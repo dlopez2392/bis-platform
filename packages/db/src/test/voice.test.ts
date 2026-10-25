@@ -13,7 +13,7 @@ import {
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
   countCallerHistorySince, countAnsweredCallsSince,
   hasActiveCallSince,
-  findUpcomingBookingForPhone, getBookingById, deleteCallRow,
+  getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
   listCalls, getCall, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
@@ -201,23 +201,16 @@ describe("voice accessors", () => {
     });
   });
 
-  it("findUpcomingBookingForPhone: matches contact phone, skips past and cancelled", async () => {
+  // S-47e (plan P17): findUpcomingBookingForPhone left with its last caller (the voice registry reads
+  // findUpcomingBookingForContact now, tested beside listContactsOnNumber). Its test held this file's only
+  // read of getBookingById, kept here on its own.
+  it("getBookingById: reads a booking with its contact and status", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId,
         { firstName: "Maria", phone: "+19565550130" }, "user_test");
-      const now = new Date("2027-05-01T12:00:00Z");
-      await createBooking(db, accountId, { calendarId: cal.id, contactId,
-        startsAt: new Date("2027-04-30T15:00:00Z"), endsAt: new Date("2027-04-30T16:00:00Z") }, "user_test"); // past
       const future = await createBooking(db, accountId, { calendarId: cal.id, contactId,
         startsAt: new Date("2027-05-03T15:00:00Z"), endsAt: new Date("2027-05-03T16:00:00Z") }, "user_test");
-      // Add a cancelled booking earlier than future, but still in the future
-      const cancelled = await createBooking(db, accountId, { calendarId: cal.id, contactId,
-        startsAt: new Date("2027-05-02T15:00:00Z"), endsAt: new Date("2027-05-02T16:00:00Z") }, "user_test");
-      await setBookingStatus(db, accountId, cancelled.id, "cancelled", "user_test");
-      const hit = await findUpcomingBookingForPhone(db, accountId, "+19565550130", now.toISOString());
-      expect(hit).toMatchObject({ bookingId: future.id });
-      expect(await findUpcomingBookingForPhone(db, accountId, "+19999999998", now.toISOString())).toBeNull();
       const row = await getBookingById(db, accountId, future.id);
       expect(row).toMatchObject({ contact_id: contactId, status: "booked" });
     });

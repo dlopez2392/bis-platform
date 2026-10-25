@@ -123,3 +123,47 @@ describe("toolSchemas — manage mode (Always take a message)", () => {
     expect(JSON.stringify(tools)).not.toContain("book_appointment");
   });
 });
+
+describe("S-47e: confirm_identity (plan Task 6)", () => {
+  const MEETING_TYPES = ["in_person", "phone", "video"] as const;
+  const CONFIRM_DESCRIPTION = "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.";
+  const names = (list: readonly unknown[]) => (list as Tool[]).map((t) => t.name);
+
+  it("is on the session exactly where find_my_booking is: full (every meeting type) and manage, never none", () => {
+    expect(MEETING_TYPES).toHaveLength(3);
+    for (const mt of MEETING_TYPES) {
+      expect(names(toolSchemas("full", mt, false)), mt).toContain("confirm_identity");
+      expect(names(toolSchemas("manage", mt, false)), mt).toContain("confirm_identity");
+      expect(names(toolSchemas("none", mt, false)), mt).not.toContain("confirm_identity");
+      expect(names(toolSchemas("none", mt, true)), mt).not.toContain("confirm_identity");
+    }
+  });
+
+  it("takes a full name, and an email only when asked for", () => {
+    for (const mt of MEETING_TYPES) {
+      expect(tool(toolSchemas("full", mt, false), "confirm_identity").parameters).toEqual({
+        type: "object",
+        properties: {
+          fullName: { type: "string", description: "First and last name, as the caller said it." },
+          email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." },
+        },
+        required: ["fullName"],
+      });
+    }
+  });
+
+  it("its description says when to call it, including for a different person, and never to suggest a name (P25)", () => {
+    const d = tool(toolSchemas("full", "in_person", false), "confirm_identity").description;
+    expect(d).toBe(CONFIRM_DESCRIPTION);
+    expect(d).toMatch(/never suggest, guess or spell/);
+    expect(d).toMatch(/whenever the caller asks about a different person's appointment than the one already confirmed/);
+    expect(tool(toolSchemas("manage", "in_person", false), "confirm_identity").description).toBe(CONFIRM_DESCRIPTION);
+  });
+
+  it("find_my_booking says to confirm who they are when it asks, then look again", () => {
+    for (const mt of MEETING_TYPES) {
+      expect(tool(toolSchemas("full", mt, false), "find_my_booking").description).toBe(
+        "Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number. If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again.");
+    }
+  });
+});

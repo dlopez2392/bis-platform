@@ -1084,23 +1084,6 @@ export async function listCallStartsByOutcomeBetween(
   }
 }
 
-export async function findUpcomingBookingForPhone(
-  db: SupabaseClient, accountId: string, phoneE164: string, nowIso: string,
-): Promise<{ bookingId: string; startsAt: string } | null> {
-  const { data: contacts, error: cErr } = await db.from("contacts")
-    .select("id").eq("account_id", accountId).eq("phone", phoneE164);
-  if (cErr) throw new Error(`findUpcomingBookingForPhone contacts failed: ${cErr.message}`);
-  const ids = (contacts ?? []).map((c: { id: string }) => c.id);
-  if (ids.length === 0) return null;
-  const { data, error } = await db.from("bookings")
-    .select("id, starts_at").eq("account_id", accountId)
-    .in("contact_id", ids).eq("status", "booked").gt("starts_at", nowIso)
-    .order("starts_at", { ascending: true }).limit(1);
-  if (error) throw new Error(`findUpcomingBookingForPhone bookings failed: ${error.message}`);
-  const row = (data ?? [])[0] as { id: string; starts_at: string } | undefined;
-  return row ? { bookingId: row.id, startsAt: row.starts_at } : null;
-}
-
 export async function listPhoneNumbersForAccount(
   db: SupabaseClient, accountId: string,
 ): Promise<PhoneNumberRow[]> {

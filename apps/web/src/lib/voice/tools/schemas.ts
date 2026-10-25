@@ -21,8 +21,12 @@ const BOOKING_TOOLS = [
     description: "Cancel an existing booking. Only for a booking find_my_booking returned on this call, or one booked on this call.",
     parameters: { type: "object", properties: { bookingId: { type: "string" } }, required: ["bookingId"] } },
   { type: "function", name: "find_my_booking",
-    description: "Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number.",
+    description: "Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number. If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again.",
     parameters: { type: "object", properties: {}, required: [] } },
+  // S-47e (spec 5.4.3): on the session exactly where find_my_booking is (modes full and manage).
+  { type: "function", name: "confirm_identity",
+    description: "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.",
+    parameters: { type: "object", properties: { fullName: { type: "string", description: "First and last name, as the caller said it." }, email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." } }, required: ["fullName"] } },
 ] as const;
 
 const CORE_TOOLS = [

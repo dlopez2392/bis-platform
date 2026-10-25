@@ -1269,6 +1269,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       calendar, profile, branding, fromEmail: accountRow.from_email ?? null,
       callerNumber, origin,
       callRowId, handoffTarget,
+      tradeModule: tradeStamp?.module ?? null,
     };
     const finishCtx: FinishContext = {
       db, accountId, branding,

@@ -12,7 +12,7 @@ vi.mock("@/lib/booking/availability", async (importOriginal) => {
   };
 });
 const dbMocks = vi.hoisted(() => ({
-  findUpcomingBookingForPhone: vi.fn(),
+  listContactsOnNumber: vi.fn(), findUpcomingBookingForContact: vi.fn(),
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
   fillContactBlanksReport: vi.fn(), getContact: vi.fn(),
@@ -74,6 +74,9 @@ function gated(): Array<Record<string, unknown>> { return gateCalls; }
 import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
 import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
+import { withConfirmed } from "../identity/state";
+// (results.test.ts pins every one of these word for word; here they say WHICH answer the tool gave.)
+import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, FOUND_BY_NAME_NEXT, readFailed } from "../identity/results";
 import { formatWhen } from "@/lib/booking/time";
 
 const ctx: ToolContext = {
@@ -86,9 +89,17 @@ const ctx: ToolContext = {
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
   fromEmail: null, callerNumber: "+19562921696", origin: "https://x.example",
-  callRowId: null, handoffTarget: { available: false, reason: "not-configured" },
+  callRowId: null, handoffTarget: { available: false, reason: "not-configured" }, tradeModule: null,
   now: () => new Date("2027-06-01T12:00:00Z"),
 };
+/** S-47e: a call that has confirmed this contact, the state find_my_booking or confirm_identity leaves (Task 6). */
+const owns = (contactId = "ct1", rung: 1 | 2 = 1) => withConfirmed(emptyCallState(), { contactId, rung, by: "caller_id" });
+/** The caller ID's one contact (ct1) with this upcoming booking, through the two reads that replaced the household one. */
+const ONE_ON_NUMBER = { id: "ct1", first_name: "Ana", last_name: "Ruiz", phone: "+19562921696", email_key: null, holds_shared_number: false };
+function onNumber(hit: { bookingId: string; startsAt: string } | null) {
+  dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [ONE_ON_NUMBER], truncated: false });
+  dbMocks.findUpcomingBookingForContact.mockResolvedValue(hit);
+}
 
 // Named for the brief's own shape: `dbMocks` is reset wholesale in the
 // beforeEach below, so this alias stays live across tests.
@@ -98,6 +109,7 @@ beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   dbMocks.readEmailSuppression.mockResolvedValue(null);
   dbMocks.serviceDb.mockReturnValue({});
+  dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
   computeAllSlotsMock.mockReset();
   // By default the submit-time check answers from the same slot list the
   // tests already set up: a start is bookable when the list carries it. The
@@ -158,9 +170,9 @@ describe("find_my_booking", () => {
   const TARGET = { available: true as const, to: "+19565550199" };
 
   it("looks up the caller ID and hands back the spoken local time", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    onNumber(HIT);
     const r1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
-    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
+    expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", "+19562921696"); expect(dbMocks.findUpcomingBookingForContact).toHaveBeenCalledWith({}, "a1", "ct1", expect.any(String));
     expect(r1.result).toMatchObject({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     // Spoken rendering rides along so the model never converts the ISO itself.
     expect((r1.result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
@@ -169,10 +181,10 @@ describe("find_my_booking", () => {
   it("a recited number that is not the caller ID is refused with no lookup, nothing revealed, nobody served", async () => {
     // The mock WOULD find a booking — a lookup by the recited number would
     // hand its details straight back.
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    onNumber(HIT);
     const pre = emptyCallState();
     const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "(956) 555-0100" });
-    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: false, verified: false });
     expect(result).not.toHaveProperty("bookingId");
     expect(result).not.toHaveProperty("startsAt");
@@ -183,19 +195,19 @@ describe("find_my_booking", () => {
   });
 
   it("a garbled recited number is refused the same way — never quietly swapped for caller ID", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    onNumber(HIT);
     const pre = emptyCallState();
     const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "55 01" });
-    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: false, verified: false });
     expect(result).not.toHaveProperty("bookingId");
     expect(state).toBe(pre);
   });
 
   it("a recited number that IS the caller ID, in another shape, looks up the caller ID and finds it", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    onNumber(HIT);
     const { state, result } = await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 292-1696" });
-    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
+    expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", "+19562921696"); expect(dbMocks.findUpcomingBookingForContact).toHaveBeenCalledWith({}, "a1", "ct1", expect.any(String));
     expect(result).toMatchObject({ found: true, bookingId: "b9" });
     expect(state.served).toEqual(["booking_found"]);
   });
@@ -204,16 +216,16 @@ describe("find_my_booking", () => {
     const pre = emptyCallState();
     const r = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking", {});
     expect(r.result).toMatchObject({ found: false, verified: false, error: expect.any(String) });
-    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(r.state).toBe(pre);
   });
 
   it("no caller ID and a recited number → still no query: a withheld call can look nothing up", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    onNumber(HIT);
     const pre = emptyCallState();
     const { state, result } = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking",
       { phone: "(956) 292-1696" });
-    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(result).toMatchObject({ found: false, verified: false });
     expect(result).not.toHaveProperty("bookingId");
     expect(state).toBe(pre);
@@ -235,12 +247,12 @@ describe("find_my_booking", () => {
   // therefore getting an automatic "Sorry we missed you just now" text for a
   // call that went perfectly. This flag is what the text-back gate reads.
   it("a lookup that FOUND the booking marks the caller served", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    onNumber({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     const { state } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
     expect(state.served).toEqual(["booking_found"]);
   });
   it("a lookup that found NOTHING does not - that caller left empty-handed", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(null);
+    onNumber(null);
     const { state } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
     expect(state.served).toEqual([]);
   });
@@ -742,7 +754,7 @@ describe("reschedule / cancel", () => {
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
     dbMocks.createBooking.mockImplementation(async () => { calls.push("book"); return { id: "new1", cancelToken: "t" }; });
     dbMocks.setBookingStatus.mockImplementation(async () => { calls.push("cancel"); return { updatedAt: "2027-05-31T09:00:00.000Z" }; });
-    const { state, result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+    const { state, result } = await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     // The 2026-08-30 double-reschedule: the model re-read the result's raw
@@ -765,7 +777,7 @@ describe("reschedule / cancel", () => {
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
     dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+    const { result } = await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     expect(dbMocks.createBooking).toHaveBeenCalledTimes(1);
@@ -781,7 +793,7 @@ describe("reschedule / cancel", () => {
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
     dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+    const { result } = await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     expect(bookableSlotMock.mock.calls[0]![4]).toEqual(wantedSlot.startsAt);
@@ -808,7 +820,7 @@ describe("reschedule / cancel", () => {
     dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",
       starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "booked" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    const { state } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+    const { state } = await runTool(owns(), ctx, "cancel_appointment", { bookingId: "b1" });
     expect(state.bookings).toEqual([]);
     expect(state.served).toEqual(["cancelled"]);
   });
@@ -827,7 +839,7 @@ describe("reschedule / cancel", () => {
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
     dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    await runTool(emptyCallState(), ctx, "reschedule_appointment",
+    await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(meetingProviderMock).not.toHaveBeenCalled();
   });
@@ -859,7 +871,7 @@ describe("reschedule / cancel", () => {
       const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/new-room" });
       meetingProviderMock.mockReturnValue({ createMeetingRoom });
 
-      const { result } = await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+      const { result } = await runTool(owns(), videoCtx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
 
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
@@ -877,7 +889,7 @@ describe("reschedule / cancel", () => {
       meetingProviderMock.mockReturnValue({ createMeetingRoom });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const { result } = await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+      const { result } = await runTool(owns(), videoCtx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
 
       const loggedUrl = errSpy.mock.calls.some((c) => String(c[0] ?? "").includes("https://"));
@@ -908,7 +920,7 @@ describe("reschedule / cancel", () => {
     });
 
     it("sends the contact ONE email carrying the new time and the NEW booking's cancel link", async () => {
-      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      const { result } = await runTool(owns(), ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       expect(result).not.toHaveProperty("emailFailed");
@@ -929,7 +941,7 @@ describe("reschedule / cancel", () => {
       const esCtx: ToolContext = {
         ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
       };
-      const spanish = { ...emptyCallState(), transcript: [
+      const spanish = { ...owns(), transcript: [
         { role: "caller" as const, text: "Hola, necesito cambiar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
       ] };
       await runTool(spanish, esCtx, "reschedule_appointment",
@@ -944,7 +956,7 @@ describe("reschedule / cancel", () => {
     });
 
     it("an English caller's moved email carries the calendar and move links on the NEW token, with no locale", async () => {
-      await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      await runTool(owns(), ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       const sent = sendMock.mock.calls[0]![0] as { body: string; html: string };
       expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/ics\/newtok99$/m);
@@ -956,7 +968,7 @@ describe("reschedule / cancel", () => {
       dbMocks.getContact.mockResolvedValue({
         id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19562921696",
       });
-      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      const { result } = await runTool(owns(), ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       expect(result).not.toHaveProperty("emailFailed");
@@ -970,7 +982,7 @@ describe("reschedule / cancel", () => {
       meetingProviderMock.mockReturnValue({
         createMeetingRoom: vi.fn().mockResolvedValue({ url: "https://video.example/new-room" }),
       });
-      await runTool(emptyCallState(), videoCtx, "reschedule_appointment",
+      await runTool(owns(), videoCtx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       expect(sendMock).toHaveBeenCalledTimes(1);
       const sent = sendMock.mock.calls[0]![0] as { html?: string; body: string };
@@ -981,7 +993,7 @@ describe("reschedule / cancel", () => {
     it("a throwing send never fails the committed reschedule — soft emailFailed flag, like book_appointment", async () => {
       sendMock.mockRejectedValue(new Error("smtp down"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      const { result } = await runTool(owns(), ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       errSpy.mockRestore();
       expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
@@ -1068,10 +1080,10 @@ describe("reschedule / cancel", () => {
 
     it("refuses to reschedule a booking under a different number — no slot lookup, room, booking, cancel or mail", async () => {
       dbMocks.getContact.mockResolvedValue(SOMEONE_ELSE);
-      const pre = emptyCallState();
+      const pre = owns("ct1");
       const { state, result } = await runTool(pre, watchedCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
-      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
+      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't one they have confirmed is theirs/) });
       expect(String((result as { error: string }).error)).toMatch(/do not share/i);
       expectNoDetailsOfTheBooking(String((result as { error: string }).error));
       expect(state).toBe(pre);
@@ -1080,9 +1092,9 @@ describe("reschedule / cancel", () => {
 
     it("refuses to cancel a booking under a different number — nothing cancelled, nothing sent", async () => {
       dbMocks.getContact.mockResolvedValue(SOMEONE_ELSE);
-      const pre = emptyCallState();
+      const pre = owns("ct1");
       const { state, result } = await runTool(pre, watchedCtx, "cancel_appointment", { bookingId: "b1" });
-      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
+      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't one they have confirmed is theirs/) });
       expectNoDetailsOfTheBooking(String((result as { error: string }).error));
       expect(state).toBe(pre);
       expect(state.served).toEqual([]);
@@ -1091,14 +1103,14 @@ describe("reschedule / cancel", () => {
 
     it("the stored phone is compared as E.164: \"(956) 292-1696\" on file matches caller ID +19562921696 — cancel", async () => {
       dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: "(956) 292-1696" });
-      const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+      const { result } = await runTool(owns("ct2"), ctx, "cancel_appointment", { bookingId: "b1" });
       expect(result).toEqual({ ok: true });
       expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
     });
 
     it("the stored phone is compared as E.164: \"(956) 292-1696\" on file matches caller ID +19562921696 — reschedule", async () => {
       dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: "(956) 292-1696" });
-      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      const { result } = await runTool(owns("ct2"), ctx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       expect(dbMocks.createBooking).toHaveBeenCalled();
@@ -1209,7 +1221,7 @@ describe("reschedule / cancel", () => {
 
     it("cancel: one staff alert per recipient with no fromAddress, one customer email, and the conversation trail", async () => {
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const { result } = await runTool(owns(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
       const errors = errSpy.mock.calls.length;
       errSpy.mockRestore();
       expect(result).toEqual({ ok: true });
@@ -1244,7 +1256,7 @@ describe("reschedule / cancel", () => {
 
     it("cancel with no notify emails and no contact email still writes the thread line — the signal that always exists", async () => {
       dbMocks.getContact.mockResolvedValue(OWNER);
-      const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+      const { result } = await runTool(owns(), ctx, "cancel_appointment", { bookingId: "b1" });
       expect(result).toEqual({ ok: true });
       expect(sendMock).not.toHaveBeenCalled();
       expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
@@ -1256,7 +1268,7 @@ describe("reschedule / cancel", () => {
       const esCtx: ToolContext = {
         ...notifyCtx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
       };
-      const pre = { ...emptyCallState(), transcript: [
+      const pre = { ...owns(), transcript: [
         { role: "caller" as const, text: "Hola, necesito cancelar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
       ] };
       const { result } = await runTool(pre, esCtx, "cancel_appointment", { bookingId: "b1" });
@@ -1283,7 +1295,7 @@ describe("reschedule / cancel", () => {
       const esCtx: ToolContext = {
         ...notifyCtx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
       };
-      const pre = { ...emptyCallState(), transcript: [
+      const pre = { ...owns(), transcript: [
         { role: "caller" as const, text: "Hola, necesito cambiar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
       ] };
       const { result } = await runTool(pre, esCtx, "reschedule_appointment", { bookingId: "b1", startsAt: NEW_ISO });
@@ -1303,7 +1315,7 @@ describe("reschedule / cancel", () => {
     });
 
     it("reschedule: the staff alert says moved, with the old AND new times, alongside the unchanged customer email", async () => {
-      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+      const { result } = await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       expect(result).not.toHaveProperty("emailFailed");
@@ -1330,7 +1342,7 @@ describe("reschedule / cancel", () => {
       sendMock.mockRejectedValue(new Error("mail down"));
       dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const { result } = await runTool(owns(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
       const logs = errSpy.mock.calls.map((c) => c.map(String).join(" "));
       errSpy.mockRestore();
       expect(result).toEqual({ ok: true });
@@ -1358,7 +1370,7 @@ describe("reschedule / cancel", () => {
         return { providerMessageId: "x" };
       });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const { result } = await runTool(owns(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
       const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
       errSpy.mockRestore();
       expect(result).toEqual({ ok: true });
@@ -1369,7 +1381,7 @@ describe("reschedule / cancel", () => {
       sendMock.mockRejectedValue(new Error("mail down"));
       dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+      const { result } = await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       errSpy.mockRestore();
       expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
@@ -1383,7 +1395,7 @@ describe("reschedule / cancel", () => {
       });
       dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+      const { result } = await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       errSpy.mockRestore();
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
@@ -1393,8 +1405,8 @@ describe("reschedule / cancel", () => {
     it("a mail provider that throws on setup costs neither change, and the thread line is still written", async () => {
       providerSetup.fails = true;
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const cancel = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
-      const move = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+      const cancel = await runTool(owns(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const move = await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
       errSpy.mockRestore();
@@ -1423,7 +1435,7 @@ describe("reschedule / cancel", () => {
       sendMock.mockImplementation(async () => { await gate; return { providerMessageId: "x" }; });
       dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
 
-      const pending = runTool(emptyCallState(), notifyCtx, tool, { ...args });
+      const pending = runTool(owns(), notifyCtx, tool, { ...args });
       let returned = false;
       void pending.then(() => { returned = true; });
       for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -1460,7 +1472,7 @@ describe("reschedule / cancel", () => {
         });
       }
       const args = tool === "cancel_appointment" ? { bookingId: "b1" } : { bookingId: "b1", startsAt: NEW_ISO };
-      const pending = runTool(emptyCallState(), notifyCtx, tool, args);
+      const pending = runTool(owns(), notifyCtx, tool, args);
       let returned = false;
       void pending.then(() => { returned = true; });
       for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -1480,9 +1492,9 @@ describe("reschedule / cancel", () => {
       dbMocks.createContact.mockResolvedValue({ id: "ctA", existing: false });
       await runTool(emptyCallState(), ctx, "book_appointment",
         { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
-      await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+      await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
-      await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      await runTool(owns(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
 
       const kinds = gated().map((r) => r.kind);
       expect(kinds).toEqual(expect.arrayContaining(
@@ -1620,13 +1632,13 @@ describe("runTool refuses the booking tools the line does not offer", () => {
   });
 
   it("Always take a message: an existing appointment can still be found (owner decision A)", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    onNumber({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     const { result } = await runTool(emptyCallState(), messageOnly, "find_my_booking", {});
     expect(result).toMatchObject({ found: true, bookingId: "b9" });
   });
 
   it("booking off on the profile: every booking tool is refused, nothing read or written (mutation: no guard → FAILS)", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    onNumber({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     const calls: [ToolName, Record<string, unknown>][] = [
       ["check_availability", { date: "2027-06-01" }],
       ["book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana", emailDeclined: true }],
@@ -1639,7 +1651,7 @@ describe("runTool refuses the booking tools the line does not offer", () => {
       expect(result, name).toMatchObject({ ok: false, error: expect.any(String) });
     }
     expect(computeAllSlotsMock).not.toHaveBeenCalled();
-    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(dbMocks.getBookingById).not.toHaveBeenCalled();
     expect(dbMocks.createBooking).not.toHaveBeenCalled();
   });
@@ -1747,7 +1759,7 @@ describe("Sofía's acts (item 8c)", () => {
 
   it("a reschedule is ONE booking_rescheduled act carrying the cancel's own updatedAt as its version, never a booking_created (mutation: record new Date().toISOString() -> FAILS)", async () => {
     dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
-    const { result } = await runTool(emptyCallState(), callCtx, "reschedule_appointment",
+    const { result } = await runTool(owns(), callCtx, "reschedule_appointment",
       { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     expect(inserted()).toEqual([[{
@@ -1761,12 +1773,12 @@ describe("Sofía's acts (item 8c)", () => {
   it("a reschedule whose new slot was just taken records nothing: nothing changed", async () => {
     const { SlotTakenError } = await import("@bis/db");
     dbMocks.createBooking.mockRejectedValue(new SlotTakenError());
-    await runTool(emptyCallState(), callCtx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
+    await runTool(owns(), callCtx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
   });
 
   it("a cancel is ONE booking_cancelled act: the old times before, the cancel's updatedAt after", async () => {
-    const { result } = await runTool(emptyCallState(), callCtx, "cancel_appointment", { bookingId: "b1" });
+    const { result } = await runTool(owns(), callCtx, "cancel_appointment", { bookingId: "b1" });
     expect(result).toEqual({ ok: true });
     expect(inserted()).toEqual([[{
       ...VOICE, kind: "booking_cancelled", contactId: "ct1", target: { bookingId: "b1" },
@@ -1780,7 +1792,7 @@ describe("Sofía's acts (item 8c)", () => {
     dbMocks.setBookingStatus.mockImplementation(async () => { order.push("cancel"); return { updatedAt: CANCEL_VERSION }; });
     dbMocks.insertAiActs.mockImplementation(async () => { order.push("record"); });
     dbMocks.ensureConversation.mockImplementation(async () => { order.push("thread"); return { id: "cv1", created: false }; });
-    await runTool(emptyCallState(), callCtx, "cancel_appointment", { bookingId: "b1" });
+    await runTool(owns(), callCtx, "cancel_appointment", { bookingId: "b1" });
     expect(order).toEqual(["cancel", "record", "thread"]);
 
     order.length = 0;
@@ -1794,7 +1806,7 @@ describe("Sofía's acts (item 8c)", () => {
 
   it("no call row (startCallRow failed open): nothing is recorded, the skip is logged by id, and the tool answers as ever", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+    const { result } = await runTool(owns(), ctx, "cancel_appointment", { bookingId: "b1" });
     const lines = warn.mock.calls.map((c) => String(c[0]));
     warn.mockRestore();
     expect(result).toEqual({ ok: true });
@@ -1807,11 +1819,11 @@ describe("Sofía's acts (item 8c)", () => {
     "%s: a throwing insertAiActs leaves result and state toEqual the run that recorded (mutation: remove the try in recordActs -> FAILS)",
     async (_label, site) => {
       site.setup();
-      const ok = await runTool(emptyCallState(), callCtx, site.name, site.args);
+      const ok = await runTool(owns(), callCtx, site.name, site.args);
       expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
       dbMocks.insertAiActs.mockReset().mockRejectedValue(Object.assign(new Error("down"), { code: "08006" }));
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
-      const failed = await runTool(emptyCallState(), callCtx, site.name, site.args);
+      const failed = await runTool(owns(), callCtx, site.name, site.args);
       const lines = err.mock.calls.map((c) => String(c[0]));
       err.mockRestore();
       expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
@@ -1826,13 +1838,13 @@ describe("Sofía's acts (item 8c)", () => {
     async (_label, site) => {
       const { ACT_RECORD_TIMEOUT_MS } = await import("@/lib/ai-acts/record");
       site.setup();
-      const ok = await runTool(emptyCallState(), callCtx, site.name, site.args);
+      const ok = await runTool(owns(), callCtx, site.name, site.args);
       dbMocks.insertAiActs.mockReset().mockReturnValue(new Promise(() => {}));
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       vi.useFakeTimers();
       try {
         let answered: { state: unknown; result: unknown } | null = null;
-        const pending = runTool(emptyCallState(), callCtx, site.name, site.args).then((r) => { answered = r; });
+        const pending = runTool(owns(), callCtx, site.name, site.args).then((r) => { answered = r; });
         await vi.advanceTimersByTimeAsync(ACT_RECORD_TIMEOUT_MS + 50);
         expect(answered).not.toBeNull();
         await pending;
@@ -1867,7 +1879,7 @@ describe("§7: a booking change with no staff address says so (G1)", () => {
   ] as const)("%s with an empty notify_emails logs that only the thread line remains, by booking id only (mutation: return silently -> FAILS)", async (tool, name, args) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { result } = await runTool(emptyCallState(), { ...ctx, callRowId: "call-1" }, name, args);
+    const { result } = await runTool(owns(), { ...ctx, callRowId: "call-1" }, name, args);
     const lines = [...warn.mock.calls, ...err.mock.calls].map((c) => c.map(String).join(" "));
     warn.mockRestore();
     err.mockRestore();
@@ -1882,7 +1894,7 @@ describe("§7: a booking change with no staff address says so (G1)", () => {
   it("reschedule: a failed staff send is logged by booking id and every address, and the tool still answers ok:true", async () => {
     sendMock.mockRejectedValue(new Error("mail down"));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { result } = await runTool(emptyCallState(), { ...ctx, callRowId: "call-1",
+    const { result } = await runTool(owns(), { ...ctx, callRowId: "call-1",
       calendar: { ...ctx.calendar, notify_emails: ["owner@biz.example", "desk@biz.example"] } as unknown as CalendarRow },
     "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
     const lines = err.mock.calls.map((c) => c.map(String).join(" "));
@@ -1894,12 +1906,202 @@ describe("§7: a booking change with no staff address says so (G1)", () => {
 
   it("a calendar WITH notify addresses never logs the G1 line", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await runTool(emptyCallState(), { ...ctx, callRowId: "call-1",
+    await runTool(owns(), { ...ctx, callRowId: "call-1",
       calendar: { ...ctx.calendar, notify_emails: ["owner@biz.example"] } as unknown as CalendarRow },
     "cancel_appointment", { bookingId: "b1" });
     const lines = warn.mock.calls.map((c) => String(c[0]));
     warn.mockRestore();
     expect(lines.some((l) => l.includes("no staff address"))).toBe(false);
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("S-47e: whose appointment it is (plan Task 6)", () => {
+  const ANA = { id: "ct1", first_name: "Ana", last_name: "Prueba", phone: "+19562921696", email_key: "ana@example.com", holds_shared_number: false };
+  const BETO = { id: "ct2", first_name: "Beto", last_name: "Prueba", phone: "(956) 292-1696", email_key: null, holds_shared_number: false };
+  const HOLDING = { id: "ct9", first_name: "Caller", last_name: null, phone: "+19562921696", email_key: null, holds_shared_number: true };
+  const HIT = { bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" };
+  const insurance: ToolContext = { ...ctx, tradeModule: "insurance_pc" };
+  const on = (...rows: object[]) => dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+  beforeEach(() => { dbMocks.findUpcomingBookingForContact.mockResolvedValue(HIT); });
+
+  it("one contact (a holding record is nobody): no name asked, and the lookup is that contact's", async () => {
+    on(ANA, HOLDING);
+    const { state, result } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(result).toMatchObject({ found: true, bookingId: "b9" });
+    expect(dbMocks.findUpcomingBookingForContact).toHaveBeenCalledWith({}, "a1", "ct1", expect.any(String));
+    expect(state.identity.confirmed).toEqual({ contactId: "ct1", rung: 1, by: "caller_id" });
+  });
+
+  it("two contacts: ASK NAME, and nothing of theirs is in it (mutation: put a candidate's name in the result -> FAILS)", async () => {
+    on(ANA, BETO);
+    const { state, result } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(result).toEqual(ASK_NAME);
+    // Case-blind: the identity module holds a candidate's name as lowercased words (match.ts nameWords), so a
+    // leak would read "ana prueba", which a case-sensitive "Ana" would miss.
+    const DETAILS = ["Ana", "Beto", "Prueba", "ana@example.com", "956", "292", "1696", "ct1", "ct2"];
+    expect(DETAILS).toHaveLength(9);
+    for (const detail of DETAILS) {
+      expect(JSON.stringify(result).toLowerCase()).not.toContain(detail.toLowerCase());
+    }
+    expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
+    expect(state.identity).toEqual({ confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false });
+  });
+
+  it("confirm Beto, then find: the lookup is Beto's only, and the found result says to confirm anyone else first; confirming Ana afterwards replaces him (S7, P25)", async () => {
+    on(ANA, BETO);
+    const c1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Beto Prueba" });
+    expect(c1.result).toEqual(CONFIRMED);
+    const f1 = await runTool(c1.state, ctx, "find_my_booking", {});
+    expect(f1.result).toMatchObject({ found: true, bookingId: "b9", next: FOUND_BY_NAME_NEXT });
+    expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct2"]);
+    const c2 = await runTool(c1.state, ctx, "confirm_identity", { fullName: "Ana Prueba" });
+    await runTool(c2.state, ctx, "find_my_booking", {});
+    expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct2", "ct1"]);
+  });
+
+  it("a found result confirmed by the caller ID alone (one contact) carries no note", async () => {
+    on(ANA);
+    const { result } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(result).toMatchObject({ found: true });
+    expect(result).not.toHaveProperty("next");
+  });
+
+  it("a name that is not the one contact on the number confirms nobody (P25; mutation: the sole-candidate row ignores the name -> FAILS)", async () => {
+    on(ANA);
+    const { state, result } = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    expect(result).toEqual(MISS);
+    expect(state.identity.confirmed).toBeNull();
+  });
+
+  it("two misses lock; a third confirm_identity makes no read (mutation: no lock -> FAILS)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    const m2 = await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    const m3 = await runTool(m2.state, ctx, "confirm_identity", { fullName: "Ana Prueba" });
+    expect([m1.result, m2.result, m3.result]).toEqual([MISS, LOCKED, LOCKED]);
+    expect(dbMocks.listContactsOnNumber).toHaveBeenCalledTimes(2);
+  });
+
+  it("while locked: find, reschedule and cancel answer LOCKED; a booking made on this call can still be cancelled (S18)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" })).state;
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    expect((await runTool(locked, ctx, "find_my_booking", {})).result).toEqual(LOCKED);
+    expect((await runTool(locked, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual(LOCKED);
+    expect((await runTool(locked, ctx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" })).result).toEqual(LOCKED);
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    const madeHere = { ...locked, bookings: [{ id: "b1", contactName: "Ana", startsAt: "x", endsAt: "y", status: "booked" as const }] };
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "m1" });
+    expect((await runTool(madeHere, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual({ ok: true });
+  });
+
+  it("a locked call can still book, take a message, and move the booking it made (spec 7, S18; R10)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    const slot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    const later = { startsAt: new Date("2027-06-02T16:00:00Z"), endsAt: new Date("2027-06-02T17:00:00Z") };
+    computeAllSlotsMock.mockResolvedValue([slot, later]);
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
+    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" }).mockResolvedValueOnce({ id: "bk2", cancelToken: "t2" });
+    const booked = await runTool(locked, ctx, "book_appointment", { startsAt: slot.startsAt.toISOString(), name: "Ana Prueba", emailDeclined: true });
+    expect(booked.result).toMatchObject({ ok: true, bookingId: "bk1" });
+    const msg = await runTool(booked.state, ctx, "take_message", { body: "Please call me", name: "Ana Prueba" });
+    expect(msg.result).toEqual({ ok: true });
+    dbMocks.getBookingById.mockResolvedValue({ id: "bk1", contact_id: "ct1", calendar_id: "cal1", starts_at: slot.startsAt.toISOString(), ends_at: slot.endsAt.toISOString(), status: "booked" });
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "m1" });
+    const moved = await runTool(msg.state, ctx, "reschedule_appointment", { bookingId: "bk1", startsAt: later.startsAt.toISOString() });
+    expect(moved.result).toMatchObject({ ok: true, bookingId: "bk2" });
+    expect(moved.state.identity.locked).toBe("misses");
+  });
+
+  it("a failed candidate read is READ FAILED and not a try", async () => {
+    dbMocks.listContactsOnNumber.mockRejectedValue(new Error("db blip"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { state, result } = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Ana Prueba" });
+    err.mockRestore();
+    expect(result).toEqual(readFailed("offer to take a message with take_message"));
+    expect(state.identity.misses).toBe(0);
+  });
+
+  it("insurance: a name alone gets ASK EMAIL; the name and email confirm at rung 2; with no email on file it is CANNOT and locks", async () => {
+    on(ANA, BETO);
+    expect((await runTool(emptyCallState(), insurance, "find_my_booking", {})).result).toEqual(ASK_NAME_AND_EMAIL);
+    expect((await runTool(emptyCallState(), insurance, "confirm_identity", { fullName: "Ana Prueba" })).result).toEqual(ASK_EMAIL);
+    const ok = await runTool(emptyCallState(), insurance, "confirm_identity", { fullName: "Ana Prueba", email: "ana at example dot com" });
+    expect(ok.result).toEqual(CONFIRMED);
+    expect(ok.state.identity.confirmed).toEqual({ contactId: "ct1", rung: 2, by: "name_email" });
+    on(BETO);
+    const cannot = await runTool(emptyCallState(), insurance, "find_my_booking", {});
+    expect(cannot.result).toEqual(CANNOT);
+    expect(cannot.state.identity.locked).toBe("cannot");
+  });
+
+  it("move or cancel before any confirmation: NOT CONFIRMED YET, nothing written (S9; mutation: today's caller-ID-only rule -> FAILS)", async () => {
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    // Resolved, so a mutant that writes fails on the assertions below, not on a missing mock.
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    const cases = [["cancel_appointment", { bookingId: "b1" }], ["reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" }]] as const;
+    expect(cases).toHaveLength(2);
+    for (const [name, args] of cases) {
+      expect((await runTool(emptyCallState(), ctx, name, args)).result, name).toEqual(NOT_CONFIRMED_YET);
+    }
+    expect(dbMocks.getContact).toHaveBeenCalledTimes(2);
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+  });
+
+  it("a rung-1 confirmation on an insurance call cannot move the booking (P7; mutation: ignore the rung -> FAILS)", async () => {
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    expect((await runTool(owns("ct1", 1), insurance, "cancel_appointment", { bookingId: "b1" })).result).toEqual(NOT_CONFIRMED_YET);
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+  });
+
+  it("no caller ID: confirm_identity is refused and reads nothing; a recited other number is still refused by find", async () => {
+    const r = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "confirm_identity", { fullName: "Ana Prueba" });
+    expect(r.result).toMatchObject({ ok: false, confirmed: false, error: expect.stringMatching(/no visible caller number/) });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    const f = await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 555-0100" });
+    expect(f.result).toMatchObject({ found: false, verified: false });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
+  it("a line with booking off refuses confirm_identity, reading nothing", async () => {
+    const off: ToolContext = { ...ctx, profile: { booking_enabled: false, after_hours: "hours_then_message" } as unknown as VoiceProfileRow };
+    expect((await runTool(emptyCallState(), off, "confirm_identity", { fullName: "Ana Prueba" })).result).toMatchObject({ ok: false });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
+  it("every read is the context's own account (second account; mutation: a fixed account id in a read -> FAILS)", async () => {
+    on(ANA, BETO);
+    const a2: ToolContext = { ...ctx, accountId: "a2" };
+    const c = await runTool(emptyCallState(), a2, "confirm_identity", { fullName: "Ana Prueba" });
+    await runTool(c.state, a2, "find_my_booking", {});
+    expect(dbMocks.listContactsOnNumber.mock.calls.map((x) => x[1])).toEqual(["a2"]);
+    expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((x) => x[1])).toEqual(["a2"]);
+  });
+
+  it("logs one identity line per event, by call row, with no name, email or number", async () => {
+    on(ANA, BETO);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const rowCtx: ToolContext = { ...ctx, callRowId: "call-7" };
+    const m1 = await runTool(emptyCallState(), rowCtx, "confirm_identity", { fullName: "Carla Prueba" });
+    await runTool(m1.state, rowCtx, "confirm_identity", { fullName: "Carla Prueba" });
+    const lines = log.mock.calls.map((x) => String(x[0])).filter((l) => l.startsWith("voice identity"));
+    log.mockRestore();
+    expect(lines).toEqual(["voice identity call-7: miss 1", "voice identity call-7: locked (misses)"]);
   });
 });
