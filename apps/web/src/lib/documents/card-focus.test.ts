@@ -37,6 +37,22 @@ describe("workRowHref: the closure To-do's link (S-47d Task 7)", () => {
   });
 });
 
+describe("workRowHref: the identity To-do's call link (S-47e, S11)", () => {
+  it("a call To-do with no contact links to the call (mutation: return null for callId -> FAILS)", () => {
+    expect(workRowHref(A, { contactId: null, callId: "call9" })).toBe(`/dashboard/accounts/${A}/calls/call9`);
+  });
+  it("a contact wins over a call id (mutation: test callId before contactId -> FAILS; P13)", () => {
+    expect(workRowHref(A, { contactId: "ct1", callId: "call9" })).toBe(`/dashboard/accounts/${A}/contacts/ct1`);
+  });
+  it("a closure To-do's link wins over a call id too — a real closure To-do has no call, but the precedence still holds (mutation: test callId first -> FAILS; P13)", () => {
+    expect(workRowHref(A, { contactId: null, callId: "call9", closureFocus: { kind: "status", on: "2027-06-01" } }))
+      .toBe(`/dashboard/accounts/${A}/dashboard#business-status`);
+  });
+  it("no contact and no call: nothing to link to", () => {
+    expect(workRowHref(A, { contactId: null, callId: null })).toBeNull();
+  });
+});
+
 describe("cardFocusFrom", () => {
   it("reads back exactly what workRowHref wrote (mutation: rename either parameter on one side -> FAILS)", () => {
     const href = workRowHref(A, { contactId: "c1", documentFocus: { documentId: DOC, category: "warranty", groupId: null } })!;

@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
-import { createContact, getContact, listTags, addTagToContact, listContactTags } from "../contacts";
+import { createContact, getContact, listTags, addTagToContact, listContactTags, phoneDigits } from "../contacts";
+import { ensureHoldingContact } from "../voice";
 import { buildMatchIndex, applyImportBatch, type MatchIndex } from "../contact-import";
 
 // Transcribed verbatim from docs/superpowers/plans/2026-09-09-contacts-data.md,
@@ -195,5 +196,42 @@ describe("applyImportBatch", () => {
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length).toBe(1);
       expect(data![0]!.reason).toBe("phone_match_on_edit");
+    }));
+});
+
+/**
+ * S-47e (E8, spec 5.12.3): a shared number's holding record (seeded by its one writer,
+ * ensureHoldingContact) is never in the import's match index, so an imported row never matches or
+ * updates it.
+ */
+describe("S-47e: buildMatchIndex leaves a shared number's holding record out", () => {
+  const P = "+19565550188";
+
+  it("with only the holding record on the number there is no phone match; with Ana too it is Ana (mutation: drop the continue -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const holding = await ensureHoldingContact(db, accountId, P, "voice");
+      const alone = await buildMatchIndex(db, accountId);
+      expect(alone.byPhone.get(phoneDigits(P))).toBeUndefined();
+      expect(alone.byPhone.size).toBe(0);
+
+      const ana = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+      expect(ana.id).not.toBe(holding.id);
+      const withAna = await buildMatchIndex(db, accountId);
+      expect(withAna.byPhone.get(phoneDigits(P))).toBe(ana.id);
+    }));
+
+  it("an imported row on the number never updates the holding record: it makes a new contact", () =>
+    withTestAccount(async (db, accountId) => {
+      const holding = await ensureHoldingContact(db, accountId, P, "voice");
+      const index = await buildMatchIndex(db, accountId);
+      const r = await applyImportBatch(db, accountId,
+        [{ input: { phone: "(956) 555-0188", firstName: "Ivy" }, tags: [] }],
+        index, "user_test", { createTags: false });
+      expect(r).toEqual({ created: 1, updated: 0, flagged: 0 });
+      const kept = await getContact(db, accountId, holding.id);
+      expect(kept?.first_name).toBe("Caller");
+      const { data } = await db.from("contacts").select("id, first_name").eq("account_id", accountId).eq("first_name", "Ivy");
+      expect(data).toHaveLength(1);
+      expect(data![0]!.id).not.toBe(holding.id);
     }));
 });

@@ -1,9 +1,12 @@
 import {
   appendConsentEventGuarded, ensureConsentTask, getContact, nextBookedStart, readAccountTimezone,
-  completeTasksForConsentEvents, readConsentHistory,
+  completeTasksForConsentEvents, readConsentHistory, addTask, getAccountLanguage,
   type ConsentAppend, type SupabaseClient,
 } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { formatPhone } from "@/lib/document-requests/customer-state";
 import { formatDateInZone } from "@/lib/format";
 import { loggableError } from "@/lib/loggable-error";
 import { hoursZone } from "./hours";
@@ -106,6 +109,10 @@ export type InboundConsentInput = {
   /** This attempt filed the message; false on Telnyx's retry of one already filed. */
   firstFiling: boolean;
   now: Date;
+  /** S-47e: the real contacts of a shared number whose text filed on its holding record,
+   *  or null on every other filing. `truncated`: more people on the number than one read returns, so
+   *  exactly one among those read is not exactly one on the number (spec S6; T17 review M4). */
+  sharedNumber: { realContactIds: string[]; truncated: boolean } | null;
 };
 
 const ACTOR = "sms-inbound";
@@ -126,8 +133,38 @@ async function contactLabel(db: SupabaseClient, i: InboundConsentInput): Promise
   return name || i.address;
 }
 
+async function accountLocale(db: SupabaseClient, accountId: string): Promise<Locale> {
+  return (await getAccountLanguage(db, accountId)) === "es" ? "es" : "en";
+}
+
+/** S-47e (S30, P30): the one To-do for a reply from a shared number that no single appointment answers. */
+export async function fileSharedReplyTodo(db: SupabaseClient, accountId: string, holdingContactId: string, now: Date): Promise<void> {
+  const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, accountId));
+  await addTask(db, accountId, { contactId: holdingContactId, title, dueAt: now.toISOString() }, ACTOR, "system");
+}
+
 /** Spec §4.2 step 2: a CANCEL with an upcoming appointment asks staff whether the appointment was meant too. */
 async function cancelTodo(db: SupabaseClient, i: InboundConsentInput, eventId: string, word: string): Promise<void> {
+  // S-47e (S30): on a shared number the holding record has no booking; the household's do.
+  if (i.sharedNumber) {
+    // Truncated: the people read may not be everyone on the number, so no one person is named (the YES
+    // path's rule, route.ts): the one reply To-do, without reading anyone's bookings.
+    if (i.sharedNumber.truncated) {
+      const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, i.accountId));
+      await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+      return;
+    }
+    const upcoming = (await Promise.all(i.sharedNumber.realContactIds.map(async (id) =>
+      ({ id, startsAt: await nextBookedStart(db, i.accountId, id, i.now.toISOString()) }))))
+      .filter((x): x is { id: string; startsAt: string } => x.startsAt !== null);
+    if (upcoming.length === 0) return;
+    if (upcoming.length > 1) {
+      const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, i.accountId));
+      await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+      return;
+    }
+    return cancelTodo(db, { ...i, contactId: upcoming[0]!.id, sharedNumber: null }, eventId, word);
+  }
   const startsAt = await nextBookedStart(db, i.accountId, i.contactId as string, i.now.toISOString());
   if (!startsAt) return;
   const [name, zone] = await Promise.all([contactLabel(db, i), readAccountTimezone(db, i.accountId)]);
@@ -140,6 +177,13 @@ async function cancelTodo(db: SupabaseClient, i: InboundConsentInput, eventId: s
 
 /** Decision 5: a sentence holds texts and asks staff to confirm or undo. */
 async function holdTodo(db: SupabaseClient, i: InboundConsentInput, eventId: string): Promise<void> {
+  // S-47e (P19, R5): a holding record's name is "Caller"; the To-do names the number instead.
+  if (i.sharedNumber) {
+    const title = t(m, "todo.sharedNumber.hold", await accountLocale(db, i.accountId),
+      { number: formatPhone(i.address), excerpt: excerptOf(i.text, TODO_EXCERPT) });
+    await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+    return;
+  }
   const name = await contactLabel(db, i);
   const title = m["todo.consent.hold.en"]
     .replace("{name}", () => name)

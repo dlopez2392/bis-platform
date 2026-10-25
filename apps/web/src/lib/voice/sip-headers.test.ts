@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCallerNumber, extractCalledNumber, extractSipSignature, sipHeaderNames } from "./sip-headers";
+import { extractCallerNumber, extractCalledNumber, extractSipSignature, sipHeaderNames, sipAttestation } from "./sip-headers";
 
 const ev = (headers: { name: unknown; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
 
@@ -67,5 +67,61 @@ describe("sipHeaderNames", () => {
   it("skips headers with non-string names", () => {
     expect(sipHeaderNames(ev([{ name: {}, value: "x" }, { name: "To", value: "y" }])))
       .toEqual(["To"]);
+  });
+});
+
+describe("sipAttestation", () => {
+  it("no headers -> \"none\"", () => {
+    expect(sipAttestation(ev([]))).toBe("none");
+  });
+
+  it("a plain attestation-looking field name prints its value", () => {
+    expect(sipAttestation(ev([{ name: "X-Attest-Level", value: "B" }]))).toBe("X-Attest-Level=B");
+  });
+
+  it("an Identity header prints only the attest claim (A, B, or C), never the token or the orig number (mutation: return the raw token instead of identityAttest's result -> FAILS)", () => {
+    for (const attest of ["A", "B", "C"]) {
+      const payload = Buffer.from(JSON.stringify({ attest, orig: { tn: "19565550142" } })).toString("base64url");
+      const value = `h.${payload}.s`;
+      const line = sipAttestation(ev([{ name: "Identity", value }]));
+      expect(line).toBe(`identity=attest:${attest}`);
+      expect(line).not.toContain("19565550142");
+      expect(line).not.toContain(payload);
+    }
+  });
+
+  it("a malformed token, a payload over 4096 characters, and an unrecognized attest letter all read as (present)", () => {
+    expect(sipAttestation(ev([{ name: "Identity", value: "not-a-jwt" }]))).toBe("identity=(present)");
+    const hugePayload = "a".repeat(4097);
+    expect(sipAttestation(ev([{ name: "Identity", value: `h.${hugePayload}.s` }]))).toBe("identity=(present)");
+    const dPayload = Buffer.from(JSON.stringify({ attest: "D" })).toString("base64url");
+    expect(sipAttestation(ev([{ name: "Identity", value: `h.${dPayload}.s` }]))).toBe("identity=(present)");
+  });
+
+  it("a verstat parameter inside From prints as a short word", () => {
+    expect(sipAttestation(ev([{ name: "From", value: "<sip:+19565550142@x;verstat=TN-Validation-Passed>;tag=1" }])))
+      .toBe("from.verstat=TN-Validation-Passed");
+  });
+
+  it("a verstat past 40 characters is unprintable", () => {
+    const long = "a".repeat(41);
+    expect(sipAttestation(ev([{ name: "From", value: `<sip:+19565550142@x;verstat=${long}>;tag=1` }])))
+      .toBe("from.verstat=(unprintable)");
+  });
+
+  it("a generic stir/shaken field holding 7+ digits is redacted", () => {
+    expect(sipAttestation(ev([{ name: "X-Stir-Orig", value: "19565550142" }]))).toBe("X-Stir-Orig=(redacted)");
+  });
+
+  it("bounded at MAX_ATTESTATION: 12 matching headers print only 10 (mutation: drop the cap -> FAILS)", () => {
+    const headers = Array.from({ length: 12 }, (_, i) => ({ name: `X-Attest-${i}`, value: "B" }));
+    const line = sipAttestation(ev(headers));
+    expect(line.split(",")).toHaveLength(10);
+    expect(line).not.toContain("X-Attest-10");
+    expect(line).not.toContain("X-Attest-11");
+  });
+
+  it("a header name that could forge a log line is counted, not printed", () => {
+    expect(sipAttestation(ev([{ name: "bad\nname", value: "x" }]))).toBe("none (+1 unprintable)");
   });
 });

@@ -1,16 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, stubToolResult, renderTranscript,
   resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
-  selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName,
+  selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName, newStubSession, STUB_BOOKING,
   CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
-  type CorpusFixture,
+  type CorpusFixture, type CorpusItem,
 } from "./corpus-lib";
 import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
 import { leadHasContact } from "../../concierge/lead";
 import { capturePhoneLead, droppedNote } from "../tools/placeholders";
+import { NOT_CONFIRMED_YET, BOOK_ASK_WHOSE, LEAD_ASK_WHOSE } from "../identity/results";
 
 const ITEM = `---
 lang: es
@@ -253,6 +254,66 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
   });
 });
 
+// S-47e Task 14 (O2): with a `session`, the five identity-bearing tools run registry.ts's own identity/flow.ts
+// and identity/record.ts functions instead of answering ok:true, so a corpus run cannot pass the ladder vacuously.
+describe("newStubSession / stubToolResult with a session: the stub follows the live identity ladder", () => {
+  const ITEM: CorpusItem = {
+    file: "01-en-id.md", id: "01", lang: "en", medium: "phone", transfer: false, booking: true, disclosure: false,
+    callerId: "shown", afterHours: null, facts: "x", caller: ["x"], must: ["x"], mustNot: ["x"],
+  };
+  const FIXTURE_NONE: CorpusFixture = FIXTURE; // no contactsOnNumber at all
+  const FIXTURE_TWO: CorpusFixture = { ...FIXTURE, contactsOnNumber: [{ firstName: "Ana", lastName: "Prueba" }, { firstName: "Beto", lastName: "Prueba" }] };
+  const FIXTURE_ONE: CorpusFixture = { ...FIXTURE, contactsOnNumber: [{ firstName: "Dan", lastName: "Lopez" }] };
+
+  it("with no contactsOnNumber, find_my_booking answers { found: false } (nobody on the number)", () => {
+    const session = newStubSession(FIXTURE_NONE, ITEM, "events");
+    expect(stubToolResult("find_my_booking", {}, { medium: "phone", timezone: FIXTURE_NONE.timezone, session })).toEqual({ found: false });
+  });
+
+  it("cancel_appointment of a booking id the item never saw is the live refusal", () => {
+    const session = newStubSession(FIXTURE_TWO, ITEM, "events");
+    expect(stubToolResult("cancel_appointment", { bookingId: "nope" }, { medium: "phone", timezone: FIXTURE_TWO.timezone, session }))
+      .toEqual({ ok: false, error: "no such booking — use find_my_booking first" });
+  });
+
+  it("cancelling the fixed booking before any confirmation, on a number with two contacts, is NOT_CONFIRMED_YET (mutation: today's { ok: true } for every unmirrored tool -> FAILS)", () => {
+    const session = newStubSession(FIXTURE_TWO, ITEM, "events");
+    expect(stubToolResult("cancel_appointment", { bookingId: STUB_BOOKING.bookingId }, { medium: "phone", timezone: FIXTURE_TWO.timezone, session }))
+      .toEqual(NOT_CONFIRMED_YET);
+  });
+
+  it("a booking the item made on this call can be cancelled with no confirmation (rung 0)", () => {
+    const session = newStubSession(FIXTURE_TWO, ITEM, "events");
+    const ctx = { medium: "phone" as const, timezone: FIXTURE_TWO.timezone, session };
+    const made = stubToolResult("book_appointment",
+      { name: "Carla Prueba", startsAt: "2027-06-08T16:00:00.000Z", phone: "9565550199" }, ctx) as { bookingId: string };
+    expect(stubToolResult("cancel_appointment", { bookingId: made.bookingId }, ctx)).toEqual({ ok: true });
+  });
+
+  it("a booking and a lead for someone else on a one-contact number ask whose it is, and pass with forSomeoneElse: true", () => {
+    const bookCtx = { medium: "phone" as const, timezone: FIXTURE_ONE.timezone, session: newStubSession(FIXTURE_ONE, ITEM, "events") };
+    expect(stubToolResult("book_appointment", { name: "Ana Prueba", startsAt: "2027-06-08T16:00:00.000Z" }, bookCtx)).toEqual(BOOK_ASK_WHOSE);
+    expect(stubToolResult("book_appointment", { name: "Ana Prueba", startsAt: "2027-06-08T16:00:00.000Z", forSomeoneElse: true }, bookCtx))
+      .toMatchObject({ ok: true });
+
+    const leadCtx = { medium: "phone" as const, timezone: FIXTURE_ONE.timezone, session: newStubSession(FIXTURE_ONE, ITEM, "events") };
+    expect(stubToolResult("capture_lead", { fields: { fullName: "Ana Prueba", need: "Quote" } }, leadCtx)).toEqual(LEAD_ASK_WHOSE);
+    expect(stubToolResult("capture_lead", { fields: { fullName: "Ana Prueba", need: "Quote" }, forSomeoneElse: true }, leadCtx)).toEqual({ ok: true });
+  });
+
+  it("without a session, find_my_booking still answers { ok: true } as every untouched tool does (unchanged)", () => {
+    expect(stubToolResult("find_my_booking", {}, { medium: "phone", timezone: "America/Chicago" })).toEqual({ ok: true });
+  });
+
+  it("every existing corpus fixture still parses, with no contactsOnNumber (parseFixture is unchanged)", () => {
+    const dir = path.resolve(__dirname, "corpus/fixtures");
+    for (const file of readdirSync(dir)) {
+      const fixture = parseFixture(file, readFileSync(path.join(dir, file), "utf8"));
+      expect(fixture.contactsOnNumber).toBeUndefined();
+    }
+  });
+});
+
 describe("a Realtime error event is never dropped (m1)", () => {
   it.each([
     [{ response: true, session: false }, "response"],
@@ -434,7 +495,11 @@ describe("--repeat N plays each item N times (1 to 5, default 1)", () => {
   });
   it("the script hands the caller's lines so far to the stub (v3 A3: the web name-from-email check; mutation: drop said -> FAILS)", () => {
     const src = SCRIPT();
-    expect(src).toMatch(/stubToolResult\(name, a, \{ medium: item\.medium, timezone: f\.timezone, said \}\)/);
+    expect(src).toMatch(/stubToolResult\(name, a, \{ medium: item\.medium, timezone: f\.timezone, said, session \}\)/);
     expect(src.match(/stub\((?:String\(ev\.name\)|c\.function\.name), a, callerLines\(turns\)\)/g)?.length).toBe(2);
+  });
+  it("the script builds a per-item identity session and hands it to the stub (S-47e Task 14, O2; mutation: drop newStubSession -> FAILS)", () => {
+    const src = SCRIPT();
+    expect(src).toMatch(/const session = newStubSession\(f, item, moduleId!\);/);
   });
 });

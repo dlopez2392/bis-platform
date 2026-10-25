@@ -7,7 +7,8 @@ import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         listTagNamesForContacts } from "../contacts";
+         listTagNamesForContacts, flagMatchesOf, phoneDigits, setContactPhoneCountry } from "../contacts";
+import { ensureHoldingContact } from "../voice";
 // S-02 A2: company_name is no longer a ContactInput key — it is the
 // contact's business group, kept in sync by the database's own trigger
 // (client-groups.ts's own header comment). The one test below that sorts by
@@ -1153,4 +1154,222 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       expect(await convs(db, accountId, chatty)).toHaveLength(1);
       expect(await convs(db, accountId, quiet)).toHaveLength(1);
     }), 30_000);
+});
+
+/**
+ * S-47e (E7, E8; spec 5.10.1, 5.12.3; plan P29): `matchBy: "email_only"` and the holding skip.
+ * Every case seeds through the real writers (createContact, ensureHoldingContact, updateContact) and
+ * re-reads the stored rows. The numbers are the demo block's fiction shapes, account-scoped.
+ */
+describe("S-47e: matchBy email_only and a shared number's holding record", () => {
+  const P = "+19565550188";
+  const flagsOf = async (db: SupabaseClient, accountId: string) => {
+    const { data, error } = await db.from("contact_duplicate_flags")
+      .select("contact_a, contact_b, reason").eq("account_id", accountId);
+    if (error) throw new Error(error.message);
+    return (data ?? []) as { contact_a: string; contact_b: string; reason: string }[];
+  };
+  const onNumber = async (db: SupabaseClient, accountId: string, e164: string) => {
+    const { data, error } = await db.from("contacts").select("id, first_name, holds_shared_number")
+      .eq("account_id", accountId).eq("phone_key", phoneDigits(e164));
+    if (error) throw new Error(error.message);
+    return (data ?? []) as { id: string; first_name: string | null; holds_shared_number: boolean }[];
+  };
+
+  describe("matchBy: email_only", () => {
+    it("a contact with the same phone and no email match is NOT returned: a new person lands beside her", () =>
+      withTestAccount(async (db, accountId) => {
+        const ana = await createContact(db, accountId, { firstName: "Ana", lastName: "Prueba", phone: P }, "user_test");
+        const beto = await createContact(db, accountId,
+          { firstName: "Beto", lastName: "Prueba", phone: P, matchBy: "email_only" }, "user_test");
+        expect(beto.existing).toBe(false);
+        expect(beto.id).not.toBe(ana.id);
+        const rows = await onNumber(db, accountId, P);
+        expect(rows.map((r) => r.id).sort()).toEqual([ana.id, beto.id].sort());
+        expect(rows.find((r) => r.id === beto.id)?.first_name).toBe("Beto");
+      }));
+
+    it("an email match still returns its contact, whatever the phone", () =>
+      withTestAccount(async (db, accountId) => {
+        const ana = await createContact(db, accountId,
+          { firstName: "Ana", email: "ana@example.com", phone: P }, "user_test");
+        const got = await createContact(db, accountId,
+          { firstName: "A", email: "ANA+x@example.com", phone: "+19565550199", matchBy: "email_only" }, "user_test");
+        expect(got).toEqual({ id: ana.id, existing: true, flagged: false });
+        const { data } = await db.from("contacts").select("id").eq("account_id", accountId);
+        expect(data?.map((r) => r.id)).toEqual([ana.id]);
+      }));
+
+    it("the new person and the phone match are filed for the merge queue as ONE pair, reason phone_shared_new_person (P29; mutation: drop the flag -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const roberto = await createContact(db, accountId, { firstName: "Roberto", lastName: "Prueba", phone: P }, "user_test");
+        const beto = await createContact(db, accountId,
+          { firstName: "Beto", lastName: "Prueba", phone: P, matchBy: "email_only" }, "user_test");
+        expect(beto.flagged).toBe(true);
+        const [lo, hi] = [roberto.id, beto.id].sort();
+        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_shared_new_person" }]);
+      }));
+
+    it("no country-twin read on that path: +52 beside a +1 contact of the same ten digits is a new contact with no flag at all; without matchBy the same pair files phone_country_twin", () =>
+      withTestAccount(async (db, accountId) => {
+        await createContact(db, accountId, { firstName: "Ana", phone: "+19565550170" }, "user_test");
+        const mx = await createContact(db, accountId,
+          { firstName: "Mx", phone: "+529565550170", matchBy: "email_only" }, "user_test");
+        expect(mx.existing).toBe(false);
+        expect(mx.flagged).toBe(false);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+
+        // The control, so the case can fail: the same pair, no matchBy, on a fresh account.
+        await withTestAccount(async (_db2, accountB) => {
+          const anaB = await createContact(db, accountB, { firstName: "Ana", phone: "+19565550170" }, "user_test");
+          const mxB = await createContact(db, accountB, { firstName: "Mx", phone: "+529565550170" }, "user_test");
+          expect(mxB.existing).toBe(false);
+          expect(mxB.flagged).toBe(true);
+          const [lo, hi] = [anaB.id, mxB.id].sort();
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_twin" }]);
+        });
+      }));
+
+    it("the mirrored +1 branch: a +1 number beside a +52 contact of the same ten digits is a new contact with no flag under matchBy; without matchBy the same pair files phone_country_twin (mutation: drop the +1 branch's emailOnly guard -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        await createContact(db, accountId, { firstName: "Mx", phone: "+529565550172" }, "user_test");
+        const us = await createContact(db, accountId,
+          { firstName: "Us", phone: "+19565550172", matchBy: "email_only" }, "user_test");
+        expect(us.existing).toBe(false);
+        expect(us.flagged).toBe(false);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+
+        // The control, so the case can fail: the same pair, no matchBy, on a fresh account.
+        await withTestAccount(async (_db2, accountB) => {
+          const mxB = await createContact(db, accountB, { firstName: "Mx", phone: "+529565550172" }, "user_test");
+          const usB = await createContact(db, accountB, { firstName: "Us", phone: "+19565550172" }, "user_test");
+          expect(usB.existing).toBe(false);
+          expect(usB.flagged).toBe(true);
+          const [lo, hi] = [mxB.id, usB.id].sort();
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_twin" }]);
+        });
+      }));
+
+    it("account B's contact with the same email is never returned for account A (mutation: drop the email branch's account filter -> FAILS)", () =>
+      withTestAccount(async (db, accountA) => {
+        await withTestAccount(async (_db2, accountB) => {
+          const inB = await createContact(db, accountB, { firstName: "Bea", email: "shared@example.com" }, "user_test");
+          const inA = await createContact(db, accountA,
+            { firstName: "Bea", email: "shared@example.com", phone: P, matchBy: "email_only" }, "user_test");
+          expect(inA.existing).toBe(false);
+          expect(inA.id).not.toBe(inB.id);
+          const { data } = await db.from("contacts").select("account_id").eq("id", inA.id).single();
+          expect(data?.account_id).toBe(accountA);
+        });
+      }));
+  });
+
+  describe("the holding skip", () => {
+    it("createContact on the number, with and without matchBy, never returns the holding record; without matchBy it returns Ana (mutation: drop the direct read's holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        // The holding record first, so an unfiltered read meets it first.
+        const holding = await ensureHoldingContact(db, accountId, P, "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", lastName: "Prueba", phone: P }, "user_test");
+        expect(ana.existing).toBe(false);
+        expect(ana.id).not.toBe(holding.id);
+
+        const again = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+        expect(again).toEqual({ id: ana.id, existing: true, flagged: false });
+
+        const beto = await createContact(db, accountId,
+          { firstName: "Beto", lastName: "Prueba", phone: P, matchBy: "email_only" }, "user_test");
+        expect(beto.existing).toBe(false);
+        expect([holding.id, ana.id]).not.toContain(beto.id);
+        const [lo, hi] = [ana.id, beto.id].sort();
+        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_shared_new_person" }]);
+        const rows = await onNumber(db, accountId, P);
+        expect(rows).toHaveLength(3);
+        expect(rows.find((r) => r.id === holding.id)).toEqual({ id: holding.id, first_name: "Caller", holds_shared_number: true });
+      }));
+
+    it("with ONLY the holding record on the number, createContact makes a NEW contact (mutation: drop the filter -> it returns the holding id, FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const holding = await ensureHoldingContact(db, accountId, P, "voice");
+        const dee = await createContact(db, accountId, { firstName: "Dee", phone: P }, "user_test");
+        expect(dee.existing).toBe(false);
+        expect(dee.id).not.toBe(holding.id);
+        const rows = await onNumber(db, accountId, P);
+        expect(rows.map((r) => r.id).sort()).toEqual([holding.id, dee.id].sort());
+        expect(rows.find((r) => r.id === holding.id)?.first_name).toBe("Caller");
+      }));
+
+    it("the legacy read never makes the holding record a country twin: no flag names it (mutation: drop the legacy read's holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        // +19565550171 keys 9565550171; +529565550171's legacy keys are ["9565550171", "5219565550171"].
+        const holding = await ensureHoldingContact(db, accountId, "+19565550171", "voice");
+        const gil = await createContact(db, accountId, { firstName: "Gil", phone: "+529565550171" }, "user_test");
+        expect(gil.existing).toBe(false);
+        expect(gil.id).not.toBe(holding.id);
+        expect(gil.flagged).toBe(false);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+      }));
+
+    it("updateContact of Ana's phone onto the number files no phone_match_on_edit pair with the holding record (mutation: drop the post-write check's holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        await ensureHoldingContact(db, accountId, P, "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+19565550189" }, "user_test");
+        expect(await updateContact(db, accountId, ana.id, { phone: P }, "user_test")).toEqual({ flagged: false });
+        expect((await getContact(db, accountId, ana.id))?.phone).toBe(P);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+      }));
+
+    it("setContactPhoneCountry picking the shared number's country files no phone_country_pick pair with its holding record; the same pick beside a real person does (Task 4 review I1; mutation: drop the twin read's holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const holding = await ensureHoldingContact(db, accountId, "+525512345678", "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+15512345678" }, "user_test");
+        expect(ana.existing).toBe(false);
+        expect(await setContactPhoneCountry(db, accountId, ana.id,
+          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+        expect((await getContact(db, accountId, ana.id))?.phone).toBe("+525512345678");
+        expect((await getContact(db, accountId, holding.id))?.first_name).toBe("Caller");
+        expect(await flagsOf(db, accountId)).toEqual([]);
+
+        // The control, so the case can fail: a real person on that number instead of the holding record. Ana
+        // starts on an unrelated number, so her own createContact files nothing and only the pick can.
+        await withTestAccount(async (_db2, accountB) => {
+          const luz = await createContact(db, accountB, { firstName: "Luz", phone: "+525512345678" }, "user_test");
+          const anaB = await createContact(db, accountB, { firstName: "Ana", phone: "+15512340000" }, "user_test");
+          expect(await flagsOf(db, accountB)).toEqual([]);
+          expect(await setContactPhoneCountry(db, accountB, anaB.id,
+            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+          const [lo, hi] = [luz.id, anaB.id].sort();
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_pick" }]);
+        });
+      }));
+
+    it("flagMatchesOf for Ana on the number writes 0 pairs with the holding record (mutation: drop its holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        await ensureHoldingContact(db, accountId, P, "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+        expect(ana.existing).toBe(false);
+        expect(await flagMatchesOf(db, accountId, ana.id)).toBe(0);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+      }));
+
+    it("listContacts and countContacts leave it out, searched for Caller too (mutation: drop the filter from either -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const holding = await ensureHoldingContact(db, accountId, P, "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+        const { data: all } = await db.from("contacts").select("id").eq("account_id", accountId);
+        expect(all?.map((r) => r.id).sort()).toEqual([holding.id, ana.id].sort());
+
+        expect(await countContacts(db, accountId)).toBe(1);
+        expect((await listContacts(db, accountId)).map((r) => r.id)).toEqual([ana.id]);
+        expect(await countContacts(db, accountId, { search: "Caller" })).toBe(0);
+        expect(await listContacts(db, accountId, { search: "Caller" })).toEqual([]);
+      }));
+
+    it("getContact reads holds_shared_number: true for the holding record, false for Ana (the COLS change)", () =>
+      withTestAccount(async (db, accountId) => {
+        const holding = await ensureHoldingContact(db, accountId, P, "voice");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+        expect((await getContact(db, accountId, holding.id))?.holds_shared_number).toBe(true);
+        expect((await getContact(db, accountId, ana.id))?.holds_shared_number).toBe(false);
+      }));
+  });
 });

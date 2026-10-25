@@ -123,3 +123,86 @@ describe("toolSchemas — manage mode (Always take a message)", () => {
     expect(JSON.stringify(tools)).not.toContain("book_appointment");
   });
 });
+
+describe("S-47e: confirm_identity (plan Task 6)", () => {
+  const MEETING_TYPES = ["in_person", "phone", "video"] as const;
+  const CONFIRM_DESCRIPTION = "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.";
+  const names = (list: readonly unknown[]) => (list as Tool[]).map((t) => t.name);
+
+  it("is on the session exactly where find_my_booking is: full (every meeting type) and manage, never none", () => {
+    expect(MEETING_TYPES).toHaveLength(3);
+    for (const mt of MEETING_TYPES) {
+      expect(names(toolSchemas("full", mt, false)), mt).toContain("confirm_identity");
+      expect(names(toolSchemas("manage", mt, false)), mt).toContain("confirm_identity");
+      expect(names(toolSchemas("none", mt, false)), mt).not.toContain("confirm_identity");
+      expect(names(toolSchemas("none", mt, true)), mt).not.toContain("confirm_identity");
+    }
+  });
+
+  it("takes a full name, and an email only when asked for", () => {
+    for (const mt of MEETING_TYPES) {
+      expect(tool(toolSchemas("full", mt, false), "confirm_identity").parameters).toEqual({
+        type: "object",
+        properties: {
+          fullName: { type: "string", description: "First and last name, as the caller said it." },
+          email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." },
+        },
+        required: ["fullName"],
+      });
+    }
+  });
+
+  it("its description says when to call it, including for a different person, and never to suggest a name (P25)", () => {
+    const d = tool(toolSchemas("full", "in_person", false), "confirm_identity").description;
+    expect(d).toBe(CONFIRM_DESCRIPTION);
+    expect(d).toMatch(/never suggest, guess or spell/);
+    expect(d).toMatch(/whenever the caller asks about a different person's appointment than the one already confirmed/);
+    expect(tool(toolSchemas("manage", "in_person", false), "confirm_identity").description).toBe(CONFIRM_DESCRIPTION);
+  });
+
+  it("find_my_booking says to confirm who they are when it asks, then look again", () => {
+    for (const mt of MEETING_TYPES) {
+      expect(tool(toolSchemas("full", mt, false), "find_my_booking").description).toBe(
+        "Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number. If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again.");
+    }
+  });
+});
+
+describe("S-47e: who a write is for (plan Task 7)", () => {
+  type Full = { name: string; description: string; parameters: { type: string; properties: Record<string, unknown>; required: readonly string[] } };
+  const full = (list: readonly unknown[], name: string) => tool(list, name) as unknown as Full;
+  const FOR_BOOK = { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." };
+  const FOR_LEAD = { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." };
+
+  it("take_message takes the caller's name, or that they would not give it; only the body is required", () => {
+    const msg = full(toolSchemas("full", "in_person", false), "take_message");
+    expect(msg.description).toBe("Leave a message for a human callback.");
+    expect(msg.parameters).toEqual({
+      type: "object",
+      properties: {
+        body: { type: "string" },
+        callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." },
+        name: { type: "string", description: "The caller's first and last name, when you were asked for it." },
+        nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." },
+      },
+      required: ["body"],
+    });
+  });
+
+  it("book_appointment carries forSomeoneElse on every meeting type, the video variant included; required is unchanged", () => {
+    const types = ["in_person", "phone", "video"] as const;
+    expect(types).toHaveLength(3);
+    for (const mt of types) {
+      const book = full(toolSchemas("full", mt, false), "book_appointment");
+      expect(book.parameters.properties.forSomeoneElse, mt).toEqual(FOR_BOOK);
+      expect(book.parameters.required, mt).toEqual(["startsAt", "name"]);
+    }
+  });
+
+  it("capture_lead carries forSomeoneElse beside fields; required is unchanged", () => {
+    const lead = full(toolSchemas("full", "in_person", false), "capture_lead");
+    expect(Object.keys(lead.parameters.properties)).toEqual(["fields", "forSomeoneElse"]);
+    expect(lead.parameters.properties.forSomeoneElse).toEqual(FOR_LEAD);
+    expect(lead.parameters.required).toEqual(["fields"]);
+  });
+});

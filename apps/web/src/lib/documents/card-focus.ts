@@ -26,6 +26,9 @@ export function workRowHref(
     contactId: string | null;
     documentFocus?: { documentId: string; category: string | null; groupId: string | null } | null;
     closureFocus?: { kind: ClosureKind; on: string } | null;
+    /** S-47e (spec 5.6, S11): the call a call-linked To-do (the identity To-do; a callback with no
+     *  contact) names. Read only when neither closureFocus/documentFocus nor contactId answered already. */
+    callId?: string | null;
   },
 ): string | null {
   const base = `/dashboard/accounts/${accountId}`;
@@ -38,5 +41,7 @@ export function workRowHref(
     if (f.groupId) return `${base}/groups/${f.groupId}?${q}`;
     if (row.contactId) return `${base}/contacts/${row.contactId}?${q}`;
   }
-  return row.contactId ? `${base}/contacts/${row.contactId}` : null;
+  if (row.contactId) return `${base}/contacts/${row.contactId}`;
+  // S-47e (spec 5.6, S11): a call's To-do with no customer (the identity To-do; a callback with no contact) opens the call.
+  return row.callId ? `${base}/calls/${row.callId}` : null;
 }

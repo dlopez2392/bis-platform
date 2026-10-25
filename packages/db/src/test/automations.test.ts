@@ -22,7 +22,7 @@ import {
   parseInstantReplyConfig, stampInstantReplySent, countInstantRepliesSince,
   listDueAppointmentConfirms, getDueAppointmentConfirmById,
   stampAppointmentConfirmAsked, stampAppointmentConfirmSmsFailed,
-  matchConfirmationReply, applyConfirmationReply,
+  matchConfirmationReply, applyConfirmationReply, listOutstandingConfirmAsks,
   APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_MIN_LEAD_MS,
   parseReferralAskConfig, listDueReferralAsks, getDueReferralAskById,
@@ -816,6 +816,66 @@ describe("appointment confirm — data layer", () => {
       const { data } = await db.from("bookings").select("confirm_reply").eq("id", b.id).single();
       expect((data as { confirm_reply: string | null }).confirm_reply).toBeNull();
     });
+  });
+});
+
+describe("listOutstandingConfirmAsks — a shared number's household (S-47e S30)", () => {
+  const byContact = (rows: { bookingId: string; contactId: string }[]) =>
+    [...rows].sort((a, b) => a.contactId.localeCompare(b.contactId));
+
+  it("returns each household member's asked, unanswered, future, booked appointment; an answer, a cancellation, a past start or no ask leaves it out", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const person = async (firstName: string, phone: string) =>
+        (await createContact(db, accountId, { firstName, lastName: "Ruiz", phone }, "user_test")).id;
+      const [ana, beto, cora, dora, eva] = [
+        await person("Ana", "(956) 555-0131"), await person("Beto", "(956) 555-0132"),
+        await person("Cora", "(956) 555-0133"), await person("Dora", "(956) 555-0134"),
+        await person("Eva", "(956) 555-0135"),
+      ];
+      const now = new Date("2027-09-01T12:00:00Z");
+      const mk = (contactId: string, startsAt: Date) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt, endsAt: new Date(startsAt.getTime() + MINUTE) }, "user_test");
+      const anaB = await mk(ana, new Date(now.getTime() + 48 * HOUR));
+      const betoB = await mk(beto, new Date(now.getTime() + 50 * HOUR));
+      const coraB = await mk(cora, new Date(now.getTime() + 52 * HOUR));
+      const doraB = await mk(dora, new Date(now.getTime() - HOUR));
+      await mk(eva, new Date(now.getTime() + 54 * HOUR));   // never asked
+      for (const b of [anaB, betoB, coraB, doraB]) await stampAppointmentConfirmAsked(db, b.id);
+      await cancelBookingByToken(db, coraB.cancelToken);
+
+      expect(byContact(await listOutstandingConfirmAsks(db, accountId, [ana, beto], now))).toEqual(byContact([
+        { bookingId: anaB.id, contactId: ana }, { bookingId: betoB.id, contactId: beto },
+      ]));
+      // Cancelled, already started, never asked: none is an ask anyone is answering.
+      // Mutations: drop .eq("status", "booked") / .gt("starts_at") / .not("confirm_asked_at", "is", null) → FAILS.
+      expect(await listOutstandingConfirmAsks(db, accountId, [cora, dora, eva], now)).toEqual([]);
+
+      expect(await applyConfirmationReply(db, accountId, ana, "yes", now)).toBe("yes");
+      // Mutation: drop .is("confirm_reply", null) → Ana's answered ask comes back, FAILS.
+      expect(await listOutstandingConfirmAsks(db, accountId, [ana, beto, cora, dora, eva], now))
+        .toEqual([{ bookingId: betoB.id, contactId: beto }]);
+    });
+  });
+
+  it("[] asks nothing and answers []", async () => {
+    const from = vi.fn(() => { throw new Error("no request expected"); });
+    expect(await listOutstandingConfirmAsks({ from } as never, "acct", [], new Date())).toEqual([]);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("never reaches another account's ask (mutation: drop .eq(\"account_id\", …) → FAILS)", async () => {
+    await withTestAccount(async (db, accountA) => withTestAccount(async (_d, accountB) => {
+      const cal = await getOrCreateCalendar(db, accountB, "user_test");
+      const { id: bContact } = await createContact(db, accountB, { firstName: "Other", lastName: "Tenant", phone: "(956) 555-0136" }, "user_test");
+      const now = new Date("2027-09-01T12:00:00Z");
+      const b = await createBooking(db, accountB,
+        { calendarId: cal.id, contactId: bContact, startsAt: new Date(now.getTime() + 48 * HOUR), endsAt: new Date(now.getTime() + 49 * HOUR) }, "user_test");
+      await stampAppointmentConfirmAsked(db, b.id);
+      // The positive control: on its own account the ask is there.
+      expect(await listOutstandingConfirmAsks(db, accountB, [bContact], now)).toEqual([{ bookingId: b.id, contactId: bContact }]);
+      expect(await listOutstandingConfirmAsks(db, accountA, [bContact], now)).toEqual([]);
+    }));
   });
 });
 

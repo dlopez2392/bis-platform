@@ -1243,3 +1243,39 @@ describe("POST /api/voice/incoming — today's status and the closed days (S-47d
     });
   });
 });
+
+describe("POST /api/voice/incoming — the SIP leg's caller-ID attestation, observation only (S-47e, spec 5.7, S13)", () => {
+  /** Same shape callIncomingEvent builds, plus an optional Identity header — nothing here is verified,
+   *  stored or decided on; the test exists to prove it reaches exactly one log line and nothing else. */
+  function eventWithIdentity(identityValue?: string) {
+    const sip_headers: { name: string; value: string }[] = [
+      { name: "From", value: "sip:+19562921696@sip.example.com" },
+      { name: "X-BIS-Called", value: "+19565550999" },
+    ];
+    if (identityValue !== undefined) sip_headers.push({ name: "Identity", value: identityValue });
+    return {
+      id: "evt_1", created_at: Math.floor(Date.now() / 1000),
+      type: "realtime.call.incoming", data: { call_id: "call_abc123", sip_headers },
+    };
+  }
+
+  it("the \"incoming call\" log line carries the attestation claim, and the accept is byte-identical with or without it (mutation: skip the Identity header -> the attestation assertion FAILS)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const payload = Buffer.from(JSON.stringify({ attest: "B" })).toString("base64url");
+
+    unwrapMock.mockResolvedValue(eventWithIdentity(`h.${payload}.s`));
+    await POST(req());
+    const line = logSpy.mock.calls.find((c) => c[1] === "incoming call");
+    expect(line, "the incoming call log line was written").toBeDefined();
+    expect(line![2]).toMatchObject({ attestation: "identity=attest:B" });
+    const withIdentityBody = (fetchMock.mock.calls[0]![1] as { body: string }).body;
+
+    fetchMock.mockClear();
+    unwrapMock.mockResolvedValue(eventWithIdentity());
+    await POST(req());
+    const withoutIdentityBody = (fetchMock.mock.calls[0]![1] as { body: string }).body;
+
+    expect(JSON.parse(withIdentityBody)).toEqual(JSON.parse(withoutIdentityBody));
+    logSpy.mockRestore();
+  });
+});

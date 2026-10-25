@@ -182,6 +182,8 @@ export async function setContactBusinessAction(
     db = await dbForRequest();
     before = await getContact(db, accountId, contactId);
     if (!before) return { ok: false, error: "Save failed — please try again." };
+    // S-47e (spec 5.12.3): a shared number's holding record is nobody's business (0098's CHECK refuses one too).
+    if (before.holds_shared_number) return { ok: false, error: "Save failed — please try again." };
     [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
     if (!r || r.status === "not_found") return { ok: false, error: "Save failed — please try again." };
     if (r.status === "too_long") return { ok: false, error: m["contact.business.tooLong"] };

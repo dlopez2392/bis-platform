@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { notFound } from "next/navigation";
-import { getContact, getInboundSettings, readReplyToken, serviceDb, type AuthorKind } from "@bis/db";
+import { notFound, redirect } from "next/navigation";
+import { getContact, getInboundSettings, readReplyToken, serviceDb, findConversationForContact, type AuthorKind } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -93,6 +93,12 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
+  // S-47e (E8, spec 5.12.4): a shared number's holding record is not a customer; its page is its thread, so no
+  // card, field, document, relationship or deal can be added to it.
+  if (contact.holds_shared_number) {
+    const thread = await findConversationForContact(db, accountId, contactId);
+    redirect(`/dashboard/accounts/${accountId}/conversations${thread ? `?c=${thread}` : ""}`);
+  }
   // F-085 (spec §7.3): consent is keyed by ADDRESS and a STOP can arrive tied to no contact, so a
   // Technician's own token sees only part of the ledger. Every consent DISPLAY read (and the hold
   // check's ledger read) goes through this client, built only here, after getContact on the request

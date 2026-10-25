@@ -144,6 +144,47 @@ describe("every write proves its target through the request client first (mutati
   });
 });
 
+describe("S-47e (spec 5.12.3): a shared number's holding record is never put in a household or a business (mutation: drop the holding check in any action -> its case FAILS)", () => {
+  const HOLDING = { id: C, first_name: "Caller", holds_shared_number: true };
+  it("create: refused before the service write, logged with the reason", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    db.getContact.mockResolvedValue(HOLDING);
+    db.createGroupWithMember.mockResolvedValue({ status: "ok", memberId: M, name: "Garcia", existed: false });
+    expect(await A.createGroupAction("a1", C, "household", "Garcia")).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", C);
+    expect(db.createGroupWithMember).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(`createGroupAction: account a1: groups.refused (shared number holding record): contact ${C}`);
+    warn.mockRestore();
+  });
+  it("add: refused before the service write, even with a visible household", async () => {
+    db.getContact.mockResolvedValue(HOLDING);
+    db.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Garcia", billingAddress: null });
+    db.addContactToGroup.mockResolvedValue({ status: "ok", memberId: M });
+    expect(await A.addToGroupAction("a1", C, G)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", C);
+    expect(db.addContactToGroup).not.toHaveBeenCalled();
+  });
+  it("restore: Staff's snapshot naming it is refused before the service write", async () => {
+    access.role = "staff";
+    db.getContact.mockResolvedValue(HOLDING);
+    db.restoreMembership.mockResolvedValue("ok");
+    expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", C);
+    expect(db.restoreMembership).not.toHaveBeenCalled();
+  });
+  it("the control: a person (holds_shared_number false) is written", async () => {
+    access.role = "staff";
+    db.getContact.mockResolvedValue({ ...HOLDING, first_name: "Ana", holds_shared_number: false });
+    db.createGroupWithMember.mockResolvedValue({ status: "ok", memberId: M, name: "Garcia", existed: false });
+    db.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Garcia", billingAddress: null });
+    db.addContactToGroup.mockResolvedValue({ status: "ok", memberId: M });
+    db.restoreMembership.mockResolvedValue("ok");
+    expect(await A.createGroupAction("a1", C, "household", "Garcia")).toEqual({ ok: true, memberId: M, name: "Garcia", existed: false });
+    expect(await A.addToGroupAction("a1", C, G)).toEqual({ ok: true, memberId: M });
+    expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: true });
+  });
+});
+
 describe("I1: a narrow caller restores only a membership THEY removed (no Undo into a group they cannot see)", () => {
   it.each(["technician", null])("role %s, contact visible, no matching removal on record: refused, nothing written", async (role) => {
     access.role = role;

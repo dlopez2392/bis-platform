@@ -261,6 +261,29 @@ describe("CallDetailPage", () => {
     expect(html).not.toContain("/calendar/bk1");
   });
 
+  /**
+   * S-47e Task 12 (plan P20): a call that opened a shared number's holding thread names no contact
+   * (0098's hold fires before any contact is ever matched), so its rail link opens that thread
+   * directly (`?c=`) and reads "Open the texts" — never the generic "View conversation", which would
+   * only point at the inbox's list.
+   */
+  it("a call with a conversation and NO contact links straight at the thread, worded 'Open the texts' (mutation: keep the generic list link/label -> FAILS)", async () => {
+    const html = await render({ ...CALL, contact_id: null, contact: null });
+
+    expect(html).toContain("/dashboard/accounts/acct1/conversations?c=cv1");
+    expect(renderedText(html)).toContain("Open the texts");
+    expect(renderedText(html)).not.toContain("View conversation");
+  });
+
+  it("a call WITH a contact keeps the generic conversations-list link, worded 'View conversation' (control)", async () => {
+    const html = await render(CALL);
+
+    expect(html).toContain("/dashboard/accounts/acct1/conversations");
+    expect(html).not.toContain("/dashboard/accounts/acct1/conversations?c=cv1");
+    expect(renderedText(html)).toContain("View conversation");
+    expect(renderedText(html)).not.toContain("Open the texts");
+  });
+
   it("renders no dead links for a call that matched nothing", async () => {
     // The abandoned-call shape: nobody identified, nothing opened, nothing
     // booked. Every link on this page is conditional on its own id, so the

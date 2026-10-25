@@ -38,12 +38,15 @@ export type MatchIndex = { byEmail: Map<string, string>; byPhone: Map<string, st
 export async function buildMatchIndex(
   db: SupabaseClient, accountId: string,
 ): Promise<MatchIndex> {
-  const { data, error } = await db.from("contacts").select("id, email, phone")
+  const { data, error } = await db.from("contacts").select("id, email, phone, holds_shared_number")
     .eq("account_id", accountId);
   if (error) throw new Error(`buildMatchIndex failed: ${error.message}`);
   const byEmail = new Map<string, string>();
   const byPhone = new Map<string, string>();
   for (const row of data ?? []) {
+    // S-47e (spec 5.12.3): a shared number's holding record (0098) is never a match, so an imported row
+    // never updates it.
+    if (row.holds_shared_number) continue;
     if (row.email) byEmail.set(String(row.email).toLowerCase(), row.id as string);
     if (row.phone) {
       const key = phoneDigits(String(row.phone));

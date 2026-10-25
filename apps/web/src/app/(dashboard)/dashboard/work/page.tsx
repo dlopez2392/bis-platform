@@ -17,6 +17,7 @@ import { UsageStaleBanner } from "@/components/usage-stale-banner";
 import { requireAgency } from "@/lib/auth";
 import { bucketAgencyWork } from "@/lib/work/agency-buckets";
 import { contactDisplayName } from "@/lib/format";
+import { holdingLabel } from "@/lib/contacts/holding-label";
 import { m } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
@@ -142,11 +143,12 @@ export default async function AgencyWorkPage() {
   if (contactIds.length > 0) {
     const { data: contacts, error } = await db
       .from("contacts")
-      .select("id, first_name, last_name")
+      .select("id, first_name, last_name, phone, holds_shared_number")
       .in("id", contactIds);
     if (error) throw new Error(`work: contacts lookup failed: ${error.message}`);
     for (const c of contacts ?? []) {
-      contactNames[c.id] = contactDisplayName(c);
+      // S-47e (P19): a To-do on a shared number's holding record names the number, never "Caller".
+      contactNames[c.id] = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c);
     }
   }
 

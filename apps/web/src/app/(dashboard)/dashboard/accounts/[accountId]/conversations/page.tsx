@@ -4,8 +4,12 @@ import { MessagesSquare } from "lucide-react";
 import {
   listConversations, getConversationSummary, listMessages, getContact,
   listHeldInboundEmails, countHeldInboundEmails, getInboundSettings, listPeopleNames, getVoiceProfile,
+  listContactsOnNumber,
   type SupabaseClient,
 } from "@bis/db";
+import { isCallerIdNumber } from "@/lib/voice/phone-number";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { holdingLabel } from "@/lib/contacts/holding-label";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -18,7 +22,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { withWho } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { ledgerDb } from "@/lib/consent/ledger-db";
@@ -94,10 +98,10 @@ export default async function ConversationsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ c?: string; before?: string; who?: string; view?: string }>;
+  searchParams: Promise<{ c?: string; before?: string; who?: string; view?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { c, before, who: rawWho, view } = await searchParams;
+  const { c, before, who: rawWho, view, locale: localeParam } = await searchParams;
   const heldView = view === "held";
   const access = await requireAccountAccess(accountId);
   const db = await dbForRequest();
@@ -127,7 +131,9 @@ export default async function ConversationsPage({
   const zone = await renderZone(accountRow?.timezone);
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
-  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  // T17 design review M-6: ?locale= (the QA override, off on every Vercel deployment) as the call page reads it.
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const pseudo = requestPseudoMode({ locale: localeParam });
   const base = `/dashboard/accounts/${accountId}/conversations`;
 
   // Task 12: the "Needs a look" filter pill, beside Mine/Unassigned — read
@@ -326,6 +332,23 @@ export default async function ConversationsPage({
   // S-06 part 3 (spec §6): the composer's facts and its first channel, decided HERE. getContact on the
   // REQUEST client proves the customer is the viewer's (0068); only then are the two recipient states read
   // on the ledger client — the record page's order (contacts/[contactId]/page.tsx:84-121).
+  // S-47e (E8, spec 5.12.4-5): a shared number's holding thread names its number, says why, and offers
+  // Move to the people on the number (the request client's own RLS) for those who may reply in the inbox.
+  let holding: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null = null;
+  if (active?.holdsSharedNumber && active.sharedNumber) {
+    const number = active.sharedNumber;
+    let people: { id: string; name: string }[] = [];
+    try {
+      const { rows } = await listContactsOnNumber(db, accountId, number);
+      people = rows.filter((r) => !r.holds_shared_number && isCallerIdNumber(r.phone, number))
+        // T17 design review M-3: an unnamed person reads "no name" in the reader's language.
+        .map((r) => ({ id: r.id, name: [r.first_name, r.last_name].filter(Boolean).join(" ") || t(m, "contact.noName", locale) }));
+    } catch (e) {
+      console.error(`conversations: account ${accountId} holding people read failed: ${loggableError(e)}`);
+    }
+    holding = { number, canMove: seesWholeAccount(access), holdingContactId: active.contactId, people };
+  }
+
   const composerFacts = active
     ? await loadInboxComposer({
       contact: () => getContact(db, accountId, active.contactId),
@@ -356,6 +379,7 @@ export default async function ConversationsPage({
             before={currentBefore}
             timezone={zone.zone}
             who={assign.who}
+            locale={locale}
           />
         </div>
         {active ? (
@@ -378,10 +402,14 @@ export default async function ConversationsPage({
               emailViews={emailViews}
               forwardedNames={forwardedNames}
               personaName={personaName}
-              contactName={contactDisplayName({
-                first_name: active.contactFirstName,
-                last_name: active.contactLastName,
-              })}
+              holding={holding}
+              pseudo={pseudo}
+              contactName={active.holdsSharedNumber
+                ? holdingLabel(active.sharedNumber, locale)
+                : contactDisplayName({
+                  first_name: active.contactFirstName,
+                  last_name: active.contactLastName,
+                })}
               composer={composerFacts ? (
                 // key: a different thread is a different composer; its tab is that thread's server
                 // answer, never the last thread's (useState keeps its first value across re-renders).

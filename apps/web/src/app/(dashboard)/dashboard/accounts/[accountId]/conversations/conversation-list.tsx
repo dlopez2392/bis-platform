@@ -7,6 +7,8 @@ import { contactDisplayName, formatDateTimeInZone } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import type { Who } from "@/lib/assign/who";
+import type { Locale } from "@/lib/i18n/locale";
+import { holdingLabelParts } from "@/lib/contacts/holding-label";
 
 export function ConversationList({
   conversations,
@@ -17,6 +19,7 @@ export function ConversationList({
   before,
   timezone,
   who = "all",
+  locale = "en",
 }: {
   conversations: ConversationSummary[];
   base: string;
@@ -42,12 +45,18 @@ export function ConversationList({
   /** F-085 part 1: the Mine / Unassigned filter in view, carried on every
    *  row's link for the same reason `before` is. */
   who?: Who;
+  /** S-47e (E8, spec 5.12.4): a shared number's holding row names its number, never the fixture's own
+   *  "Caller" first name — defaults to English for every other caller of this list. */
+  locale?: Locale;
 }) {
   return (
     <div className="space-y-3">
       <ListPanel as="nav" className="flex flex-col">
         {conversations.map((conversation) => {
-          const name = contactDisplayName({
+          // S-47e (T17 design review I-1, I-3): a holding row's words truncate in the reader's language, and
+          // its number keeps its width, so two shared numbers never read the same.
+          const held = conversation.holdsSharedNumber ? holdingLabelParts(conversation.sharedNumber, locale) : null;
+          const name = held ? null : contactDisplayName({
             first_name: conversation.contactFirstName,
             last_name: conversation.contactLastName,
           });
@@ -59,6 +68,7 @@ export function ConversationList({
             <Link
               key={conversation.id}
               href={`${base}?${rowParams}`}
+              data-conversation-row={conversation.id}
               className={cn(
                 "flex flex-col gap-0.5 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--surface-3)]",
                 LIST_ROW,
@@ -69,12 +79,21 @@ export function ConversationList({
               )}
             >
               <span className="flex items-center justify-between gap-2">
-                <span className={cn(
-                  "truncate text-card-foreground",
-                  conversation.unreadCount > 0 ? "font-semibold" : "font-medium",
-                )}>
-                  {name}
-                </span>
+                {held ? (
+                  <span className={cn(
+                    "flex min-w-0 items-baseline gap-1 text-card-foreground",
+                    conversation.unreadCount > 0 ? "font-semibold" : "font-medium",
+                  )}>
+                    <span lang={locale} className="min-w-0 truncate">{held.words}</span>{" "}<span className="shrink-0 tabular-nums">{held.number}</span>
+                  </span>
+                ) : (
+                  <span className={cn(
+                    "truncate text-card-foreground",
+                    conversation.unreadCount > 0 ? "font-semibold" : "font-medium",
+                  )}>
+                    {name}
+                  </span>
+                )}
                 <span className="flex shrink-0 items-center gap-1.5">
                   {conversation.unreadCount > 0 ? (
                     <Badge aria-label={`${conversation.unreadCount} ${m["conversations.unread"]}`}>

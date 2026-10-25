@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({
   appendConsentEventGuarded: vi.fn(), ensureConsentTask: vi.fn(), nextBookedStart: vi.fn(),
   readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(), readConsentHistory: vi.fn(),
+  // S-47e (Task 10): the shared number's holding filing and the household reply (S30).
+  listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(), listOutstandingConfirmAsks: vi.fn(),
+  addTask: vi.fn(), getAccountLanguage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
@@ -16,7 +19,8 @@ const DB = {} as never;
 const NOW = new Date("2026-10-06T20:00:00Z");
 const input = (over: Partial<InboundConsentInput> = {}): InboundConsentInput => ({
   accountId: "acct_1", address: "+19562921696", text: "STOP", autoresponse: null, autoresponseRaw: null,
-  providerMessageId: "msg_1", messagingProfileId: "prof_1", contactId: "ct_1", firstFiling: true, now: NOW, ...over,
+  providerMessageId: "msg_1", messagingProfileId: "prof_1", contactId: "ct_1", firstFiling: true, now: NOW,
+  sharedNumber: null, ...over,
 });
 const appended = (id: string, prior: object | null = null) => ({ outcome: "appended", id, prior });
 const calls = () => db.appendConsentEventGuarded.mock.calls.map((c) => [c[1].action, c[1].method, c[2]]);
@@ -38,6 +42,11 @@ beforeEach(() => {
   db.getContact.mockResolvedValue({ id: "ct_1", first_name: "Ana", last_name: "Ruiz" });
   db.completeTasksForConsentEvents.mockResolvedValue([]);
   db.readConsentHistory.mockResolvedValue([]);
+  db.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
+  db.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });
+  db.listOutstandingConfirmAsks.mockResolvedValue([]);
+  db.addTask.mockResolvedValue({ id: "t1" });
+  db.getAccountLanguage.mockResolvedValue(null);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -294,5 +303,81 @@ describe("excerptOf", () => {
     expect(Array.from(cut)).toHaveLength(60);
     expect(cut.endsWith("👍…")).toBe(true);
     expect(excerptOf("  short\n text ")).toBe("short text");
+  });
+});
+
+describe("the consent To-dos of a shared number's text, filed on its holding record (S-47e P19, S30)", () => {
+  const SHARED = "+19565550142";
+  const shared = (over: Partial<InboundConsentInput> = {}) =>
+    input({ address: SHARED, contactId: "ct_hold", sharedNumber: { realContactIds: ["ct_ana", "ct_beto"], truncated: false }, ...over });
+  beforeEach(() => {
+    db.getContact.mockImplementation(async (_d: unknown, _a: string, id: string) =>
+      id === "ct_ana" ? { id, first_name: "Ana", last_name: "Ruiz" }
+        : id === "ct_beto" ? { id, first_name: "Beto", last_name: "Ruiz" }
+        : { id, first_name: "Caller", last_name: null });
+  });
+  /** Ana's appointment is Oct 9, 7 PM in Los Angeles; Beto's (when he has one) a day later; the holding record never has one. */
+  const bookings = (who: { ana?: boolean; beto?: boolean }) =>
+    db.nextBookedStart.mockImplementation(async (_d: unknown, _a: string, id: string) =>
+      id === "ct_ana" && who.ana ? "2026-10-10T02:00:00Z" : id === "ct_beto" && who.beto ? "2026-10-11T02:00:00Z" : null);
+
+  it("a held phrase names the NUMBER, never \"Caller\", on the holding record (R5; mutation (f): drop the shared branch → today's contactLabel title FAILS)", async () => {
+    const text = "please stop texting me";
+    await run(shared({ text }), classifyInbound(text, null));
+    expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+    expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
+      contactId: "ct_hold", consentEventId: "ev_held",
+      title: "A text from the shared number (956) 555-0142 may have asked to stop texts: “please stop texting me”. Texts to that number are on hold.",
+      dueAt: NOW.toISOString(),
+    }, "sms-inbound", "system");
+  });
+
+  it("the hold To-do is in the account's language", async () => {
+    db.getAccountLanguage.mockResolvedValue("es");
+    const text = "ya no me manden nada";
+    await run(shared({ text }), classifyInbound(text, null));
+    expect(db.getAccountLanguage).toHaveBeenCalledWith(DB, "acct_1");
+    expect(db.ensureConsentTask.mock.calls[0]![2].title).toBe(
+      "Un mensaje del número compartido (956) 555-0142 quizá pidió dejar de recibir mensajes: “ya no me manden nada”. Los mensajes a ese número están en pausa.");
+  });
+
+  it("a CANCEL with exactly one real contact holding an upcoming appointment asks about THAT contact's appointment, by name and date (mutation (g): read the holding record's booking → FAILS)", async () => {
+    bookings({ ana: true });
+    await run(shared({ text: "Cancelar" }), classifyInbound("Cancelar", null));
+    expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+    expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
+      contactId: "ct_ana", consentEventId: "ev_revoked",
+      title: "Ana Ruiz texted CANCELAR, so their texts are stopped. Check whether they also meant their appointment on Oct 9, 2026.",
+      dueAt: NOW.toISOString(),
+    }, "sms-inbound", "system");
+  });
+
+  it("a CANCEL with two real contacts holding upcoming appointments files ONE To-do on the holding record", async () => {
+    bookings({ ana: true, beto: true });
+    await run(shared({ text: "Cancel" }), classifyInbound("Cancel", null));
+    expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+    expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
+      contactId: "ct_hold", consentEventId: "ev_revoked",
+      title: "A reply from a shared number couldn't be matched to one appointment",
+      dueAt: NOW.toISOString(),
+    }, "sms-inbound", "system");
+  });
+
+  it("a CANCEL from a number with more people than one read returns files the ONE reply To-do on the holding record, even when exactly one of those read has an appointment (T17 review M4, the YES path's rule; mutation: ignore truncated -> names Ana and her date, FAILS)", async () => {
+    bookings({ ana: true });
+    await run(shared({ text: "Cancel", sharedNumber: { realContactIds: ["ct_ana", "ct_beto"], truncated: true } }), classifyInbound("Cancel", null));
+    expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+    expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
+      contactId: "ct_hold", consentEventId: "ev_revoked",
+      title: "A reply from a shared number couldn't be matched to one appointment",
+      dueAt: NOW.toISOString(),
+    }, "sms-inbound", "system");
+  });
+
+  it("a CANCEL with nobody's upcoming appointment files no To-do (S30, today's rule)", async () => {
+    bookings({});
+    await run(shared({ text: "Cancel" }), classifyInbound("Cancel", null));
+    expect(db.nextBookedStart).toHaveBeenCalledTimes(2);
+    expect(db.ensureConsentTask).not.toHaveBeenCalled();
   });
 });

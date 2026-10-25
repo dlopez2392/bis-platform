@@ -37,15 +37,16 @@ import { NextResponse, after } from "next/server";
 import {
   serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
-  applyConfirmationReply,
+  applyConfirmationReply, ensureHoldingContact, listOutstandingConfirmAsks, matchConfirmationReply,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
+import { readCandidates, isShared } from "@/lib/voice/identity/candidates";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggableError } from "@/lib/loggable-error";
 import {
-  classifyInbound, parseAutoresponse, recordInboundConsent, CHANGES_CONSENT, type InboundClass,
+  classifyInbound, parseAutoresponse, recordInboundConsent, fileSharedReplyTodo, CHANGES_CONSENT, type InboundClass,
 } from "@/lib/consent/inbound";
 import { sendConsentReply } from "@/lib/consent/replies";
 
@@ -167,7 +168,7 @@ async function handleInbound(
     // START lift it, so its STOP and START are recorded BEFORE the drop. No
     // grant, no To-do, no HELP: it is the business, not a customer.
     if (consent.kind === "stop" || consent.kind === "start") {
-      await recordInboundConsent(db, { ...base, address: fromNumber, contactId: null, firstFiling: true }, consent,
+      await recordInboundConsent(db, { ...base, address: fromNumber, contactId: null, firstFiling: true, sharedNumber: null }, consent,
         (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: null, conversationId: null, reply })));
     }
     log("dropping inbound text from the account's own alert_phone — recognized, not filed as a contact", accountId, alertPhone);
@@ -198,10 +199,23 @@ async function handleInbound(
   // filed, so a failure here keeps the old rule below.
   let contact: Awaited<ReturnType<typeof createContact>>;
   let conversation: Awaited<ReturnType<typeof ensureConversation>>;
+  let shared: { realContactIds: string[]; truncated: boolean } | null = null;
+  /** More people on the number than one read returns (spec S6): an ask among those read may not be the only one. */
+  let sharedTruncated = false;
   try {
-    contact = await createContact(
-      db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
-    );
+    // S-47e (E8, S27): a text from a number several customers share carries no name, so it files on the
+    // number's ONE holding record, never on a household member by phone. Staff move it. A failed read on
+    // the first filing is FilingFailed (503), like every other step here.
+    const read = fromNumber ? await readCandidates(db, accountId, fromNumber) : null;
+    if (read && fromNumber && isShared(read)) {
+      shared = { realContactIds: read.candidates.map((c) => c.id), truncated: read.truncated };
+      sharedTruncated = read.truncated;
+      contact = { id: (await ensureHoldingContact(db, accountId, fromNumber, "sms")).id, existing: true, flagged: false };
+    } else {
+      contact = await createContact(
+        db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
+      );
+    }
     conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
     if (firstFiling) {
       await createMessage(db, accountId, {
@@ -214,6 +228,7 @@ async function handleInbound(
       }, ACTOR_ID, ACTOR_TYPE);
     }
   } catch (e) {
+    // A HoldingContactUnavailable lands here too (P23): a delete raced the insert, and Telnyx's retry recovers.
     if (firstFiling) throw new FilingFailed(e);
     throw e;
   }
@@ -234,8 +249,24 @@ async function handleInbound(
     // (automation spec decision 6).
     if (consent.kind === "none" || consent.kind === "telnyx_only") {
       try {
-        const answer = await applyConfirmationReply(db, accountId, contact.id, text, new Date());
-        if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
+        if (shared) {
+          // S-47e (S30): the household's one outstanding ask, or one To-do when there is not exactly one.
+          if (matchConfirmationReply(text)) {
+            const now = base.now;
+            // Truncated: no read of asks, because exactly one among those read is not exactly one on the number.
+            const asks = sharedTruncated ? [] : await listOutstandingConfirmAsks(db, accountId, shared.realContactIds, now);
+            if (asks.length === 1) {
+              const answer = await applyConfirmationReply(db, accountId, asks[0]!.contactId, text, now);
+              if (answer) log("recorded an appointment confirmation reply", accountId, asks[0]!.contactId, answer);
+            } else {
+              await fileSharedReplyTodo(db, accountId, contact.id, now);
+              log("a reply from a shared number matched no single appointment; To-do filed", accountId);
+            }
+          }
+        } else {
+          const answer = await applyConfirmationReply(db, accountId, contact.id, text, new Date());
+          if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
+        }
       } catch (e) {
         log("could not record a confirmation reply — the customer's message is filed regardless", accountId, loggableError(e));
       }
@@ -250,7 +281,7 @@ async function handleInbound(
   }
   // The reply is scheduled the moment it is owed, inside the step, so a
   // To-do failure after it (503) cannot lose it (review R2-I1a).
-  await recordInboundConsent(db, { ...base, address: fromNumber, contactId: contact.id, firstFiling }, consent,
+  await recordInboundConsent(db, { ...base, address: fromNumber, contactId: contact.id, firstFiling, sharedNumber: shared }, consent,
     (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: contact.id, conversationId: conversation.id, reply })));
 }
 

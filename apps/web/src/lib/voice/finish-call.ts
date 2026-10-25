@@ -2,7 +2,7 @@ import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanksReport, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
-  ensureCallbackTask, setCallCard, recordLanguageSignal,
+  ensureCallbackTask, setCallCard, recordLanguageSignal, ensureHoldingContact,
 } from "@bis/db";
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
@@ -10,6 +10,10 @@ import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
+import { readCandidates, isShared } from "./identity/candidates";
+import { pickRecordOnNumber, sameNameAsRecord } from "./identity/record";
+import { identityTodoTitle } from "./identity/todo";
+import type { ResolvedTextbackContact } from "./textback";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { CallState } from "./call-state";
@@ -19,7 +23,7 @@ import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
-import { isCallerIdNumber, spokenPhone } from "./phone-number";
+import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
   callbackWanted, callbackNumberOf, callbackTaskTitle, recordedReason,
   cardReadable, readCallForCard, composeCallCard, NO_READING,
@@ -289,12 +293,22 @@ async function resolveOpenOpportunity(
   }
 }
 
+/** S-47e (Task 8 review M1): the name the record below is chosen by: the lead's, or with no lead the last
+ *  message's when the caller did not decline it. Undefined when none was given. */
+function nameSaidAfter(state: CallState): string | undefined {
+  const lead = state.leads[0];
+  if (lead) return lead.fields?.fullName;
+  const msg = state.messages[state.messages.length - 1];
+  return msg && !msg.nameDeclined ? msg.name : undefined;
+}
+
 /**
  * Resolves who this call is about, creating a contact only when the state
  * genuinely has nobody yet.
  *
  * `state.contactId` wins outright — set by an in-call booking or an explicit
- * lookup, it is never second-guessed here. Absent that, a captured lead's
+ * lookup, it is second-guessed only when the lead or the message names someone
+ * else (S-47e, below). Absent that, a captured lead's
  * fields build a real contact (name split, phone as said via `spokenPhone`,
  * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
@@ -303,16 +317,73 @@ async function resolveOpenOpportunity(
  * `callId` (item 8c) is the call's own row: a contact made here is Sofía's `contact_created`, a fill
  * her `contact_field_filled` per column written, recorded in ONE insert before this returns. Null
  * (startCallRow failed open) records nothing and says so. Recording never changes what is returned.
+ *
+ * S-47e (E7, spec 5.10.3): on a number several contacts share, the confirmed person, the one the lead's or the
+ * message's name picks, a new person the name makes, or NOBODY: never whichever record the phone dedupe finds.
+ * A read failure throws to the lead-treatment leg's catch, which writes nothing.
+ *
+ * S-47e (spec 5.10.3 step 1; Task 8 review M1): `state.contactId` is also set by a booking that lost its slot
+ * (SlotTakenError), so "this is Ana, take a message" after booking Beto would land on Beto. The call's record
+ * therefore yields when the lead's name (or, with no lead, the last message's name) does not agree with its
+ * stored name (sameNameAsRecord, the booking's own rule), and the resolution below runs. No name keeps it.
  */
 async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
-  if (state.contactId) return state.contactId;
+  if (state.contactId) {
+    const said = nameSaidAfter(state);
+    if (!said?.trim()) return state.contactId;
+    const record = (await getContact(ctx.db, ctx.accountId, state.contactId)) as
+      { first_name: string | null; last_name: string | null } | null;
+    if (sameNameAsRecord(said, record)) return state.contactId;
+  }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];
-
   const lead = state.leads[0];
+
+  // The call's confirmation counts only for the caller-ID number (5.10.0), and no step runs ahead of the
+  // lead or the message: the same order as book_appointment's (R2 finding 9). The confirmed person with no
+  // lead and no message name is the message path's `existing`, below.
+  const confirmedId = state.identity.confirmed?.contactId ?? null;
+
   if (lead) {
     const fields = lead.fields ?? {};
     const { firstName, lastName } = splitFullName(fields.fullName ?? "");
+    // As said, or the caller ID (review R2-C1): phoneFields flags a number that could be Mexican or US.
+    const phone = spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined;
+    const number = phone ? e164Of(phone) : null;
+    if (number) {
+      // 5.10.3 step 3: the lead's name picks its record on the number it would store.
+      const { candidates, truncated } = await readCandidates(ctx.db, ctx.accountId, number);
+      const pick = pickRecordOnNumber({ onNumber: candidates, truncated, name: fields.fullName, email: fields.email,
+        confirmedId: number === ctx.callerNumber ? confirmedId : null, forSomeoneElse: lead.forSomeoneElse });
+      // ask_whose here means capture_lead asked once and the caller never answered, OR its in-call read failed
+      // and it recorded the lead without asking (leadWhoseStep): either way nothing ambiguous is written.
+      if (pick.kind === "ask_name" || pick.kind === "ambiguous" || pick.kind === "ask_whose") return null;
+      if (pick.kind === "existing") {
+        if (number === ctx.callerNumber) {
+          try {
+            const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, pick.contactId,
+              { firstName: firstName || undefined, lastName, email: fields.email }, ACTOR_ID, ACTOR_TYPE);
+            acts.push(...fieldFillActs(source, pick.contactId, filled));
+          } catch (e) {
+            console.error(`finishCall fillContactBlanks failed for ${pick.contactId}: ${String(e)}`);
+          }
+        }
+        await recordActs(ctx.db, ctx.accountId, acts);
+        return pick.contactId;
+      }
+      if (pick.kind === "create") {
+        const created = await createContact(ctx.db, ctx.accountId, {
+          firstName: firstName || "Caller", lastName, phone, email: fields.email, source: "voice", matchBy: "email_only",
+        }, ACTOR_ID, ACTOR_TYPE);
+        if (!created.existing) {
+          acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+        }
+        await recordActs(ctx.db, ctx.accountId, acts);
+        return created.id;
+      }
+    }
+    // `today`: zero or one contact on the number, or no number at all. Today's code, moved unchanged
+    // (finish-call.ts:316-349 at df8882ce); `fields`, `firstName` and `lastName` are declared above.
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: firstName || "Caller",
       lastName,
@@ -350,6 +421,24 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
   }
 
   if (ctx.callerNumber) {
+    const read = await readCandidates(ctx.db, ctx.accountId, ctx.callerNumber);
+    if (isShared(read)) {
+      // 5.10.3 step 4 (S22): the confirmed person, or the last message's name; declined, absent or ambiguous is nobody's.
+      const msg = state.messages[state.messages.length - 1];
+      const name = msg && !msg.nameDeclined ? msg.name : undefined;
+      const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name, email: null, confirmedId });
+      if (pick.kind === "existing") return pick.contactId;
+      if (pick.kind !== "create") return null;
+      const { firstName, lastName } = splitFullName(name!);
+      const created = await createContact(ctx.db, ctx.accountId,
+        { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only" }, ACTOR_ID, ACTOR_TYPE);
+      if (!created.existing) {
+        acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+      }
+      await recordActs(ctx.db, ctx.accountId, acts);
+      return created.id;
+    }
+    // Not shared: today's "Caller" path, moved unchanged (finish-call.ts:353-375 at df8882ce).
     // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
     // the caller's own contact and the phone fill is a no-op. Do not add the
     // lead path's email/name here without its caller-ID check.
@@ -376,6 +465,20 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
   }
 
   return null;
+}
+
+/**
+ * S-47e (E8, spec 5.10.4; plan P15): the text-back's contact. resolveContactId's answer, or, on a shared
+ * caller-ID number with nobody confirmed or named, the number's ONE holding record: the text and any reply live
+ * there until staff move them, and finishCall keeps the call row's contact null.
+ */
+async function resolveTextbackContact(state: CallState, ctx: FinishContext, callId: string | null): Promise<ResolvedTextbackContact> {
+  const id = await resolveContactId(state, ctx, callId);
+  if (id !== null || !ctx.callerNumber) return id;
+  if (!isShared(await readCandidates(ctx.db, ctx.accountId, ctx.callerNumber))) return null;
+  // The service client (FinishContext.db), and the writer said: Sofía took this call.
+  const holding = await ensureHoldingContact(ctx.db, ctx.accountId, ctx.callerNumber, "voice");
+  return { id: holding.id, holding: true };
 }
 
 /**
@@ -636,7 +739,7 @@ export async function finishCall(
         contactId: null,
         // finishCall's own resolver: a call with a captured lead deserves the
         // richer contact, and it runs behind the send gate.
-        resolveContact: () => resolveContactId(state, ctx, meta.callRowId),
+        resolveContact: () => resolveTextbackContact(state, ctx, meta.callRowId),
         language: spokenLanguage,
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,
@@ -651,7 +754,8 @@ export async function finishCall(
       // points at the contact and conversation the text lives in, and a
       // cooldown-suppressed call keeps them too, so it is never orphaned from
       // its own thread.
-      if (result.contactId) contactId = result.contactId;
+      // S-47e (SD21): never a holding record: no contact_field or stage suggestion may be offered for it.
+      if (result.contactId && !result.holding) contactId = result.contactId;
       if (result.conversationId) conversationId = result.conversationId;
       pendingTextback = result.pending;
     } catch (e) {
@@ -820,12 +924,23 @@ export async function finishCall(
   // Read by the proposals below (owner ruling 2026-10-09): with the callback
   // already a To do, they do not also suggest it. True only once the write
   // (or an existing row) is confirmed.
+  // S-47e (spec 5.6, S10): a call whose identity check locked leaves THE call's one To-do (tasks_call_once):
+  // E5's sentence, in the ACCOUNT's language, on no customer (nobody was confirmed). Not for a call a person
+  // took (transferred), a recording, or a call with no row. The callback number and the message stay on the
+  // call card and in the alert.
+  const identityTodo = state.identity.locked !== null && !state.recordedCaller && !wasTransferred(state);
+  if (state.identity.locked !== null && (!identityTodo || !meta.callRowId)) {
+    console.log(`finishCall ${meta.callRowId ?? "(no row)"}: identity To do not filed (transferred, a recording, or no row), account ${ctx.accountId}`);
+  }
   let callbackTodo = false;
-  if (meta.callRowId && callbackLine) {
+  if (meta.callRowId && (identityTodo || callbackLine)) {
     try {
       await ensureCallbackTask(ctx.db, ctx.accountId, {
-        callId: meta.callRowId, contactId,
-        title: callbackLine,
+        callId: meta.callRowId,
+        contactId: identityTodo ? null : contactId,
+        title: identityTodo
+          ? identityTodoTitle(resolveLocale(undefined, ctx.accountLanguage ?? null))
+          : callbackLine!,
         dueAt: meta.endedAt.toISOString(),
       }, ACTOR_ID, ACTOR_TYPE);
       callbackTodo = true;

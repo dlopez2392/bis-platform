@@ -22,6 +22,8 @@ const dbMocks = vi.hoisted(() => ({
   // The call card and its callback To do (0064), each written by its own
   // leg in finishCall's tail.
   ensureCallbackTask: vi.fn(), setCallCard: vi.fn(),
+  // S-47e (plan Task 8): who is on the caller ID, and the shared number's one holding record.
+  listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -97,6 +99,8 @@ import {
 } from "./call-state";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
+import { HoldingContactUnavailable } from "@bis/db";
+import { withConfirmed, withLocked } from "./identity/state";
 
 /**
  * The two raw-table reads `resolveOpenOpportunity` (finish-call.ts) makes —
@@ -207,6 +211,8 @@ const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T17:00:00Z"), 
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
+  dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
+  dbMocks.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });
   dbMocks.recordLanguageSignal.mockResolvedValue(true);
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
@@ -1849,6 +1855,66 @@ describe("finishCall — the call card and the callback To do", () => {
     expect(proposalsMocks.generateProposals).toHaveBeenCalled();
     expect(err.mock.calls.some((c) => String(c[0]).includes("call card failed"))).toBe(true);
   });
+
+  // S-47e (spec 5.6, S10): a call whose identity check locked leaves THE call's one To do — never a
+  // second one alongside whatever the callback leg would otherwise have filed.
+  it("a locked call that took a message files exactly ONE To do: the identity sentence, no contact, the call's own id, due at the call's end (mutation: file the callback title → FAILS)", async () => {
+    await finishCall(withLocked(messageState(), "misses"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", {
+      callId: "call1", contactId: null,
+      title: "Someone asked about an appointment and couldn't confirm who they are",
+      dueAt: "2027-06-01T17:02:00.000Z",
+    }, "voice", "ai");
+  });
+
+  it("the identity To do's title is the ACCOUNT's Spanish when accountLanguage is 'es', never the caller's language or the actor's", async () => {
+    await finishCall(withLocked(messageState(), "misses"), { ...ctx, accountLanguage: "es" }, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      title: "Alguien preguntó por una cita y no pudo confirmar quién es",
+    }), "voice", "ai");
+  });
+
+  it("accountLanguage: null still reads English", async () => {
+    await finishCall(withLocked(messageState(), "misses"), { ...ctx, accountLanguage: null }, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("a locked call with no message and no lead still files the identity To do (callbackLine null) (mutation: gate on callbackLine alone → FAILS)", async () => {
+    await finishCall(withLocked(caller(), "misses"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("a 'cannot' lock files the identity To do too (mutation: gate on locked === 'misses' only → FAILS)", async () => {
+    await finishCall(withLocked(caller(), "cannot"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("locked + transferred, locked + a recording, and locked + no row file no To do; the skipped case logs one line naming the account id and no number (mutation: log the caller number too → FAILS)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await finishCall(withLocked(withTransferred(caller()), "misses"), ctx, meta);
+    await finishCall(withLocked(withRecordedCaller(caller()), "misses"), ctx, meta);
+    await finishCall(withLocked(caller(), "misses"), ctx, { ...meta, callRowId: null });
+    expect(dbMocks.ensureCallbackTask).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual([
+      "finishCall call1: identity To do not filed (transferred, a recording, or no row), account a1",
+      "finishCall call1: identity To do not filed (transferred, a recording, or no row), account a1",
+      "finishCall (no row): identity To do not filed (transferred, a recording, or no row), account a1",
+    ]);
+    log.mockRestore();
+  });
+
+  it("the identity To do also tells the proposals a callback To do exists, so they do not duplicate it (mutation: skip callbackTodo for the identity branch → FAILS)", async () => {
+    await finishCall(withLocked(messageState(), "misses"), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: true }));
+  });
 });
 
 /**
@@ -2136,5 +2202,244 @@ describe("finishCall — Sofía's acts (item 8c)", () => {
     expect(dbMocks.createMessage.mock.calls.length).toBe(okMessages);
     expect(lines.some((l) => l === "ai act not recorded: kind=contact_created account=a1 source=call:call1 contact=ct1: 08006")).toBe(true);
     expect(lines.some((l) => /lead treatment failed|text-back failed/.test(l))).toBe(false);
+  });
+});
+
+describe("S-47e: the record after the call (plan Task 8)", () => {
+  const caller = () => withTranscript(emptyCallState(), { role: "caller", text: "Hi, I need a quote.", at: "t" });
+  const person = (id: string, first: string, last: string, phone = "+19562921696") =>
+    ({ id, first_name: first, last_name: last, phone, email_key: null, holds_shared_number: false });
+  // Rows answer ONLY for account a1 and the number asked (Task 8 review I1, I2): a read of another account, or
+  // of another number, sees nobody, so a hard-coded account or the wrong number changes what is written.
+  let byNumber: Record<string, ReturnType<typeof person>[]> = {};
+  beforeEach(() => {
+    byNumber = {};
+    dbMocks.listContactsOnNumber.mockImplementation(async (_db: unknown, accountId: string, e164: string) =>
+      ({ rows: accountId === "a1" ? byNumber[e164] ?? [] : [], truncated: false }));
+  });
+  const onNumber = (e164: string, ...rows: ReturnType<typeof person>[]) => { byNumber[e164] = rows; };
+  const onCallerId = (...rows: ReturnType<typeof person>[]) => onNumber("+19562921696", ...rows);
+  const confirmedAna = () => withConfirmed(caller(), { contactId: "ct7", rung: 1, by: "name" });
+  const patch = () => dbMocks.finishCallRow.mock.calls[0]![3] as { contactId?: string; conversationId?: string };
+  const silence = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  describe("the confirmed person, in the booking's order (5.10.3; R2 finding 9)", () => {
+    beforeEach(() => { onCallerId(person("ct7", "Ana", "Prueba"), person("ct2", "Beto", "Prueba")); });
+
+    it("a lead in the confirmed person's own name lands on them, makes nobody, and fills their blanks", async () => {
+      await finishCall(withLead(confirmedAna(), { fields: { fullName: "Ana Prueba", email: "ana@example.com", need: "quote" } }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct7", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct7",
+        { firstName: "Ana", lastName: "Prueba", email: "ana@example.com" }, "voice", "ai");
+    });
+
+    it("a lead named for the housemate lands on the housemate, as book_appointment would book it (mutation: a confirmed-first shortcut ahead of the lead → ct7, FAILS)", async () => {
+      await finishCall(withLead(confirmedAna(), { fields: { fullName: "Beto Prueba", need: "quote" } }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct7", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+    });
+
+    it("a message with no name lands on the confirmed person: the confirmation picks", async () => {
+      await finishCall(withMessage(confirmedAna(), { body: "Call me", at: "t" }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct7", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a lead on a number with ONE contact (P27)", () => {
+    beforeEach(() => { onCallerId(person("ct1", "Dan", "Lopez")); });
+    const lead = (forSomeoneElse?: boolean) => withLead(caller(), {
+      fields: { fullName: "Ana Prueba", need: "quote" }, ...(forSomeoneElse === undefined ? {} : { forSomeoneElse }),
+    });
+
+    it("a different name the caller never said was theirs or someone else's files on NO customer, while the alert and the To do are still written (mutation: today's phone dedupe → ct1, FAILS)", async () => {
+      await finishCall(lead(), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ contactId: null }), "voice", "ai");
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("for someone else: a new person, deduped by email only", async () => {
+      await finishCall(lead(true), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ firstName: "Ana", lastName: "Prueba", phone: "+19562921696", source: "voice", matchBy: "email_only" }), "voice", "ai");
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+    });
+
+    it("for themselves: the one contact, with the fill", async () => {
+      await finishCall(lead(false), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct1",
+        { firstName: "Ana", lastName: "Prueba", email: undefined }, "voice", "ai");
+    });
+  });
+
+  describe("a lead on a shared number", () => {
+    it("the lead's name picks the housemate it names: no new contact, one fill on them", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      await finishCall(withLead(caller(), { fields: { fullName: "Beto Prueba", need: "quote" } }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledTimes(1);
+      expect(dbMocks.fillContactBlanksReport.mock.calls[0]![2]).toBe("ct2");
+    });
+
+    it("a name nobody on the number has is a new person on the lead's phone, deduped by email only", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      await finishCall(withLead(caller(), { fields: { fullName: "Carla Prueba", need: "quote" } }), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ firstName: "Carla", lastName: "Prueba", phone: "+19562921696", source: "voice", matchBy: "email_only" }), "voice", "ai");
+    });
+
+    it("two of the same name and no email: NO contact, conversation or message; the row, the alert and the To do still go", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct3", "Ana", "Prueba"));
+      await finishCall(withLead(caller(), { fields: { fullName: "Ana Prueba", need: "quote" } }), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ contactId: null }), "voice", "ai");
+    });
+
+    it("the create path never fills, even when the create's email match lands on a caller-ID record (5.10.2; mutation: today's created.existing && isCallerIdNumber fill → FAILS)", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      dbMocks.createContact.mockResolvedValue({ id: "ct8", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct8", first_name: "Carla", last_name: null, email: null, phone: "+19562921696" });
+      await finishCall(withLead(caller(), { fields: { fullName: "Carla Prueba", need: "quote" } }), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a message on a shared number (S22)", () => {
+    beforeEach(() => { onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba")); });
+
+    it("the name the caller gave picks the thread", async () => {
+      await finishCall(withMessage(caller(), { body: "Call me", at: "t", name: "Beto Prueba" }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["declined (the name it carries is not used)", { body: "Call me", at: "t", name: "Beto Prueba", nameDeclined: true }],
+      ["no name and not declined (the model ignored the ask)", { body: "Call me", at: "t" }],
+    ])("%s: on nobody's thread, while the row, the card, the alert and the To do are all still written", async (_label, msg) => {
+      await finishCall(withMessage(caller(), msg), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
+      expect(dbMocks.setCallCard).toHaveBeenCalledTimes(1);
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ contactId: null }), "voice", "ai");
+    });
+  });
+
+  describe("a lead is matched on its OWN callback number (Task 8 review I1; mutation O1: read ctx.callerNumber ?? number → FAILS)", () => {
+    const CALLBACK = "+19565550199";
+    it("the caller ID has only Carla; Ana and Beto share the callback number: a lead for Ana Prueba lands on Ana, with no fill (not the caller ID)", async () => {
+      onCallerId(person("ct9", "Carla", "Prueba"));
+      onNumber(CALLBACK, person("ct1", "Ana", "Prueba", CALLBACK), person("ct2", "Beto", "Prueba", CALLBACK));
+      await finishCall(withLead(caller(), { fields: { fullName: "Ana Prueba", callbackNumber: "956-555-0199", need: "quote" } }), ctx, meta);
+      expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", CALLBACK);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+    });
+
+    it("a lone Dan on the caller ID, and an Ana lead whose callback number has nobody on it: today's path, on the number as said", async () => {
+      onCallerId(person("ct1", "Dan", "Lopez"));
+      dbMocks.createContact.mockResolvedValue({ id: "ct_new", existing: false });
+      await finishCall(withLead(caller(), { fields: { fullName: "Ana Prueba", callbackNumber: "956-555-0199", need: "quote" } }), ctx, meta);
+      expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", CALLBACK);
+      expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+      const input = dbMocks.createContact.mock.calls[0]![2] as Record<string, unknown>;
+      expect(input).toMatchObject({ firstName: "Ana", lastName: "Prueba", phone: "956-555-0199", source: "voice" });
+      expect(input).not.toHaveProperty("matchBy");
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct_new", "voice", "ai");
+    });
+  });
+
+  describe("the call's own record yields to a name that is not its own (Task 8 review M1, spec 5.10.3 step 1; mutation: the unconditional state.contactId shortcut → FAILS)", () => {
+    const stored: Record<string, { id: string; first_name: string; last_name: string }> = {
+      ct1: { id: "ct1", first_name: "Ana", last_name: "Prueba" },
+      ct2: { id: "ct2", first_name: "Beto", last_name: "Prueba" },
+    };
+    beforeEach(() => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => stored[id] ?? null);
+    });
+    // A booking for Beto (or one that lost its slot, SlotTakenError) leaves state.contactId on Beto.
+    const afterBetosBooking = (s: ReturnType<typeof caller>) => ({ ...s, contactId: "ct2" });
+
+    it("booked Beto, then \"this is Ana, take a message\": the message lands on Ana, not Beto", async () => {
+      await finishCall(afterBetosBooking(withMessage(caller(), { body: "Call me", at: "t", name: "Ana Prueba" })), ctx, meta);
+      // The yield read is this account's own (T17 review M3; mutation: read with another account id -> FAILS).
+      expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct2");
+      expect(dbMocks.getContact.mock.calls.every((c) => c[1] === "a1")).toBe(true);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+    });
+
+    it("booked Beto, then a lead for Ana: the lead lands on Ana", async () => {
+      await finishCall(afterBetosBooking(withLead(caller(), { fields: { fullName: "Ana Prueba", need: "quote" } })), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+    });
+
+    it.each([
+      ["Beto's own name", { body: "Call me", at: "t", name: "Beto Prueba" }],
+      ["no name", { body: "Call me", at: "t" }],
+      ["a declined name", { body: "Call me", at: "t", name: "Ana Prueba", nameDeclined: true }],
+    ])("booked Beto, then a message with %s: the call's record keeps it, and the number is not read", async (_l, msg) => {
+      await finishCall(afterBetosBooking(withMessage(caller(), msg)), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the text-back (E8, S25)", () => {
+    it("an abandoned caller on a shared number, nobody confirmed: the text files on the number's ONE holding record, and the call row keeps no contact (mutation: adopt every text-back contact → FAILS)", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      await finishCall(caller(), textbackCtx, meta);
+      expect(dbMocks.ensureHoldingContact).toHaveBeenCalledWith({}, "a1", "+19562921696", "voice");
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct_hold", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+      expect(patch().conversationId).toBe("cv1");
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ contactId: null }));
+      expect(smsRefs.send).toHaveBeenCalledOnce();
+    });
+
+    it("a confirmed caller's text-back goes to the confirmed person, not the holding record", async () => {
+      onCallerId(person("ct7", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      await finishCall(confirmedAna(), textbackCtx, meta);
+      expect(dbMocks.ensureHoldingContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct7", "voice", "ai");
+      expect(patch().contactId).toBe("ct7");
+    });
+
+    it("the holding record unavailable (P23): no message, no send, one text-back failed line naming the call and no number, and the row is still written", async () => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      dbMocks.ensureHoldingContact.mockRejectedValue(new HoldingContactUnavailable("a1"));
+      const err = silence();
+      const r = await finishCall(caller(), textbackCtx, meta);
+      const lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("text-back failed"));
+      err.mockRestore();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(smsRefs.send).not.toHaveBeenCalled();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("call1");
+      expect(lines[0]).not.toMatch(/9562921696/);
+      expect(r).toMatchObject({ stored: true, outcome: "abandoned" });
+      expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
+    });
   });
 });

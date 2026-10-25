@@ -7,7 +7,10 @@ import {
   listFailedOutboundSms,
   listConversations, listMessages, getConversationSummary,
   incrementUnreadCount, clearUnreadCount, sumUnreadCount, searchConversations,
+  findConversationForContact,
 } from "../messaging";
+import { ensureHoldingContact } from "../voice";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * Every `provider_message_id` in this file comes from `testProviderMessageId()`
@@ -1040,5 +1043,71 @@ describe("messaging", () => {
       // proving nothing about direction. This is the only assertion in the file
       // that a two-separate-draws mistake would not have failed loudly.
       expect(msg!.provider_message_id).toBe(providerMessageId);
+    }));
+});
+
+/**
+ * S-47e (E8, spec 5.12.4; plan P8, P9): a thread on a shared number's holding record is labelled as
+ * one by every inbox read, and findConversationForContact finds a contact's one thread. Seeded through
+ * the real writers: ensureHoldingContact, createContact, ensureConversation, createMessage.
+ */
+describe("S-47e: the inbox reads carry the holding fields; findConversationForContact", () => {
+  const P = "+19565550188";
+  async function seed(db: SupabaseClient, accountId: string) {
+    const holding = await ensureHoldingContact(db, accountId, P, "voice");
+    const holdingThread = await ensureConversation(db, accountId, holding.id, "user_test");
+    await createMessage(db, accountId, {
+      conversationId: holdingThread.id, channel: "sms", direction: "inbound", body: "is the porch gazebo still on for Saturday",
+    }, "user_test");
+    const ana = await createContact(db, accountId, { firstName: "Ana", phone: P }, "user_test");
+    const anaThread = await ensureConversation(db, accountId, ana.id, "user_test");
+    await createMessage(db, accountId, {
+      conversationId: anaThread.id, channel: "sms", direction: "outbound", body: "see you Tuesday",
+    }, "user_test");
+    return { holding, holdingThread, ana, anaThread };
+  }
+
+  it("listConversations, getConversationSummary and searchConversations: true and the number on the holding thread, false and null on Ana's (mutation: drop a field from an embed -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const list = await listConversations(db, accountId);
+      expect(list).toHaveLength(2);
+      const h = list.find((c) => c.id === s.holdingThread.id);
+      const a = list.find((c) => c.id === s.anaThread.id);
+      expect(h).toMatchObject({ contactId: s.holding.id, holdsSharedNumber: true, sharedNumber: P });
+      expect(a).toMatchObject({ contactId: s.ana.id, holdsSharedNumber: false, sharedNumber: null });
+
+      expect(await getConversationSummary(db, accountId, s.holdingThread.id))
+        .toMatchObject({ holdsSharedNumber: true, sharedNumber: P });
+      expect(await getConversationSummary(db, accountId, s.anaThread.id))
+        .toMatchObject({ holdsSharedNumber: false, sharedNumber: null });
+
+      const hits = await searchConversations(db, accountId, { search: "gazebo" });
+      expect(hits).toHaveLength(1);
+      expect(hits[0]).toMatchObject({ id: s.holdingThread.id, holdsSharedNumber: true, sharedNumber: P });
+      const anaHits = await searchConversations(db, accountId, { search: "Tuesday" });
+      expect(anaHits).toHaveLength(1);
+      expect(anaHits[0]).toMatchObject({ id: s.anaThread.id, holdsSharedNumber: false, sharedNumber: null });
+    }));
+
+  it("listConversations filtered to Unassigned (the !inner embed) still carries the fields", () =>
+    withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const list = await listConversations(db, accountId, { assignee: { who: "unassigned" } });
+      expect(list).toHaveLength(2);
+      expect(list.find((c) => c.id === s.holdingThread.id)).toMatchObject({ holdsSharedNumber: true, sharedNumber: P });
+      expect(list.find((c) => c.id === s.anaThread.id)).toMatchObject({ holdsSharedNumber: false, sharedNumber: null });
+    }));
+
+  it("findConversationForContact: the holding thread's id; null for a contact with no thread; null for another account (mutation: drop the account filter -> FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      const s = await seed(db, accountA);
+      expect(await findConversationForContact(db, accountA, s.holding.id)).toBe(s.holdingThread.id);
+      expect(await findConversationForContact(db, accountA, s.ana.id)).toBe(s.anaThread.id);
+      const quiet = await createContact(db, accountA, { firstName: "Quiet" }, "user_test");
+      expect(await findConversationForContact(db, accountA, quiet.id)).toBeNull();
+      await withTestAccount(async (_db2, accountB) => {
+        expect(await findConversationForContact(db, accountB, s.holding.id)).toBeNull();
+      });
     }));
 });

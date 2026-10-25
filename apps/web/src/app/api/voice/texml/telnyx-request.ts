@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+import { FIELD_NAME, ATTESTATION_FIELD, MAX_ATTESTATION, shownValue } from "@/lib/voice/attestation-log";
 
 export type TelnyxForm =
   | { ok: true; form: URLSearchParams; authenticated: boolean }
@@ -60,11 +61,7 @@ export async function readTelnyxForm(req: Request, tag: string): Promise<TelnyxF
   return { ok: true, form, authenticated: Boolean(publicKey) };
 }
 
-const FIELD_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
-const ATTESTATION_FIELD = /attest|shaken|stir|verstat/i;
-const SAFE_VALUE = /^[A-Za-z0-9 _.:-]{0,64}$/;
 const MAX_LISTED = 60;
-const MAX_ATTESTATION = 10;
 
 /**
  * OBSERVATION ONLY: one line naming every form field this request carried,
@@ -98,7 +95,7 @@ export function logFormFields(tag: string, form: URLSearchParams): void {
     seen.add(name);
     if (listed.length < MAX_LISTED) listed.push(name);
     if (attestation.length < MAX_ATTESTATION && ATTESTATION_FIELD.test(name)) {
-      const shown = !SAFE_VALUE.test(value) ? "(unprintable)" : /\d{7,}/.test(value) ? "(redacted)" : value;
+      const shown = shownValue(value);
       attestation.push(`${name}=${shown}`);
     }
   }

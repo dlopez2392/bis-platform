@@ -23,6 +23,7 @@ export { createContact, updateContact, listContacts, getContact,
 // item 8c: a field's own Undo (the compare-and-swap restore) and who most recently edited it.
 export { restoreContactFieldIf, lastFieldEditor } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
+export { emailKey } from "./contacts";
 export { recordLanguageSignal, setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple, LANGUAGE_SOURCES,
          type ContactLanguage, type LanguageSource, type LanguageSignalSource, type LanguageTriple } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
@@ -50,7 +51,7 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
          listFailedOutboundSms,
-         listConversations, getConversationSummary, listMessages,
+         listConversations, getConversationSummary, findConversationForContact, listMessages,
          listContactMessages, incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
          type ConversationCursor, type FailedOutboundSms, type TextbackWindow,
@@ -116,7 +117,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          getDueReviewRequestById, getDueNoShowNudgeById, getDueSmsReminderById,
          listDueAppointmentConfirms, getDueAppointmentConfirmById,
          stampAppointmentConfirmAsked, stampAppointmentConfirmSmsFailed,
-         matchConfirmationReply, applyConfirmationReply,
+         matchConfirmationReply, applyConfirmationReply, listOutstandingConfirmAsks,
          APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
          APPOINTMENT_CONFIRM_MIN_LEAD_MS,
          parseReferralAskConfig, listDueReferralAsks, getDueReferralAskById,

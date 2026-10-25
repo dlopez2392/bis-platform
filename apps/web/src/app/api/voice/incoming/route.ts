@@ -91,6 +91,7 @@ import {
 } from "@bis/db";
 import {
   extractCallerNumber, extractCalledNumber, extractHandoffToken, extractSipSignature, sipHeaderNames,
+  sipAttestation,
 } from "@/lib/voice/sip-headers";
 import { verifySipHandoff, sipHandoffEnforced } from "@/lib/voice/sip-handoff-signature";
 import { resolveHandoffTarget, type HandoffTarget } from "@/lib/voice/handoff";
@@ -921,7 +922,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // --- Step 4b: log routing info, header NAMES never VALUES ------------
-    log("incoming call", { callId, callerNumber, calledNumber, sipHeaderNames: sipHeaderNames(event.data) });
+    log("incoming call", { callId, callerNumber, calledNumber, sipHeaderNames: sipHeaderNames(event.data), attestation: sipAttestation(event.data) });
 
     // --- Step 5: unroutable ------------------------------------------------
     if (!calledNumber) {
@@ -1268,6 +1269,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       calendar, profile, branding, fromEmail: accountRow.from_email ?? null,
       callerNumber, origin,
       callRowId, handoffTarget,
+      tradeModule: tradeStamp?.module ?? null,
     };
     const finishCtx: FinishContext = {
       db, accountId, branding,

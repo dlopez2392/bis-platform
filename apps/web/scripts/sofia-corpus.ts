@@ -20,7 +20,7 @@ import { CONCIERGE_MAX_TURNS, CONCIERGE_MAX_REPLY_TOKENS, CONCIERGE_MODEL } from
 import { TRADE_MODULES } from "../src/lib/voice/modules";
 import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
 import {
-  parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult,
+  parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult, newStubSession,
   renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
   selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName,
   DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
@@ -211,7 +211,8 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
   const f = fixtureFor(item.facts);
   const input = promptInputFor(item, f, moduleId!);
   const tools = toolsFor(item, input);
-  const stub: Stub = (name, a, said) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone, said });
+  const session = newStubSession(f, item, moduleId!);
+  const stub: Stub = (name, a, said) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone, said, session });
   if (dryRun) {
     return [{ role: "tool", text: `dry run: ${tools.map((t) => t.name).join(", ")}; caller ID ${input.callerNumber === null ? "withheld" : "shown"}; after hours ${input.afterHours}; prompt ${buildSystemPrompt(input, new Date()).length} chars` }];
   }

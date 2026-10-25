@@ -1377,7 +1377,9 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
     "calls.detail.tradeModule.events": [],
   };
   const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
-  const paramsOf = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+  // The SET of names: S-47e's closing sentence on insurance_pcHint names {persona} a second
+  // time, and t() replaces every occurrence (same reasoning as the S-47d describe below).
+  const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
 
   it("the key list itself is the ten this plan names, plus the final fix's nextCall (guards the loops below from vacuity)", () => {
     expect(KEYS.length).toBe(11);
@@ -1407,8 +1409,8 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
       ["voice.tradeRules.noneHint", "{persona} follows only the rules every account has.", "{persona} sigue solo las reglas que tiene toda cuenta."],
       ["voice.tradeRules.insurance_pc", "Insurance (property & casualty)", "Seguros de daños (auto, casa y negocio)"],
       ["voice.tradeRules.insurance_pcHint",
-        "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy.",
-        "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza."],
+        "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy. Before reading, moving or cancelling an appointment, {persona} asks for the full name and the email on file.",
+        "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza. Antes de consultar, cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado."],
       ["voice.tradeRules.events", "Events and venues", "Eventos y salones"],
       ["voice.tradeRules.eventsHint",
         "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Services & prices, or from Facts when there is no list.",
@@ -2012,5 +2014,95 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
         expect(s.replace(/\{\w+\}/g, "")).not.toMatch(/\b(business_status|closure_kind|null|RPC|set_at|running_late)\b/i);
       }
     }
+  });
+});
+
+describe("S-47e: identity and shared-number copy, English and Spanish (plan Task 2)", () => {
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "voice.todo.identity": [],
+    "contact.holding.label": ["number"],
+    "conversation.holding.notice": ["number"],
+    "conversation.holding.move": [],
+    "conversation.holding.moveOther": [],
+    "conversation.holding.moved": ["name"],
+    "conversation.holding.movedBack": [],
+    "conversation.holding.moveFailed": [],
+    "conversation.holding.moveEmpty": [],
+    "call.holding.openTexts": [],
+    "conversation.holding.findLabel": [],
+    "conversation.holding.findNone": [],
+    "conversation.holding.findHint": [],
+    "conversation.holding.findCustomer": [],
+    "conversation.holding.findFailed": [],
+    "conversation.holding.moveRole": [],
+    "todo.sharedNumber.reply": [],
+    "todo.sharedNumber.hold": ["excerpt", "number"],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+  // The SET of names: a sentence may name one twice, and t() replaces every occurrence.
+  const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
+
+  it("the key list itself is the plan's 16 rows plus the design review's two (T17 M-4, M-7): one voice, one contact, thirteen conversation, one call, two todo (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(18);
+  });
+
+  it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    expect(KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`])).toEqual([]);
+  });
+
+  it("names exactly its params, the same set in both languages (mutation: {number} -> {num} in one .es -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+    }
+  });
+
+  it("pins every sentence, both languages (mutation: change one word -> FAILS)", () => {
+    const pairs: Array<[string, string, string]> = [
+      ["voice.todo.identity", "Someone asked about an appointment and couldn't confirm who they are", "Alguien preguntó por una cita y no pudo confirmar quién es"],
+      ["contact.holding.label", "Shared number {number}", "Número compartido {number}"],
+      ["conversation.holding.notice", "These texts came from {number}, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person.", "Estos mensajes llegaron desde el {number}, un teléfono que usa más de un cliente, así que todavía no están en el registro de ningún cliente. Muévalos a la persona correcta."],
+      ["conversation.holding.move", "Move to…", "Mover a…"],
+      ["conversation.holding.moveOther", "Find another customer", "Buscar otro cliente"],
+      ["conversation.holding.moved", "Moved to {name}.", "Los mensajes se movieron a {name}."],
+      ["conversation.holding.movedBack", "Moved back.", "Los mensajes se regresaron."],
+      ["conversation.holding.moveFailed", "That conversation couldn't be moved. Try again.", "No se pudo mover la conversación. Inténtelo de nuevo."],
+      ["conversation.holding.moveEmpty", "These texts were already moved.", "Estos mensajes ya se movieron."],
+      ["call.holding.openTexts", "Open the texts", "Abrir los mensajes"],
+      ["conversation.holding.findLabel", "Search customers by name or phone", "Buscar clientes por nombre o teléfono"],
+      ["conversation.holding.findNone", "No one found. Add them on Contacts first, then move these texts.", "No se encontró a nadie. Agréguelo primero en Contactos y luego mueva estos mensajes."],
+      ["conversation.holding.findHint", "Pick who these texts belong to. They move as soon as you choose, and you can undo.", "Elija a quién pertenecen estos mensajes. Se mueven en cuanto elige, y puede deshacerlo."],
+      ["conversation.holding.findCustomer", "Find a customer", "Buscar un cliente"],
+      ["conversation.holding.findFailed", "Couldn't search customers. Try again.", "No se pudo buscar clientes. Inténtelo de nuevo."],
+      ["conversation.holding.moveRole", "Only an Owner or Staff can move these texts.", "Solo un dueño o un empleado puede mover estos mensajes."],
+      ["todo.sharedNumber.reply", "A reply from a shared number couldn't be matched to one appointment", "Una respuesta de un número compartido no se pudo asociar con una sola cita"],
+      ["todo.sharedNumber.hold", "A text from the shared number {number} may have asked to stop texts: “{excerpt}”. Texts to that number are on hold.", "Un mensaje del número compartido {number} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes a ese número están en pausa."],
+    ];
+    const cat = m as Record<string, string>;
+    for (const [k, en, es] of pairs) expect([cat[k], cat[`${k}.es`]], k).toEqual([en, es]);
+  });
+
+  it("Spanish is usted, the persona is never typed, no plumbing word reaches the reader (mutations: 'tu' / 'Sofía' / 'conversation_id' into one line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(cat[`${k}.es`]).not.toMatch(/\b(tu|tus|contigo|escribe|intenta)\b/i);
+      for (const s of [cat[k]!, cat[`${k}.es`]!]) {
+        expect(s).not.toMatch(/Sofía|Sofia/);
+        expect(s.replace(/\{\w+\}/g, "")).not.toMatch(/\b(holds_shared_number|holding record|RPC|null|conversation_id)\b/i);
+      }
+    }
+  });
+
+  it("\"dueño\", never \"propietario\", in conversation.holding.moveRole.es (P14)", () => {
+    const cat = m as Record<string, string>;
+    expect(cat["conversation.holding.moveRole.es"]).toMatch(/dueño/);
+    expect(cat["conversation.holding.moveRole.es"]).not.toMatch(/propietario/);
+  });
+
+  it("the Spanish Notice never says \"asignar\" or \"archivados\" (T17 design review M-8)", () => {
+    const cat = m as Record<string, string>;
+    expect(cat["conversation.holding.notice.es"]).not.toMatch(/asign|archivad/i);
   });
 });

@@ -174,6 +174,21 @@ describe("AgencyWorkPage", () => {
     expect(html).toContain(m["work.agency.empty.body"]);
   });
 
+  it("a To-do on a shared number's holding record names the number, never \"Caller\"; a customer's row keeps their name (S-47e P19; T17 review M9; mutation: contactDisplayName for every row -> FAILS)", async () => {
+    listAgencyWorkMock.mockResolvedValueOnce([
+      row({ id: "task:hold", contactId: "ct-hold", title: "A reply from a shared number couldn't be matched to one appointment" }),
+      row({ id: "task:ana", contactId: "ct-ana", title: "Call Ana back" }),
+    ]);
+    fake.tables.contacts = [
+      { id: "ct-hold", first_name: "Caller", last_name: null, phone: "+19565550142", holds_shared_number: true },
+      { id: "ct-ana", first_name: "Ana", last_name: "López", phone: "+19565550142", holds_shared_number: false },
+    ];
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).toContain("Shared number (956) 555-0142");
+    expect(text).toContain("Ana López");
+    expect(text).not.toMatch(/\bCaller\b/);
+  });
+
   it("renders no line-down banner on the good day, when the count is zero", async () => {
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).not.toContain(m["work.linesDown.action"]);

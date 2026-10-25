@@ -16,7 +16,8 @@ export default async function DashboardPage() {
   const db = serviceDb();
   const [accounts, contactCount, openOpps] = await Promise.all([
     listAccounts(db),
-    db.from("contacts").select("id", { count: "exact", head: true }),
+    // S-47e (S29): a shared number's holding record is not a customer, so it is not in the total.
+    db.from("contacts").select("id", { count: "exact", head: true }).eq("holds_shared_number", false),
     // Pages past PostgREST's row cap (max_rows, 1000) internally, so neither
     // the count nor the sum silently undercounts above it — see
     // sumOpenOpportunities' own comment. No accountId: this tile is

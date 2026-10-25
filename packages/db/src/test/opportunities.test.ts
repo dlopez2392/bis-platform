@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
+import { ensureHoldingContact } from "../voice";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
@@ -107,6 +108,38 @@ describe("opportunities", () => {
       const { data: after } = await db.from("opportunities")
         .select("stage_id").eq("id", id).single();
       expect(after!.stage_id).toBe(before!.stage_id);
+    }));
+
+  // S-47e (Task 4 review M3, orchestrator ruling; spec 5.12.3): a deal is the one path from a record to an
+  // outbound text (the quote follow-up), so a shared number's holding record can never carry one. Seeded
+  // through its one writer, ensureHoldingContact.
+  it("refuses a deal on a shared number's holding record, writes nothing, and still refuses a person of another account (mutation: drop the holding filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const holding = await ensureHoldingContact(db, accountId, "+19565550188", "voice");
+      await expect(createOpportunity(db, accountId,
+        { contactId: holding.id, pipelineId, name: "Shared", value: 100 }, "user_test"),
+      ).rejects.toThrow("contact not in account");
+      const { data: none } = await db.from("opportunities").select("id").eq("account_id", accountId);
+      expect(none).toEqual([]);
+
+      // The control: a person on the same number gets the deal.
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana", phone: "+19565550188" }, "user_test");
+      expect(ana).not.toBe(holding.id);
+      const { id: oppId } = await createOpportunity(db, accountId,
+        { contactId: ana, pipelineId, name: "Deck", value: 100 }, "user_test");
+      const { data: rows } = await db.from("opportunities").select("id, contact_id").eq("account_id", accountId);
+      expect(rows).toEqual([{ id: oppId, contact_id: ana }]);
+
+      // The second account: its person is never A's to put a deal on.
+      await withTestAccount(async (_db2, accountB) => {
+        const { id: bea } = await createContact(db, accountB, { firstName: "Bea" }, "user_test");
+        await expect(createOpportunity(db, accountId,
+          { contactId: bea, pipelineId, name: "Cross", value: 100 }, "user_test"),
+        ).rejects.toThrow("contact not in account");
+        const { data: bRows } = await db.from("opportunities").select("id").eq("contact_id", bea);
+        expect(bRows).toEqual([]);
+      });
     }));
 
   it("rejects creating an opportunity for a contact from a different account", () =>
