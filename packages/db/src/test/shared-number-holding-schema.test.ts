@@ -126,7 +126,7 @@ describe("0098 shape", () => {
       const { rows: [k] } = await c.query(
         "select pg_get_constraintdef(oid) as def, convalidated from pg_constraint where conname = 'contacts_holding_shape'");
       expect(k).toEqual({
-        def: "CHECK (((NOT holds_shared_number) OR ((NOT (first_name IS DISTINCT FROM 'Caller'::text)) AND (last_name IS NULL) AND (email IS NULL) AND (phone IS NOT NULL) AND ((length(phone) >= 8) AND (length(phone) <= 16)) AND (substr(phone, 1, 1) = '+'::text) AND (substr(phone, 2) !~ '[^0-9]'::text))))",
+        def: "CHECK (((NOT holds_shared_number) OR ((NOT (first_name IS DISTINCT FROM 'Caller'::text)) AND (last_name IS NULL) AND (email IS NULL) AND (company_name IS NULL) AND (phone IS NOT NULL) AND ((length(phone) >= 8) AND (length(phone) <= 16)) AND (substr(phone, 1, 1) = '+'::text) AND (substr(phone, 2) !~ '[^0-9]'::text))))",
         convalidated: true,
       });
       const { rows: [i] } = await c.query("select indexdef from pg_indexes where indexname = 'contacts_one_holding_per_number'");
@@ -151,8 +151,8 @@ describe("0098 shape", () => {
       const { rows: [r] } = await c.query(`select
           col_description('public.contacts'::regclass, (select attnum from pg_attribute where attrelid = 'public.contacts'::regclass and attname = 'holds_shared_number')) as col,
           obj_description('public.move_holding_thread(uuid,uuid,uuid,text,bigint)'::regprocedure, 'pg_proc') as fn`);
-      expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).");
-      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).");
+      expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). Whoever writes it, it carries no name but Caller, no email and no business name (contacts_holding_shape); no booking or lead is filed on it (every writer skips it).");
+      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).");
     }));
 });
 
@@ -175,6 +175,7 @@ describe("0098 the holding record", () => {
     ["no phone", { phone: null }],
     ["a phone typed, not E.164", { phone: "(956) 555-0142" }],
     ["a phone of 7 characters, one short of the shortest E.164 (mutation: length between 7 and 16 -> FAILS)", { phone: "+683456" }],
+    ["a phone of 17 characters, + and 16 digits, one past the longest E.164 (mutation: length between 8 and 17 -> FAILS)", { phone: "+1234567890123456" }],
   ] as const)("refuses a holding record with %s (contacts_holding_shape, 23514; mutation: drop the CHECK -> FAILS)", (_label, over) =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "refuse");
@@ -184,12 +185,38 @@ describe("0098 the holding record", () => {
       expect(err).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
     }));
 
-  it("admits the shortest E.164, 8 characters (Niue: +683 and four digits; mutation: length between 9 and 16 -> FAILS)", () =>
+  it.each([
+    ["8 characters, the shortest (Niue: +683 and four digits; mutation: length between 9 and 16 -> FAILS)", "+6834567"],
+    ["16 characters, the longest (+ and 15 digits; mutation: length between 8 and 15 -> FAILS)", "+123456789012345"],
+  ] as const)("admits a holding record whose E.164 is %s", (_label, phone) =>
     withRollback(async (c) => {
-      const a = await seedAccount(c, "niue");
-      const { rows: [h] } = await holdingRow(c, a.accountId, { phone: "+6834567" });
+      const a = await seedAccount(c, "edge");
+      const { rows: [h] } = await holdingRow(c, a.accountId, { phone });
       const { rows } = await c.query("select phone, holds_shared_number from public.contacts where id = $1", [h!.id]);
-      expect(rows).toEqual([{ phone: "+6834567", holds_shared_number: true }]);
+      expect(rows).toEqual([{ phone, holds_shared_number: true }]);
+    }));
+
+  /**
+   * A business name reaches a contact only through its business group: app.sync_company_name writes company_name
+   * as its owner, so the trigger below never sees a signed-in session, and contacts_company_name_derived re-derives
+   * any company_name an insert or update names (a holding insert naming "Acme Roofing" stores none). The group
+   * write is therefore the one shape that can put a business name on a holding record, and only the CHECK refuses
+   * it. The same call on Ana is the control: it stores the name, so the refusal is the CHECK and not the call.
+   */
+  it("a business name cannot reach a holding record: set_contacts_business on it is refused (23514), on a person it stores the name (mutation: drop company_name is null from the CHECK -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "business");
+      const { rows: [h] } = await holdingRow(c, a.accountId);
+      const ana = await person(c, a.accountId, "Ana", "Prueba");
+      const business = "select public.set_contacts_business($1, array[$2::uuid], array['Acme Roofing'])";
+      await c.query("set local role service_role");
+      expect(await refusal(c, business, [a.accountId, ana])).toBeNull();
+      expect(await refusal(c, business, [a.accountId, h!.id])).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
+      await c.query("reset role");
+      const { rows } = await c.query("select id, company_name from public.contacts where id = any($1) order by first_name", [[h!.id, ana]]);
+      expect(rows).toEqual([{ id: ana, company_name: "Acme Roofing" }, { id: h!.id, company_name: null }]);
+      const { rows: [m] } = await c.query("select count(*)::int as n from public.client_group_members where contact_id = $1", [h!.id]);
+      expect(m!.n).toBe(0);
     }));
 
   it("one holding record per account and E.164; account B gets its own on the same number (mutation: the index on phone alone -> FAILS)", () =>
@@ -334,6 +361,55 @@ describe("0098 move_holding_thread", () => {
         fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2,
         undo: false, undoOf: null, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
       } }]);
+    }));
+
+  it("a second move of the same thread (a concurrent second move, or a stale tab) moves nothing, answers empty and writes no event (mutation: drop the empty answer -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
+      expect(r.status).toBe("ok");
+      expect(await move(c, s.a.accountId, s.hc, s.bc)).toEqual({ status: "empty" });
+      const { rows: events } = await c.query(
+        "select id::int as id from public.events where account_id = $1 and type = 'conversation.moved'", [s.a.accountId]);
+      expect(events).toEqual([{ id: r.moveId }]);
+      const { rows: convs } = await c.query("select id, unread_count from public.conversations where id = any($1) order by unread_count", [[s.hc, s.bc]]);
+      expect(convs).toEqual([{ id: s.hc, unread_count: 0 }, { id: s.bc, unread_count: 2 }]);
+    }));
+
+  it("texts with no call, and a call with no text, are each a move, not empty, and so is each Undo (mutation: empty when EITHER list is empty -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const { rows: [h2] } = await holdingRow(c, s.a.accountId, { phone: "+19565550143" });
+      const h2c = await conversation(c, s.a.accountId, h2!.id, 0);
+      const text = await message(c, s.a.accountId, h2c, "texts only", 5);
+      const t = await move(c, s.a.accountId, h2c, s.ac);
+      expect(t).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [text], callIds: [] });
+      expect(await move(c, s.a.accountId, s.ac, h2c, t.moveId!))
+        .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [text], callIds: [] });
+      const { rows: [h3] } = await holdingRow(c, s.a.accountId, { phone: "+19565550144" });
+      const h3c = await conversation(c, s.a.accountId, h3!.id, 0);
+      const lone = await call(c, s.a.accountId, s.pn, h3c, null);
+      const k = await move(c, s.a.accountId, h3c, s.bc);
+      expect(k).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [], callIds: [lone] });
+      expect(await move(c, s.a.accountId, s.bc, h3c, k.moveId!))
+        .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [], callIds: [lone] });
+    }));
+
+  it("an Undo naming a system event of another type that carries a move's own payload is invalid (mutation: drop e.type = 'conversation.moved' -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      await move(c, s.a.accountId, s.hc, s.bc);                          // m1 and m2 are on Beto's thread
+      // Written here as the table owner: the function's own actor_type, writer and payload, naming m1 and the two
+      // threads reversed, so only the event's type can refuse it.
+      const { rows: [other] } = await c.query<{ id: number }>(
+        `insert into public.events (account_id, type, actor_type, actor_id, payload)
+         values ($1, 'conversation.updated', 'system', 'user_staff', jsonb_build_object('writer', 'move_holding_thread', 'by', 'user_staff',
+                 'undo', false, 'fromConversationId', $2::text, 'toConversationId', $3::text,
+                 'messageIds', jsonb_build_array($4::text), 'callIds', '[]'::jsonb)) returning id::int as id`,
+        [s.a.accountId, s.hc, s.bc, s.m1]);
+      expect(await move(c, s.a.accountId, s.bc, s.hc, other!.id)).toEqual({ status: "invalid" });
+      const { rows: [row] } = await c.query("select conversation_id from public.messages where id = $1", [s.m1]);
+      expect(row).toEqual({ conversation_id: s.bc });
     }));
 
   it("a call on the holding thread that names another contact is not repointed (mutation: drop the calls contact guard -> FAILS)", () =>

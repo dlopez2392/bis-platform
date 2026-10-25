@@ -9,8 +9,11 @@
 -- WHAT.
 --   public.contacts.holds_shared_number boolean not null default false: the mark. Set only by server code
 --     (ensureHoldingContact, service_role); a signed-in insert stores false; no client UPDATE grant names it.
---   contacts_holding_shape: a holding record is first name Caller, no last name, no email, and an E.164
---     phone. Written null-safe: a CHECK passes on NULL, so every term is true or false, never NULL.
+--   contacts_holding_shape: a holding record is first name Caller, no last name, no email, no business
+--     name, and an E.164 phone of 8 to 16 characters. Written null-safe: a CHECK passes on NULL, so every
+--     term is true or false, never NULL. The business name is company_name, which only the business group
+--     sync writes (app.sync_company_name, a definer, so the trigger below never sees a signed-in session);
+--     the CHECK is what refuses it, for every writer.
 --   contacts_one_holding_per_number: unique (account_id, phone) where holds_shared_number. The exact E.164,
 --     not phone_key: two numbers of two countries can share a digits key, never an E.164.
 --   app.contacts_holding_server_only(): plain, not definer. For a signed-in session it stores false on
@@ -20,8 +23,9 @@
 --     a person, recording what it moved on its own conversation.moved event (actor_type system, actor_id and
 --     payload by the person, payload writer move_holding_thread), or moves back exactly what one such event
 --     recorded (Undo, which names that event and nothing else). An event a client wrote through record_event
---     is actor_type user (0053), so it can never be undone from. SECURITY DEFINER, executed by service_role
---     only, behind the role check of the app.
+--     is actor_type user (0053), so it can never be undone from. A move that finds nothing to move (a second
+--     move of the same thread, or a stale tab) answers empty and writes nothing. SECURITY DEFINER, executed
+--     by service_role only, behind the role check of the app.
 --
 -- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
 -- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
@@ -66,6 +70,7 @@ alter table public.contacts
   add constraint contacts_holding_shape check (
     not holds_shared_number
     or (first_name is not distinct from 'Caller' and last_name is null and email is null
+        and company_name is null
         and phone is not null and pg_catalog.length(phone) between 8 and 16
         and pg_catalog.substr(phone, 1, 1) = '+' and pg_catalog.substr(phone, 2) !~ '[^0-9]')
   ) not valid;
@@ -184,6 +189,13 @@ begin
     returning k.id)
   select coalesce(pg_catalog.array_agg(id), '{}') into v_calls from repointed;
 
+  -- A move that found nothing left to move (a second move of the same thread, which waited on the lock
+  -- above, or a stale tab) changes no count and writes no event, so nothing can claim or undo it.
+  if p_undo_of is null
+     and pg_catalog.cardinality(v_messages) = 0 and pg_catalog.cardinality(v_calls) = 0 then
+    return pg_catalog.jsonb_build_object('status', 'empty');
+  end if;
+
   -- A whole move carries the unread count with it; an Undo leaves both counts as they are.
   update public.conversations c
      set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
@@ -216,6 +228,6 @@ grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, big
 
 -- 6. Comments: each names its one writer.
 comment on column public.contacts.holds_shared_number is
-  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
+  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). Whoever writes it, it carries no name but Caller, no email and no business name (contacts_holding_shape); no booking or lead is filed on it (every writer skips it).';
 comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) is
-  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';
+  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';

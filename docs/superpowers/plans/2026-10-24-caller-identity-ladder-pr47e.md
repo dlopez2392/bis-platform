@@ -40,6 +40,7 @@ The 0098 SQL went through three versions on the plan writer's own PG18 replica o
 - the first plan's revision (md5 `13f26cbe99753bfbbd8e20e7ba9ee632`, approved by the opus plan review: md5, digest and definers reproduced, its 12 mutations failed, the rollback was clean);
 - the first fix round's text (md5 `a76f898b5e362d9e0b8c71e2a0d28fff`, 216 lines; the re-review reproduced its md5, digest, definers, 32/32 and 19 mutations);
 - **the second fix round's text** (Task 1 Step 4; md5 **`ae8371757c516d581810b713e86d7cb0`**; 221 lines). It answers the first review's items 7, 8, 11 and 13, closes the hole the first fix round found (P22), and the re-review's item 1 (P1: an Undo accepts only the function's own event). The spec's §4.1 carries the same text.
+- **Task 1 changed the text after this check** (the orchestrator's amendments 1 and 2, then the Task 1 review's fix round, P32): md5 `6a3f65120e8fe0eb1d84129e597caaa3`, 233 lines, a 49-case test, 32 mutations, each red, on the Task 1 implementer's replica (port 55492). The counts below are the plan writer's, on the 221-line text.
 
 **Read off the replica, on the second fix round's text (every line re-run after the last change):**
 - **Client-write digest** (the query at `packages/db/src/test/proposals-drop.test.ts:93-98`): `pre` = `post` = **`52|b66203ca5d355155540b520af510d120`**, unchanged.
@@ -100,7 +101,7 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
 - **P20. The call page's link for a holding call opens the thread** (`conversations?c=<id>`, `call.holding.openTexts`).
 - **P21. The palette's label is English** (`holdingLabel(number, "en")`), matching the route's other labels.
 - **P22. The shape CHECK is written null-safe.** Evidence: the replica, above. A CHECK passes when its expression is NULL, and `first_name = 'Caller'` is NULL for a NULL first name.
-  - **Resolution:** `first_name is not distinct from 'Caller'`, and `phone is not null` with a plain E.164 test (length 9–16, a leading `+`, digits after it). Mutation m02 (`first_name = 'Caller'`) → the "no first name" case FAILS.
+  - **Resolution:** `first_name is not distinct from 'Caller'`, and `phone is not null` with a plain E.164 test (length 8–16 since Task 1's amendment 2, a leading `+`, digits after it). Mutation m02 (`first_name = 'Caller'`) → the "no first name" case FAILS.
 - **P23. One holding record per account and E.164, not per `phone_key`** (R13). Two numbers of two countries can share a digits key: `+1 322 123 4567` and Belgium's `+32 2 123 4567` both key `3221234567`. With the index on `phone_key`, the second number's `ensureHoldingContact` got 23505, re-read by its own E.164, found nothing, and threw, so the inbound route answered 503 to every retry.
   - **Resolution:** `contacts_one_holding_per_number` is unique `(account_id, phone)`, and the CHECK fixes a holding record's phone to E.164, so the two can never collide. `ensureHoldingContact` reads by the exact phone. If a 23505 is ever followed by a read that finds no row, it throws `HoldingContactUnavailable`. Its one remaining cause is a delete racing the insert, which a retry recovers from, so the inbound route answers it like any other filing failure: `FilingFailed`, 503, and Telnyx retries (re-review R5; the collision that could have made it permanent is gone with the index on the exact E.164). The text-back logs and sends nothing. Mutation m04 (back to `phone_key`) → the two-countries case FAILS.
 - **P24. Staff cannot edit a holding record** (R8). The spec's §4.1 said "no name or customer detail is ever written onto it … for every writer, staff included", but the CHECK binds only the name, the email and the phone's shape; a signed-in session could still change its phone, source, custom fields, `dnd` and the rest.
@@ -123,6 +124,11 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
     - A recognised one-word answer (`matchConfirmationReply`) looks for outstanding confirmation asks across the REAL contacts on the number (`listOutstandingConfirmAsks`, Task 10). Exactly one → `applyConfirmationReply` for that contact, as today. More than one, or none → nothing is applied, and ONE To-do is filed on the holding record: `todo.sharedNumber.reply`, "A reply from a shared number couldn't be matched to one appointment", in the account's language.
     - A CANCEL word: the real contacts with an upcoming booked appointment (`nextBookedStart` each). Exactly one → today's CANCEL To-do for THAT contact, with their name and date. More than one → the same `todo.sharedNumber.reply` To-do on the holding record. None → no To-do, today's rule for a CANCEL with nothing to check (`inbound.ts:131-132`); said in S30.
 - **P31. Task 10 is HIGH and carries mutation probes** (R4): (a) and (b) plus the reviewer's own, like the other HIGH tasks.
+- **P32. Task 1's review fix round (2026-10-24): a business name, an empty move, and three pins.** The Task 1 review proved on its replica that `set_contacts_business` (0069) puts a business name on a holding record: `app.sync_company_name` is a definer and writes `company_name` as its owner, so the trigger never sees a signed-in session.
+  - **Resolution:** `contacts_holding_shape` gains `company_name is null`, so that group write fails 23514 for every writer. (`contacts_company_name_derived` already re-derives any `company_name` an insert or update names, so the group write is the one shape that can carry one, and the test probes exactly that, with a person as its control.)
+  - A forward move that finds nothing left to move (a concurrent second move, or a stale tab) answers `{"status":"empty"}`, changes no count and writes no event, so no toast claims a move and no Undo can name one. Task 3 maps it, Task 11 answers `conversation.holding.moveEmpty` (a Task 2 follow-up key) and Task 12's handler toasts it. An Undo never answers `empty`.
+  - The E.164 bounds are pinned at both edges (8 and 16 characters admitted, 7 and 17 refused), and the Undo's `e.type` check has its own probe.
+  - 0098 is md5 `6a3f65120e8fe0eb1d84129e597caaa3` (233 lines); Task 1's test has 49 cases.
 - **Confirmed, not deviations:**
   - Every registry, finish-call, textback, phone-number, sip-headers, telnyx-request, card-focus, corpus-lib, contacts, voice and route cite in the spec reads as the spec says at `df8882ce` (re-read for this plan).
   - `isCallerIdNumber(stored, number)` (`phone-number.ts:63-67`) is a plain normalised compare, so it filters candidates for any number (spec §4).
@@ -269,12 +275,12 @@ No other open question. Two behaviours the owner may want to know about are in "
 | Object | Name and rule |
 |---|---|
 | Column | `public.contacts.holds_shared_number boolean not null default false` |
-| CHECK | `contacts_holding_shape`: `not holds_shared_number or (first_name is not distinct from 'Caller' and last_name is null and email is null and phone is not null and length(phone) between 9 and 16 and substr(phone, 1, 1) = '+' and substr(phone, 2) !~ '[^0-9]')`, null-safe (P22), added NOT VALID then validated |
+| CHECK | `contacts_holding_shape`: `not holds_shared_number or (first_name is not distinct from 'Caller' and last_name is null and email is null and company_name is null and phone is not null and length(phone) between 8 and 16 and substr(phone, 1, 1) = '+' and substr(phone, 2) !~ '[^0-9]')`, null-safe (P22), added NOT VALID then validated; `company_name is null` because the business group sync writes it as a definer (P32) |
 | Index | `contacts_one_holding_per_number`: unique `(account_id, phone) where holds_shared_number` (the exact E.164, P23) |
 | Trigger | `contacts_holding_server_only` BEFORE INSERT OR UPDATE FOR EACH ROW → `app.contacts_holding_server_only()` (plain plpgsql, not definer). For `current_user = 'authenticated'`: INSERT stores `false`; UPDATE of a holding record that changes any of `first_name, last_name, email, phone, phone_country_unconfirmed, source, custom, attribution, dnd, marketing_email_opted_out_at` raises 42501 "A shared number holding record is changed by server code only" (P24); every UPDATE keeps `old.holds_shared_number` |
 | Function | `public.move_holding_thread(p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text, p_undo_of bigint default null) returns jsonb`, SECURITY DEFINER, `set search_path = pg_catalog, pg_temp`, EXECUTE to service_role only |
-| Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side with no `p_undo_of`; away from it with one; a `p_undo_of` that is not a move of this account between the same two threads reversed, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"ok","moveId":<bigint>,"messageIds":[…],"callIds":[…]}` |
-| Event | `conversation.moved`, written by the function itself: `actor_type` `system`, `actor_id` = `p_actor` (the person), payload `{ writer: "move_holding_thread", by: <the person>, fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId`. An Undo accepts only such an event (P1) |
+| Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side with no `p_undo_of`; away from it with one; a `p_undo_of` that is not a move of this account between the same two threads reversed, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"empty"}` (a move with no `p_undo_of` that found no message and no call left to move: no count changes and no event is written, P32), `{"status":"ok","moveId":<bigint>,"messageIds":[…],"callIds":[…]}` |
+| Event | `conversation.moved`, written by the function itself: `actor_type` `system`, `actor_id` = `p_actor` (the person), payload `{ writer: "move_holding_thread", by: <the person>, fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId`; an `empty` move writes none. An Undo accepts only such an event (P1) |
 
 ### `@bis/db` (Task 3) — `packages/db/src/voice.ts`
 
@@ -388,13 +394,13 @@ export async function ensureHoldingContact(
 
 export type HoldingMove =
   | { status: "ok"; moveId: number; messageIds: string[]; callIds: string[] }
-  | { status: "invalid" | "not_found" };
+  | { status: "invalid" | "not_found" | "empty" };
 
 /**
  * 0098's move_holding_thread through PostgREST, on the SERVICE client (the caller has checked the role, spec
  * 5.12.5). A move names no event; its Undo names the move's own `moveId` and nothing else (plan P1): the
  * function moves back only the ids that move recorded. Throws on a transport error or an answer the function
- * never gives.
+ * never gives. A move that finds nothing left to move is `empty` (plan P32), never an `ok` with no ids.
  */
 export async function moveHoldingThread(
   db: SupabaseClient, accountId: string,
@@ -413,7 +419,7 @@ export async function moveHoldingThread(
       callIds: Array.isArray(r.callIds) ? r.callIds.map(String) : [],
     };
   }
-  if (r?.status === "invalid" || r?.status === "not_found") return { status: r.status };
+  if (r?.status === "invalid" || r?.status === "not_found" || r?.status === "empty") return { status: r.status };
   throw new Error("moveHoldingThread: unexpected answer");
 }
 ```
@@ -1053,7 +1059,7 @@ export type ResolvedTextbackContact = string | { id: string; holding: true } | n
 export type HoldingMoveUndo = { moveId: number; fromConversationId: string; toConversationId: string };
 export type MoveHoldingResult =
   | { ok: true; toConversationId: string; name: string; undo: HoldingMoveUndo }
-  | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" };
+  | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" | "conversation.holding.moveEmpty" };
 export async function moveHoldingThreadAction(accountId: string, conversationId: string, toContactId: string): Promise<MoveHoldingResult>;
 export async function undoMoveHoldingThreadAction(accountId: string, undo: HoldingMoveUndo):
   Promise<{ ok: true; conversationId: string } | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" }>;
@@ -1087,6 +1093,7 @@ export function sipAttestation(eventData: unknown): string;   // "none" when not
 | `conversation.holding.moved` | Moved to {name}. | Se movió a {name}. |
 | `conversation.holding.movedBack` | Moved back. | Se regresó. |
 | `conversation.holding.moveFailed` | That conversation couldn't be moved. Try again. | No se pudo mover la conversación. Inténtelo de nuevo. |
+| `conversation.holding.moveEmpty` (P32; a Task 2 follow-up, after `07f1a112`) | These texts were already moved. | Estos mensajes ya se movieron. |
 | `call.holding.openTexts` | Open the texts | Abrir los mensajes |
 | `conversation.holding.findLabel` (Q1) | Search customers by name or phone | Buscar clientes por nombre o teléfono |
 | `conversation.holding.findNone` (Q1) | No customers match. | Ningún cliente coincide. |
@@ -1163,7 +1170,7 @@ And the changed pair (S16), each gaining a closing sentence:
   - No apostrophe inside a `--` comment or inside a `comment on … is '…'` string, so no possessives.
   - No `begin;`/`commit;` wrapper. `lock_timeout` is set inside the first `do` block (`0091_ai_acts.sql:45-51` gives the reason: on PostgreSQL 17 a bare SET LOCAL as a later statement of a multi-statement string is not guaranteed to be inside a transaction block).
   - Every function 0098 creates writes `set search_path = pg_catalog, pg_temp`. Exactly one `security definer` on a code line (`move_holding_thread`), so `EXPECTED_DEFINERS` gains exactly that one entry.
-  - The md5 of the committed file is `ae8371757c516d581810b713e86d7cb0` when copied byte for byte (LF line ends, one trailing newline, 221 lines).
+  - The md5 of the committed file is `6a3f65120e8fe0eb1d84129e597caaa3` (LF line ends, one trailing newline, 233 lines), after Task 1's amendments and its review fix round (P32). The plan writer's reviewed text was `ae8371757c516d581810b713e86d7cb0` (221 lines).
   - The E.164 test in the CHECK is written without a `$` anchor (length, a leading `+`, no non-digit after it), so every `$` stays a dollar-quote.
 - **plpgsql NULL guard** (memory "plpgsql NULL guard"): `app.contacts_holding_server_only()` keeps `coalesce(current_user = 'authenticated', false)`; `move_holding_thread` tests `v_from_holding is null or v_to_holding is null` before comparing them.
 - **Tests must be able to fail** (memories "Test vacuity", "Vacuous test shapes"):
@@ -1256,730 +1263,11 @@ And the changed pair (S16), each gaining a closing sentence:
 
 - [ ] **Step 1: Build the kit** (Global constraints) on 55492. The migration is not written yet, so the first build's third argument is a copy of the plan writer's file: `cp <KIT>/0098_shared_number_holding.reviewed.sql <SCRATCH>/t1-kit/0098.sql`, then `bash <SCRATCH>/t1-kit/replica.sh 55492 <SCRATCH>/t1-kit/r <SCRATCH>/t1-kit/0098.sql`. Show `diff <KIT>/replica.sh <SCRATCH>/t1-kit/replica.sh` (no difference). Confirm `pre`'s client-write digest equals Task 0's bis-ci value (`52|b66203ca…`) and `pre` has 22 definers. Steps 3 and 6 use `pre` only; Step 5 rebuilds with the committed file.
 
-- [ ] **Step 2: Write the failing schema test** `packages/db/src/test/shared-number-holding-schema.test.ts`:
+- [ ] **Step 2: Write the failing schema test** `packages/db/src/test/shared-number-holding-schema.test.ts`. DONE (Task 1, then its review fix round, P32): the committed file is the text, 49 cases. This plan no longer carries a copy, because the copy drifted from the file; read the file at the branch head.
 
-```ts
-import { describe, it, expect } from "vitest";
-import type { Client } from "pg";
-import { withRollback, actAsMember, actAsOwner } from "./db";
-import { testPhoneNumber } from "./fixtures";
+- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  49 failed (49)` (`column "holds_shared_number" … does not exist`, or a null def), as on the Task 1 implementer's replica after the review fix round (P32; the plan writer's 42-case file read 42 of 42). Paste the summary line.
 
-/**
- * 0098_shared_number_holding.sql (S-47e, owner decision E8): contacts.holds_shared_number, its shape, one
- * holding record per account and number, the server-only trigger and move_holding_thread.
- * RED BEFORE APPLY: every case names an object that does not exist yet.
- *
- * Every refusal is shaped so the rule it names is the ONLY one that can refuse it: a shape probe changes exactly
- * one field of the valid holding row. A refused statement aborts the transaction, so each runs in `refusal()`'s
- * savepoint. These rows are hand-shaped on purpose: this file IS the writer's contract (plan Global constraints).
- */
-const RUN = Math.random().toString(36).slice(2, 10);
-const PHONE = "+19565550142";
-type Acct = { accountId: string; orgId: string };
-type Refusal = { code?: string; constraint?: string; message: string } | null;
-type Over = { first_name?: string | null; last_name?: string | null; email?: string | null; phone?: string | null };
-
-async function seedAccount(c: Client, label: string): Promise<Acct> {
-  await actAsOwner(c);
-  const orgId = `org_holding_${label}_${RUN}`;
-  const { rows: [agency] } = await c.query<{ id: string }>("insert into public.agencies (name) values ('Holding') returning id");
-  const { rows: [account] } = await c.query<{ id: string }>(
-    `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
-     values ($1, $2, 'Shared number', true) returning id`, [agency!.id, orgId]);
-  return { accountId: account!.id, orgId };
-}
-
-async function holdingRow(c: Client, accountId: string, over: Over = {}) {
-  const r = { first_name: "Caller", last_name: null, email: null, phone: PHONE, ...over };
-  return c.query<{ id: string }>(
-    `insert into public.contacts (account_id, first_name, last_name, email, phone, holds_shared_number, author_kind)
-     values ($1, $2, $3, $4, $5, true, 'ai') returning id`,
-    [accountId, r.first_name, r.last_name, r.email, r.phone]);
-}
-
-async function person(c: Client, accountId: string, first: string, last: string, phone = PHONE): Promise<string> {
-  const { rows: [r] } = await c.query<{ id: string }>(
-    "insert into public.contacts (account_id, first_name, last_name, phone, author_kind) values ($1, $2, $3, $4, 'ai') returning id",
-    [accountId, first, last, phone]);
-  return r!.id;
-}
-
-/** Runs one statement inside its own savepoint: null when it succeeds, else the error's code, constraint and message. */
-async function refusal(c: Client, sql: string, params: unknown[] = []): Promise<Refusal> {
-  await c.query("savepoint probe");
-  try {
-    await c.query(sql, params);
-    await c.query("release savepoint probe");
-    return null;
-  } catch (e) {
-    await c.query("rollback to savepoint probe");
-    const err = e as { code?: string; constraint?: string; message: string };
-    return { code: err.code, constraint: err.constraint, message: err.message };
-  }
-}
-
-async function conversation(c: Client, accountId: string, contactId: string, unread = 0): Promise<string> {
-  const { rows: [r] } = await c.query<{ id: string }>(
-    "insert into public.conversations (account_id, contact_id, unread_count) values ($1, $2, $3) returning id",
-    [accountId, contactId, unread]);
-  return r!.id;
-}
-async function message(c: Client, accountId: string, conversationId: string, body: string, minutesAgo: number): Promise<string> {
-  const { rows: [r] } = await c.query<{ id: string }>(
-    `insert into public.messages (account_id, conversation_id, channel, direction, body, author_kind, created_at)
-     values ($1, $2, 'sms', 'inbound', $3, 'customer', now() - make_interval(mins => $4)) returning id`,
-    [accountId, conversationId, body, minutesAgo]);
-  return r!.id;
-}
-/** One phone number per account (phone_numbers_one_active_per_account), so household() makes it once. */
-async function phoneNumber(c: Client, accountId: string): Promise<string> {
-  const { rows: [pn] } = await c.query<{ id: string }>(
-    "insert into public.phone_numbers (account_id, e164) values ($1, $2) returning id", [accountId, testPhoneNumber()]);
-  return pn!.id;
-}
-async function call(c: Client, accountId: string, phoneNumberId: string, conversationId: string, contactId: string | null): Promise<string> {
-  const { rows: [r] } = await c.query<{ id: string }>(
-    "insert into public.calls (account_id, phone_number_id, conversation_id, contact_id) values ($1, $2, $3, $4) returning id",
-    [accountId, phoneNumberId, conversationId, contactId]);
-  return r!.id;
-}
-type Moved = { status: string; moveId?: number; messageIds?: string[]; callIds?: string[] };
-async function move(c: Client, accountId: string, from: string, to: string, undoOf: number | null = null): Promise<Moved> {
-  await c.query("set local role service_role");
-  const { rows: [r] } = await c.query<{ r: Moved }>(
-    "select public.move_holding_thread($1, $2, $3, 'user_staff', $4::bigint) as r", [accountId, from, to, undoOf]);
-  await c.query("reset role");
-  return r!.r;
-}
-
-/** Account A: a holding thread (2 messages, unread 2, one call with no contact), Ana (1 message, unread 1, a call of
- *  her own) and Beto (an empty thread), all on PHONE. Account B: its own holding thread on the same number. */
-async function household(c: Client) {
-  const a = await seedAccount(c, "a");
-  const b = await seedAccount(c, "b");
-  const { rows: [h] } = await holdingRow(c, a.accountId);
-  const ana = await person(c, a.accountId, "Ana", "Prueba");
-  const beto = await person(c, a.accountId, "Beto", "Prueba");
-  const { rows: [hb] } = await holdingRow(c, b.accountId);
-  const hc = await conversation(c, a.accountId, h!.id, 2);
-  const ac = await conversation(c, a.accountId, ana, 1);
-  const bc = await conversation(c, a.accountId, beto, 0);
-  const hbc = await conversation(c, b.accountId, hb!.id, 0);
-  const m1 = await message(c, a.accountId, hc, "missed-call text", 120);
-  const m2 = await message(c, a.accountId, hc, "test", 60);
-  await message(c, a.accountId, ac, "ana old", 180);
-  const pn = await phoneNumber(c, a.accountId);
-  const holdingCall = await call(c, a.accountId, pn, hc, null);
-  const anaCall = await call(c, a.accountId, pn, ac, ana);
-  return { a, b, holding: h!.id, holdingB: hb!.id, ana, beto, hc, ac, bc, hbc, m1, m2, pn, holdingCall, anaCall };
-}
-
-describe("0098 shape", () => {
-  it("contacts.holds_shared_number is boolean, not null, default false", () =>
-    withRollback(async (c) => {
-      const { rows } = await c.query(`select data_type, is_nullable, column_default from information_schema.columns
-        where table_schema = 'public' and table_name = 'contacts' and column_name = 'holds_shared_number'`);
-      expect(rows).toEqual([{ data_type: "boolean", is_nullable: "NO", column_default: "false" }]);
-    }));
-
-  it("pins the CHECK, the partial unique index and the trigger exactly", () =>
-    withRollback(async (c) => {
-      const { rows: [k] } = await c.query(
-        "select pg_get_constraintdef(oid) as def, convalidated from pg_constraint where conname = 'contacts_holding_shape'");
-      expect(k).toEqual({
-        def: "CHECK (((NOT holds_shared_number) OR ((NOT (first_name IS DISTINCT FROM 'Caller'::text)) AND (last_name IS NULL) AND (email IS NULL) AND (phone IS NOT NULL) AND ((length(phone) >= 9) AND (length(phone) <= 16)) AND (substr(phone, 1, 1) = '+'::text) AND (substr(phone, 2) !~ '[^0-9]'::text))))",
-        convalidated: true,
-      });
-      const { rows: [i] } = await c.query("select indexdef from pg_indexes where indexname = 'contacts_one_holding_per_number'");
-      expect(i!.indexdef).toBe("CREATE UNIQUE INDEX contacts_one_holding_per_number ON public.contacts USING btree (account_id, phone) WHERE holds_shared_number");
-      const { rows: [t] } = await c.query("select pg_get_triggerdef(oid) as def from pg_trigger where tgname = 'contacts_holding_server_only'");
-      expect(t!.def).toBe("CREATE TRIGGER contacts_holding_server_only BEFORE INSERT OR UPDATE ON public.contacts FOR EACH ROW EXECUTE FUNCTION app.contacts_holding_server_only()");
-    }));
-
-  it("the trigger function is a plain invoker and the move a definer, both with pg_temp last, owned by postgres", () =>
-    withRollback(async (c) => {
-      const { rows } = await c.query(`select p.oid::regprocedure::text as sig, p.prosecdef, p.proconfig,
-          pg_catalog.pg_get_userbyid(p.proowner) as owner
-        from pg_proc p where p.proname in ('contacts_holding_server_only', 'move_holding_thread') order by 1`);
-      expect(rows).toEqual([
-        { sig: "app.contacts_holding_server_only()", prosecdef: false, proconfig: ["search_path=pg_catalog, pg_temp"], owner: "postgres" },
-        { sig: "move_holding_thread(uuid,uuid,uuid,text,bigint)", prosecdef: true, proconfig: ["search_path=pg_catalog, pg_temp"], owner: "postgres" },
-      ]);
-    }));
-
-  it("the comments name the one writer", () =>
-    withRollback(async (c) => {
-      const { rows: [r] } = await c.query(`select
-          col_description('public.contacts'::regclass, (select attnum from pg_attribute where attrelid = 'public.contacts'::regclass and attname = 'holds_shared_number')) as col,
-          obj_description('public.move_holding_thread(uuid,uuid,uuid,text,bigint)'::regprocedure, 'pg_proc') as fn`);
-      expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).");
-      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).");
-    }));
-});
-
-describe("0098 the holding record", () => {
-  it("an ordinary contact reads false, and the exact holding shape is admitted", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "shape");
-      const ana = await person(c, a.accountId, "Ana", "Prueba");
-      const { rows: [h] } = await holdingRow(c, a.accountId);
-      const { rows } = await c.query("select id, holds_shared_number from public.contacts where id = any($1) order by holds_shared_number",
-        [[ana, h!.id]]);
-      expect(rows).toEqual([{ id: ana, holds_shared_number: false }, { id: h!.id, holds_shared_number: true }]);
-    }));
-
-  it.each([
-    ["a last name", { last_name: "Prueba" }],
-    ["an email", { email: "ana@example.com" }],
-    ["another first name", { first_name: "Ana" }],
-    ["no first name (a CHECK passes on NULL, so the term is null-safe)", { first_name: null }],
-    ["no phone", { phone: null }],
-    ["a phone typed, not E.164", { phone: "(956) 555-0142" }],
-    ["a phone too short for E.164", { phone: "+1956555" }],
-  ] as const)("refuses a holding record with %s (contacts_holding_shape, 23514; mutation: drop the CHECK -> FAILS)", (_label, over) =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "refuse");
-      await c.query("savepoint probe");
-      const err = await holdingRow(c, a.accountId, over as Over).then(() => null, (e: { code?: string; constraint?: string }) => e);
-      await c.query("rollback to savepoint probe");
-      expect(err).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
-    }));
-
-  it("one holding record per account and E.164; account B gets its own on the same number (mutation: the index on phone alone -> FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "one");
-      const b = await seedAccount(c, "other");
-      await holdingRow(c, a.accountId);
-      expect(await refusal(c,
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai')",
-        [a.accountId, PHONE])).toMatchObject({ code: "23505", constraint: "contacts_one_holding_per_number" });
-      expect(await refusal(c,
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai')",
-        [b.accountId, PHONE])).toBeNull();
-      // Two people and the holding record share the number: the index binds the holding record only.
-      await person(c, a.accountId, "Ana", "Prueba");
-      await person(c, a.accountId, "Beto", "Prueba");
-      const { rows: [n] } = await c.query("select count(*)::int as n from public.contacts where account_id = $1 and phone = $2", [a.accountId, PHONE]);
-      expect(n!.n).toBe(3);
-    }));
-
-  it("two numbers of two countries that share a digits key each get their own holding record (plan item 13; mutation: the index on (account_id, phone_key) -> FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "keys");
-      // +1 322 123 4567 keys 3221234567; +32 2 123 4567 (Belgium) is ten digits and keys the same.
-      await holdingRow(c, a.accountId, { phone: "+13221234567" });
-      expect(await refusal(c,
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', '+3221234567', true, 'ai')",
-        [a.accountId])).toBeNull();
-      const { rows } = await c.query("select phone_key from public.contacts where account_id = $1 order by phone", [a.accountId]);
-      expect(rows).toEqual([{ phone_key: "3221234567" }, { phone_key: "3221234567" }]);
-    }));
-});
-
-describe("0098 only server code sets or edits the mark", () => {
-  it("a signed-in Owner's insert with holds_shared_number true stores false (mutation: drop the trigger -> FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "client-insert");
-      await actAsMember(c, a.accountId, a.orgId, "owner");
-      await c.query(
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number) values ($1, 'Caller', $2, true)",
-        [a.accountId, PHONE]);
-      await actAsOwner(c);
-      const { rows } = await c.query("select holds_shared_number from public.contacts where account_id = $1", [a.accountId]);
-      expect(rows).toEqual([{ holds_shared_number: false }]);
-    }));
-
-  it("a signed-in update that names the mark is refused by the grant (plan P3; mutation: grant update (holds_shared_number) on public.contacts to authenticated -> FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "client-update");
-      const ana = await person(c, a.accountId, "Ana", "Prueba");
-      await actAsMember(c, a.accountId, a.orgId, "owner");
-      expect(await refusal(c, "update public.contacts set holds_shared_number = true where id = $1", [ana]))
-        .toMatchObject({ code: "42501" });
-      await actAsOwner(c);
-      const { rows } = await c.query("select holds_shared_number from public.contacts where id = $1", [ana]);
-      expect(rows).toEqual([{ holds_shared_number: false }]);
-    }));
-
-  /** Every client-updatable column but assigned_to and updated_at (schema-grants-guard.test.ts:86-89). */
-  const EDITS = [
-    ["attribution", "attribution = '{\"x\":1}'::jsonb"],
-    ["custom", "custom = '{\"x\":1}'::jsonb"],
-    ["dnd", "dnd = '{\"sms\":true}'::jsonb"],
-    ["email", "email = 'ana@example.com'"],
-    ["first_name", "first_name = 'Ana'"],
-    ["last_name", "last_name = 'Prueba'"],
-    ["marketing_email_opted_out_at", "marketing_email_opted_out_at = now()"],
-    ["phone", "phone = '+19565550199'"],
-    ["phone_country_unconfirmed", "phone_country_unconfirmed = true"],
-    ["source", "source = 'staff note'"],
-  ] as const;
-
-  it("the edit cases cover exactly the ten columns the trigger compares (read off its own body)", () =>
-    withRollback(async (c) => {
-      const { rows: [p] } = await c.query<{ src: string }>(
-        "select prosrc as src from pg_proc where oid = 'app.contacts_holding_server_only()'::regprocedure");
-      const named = [...new Set([...p!.src.matchAll(/\bnew\.(\w+)/g)].map((m) => m[1]!))]
-        .filter((col) => col !== "holds_shared_number").sort();
-      expect(EDITS).toHaveLength(10);
-      expect(named).toEqual(EDITS.map(([col]) => col));
-    }));
-
-  it.each(EDITS)("a signed-in Owner cannot change a holding record's %s (plan item 8, R3; mutation: drop the trigger's refusal -> FAILS)", (_col, set) =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "client-edit");
-      const { rows: [h] } = await holdingRow(c, a.accountId);
-      await actAsMember(c, a.accountId, a.orgId, "owner");
-      expect(await refusal(c, `update public.contacts set ${set} where id = $1`, [h!.id]))
-        .toMatchObject({ code: "42501", message: "A shared number holding record is changed by server code only" });
-    }));
-
-  it("a signed-in Owner may still assign the holding record and touch updated_at, and edit an ordinary contact's phone", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "client-assign");
-      const { rows: [h] } = await holdingRow(c, a.accountId);
-      const ana = await person(c, a.accountId, "Ana", "Prueba");
-      const sub = await actAsMember(c, a.accountId, a.orgId, "owner");
-      await actAsOwner(c);
-      const { rows: [u] } = await c.query<{ id: string }>("select id from public.users where clerk_user_id = $1", [sub]);
-      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ org_id: a.orgId, sub })]);
-      await c.query("set local role authenticated");
-      expect(await refusal(c, "update public.contacts set assigned_to = $2, updated_at = now() where id = $1", [h!.id, u!.id])).toBeNull();
-      expect(await refusal(c, "update public.contacts set phone = '+19565550199' where id = $1", [ana])).toBeNull();
-      await actAsOwner(c);
-      const { rows } = await c.query("select id, assigned_to, phone from public.contacts where id = any($1) order by phone", [[h!.id, ana]]);
-      expect(rows).toEqual([{ id: h!.id, assigned_to: u!.id, phone: PHONE }, { id: ana, assigned_to: null, phone: "+19565550199" }]);
-    }));
-
-  it("service_role may set the mark and change the record (the server path ensureHoldingContact takes)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "server");
-      await c.query("set local role service_role");
-      const { rows: [h] } = await c.query<{ id: string }>(
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai') returning id",
-        [a.accountId, PHONE]);
-      await c.query("update public.contacts set source = 'voice' where id = $1", [h!.id]);
-      await c.query("reset role");
-      const { rows } = await c.query("select holds_shared_number, source from public.contacts where account_id = $1", [a.accountId]);
-      expect(rows).toEqual([{ holds_shared_number: true, source: "voice" }]);
-    }));
-});
-
-describe("0098 move_holding_thread", () => {
-  it("a whole move takes every message and call of the holding thread to the person, carries the unread count, and records the ids on its event", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      expect(r).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
-      expect(r.messageIds!.length).toBe(2);
-      const { rows: msgs } = await c.query("select conversation_id from public.messages where id = any($1)", [[s.m1, s.m2]]);
-      expect(msgs).toEqual([{ conversation_id: s.bc }, { conversation_id: s.bc }]);
-      const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.holdingCall]);
-      expect(callRow).toEqual({ conversation_id: s.bc, contact_id: s.beto });
-      const { rows: convs } = await c.query(
-        "select id, unread_count, last_message_at is null as empty from public.conversations where id = any($1) order by unread_count",
-        [[s.hc, s.bc]]);
-      expect(convs).toEqual([{ id: s.hc, unread_count: 0, empty: true }, { id: s.bc, unread_count: 2, empty: false }]);
-      const { rows: events } = await c.query(
-        "select id::int as id, actor_type, actor_id, payload from public.events where account_id = $1 and type = 'conversation.moved'", [s.a.accountId]);
-      expect(events).toEqual([{ id: r.moveId, actor_type: "system", actor_id: "user_staff", payload: {
-        writer: "move_holding_thread", by: "user_staff",
-        fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2,
-        undo: false, undoOf: null, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
-      } }]);
-    }));
-
-  it("a call on the holding thread that names another contact is not repointed (mutation: drop the calls contact guard -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const stray = await call(c, s.a.accountId, s.pn, s.hc, s.ana);
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      expect(r.callIds).toEqual([s.holdingCall]);
-      const { rows: [row] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [stray]);
-      expect(row).toEqual({ conversation_id: s.hc, contact_id: s.ana });
-    }));
-
-  it("a message carrying another account's id is never moved (mutation: drop m.account_id = p_account_id from the messages update -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const foreign = await message(c, s.b.accountId, s.hc, "foreign", 30);
-      await move(c, s.a.accountId, s.hc, s.bc);
-      const { rows: [row] } = await c.query("select conversation_id from public.messages where id = $1", [foreign]);
-      expect(row).toEqual({ conversation_id: s.hc });
-    }));
-
-  it("a conversation of A whose contact is B's holding record is not a holding thread for A (mutation: drop k.account_id = p_account_id from the contacts reads -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const crossed = await conversation(c, s.a.accountId, s.holdingB, 0);
-      await message(c, s.a.accountId, crossed, "crossed", 10);
-      expect(await move(c, s.a.accountId, crossed, s.bc)).toEqual({ status: "invalid" });
-    }));
-
-  it("Undo names the move: exactly what it moved goes back, a message and a call the person made since stay, the event says undo (mutations: drop the m.id or the k.id filter -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      const later = await message(c, s.a.accountId, s.bc, "later", 1);
-      const betosOwn = await call(c, s.a.accountId, s.pn, s.bc, s.beto);
-      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
-      expect(u).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
-      const { rows: [counts] } = await c.query(`select
-          (select count(*)::int from public.messages where conversation_id = $1) as holding,
-          (select count(*)::int from public.messages where conversation_id = $2) as beto,
-          (select conversation_id from public.messages where id = $3) as later_in`, [s.hc, s.bc, later]);
-      expect(counts).toEqual({ holding: 2, beto: 1, later_in: s.bc });
-      const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.holdingCall]);
-      expect(callRow).toEqual({ conversation_id: s.hc, contact_id: null });
-      // R2: a call Beto made on his own thread after the move is not one the move recorded (mutation: drop
-      // `and (p_undo_of is null or k.id = any (v_want_calls))` -> it moves to the holding thread, FAILS).
-      const { rows: [own] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [betosOwn]);
-      expect(own).toEqual({ conversation_id: s.bc, contact_id: s.beto });
-      const { rows: convs } = await c.query("select id, unread_count from public.conversations where id = any($1) order by unread_count", [[s.hc, s.bc]]);
-      expect(convs).toEqual([{ id: s.hc, unread_count: 0 }, { id: s.bc, unread_count: 2 }]);
-      const { rows: [ev] } = await c.query("select payload->'undo' as undo, (payload->>'undoOf')::int as of from public.events where id = $1", [u.moveId]);
-      expect(ev).toEqual({ undo: true, of: r.moveId });
-    }));
-
-  it("a forged Undo moves nothing it did not move: another move's event, an Undo's own event, another account's event, a reversed pair (item 11; mutation: skip the event's from/to check -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const { rows: [h2] } = await holdingRow(c, s.a.accountId, { phone: "+19565550143" });
-      const h2c = await conversation(c, s.a.accountId, h2!.id, 0);
-      await message(c, s.a.accountId, h2c, "other number", 5);
-      const toAna = await move(c, s.a.accountId, h2c, s.ac);            // a move between OTHER threads
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
-      await move(c, s.a.accountId, s.hc, s.bc);                          // moved again: the threads are full again
-      // An event of account B shaped exactly like the function's own, naming A's two threads (written here as the
-      // table owner), so only the event's account filter refuses it.
-      const { rows: [bEvent] } = await c.query<{ id: number }>(
-        `insert into public.events (account_id, type, actor_type, actor_id, payload)
-         values ($1, 'conversation.moved', 'system', 'x', jsonb_build_object('writer', 'move_holding_thread', 'by', 'x', 'undo', false, 'fromConversationId', $2::text,
-                 'toConversationId', $3::text, 'messageIds', '[]'::jsonb, 'callIds', '[]'::jsonb)) returning id::int as id`,
-        [s.b.accountId, s.hc, s.bc]);
-      expect(await move(c, s.a.accountId, s.bc, s.hc, toAna.moveId!)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.bc, s.hc, u.moveId!)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.bc, s.hc, bEvent!.id)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.ac, s.hc, r.moveId!)).toEqual({ status: "invalid" });
-      const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.bc]);
-      expect(n!.n).toBe(2);
-    }));
-
-  it.each(["technician", "owner"] as const)("an event a signed-in %s writes through record_event, shaped like a move, can never be undone from (R1; mutation: drop the actor_type and writer checks -> FAILS)", (role) =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      await move(c, s.a.accountId, s.hc, s.bc);                          // Ana's message and call stay on her thread
-      await actAsMember(c, s.a.accountId, s.a.orgId, role);
-      await c.query("select public.record_event($1, 'conversation.moved', $2::jsonb)", [s.a.accountId, JSON.stringify({
-        writer: "move_holding_thread", by: "x", undo: false, fromConversationId: s.hc, toConversationId: s.ac,
-        messageIds: [], callIds: [s.anaCall],
-      })]);
-      await actAsOwner(c);
-      const { rows: [forged] } = await c.query<{ id: number; actor_type: string }>(
-        "select id::int as id, actor_type from public.events where account_id = $1 and type = 'conversation.moved' order by id desc limit 1", [s.a.accountId]);
-      expect(forged!.actor_type).toBe("user");
-      expect(await move(c, s.a.accountId, s.ac, s.hc, forged!.id)).toEqual({ status: "invalid" });
-      const { rows: [anaCall] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.anaCall]);
-      expect(anaCall).toEqual({ conversation_id: s.ac, contact_id: s.ana });
-    }));
-
-  it("an Undo cannot itself be undone: two guards refuse it together, the event's undo flag and the move away from the holding thread with an event named (R4: neither alone can be reached, because an Undo always moves toward the holding thread; mutation m20 drops both -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
-      expect(await move(c, s.a.accountId, s.hc, s.bc, u.moveId!)).toEqual({ status: "invalid" });
-      const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.hc]);
-      expect(n!.n).toBe(2);
-    }));
-
-  it("invalid: the same thread, two person threads, two holding threads, toward the holding thread with no move named, away from it with one", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      const { rows: [h2] } = await holdingRow(c, s.a.accountId, { phone: "+19565550143" });
-      const h2c = await conversation(c, s.a.accountId, h2!.id, 0);
-      const r = await move(c, s.a.accountId, s.hc, s.bc);
-      expect(await move(c, s.a.accountId, s.hc, s.hc)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.ac, s.bc)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.hc, h2c)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.ac, s.hc)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.hc, s.ac, r.moveId!)).toEqual({ status: "invalid" });
-      const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.anaCall]);
-      expect(callRow).toEqual({ conversation_id: s.ac, contact_id: s.ana });
-    }));
-
-  it("not_found for another account's conversation on either side, and for A's conversations asked as B (mutation: drop c.account_id = p_account_id from the two reads -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      expect(await move(c, s.a.accountId, s.hbc, s.bc)).toEqual({ status: "not_found" });
-      expect(await move(c, s.a.accountId, s.hc, s.hbc)).toEqual({ status: "not_found" });
-      expect(await move(c, s.b.accountId, s.hc, s.bc)).toEqual({ status: "not_found" });
-      const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.hc]);
-      expect(n!.n).toBe(2);
-    }));
-
-  it("only service_role may execute it (mutation: grant execute to authenticated -> FAILS)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      for (const role of ["anon", "authenticated"] as const) {
-        await c.query("savepoint probe");
-        await c.query(`set local role ${role}`);
-        const err = await c.query("select public.move_holding_thread($1, $2, $3, 'x')", [s.a.accountId, s.hc, s.bc])
-          .then(() => null, (e: { code?: string }) => e);
-        await c.query("rollback to savepoint probe");
-        expect(err, role).toMatchObject({ code: "42501" });
-      }
-      const { rows } = await c.query(`select has_function_privilege('service_role', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as svc,
-        has_function_privilege('authenticated', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as auth,
-        has_function_privilege('anon', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as anon`);
-      expect(rows).toEqual([{ svc: true, auth: false, anon: false }]);
-    }));
-
-  it("a pg_temp shadow does not run inside it (0096's probe, armed first)", () =>
-    withRollback(async (c) => {
-      const s = await household(c);
-      await c.query("set local role service_role");
-      await c.query(`create function pg_temp.bis_shadow(v pg_catalog.text) returns pg_catalog.bool language plpgsql
-                       as $f$ begin raise exception 'BIS-SHADOW ran as %', current_user; end $f$`);
-      await c.query("create domain pg_temp.text as pg_catalog.text check (pg_temp.bis_shadow(value))");
-      await c.query("savepoint armed");
-      await expect(c.query("select 'x'::text")).rejects.toThrow("BIS-SHADOW ran as service_role");
-      await c.query("rollback to savepoint armed");
-      const { rows: [r] } = await c.query<{ s: string }>(
-        "select (public.move_holding_thread($1, $2, $3, 'user_shadow'))->>'status' as s", [s.a.accountId, s.hc, s.bc]);
-      expect(r!.s).toBe("ok");
-    }));
-});
-```
-
-- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  42 failed (42)` (`column "holds_shared_number" … does not exist`, or a null def), as on the plan writer's replica. Paste the summary line.
-
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. Copy this text byte for byte; the plan writer's copy (`<KIT>/0098_shared_number_holding.reviewed.sql`, the fix round's text) has md5 `ae8371757c516d581810b713e86d7cb0`:
-
-```sql
--- 0098_shared_number_holding.sql - one "Caller" holding record per shared number (S-47e, owner decision E8)
--- (docs/superpowers/specs/2026-10-24-caller-identity-ladder-design.md section 4.1;
---  docs/superpowers/plans/2026-10-24-caller-identity-ladder-pr47e.md, Task 1)
---
--- WHY. A phone several customers share carries no name, so a missed-call text-back and the replies to it
--- cannot be filed on any one of them (S-47e E7). E8: they live on ONE holding record per number, which no
--- booking, lead, name or customer detail ever reaches, and staff move the thread to the right person.
---
--- WHAT.
---   public.contacts.holds_shared_number boolean not null default false: the mark. Set only by server code
---     (ensureHoldingContact, service_role); a signed-in insert stores false; no client UPDATE grant names it.
---   contacts_holding_shape: a holding record is first name Caller, no last name, no email, and an E.164
---     phone. Written null-safe: a CHECK passes on NULL, so every term is true or false, never NULL.
---   contacts_one_holding_per_number: unique (account_id, phone) where holds_shared_number. The exact E.164,
---     not phone_key: two numbers of two countries can share a digits key, never an E.164.
---   app.contacts_holding_server_only(): plain, not definer. For a signed-in session it stores false on
---     insert, keeps the mark on update, and refuses (42501) any change to a holding record except who it is
---     assigned to; server code (service_role) is not limited.
---   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
---     a person, recording what it moved on its own conversation.moved event (actor_type system, actor_id and
---     payload by the person, payload writer move_holding_thread), or moves back exactly what one such event
---     recorded (Undo, which names that event and nothing else). An event a client wrote through record_event
---     is actor_type user (0053), so it can never be undone from. SECURITY DEFINER, executed by service_role
---     only, behind the role check of the app.
---
--- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
--- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
--- schema-grants-guard.test.ts is unchanged for contacts (no column grant names holds_shared_number). The new
--- definer is added to EXPECTED_DEFINERS in definer-search-path.test.ts (22 -> 23).
---
--- SEARCH PATHS. Both functions say set search_path = pg_catalog, pg_temp (the 0096 rule).
---
--- LOCKS AND COST. The file runs as one transaction. ADD COLUMN with a constant default is catalogue-only
--- but takes ACCESS EXCLUSIVE on contacts, held to the end of the file; the CHECK validation (one scan, every
--- existing row is false and passes) and the partial unique index build (it indexes no existing row) run
--- under that same lock. The lock_timeout of 5s below bounds the wait to take it.
---
--- LOAD-BEARING. The build after this file names holds_shared_number in every contact dedupe, the contact
--- list and count, the contact reads, the inbox reads, the CSV import match index and the voice reads, and
--- calls move_holding_thread (plan SD list), so it merges only after this file is on production.
---
--- ROLLBACK (roll the app back first):
---   drop function public.move_holding_thread(uuid, uuid, uuid, text, bigint);
---   drop trigger contacts_holding_server_only on public.contacts;
---   drop function app.contacts_holding_server_only();
---   drop index public.contacts_one_holding_per_number;
---   alter table public.contacts drop constraint contacts_holding_shape;
---   alter table public.contacts drop column holds_shared_number;
---     (holding records then read as ordinary Caller contacts, threads and all)
---
--- ASCII only, no backslash anywhere, and every dollar sign in this file is part of a dollar-quote pair.
-
--- 0. Fail fast instead of queueing behind a long lock (0094 reason: inside a do block, so it is always in
---    the block transaction).
-do $$
-begin
-  perform pg_catalog.set_config('lock_timeout', '5s', true);
-end $$;
-
--- 1. The mark.
-alter table public.contacts
-  add column holds_shared_number boolean not null default false;
-
--- 2. Its shape.
-alter table public.contacts
-  add constraint contacts_holding_shape check (
-    not holds_shared_number
-    or (first_name is not distinct from 'Caller' and last_name is null and email is null
-        and phone is not null and pg_catalog.length(phone) between 9 and 16
-        and pg_catalog.substr(phone, 1, 1) = '+' and pg_catalog.substr(phone, 2) !~ '[^0-9]')
-  ) not valid;
-alter table public.contacts validate constraint contacts_holding_shape;
-
--- 3. One per account and number.
-create unique index contacts_one_holding_per_number
-  on public.contacts (account_id, phone) where holds_shared_number;
-
--- 4. Only server code sets, clears or edits it.
-create function app.contacts_holding_server_only() returns trigger
-language plpgsql set search_path = pg_catalog, pg_temp as $$
-begin
-  if coalesce(current_user = 'authenticated', false) then
-    if tg_op = 'INSERT' then
-      new.holds_shared_number := false;
-    else
-      if old.holds_shared_number
-         and (new.first_name, new.last_name, new.email, new.phone, new.phone_country_unconfirmed, new.source,
-              new.custom, new.attribution, new.dnd, new.marketing_email_opted_out_at)
-             is distinct from
-             (old.first_name, old.last_name, old.email, old.phone, old.phone_country_unconfirmed, old.source,
-              old.custom, old.attribution, old.dnd, old.marketing_email_opted_out_at) then
-        raise exception 'A shared number holding record is changed by server code only'
-          using errcode = '42501';
-      end if;
-      new.holds_shared_number := old.holds_shared_number;
-    end if;
-  end if;
-  return new;
-end $$;
-create trigger contacts_holding_server_only before insert or update on public.contacts
-  for each row execute function app.contacts_holding_server_only();
-
--- 5. Move a holding thread to a person, or move back exactly what one earlier move recorded (Undo).
-create function public.move_holding_thread(
-  p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text,
-  p_undo_of bigint default null)
-returns jsonb
-language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare
-  v_from_contact uuid;
-  v_to_contact uuid;
-  v_from_unread integer;
-  v_from_holding boolean;
-  v_to_holding boolean;
-  v_undo jsonb;
-  v_want_messages uuid[];
-  v_want_calls uuid[];
-  v_messages uuid[];
-  v_calls uuid[];
-  v_event bigint;
-begin
-  if p_from_conversation = p_to_conversation then
-    return pg_catalog.jsonb_build_object('status', 'invalid');
-  end if;
-
-  -- Both conversations on this account, locked in a fixed order so two moves cannot deadlock.
-  perform 1 from public.conversations c
-   where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation)
-   order by c.id for update;
-  select c.contact_id, c.unread_count into v_from_contact, v_from_unread
-    from public.conversations c where c.account_id = p_account_id and c.id = p_from_conversation;
-  select c.contact_id into v_to_contact
-    from public.conversations c where c.account_id = p_account_id and c.id = p_to_conversation;
-  if v_from_contact is null or v_to_contact is null then
-    return pg_catalog.jsonb_build_object('status', 'not_found');
-  end if;
-
-  select coalesce(k.holds_shared_number, false) into v_from_holding
-    from public.contacts k where k.account_id = p_account_id and k.id = v_from_contact;
-  select coalesce(k.holds_shared_number, false) into v_to_holding
-    from public.contacts k where k.account_id = p_account_id and k.id = v_to_contact;
-  -- Exactly one side is the holding record. A move goes away from it with no event named; an Undo goes
-  -- toward it and must name the move it undoes.
-  if v_from_holding is null or v_to_holding is null
-     or v_from_holding = v_to_holding
-     or (v_to_holding and p_undo_of is null)
-     or (v_from_holding and p_undo_of is not null) then
-    return pg_catalog.jsonb_build_object('status', 'invalid');
-  end if;
-
-  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo. The
-  -- event must be one this function wrote: record_event stamps every client event actor_type user (0053).
-  if p_undo_of is not null then
-    select e.payload into v_undo from public.events e
-     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved'
-       and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread';
-    if v_undo is null
-       or (v_undo ->> 'undo') is distinct from 'false'
-       or (v_undo ->> 'fromConversationId') is distinct from p_to_conversation::text
-       or (v_undo ->> 'toConversationId') is distinct from p_from_conversation::text then
-      return pg_catalog.jsonb_build_object('status', 'invalid');
-    end if;
-    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_messages
-      from pg_catalog.jsonb_array_elements_text(v_undo -> 'messageIds') as t(x);
-    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_calls
-      from pg_catalog.jsonb_array_elements_text(v_undo -> 'callIds') as t(x);
-  end if;
-
-  with moved as (
-    update public.messages m
-       set conversation_id = p_to_conversation, updated_at = pg_catalog.now()
-     where m.account_id = p_account_id and m.conversation_id = p_from_conversation
-       and (p_undo_of is null or m.id = any (v_want_messages))
-    returning m.id)
-  select coalesce(pg_catalog.array_agg(id), '{}') into v_messages from moved;
-
-  with repointed as (
-    update public.calls k
-       set conversation_id = p_to_conversation,
-           contact_id = case when v_to_holding then null else v_to_contact end
-     where k.account_id = p_account_id and k.conversation_id = p_from_conversation
-       and (p_undo_of is null or k.id = any (v_want_calls))
-       and (k.contact_id is null or k.contact_id = v_from_contact)
-    returning k.id)
-  select coalesce(pg_catalog.array_agg(id), '{}') into v_calls from repointed;
-
-  -- A whole move carries the unread count with it; an Undo leaves both counts as they are.
-  update public.conversations c
-     set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
-                             where m.account_id = p_account_id and m.conversation_id = c.id),
-         unread_count = case
-           when p_undo_of is not null then c.unread_count
-           when c.id = p_to_conversation then c.unread_count + v_from_unread
-           else 0 end,
-         updated_at = pg_catalog.now()
-   where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation);
-
-  insert into public.events (account_id, type, actor_type, actor_id, payload)
-  values (p_account_id, 'conversation.moved', 'system', p_actor,
-          pg_catalog.jsonb_build_object(
-            'writer', 'move_holding_thread', 'by', p_actor,
-            'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
-            'fromContactId', v_from_contact, 'toContactId', v_to_contact,
-            'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
-            'undo', p_undo_of is not null, 'undoOf', p_undo_of,
-            'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls)))
-  returning id into v_event;
-
-  return pg_catalog.jsonb_build_object('status', 'ok', 'moveId', v_event,
-    'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls));
-end $$;
-
-revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, bigint)
-  from public, anon, authenticated, service_role;
-grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to service_role;
-
--- 6. Comments: each names its one writer.
-comment on column public.contacts.holds_shared_number is
-  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
-comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) is
-  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';
-```
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. DONE: the committed file is the text, md5 `6a3f65120e8fe0eb1d84129e597caaa3` (233 lines). The plan writer's reviewed copy was `ae8371757c516d581810b713e86d7cb0`; amendments 1 and 2 and the review fix round (P32) changed it. This plan no longer carries a copy.
 
 - [ ] **Step 5: `EXPECTED_DEFINERS` 22 → 23, in this commit** (`definer-search-path.test.ts`'s own rule, `:20`):
   - `:25`: "The 22 SECURITY DEFINER functions in public and app at 0096" → "The 23 SECURITY DEFINER functions in public and app at 0098".
@@ -1989,36 +1277,44 @@ comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) i
   - Re-build the kit with the committed file as its third argument. Run on `post`, from `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/post; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/record-provenance-schema.test.ts src/test/one-switch-schema.test.ts src/test/customer-language-schema.test.ts src/test/company-name-read-only-schema.test.ts` → all green (all nine are withRollback-only; the plan writer's run of the last seven, unedited, was green).
   - If the defs or the comments differ on your replica, STOP and report.
 
-- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<KIT>/mutate4.js <file> <dir>` writes all 25 with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The plan writer's counts are in brackets (out of 42, or 48 with the second file); more reds than a line names are fine, fewer is a finding.
-  - m01. Drop `contacts_holding_shape` (both statements) → the seven `refuses a holding record with …` cases and the pin case FAIL [8 failed of 42].
+- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<SCRATCH>/s47e/t1-kit/mutate5.js <file> <dir>` writes all 31, m06b is written beside them, all with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The counts in brackets are the Task 1 implementer's after the review fix round (out of 49, or 55 with the second file); more reds than a line names are fine, fewer is a finding.
+  - m01. Drop `contacts_holding_shape` (both statements) → the eight `refuses a holding record with …` cases, the business-name case and the pin case FAIL [10 failed of 49].
   - m02. `first_name = 'Caller'` (not null-safe, P22) → "…with no first name…" and the pin case FAIL [2 failed].
-  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [15 failed].
+  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [18 failed].
   - m04. The index on `(account_id, phone_key)` (P23) → "two numbers of two countries…" and the pin case FAIL [2 failed].
   - m05. Drop the `create trigger contacts_holding_server_only …` statement → the signed-in insert case, the ten edit cases and the pin case FAIL [12 failed].
-  - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the ten "cannot change a holding record's …" cases and the column-coverage case FAIL [11 failed]. Dropping ONE column from the trigger's tuple fails the column-coverage case (it reads the trigger's own body).
-  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 48].
+  - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the ten "cannot change a holding record's …" cases and the column-coverage case FAIL [11 failed]. m06b: drop `source` from both tuples → the `source` case and the column-coverage case FAIL [2 failed].
+  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 55].
   - m08. Drop `or (v_to_holding and p_undo_of is null)` → the `invalid` case FAILS [1 failed].
   - m09. Drop the event's `fromConversationId`/`toConversationId` checks → the forged-Undo case FAILS [1 failed].
-  - m10. Drop `and (p_undo_of is null or m.id = any (v_want_messages))` → the Undo case FAILS (`later` moves too) [1 failed].
+  - m10. Drop `and (p_undo_of is null or m.id = any (v_want_messages))` → the Undo case (`later` moves too) and the texts-only Undo FAIL [2 failed].
   - m11. Drop `c.account_id = p_account_id and` from BOTH `select c.contact_id …` reads → the `not_found` case FAILS [1 failed].
   - m12. Append `grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to authenticated;` → "only service_role may execute it" FAILS [1 failed].
-  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 48]. The shadow case STAYED GREEN in the plan writer's run: only the pins catch this one. Say whether yours did too.
+  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 55]. The shadow case stays GREEN: only the pins catch this one.
   - m14. Delete `comment on function public.move_holding_thread …` → the comments case FAILS [1 failed].
-  - m15. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case and the Undo case FAIL [2 failed].
+  - m15. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case, the Undo case and the empty case FAIL [3 failed].
   - m16. Drop the calls contact guard `and (k.contact_id is null or k.contact_id = v_from_contact)` → "a call on the holding thread that names another contact…" FAILS [1 failed] (R7).
   - m17. Drop `m.account_id = p_account_id and` from the messages update → "a message carrying another account's id…" FAILS [1 failed] (R7).
   - m18. Drop `k.account_id = p_account_id and` from BOTH contacts reads → "a conversation of A whose contact is B's holding record…" FAILS [1 failed] (R7).
   - m19. `'undo', false` always in the event → the Undo case FAILS on the event's `undo` [1 failed] (R7).
-  - m20. Drop BOTH Undo-of-an-Undo guards, `or (v_undo ->> 'undo') is distinct from 'false'` and `or (v_from_holding and p_undo_of is not null)` → "an Undo cannot itself be undone…" FAILS [1 failed] (re-review R4). m20a (the undo-flag guard alone) and m20b (the away guard alone) stay GREEN [42 passed]: an Undo always moves toward the holding thread, so undoing it means moving away from it with an event named, which both guards refuse; neither can be reached without the other. The test's name says so; paste all three runs.
-  - m21. Drop `and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread'` → both record_event cases (Technician, Owner) FAIL [2 failed] (re-review R1: the forged event then drives an Undo that moves Ana's call to the holding thread).
-  - m22. Drop `and (p_undo_of is null or k.id = any (v_want_calls))` → the Undo case FAILS on Beto's own call [1 failed] (re-review R2).
-  - m23. Write the event as `'user'` → the whole-move pin, the Undo case and the Undo-of-an-Undo case FAIL [3 failed] (the function can no longer undo from its own event).
+  - m20. Drop the direction guard `or (v_from_holding and p_undo_of is not null)` → "an Undo cannot itself be undone…" FAILS [1 failed]. Amendment 1 deleted the Undo flag check, which no call could reach (on the 221-line text, dropping either guard alone stayed green), so the direction guard is the one guard and it fails alone.
+  - m21. Drop `and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread'` → both record_event cases (Technician, Owner) FAIL [2 failed] (re-review R1).
+  - m22. Drop `and (p_undo_of is null or k.id = any (v_want_calls))` → the Undo case on Beto's own call and the call-only Undo FAIL [2 failed] (re-review R2).
+  - m23. Write the event as `'user'` → the whole-move pin, the Undo case, the Undo-of-an-Undo case and the one-sided case FAIL [4 failed].
+  - m24. `between 9 and 16` → the 8-character case and the pin FAIL [2 failed] (amendment 2).
+  - m25. `between 7 and 16` → the 7-character refusal and the pin FAIL [2 failed].
+  - m26. Drop `and company_name is null` → the business-name case and the pin FAIL [2 failed] (P32).
+  - m27. Drop the `empty` answer → "a second move of the same thread … answers empty and writes no event" FAILS [1 failed] (P32).
+  - m27b. `or` for `and` between the two emptiness tests → "texts with no call, and a call with no text, are each a move…" FAILS [1 failed] (P32).
+  - m28. `between 8 and 15` → the 16-character case and the pin FAIL [2 failed] (P32).
+  - m29. `between 8 and 17` → the 17-character refusal and the pin FAIL [2 failed] (P32).
+  - m30. Drop `and e.type = 'conversation.moved'` → "an Undo naming a system event of another type…" FAILS [1 failed] (P32).
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the six ROLLBACK lines of the file's header in order (they ran on the plan writer's replica). Then: `select count(*) from pg_constraint where conname like 'contacts_holding%'` → `0`; `select count(*) from information_schema.columns where table_name = 'contacts' and column_name = 'holds_shared_number'` → `0`; the two functions gone; the definer count back to 22; the client-write digest `52|b66203ca…`. Drop `rb`.
   - On `post`, the client-write digest → `52|b66203ca5d355155540b520af510d120`.
-  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 31 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (80, 108); `wc -l f` → `221`.
-  - Record `md5sum` of the file. It equals `ae8371757c516d581810b713e86d7cb0` if nothing changed. If it differs, say what changed and why.
+  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 35 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (85, 113); `wc -l f` → `233`.
+  - Record `md5sum` of the file. It equals `6a3f65120e8fe0eb1d84129e597caaa3` (P32). If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green; eslint on the test file).
 
@@ -2031,11 +1327,11 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Verify (the affected-test rule):** (1) no web mock reaches 0098; (2) none; (3) none; (4) none; (5) none; (6) none. The db suites above, on the replica.
 
-**Acceptance:** all 42 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
+**Acceptance:** all 49 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree, with its own kit on 55493.
 - It applies 0098 to a fresh `pre` copy through `psql -1` only, and reads every def itself.
-- It re-runs m02, m04, m06, m08, m09, m10, m16, m18, m20 (with m20a and m20b), m21 and m22, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
+- It re-runs m02, m04, m06, m08, m09, m10, m16, m18, m20 (the direction guard alone, amendment 1), m21, m22, m26, m27, m27b and m30, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
 - It checks the bytes and the md5, and that no comment string or `--` line holds an apostrophe.
 - It confirms `definer-search-path.test.ts` is green on `post` with exactly one new entry, and that `schema-grants-guard.test.ts` and `proposals-drop.test.ts` were NOT edited.
 - A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
@@ -2045,13 +1341,13 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 ## Task 2 (LOW): Every new copy key, English and Spanish (bis-frontend)
 
 **Brief.**
-- Add the 15 keys of "The model, Copy keys" to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key, after the S-47d block's last key (`"voice.knowledge.noClosedDaysRecorded.es"`, `:2573` at `a1ccb19a`; re-read after the rebase), under one comment line: `// S-47e: identity checks (the To-do), the shared number's holding thread (label, Notice, Move, the call page) and its two To-dos. Usted.` The two `todo.sharedNumber.*` keys must NOT start `todo.consent.` (`lib/consent/copy.test.ts:111` counts that prefix: 80).
+- Add the 16 keys of "The model, Copy keys" (Task 2 committed 15 at `07f1a112`; `conversation.holding.moveEmpty`, P32, is the one follow-up) to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key, after the S-47d block's last key (`"voice.knowledge.noClosedDaysRecorded.es"`, `:2573` at `a1ccb19a`; re-read after the rebase), under one comment line: `// S-47e: identity checks (the To-do), the shared number's holding thread (label, Notice, Move, the call page) and its two To-dos. Usted.` The two `todo.sharedNumber.*` keys must NOT start `todo.consent.` (`lib/consent/copy.test.ts:111` counts that prefix: 80).
 - Replace the `voice.tradeRules.insurance_pcHint` pair (`:2056-2057`) with the two sentences of "The model, Copy keys" (S16), and the S-47b describe's pinned pair (`messages.test.ts:1409-1411` at `df8882ce`) with the same two literals. `voice-settings.test.ts:39` and `:826` read the key through `m[…]` and need no edit; run them.
 - Append ONE `describe("S-47e: identity and shared-number copy, English and Spanish (plan Task 2)")` to `apps/web/src/lib/messages.test.ts`, in the shape of the S-47d describe (`messages.test.ts:1723-…`). It contains:
-  - a literal `EXPECTED_PARAMS` over the 15 keys, with its length asserted as **15** (the table's rows, counted off this plan: one `voice`, one `contact`, ten `conversation`, one `call`, two `todo`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, `todo.sharedNumber.hold` `["excerpt", "number"]` (sorted), every other `[]`;
+  - a literal `EXPECTED_PARAMS` over the 16 keys, with its length asserted as **16** (the table's rows, counted off this plan: one `voice`, one `contact`, eleven `conversation`, one `call`, two `todo`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, `todo.sharedNumber.hold` `["excerpt", "number"]` (sorted), every other `[]`;
   - every key and twin present and different;
   - params identical across the twin;
-  - every sentence pinned as a typed literal pair (all 15 rows, both columns, word for word);
+  - every sentence pinned as a typed literal pair (all 16 rows, both columns, word for word);
   - usted (the S-47b regex);
   - no typed "Sofía";
   - no plumbing word (`holds_shared_number|holding record|RPC|null|conversation_id`);
@@ -2240,7 +1536,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("moveHoldingThread moves through PostgREST and its Undo names the move; another account's thread is not_found", async () => {
+  it("moveHoldingThread moves through PostgREST and its Undo names the move; a second move is empty; another account's thread is not_found", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (dbB, accountB) => {
         await person(db, accountId, "Ana", "Prueba", "+19565550169");
@@ -2254,6 +1550,8 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
         if (moved.status !== "ok") throw new Error("unreachable");
         const { data: m } = await db.from("messages").select("conversation_id").eq("id", msg.id).single();
         expect(m).toEqual({ conversation_id: bc.id });
+        // Nothing is left on the holding thread: a second move is empty and writes no event (P32).
+        expect(await moveHoldingThread(db, accountId, { from: hc.id, to: bc.id, actor: "user_test" })).toEqual({ status: "empty" });
         expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test", undoOf: moved.moveId }))
           .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [] });
         // An Undo that names no move is refused by the function (P1), never a silent no-op.
@@ -3403,6 +2701,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
   - An Owner's move: `callerCanSee("conversations", "a1", conv)` true, `getContact` → Beto (`holds_shared_number: false`), `ensureConversation(serviceDb(), "a1", "ct2", userId, "user")` → `bc`, `moveHoldingThread` → `{ status: "ok", moveId: 41, messageIds: ["m1"], callIds: ["k1"] }` → `{ ok: true, toConversationId: "bc", name: "Beto Prueba", undo: { moveId: 41, fromConversationId: conv, toConversationId: "bc" } }` (no id list leaves the server, P1); `moveHoldingThread` called with `(service, "a1", { from: conv, to: "bc", actor: userId })` (no `undo`).
   - Staff and the agency may move; a Technician may not (two more cases).
   - A target that is itself a holding record, a target `getContact` cannot see (null), a conversation `callerCanSee` denies, a non-UUID id, and `moveHoldingThread` answering `invalid` or `not_found` → `{ ok: false, error: "conversation.holding.moveFailed" }`.
+  - `moveHoldingThread` answering `empty` (a second move of the same thread, or a stale tab; P32) → `{ ok: false, error: "conversation.holding.moveEmpty" }`, with `revalidatePath` called so the tab shows where the texts went (mutation: answer `moveFailed` for `empty` → FAILS).
   - Undo: `undoMoveHoldingThreadAction("a1", undo)` calls `moveHoldingThread(service, "a1", { from: "bc", to: conv, actor: userId, undoOf: 41 })` and answers `{ ok: true, conversationId: conv }`; an `undo` whose `moveId` is not a positive safe integer, or whose thread ids are not UUIDs, is refused `moveFailed` without a call; a forged `moveId` is the function's to refuse (`invalid` → `moveFailed`).
   - Second account: every call carries the action's own `accountId` (call with `"a2"`; mutation: a literal account id → FAILS).
 - [ ] **Step 2: Run to verify they fail.**
@@ -3416,8 +2715,9 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     export type HoldingMoveUndo = { moveId: number; fromConversationId: string; toConversationId: string };
     export type MoveHoldingResult =
       | { ok: true; toConversationId: string; name: string; undo: HoldingMoveUndo }
-      | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" };
+      | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" | "conversation.holding.moveEmpty" };
     const MOVE_FAILED = { ok: false, error: "conversation.holding.moveFailed" } as const;
+    const MOVE_EMPTY = { ok: false, error: "conversation.holding.moveEmpty" } as const;
     const MOVE_ROLE = { ok: false, error: "conversation.holding.moveRole" } as const;
 
     export async function moveHoldingThreadAction(
@@ -3435,6 +2735,11 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
         const svc = serviceDb();
         const target = await ensureConversation(svc, accountId, toContactId, access.userId, "user");
         const moved: HoldingMove = await moveHoldingThread(svc, accountId, { from: conversationId, to: target.id, actor: access.userId });
+        if (moved.status === "empty") {
+          // Someone, or another tab, moved them first (P32): say so, and refresh the inbox to show where they went.
+          revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+          return MOVE_EMPTY;
+        }
         if (moved.status !== "ok") return MOVE_FAILED;
         revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
         return {
@@ -3549,7 +2854,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     }
   }
   ```
-  Tests (literal copy, both languages): ok → `success("Moved to Beto Prueba.", { action: { label: "Undo", … }, duration: 10000 })` and `open("bc")`; pressing the action → `undo(undo)`, `success("Moved back.")`, `open(<the holding conversation>)`; `{ ok: false, error: "conversation.holding.moveRole" }` → `error("Only an Owner or Staff can move these texts.")`; a throw → `error("That conversation couldn't be moved. Try again.")`; Spanish → `"Se movió a Beto Prueba."` / `"Se regresó."`; an Undo that fails → the error toast and no `open`.
+  Tests (literal copy, both languages): ok → `success("Moved to Beto Prueba.", { action: { label: "Undo", … }, duration: 10000 })` and `open("bc")`; pressing the action → `undo(undo)`, `success("Moved back.")`, `open(<the holding conversation>)`; `{ ok: false, error: "conversation.holding.moveRole" }` → `error("Only an Owner or Staff can move these texts.")`; a throw → `error("That conversation couldn't be moved. Try again.")`; Spanish → `"Se movió a Beto Prueba."` / `"Se regresó."`; an Undo that fails → the error toast and no `open`; `{ ok: false, error: "conversation.holding.moveEmpty" }` → `error("These texts were already moved.")` (Spanish `"Estos mensajes ya se movieron."`) and no `open` (P32).
 - **`…/convos/holding-move.tsx`** (new, `"use client"`): the menu and the search dialog. Search is the existing `searchRelatableContactsAction(accountId, holdingContactId, term)` (`[acct]/contacts/relationship-actions.ts:227-251`; its own RLS bounds who can be found, and `listContacts` now leaves holding records out), searched as you type after 250 ms, the `add-relationship-dialog.tsx` pattern.
   ```tsx
   "use client";
@@ -3915,7 +3220,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with its kit on 55506/55507/55508 (PostgREST up).
   - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S29) and this plan (P1–P21).
   - Run every touched test file by path and both typechecks. On `post`: `shared-number-holding-schema`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `voice`, `contacts`, `contact-import`, `messaging`.
-  - Re-check 0098's md5 against Task 1's (`ae8371757c516d581810b713e86d7cb0`, or the reviewed one if Task 1 changed it).
+  - Re-check 0098's md5 against Task 1's (`6a3f65120e8fe0eb1d84129e597caaa3` after its review fix round, P32, or the re-reviewed one if it changed again).
   - Three probes of its own: a byte-identity probe of the prompt (`system-prompt.test.ts`'s three digests, plus a `buildSystemPrompt` diff of one input at `a1ccb19a` against HEAD → no difference); a read/act split (find confirms one contact but `findUpcomingBookingForContact` is called for another: make `findStep` return the first candidate and see what fails); a picker/writer split (`book_appointment` picks `existing` but `createBooking` receives `state.contactId`).
   - **Hunt:**
     - a path where a household member's appointment is read, moved or cancelled without that person's name (or name and email on insurance) on THIS call;
