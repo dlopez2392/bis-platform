@@ -164,8 +164,11 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
 - **S23 A second booking in one call is picked again.** Today `book_appointment` reuses `state.contactId`
   from the call's first booking (`registry.ts:442`), so "and one for my husband" lands on the wife. Every
   booking with a number runs the picker (one indexed read, after the first booking's own insert, so the
-  wife's new record is already on the number); `state.contactId` is reused only when the picker answers
-  `today`, and is then the latest booking's contact.
+  wife's new record is already on the number). On `today` with a number, `state.contactId` is never reused:
+  `createContact`'s own dedupe finds the record (the contact the name agrees with, or the first booking's own
+  record when it is the same number), so a second booking on a recited number lands on that number's person,
+  not on the first one (Task 7 review fix round). With no number at all, the earlier record is reused only
+  when the name agrees with that record's own name (5.10.1).
 - **S24 The corpus stub follows the real ladder** (O2): it runs `decideIdentity` and the 5.4.4 result
   builders over a fixture's contacts, with per-item state, rather than refusing (5.11).
 - **S25 The missed-call text-back on an unconfirmed shared number** goes to the holding record (E8,
@@ -746,6 +749,8 @@ in this order (amended, R2 ruling b):
   a confirmation is about the caller ID's people, never about a number the caller recited.
 - The name and email rules are 5.3's, word for word. The picker never fuzzes and never returns a contact
   the caller did not name or confirm.
+- On a shared number, a name that matches the confirmed person picks that person even when the caller said
+  `forSomeoneElse: true`: the name and the confirmation are both theirs (known limit, Task 7 review).
 - A read failure throws. Every caller below already sits inside a net that writes nothing on a throw.
 
 #### 5.10.1 A new booking (`registry.ts:442-476`)
@@ -756,7 +761,13 @@ booking writes nothing. The number is `e164Of(phone)`, the stored form of `spoke
 `createContact`, which cannot reach a household by phone.
 
 - The picker runs for every booking that has a number, the call's second booking included (S23).
-- `today` → today's code, unchanged: `state.contactId` when the call already booked, else `createContact`.
+- `today` → today's code, with one change (Task 7 review fix round). With a number, always `createContact`,
+  whose dedupe finds the agreeing contact, or the call's earlier record when the number is the same; the
+  call's earlier contact is never reused as such, so the second booking on another number lands on that
+  number's person. With NO number, `state.contactId` is reused only when the name agrees with that record's
+  own name (`sameNameAsRecord`: 5.10.0's agreement rule, a placeholder or unreadable record never agrees);
+  otherwise `createContact` (email-only, so a known email still finds its record). A failed read of the
+  earlier record makes the contact; it never fails the booking.
 - `existing(id)` → `contactId = id`, no `createContact`; the blank-fill of 5.10.2 applies.
 - `create` → `createContact({ firstName, lastName, phone, email, source: "voice", matchBy: "email_only" })`
   (4). An email on file elsewhere on the account still wins, as today (`existing: true`, and no fill: that
@@ -798,6 +809,8 @@ The new order:
    with the lead's `fullName`, `email`, `forSomeoneElse` and, on the caller-ID number, the confirmation.
    `existing` → that record, with the 5.10.2 fill; `create` → `createContact` with `matchBy: "email_only"`;
    `ask_name`, `ask_whose` (asked once, never answered) or `ambiguous` → null; `today` → today's code.
+   Known limit (P27): a lead whose `capture_lead` was answered with LEAD ASK WHOSE and never called again is
+   not in the state at all, so it is lost with the call (the call row, transcript and staff alert remain).
 4. No lead, a caller ID (352-376): on a shared caller-ID number, the picker with the confirmation and the
    last message's `name` (S22, 5.10.5). `existing` → it; `create` → `createContact({ firstName, lastName, phone: callerNumber,
    source: "voice", matchBy: "email_only" })`; a declined name, `ask_name` or `ambiguous` → null. Any other
@@ -837,7 +850,8 @@ E8 decides which:
   take the message, ask for their first and last name, then call take_message again with name. If they
   would rather not say, call it again with nameDeclined: true." }`. One or none → recorded as today. A read
   failure → recorded as today (a message is never lost on our outage; `finishCall` decides its record later,
-  and fails closed there).
+  and fails closed there). Known limit (P6): a message refused with MESSAGE ASK NAME whose `take_message` is
+  never called again is not recorded; the call row, transcript and staff alert remain.
 - `TakenMessage` (`call-state.ts:12`) gains `name?: string` and `nameDeclined?: boolean`.
 - The prompt's TOOLS line still says `take_message(body, callbackNumber)` (`system-prompt.ts:212`); the new
   fields travel in the schema and in this one result (5.5, SD16).
@@ -1371,7 +1385,10 @@ Found while specifying E7 (2026-10-24):
   and leaves `contactForCallerId`'s phone pick in place. Covered by S25, 5.10.4 and Q2.
 - **SD15 The household gap is also inside one call.** `book_appointment` reuses `state.contactId`
   (`registry.ts:442`), so a second booking for another person lands on the first one's record even when the
-  number had nobody on it before the call. Covered by S23.
+  number had nobody on it before the call. Covered by S23: the picker runs for every booking with a number,
+  its `today` never reuses the call's earlier contact (the Task 7 review's P1-P3: a recited empty number, a
+  withheld caller ID with two emails, a recited number whose one contact is someone else), and with no number
+  the earlier record is reused only for an agreeing name.
 - **SD16 "Asks the name first" has no field to ask with on a message.** `take_message` takes `body` and
   `callbackNumber` only (`schemas.ts:32-34`), and the frozen prompt names exactly those two
   (`system-prompt.ts:212`). Covered by S22 and 5.10.5, through the schema and one result.

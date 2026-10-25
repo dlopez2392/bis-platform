@@ -2298,6 +2298,109 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
     expect(bookedOn()).toEqual(["ct4"]);
   });
+
+  // Task 7 review fix round (Critical): the picker's `today` never reuses the call's earlier contact on a number.
+  it("P1: Ana on the empty caller ID, then Beto on a recited empty number: two records (mutation: reuse state.contactId -> FAILS)", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct5", existing: false }).mockResolvedValueOnce({ id: "ct6", existing: false });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    await book(first.state, { name: "Beto Prueba", phone: "956 555 0199", forSomeoneElse: true });
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ firstName: "Beto", phone: "956 555 0199" }), "voice", "ai");
+    expect(bookedOn()).toEqual(["ct5", "ct6"]);
+  });
+
+  it("P2: caller ID withheld, Ana then Beto each with their own email: two records (mutation: reuse state.contactId -> FAILS)", async () => {
+    const hidden: ToolContext = { ...ctx, callerNumber: null };
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct4", existing: false }).mockResolvedValueOnce({ id: "ct10", existing: false });
+    dbMocks.getContact.mockResolvedValue({ id: "ct4", first_name: "Ana", last_name: "Prueba", email: "ana@example.com", phone: null });
+    const first = await runTool(emptyCallState(), hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    await runTool(first.state, hidden, "book_appointment", { startsAt: AT, name: "Beto Prueba", email: "beto@example.com" });
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(2);
+    expect(bookedOn()).toEqual(["ct4", "ct10"]);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
+  it("P3: Ana on a shared caller ID, then Dan on a recited number whose one contact is Dan: Dan's record (mutation: reuse state.contactId -> FAILS)", async () => {
+    dbMocks.listContactsOnNumber
+      .mockResolvedValueOnce({ rows: [ANA, BETO], truncated: false })
+      .mockResolvedValueOnce({ rows: [row("ct9", "Dan", "Lopez", "+19565550199")], truncated: false });
+    dbMocks.createContact.mockResolvedValue({ id: "ct9", existing: true });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    await book(first.state, { name: "Dan Lopez", phone: "956 555 0199" });
+    expect(bookedOn()).toEqual(["ct1", "ct9"]);
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ firstName: "Dan", phone: "956 555 0199" }), "voice", "ai");
+    expect(dbMocks.createContact.mock.calls[0]![2]).not.toHaveProperty("matchBy");
+  });
+
+  it("no number: the same name books again onto the call's earlier record, with no new contact", async () => {
+    const hidden: ToolContext = { ...ctx, callerNumber: null };
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct4", existing: false });
+    dbMocks.getContact.mockResolvedValue({ id: "ct4", first_name: "Ana", last_name: "Prueba", email: "ana@example.com", phone: null });
+    const first = await runTool(emptyCallState(), hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    await runTool(first.state, hidden, "book_appointment", { startsAt: AT, name: "Ana", email: "ana.work@example.com" });
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+    expect(bookedOn()).toEqual(["ct4", "ct4"]);
+  });
+
+  it("no number: a failed read of the earlier record makes the contact (the email dedupe) and still books", async () => {
+    const hidden: ToolContext = { ...ctx, callerNumber: null };
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct4", existing: false }).mockResolvedValueOnce({ id: "ct4", existing: true });
+    dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = await runTool(emptyCallState(), hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    const again = await runTool(first.state, hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    const lines = err.mock.calls.map((x) => String(x[0]));
+    err.mockRestore();
+    expect(again.result).toMatchObject({ ok: true });
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(2);
+    expect(bookedOn()).toEqual(["ct4", "ct4"]);
+    expect(lines.some((l) => l.includes("earlier contact read failed"))).toBe(true);
+  });
+
+  it("no number, after a slot-taken retry for Beto: Ana's next booking is not put on Beto's record", async () => {
+    const hidden: ToolContext = { ...ctx, callerNumber: null };
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct4", existing: false })
+      .mockResolvedValueOnce({ id: "ct10", existing: false }).mockResolvedValueOnce({ id: "ct4", existing: true });
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: unknown, id: string) => id === "ct10"
+      ? { id: "ct10", first_name: "Beto", last_name: "Prueba", email: "beto@example.com", phone: null }
+      : { id: "ct4", first_name: "Ana", last_name: "Prueba", email: "ana@example.com", phone: null });
+    const first = await runTool(emptyCallState(), hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    const { SlotTakenError } = await import("@bis/db");
+    dbMocks.createBooking.mockRejectedValueOnce(new SlotTakenError());
+    const taken = await runTool(first.state, hidden, "book_appointment", { startsAt: AT, name: "Beto Prueba", email: "beto@example.com" });
+    expect(taken.result).toMatchObject({ slotTaken: true });
+    await runTool(taken.state, hidden, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    expect(bookedOn()).toEqual(["ct4", "ct10", "ct4"]);
+  });
+
+  it("a recited number's one contact picked by forSomeoneElse false: its blanks are NOT filled (mutation: fill on any number -> FAILS)", async () => {
+    on(row("ct9", "Dan", "Lopez", "+19565550199"));
+    const r = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: AT, name: "Daniel Lopez", email: "daniel@example.com", phone: "956 555 0199", forSomeoneElse: false });
+    expect(r.result).toMatchObject({ ok: true });
+    expect(bookedOn()).toEqual(["ct9"]);
+    expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+  });
+
+  it("every new number read is the context's own account (second account; mutation: a fixed account id in any of the three -> FAILS)", async () => {
+    const a2: ToolContext = { ...ctx, accountId: "a2" };
+    on(ANA, BETO);
+    await book(emptyCallState(), { name: "Beto Prueba" }, a2);
+    on(row("ct9", "Dan", "Lopez"));
+    const lead = await runTool(emptyCallState(), a2, "capture_lead", { fields: { fullName: "Ana Prueba", need: "quote" } });
+    expect(lead.result).toEqual(LEAD_ASK_WHOSE);
+    on(ANA, BETO);
+    const msg = await runTool(emptyCallState(), a2, "take_message", { body: "call me" });
+    expect(msg.result).toEqual(MESSAGE_ASK_NAME);
+    expect(dbMocks.listContactsOnNumber.mock.calls.map((x) => x[1])).toEqual(["a2", "a2", "a2"]);
+  });
+
+  it("capture_lead reads the callback number the caller gave, not the caller ID (mutation: read the caller ID -> FAILS)", async () => {
+    on(row("ct9", "Dan", "Lopez", "+19565550199"));
+    const r = await runTool(emptyCallState(), ctx, "capture_lead", { fields: { fullName: "Ana Prueba", need: "quote", callbackNumber: "956 555 0199" } });
+    expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", "+19565550199");
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalledWith({}, "a1", "+19562921696");
+    expect(r.result).toEqual(LEAD_ASK_WHOSE);
+  });
 });
 
 describe("S-47e: capture_lead asks whose it is, once (plan Task 7)", () => {

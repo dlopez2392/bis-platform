@@ -39,7 +39,7 @@ import { readCandidates } from "../identity/candidates";
 import { findNeedsRead, findStep, confirmStep, ownsStep, messageNeedsNameCheck, messageNameStep, messageName, type CandidateRead } from "../identity/flow";
 import { isLocked } from "../identity/state";
 import { lockedResult, noCallerId, FOUND_BY_NAME_NEXT, BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, type ToolResult } from "../identity/results";
-import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, type RecordPick } from "../identity/record";
+import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord, type RecordPick } from "../identity/record";
 
 export type ToolName =
   | "check_availability" | "book_appointment" | "reschedule_appointment"
@@ -555,37 +555,50 @@ export async function runTool(
         contactId = created.id;
         if (!created.existing) acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
       } else {
-        contactId = state.contactId;
+        // S-47e (Task 7 review fix round): with a number, createContact's dedupe finds the record (the contact who
+        // agrees, or the call's earlier record when it is the same number), never the call's earlier contact as
+        // such: a second booking for someone else must not land on the first person. With NO number, the earlier
+        // record is reused only when the name agrees with its own (record.ts sameNameAsRecord); a failed read
+        // makes the contact instead, which the email dedupe still matches.
+        contactId = null;
+        if (number === null && state.contactId) {
+          try {
+            const earlier = (await getContact(ctx.db, ctx.accountId, state.contactId)) as BookingContact | null;
+            if (sameNameAsRecord(name, earlier)) contactId = state.contactId;
+          } catch (e) {
+            console.error(`voice book_appointment ${ctx.callRowId ?? "(no row)"}: earlier contact read failed, making the contact: ${String(e)}`);
+          }
+        }
         if (!contactId) {
-            const created = await createContact(ctx.db, ctx.accountId,
-              { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
-              "voice", "ai");
-            contactId = created.id;
-            if (!created.existing) {
-              acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
-            }
-            // Dedupe returns the existing row untouched — backfill blanks so a
-            // repeat caller stops being "Caller" with no email (the unsendable-
-            // reminder casualty). ONLY on the caller's own contact: the dedupe
-            // matches email first, then phone, and either can be something the
-            // caller merely said, so the match may be someone else's record. The
-            // booking still lands on it; nothing of this caller's is written
-            // onto it. `phone` is never passed — on the caller's own contact it
-            // already is the caller ID. A withheld caller ID fills nothing.
-            // Failure here (the read or the fill) must NEVER fail the booking.
-            if (created.existing && ctx.callerNumber) {
-              try {
-                const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
-                if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
-                  const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
-                    { firstName, lastName, email: email ?? undefined },
-                    "voice", "ai");
-                  acts.push(...fieldFillActs(source, contactId, filled));
-                }
-              } catch (e) {
-                console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
+          const created = await createContact(ctx.db, ctx.accountId,
+            { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
+            "voice", "ai");
+          contactId = created.id;
+          if (!created.existing) {
+            acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+          }
+          // Dedupe returns the existing row untouched — backfill blanks so a
+          // repeat caller stops being "Caller" with no email (the unsendable-
+          // reminder casualty). ONLY on the caller's own contact: the dedupe
+          // matches email first, then phone, and either can be something the
+          // caller merely said, so the match may be someone else's record. The
+          // booking still lands on it; nothing of this caller's is written
+          // onto it. `phone` is never passed — on the caller's own contact it
+          // already is the caller ID. A withheld caller ID fills nothing.
+          // Failure here (the read or the fill) must NEVER fail the booking.
+          if (created.existing && ctx.callerNumber) {
+            try {
+              const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
+              if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+                const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
+                  { firstName, lastName, email: email ?? undefined },
+                  "voice", "ai");
+                acts.push(...fieldFillActs(source, contactId, filled));
               }
+            } catch (e) {
+              console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
             }
+          }
         }
       }
 

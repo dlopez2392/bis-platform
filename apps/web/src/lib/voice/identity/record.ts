@@ -60,6 +60,17 @@ export function pickRecordOnNumber(input: {
   return { kind: "create" };
 }
 
+/** A booking with NO number (caller ID withheld, none said) reuses the call's earlier record only when the name
+ *  given agrees with that record's own name, by the rule above; a placeholder or missing record never agrees
+ *  (Task 7 review fix round). Otherwise the booking makes its contact, and the email dedupe finds a known one. */
+export function sameNameAsRecord(
+  name: string | null | undefined, record: { first_name: string | null; last_name: string | null } | null | undefined,
+): boolean {
+  if (!record) return false;
+  const words = nameWords(`${record.first_name ?? ""} ${record.last_name ?? ""}`);
+  return !isPlaceholder(words) && agreesWithSole(nameWords(name), words);
+}
+
 /** capture_lead asks "for you or for someone else?" once per call, and only when the lead has a name and a number
  *  and the caller has not already answered (plan P27). */
 export function leadNeedsWhoseCheck(state: CallState, fullName: string | undefined, forSomeoneElse: boolean | undefined): boolean {

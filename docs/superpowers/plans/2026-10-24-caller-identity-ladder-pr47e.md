@@ -1032,6 +1032,17 @@ export function pickRecordOnNumber(input: {
   return { kind: "create" };
 }
 
+/** A booking with NO number (caller ID withheld, none said) reuses the call's earlier record only when the name
+ *  given agrees with that record's own name, by the rule above; a placeholder or missing record never agrees
+ *  (Task 7 review fix round). Otherwise the booking makes its contact, and the email dedupe finds a known one. */
+export function sameNameAsRecord(
+  name: string | null | undefined, record: { first_name: string | null; last_name: string | null } | null | undefined,
+): boolean {
+  if (!record) return false;
+  const words = nameWords(`${record.first_name ?? ""} ${record.last_name ?? ""}`);
+  return !isPlaceholder(words) && agreesWithSole(nameWords(name), words);
+}
+
 /** capture_lead asks "for you or for someone else?" once per call, and only when the lead has a name and a number
  *  and the caller has not already answered (plan P27). */
 export function leadNeedsWhoseCheck(state: CallState, fullName: string | undefined, forSomeoneElse: boolean | undefined): boolean {
@@ -2084,7 +2095,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **Step 2: Run to verify they fail**; paste the summary.
 - [ ] **Step 3: Implement.**
   - `record.ts`: the model's code exactly.
-  - `registry.ts` imports gain `import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, type RecordPick } from "../identity/record";`, `readCandidates` (Task 6 already imports it from `../identity/candidates`), `import { messageNeedsNameCheck, messageNameStep, messageName } from "../identity/flow";` and `BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE` from `../identity/results`.
+  - `registry.ts` imports gain `import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord, type RecordPick } from "../identity/record";` (`sameNameAsRecord` added by the Task 7 review fix round), `readCandidates` (Task 6 already imports it from `../identity/candidates`), `import { messageNeedsNameCheck, messageNameStep, messageName } from "../identity/flow";` and `BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE` from `../identity/results`.
   - `capture_lead` (`:331-337`):
     ```ts
     case "capture_lead": {
@@ -2181,7 +2192,17 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
         contactId = created.id;
         if (!created.existing) acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
       } else {
-        contactId = state.contactId;
+        // Task 7 review fix round (Critical): with a number, never the call's earlier contact; createContact's
+        // dedupe finds the record. With NO number, the earlier record only for a name that agrees with its own.
+        contactId = null;
+        if (number === null && state.contactId) {
+          try {
+            const earlier = (await getContact(ctx.db, ctx.accountId, state.contactId)) as BookingContact | null;
+            if (sameNameAsRecord(name, earlier)) contactId = state.contactId;
+          } catch (e) {
+            console.error(`voice book_appointment ${ctx.callRowId ?? "(no row)"}: earlier contact read failed, making the contact: ${String(e)}`);
+          }
+        }
         if (!contactId) {
           // today's code, moved unchanged (registry.ts:447-475 at df8882ce):
           const created = await createContact(ctx.db, ctx.accountId,
@@ -2216,7 +2237,8 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
         }
       }
     ```
-    The `else` branch keeps today's `:447-475` statements exactly (move them, do not retype them; `git diff -w` shows only the indentation and the three moved declarations). After it, `contactId` is non-null on every path; the rest of the case (`:478-573`) is unchanged.
+    The `else` branch keeps today's `:447-475` statements exactly (move them, do not retype them; `git diff -w` shows only the indentation and the three moved declarations).
+    **Amended by the Task 7 review (Critical, P1-P3):** the brief's first version had `contactId = state.contactId` on `today`, so a second booking for someone else landed on the first person: Ana on an empty caller ID then Beto on a recited empty number (`forSomeoneElse: true`), both on ct5 (P1); a withheld caller ID with two people and two emails, both on ct4 (P2); Ana on a shared caller ID then Dan on a recited number whose one contact is Dan, both on ct1 (P3). The fix is the block above, with `sameNameAsRecord` in `record.ts` (the picker's agreement rule against the earlier record's own name; a placeholder or missing record never agrees). The earlier record is read, not taken from `state.bookings`, because the slot-taken path sets `state.contactId` without a booking, so the last booking's name can be someone else's (pinned: Ana, then Beto slot-taken, then Ana again lands on Ana's record). Tests: P1-P3, the no-number reuse, its read failure and the slot-taken case; mutation: restore the reuse → all five FAIL; drop the name check → P2 and the slot-taken case FAIL. The same round pins the fill's caller-ID guard (a recited one-contact number, `forSomeoneElse: false`, no fill; mutation `if (true)` → FAILS), the three number reads' account (one `a2` test; a fixed id in any of the three → FAILS) and `capture_lead`'s callback-number read (mutation: read the caller ID → FAILS). After it, `contactId` is non-null on every path; the rest of the case (`:478-573`) is unchanged.
   - `schemas.ts:10-12`: `book_appointment`'s properties gain `forSomeoneElse: { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }` (the video variant spreads these properties, `:66-69`, so it carries it too). `schemas.ts:29-31`: `capture_lead`'s properties gain `forSomeoneElse: { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }`.
   - `schemas.ts:32-34`: `take_message`'s properties gain `name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." }`; `required` stays `["body"]`; its description stays `"Leave a message for a human callback."`.
 - [ ] **Step 4: Run to verify they pass**, then each named mutation; paste, revert, `cmp`.

@@ -1,6 +1,6 @@
 // S-47e (E7, spec 5.10.0 as amended by plan P26, P27): which record a voice write lands on. Literal candidates.
 import { describe, it, expect } from "vitest";
-import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep } from "./record";
+import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord } from "./record";
 import { candidateOf, type Candidate } from "./match";
 import { emptyCallState } from "../call-state";
 import { withLeadWhoseAsked } from "./state";
@@ -126,5 +126,20 @@ describe("leadWhoseStep", () => {
     expect(leadWhoseStep(emptyCallState(), ok([cand("a", "Ana", "Prueba")]), "Ana Prueba")).toBeNull();
     expect(leadWhoseStep(emptyCallState(), ok([DAN, BETO]), "Ana Prueba")).toBeNull();
     expect(leadWhoseStep(emptyCallState(), { ok: false }, "Ana Prueba")).toBeNull();
+  });
+});
+
+describe("sameNameAsRecord (a booking with no number reuses the call's earlier record only on this)", () => {
+  it("the same name, a first name alone, or P26's partial match agree", () => {
+    expect(sameNameAsRecord("Ana Prueba", { first_name: "Ana", last_name: "Prueba" })).toBe(true);
+    expect(sameNameAsRecord("Ana", { first_name: "Ana", last_name: "Prueba" })).toBe(true);
+    expect(sameNameAsRecord("María García López", { first_name: "María", last_name: "García" })).toBe(true);
+  });
+  it("another name, a placeholder record, a missing record, or no name do not", () => {
+    expect(sameNameAsRecord("Beto Prueba", { first_name: "Ana", last_name: "Prueba" })).toBe(false);
+    expect(sameNameAsRecord("Ana Prueba", { first_name: "Caller", last_name: null })).toBe(false);
+    expect(sameNameAsRecord("Ana Prueba", { first_name: null, last_name: null })).toBe(false);
+    expect(sameNameAsRecord("Ana Prueba", null)).toBe(false);
+    expect(sameNameAsRecord("", { first_name: "Ana", last_name: "Prueba" })).toBe(false);
   });
 });
