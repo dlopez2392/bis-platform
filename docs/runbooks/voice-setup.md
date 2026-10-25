@@ -1,12 +1,12 @@
 # Voice Receptionist — owner setup runbook
 
 Audience: danlo, doing this once per environment (today: production only —
-there is one Vercel deployment). Walk the 7 steps in order; each has its own
+there is one Vercel deployment). Walk the 8 steps in order; each has its own
 verification. Step 6 is **the exit gate** — nothing here ships to a real
 client until it's been walked with an actual phone call and the resulting
 rows have been read, not just "it rang."
 
-Two follow-on procedures live alongside the 7 steps, not numbered into them:
+Two follow-on procedures live alongside the 8 steps, not numbered into them:
 **"Client onboarding (wizard)"** (after Step 4) covers how every account —
 test or real — actually gets set up now, via the Setup wizard page; and
 **"TELNYX_PUBLIC_KEY — hardened activation procedure"** (after Step 3) is an
