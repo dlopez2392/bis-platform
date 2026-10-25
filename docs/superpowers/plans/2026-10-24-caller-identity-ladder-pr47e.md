@@ -150,7 +150,7 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
   | Key | English | Spanish (usted) |
   |---|---|---|
   | `conversation.holding.findLabel` | Search customers by name or phone | Buscar clientes por nombre o teléfono |
-  | `conversation.holding.findNone` | No customers match. | Ningún cliente coincide. |
+  | `conversation.holding.findNone` | No one found. Add them on Contacts first, then move these texts. | No se encontró a nadie. Agréguelo primero en Contactos y luego mueva estos mensajes. |
   | `conversation.holding.findFailed` | Couldn't search customers. Try again. | No se pudo buscar clientes. Inténtelo de nuevo. |
   | `conversation.holding.moveRole` | Only an Owner or Staff can move these texts. | Solo un dueño o un empleado puede mover estos mensajes. |
 
@@ -257,7 +257,7 @@ No other open question. Two behaviours the owner may want to know about are in "
 | `[acct]/contacts/[contactId]/page.tsx:94-95` | 12 | the redirect |
 | `apps/web/src/app/api/accounts/[accountId]/search/route.ts:121-133` | 12 | the label |
 | `apps/web/src/lib/contacts/holding-label.ts` (+ test) | 12 | new |
-| `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` | 12 | regenerated last |
+| `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` | 12 | unchanged (Task 17: never regenerated, no diff, and `ratchet.test.ts` stayed green) |
 | `apps/web/src/lib/voice/attestation-log.ts` (new, + test); `…/texml/telnyx-request.ts:63-108`; `lib/voice/sip-headers.ts` (+ test); `…/incoming/route.ts:924` (+ `route.test.ts`) | 13 | |
 | `apps/web/src/lib/voice/modules/corpus-lib.ts:38-43`, `:163-206`; `apps/web/scripts/sofia-corpus.ts:214`; `corpus-lib.test.ts:435-439`; new `corpus-parity.test.ts` | 14 | |
 | `docs/runbooks/voice-setup.md` (after "Step 7 — Booking leg", before "## Video meetings (Daily.co)" at `:487`; and `:795-796`) | 15 | Step 8 |
@@ -1106,16 +1106,18 @@ export function sipAttestation(eventData: unknown): string;   // "none" when not
 |---|---|---|
 | `voice.todo.identity` | Someone asked about an appointment and couldn't confirm who they are | Alguien preguntó por una cita y no pudo confirmar quién es |
 | `contact.holding.label` | Shared number {number} | Número compartido {number} |
-| `conversation.holding.notice` | These texts came from {number}, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person. | Estos mensajes llegaron del {number}, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a la persona correcta. |
+| `conversation.holding.notice` | These texts came from {number}, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person. | Estos mensajes llegaron desde el {number}, un teléfono que usa más de un cliente, así que todavía no están en el registro de ningún cliente. Muévalos a la persona correcta. |
 | `conversation.holding.move` | Move to… | Mover a… |
 | `conversation.holding.moveOther` | Find another customer | Buscar otro cliente |
-| `conversation.holding.moved` | Moved to {name}. | Se movió a {name}. |
-| `conversation.holding.movedBack` | Moved back. | Se regresó. |
+| `conversation.holding.moved` | Moved to {name}. | Los mensajes se movieron a {name}. |
+| `conversation.holding.movedBack` | Moved back. | Los mensajes se regresaron. |
 | `conversation.holding.moveFailed` | That conversation couldn't be moved. Try again. | No se pudo mover la conversación. Inténtelo de nuevo. |
 | `conversation.holding.moveEmpty` (P32; a Task 2 follow-up, after `07f1a112`) | These texts were already moved. | Estos mensajes ya se movieron. |
 | `call.holding.openTexts` | Open the texts | Abrir los mensajes |
 | `conversation.holding.findLabel` (Q1) | Search customers by name or phone | Buscar clientes por nombre o teléfono |
-| `conversation.holding.findNone` (Q1) | No customers match. | Ningún cliente coincide. |
+| `conversation.holding.findNone` (Q1; Task 17 design review I-4) | No one found. Add them on Contacts first, then move these texts. | No se encontró a nadie. Agréguelo primero en Contactos y luego mueva estos mensajes. |
+| `conversation.holding.findHint` (Task 17 design review M-4) | Pick who these texts belong to. They move as soon as you choose, and you can undo. | Elija a quién pertenecen estos mensajes. Se mueven en cuanto elige, y puede deshacerlo. |
+| `conversation.holding.findCustomer` (Task 17 design review M-7) | Find a customer | Buscar un cliente |
 | `conversation.holding.findFailed` (Q1) | Couldn't search customers. Try again. | No se pudo buscar clientes. Inténtelo de nuevo. |
 | `conversation.holding.moveRole` (Q1) | Only an Owner or Staff can move these texts. | Solo un dueño o un empleado puede mover estos mensajes. |
 | `todo.sharedNumber.reply` (Q2, P30) | A reply from a shared number couldn't be matched to one appointment | Una respuesta de un número compartido no se pudo asociar con una sola cita |
@@ -1367,7 +1369,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 - Add the 16 keys of "The model, Copy keys" (Task 2 committed 15 at `07f1a112`; `conversation.holding.moveEmpty`, P32, is the one follow-up) to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key, after the S-47d block's last key (`"voice.knowledge.noClosedDaysRecorded.es"`, `:2573` at `a1ccb19a`; re-read after the rebase), under one comment line: `// S-47e: identity checks (the To-do), the shared number's holding thread (label, Notice, Move, the call page) and its two To-dos. Usted.` The two `todo.sharedNumber.*` keys must NOT start `todo.consent.` (`lib/consent/copy.test.ts:111` counts that prefix: 80).
 - Replace the `voice.tradeRules.insurance_pcHint` pair (`:2056-2057`) with the two sentences of "The model, Copy keys" (S16), and the S-47b describe's pinned pair (`messages.test.ts:1409-1411` at `df8882ce`) with the same two literals. `voice-settings.test.ts:39` and `:826` read the key through `m[…]` and need no edit; run them.
 - Append ONE `describe("S-47e: identity and shared-number copy, English and Spanish (plan Task 2)")` to `apps/web/src/lib/messages.test.ts`, in the shape of the S-47d describe (`messages.test.ts:1723-…`). It contains:
-  - a literal `EXPECTED_PARAMS` over the 16 keys, with its length asserted as **16** (the table's rows, counted off this plan: one `voice`, one `contact`, eleven `conversation`, one `call`, two `todo`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, `todo.sharedNumber.hold` `["excerpt", "number"]` (sorted), every other `[]`;
+  - a literal `EXPECTED_PARAMS` over the 16 keys (18 after Task 17's design review added `findHint` and `findCustomer`), with its length asserted as **16** (the table's rows, counted off this plan: one `voice`, one `contact`, eleven `conversation`, one `call`, two `todo`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, `todo.sharedNumber.hold` `["excerpt", "number"]` (sorted), every other `[]`;
   - every key and twin present and different;
   - params identical across the twin;
   - every sentence pinned as a typed literal pair (all 16 rows, both columns, word for word);
@@ -1650,6 +1652,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 5. e2e: none.
 6. In-account service reads: none.
 - On your replica + PostgREST: `contacts.test.ts`, `contact-import.test.ts`, `contact-import.business-link.test.ts`, `messaging.test.ts`, `voice.test.ts`, `server-only-writes-grants.test.ts`.
+7. Stubs (added in Task 17, review I2): every in-memory stub that filters contacts by column, here `packages/db/src/contacts-phone.test.ts` (its `memoryDb` rows carried no `holds_shared_number`, so the new `.eq("holds_shared_number", false)` filtered every row out: 15 red). Give such a stub the column's default and one case that proves the skip.
 
 **Review (HIGH, opus, own worktree and kit on 55503–55505):** re-runs the four filter mutations and the `matchBy` email-branch mutation; reads every other `.from("contacts")` read in `packages/db/src` that could pick a contact for a person (`grep -n 'from("contacts")' packages/db/src/*.ts`) and lists any that can still return a holding record to a writer, with the spec §5.12.3 row it falls under or "not covered"; confirms `toRow` (`:128-163`) never reads `matchBy`.
 
@@ -2503,7 +2506,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     - `{ contactId: null, callId: null }` → `null`; every existing case unedited.
 - [ ] **Step 2: Run to verify they fail.**
 - [ ] **Step 3: Implement.**
-  - `finish-call.ts` imports gain `import { m } from "@/lib/messages";` and `import { t } from "@/lib/i18n/t";`.
+  - `finish-call.ts` imports gain `import { identityTodoTitle } from "./identity/todo";` (corrected in Task 17, review I1: the plan first imported `m` and `t` and put the `"voice.todo.identity"` literal in `finish-call.ts`, which imports the email gate, so `lib/consent/scans.test.ts` read the literal as a send kind and went red. The title is built in `lib/voice/identity/todo.ts`, `identityTodoTitle(locale)`, and no `"voice."` literal may sit in a gate-caller file).
   - The leg (`:823-835`) becomes:
     ```ts
       // S-47e (spec 5.6, S10): a call whose identity check locked leaves THE call's one To-do (tasks_call_once):
@@ -2521,7 +2524,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
             callId: meta.callRowId,
             contactId: identityTodo ? null : contactId,
             title: identityTodo
-              ? t(m, "voice.todo.identity", resolveLocale(undefined, ctx.accountLanguage ?? null))
+              ? identityTodoTitle(resolveLocale(undefined, ctx.accountLanguage ?? null))
               : callbackLine!,
             dueAt: meta.endedAt.toISOString(),
           }, ACTOR_ID, ACTOR_TYPE);
@@ -2541,7 +2544,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **Step 4: Run to verify they pass**, then the mutations; paste, revert, `cmp`.
 - [ ] **Step 5: Commit** `voice: a call whose identity check locked leaves one To-do for the team in the account's language, and a call's To-do with no customer opens the call (S-47e)`.
 
-**Verify (the affected-test rule):** (1) `finish-call.test.ts`; `[acct]/tasks/work-list.href.test.ts` and `apps/web/src/app/(dashboard)/dashboard/work/*.test.ts` (they render `workRowHref`; run them); (2) none; (3) `packages/db/src/test/tasks-call-id-read.test.ts` untouched (no select changes); (4) none; (5) `grep -rn "data-work-row-link" apps/web/e2e` and read each hit: a To-do with a call and no contact is now a link (expected: `work-queue.spec.ts` asserts on rows it seeds; say whether any seeds a call To-do with no contact); (6) none.
+**Verify (the affected-test rule):** (0) `apps/web/src/lib/consent/scans.test.ts` and the other source-scanning guards (Global constraints; added in Task 17, review I1: a `"voice."` literal in a gate caller is read as a send kind); (1) `finish-call.test.ts`; `[acct]/tasks/work-list.href.test.ts` and `apps/web/src/app/(dashboard)/dashboard/work/*.test.ts` (they render `workRowHref`; run them); (2) none; (3) `packages/db/src/test/tasks-call-id-read.test.ts` untouched (no select changes); (4) none; (5) `grep -rn "data-work-row-link" apps/web/e2e` and read each hit: a To-do with a call and no contact is now a link (expected: `work-queue.spec.ts` asserts on rows it seeds; say whether any seeds a call To-do with no contact); (6) none.
 
 **Review (MEDIUM, sonnet):** the title's language is the account's, never the caller's or the actor's; exactly one `ensureCallbackTask` per call in every branch; the skipped log line carries no number.
 
@@ -2888,7 +2891,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     }
   }
   ```
-  Tests (literal copy, both languages): ok → `success("Moved to Beto Prueba.", { action: { label: "Undo", … }, duration: 10000 })` and `open("bc")`; pressing the action → `undo(undo)`, `success("Moved back.")`, `open(<the holding conversation>)`; `{ ok: false, error: "conversation.holding.moveRole" }` → `error("Only an Owner or Staff can move these texts.")`; a throw → `error("That conversation couldn't be moved. Try again.")`; Spanish → `"Se movió a Beto Prueba."` / `"Se regresó."`; an Undo that fails → the error toast and no `open`; `{ ok: false, error: "conversation.holding.moveEmpty" }` → `error("These texts were already moved.")` (Spanish `"Estos mensajes ya se movieron."`) and no `open` (P32).
+  Tests (literal copy, both languages): ok → `success("Moved to Beto Prueba.", { action: { label: "Undo", … }, duration: 10000 })` and `open("bc")`; pressing the action → `undo(undo)`, `success("Moved back.")`, `open(<the holding conversation>)`; `{ ok: false, error: "conversation.holding.moveRole" }` → `error("Only an Owner or Staff can move these texts.")`; a throw → `error("That conversation couldn't be moved. Try again.")`; Spanish → `"Los mensajes se movieron a Beto Prueba."` / `"Los mensajes se regresaron."` (Task 17 design review I-2); an Undo that fails → the error toast and no `open`; `{ ok: false, error: "conversation.holding.moveEmpty" }` → `error("These texts were already moved.")` (Spanish `"Estos mensajes ya se movieron."`) and no `open` (P32).
 - **`…/convos/holding-move.tsx`** (new, `"use client"`): the menu and the search dialog. Search is the existing `searchRelatableContactsAction(accountId, holdingContactId, term)` (`[acct]/contacts/relationship-actions.ts:227-251`; its own RLS bounds who can be found, and `listContacts` now leaves holding records out), searched as you type after 250 ms, the `add-relationship-dialog.tsx` pattern.
   ```tsx
   "use client";
@@ -3252,7 +3255,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 
 - [ ] **Before it:** Task 16's one local run against a production build (its last bullet) is in the ledger, green.
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with its kit on 55506/55507/55508 (PostgREST up).
-  - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S29) and this plan (P1–P21).
+  - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S30) and this plan (P1–P32). (Corrected in Task 17: the spec carries S30 and this plan P22–P32.)
   - Run every touched test file by path and both typechecks. On `post`: `shared-number-holding-schema`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `voice`, `contacts`, `contact-import`, `messaging`.
   - Re-check 0098's md5 against Task 1's (`fbee986eb08d1502eed552f4c1eed5a0` after its review fix round, P32, or the re-reviewed one if it changed again).
   - Three probes of its own: a byte-identity probe of the prompt (`system-prompt.test.ts`'s three digests, plus a `buildSystemPrompt` diff of one input at `a1ccb19a` against HEAD → no difference); a read/act split (find confirms one contact but `findUpcomingBookingForContact` is called for another: make `findStep` return the first candidate and see what fails); a picker/writer split (`book_appointment` picks `existing` but `createBooking` receives `state.contactId`).
@@ -3314,7 +3317,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 - [ ] **5. Parity.** Runbook §5 (`docs/runbooks/ci-supabase-project.md`): `-f step=fingerprint` on bis-ci and `packages/db/supabase/parity/fingerprint.sql` on production; equal on every 0098 object (the column, the CHECK, the index, the trigger, the two functions, the function grants). Also read, read-only, on both: `select p.oid::regprocedure, pg_get_userbyid(p.proowner), p.prosecdef, p.proconfig from pg_proc p where p.proname in ('contacts_holding_server_only', 'move_holding_thread') order by 1::text;` → owner `postgres`, `prosecdef` f then t, `{"search_path=pg_catalog, pg_temp"}` for both.
 - [ ] **6. PR and merge.**
   - `gh pr create`. The body names:
-    - E1–E8 (owner), O1–O3 (orchestrator), S1–S29, and P1–P21 with their resolutions;
+    - E1–E8 (owner), O1–O3 (orchestrator), S1–S30, and P1–P32 with their resolutions;
     - Q1's four drafts;
     - both apply lines and the md5;
     - the tiers;

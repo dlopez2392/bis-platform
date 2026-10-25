@@ -191,7 +191,9 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   or none, applies nothing and files ONE To-do on the holding record, "A reply from a shared number couldn't
   be matched to one appointment", in the account's language. A CANCEL word: exactly one real contact with an
   upcoming appointment gets today's CANCEL To-do; more than one gets that same one To-do; none gets no To-do
-  (today's rule for a CANCEL with nothing to check). A held phrase's To-do names the number, never "Caller".
+  (today's rule for a CANCEL with nothing to check). With more people on the number than one read returns
+  (S6's truncated), both a reply and a CANCEL file that same one To-do, because exactly one among those read is
+  not exactly one on the number (amended, Task 17 M4). A held phrase's To-do names the number, never "Caller".
 - **S29 The holding record is not a customer:** off the contact list, its total, the export and every
   contact picker; shown in the inbox and search as its thread, labelled "Shared number {number}" (5.12.4).
 
@@ -883,6 +885,11 @@ mirror, so a corpus item could "find" and "cancel" an appointment with no check 
   ("registry.ts's own functions, so the stub answers what the live tool answers", `corpus-lib.ts:196`).
 - A parity test feeds one fixture to the stub and to `runTool` (its DB reads mocked from the same contacts)
   and requires deep-equal results for each of the five tools. No corpus run is part of this spec.
+- **Known limit (Task 17, carry-in 7):** the stub's `book_appointment` never adds the person it made to the
+  item's fixed candidates, so a second, different name on an empty fixture number books where the live tool
+  answers BOOK_ASK_WHOSE. The modules are paused and no corpus run is in scope (section 3); the fix, when a
+  corpus run is, is to append the made person to the session's candidates when the pick was today or create on
+  the caller ID.
 
 ### 5.12 The holding record (E8, tier HIGH)
 
@@ -899,16 +906,17 @@ the thread.
 #### 5.12.2 Who makes it: `ensureHoldingContact` (`packages/db/src/voice.ts`)
 
 ```
-ensureHoldingContact(db, accountId, e164): Promise<{ id: string; created: boolean }>
+ensureHoldingContact(db, accountId, e164, writer): Promise<{ id: string; created: boolean }>   // writer "voice" | "sms", required (Task 17, M6)
   1. read the contact where account_id = accountId and phone = e164 and holds_shared_number (the exact
      E.164 0098 fixes on a holding record; amended, R13)
-  2. none: insert { account_id, first_name: 'Caller', ...phoneFields(e164), source: 'voice',
-     holds_shared_number: true, author_kind: 'ai', author_id: null } as service_role
+  2. none: insert { account_id, first_name: 'Caller', ...phoneFields(e164), source: the writer's ('voice' or 'sms'),
+     holds_shared_number: true, author: the writer's (Sofía's 'ai' for a call, 'customer' for a text) } as service_role
      a 23505 on contacts_one_holding_per_number (two calls at once): step 1 again, once; a read that then
      finds no row throws HoldingContactUnavailable. Its one cause is a delete racing the insert, which a
      retry recovers from: the inbound route answers it FilingFailed (503, Telnyx retries; amended, re-review
      R5), and the text-back sends nothing
-  3. created: emit contact.created { contactId, holding: true }, actor voice / ai
+  3. created: emit contact.created { contactId, holding: true }, actor the writer's: voice / ai for a call,
+     sms-inbound / system for a text (amended after the Task 10 fix; Task 17 correction 5)
   throws on any other error (each caller already has a net)
 ```
 
@@ -980,6 +988,10 @@ real contacts, 5.10.0).
   nothing (amended, plan P32). The holding record stays, empty, for the number's next missed call or text.
 - **What does not move:** the consent ledger and the send gate are keyed by the phone address, not the
   contact, so a stop sent from that number keeps applying to every contact on it, as it does today.
+- **A held text-back follows the holding record, not a move** (Task 17, M11): a missed-call text-back held for
+  08:00 stores the holding record as its contact, so if staff move the thread before it is released, the text
+  lands back in the now-empty holding thread (which lists again as "Shared number …"). It still reaches the
+  right phone.
 
 #### 5.12.6 Inbound texts (S27; `app/api/sms/inbound/route.ts:193-205`)
 
@@ -1005,13 +1017,13 @@ The holding record's keys (E8, 5.12), staff-facing, usted:
 
 - `contact.holding.label`: "Shared number {number}" / `.es`: "Número compartido {number}"
 - `conversation.holding.notice`: "These texts came from {number}, a phone more than one customer uses, so
-  they aren't filed under anyone yet. Move them to the right person." / `.es`: "Estos mensajes llegaron del
-  {number}, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a
-  la persona correcta."
+  they aren't filed under anyone yet. Move them to the right person." / `.es`: "Estos mensajes llegaron desde el
+  {number}, un teléfono que usa más de un cliente, así que todavía no están en el registro de ningún cliente.
+  Muévalos a la persona correcta." (Task 17 design review M-8)
 - `conversation.holding.move`: "Move to…" / `.es`: "Mover a…"
 - `conversation.holding.moveOther`: "Find another customer" / `.es`: "Buscar otro cliente"
-- `conversation.holding.moved`: "Moved to {name}." / `.es`: "Se movió a {name}."
-- `conversation.holding.movedBack`: "Moved back." / `.es`: "Se regresó."
+- `conversation.holding.moved`: "Moved to {name}." / `.es`: "Los mensajes se movieron a {name}." (Task 17 design review I-2)
+- `conversation.holding.movedBack`: "Moved back." / `.es`: "Los mensajes se regresaron."
 - `conversation.holding.moveFailed`: "That conversation couldn't be moved. Try again." / `.es`: "No se pudo
   mover la conversación. Inténtelo de nuevo."
 - `call.holding.openTexts`: "Open the texts" / `.es`: "Abrir los mensajes"
