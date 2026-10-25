@@ -1243,7 +1243,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   it("two ensureHoldingContact calls at once make ONE row (mutation: no re-read after the 23505 -> the loser throws, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const [x, y] = await Promise.all([
-        ensureHoldingContact(db, accountId, "+19565550166"), ensureHoldingContact(db, accountId, "+19565550166"),
+        ensureHoldingContact(db, accountId, "+19565550166", "voice"), ensureHoldingContact(db, accountId, "+19565550166", "voice"),
       ]);
       expect(x.id).toBe(y.id);
       const { data } = await db.from("contacts").select("id").eq("account_id", accountId).eq("holds_shared_number", true);
@@ -1253,22 +1253,22 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 
   it("two numbers that share a digits key get two holding records (P23: +1 322 123 4567 and +32 2 123 4567; mutation: read by phone_key -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const us = await ensureHoldingContact(db, accountId, "+13221234567");
-      const be = await ensureHoldingContact(db, accountId, "+3221234567");
+      const us = await ensureHoldingContact(db, accountId, "+13221234567", "voice");
+      const be = await ensureHoldingContact(db, accountId, "+3221234567", "voice");
       expect(be.id).not.toBe(us.id);
       expect(be.created).toBe(true);
-      expect(await ensureHoldingContact(db, accountId, "+3221234567")).toEqual({ id: be.id, created: false });
+      expect(await ensureHoldingContact(db, accountId, "+3221234567", "voice")).toEqual({ id: be.id, created: false });
     });
   });
 
   it("a raw +521 caller's holding record is found again by the phone it is stored as (mutation: find() by the raw e164 -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
-      const first = await ensureHoldingContact(db, accountId, "+5218999221234");
+      const first = await ensureHoldingContact(db, accountId, "+5218999221234", "voice");
       expect(first.created).toBe(true);
       const { data: row } = await db.from("contacts").select("phone").eq("id", first.id).single();
       expect(row).toEqual({ phone: "+528999221234" });
-      expect(await ensureHoldingContact(db, accountId, "+5218999221234")).toEqual({ id: first.id, created: false });
-      expect(await ensureHoldingContact(db, accountId, "+528999221234")).toEqual({ id: first.id, created: false });
+      expect(await ensureHoldingContact(db, accountId, "+5218999221234", "voice")).toEqual({ id: first.id, created: false });
+      expect(await ensureHoldingContact(db, accountId, "+528999221234", "voice")).toEqual({ id: first.id, created: false });
       const { data: all } = await db.from("contacts").select("id").eq("account_id", accountId).eq("holds_shared_number", true);
       expect(all).toEqual([{ id: first.id }]);
     });
@@ -1277,8 +1277,8 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   it("ensureHoldingContact never returns account B's holding record for account A (mutation: drop .eq(\"account_id\", …) from its read -> FAILS)", async () => {
     await withTestAccount(async (dbA, accountA) => {
       await withTestAccount(async (dbB, accountB) => {
-        const b = await ensureHoldingContact(dbB, accountB, "+19565550167");
-        const a = await ensureHoldingContact(dbA, accountA, "+19565550167");
+        const b = await ensureHoldingContact(dbB, accountB, "+19565550167", "voice");
+        const a = await ensureHoldingContact(dbA, accountA, "+19565550167", "voice");
         expect(a.id).not.toBe(b.id);
         expect(a.created).toBe(true);
       });
@@ -1288,7 +1288,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   it("listContactsOnNumber returns the holding record flagged; an ordinary \"Caller\" contact is not one", async () => {
     await withTestAccount(async (db, accountId) => {
       const caller = await createContact(db, accountId, { firstName: "Caller", phone: "+19565550168", source: "voice" }, "voice", "ai");
-      const holding = await ensureHoldingContact(db, accountId, "+19565550168");
+      const holding = await ensureHoldingContact(db, accountId, "+19565550168", "voice");
       const { rows } = await listContactsOnNumber(db, accountId, "+19565550168");
       expect(rows.map((r) => [r.id, r.holds_shared_number])).toEqual([[caller.id, false], [holding.id, true]]);
     });
@@ -1299,7 +1299,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
       await withTestAccount(async (dbB, accountB) => {
         await person(db, accountId, "Ana", "Prueba", "+19565550169");
         const beto = await person(db, accountId, "Beto", "Prueba", "+19565550169");
-        const holding = await ensureHoldingContact(db, accountId, "+19565550169");
+        const holding = await ensureHoldingContact(db, accountId, "+19565550169", "voice");
         const hc = await ensureConversation(db, accountId, holding.id, "voice", "ai");
         const bc = await ensureConversation(db, accountId, beto.id, "user_test");
         const msg = await createMessage(db, accountId, { conversationId: hc.id, channel: "sms", direction: "inbound", body: "test", status: "delivered" }, "sms-inbound", "system");
@@ -1320,7 +1320,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
         expect(await callRow()).toEqual({ conversation_id: hc.id, contact_id: null });
         // An Undo that names no move is refused by the function (P1), never a silent no-op.
         expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test" })).toEqual({ status: "invalid" });
-        const holdingB = await ensureHoldingContact(dbB, accountB, "+19565550169");
+        const holdingB = await ensureHoldingContact(dbB, accountB, "+19565550169", "voice");
         const hbc = await ensureConversation(dbB, accountB, holdingB.id, "voice", "ai");
         expect(await moveHoldingThread(db, accountId, { from: hbc.id, to: bc.id, actor: "user_test" })).toEqual({ status: "not_found" });
       });
@@ -1330,7 +1330,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   it("a second move of the same thread answers empty and writes no event; a second Undo of one move is ok with nothing moved (P32; mutation: drop \"empty\" from the mapping -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const beto = await person(db, accountId, "Beto", "Prueba", "+19565550170");
-      const holding = await ensureHoldingContact(db, accountId, "+19565550170");
+      const holding = await ensureHoldingContact(db, accountId, "+19565550170", "voice");
       const hc = await ensureConversation(db, accountId, holding.id, "voice", "ai");
       const bc = await ensureConversation(db, accountId, beto.id, "user_test");
       const msg = await createMessage(db, accountId, { conversationId: hc.id, channel: "sms", direction: "inbound", body: "test", status: "delivered" }, "sms-inbound", "system");
@@ -1368,7 +1368,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
       from: (table: string) => { reached.push(`from:${table}`); return answer({ data: { id: "c-stub", holds_shared_number: false }, error: null }); },
       rpc: async (fn: string) => { reached.push(`rpc:${fn}`); return { data: null, error: null }; },
     } as unknown as SupabaseClient;
-    await expect(ensureHoldingContact(stub, "acct-stub", "+19565550172"))
+    await expect(ensureHoldingContact(stub, "acct-stub", "+19565550172", "voice"))
       .rejects.toThrow("ensureHoldingContact: contact c-stub was stored without the holding mark (not the service client)");
     expect(reached).toEqual(["from:contacts", "from:contacts"]);
   });
@@ -1397,7 +1397,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
         if (mem.error) throw new Error(mem.error.message);
         const token = signJwt({ role: "authenticated", org_id: (acct as { clerk_org_id: string }).clerk_org_id, sub,
           exp: Math.floor(Date.now() / 1000) + 600 }, REPLICA_SECRET!);
-        await expect(ensureHoldingContact(userDb(token), accountId, "+19565550171")).rejects.toThrow("was stored without the holding mark");
+        await expect(ensureHoldingContact(userDb(token), accountId, "+19565550171", "voice")).rejects.toThrow("was stored without the holding mark");
         const { data: rows } = await db.from("contacts").select("first_name, phone, holds_shared_number").eq("account_id", accountId);
         expect(rows).toEqual([{ first_name: "Caller", phone: "+19565550171", holds_shared_number: false }]);
         const { data: created } = await db.from("events").select("id").eq("account_id", accountId).eq("type", "contact.created");

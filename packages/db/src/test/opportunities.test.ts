@@ -116,7 +116,7 @@ describe("opportunities", () => {
   it("refuses a deal on a shared number's holding record, writes nothing, and still refuses a person of another account (mutation: drop the holding filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      const holding = await ensureHoldingContact(db, accountId, "+19565550188");
+      const holding = await ensureHoldingContact(db, accountId, "+19565550188", "voice");
       await expect(createOpportunity(db, accountId,
         { contactId: holding.id, pipelineId, name: "Shared", value: 100 }, "user_test"),
       ).rejects.toThrow("contact not in account");

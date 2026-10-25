@@ -820,7 +820,7 @@ const HOLDING_WRITERS: Record<HoldingWriter, { source: string; actorId: string; 
  * A record found again is never re-stamped by a later writer.
  */
 export async function ensureHoldingContact(
-  db: SupabaseClient, accountId: string, e164: string, writer: HoldingWriter = "voice",
+  db: SupabaseClient, accountId: string, e164: string, writer: HoldingWriter,
 ): Promise<{ id: string; created: boolean }> {
   const by = HOLDING_WRITERS[writer];
   const author = contactAuthor(by.actorType, by.actorId);

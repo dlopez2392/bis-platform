@@ -1054,7 +1054,7 @@ describe("messaging", () => {
 describe("S-47e: the inbox reads carry the holding fields; findConversationForContact", () => {
   const P = "+19565550188";
   async function seed(db: SupabaseClient, accountId: string) {
-    const holding = await ensureHoldingContact(db, accountId, P);
+    const holding = await ensureHoldingContact(db, accountId, P, "voice");
     const holdingThread = await ensureConversation(db, accountId, holding.id, "user_test");
     await createMessage(db, accountId, {
       conversationId: holdingThread.id, channel: "sms", direction: "inbound", body: "is the porch gazebo still on for Saturday",

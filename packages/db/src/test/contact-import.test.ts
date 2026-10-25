@@ -209,7 +209,7 @@ describe("S-47e: buildMatchIndex leaves a shared number's holding record out", (
 
   it("with only the holding record on the number there is no phone match; with Ana too it is Ana (mutation: drop the continue -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
-      const holding = await ensureHoldingContact(db, accountId, P);
+      const holding = await ensureHoldingContact(db, accountId, P, "voice");
       const alone = await buildMatchIndex(db, accountId);
       expect(alone.byPhone.get(phoneDigits(P))).toBeUndefined();
       expect(alone.byPhone.size).toBe(0);
@@ -222,7 +222,7 @@ describe("S-47e: buildMatchIndex leaves a shared number's holding record out", (
 
   it("an imported row on the number never updates the holding record: it makes a new contact", () =>
     withTestAccount(async (db, accountId) => {
-      const holding = await ensureHoldingContact(db, accountId, P);
+      const holding = await ensureHoldingContact(db, accountId, P, "voice");
       const index = await buildMatchIndex(db, accountId);
       const r = await applyImportBatch(db, accountId,
         [{ input: { phone: "(956) 555-0188", firstName: "Ivy" }, tags: [] }],
