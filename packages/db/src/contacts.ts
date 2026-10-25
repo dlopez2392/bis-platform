@@ -1310,8 +1310,10 @@ export async function setContactPhoneCountry(
   // Nothing to dedupe a CLEARED number against (round 4: the inline Undo
   // can restore a null phone — the first-fill case, undone).
   if (input.phone !== null) {
+    // S-47e (spec 5.12.3; Task 4 review I1): a shared number's holding record is never a pick's twin.
     const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
+      .eq("account_id", accountId).eq("holds_shared_number", false)
+      .eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
     // The phone is written: a failure from here on is logged, never thrown
     // (a throw would report a failed pick that succeeded; review R3-M11).
     const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;

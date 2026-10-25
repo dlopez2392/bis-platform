@@ -7,7 +7,7 @@ import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         listTagNamesForContacts, flagMatchesOf, phoneDigits } from "../contacts";
+         listTagNamesForContacts, flagMatchesOf, phoneDigits, setContactPhoneCountry } from "../contacts";
 import { ensureHoldingContact } from "../voice";
 // S-02 A2: company_name is no longer a ContactInput key — it is the
 // contact's business group, kept in sync by the database's own trigger
@@ -1230,6 +1230,26 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         });
       }));
 
+    it("the mirrored +1 branch: a +1 number beside a +52 contact of the same ten digits is a new contact with no flag under matchBy; without matchBy the same pair files phone_country_twin (mutation: drop the +1 branch's emailOnly guard -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        await createContact(db, accountId, { firstName: "Mx", phone: "+529565550172" }, "user_test");
+        const us = await createContact(db, accountId,
+          { firstName: "Us", phone: "+19565550172", matchBy: "email_only" }, "user_test");
+        expect(us.existing).toBe(false);
+        expect(us.flagged).toBe(false);
+        expect(await flagsOf(db, accountId)).toEqual([]);
+
+        // The control, so the case can fail: the same pair, no matchBy, on a fresh account.
+        await withTestAccount(async (_db2, accountB) => {
+          const mxB = await createContact(db, accountB, { firstName: "Mx", phone: "+529565550172" }, "user_test");
+          const usB = await createContact(db, accountB, { firstName: "Us", phone: "+19565550172" }, "user_test");
+          expect(usB.existing).toBe(false);
+          expect(usB.flagged).toBe(true);
+          const [lo, hi] = [mxB.id, usB.id].sort();
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_twin" }]);
+        });
+      }));
+
     it("account B's contact with the same email is never returned for account A (mutation: drop the email branch's account filter -> FAILS)", () =>
       withTestAccount(async (db, accountA) => {
         await withTestAccount(async (_db2, accountB) => {
@@ -1296,6 +1316,30 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         expect(await updateContact(db, accountId, ana.id, { phone: P }, "user_test")).toEqual({ flagged: false });
         expect((await getContact(db, accountId, ana.id))?.phone).toBe(P);
         expect(await flagsOf(db, accountId)).toEqual([]);
+      }));
+
+    it("setContactPhoneCountry picking the shared number's country files no phone_country_pick pair with its holding record; the same pick beside a real person does (Task 4 review I1; mutation: drop the twin read's holding filter -> FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const holding = await ensureHoldingContact(db, accountId, "+525512345678");
+        const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+15512345678" }, "user_test");
+        expect(ana.existing).toBe(false);
+        expect(await setContactPhoneCountry(db, accountId, ana.id,
+          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+        expect((await getContact(db, accountId, ana.id))?.phone).toBe("+525512345678");
+        expect((await getContact(db, accountId, holding.id))?.first_name).toBe("Caller");
+        expect(await flagsOf(db, accountId)).toEqual([]);
+
+        // The control, so the case can fail: a real person on that number instead of the holding record. Ana
+        // starts on an unrelated number, so her own createContact files nothing and only the pick can.
+        await withTestAccount(async (_db2, accountB) => {
+          const luz = await createContact(db, accountB, { firstName: "Luz", phone: "+525512345678" }, "user_test");
+          const anaB = await createContact(db, accountB, { firstName: "Ana", phone: "+15512340000" }, "user_test");
+          expect(await flagsOf(db, accountB)).toEqual([]);
+          expect(await setContactPhoneCountry(db, accountB, anaB.id,
+            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+          const [lo, hi] = [luz.id, anaB.id].sort();
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_pick" }]);
+        });
       }));
 
     it("flagMatchesOf for Ana on the number writes 0 pairs with the holding record (mutation: drop its holding filter -> FAILS)", () =>

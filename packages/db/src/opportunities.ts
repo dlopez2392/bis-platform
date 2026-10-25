@@ -17,8 +17,11 @@ export async function createOpportunity(
   actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const stages = await stagesOf(db, accountId, input.pipelineId);
+  // S-47e (spec 5.12.3; Task 4 review M3): a shared number's holding record (0098) never carries a deal, so
+  // the quote follow-up can never text a shared number from one. It reads as no such contact.
   const { data: contact } = await db.from("contacts")
-    .select("id").eq("account_id", accountId).eq("id", input.contactId).maybeSingle();
+    .select("id").eq("account_id", accountId).eq("holds_shared_number", false)
+    .eq("id", input.contactId).maybeSingle();
   if (!contact) throw new Error("contact not in account");
   const { data, error } = await db.from("opportunities")
     .insert({ account_id: accountId, contact_id: input.contactId, pipeline_id: input.pipelineId,
