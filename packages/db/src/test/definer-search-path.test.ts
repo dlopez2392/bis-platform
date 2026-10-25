@@ -22,7 +22,7 @@ import { withRollback, actAsOwner } from "./db";
  * RED BEFORE APPLY: every case except the armed controls inside the probes. GREEN AFTER APPLY: all of them.
  */
 
-/** The 22 SECURITY DEFINER functions in public and app at 0096, with their whole proconfig after it. */
+/** The 23 SECURITY DEFINER functions in public and app at 0098, with their whole proconfig after it. */
 const PG_CATALOG_PG_TEMP = ["search_path=pg_catalog, pg_temp"];
 const EXPECTED_DEFINERS: Record<string, string[]> = {
   "app.account_role(uuid)": PG_CATALOG_PG_TEMP,
@@ -45,6 +45,7 @@ const EXPECTED_DEFINERS: Record<string, string[]> = {
   // 0096 changes only the search_path key: the 2s lock_timeout from 0095 stays, in its place.
   "public.ensure_knowledge_snapshot(uuid,jsonb)": ["search_path=pg_catalog, pg_temp", "lock_timeout=2s"],
   "public.mark_document_version_ready(uuid,uuid,uuid,bigint,text)": PG_CATALOG_PG_TEMP,
+  "public.move_holding_thread(uuid,uuid,uuid,text,bigint)": PG_CATALOG_PG_TEMP,
   "public.record_event(uuid,text,jsonb)": PG_CATALOG_PG_TEMP,
   "public.reserve_document_version(uuid,uuid,bigint,text,text,text)": PG_CATALOG_PG_TEMP,
   "public.save_voice_knowledge(uuid,text,jsonb,jsonb,integer)": PG_CATALOG_PG_TEMP,
@@ -59,12 +60,12 @@ const searchPathOf = (cfg: string[] | null) => cfg?.find((c) => c.startsWith("se
 const endsWithPgTemp = (path: string | undefined) => path !== undefined && path.split(",").map((s) => s.trim()).at(-1) === "pg_temp";
 
 describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
-  it("the definers in public and app are exactly these 22, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
+  it("the definers in public and app are exactly these 23, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows).toHaveLength(22);
+      expect(rows).toHaveLength(23);
       expect(Object.fromEntries(rows.map((r) => [r.sig, r.proconfig]))).toEqual(EXPECTED_DEFINERS);
     }));
 
@@ -73,7 +74,7 @@ describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows.length).toBeGreaterThanOrEqual(22); // not vacuous
+      expect(rows.length).toBeGreaterThanOrEqual(23); // not vacuous
       const offenders = rows.filter((r) => !endsWithPgTemp(searchPathOf(r.proconfig))).map((r) => `${r.sig}: ${String(r.proconfig)}`);
       expect(offenders).toEqual([]);
     }));
