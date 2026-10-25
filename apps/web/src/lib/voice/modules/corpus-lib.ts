@@ -10,6 +10,18 @@ import { isValidEmail, isValidPhone } from "../../forms/guards";
 import { formatWhen } from "../../booking/time";
 import { capturePhoneLead, messageBody, bookingName, sanitizeWebLead, withDroppedNote } from "../tools/placeholders";
 import type { TradeModuleId } from "./index";
+// S-47e (Task 14): the corpus stub's per-item identity session, so a corpus run follows the SAME ladder
+// as the live tools (registry.ts) rather than answering ok:true vacuously (O2).
+import { emptyCallState, withBooking, type CallState } from "../call-state";
+import { emailKey } from "@bis/db";
+import { requiredRung } from "../identity/ladder";
+import { candidateOf, type Candidate } from "../identity/match";
+import {
+  findNeedsRead, findStep, confirmStep, ownsStep, messageNeedsNameCheck, messageNameStep, type CandidateRead,
+} from "../identity/flow";
+import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep } from "../identity/record";
+import { BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, FOUND_BY_NAME_NEXT, noCallerId } from "../identity/results";
+// `formatWhen` is already imported above under its own name; the live tool's rendering, reused here too.
 
 export type PhoneEngine = "realtime" | "chat";
 /** "realtime": Task 0's spike ran on 2026-10-22 (GitHub run 39814905846) and gpt-realtime accepts a
@@ -40,6 +52,10 @@ export type CorpusFixture = {
   facts: string; services: string; meetingType: "in_person" | "phone" | "video";
   slotDurationMinutes: number; afterHours: "hours_then_message" | "message_only"; callerNumber: string;
   greetingEn: string; greetingEs: string;
+  /** S-47e (Task 14): who else is really on the fixture's caller number, for the per-item identity session
+   *  (newStubSession). Absent (or missing on an existing fixture file) reads as no one else on the number:
+   *  `parseFixture` below is unchanged, so every existing fixture still parses. */
+  contactsOnNumber?: { firstName: string; lastName: string; email?: string }[];
 };
 
 const FILE_RE = /^(\d{2})-(en|es)-[a-z0-9-]+\.md$/;
@@ -160,9 +176,34 @@ const UNUSABLE = "Not recorded: their name is missing. Ask for it.";
 /** registry.ts's own DAY_RE. */
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** O2, S24: the stub's per-item memory: the identity state and the bookings this item made. */
+export type StubSession = {
+  state: CallState; candidates: Candidate[]; module: TradeModuleId; callerNumber: string | null; transfer: boolean;
+  /** booking id -> the contact it belongs to (the found one, or "this-call" for one the item booked). */
+  bookings: Map<string, string>;
+  made: number;
+};
+/** The fixed booking a confirmed find answers (spec 5.11). */
+export const STUB_BOOKING = { bookingId: "stub-booking-1", startsAt: "2027-06-03T15:00:00.000Z" } as const;
+
+export function newStubSession(f: CorpusFixture, item: CorpusItem, module: TradeModuleId): StubSession {
+  const candidates = (f.contactsOnNumber ?? []).map((c, i) => candidateOf({
+    id: `stub-contact-${i + 1}`, first_name: c.firstName, last_name: c.lastName, email_key: c.email ? emailKey(c.email) : null,
+  }));
+  // The fixed booking exists from the start (the live tool's getBookingById finds any id it is given), owned
+  // by the first contact until a confirmed find hands it to the one confirmed.
+  return { state: emptyCallState(), candidates, module, callerNumber: item.callerId === "withheld" ? null : f.callerNumber,
+    transfer: item.transfer, bookings: new Map(candidates.length > 0 ? [[STUB_BOOKING.bookingId, candidates[0]!.id]] : []), made: 0 };
+}
+
 /** `said`: the caller's lines so far, this turn's included (v3: the web chat's name-from-email check reads them,
  *  as the live route reads the visitor's). */
-export type StubContext = { medium: CorpusItem["medium"]; timezone: string; said?: readonly string[] };
+export type StubContext = {
+  medium: CorpusItem["medium"]; timezone: string; said?: readonly string[];
+  /** S-47e (Task 14): when set, the five identity-bearing tools run the live ladder (identity/flow.ts,
+   *  identity/record.ts) instead of answering ok:true, so a corpus run cannot pass it vacuously. */
+  session?: StubSession;
+};
 
 /** Every tool answers ok and is logged (spec section 7), except the live refusals a corpus item can trigger,
  *  each word for word from the live code:
@@ -191,6 +232,59 @@ export function stubToolResult(name: string, args: Record<string, unknown>, ctx:
     return withDroppedNote({ ok: true }, dropped, "web");
   }
   if (ctx.medium === "phone") {
+    // S-47e (Task 14, O2): with a session, the five identity-bearing tools run registry.ts's OWN flow
+    // (identity/flow.ts, identity/record.ts) — the same functions the live tool calls — so a corpus run
+    // cannot pass the identity ladder vacuously.
+    const s = ctx.session;
+    if (s) {
+      const next = s.transfer ? "offer to put them through to someone on the team with transfer_to_human" : "offer to take a message with take_message";
+      const read: CandidateRead = { ok: true, candidates: s.candidates, truncated: false };
+      if (name === "find_my_booking") {
+        if (!s.callerNumber) return { found: false, verified: false, error: "This call has no visible caller number, so appointments can't be looked up on it — not by a number the caller says, either. " + `Apologize, then ${next} so the team can help them.` };
+        const required = requiredRung("read_existing", s.module);
+        const step = findStep(s.state, required, findNeedsRead(s.state, required) ? read : null, next);
+        s.state = step.state;
+        if (step.kind === "answer") return { ...step.result };
+        s.bookings.set(STUB_BOOKING.bookingId, step.contactId);
+        return {
+          found: true, ...STUB_BOOKING, startsAtLocal: formatWhen(new Date(STUB_BOOKING.startsAt), ctx.timezone),
+          // Deviation (see task report): registry.ts's own find_my_booking adds this whenever the confirmation
+          // was not by caller ID alone; omitting it here would make the parity test's toEqual fail for real,
+          // not by a mutation — the stub would silently under-tell the model after a name-based confirm.
+          ...(step.by === "caller_id" ? {} : { next: FOUND_BY_NAME_NEXT }),
+        };
+      }
+      if (name === "confirm_identity") {
+        if (!s.callerNumber) return { ...noCallerId(next) };
+        const step = confirmStep(s.state, requiredRung("read_existing", s.module), read, args, next);
+        s.state = step.state;
+        return { ...step.result };
+      }
+      if (name === "cancel_appointment" || name === "reschedule_appointment") {
+        const bookingId = String(args.bookingId ?? "");
+        const owner = s.bookings.get(bookingId);
+        if (!owner) return { ok: false, error: "no such booking — use find_my_booking first" };
+        const verdict = ownsStep(s.state, requiredRung("change_existing", s.module),
+          { bookingId, contactId: owner, contactPhone: s.callerNumber, callerNumber: s.callerNumber }, next);
+        if (!verdict.owned) return { ...verdict.result };
+        return { ok: true };
+      }
+      if (name === "take_message" && messageNeedsNameCheck(s.state, s.callerNumber, args)) {
+        const ask = messageNameStep(s.state, read);
+        if (ask) { s.state = ask.state; return { ...ask.result }; }
+      }
+      // P27: the same "for you or for someone else?" a live lead asks, once.
+      if (name === "capture_lead") {
+        const { fields, result } = capturePhoneLead(args.fields, s.callerNumber);
+        if (result.ok !== true) return result;
+        const fse = typeof args.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined;
+        if (leadNeedsWhoseCheck(s.state, fields.fullName, fse)) {
+          const ask = leadWhoseStep(s.state, read, fields.fullName);
+          if (ask) { s.state = ask.state; return { ...ask.result }; }
+        }
+        return result;
+      }
+    }
     // v3: registry.ts's own functions, so the stub answers what the live tool answers.
     if (name === "capture_lead") return capturePhoneLead(args.fields, null).result;
     if (name === "take_message") {
@@ -200,6 +294,24 @@ export function stubToolResult(name: string, args: Record<string, unknown>, ctx:
     if (name === "book_appointment") {
       const { name: who, dropped } = bookingName(args.name);
       if (!who) return withDroppedNote({ ok: false, error: "name required" }, dropped, "phone");
+      if (ctx.session) {
+        const s2 = ctx.session;
+        // P27: the live picker's refusals, over the fixture's contacts on the caller ID (a recited number is
+        // not modelled: the stub books it).
+        if (s2.callerNumber && !String(args.phone ?? "").trim()) {
+          const pick = pickRecordOnNumber({ onNumber: s2.candidates, truncated: false, name: who,
+            email: typeof args.email === "string" ? args.email : null,
+            confirmedId: s2.state.identity.confirmed?.contactId ?? null,
+            forSomeoneElse: typeof args.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined });
+          if (pick.kind === "ask_name") return { ...BOOK_ASK_NAME };
+          if (pick.kind === "ambiguous") return { ...BOOK_AMBIGUOUS };
+          if (pick.kind === "ask_whose") return { ...BOOK_ASK_WHOSE };
+        }
+        const id = `stub-made-${++s2.made}`;
+        s2.bookings.set(id, "this-call");
+        s2.state = withBooking(s2.state, { id, contactName: who, startsAt: String(args.startsAt ?? ""), endsAt: String(args.startsAt ?? "") });
+        return { ok: true, bookingId: id };
+      }
     }
   }
   return { ok: true };
