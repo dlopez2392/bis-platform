@@ -310,9 +310,11 @@ bis-ci and renumbers if one has landed.
 --     insert, keeps the mark on update, and refuses (42501) any change to a holding record except who it is
 --     assigned to; server code (service_role) is not limited.
 --   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
---     a person, recording what it moved on its conversation.moved event, or moves back exactly what one such
---     event recorded (Undo, which names that event and nothing else). SECURITY DEFINER, executed by
---     service_role only, behind the role check of the app.
+--     a person, recording what it moved on its own conversation.moved event (actor_type system, actor_id and
+--     payload by the person, payload writer move_holding_thread), or moves back exactly what one such event
+--     recorded (Undo, which names that event and nothing else). An event a client wrote through record_event
+--     is actor_type user (0053), so it can never be undone from. SECURITY DEFINER, executed by service_role
+--     only, behind the role check of the app.
 --
 -- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
 -- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
@@ -439,10 +441,12 @@ begin
     return pg_catalog.jsonb_build_object('status', 'invalid');
   end if;
 
-  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo.
+  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo. The
+  -- event must be one this function wrote: record_event stamps every client event actor_type user (0053).
   if p_undo_of is not null then
     select e.payload into v_undo from public.events e
-     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved';
+     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved'
+       and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread';
     if v_undo is null
        or (v_undo ->> 'undo') is distinct from 'false'
        or (v_undo ->> 'fromConversationId') is distinct from p_to_conversation::text
@@ -485,8 +489,9 @@ begin
    where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation);
 
   insert into public.events (account_id, type, actor_type, actor_id, payload)
-  values (p_account_id, 'conversation.moved', 'user', p_actor,
+  values (p_account_id, 'conversation.moved', 'system', p_actor,
           pg_catalog.jsonb_build_object(
+            'writer', 'move_holding_thread', 'by', p_actor,
             'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
             'fromContactId', v_from_contact, 'toContactId', v_to_contact,
             'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
@@ -1090,9 +1095,9 @@ ensureHoldingContact(db, accountId, e164): Promise<{ id: string; created: boolea
   2. none: insert { account_id, first_name: 'Caller', ...phoneFields(e164), source: 'voice',
      holds_shared_number: true, author_kind: 'ai', author_id: null } as service_role
      a 23505 on contacts_one_holding_per_number (two calls at once): step 1 again, once; a read that then
-     finds no row throws HoldingContactUnavailable, and every caller fails CLOSED: the inbound route records
-     the consent step with no contact and files nothing (200, never a 503 retried forever), the text-back
-     sends nothing
+     finds no row throws HoldingContactUnavailable. Its one cause is a delete racing the insert, which a
+     retry recovers from: the inbound route answers it FilingFailed (503, Telnyx retries; amended, re-review
+     R5), and the text-back sends nothing
   3. created: emit contact.created { contactId, holding: true }, actor voice / ai
   throws on any other error (each caller already has a net)
 ```
@@ -1148,7 +1153,10 @@ real contacts, 5.10.0).
   `move_holding_thread(account, holdingConversation, personConversation, actor)`. `ok` → toast "Moved to
   {name}." with Undo, and the inbox opens the person's thread. Undo calls the same function the other way,
   naming the move's `moveId` (its `conversation.moved` event) and nothing else; the function moves back only
-  the ids that event recorded that are still on the person's thread (amended, R11) → "Moved back." `not_found` or `invalid` → "That
+  the ids that event recorded that are still on the person's thread (amended, R11). It accepts only an event it
+  wrote itself (`actor_type` system, `payload.writer` move_holding_thread; `actor_id` and `payload.by` the
+  person), so a `conversation.moved` a client appends through `record_event`, which always stamps
+  `actor_type` user (0053), can never drive an Undo (amended, re-review R1) → "Moved back." `not_found` or `invalid` → "That
   conversation couldn't be moved. Try again." Nothing is retried on its own.
 - **What moves:** every message of the holding thread, and every call whose `conversation_id` was the
   holding thread, which gains the person as its `contact_id`. The person's unread count gains the holding
@@ -1627,3 +1635,16 @@ P1-P31 give the evidence). Where a section 7 test line above disagrees with thes
 - **Found while fixing** (plan P22): the shape CHECK admitted a holding record with NO first name
   (`first_name = 'Caller'` is NULL there, and a CHECK passes on NULL). The SQL in 4.1 is null-safe; proven on
   the plan writer's replica. 0098's md5 is now `a76f898b5e362d9e0b8c71e2a0d28fff`.
+
+**Second fix round (2026-10-24, the opus re-review of the plan at `dc8d2251`):**
+
+- **R1** a forged move event: any signed-in member, a Technician included, could append a
+  `conversation.moved` through `record_event` and use its id as an Undo. The function now writes its own event
+  (actor_type system, actor_id and payload.by the person, payload.writer move_holding_thread), and an Undo
+  accepts only such an event (5.12.5). No reader of `events` renders `conversation.moved` today (the plan's P1
+  lists them); a later one must name `payload.by`, never an automation.
+- **R2-R4** test gaps only (a call the person made since the move stays; every protected column; the two
+  Undo-of-an-Undo guards cover each other, tested together).
+- **R5** `HoldingContactUnavailable` is a 503 that Telnyx retries (5.12.2).
+- **R6** the plan's owner notes name the name rule's trade-off and the untagged `contact_tags`.
+- 0098's md5 is now `ae8371757c516d581810b713e86d7cb0` (221 lines), re-checked on the plan writer's replica.

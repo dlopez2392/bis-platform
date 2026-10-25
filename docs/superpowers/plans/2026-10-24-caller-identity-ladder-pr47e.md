@@ -38,18 +38,19 @@ Path abbreviations:
 The 0098 SQL went through three versions on the plan writer's own PG18 replica on port **55490**, built by `<KIT>/replica.sh 55490 <dir> <0098 file>` (`pre` = every migration through 0097, one `psql -1 -f` per file; `post` = `pre` + the 0098 file under test):
 - the spec's first text (spec §4.1 at `df8882ce`, lines 277-443; md5 `c262c2ed43bedb3a0fcea77bc45fd164`);
 - the first plan's revision (md5 `13f26cbe99753bfbbd8e20e7ba9ee632`, approved by the opus plan review: md5, digest and definers reproduced, its 12 mutations failed, the rollback was clean);
-- **this fix round's text** (Task 1 Step 4; md5 **`a76f898b5e362d9e0b8c71e2a0d28fff`**; 216 lines). It answers review items 7, 8, 11 and 13, and closes one hole the fix round found (P22). The spec's §4.1 carries the same text.
+- the first fix round's text (md5 `a76f898b5e362d9e0b8c71e2a0d28fff`, 216 lines; the re-review reproduced its md5, digest, definers, 32/32 and 19 mutations);
+- **the second fix round's text** (Task 1 Step 4; md5 **`ae8371757c516d581810b713e86d7cb0`**; 221 lines). It answers the first review's items 7, 8, 11 and 13, closes the hole the first fix round found (P22), and the re-review's item 1 (P1: an Undo accepts only the function's own event). The spec's §4.1 carries the same text.
 
-**Read off the replica, on the fix round's text (every line re-run after the last change):**
+**Read off the replica, on the second fix round's text (every line re-run after the last change):**
 - **Client-write digest** (the query at `packages/db/src/test/proposals-drop.test.ts:93-98`): `pre` = `post` = **`52|b66203ca5d355155540b520af510d120`**, unchanged.
 - **Definers** in `public` and `app`: `pre` 22, `post` **23**. The new one: `public.move_holding_thread(uuid,uuid,uuid,text,bigint)`, `prosecdef` t, `proconfig` `{"search_path=pg_catalog, pg_temp"}`, owner `postgres`. The trigger function `app.contacts_holding_server_only()`: `prosecdef` f, the same `proconfig`.
-- **Task 1's test, copied out of this plan** into a throwaway `packages/db/src/test/zz-holding-probe.test.ts`: `pre` → `Tests  32 failed (32)`; `post` → `Tests  32 passed (32)`.
-- **Every one of Task 1 Step 6's 19 mutations**, each applied to its own database cloned from `pre` (`<KIT>/mutate3.js` writes them), turned that file red. The counts are in Step 6.
+- **Task 1's test, copied out of this plan** into a throwaway `packages/db/src/test/zz-holding-probe.test.ts`: `pre` → `Tests  42 failed (42)`; `post` → `Tests  42 passed (42)`.
+- **Task 1 Step 6's 25 mutations**, each applied to its own database cloned from `pre` (`<KIT>/mutate4.js` writes them): 23 turned that file red; the two that each drop ONE of the Undo-of-an-Undo guards (m20a, m20b) stayed green, as Step 6 predicts, because each guard covers the other; dropping both (m20) is red. The counts are in Step 6.
 - **`definer-search-path.test.ts`** with Task 1 Step 5's 23-entry pin applied (a temporary edit, restored by `cp` + `cmp`): `Tests  6 passed (6)` on `post`.
 - **13 schema and grant suites on `post`** (`definer-search-path` unedited, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `record-provenance-schema`, `one-switch-schema`, `call-card-schema`, `document-expiry-schema`, `document-requests-schema`, `structured-facts-schema`, `trade-modules-schema`, `customer-language-schema`, `company-name-read-only-schema`): `Test Files 1 failed | 12 passed (13)`, `Tests 1 failed | 374 passed (375)`. The one failure is the definer pin Task 1 updates ("exactly these 22"). `schema-grants-guard.test.ts` is green, so `EXPECTED_WRITES` does not change.
 - On the first revision, three more files had failures on `post` AND on `pre`, 16 cases, identical by name: `voice-schema`, `same-account-fk-schema` and `ai-acts-schema`. Every one needs `serviceDb()` or PostgREST ("Supabase service env vars missing"), which a bare replica does not have. Environment, not 0098. (`customer-language-schema` and `company-name-read-only-schema`, which the first plan listed with them, are green: review item 14.)
 - **Rollback:** the six ROLLBACK lines of the file's header, run on `create database rb template post`, leave 0 `contacts_holding%` constraints, 0 columns, 0 of the two functions, 0 indexes; definers back to 22; the digest still `52|b66203ca…`.
-- **Bytes of the fix round's file:** 0 non-ASCII and 0 backslashes (node byte count; its positive control on `é\` printed `2 1`); 0 carriage returns; exactly **12** `$` (the E.164 test is written without a `$` anchor, so every `$` is a dollar-quote); two consecutive apostrophes → `0`; no apostrophe on any `--` line or inside either comment string; `grep -ciw cascade` → `0`; one `security definer` on a code line; `grep -n "search_path"` → the header line 29 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (78, 106); 216 lines.
+- **Bytes of the second fix round's file:** 0 non-ASCII and 0 backslashes (node byte count; its positive control on `é\` printed `2 1`); 0 carriage returns; exactly **12** `$` (the E.164 test is written without a `$` anchor, so every `$` is a dollar-quote); two consecutive apostrophes → `0`; no apostrophe on any `--` line or inside either comment string; `grep -ciw cascade` → `0`; one `security definer` on a code line; `grep -n "search_path"` → the header line 31 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (80, 108); 221 lines.
 - **What the first two texts got wrong, proven on the replica:**
   - The spec's Undo guard let an Undo that named its messages but no calls repoint a household member's own call to the holding thread (P1, first round). The fix round replaces the id arrays with the move's own event (P1).
   - **Both earlier CHECKs admitted a holding record with NO first name.** `first_name = 'Caller'` is NULL for a NULL first name, the whole term goes NULL, and a CHECK passes on NULL. An insert of `{ first_name: null, holds_shared_number: true }` succeeded on the first revision's `post` (P22).
@@ -67,7 +68,10 @@ The 0098 SQL went through three versions on the plan writer's own PG18 replica o
 The fix round's review items are cited as R1–R15 (the opus plan review of 2026-10-24) and its orchestrator rulings as the "ruling" of R2 and R3. The spec carries every change in the same commit (its §13).
 
 - **P1. An Undo names its move, and moves back only what that move recorded** (R11; first round: the spec's guard let a call-less Undo repoint a housemate's calls).
-  - **Resolution:** `move_holding_thread(p_account_id, p_from_conversation, p_to_conversation, p_actor, p_undo_of bigint default null)`. A move records the ids it moved on its `conversation.moved` event (`messageIds`, `callIds`) and returns `moveId`, that event's id. An Undo passes `p_undo_of`; the function reads that event of THIS account and refuses (`invalid`) unless it is a move (not an Undo) between the same two threads reversed, then moves back only those ids still on the person's thread. Nothing the browser sends can name a row. Task 1 proves the forged cases; Task 11's Undo token carries only `moveId` and the two thread ids.
+  - **Resolution:** `move_holding_thread(p_account_id, p_from_conversation, p_to_conversation, p_actor, p_undo_of bigint default null)`. A move records the ids it moved on its `conversation.moved` event (`messageIds`, `callIds`) and returns `moveId`, that event's id. An Undo passes `p_undo_of`; the function reads that event of THIS account and refuses (`invalid`) unless the function itself wrote it (`actor_type = 'system'` and `payload.writer = 'move_holding_thread'`) and it is a move (not an Undo) between the same two threads reversed, then moves back only those ids still on the person's thread.
+  - **Why the writer check is the guard (re-review R1, ruling):** any signed-in member, a Technician included, can append an event of any type and payload through `public.record_event` (`0053_server_only_writes.sql:64-89`), and it always stamps `actor_type 'user'` (`:87-88`); a client cannot insert into `events` any other way since 0053. A forged `conversation.moved` naming a housemate's message and call is therefore refused, and Task 1 has that exact probe (a Technician and an Owner call `record_event`, then the Undo with its id → `invalid`, Ana's call untouched; mutation m21). Only server code (service_role) could write an `actor_type 'system'` event, and it is trusted. This is the S-47d pattern (a server-written `system` event the app reads back: `apps/web/src/lib/team/removal-log.ts:47-48` reads `team.member_removed` by `.eq("actor_type", "system")`); `record_event` is not edited.
+  - **The person is never shown as an automation:** `actor_id` and `payload.by` hold the person who moved the thread. No reader of `events` renders `conversation.moved` today: the dashboard's activity card turns only its listed types into copy and drops every other one (`[acct]/dashboard/activity-card.tsx:100-175`, `default: return null`); the record timeline reads no events at all (its sources are notes, To-dos, deals, forms, messages, bookings, calls and documents, `TIMELINE_SOURCES`); and every other `events` read filters its own type (`packages/db/src/booking.ts:477`, `contacts.ts:739`, `business-status.ts:249`, `team.ts:57`, `blueprints.ts:268`, `[acct]/contacts/groups-actions.ts:230-231`, `lib/team/removal-log.ts:47-48`; read 2026-10-24). A later reader that shows the move must name `payload.by`, never "an automation".
+  - Nothing the browser sends can name a row. Task 11's Undo token carries only `moveId` and the two thread ids.
 - **P2. 0098 follows 0097's byte rules.** The spec's first text had two `''` (`person''s`, `app''s`), apostrophes on seven `--` lines, `set local lock_timeout` at top level, and a LOCKS paragraph that is wrong inside one transaction (ADD COLUMN already holds ACCESS EXCLUSIVE to the end of the file).
   - Evidence: `0097_one_switch.sql` has 0 `''` and 0 apostrophes in comments, and 0091/0094/0097 set `lock_timeout` inside a `do` block (`0094_trade_modules.sql:62-68`).
   - **Resolution:** Task 1 Step 4's text.
@@ -98,7 +102,7 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
 - **P22. The shape CHECK is written null-safe.** Evidence: the replica, above. A CHECK passes when its expression is NULL, and `first_name = 'Caller'` is NULL for a NULL first name.
   - **Resolution:** `first_name is not distinct from 'Caller'`, and `phone is not null` with a plain E.164 test (length 9–16, a leading `+`, digits after it). Mutation m02 (`first_name = 'Caller'`) → the "no first name" case FAILS.
 - **P23. One holding record per account and E.164, not per `phone_key`** (R13). Two numbers of two countries can share a digits key: `+1 322 123 4567` and Belgium's `+32 2 123 4567` both key `3221234567`. With the index on `phone_key`, the second number's `ensureHoldingContact` got 23505, re-read by its own E.164, found nothing, and threw, so the inbound route answered 503 to every retry.
-  - **Resolution:** `contacts_one_holding_per_number` is unique `(account_id, phone)`, and the CHECK fixes a holding record's phone to E.164, so the two can never collide. `ensureHoldingContact` reads by the exact phone. If a 23505 is ever followed by a read that finds no row (a delete in between), it throws `HoldingContactUnavailable`; the inbound route then records the consent step with no contact, logs the account id, and answers 200 with nothing filed (the alert-phone path's shape, `…/inbound/route.ts:164-175`), never 503 forever; the text-back logs and sends nothing. Mutation m04 (back to `phone_key`) → the two-countries case FAILS.
+  - **Resolution:** `contacts_one_holding_per_number` is unique `(account_id, phone)`, and the CHECK fixes a holding record's phone to E.164, so the two can never collide. `ensureHoldingContact` reads by the exact phone. If a 23505 is ever followed by a read that finds no row, it throws `HoldingContactUnavailable`. Its one remaining cause is a delete racing the insert, which a retry recovers from, so the inbound route answers it like any other filing failure: `FilingFailed`, 503, and Telnyx retries (re-review R5; the collision that could have made it permanent is gone with the index on the exact E.164). The text-back logs and sends nothing. Mutation m04 (back to `phone_key`) → the two-countries case FAILS.
 - **P24. Staff cannot edit a holding record** (R8). The spec's §4.1 said "no name or customer detail is ever written onto it … for every writer, staff included", but the CHECK binds only the name, the email and the phone's shape; a signed-in session could still change its phone, source, custom fields, `dnd` and the rest.
   - **Resolution:** the trigger refuses (42501, "A shared number holding record is changed by server code only") any signed-in change to a holding record's `first_name`, `last_name`, `email`, `phone`, `phone_country_unconfirmed`, `source`, `custom`, `attribution`, `dnd` or `marketing_email_opted_out_at` (every client-updatable column except `assigned_to` and `updated_at`, `schema-grants-guard.test.ts:86-89`). Server code (service_role) is not limited. Mutation m06 → the four edit cases FAIL.
 - **P25. A different person after a confirmation** (R1). Confirm Beto, then ask about Ana's appointment: `find_my_booking` reads the confirmation it holds and answers Beto's time as if it were Ana's. And on a number with one contact, `decideIdentity`'s first rows confirmed the sole contact whatever name `confirm_identity` was given.
@@ -270,7 +274,7 @@ No other open question. Two behaviours the owner may want to know about are in "
 | Trigger | `contacts_holding_server_only` BEFORE INSERT OR UPDATE FOR EACH ROW → `app.contacts_holding_server_only()` (plain plpgsql, not definer). For `current_user = 'authenticated'`: INSERT stores `false`; UPDATE of a holding record that changes any of `first_name, last_name, email, phone, phone_country_unconfirmed, source, custom, attribution, dnd, marketing_email_opted_out_at` raises 42501 "A shared number holding record is changed by server code only" (P24); every UPDATE keeps `old.holds_shared_number` |
 | Function | `public.move_holding_thread(p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text, p_undo_of bigint default null) returns jsonb`, SECURITY DEFINER, `set search_path = pg_catalog, pg_temp`, EXECUTE to service_role only |
 | Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side with no `p_undo_of`; away from it with one; a `p_undo_of` that is not a move of this account between the same two threads reversed, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"ok","moveId":<bigint>,"messageIds":[…],"callIds":[…]}` |
-| Event | `conversation.moved`, `actor_type` `user`, `actor_id` = `p_actor`, payload `{ fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId` |
+| Event | `conversation.moved`, written by the function itself: `actor_type` `system`, `actor_id` = `p_actor` (the person), payload `{ writer: "move_holding_thread", by: <the person>, fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId`. An Undo accepts only such an event (P1) |
 
 ### `@bis/db` (Task 3) — `packages/db/src/voice.ts`
 
@@ -334,9 +338,9 @@ export async function findUpcomingBookingForContact(
 
 /**
  * Thrown when the number's holding record can be neither found nor made: a 23505 on
- * contacts_one_holding_per_number followed by a read that finds no row (it was deleted in between). Callers fail
- * CLOSED (plan P23): the inbound route records the consent step with no contact and files nothing (200, never a
- * 503 Telnyx would retry forever); the text-back sends nothing. Its message names no number.
+ * contacts_one_holding_per_number followed by a read that finds no row (it was deleted in between). A retry
+ * recovers, so the inbound route treats it as FilingFailed (503, Telnyx retries; plan P23); the text-back sends
+ * nothing. Its message names no number.
  */
 export class HoldingContactUnavailable extends Error {
   constructor(accountId: string) {
@@ -1159,7 +1163,7 @@ And the changed pair (S16), each gaining a closing sentence:
   - No apostrophe inside a `--` comment or inside a `comment on … is '…'` string, so no possessives.
   - No `begin;`/`commit;` wrapper. `lock_timeout` is set inside the first `do` block (`0091_ai_acts.sql:45-51` gives the reason: on PostgreSQL 17 a bare SET LOCAL as a later statement of a multi-statement string is not guaranteed to be inside a transaction block).
   - Every function 0098 creates writes `set search_path = pg_catalog, pg_temp`. Exactly one `security definer` on a code line (`move_holding_thread`), so `EXPECTED_DEFINERS` gains exactly that one entry.
-  - The md5 of the committed file is `a76f898b5e362d9e0b8c71e2a0d28fff` when copied byte for byte (LF line ends, one trailing newline, 216 lines).
+  - The md5 of the committed file is `ae8371757c516d581810b713e86d7cb0` when copied byte for byte (LF line ends, one trailing newline, 221 lines).
   - The E.164 test in the CHECK is written without a `$` anchor (length, a leading `+`, no non-digit after it), so every `$` stays a dollar-quote.
 - **plpgsql NULL guard** (memory "plpgsql NULL guard"): `app.contacts_holding_server_only()` keeps `coalesce(current_user = 'authenticated', false)`; `move_holding_thread` tests `v_from_holding is null or v_to_holding is null` before comparing them.
 - **Tests must be able to fail** (memories "Test vacuity", "Vacuous test shapes"):
@@ -1175,7 +1179,7 @@ And the changed pair (S16), each gaining a closing sentence:
   1. **Tests that MOCK a module the task changes.** A spread-real factory (`vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))`) runs the REAL new function against the test's fake client unless the test overrides it: every such file whose module under test calls a new function gets the function in its `dbMocks` with a default (for `listContactsOnNumber`, `{ rows: [], truncated: false }`), or its existing assertions start failing for an unrelated reason.
   2. **Catalogue prefix-count pins:** `apps/web/src/lib/consent/copy.test.ts:42` and `:111`. Neither regex matches a key this PR adds (`contact\.phoneCountry`, `contact\.messages`, `contact\.texts`, `sms\.consentReply`, `todo\.consent`, …), read 2026-10-24; Task 2 runs the file to prove it.
   3. **Pinned select literals:** `packages/db/src/test/tasks-call-id-read.test.ts` (pins `openTasks`'s select; this PR does not touch it); `contacts.test.ts:895-901` (scans `contacts.ts` for `.not("phone", "is", null)` and `async function findDuplicate`, both still true after Task 4); no test pins `COLS`, `contacts(first_name, last_name, language)` or `"id, email, phone"` (grep, 2026-10-24).
-  4. **Bare `vi.mock("@bis/db", () => ({` factories** for a new import a module under test CALLS (A8). Read 2026-10-24: `…/inbound/route.test.ts:28` (bare, `() => dbMocks`; Task 10 adds `listContactsOnNumber`, `ensureHoldingContact`, `HoldingContactUnavailable`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage`); `…/convos/actions.test.ts:141` (bare; Task 11 adds `moveHoldingThread`, plus `ensureConversation` and `getContact` if absent); `[acct]/contacts/[contactId]/page.test.ts:100` (bare; Task 12's new case adds `findConversationForContact`; the existing cases never reach it); the six `…/convos/page*.test.ts` (bare; Task 12's page calls `listContactsOnNumber` only on a holding thread, so only its new case adds it); `[acct]/calls/[callId]/page.test.ts:84` (bare; no new function). The spread-real files that need defaults: `…/tools/registry.test.ts:36-39`, `lib/voice/finish-call.test.ts:26`, `lib/voice/textback.test.ts:20`, `…/inbound/route.consent.test.ts:19`, `apps/web/src/lib/consent/inbound.test.ts:7`. `lib/automations/passes/release-held.test.ts:9` reaches `prepareTextback` with a payload contact only, so it needs no default; run it to prove it.
+  4. **Bare `vi.mock("@bis/db", () => ({` factories** for a new import a module under test CALLS (A8). Read 2026-10-24: `…/inbound/route.test.ts:28` (bare, `() => dbMocks`; Task 10 adds `listContactsOnNumber`, `ensureHoldingContact`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage`); `…/convos/actions.test.ts:141` (bare; Task 11 adds `moveHoldingThread`, plus `ensureConversation` and `getContact` if absent); `[acct]/contacts/[contactId]/page.test.ts:100` (bare; Task 12's new case adds `findConversationForContact`; the existing cases never reach it); the six `…/convos/page*.test.ts` (bare; Task 12's page calls `listContactsOnNumber` only on a holding thread, so only its new case adds it); `[acct]/calls/[callId]/page.test.ts:84` (bare; no new function). The spread-real files that need defaults: `…/tools/registry.test.ts:36-39`, `lib/voice/finish-call.test.ts:26`, `lib/voice/textback.test.ts:20`, `…/inbound/route.consent.test.ts:19`, `apps/web/src/lib/consent/inbound.test.ts:7`. `lib/automations/passes/release-held.test.ts:9` reaches `prepareTextback` with a payload contact only, so it needs no default; run it to prove it.
   5. **e2e locators a renamed control could hit:** no existing control is renamed. The thread header's name line changes ONLY on a holding thread; `apps/web/e2e/messaging.spec.ts` and `contacts*.spec.ts` never create one. Task 12 greps `getByText`/`getByRole` in `apps/web/e2e` for any string it changes and lists the hits (expected: none).
   6. **`[acct]/in-account-service-reads.test.ts`** for any new value-level `serviceDb`/`ledgerDb` under `[acct]`, `app/api/accounts` or `lib`: `…/convos/actions.ts` is already `proven-target` (`:127`); `…/identity/*.ts` and `lib/contacts/holding-label.ts` use `serviceDb` as a type only; `[acct]/contacts/[contactId]/page.tsx` already imports `serviceDb` (`:3`) and is listed. Every task touching those trees runs the file.
 - **Affected tests, never the full suite locally** (memory "Agent test scope"):
@@ -1497,12 +1501,31 @@ describe("0098 only server code sets or edits the mark", () => {
       expect(rows).toEqual([{ holds_shared_number: false }]);
     }));
 
-  it.each([
-    ["phone", "phone = '+19565550199'"],
-    ["source", "source = 'staff note'"],
+  /** Every client-updatable column but assigned_to and updated_at (schema-grants-guard.test.ts:86-89). */
+  const EDITS = [
+    ["attribution", "attribution = '{\"x\":1}'::jsonb"],
     ["custom", "custom = '{\"x\":1}'::jsonb"],
+    ["dnd", "dnd = '{\"sms\":true}'::jsonb"],
+    ["email", "email = 'ana@example.com'"],
+    ["first_name", "first_name = 'Ana'"],
+    ["last_name", "last_name = 'Prueba'"],
+    ["marketing_email_opted_out_at", "marketing_email_opted_out_at = now()"],
+    ["phone", "phone = '+19565550199'"],
     ["phone_country_unconfirmed", "phone_country_unconfirmed = true"],
-  ] as const)("a signed-in Owner cannot change a holding record's %s (plan item 8; mutation: drop the trigger's refusal -> FAILS)", (_col, set) =>
+    ["source", "source = 'staff note'"],
+  ] as const;
+
+  it("the edit cases cover exactly the ten columns the trigger compares (read off its own body)", () =>
+    withRollback(async (c) => {
+      const { rows: [p] } = await c.query<{ src: string }>(
+        "select prosrc as src from pg_proc where oid = 'app.contacts_holding_server_only()'::regprocedure");
+      const named = [...new Set([...p!.src.matchAll(/\bnew\.(\w+)/g)].map((m) => m[1]!))]
+        .filter((col) => col !== "holds_shared_number").sort();
+      expect(EDITS).toHaveLength(10);
+      expect(named).toEqual(EDITS.map(([col]) => col));
+    }));
+
+  it.each(EDITS)("a signed-in Owner cannot change a holding record's %s (plan item 8, R3; mutation: drop the trigger's refusal -> FAILS)", (_col, set) =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "client-edit");
       const { rows: [h] } = await holdingRow(c, a.accountId);
@@ -1559,7 +1582,8 @@ describe("0098 move_holding_thread", () => {
       expect(convs).toEqual([{ id: s.hc, unread_count: 0, empty: true }, { id: s.bc, unread_count: 2, empty: false }]);
       const { rows: events } = await c.query(
         "select id::int as id, actor_type, actor_id, payload from public.events where account_id = $1 and type = 'conversation.moved'", [s.a.accountId]);
-      expect(events).toEqual([{ id: r.moveId, actor_type: "user", actor_id: "user_staff", payload: {
+      expect(events).toEqual([{ id: r.moveId, actor_type: "system", actor_id: "user_staff", payload: {
+        writer: "move_holding_thread", by: "user_staff",
         fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2,
         undo: false, undoOf: null, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
       } }]);
@@ -1592,11 +1616,12 @@ describe("0098 move_holding_thread", () => {
       expect(await move(c, s.a.accountId, crossed, s.bc)).toEqual({ status: "invalid" });
     }));
 
-  it("Undo names the move: exactly what it moved goes back, a message the person sent since stays, the event says undo (mutation: drop the m.id = any (v_want_messages) filter -> FAILS)", () =>
+  it("Undo names the move: exactly what it moved goes back, a message and a call the person made since stay, the event says undo (mutations: drop the m.id or the k.id filter -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await household(c);
       const r = await move(c, s.a.accountId, s.hc, s.bc);
       const later = await message(c, s.a.accountId, s.bc, "later", 1);
+      const betosOwn = await call(c, s.a.accountId, s.pn, s.bc, s.beto);
       const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
       expect(u).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
       const { rows: [counts] } = await c.query(`select
@@ -1606,6 +1631,10 @@ describe("0098 move_holding_thread", () => {
       expect(counts).toEqual({ holding: 2, beto: 1, later_in: s.bc });
       const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.holdingCall]);
       expect(callRow).toEqual({ conversation_id: s.hc, contact_id: null });
+      // R2: a call Beto made on his own thread after the move is not one the move recorded (mutation: drop
+      // `and (p_undo_of is null or k.id = any (v_want_calls))` -> it moves to the holding thread, FAILS).
+      const { rows: [own] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [betosOwn]);
+      expect(own).toEqual({ conversation_id: s.bc, contact_id: s.beto });
       const { rows: convs } = await c.query("select id, unread_count from public.conversations where id = any($1) order by unread_count", [[s.hc, s.bc]]);
       expect(convs).toEqual([{ id: s.hc, unread_count: 0 }, { id: s.bc, unread_count: 2 }]);
       const { rows: [ev] } = await c.query("select payload->'undo' as undo, (payload->>'undoOf')::int as of from public.events where id = $1", [u.moveId]);
@@ -1622,10 +1651,11 @@ describe("0098 move_holding_thread", () => {
       const r = await move(c, s.a.accountId, s.hc, s.bc);
       const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
       await move(c, s.a.accountId, s.hc, s.bc);                          // moved again: the threads are full again
-      // An event of account B that names A's two threads (B cannot make one through the function; forged here).
+      // An event of account B shaped exactly like the function's own, naming A's two threads (written here as the
+      // table owner), so only the event's account filter refuses it.
       const { rows: [bEvent] } = await c.query<{ id: number }>(
         `insert into public.events (account_id, type, actor_type, actor_id, payload)
-         values ($1, 'conversation.moved', 'user', 'x', jsonb_build_object('undo', false, 'fromConversationId', $2::text,
+         values ($1, 'conversation.moved', 'system', 'x', jsonb_build_object('writer', 'move_holding_thread', 'by', 'x', 'undo', false, 'fromConversationId', $2::text,
                  'toConversationId', $3::text, 'messageIds', '[]'::jsonb, 'callIds', '[]'::jsonb)) returning id::int as id`,
         [s.b.accountId, s.hc, s.bc]);
       expect(await move(c, s.a.accountId, s.bc, s.hc, toAna.moveId!)).toEqual({ status: "invalid" });
@@ -1633,6 +1663,34 @@ describe("0098 move_holding_thread", () => {
       expect(await move(c, s.a.accountId, s.bc, s.hc, bEvent!.id)).toEqual({ status: "invalid" });
       expect(await move(c, s.a.accountId, s.ac, s.hc, r.moveId!)).toEqual({ status: "invalid" });
       const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.bc]);
+      expect(n!.n).toBe(2);
+    }));
+
+  it.each(["technician", "owner"] as const)("an event a signed-in %s writes through record_event, shaped like a move, can never be undone from (R1; mutation: drop the actor_type and writer checks -> FAILS)", (role) =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      await move(c, s.a.accountId, s.hc, s.bc);                          // Ana's message and call stay on her thread
+      await actAsMember(c, s.a.accountId, s.a.orgId, role);
+      await c.query("select public.record_event($1, 'conversation.moved', $2::jsonb)", [s.a.accountId, JSON.stringify({
+        writer: "move_holding_thread", by: "x", undo: false, fromConversationId: s.hc, toConversationId: s.ac,
+        messageIds: [], callIds: [s.anaCall],
+      })]);
+      await actAsOwner(c);
+      const { rows: [forged] } = await c.query<{ id: number; actor_type: string }>(
+        "select id::int as id, actor_type from public.events where account_id = $1 and type = 'conversation.moved' order by id desc limit 1", [s.a.accountId]);
+      expect(forged!.actor_type).toBe("user");
+      expect(await move(c, s.a.accountId, s.ac, s.hc, forged!.id)).toEqual({ status: "invalid" });
+      const { rows: [anaCall] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.anaCall]);
+      expect(anaCall).toEqual({ conversation_id: s.ac, contact_id: s.ana });
+    }));
+
+  it("an Undo cannot itself be undone: two guards refuse it together, the event's undo flag and the move away from the holding thread with an event named (R4: neither alone can be reached, because an Undo always moves toward the holding thread; mutation m20 drops both -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
+      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
+      expect(await move(c, s.a.accountId, s.hc, s.bc, u.moveId!)).toEqual({ status: "invalid" });
+      const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.hc]);
       expect(n!.n).toBe(2);
     }));
 
@@ -1695,9 +1753,9 @@ describe("0098 move_holding_thread", () => {
 });
 ```
 
-- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  32 failed (32)` (`column "holds_shared_number" … does not exist`, or a null def), as on the plan writer's replica. Paste the summary line.
+- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  42 failed (42)` (`column "holds_shared_number" … does not exist`, or a null def), as on the plan writer's replica. Paste the summary line.
 
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. Copy this text byte for byte; the plan writer's copy (`<KIT>/0098_shared_number_holding.reviewed.sql`, the fix round's text) has md5 `a76f898b5e362d9e0b8c71e2a0d28fff`:
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. Copy this text byte for byte; the plan writer's copy (`<KIT>/0098_shared_number_holding.reviewed.sql`, the fix round's text) has md5 `ae8371757c516d581810b713e86d7cb0`:
 
 ```sql
 -- 0098_shared_number_holding.sql - one "Caller" holding record per shared number (S-47e, owner decision E8)
@@ -1719,9 +1777,11 @@ describe("0098 move_holding_thread", () => {
 --     insert, keeps the mark on update, and refuses (42501) any change to a holding record except who it is
 --     assigned to; server code (service_role) is not limited.
 --   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
---     a person, recording what it moved on its conversation.moved event, or moves back exactly what one such
---     event recorded (Undo, which names that event and nothing else). SECURITY DEFINER, executed by
---     service_role only, behind the role check of the app.
+--     a person, recording what it moved on its own conversation.moved event (actor_type system, actor_id and
+--     payload by the person, payload writer move_holding_thread), or moves back exactly what one such event
+--     recorded (Undo, which names that event and nothing else). An event a client wrote through record_event
+--     is actor_type user (0053), so it can never be undone from. SECURITY DEFINER, executed by service_role
+--     only, behind the role check of the app.
 --
 -- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
 -- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
@@ -1848,10 +1908,12 @@ begin
     return pg_catalog.jsonb_build_object('status', 'invalid');
   end if;
 
-  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo.
+  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo. The
+  -- event must be one this function wrote: record_event stamps every client event actor_type user (0053).
   if p_undo_of is not null then
     select e.payload into v_undo from public.events e
-     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved';
+     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved'
+       and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread';
     if v_undo is null
        or (v_undo ->> 'undo') is distinct from 'false'
        or (v_undo ->> 'fromConversationId') is distinct from p_to_conversation::text
@@ -1894,8 +1956,9 @@ begin
    where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation);
 
   insert into public.events (account_id, type, actor_type, actor_id, payload)
-  values (p_account_id, 'conversation.moved', 'user', p_actor,
+  values (p_account_id, 'conversation.moved', 'system', p_actor,
           pg_catalog.jsonb_build_object(
+            'writer', 'move_holding_thread', 'by', p_actor,
             'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
             'fromContactId', v_from_contact, 'toContactId', v_to_contact,
             'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
@@ -1926,32 +1989,36 @@ comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) i
   - Re-build the kit with the committed file as its third argument. Run on `post`, from `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/post; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/record-provenance-schema.test.ts src/test/one-switch-schema.test.ts src/test/customer-language-schema.test.ts src/test/company-name-read-only-schema.test.ts` → all green (all nine are withRollback-only; the plan writer's run of the last seven, unedited, was green).
   - If the defs or the comments differ on your replica, STOP and report.
 
-- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<KIT>/mutate3.js <file> <dir>` writes all 19 with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The plan writer's counts are in brackets (out of 32, or 38 with the second file); more reds than a line names are fine, fewer is a finding.
-  - m01. Drop `contacts_holding_shape` (both statements) → the seven `refuses a holding record with …` cases and the pin case FAIL [8 failed].
+- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<KIT>/mutate4.js <file> <dir>` writes all 25 with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The plan writer's counts are in brackets (out of 42, or 48 with the second file); more reds than a line names are fine, fewer is a finding.
+  - m01. Drop `contacts_holding_shape` (both statements) → the seven `refuses a holding record with …` cases and the pin case FAIL [8 failed of 42].
   - m02. `first_name = 'Caller'` (not null-safe, P22) → "…with no first name…" and the pin case FAIL [2 failed].
-  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [12 failed].
+  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [15 failed].
   - m04. The index on `(account_id, phone_key)` (P23) → "two numbers of two countries…" and the pin case FAIL [2 failed].
-  - m05. Drop the `create trigger contacts_holding_server_only …` statement → the signed-in insert case, the four edit cases and the pin case FAIL [6 failed].
-  - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the four "cannot change a holding record's …" cases FAIL [4 failed].
-  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 38].
+  - m05. Drop the `create trigger contacts_holding_server_only …` statement → the signed-in insert case, the ten edit cases and the pin case FAIL [12 failed].
+  - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the ten "cannot change a holding record's …" cases and the column-coverage case FAIL [11 failed]. Dropping ONE column from the trigger's tuple fails the column-coverage case (it reads the trigger's own body).
+  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 48].
   - m08. Drop `or (v_to_holding and p_undo_of is null)` → the `invalid` case FAILS [1 failed].
   - m09. Drop the event's `fromConversationId`/`toConversationId` checks → the forged-Undo case FAILS [1 failed].
   - m10. Drop `and (p_undo_of is null or m.id = any (v_want_messages))` → the Undo case FAILS (`later` moves too) [1 failed].
   - m11. Drop `c.account_id = p_account_id and` from BOTH `select c.contact_id …` reads → the `not_found` case FAILS [1 failed].
   - m12. Append `grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to authenticated;` → "only service_role may execute it" FAILS [1 failed].
-  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 38]. The shadow case STAYED GREEN in the plan writer's run: only the pins catch this one. Say whether yours did too.
+  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 48]. The shadow case STAYED GREEN in the plan writer's run: only the pins catch this one. Say whether yours did too.
   - m14. Delete `comment on function public.move_holding_thread …` → the comments case FAILS [1 failed].
   - m15. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case and the Undo case FAIL [2 failed].
   - m16. Drop the calls contact guard `and (k.contact_id is null or k.contact_id = v_from_contact)` → "a call on the holding thread that names another contact…" FAILS [1 failed] (R7).
   - m17. Drop `m.account_id = p_account_id and` from the messages update → "a message carrying another account's id…" FAILS [1 failed] (R7).
   - m18. Drop `k.account_id = p_account_id and` from BOTH contacts reads → "a conversation of A whose contact is B's holding record…" FAILS [1 failed] (R7).
   - m19. `'undo', false` always in the event → the Undo case FAILS on the event's `undo` [1 failed] (R7).
+  - m20. Drop BOTH Undo-of-an-Undo guards, `or (v_undo ->> 'undo') is distinct from 'false'` and `or (v_from_holding and p_undo_of is not null)` → "an Undo cannot itself be undone…" FAILS [1 failed] (re-review R4). m20a (the undo-flag guard alone) and m20b (the away guard alone) stay GREEN [42 passed]: an Undo always moves toward the holding thread, so undoing it means moving away from it with an event named, which both guards refuse; neither can be reached without the other. The test's name says so; paste all three runs.
+  - m21. Drop `and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread'` → both record_event cases (Technician, Owner) FAIL [2 failed] (re-review R1: the forged event then drives an Undo that moves Ana's call to the holding thread).
+  - m22. Drop `and (p_undo_of is null or k.id = any (v_want_calls))` → the Undo case FAILS on Beto's own call [1 failed] (re-review R2).
+  - m23. Write the event as `'user'` → the whole-move pin, the Undo case and the Undo-of-an-Undo case FAIL [3 failed] (the function can no longer undo from its own event).
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the six ROLLBACK lines of the file's header in order (they ran on the plan writer's replica). Then: `select count(*) from pg_constraint where conname like 'contacts_holding%'` → `0`; `select count(*) from information_schema.columns where table_name = 'contacts' and column_name = 'holds_shared_number'` → `0`; the two functions gone; the definer count back to 22; the client-write digest `52|b66203ca…`. Drop `rb`.
   - On `post`, the client-write digest → `52|b66203ca5d355155540b520af510d120`.
-  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 29 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (78, 106); `wc -l f` → `216`.
-  - Record `md5sum` of the file. It equals `a76f898b5e362d9e0b8c71e2a0d28fff` if nothing changed. If it differs, say what changed and why.
+  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 31 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (80, 108); `wc -l f` → `221`.
+  - Record `md5sum` of the file. It equals `ae8371757c516d581810b713e86d7cb0` if nothing changed. If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green; eslint on the test file).
 
@@ -1964,11 +2031,11 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Verify (the affected-test rule):** (1) no web mock reaches 0098; (2) none; (3) none; (4) none; (5) none; (6) none. The db suites above, on the replica.
 
-**Acceptance:** all 32 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
+**Acceptance:** all 42 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree, with its own kit on 55493.
 - It applies 0098 to a fresh `pre` copy through `psql -1` only, and reads every def itself.
-- It re-runs m02, m04, m06, m08, m09, m10, m16 and m18, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
+- It re-runs m02, m04, m06, m08, m09, m10, m16, m18, m20 (with m20a and m20b), m21 and m22, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
 - It checks the bytes and the md5, and that no comment string or `--` line holds an apostrophe.
 - It confirms `definer-search-path.test.ts` is green on `post` with exactly one new entry, and that `schema-grants-guard.test.ts` and `proposals-drop.test.ts` were NOT edited.
 - A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
@@ -3157,7 +3224,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - Test: `…/inbound/route.test.ts`, `…/inbound/route.consent.test.ts`, `apps/web/src/lib/consent/inbound.test.ts`, `packages/db/src/test/automations.test.ts` (one new `describe`).
 
 **Interfaces:**
-- Consumes: `ensureHoldingContact`, `HoldingContactUnavailable`, `listContactsOnNumber` (Task 3); `readCandidates`, `isShared`, `realCandidates` (Task 5); `todo.sharedNumber.reply`, `todo.sharedNumber.hold` (Task 2); today's `matchConfirmationReply`, `applyConfirmationReply`, `nextBookedStart`, `ensureConsentTask`, `addTask`, `getAccountLanguage`.
+- Consumes: `ensureHoldingContact`, `listContactsOnNumber` (Task 3); `readCandidates`, `isShared`, `realCandidates` (Task 5); `todo.sharedNumber.reply`, `todo.sharedNumber.hold` (Task 2); today's `matchConfirmationReply`, `applyConfirmationReply`, `nextBookedStart`, `ensureConsentTask`, `addTask`, `getAccountLanguage`.
 - Produces:
   ```ts
   // packages/db/src/automations.ts
@@ -3175,15 +3242,14 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
   export async function fileSharedReplyTodo(db: SupabaseClient, accountId: string, holdingContactId: string, now: Date): Promise<void>;
   ```
 
-- [ ] **Step 1: The mocks.** `route.test.ts`'s bare `dbMocks` (`:5-26`) gains `listContactsOnNumber`, `ensureHoldingContact`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage`, `HoldingContactUnavailable` (the real class: `HoldingContactUnavailable: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).HoldingContactUnavailable` inside a `vi.hoisted` async, or a local `class HoldingContactUnavailable extends Error {}` the route's `instanceof` cannot see: use the real one) with defaults in its `beforeEach` (`{ rows: [], truncated: false }`, `{ id: "ct_hold", created: true }`, `[]`, `{ id: "t1" }`, `null`); `route.consent.test.ts`'s spread-real `db` (`:19`) and `inbound.test.ts`'s (`:7`) gain the same functions with the same defaults. All three files green on today's code with only this change (paste the three summaries).
+- [ ] **Step 1: The mocks.** `route.test.ts`'s bare `dbMocks` (`:5-26`) gains `listContactsOnNumber`, `ensureHoldingContact`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage` with defaults in its `beforeEach` (`{ rows: [], truncated: false }`, `{ id: "ct_hold", created: true }`, `[]`, `{ id: "t1" }`, `null`); `route.consent.test.ts`'s spread-real `db` (`:19`) and `inbound.test.ts`'s (`:7`) gain the same functions with the same defaults. All three files green on today's code with only this change (paste the three summaries).
 - [ ] **Step 2: Write the failing tests.**
   - `automations.test.ts` (PostgREST, `withTestAccount`, seeded through `createContact`, `createBooking` and the ask's own writer, `stampAppointmentConfirmAsked(db, bookingId)` (`packages/db/src/automations.ts:826`), never a hand-shaped row): two household members each with an asked, unanswered, future, booked appointment → both returned; one answered (`applyConfirmationReply`) → only the other; a cancelled one and a past one → not returned; `[]` → `[]`; account B's member with an outstanding ask, asked for with account A's id and B's contact id → `[]` (mutation: drop `.eq("account_id", …)` → FAILS).
   - `route.test.ts`, the holding filing:
     - A text from a number with Ana and Beto on it files on the holding thread: `ensureHoldingContact` called with `(db, "<the route's own accountId>", "<fromNumber>")`, `ensureConversation` with `"ct_hold"`, `createContact` NOT called (red first: today it phone-picks).
     - From a number with one contact → `createContact` as today, `ensureHoldingContact` not called.
     - No `fromNumber` → no read.
-    - `ensureHoldingContact` rejects with `HoldingContactUnavailable` on the first filing (P23) → answer `200`, no message row, no `createContact`, one log line with the account id and no number, and the consent step still runs for a STOP with `contactId: null` (the alert-phone path's shape, `…/inbound/route.ts:164-175`; mutation: let it reach the `FilingFailed` catch → `503`, FAILS).
-  - `route.consent.test.ts` (it drives the route end to end, `(await POST(signed(payload))).status`, `:123-145`): a failed number read on the first filing → `503` and no message row; a failed `ensureHoldingContact` (an ordinary `Error`) → the same `503`; a stop word from the shared number is recorded against the ADDRESS, with `contactId` the holding record.
+  - `route.consent.test.ts` (it drives the route end to end, `(await POST(signed(payload))).status`, `:123-145`): a failed number read on the first filing → `503` and no message row; a failed `ensureHoldingContact`, an ordinary `Error` and a `HoldingContactUnavailable` alike (P23, re-review R5), → the same `503`, and nothing filed; a stop word from the shared number is recorded against the ADDRESS, with `contactId` the holding record.
   - `route.test.ts`, the household reply (S30; the text `"Sí"`, which `matchConfirmationReply` reads as yes):
     - Ana has the one outstanding ask → `applyConfirmationReply` called with `(db, accountId, "<Ana's id>", "Sí", <now>)`, no To-do (red first: today it is called with the holding id).
     - Ana and Beto both have one → `applyConfirmationReply` NOT called, `addTask` called once with `(db, accountId, { contactId: "ct_hold", title: "A reply from a shared number couldn't be matched to one appointment", dueAt: <now ISO> }, "sms-inbound", "system")`; with `getAccountLanguage` → `"es"` the title is `"Una respuesta de un número compartido no se pudo asociar con una sola cita"`.
@@ -3255,7 +3321,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       }
     ```
     Every other caller of `InboundConsentInput` passes `sharedNumber: null` (the typecheck lists them: the alert-phone path at `route.ts:171` and any test literal).
-  - `route.ts`: `ensureHoldingContact`, `HoldingContactUnavailable`, `listOutstandingConfirmAsks`, `matchConfirmationReply` join the `@bis/db` import at `:36-41`; `import { readCandidates, isShared } from "@/lib/voice/identity/candidates";` and `fileSharedReplyTodo` joins the `@/lib/consent/inbound` import. The filing (`:199-218`) becomes:
+  - `route.ts`: `ensureHoldingContact`, `listOutstandingConfirmAsks`, `matchConfirmationReply` join the `@bis/db` import at `:36-41`; `import { readCandidates, isShared } from "@/lib/voice/identity/candidates";` and `fileSharedReplyTodo` joins the `@/lib/consent/inbound` import. The filing (`:199-218`) becomes:
     ```ts
       let contact: Awaited<ReturnType<typeof createContact>>;
       let conversation: Awaited<ReturnType<typeof ensureConversation>>;
@@ -3276,16 +3342,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
           // …the createMessage call, unchanged…
         }
       } catch (e) {
-        // P23: the holding record can be neither read nor made. Fail CLOSED, never a 503 Telnyx retries forever:
-        // the consent step runs with no contact (the alert-phone path's shape) and nothing is filed.
-        if (e instanceof HoldingContactUnavailable && fromNumber) {
-          if (consent.kind === "stop" || consent.kind === "start") {
-            await recordInboundConsent(db, { ...base, address: fromNumber, contactId: null, firstFiling: true, sharedNumber: null }, consent,
-              (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: null, conversationId: null, reply })));
-          }
-          log("inbound text from a shared number not filed: its holding record could not be read or made", accountId);
-          return;
-        }
+        // A HoldingContactUnavailable lands here too (P23): a delete raced the insert, and Telnyx's retry recovers.
         if (firstFiling) throw new FilingFailed(e);
         throw e;
       }
@@ -3322,13 +3379,13 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
   - (b) the account id replaced by a literal in `readCandidates(...)` → the account assertion FAILS;
   - (c) `listOutstandingConfirmAsks` called with `[contact.id]` (the holding id) → the "Ana has the one outstanding ask" case FAILS;
   - (d) `asks.length === 1` → `asks.length >= 1` → the two-asks case FAILS;
-  - (e) the `HoldingContactUnavailable` branch removed → the fail-closed case FAILS (503);
+  - (e) a `HoldingContactUnavailable` caught and answered 200 (the first fix round's shape) → its 503 case in `route.consent.test.ts` FAILS;
   - (f) `holdTodo`'s shared branch removed → the R5 title case FAILS.
 - [ ] **Step 6: Commit** `sms: a text from a phone several customers share files on that number's one holding thread; a YES confirms the household's one asked appointment or files one To-do, and the consent To-dos name the number (S-47e E8, S30)`.
 
 **Verify (the affected-test rule):** (1) `route.test.ts`, `route.consent.test.ts`, `inbound.test.ts` (Step 1); `apps/web/src/lib/consent/*.test.ts` that build an `InboundConsentInput` (the typecheck lists them); (2) `copy.test.ts:42`, `:111` (the `todo.sharedNumber.*` keys match neither; run it); (3) none; (4) `route.test.ts:28` bare (Step 1); (5) `grep -rln "sms/inbound" apps/web/e2e` → read each hit (expected none); (6) none (the route and `lib/consent/inbound.ts` take the client they are given). `lib/consent/scans.test.ts` (it scans every web source for consent writers; run it). On a replica + PostgREST: `packages/db/src/test/automations.test.ts`. Both typechecks; eslint.
 
-**Review (HIGH, opus, own worktree):** re-runs (a), (b), (c) and (e), plus its own: (g) `nextBookedStart` asked for the holding id in `cancelTodo`'s shared branch (the one-contact CANCEL case must FAIL). It also confirms: a retried delivery (`firstFiling` false) cannot file on a different record than the first did (it reads the same number; say what happens if a housemate was added between the two deliveries); the holding contact never reaches `applyConfirmationReply`; the fail-closed path writes nothing and answers 200; and that a reply is never applied to an ask of a contact who is not on the number (the read takes only `realContactIds`).
+**Review (HIGH, opus, own worktree):** re-runs (a), (b), (c) and (e), plus its own: (g) `nextBookedStart` asked for the holding id in `cancelTodo`'s shared branch (the one-contact CANCEL case must FAIL). It also confirms: a retried delivery (`firstFiling` false) cannot file on a different record than the first did (it reads the same number; say what happens if a housemate was added between the two deliveries); the holding contact never reaches `applyConfirmationReply`; a `HoldingContactUnavailable` answers 503 and writes nothing; and that a reply is never applied to an ask of a contact who is not on the number (the read takes only `realContactIds`).
 
 ---
 
@@ -3858,7 +3915,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with its kit on 55506/55507/55508 (PostgREST up).
   - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S29) and this plan (P1–P21).
   - Run every touched test file by path and both typechecks. On `post`: `shared-number-holding-schema`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `voice`, `contacts`, `contact-import`, `messaging`.
-  - Re-check 0098's md5 against Task 1's (`a76f898b5e362d9e0b8c71e2a0d28fff`, or the reviewed one if Task 1 changed it).
+  - Re-check 0098's md5 against Task 1's (`ae8371757c516d581810b713e86d7cb0`, or the reviewed one if Task 1 changed it).
   - Three probes of its own: a byte-identity probe of the prompt (`system-prompt.test.ts`'s three digests, plus a `buildSystemPrompt` diff of one input at `a1ccb19a` against HEAD → no difference); a read/act split (find confirms one contact but `findUpcomingBookingForContact` is called for another: make `findStep` return the first candidate and see what fails); a picker/writer split (`book_appointment` picks `existing` but `createBooking` receives `state.contactId`).
   - **Hunt:**
     - a path where a household member's appointment is read, moved or cancelled without that person's name (or name and email on insurance) on THIS call;
@@ -3874,7 +3931,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     - a found result after a name confirmation without `FOUND_BY_NAME_NEXT`, or a name on a one-contact number that confirms the contact without matching it (P25);
     - a one-contact number that gains a contact without `forSomeoneElse: true`, or a nickname ("Daniel" for "Dan") that lands nowhere after `false` (P27);
     - a household member's YES applied to another member's appointment, or a reply To-do filed twice for one text (S30);
-    - a 503 that Telnyx would retry forever (P23);
+    - a 503 that Telnyx would retry forever (P23: none is left; the only 503 on the holding path is a race a retry recovers from);
     - the identity To-do filed twice, on a customer, in the caller's language, or for a transferred call or a recording;
     - a `''` or an apostrophe in 0098; a definer without `pg_temp` last;
     - a test that cannot fail (a guard a comment satisfies; a loop that never ran; an assertion built by the function under test; a `-t` filter that matches nothing).
@@ -3951,6 +4008,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 - **On a phone with one contact, a booking or lead for a different name now asks "Is this for you or for someone else?"** (P27). A nickname ("Daniel" for "Dan") then lands on the contact once the caller says it is them.
 - **A new person made on a shared number is filed in the duplicates table with the contact it shares the phone with** (P29), so a nickname that became a second record can be merged once a merge screen exists (none reads the table yet).
 - **The two shared-number To-dos are in the account's language** (Q2); today's consent To-dos stay English.
+- **The name rule's trade-off** (P26, the orchestrator's ruling): a spoken name is the record's person when every word of the record's name was spoken. So "José Antonio Garza", who is not on file, partially matches "José Garza" and is confirmed as José (on a shared number, and on a one-contact number where "José Garza" is the one contact). An insurance account's rung 2 still asks for the email on file; on every other account the caller ID plus the name is the bar E4 sets.
+- **A holding record can still be tagged** through `contact_tags`, which 0098 does not guard (it is its own table, with its own grant). No screen reaches it: the record page redirects to the thread, and the contact list leaves it out. A tag on it changes nothing a customer sees.
 - **Q1:** four staff-facing strings the spec did not draft are pinned as the plan's drafts (the Move's search and its role refusal). Change any by answering Q1; the fix round applies it.
 - **No corpus run** (spec §3; the modules are paused). The stub now follows the ladder, so the next run cannot pass it by accident (O2).
 
