@@ -110,8 +110,9 @@ export type InboundConsentInput = {
   firstFiling: boolean;
   now: Date;
   /** S-47e: the real contacts of a shared number whose text filed on its holding record,
-   *  or null on every other filing. */
-  sharedNumber: { realContactIds: string[] } | null;
+   *  or null on every other filing. `truncated`: more people on the number than one read returns, so
+   *  exactly one among those read is not exactly one on the number (spec S6; T17 review M4). */
+  sharedNumber: { realContactIds: string[]; truncated: boolean } | null;
 };
 
 const ACTOR = "sms-inbound";
@@ -146,6 +147,13 @@ export async function fileSharedReplyTodo(db: SupabaseClient, accountId: string,
 async function cancelTodo(db: SupabaseClient, i: InboundConsentInput, eventId: string, word: string): Promise<void> {
   // S-47e (S30): on a shared number the holding record has no booking; the household's do.
   if (i.sharedNumber) {
+    // Truncated: the people read may not be everyone on the number, so no one person is named (the YES
+    // path's rule, route.ts): the one reply To-do, without reading anyone's bookings.
+    if (i.sharedNumber.truncated) {
+      const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, i.accountId));
+      await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+      return;
+    }
     const upcoming = (await Promise.all(i.sharedNumber.realContactIds.map(async (id) =>
       ({ id, startsAt: await nextBookedStart(db, i.accountId, id, i.now.toISOString()) }))))
       .filter((x): x is { id: string; startsAt: string } => x.startsAt !== null);

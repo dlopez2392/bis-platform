@@ -199,7 +199,7 @@ async function handleInbound(
   // filed, so a failure here keeps the old rule below.
   let contact: Awaited<ReturnType<typeof createContact>>;
   let conversation: Awaited<ReturnType<typeof ensureConversation>>;
-  let shared: { realContactIds: string[] } | null = null;
+  let shared: { realContactIds: string[]; truncated: boolean } | null = null;
   /** More people on the number than one read returns (spec S6): an ask among those read may not be the only one. */
   let sharedTruncated = false;
   try {
@@ -208,7 +208,7 @@ async function handleInbound(
     // the first filing is FilingFailed (503), like every other step here.
     const read = fromNumber ? await readCandidates(db, accountId, fromNumber) : null;
     if (read && fromNumber && isShared(read)) {
-      shared = { realContactIds: read.candidates.map((c) => c.id) };
+      shared = { realContactIds: read.candidates.map((c) => c.id), truncated: read.truncated };
       sharedTruncated = read.truncated;
       contact = { id: (await ensureHoldingContact(db, accountId, fromNumber, "sms")).id, existing: true, flagged: false };
     } else {

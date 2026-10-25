@@ -309,7 +309,7 @@ describe("excerptOf", () => {
 describe("the consent To-dos of a shared number's text, filed on its holding record (S-47e P19, S30)", () => {
   const SHARED = "+19565550142";
   const shared = (over: Partial<InboundConsentInput> = {}) =>
-    input({ address: SHARED, contactId: "ct_hold", sharedNumber: { realContactIds: ["ct_ana", "ct_beto"] }, ...over });
+    input({ address: SHARED, contactId: "ct_hold", sharedNumber: { realContactIds: ["ct_ana", "ct_beto"], truncated: false }, ...over });
   beforeEach(() => {
     db.getContact.mockImplementation(async (_d: unknown, _a: string, id: string) =>
       id === "ct_ana" ? { id, first_name: "Ana", last_name: "Ruiz" }
@@ -355,6 +355,17 @@ describe("the consent To-dos of a shared number's text, filed on its holding rec
   it("a CANCEL with two real contacts holding upcoming appointments files ONE To-do on the holding record", async () => {
     bookings({ ana: true, beto: true });
     await run(shared({ text: "Cancel" }), classifyInbound("Cancel", null));
+    expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+    expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
+      contactId: "ct_hold", consentEventId: "ev_revoked",
+      title: "A reply from a shared number couldn't be matched to one appointment",
+      dueAt: NOW.toISOString(),
+    }, "sms-inbound", "system");
+  });
+
+  it("a CANCEL from a number with more people than one read returns files the ONE reply To-do on the holding record, even when exactly one of those read has an appointment (T17 review M4, the YES path's rule; mutation: ignore truncated -> names Ana and her date, FAILS)", async () => {
+    bookings({ ana: true });
+    await run(shared({ text: "Cancel", sharedNumber: { realContactIds: ["ct_ana", "ct_beto"], truncated: true } }), classifyInbound("Cancel", null));
     expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
     expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
       contactId: "ct_hold", consentEventId: "ev_revoked",

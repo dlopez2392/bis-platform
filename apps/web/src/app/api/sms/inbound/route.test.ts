@@ -617,6 +617,20 @@ describe("a one-word answer from a shared number (S-47e S30)", () => {
     expect(dbMocks.addTask).not.toHaveBeenCalled();
   });
 
+  it("a CANCEL from a number with more people than one read returns: the one reply To-do on the holding record, never one person's appointment (T17 review M4; mutation: drop truncated from sharedNumber -> Ana's CANCEL To-do, FAILS)", async () => {
+    aNumberWith([HOLDING_ROW, ANA, BETO], true);
+    dbMocks.appendConsentEventGuarded.mockResolvedValue({ outcome: "appended", id: "ev_cancel", prior: null });
+    dbMocks.nextBookedStart.mockImplementation(async (_d: unknown, _a: string, id: string) => id === "ct_ana" ? "2026-10-10T02:00:00Z" : null);
+    try {
+      await POST(inbound("CANCEL"));
+      expect(dbMocks.ensureConsentTask).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureConsentTask.mock.calls[0]![1]).toBe(SHARED_ACCT);
+      expect(dbMocks.ensureConsentTask.mock.calls[0]![2]).toMatchObject({ contactId: "ct_hold", title: REPLY_TODO_EN });
+    } finally {
+      dbMocks.nextBookedStart.mockReset();
+    }
+  });
+
   it("a one-contact number answers as today, on that contact, with no read of asks", async () => {
     aNumberWith([ANA]);
     await POST(inbound("Sí"));
