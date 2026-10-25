@@ -113,6 +113,7 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
     - A found result whose confirmation came from a name (`by` `name` or `name_email`) carries `FOUND_BY_NAME_NEXT`: "This is the appointment of the person they confirmed. If the caller asks about a different person's appointment than the one already confirmed, call confirm_identity with that person's first and last name before you call find_my_booking again."
     - Spec §5.3's sole-candidate row applies only when no full name is given: `confirm_identity` with a name on a one-contact number confirms only when the name matches.
     - Tests: the Beto-then-Ana case, and a wrong name on a one-contact number is a miss.
+    - **A MISS clears a confirmation made by a name** (the orchestrator's ruling on Task 6's review, landed in Task 7): `withMiss` sets `confirmed` to null when it was `by` `name` or `name_email`, so "confirm Beto", then a misheard "Ana Prueeba" (MISS), then `find_my_booking` asks whose appointment again instead of answering Beto's. A caller-ID-only confirmation (one contact, no name) stays. Tests: `state.test.ts` (both halves) and the registry's Beto-then-misheard-Ana sequence; mutations: keep the confirmation → FAILS, clear every confirmation → the caller-ID case FAILS.
 - **P26. The name rule (R2, ruling a).** The spec's rule (the spoken words a subsequence of the record's) duplicated "María García López" against a sole "María García", and locked out a son "José Garza" whose father "José Luis Garza" shares the number.
   - **Resolution:** `nameMatch(spoken, record)` is `"exact"` when the words are the same, in order; `"partial"` when the first words are equal and EITHER every spoken word is on record in order (its last word not a particle, rules 3 and 4) OR every word of the record's name was spoken, in order; else null. Both names need two words or more (rule 1). `nameHits` takes the exact hits when there are any, else the partial ones. A partial match that hits more than one candidate is ambiguous: with an email given it must pick one, otherwise `ask_email` when any of them has one, else a miss. So "José Garza" is the son (exact), "José Luis Garza" the father, and "María García López" is the sole "María García" (partial).
 - **P27. A name that does not match the ONE contact on a number asks, never creates silently** (R2, ruling b; finding 9).
@@ -710,10 +711,14 @@ export const MAX_MISSES = 2;
 export function withConfirmed(state: CallState, c: IdentityConfirmed): CallState {
   return { ...state, identity: { ...state.identity, confirmed: { contactId: c.contactId, rung: c.rung, by: c.by } } };
 }
-/** One try that confirmed nobody; the second locks ("misses"). */
+/** One try that confirmed nobody; the second locks ("misses"). A confirmation made by a name (or a name and an
+ *  email) is cleared: the caller has just asked about someone else, so the person confirmed before is no longer
+ *  who this call is about (Task 6 review ruling, plan P25). One made by the caller ID alone stays. */
 export function withMiss(state: CallState): CallState {
   const misses = state.identity.misses + 1;
-  return { ...state, identity: { ...state.identity, misses, locked: state.identity.locked ?? (misses >= MAX_MISSES ? "misses" : null) } };
+  const prior = state.identity.confirmed;
+  const confirmed = prior !== null && prior.by !== "caller_id" ? null : prior;
+  return { ...state, identity: { ...state.identity, confirmed, misses, locked: state.identity.locked ?? (misses >= MAX_MISSES ? "misses" : null) } };
 }
 /** The first lock wins; a call never changes why it was locked. */
 export function withLocked(state: CallState, why: "misses" | "cannot"): CallState {

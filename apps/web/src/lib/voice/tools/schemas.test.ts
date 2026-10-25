@@ -167,3 +167,42 @@ describe("S-47e: confirm_identity (plan Task 6)", () => {
     }
   });
 });
+
+describe("S-47e: who a write is for (plan Task 7)", () => {
+  type Full = { name: string; description: string; parameters: { type: string; properties: Record<string, unknown>; required: readonly string[] } };
+  const full = (list: readonly unknown[], name: string) => tool(list, name) as unknown as Full;
+  const FOR_BOOK = { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." };
+  const FOR_LEAD = { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." };
+
+  it("take_message takes the caller's name, or that they would not give it; only the body is required", () => {
+    const msg = full(toolSchemas("full", "in_person", false), "take_message");
+    expect(msg.description).toBe("Leave a message for a human callback.");
+    expect(msg.parameters).toEqual({
+      type: "object",
+      properties: {
+        body: { type: "string" },
+        callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." },
+        name: { type: "string", description: "The caller's first and last name, when you were asked for it." },
+        nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." },
+      },
+      required: ["body"],
+    });
+  });
+
+  it("book_appointment carries forSomeoneElse on every meeting type, the video variant included; required is unchanged", () => {
+    const types = ["in_person", "phone", "video"] as const;
+    expect(types).toHaveLength(3);
+    for (const mt of types) {
+      const book = full(toolSchemas("full", mt, false), "book_appointment");
+      expect(book.parameters.properties.forSomeoneElse, mt).toEqual(FOR_BOOK);
+      expect(book.parameters.required, mt).toEqual(["startsAt", "name"]);
+    }
+  });
+
+  it("capture_lead carries forSomeoneElse beside fields; required is unchanged", () => {
+    const lead = full(toolSchemas("full", "in_person", false), "capture_lead");
+    expect(Object.keys(lead.parameters.properties)).toEqual(["fields", "forSomeoneElse"]);
+    expect(lead.parameters.properties.forSomeoneElse).toEqual(FOR_LEAD);
+    expect(lead.parameters.required).toEqual(["fields"]);
+  });
+});

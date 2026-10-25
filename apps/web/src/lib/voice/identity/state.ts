@@ -7,10 +7,14 @@ export const MAX_MISSES = 2;
 export function withConfirmed(state: CallState, c: IdentityConfirmed): CallState {
   return { ...state, identity: { ...state.identity, confirmed: { contactId: c.contactId, rung: c.rung, by: c.by } } };
 }
-/** One try that confirmed nobody; the second locks ("misses"). */
+/** One try that confirmed nobody; the second locks ("misses"). A confirmation made by a name (or a name and an
+ *  email) is cleared: the caller has just asked about someone else, so the person confirmed before is no longer
+ *  who this call is about (Task 6 review ruling, plan P25). One made by the caller ID alone stays. */
 export function withMiss(state: CallState): CallState {
   const misses = state.identity.misses + 1;
-  return { ...state, identity: { ...state.identity, misses, locked: state.identity.locked ?? (misses >= MAX_MISSES ? "misses" : null) } };
+  const prior = state.identity.confirmed;
+  const confirmed = prior !== null && prior.by !== "caller_id" ? null : prior;
+  return { ...state, identity: { ...state.identity, confirmed, misses, locked: state.identity.locked ?? (misses >= MAX_MISSES ? "misses" : null) } };
 }
 /** The first lock wins; a call never changes why it was locked. */
 export function withLocked(state: CallState, why: "misses" | "cannot"): CallState {

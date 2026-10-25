@@ -431,7 +431,8 @@ gone with the invocation (`call-state.ts:1-4`), so a confirmation can never cros
 applied one at a time through the frame chain (`route.ts:654-663`), so two quick `confirm_identity` calls
 cannot both read `misses: 0`. Only ids and counters are held: no name, email or phone enters the state that
 `finishCall` and the summary read. Pure helpers in `identity/state.ts`: `withConfirmed`, `withMiss` (locks at
-2), `withLocked`, `isLocked`, `confirmedFor(state, contactId, required)`.
+2, and clears a confirmation made by a name or a name and email, never one made by the caller ID alone:
+Task 6 review ruling), `withLocked`, `isLocked`, `confirmedFor(state, contactId, required)`.
 
 `state.contactId` (the contact a booking made on this call landed on, `registry.ts:442-450`) is NOT set by a
 confirmation, and a booking does not set the confirmation: the two stay separate facts. A confirmed person
@@ -466,7 +467,9 @@ not because the confirm wrote `state.contactId`.
 2. Locked → LOCKED.
 3. Read the candidates (failure → READ FAILED); `decideIdentity`; then:
    `confirmed` → `withConfirmed`, CONFIRMED; `ask_name` / `ask_email` → those results, state unchanged;
-   `miss` → `withMiss`: the first is MISS, the second LOCKED; `cannot_on_this_call` → lock "cannot", CANNOT.
+   `miss` → `withMiss`: the first is MISS, the second LOCKED; either way a confirmation made by a name is
+   cleared, so after "confirm Beto" a misheard "Ana" leaves nobody confirmed and `find_my_booking` asks whose
+   appointment again (one made by the caller ID alone stays); `cannot_on_this_call` → lock "cannot", CANNOT.
 
 `reschedule_appointment` and `cancel_appointment` keep their order (booking read, then ownership, before the
 slot lookup, the room and both writes, `registry.ts:575-583`, `706-713`). `checkCallerOwnsBooking` becomes:
@@ -1408,7 +1411,9 @@ P1-P31 give the evidence). Where a section 7 test line above disagrees with thes
 
 - **R1** (a different person after a confirmation; a name that confirmed the sole contact whatever it was):
   `confirm_identity`'s description (5.4.3), the found result's `next` (5.4.2 step 3), and the decision
-  table's sole-candidate row only without a full name (5.3).
+  table's sole-candidate row only without a full name (5.3). And a MISS clears a confirmation made by a name
+  (5.4.1, 5.4.2; the orchestrator's ruling on Task 6's review), so a misheard second name never leaves the
+  first person's appointment answerable as if it were the second's.
 - **R2** (Spanish names and nicknames): S2's name rule (ruling a); S20's one-contact rule with
   `forSomeoneElse` on `book_appointment` and `capture_lead` (ruling b), and `finishCall`'s lead in the
   booking's order (5.10.3: the picker, with the call's confirmation counted only on the caller-ID number, and

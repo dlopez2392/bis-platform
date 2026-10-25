@@ -76,7 +76,8 @@ import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
 import { withConfirmed } from "../identity/state";
 // (results.test.ts pins every one of these word for word; here they say WHICH answer the tool gave.)
-import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, FOUND_BY_NAME_NEXT, readFailed } from "../identity/results";
+import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, FOUND_BY_NAME_NEXT, readFailed,
+  BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, LEAD_ASK_WHOSE, MESSAGE_ASK_NAME } from "../identity/results";
 import { formatWhen } from "@/lib/booking/time";
 
 const ctx: ToolContext = {
@@ -162,9 +163,10 @@ describe("check_availability", () => {
   });
 });
 
-// Booking tools are bound to the caller ID: it is the only
-// identity, and a number the caller recites never finds, reveals, moves or
-// cancels anything.
+// Booking tools are bound to the caller ID: a number the caller recites
+// never finds, reveals, moves or cancels anything. On a number several
+// contacts share, the caller ID alone is not enough either: the person is
+// confirmed by name first (S-47e, the describe "whose appointment it is").
 describe("find_my_booking", () => {
   const HIT = { bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" };
   const TARGET = { available: true as const, to: "+19565550199" };
@@ -1960,6 +1962,45 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct2", "ct1"]);
   });
 
+  it("confirm Beto, then a misheard Ana is a MISS that clears Beto: find asks whose appointment again (Task 6 review ruling; mutation: withMiss keeps the confirmation -> FAILS)", async () => {
+    on(ANA, BETO);
+    const c1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Beto Prueba" });
+    expect(c1.result).toEqual(CONFIRMED);
+    const miss = await runTool(c1.state, ctx, "confirm_identity", { fullName: "Ana Prueeba" });
+    expect(miss.result).toEqual(MISS);
+    expect(miss.state.identity.confirmed).toBeNull();
+    const f = await runTool(miss.state, ctx, "find_my_booking", {});
+    expect(f.result).toEqual(ASK_NAME);
+    expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
+  });
+
+  it("a MISS keeps a confirmation made by the caller ID alone: the one contact's lookup still answers", async () => {
+    on(ANA);
+    const f1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(f1.state.identity.confirmed).toEqual({ contactId: "ct1", rung: 1, by: "caller_id" });
+    const miss = await runTool(f1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    expect(miss.result).toEqual(MISS);
+    expect(miss.state.identity.confirmed).toEqual({ contactId: "ct1", rung: 1, by: "caller_id" });
+    await runTool(miss.state, ctx, "find_my_booking", {});
+    expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct1", "ct1"]);
+  });
+
+  it("a confirmed contact whose stored phone is not the caller ID: move and cancel are NOT CONFIRMED YET, nothing written (the ownership rule's second half; mutation: drop the phone check -> FAILS)", async () => {
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19565550100" });
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
+    dbMocks.createBooking.mockResolvedValue({ id: "bk2", cancelToken: "t2" });
+    const cases = [["cancel_appointment", { bookingId: "b1" }], ["reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" }]] as const;
+    expect(cases).toHaveLength(2);
+    for (const [name, args] of cases) {
+      expect((await runTool(owns("ct1"), ctx, name, args)).result, name).toEqual(NOT_CONFIRMED_YET);
+    }
+    expect(dbMocks.getContact).toHaveBeenCalledTimes(2);
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+  });
+
   it("a found result confirmed by the caller ID alone (one contact) carries no note", async () => {
     on(ANA);
     const { result } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
@@ -1989,14 +2030,15 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" })).state;
     dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    // Resolved BEFORE the LOCKED assertions, so a mutant that writes fails on an assertion, not on a missing mock.
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "m1" });
     expect((await runTool(locked, ctx, "find_my_booking", {})).result).toEqual(LOCKED);
     expect((await runTool(locked, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual(LOCKED);
     expect((await runTool(locked, ctx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" })).result).toEqual(LOCKED);
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
     const madeHere = { ...locked, bookings: [{ id: "b1", contactName: "Ana", startsAt: "x", endsAt: "y", status: "booked" as const }] };
-    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
-    dbMocks.createMessage.mockResolvedValue({ id: "m1" });
     expect((await runTool(madeHere, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual({ ok: true });
   });
 
@@ -2103,5 +2145,246 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     const lines = log.mock.calls.map((x) => String(x[0])).filter((l) => l.startsWith("voice identity"));
     log.mockRestore();
     expect(lines).toEqual(["voice identity call-7: miss 1", "voice identity call-7: locked (misses)"]);
+  });
+});
+
+describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
+  const slot = { startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") };
+  const AT = slot.startsAt.toISOString();
+  const row = (id: string, first: string, last: string | null, phone = "+19562921696", emailKey: string | null = null) =>
+    ({ id, first_name: first, last_name: last, phone, email_key: emailKey, holds_shared_number: false });
+  const ANA = row("ct1", "Ana", "Prueba");
+  const BETO = row("ct2", "Beto", "Prueba");
+  const on = (...rows: object[]) => dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+  const book = (state: ReturnType<typeof emptyCallState>, args: Record<string, unknown>, c: ToolContext = ctx) =>
+    runTool(state, c, "book_appointment", { startsAt: AT, emailDeclined: true, ...args });
+  const bookedOn = () => dbMocks.createBooking.mock.calls.map((x) => (x[2] as { contactId: string }).contactId);
+  const created = () => dbMocks.insertAiActs.mock.calls.flatMap((x) => x[2] as { kind: string }[]).filter((x) => x.kind === "contact_created");
+  /** Acts record only with a call row (ai-acts/record.ts drops an act with no source). */
+  const rowCtx: ToolContext = { ...ctx, callRowId: "call-1" };
+  const nothingWritten = () => {
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+  };
+  beforeEach(() => {
+    computeAllSlotsMock.mockResolvedValue([slot]);
+    dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "t" });
+    // Today's dedupe answer, so a write that should not happen fails on an assertion, not on a missing mock.
+    dbMocks.createContact.mockResolvedValue({ id: "ct-dedupe", existing: true });
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
+    dbMocks.insertAiActs.mockResolvedValue(undefined);
+    sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  });
+
+  it("a shared caller-ID number: the name picks its own record and makes no contact (red against the dedupe)", async () => {
+    on(ANA, BETO);
+    const r = await book(emptyCallState(), { name: "Beto Prueba" });
+    expect(r.result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(bookedOn()).toEqual(["ct2"]);
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("the same with an email: still that record, and its blanks are filled once (decision 19, on the caller ID)", async () => {
+    on(ANA, BETO);
+    await runTool(emptyCallState(), ctx, "book_appointment", { startsAt: AT, name: "Beto Prueba", email: "beto@example.com" });
+    expect(bookedOn()).toEqual(["ct2"]);
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledTimes(1);
+    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct2",
+      { firstName: "Beto", lastName: "Prueba", email: "beto@example.com" }, "voice", "ai");
+  });
+
+  it("a new name on a shared number makes a new contact, the email still winning (S21)", async () => {
+    on(ANA, BETO);
+    dbMocks.createContact.mockResolvedValue({ id: "ct7", existing: false });
+    await book(emptyCallState(), { name: "Carla Prueba" }, rowCtx);
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      { firstName: "Carla", lastName: "Prueba", phone: "+19562921696", email: undefined, source: "voice", matchBy: "email_only" }, "voice", "ai");
+    expect(bookedOn()).toEqual(["ct7"]);
+    expect(created()).toHaveLength(1);
+  });
+
+  it("a new name the email dedupe matched to someone else: nothing of theirs is written onto it (mutation: today's fill -> FAILS)", async () => {
+    on(ANA, BETO);
+    dbMocks.createContact.mockResolvedValue({ id: "ct8", existing: true });
+    dbMocks.getContact.mockResolvedValue({ id: "ct8", first_name: "Zoe", last_name: "Otra", email: "carla@example.com", phone: "+19562921696" });
+    await runTool(emptyCallState(), rowCtx, "book_appointment", { startsAt: AT, name: "Carla Prueba", email: "carla@example.com" });
+    expect(bookedOn()).toEqual(["ct8"]);
+    expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+    expect(created()).toHaveLength(0);
+    // Not vacuous: this call's acts DO record (the booking's own act is there).
+    expect(dbMocks.insertAiActs.mock.calls.flatMap((x) => x[2] as { kind: string }[]).map((x) => x.kind)).toContain("booking_created");
+  });
+
+  it("ONE contact and a different name: asks whose it is and writes nothing (red against the phone dedupe)", async () => {
+    on(row("ct1", "Dan", "Lopez"));
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    const r = await book(emptyCallState(), { name: "Daniel Lopez" });
+    expect(r.result).toEqual(BOOK_ASK_WHOSE);
+    nothingWritten();
+  });
+
+  it("ONE contact: forSomeoneElse false books onto it; true makes a new contact", async () => {
+    on(row("ct1", "Dan", "Lopez"));
+    const mine = await book(emptyCallState(), { name: "Daniel Lopez", forSomeoneElse: false });
+    expect(mine.result).toMatchObject({ ok: true });
+    expect(bookedOn()).toEqual(["ct1"]);
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    dbMocks.createContact.mockResolvedValue({ id: "ct6", existing: false });
+    await book(emptyCallState(), { name: "Ana Prueba", forSomeoneElse: true });
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ firstName: "Ana", lastName: "Prueba", matchBy: "email_only" }), "voice", "ai");
+    expect(bookedOn()).toEqual(["ct1", "ct6"]);
+  });
+
+  it("a first name alone on a shared number asks for the full name, writing nothing", async () => {
+    on(ANA, BETO);
+    expect((await book(emptyCallState(), { name: "Beto" })).result).toEqual(BOOK_ASK_NAME);
+    nothingWritten();
+  });
+
+  it("two of the same name and no email: cannot be booked on this call, nothing written", async () => {
+    on(ANA, row("ct3", "Ana", "Prueba"));
+    expect((await book(emptyCallState(), { name: "Ana Prueba" })).result).toEqual(BOOK_AMBIGUOUS);
+    nothingWritten();
+  });
+
+  it("S23, a shared number: the call's second booking is picked again (mutation: reuse state.contactId -> FAILS)", async () => {
+    on(ANA, BETO);
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    await book(first.state, { name: "Beto Prueba" });
+    expect(bookedOn()).toEqual(["ct1", "ct2"]);
+  });
+
+  it("S23, nobody on the number before the call: a second, different name asks whose it is (mutation: reuse state.contactId -> FAILS)", async () => {
+    dbMocks.listContactsOnNumber
+      .mockResolvedValueOnce({ rows: [], truncated: false })
+      .mockResolvedValue({ rows: [row("ct5", "Ana", "Prueba")], truncated: false });
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct5", existing: false });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    expect(bookedOn()).toEqual(["ct5"]);
+    const second = await book(first.state, { name: "Beto Prueba" });
+    expect(second.result).toEqual(BOOK_ASK_WHOSE);
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createBooking).toHaveBeenCalledTimes(1);
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct6", existing: false });
+    await book(first.state, { name: "Beto Prueba", forSomeoneElse: true });
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ firstName: "Beto", matchBy: "email_only" }), "voice", "ai");
+    expect(bookedOn()).toEqual(["ct5", "ct6"]);
+  });
+
+  it("a confirmed person booking under their first name alone books onto their record", async () => {
+    on(ANA, BETO);
+    await book(withConfirmed(emptyCallState(), { contactId: "ct1", rung: 1, by: "name" }), { name: "Ana" });
+    expect(bookedOn()).toEqual(["ct1"]);
+  });
+
+  it("a recited number: the caller ID's confirmation does not count there (mutation: pass it for any number -> FAILS)", async () => {
+    on(row("ct1", "Ana", "Prueba", "+19565550199"), row("ct2", "Beto", "Prueba", "+19565550199"));
+    const r = await book(withConfirmed(emptyCallState(), { contactId: "ct1", rung: 1, by: "name" }), { name: "Ana", phone: "956 555 0199" });
+    expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", "+19565550199");
+    expect(r.result).toEqual(BOOK_ASK_NAME);
+    nothingWritten();
+  });
+
+  it("a failed number read rejects (call-events answers 'tool failed'), and nothing was written", async () => {
+    dbMocks.listContactsOnNumber.mockRejectedValue(new Error("db blip"));
+    await expect(book(emptyCallState(), { name: "Ana Prueba" })).rejects.toThrow(/db blip/);
+    nothingWritten();
+  });
+
+  it("no number at all (caller ID withheld, an email only): no read, today's path", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct4", existing: false });
+    await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "book_appointment", { startsAt: AT, name: "Ana Prueba", email: "ana@example.com" });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    expect(bookedOn()).toEqual(["ct4"]);
+  });
+});
+
+describe("S-47e: capture_lead asks whose it is, once (plan Task 7)", () => {
+  const LEAD = { fullName: "Ana Prueba", need: "quote" };
+  const DAN = { id: "ct1", first_name: "Dan", last_name: "Lopez", phone: "+19562921696", email_key: null, holds_shared_number: false };
+  const ANA = { ...DAN, first_name: "Ana", last_name: "Prueba" };
+  const BETO = { ...DAN, id: "ct2", first_name: "Beto", last_name: "Prueba" };
+  const on = (...rows: object[]) => dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+
+  it("ONE contact and a lead for someone else: asks once, then records it (mutation: drop the once-only flag -> FAILS)", async () => {
+    on(DAN);
+    const ask = await runTool(emptyCallState(), ctx, "capture_lead", { fields: LEAD });
+    expect(ask.result).toEqual(LEAD_ASK_WHOSE);
+    expect(ask.state.leads).toHaveLength(0);
+    expect(ask.state.identity.leadWhoseAsked).toBe(true);
+    const again = await runTool(ask.state, ctx, "capture_lead", { fields: LEAD });
+    expect(again.result).toMatchObject({ ok: true });
+    expect(again.state.leads).toHaveLength(1);
+    expect(again.state.leads[0]).not.toHaveProperty("forSomeoneElse");
+  });
+
+  it("an answered forSomeoneElse is recorded with the lead, with no read", async () => {
+    on(DAN);
+    const r = await runTool(emptyCallState(), ctx, "capture_lead", { fields: LEAD, forSomeoneElse: true });
+    expect(r.state.leads[0]).toMatchObject({ forSomeoneElse: true });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
+  it("a name that agrees, a shared number, nobody on the number, a failed read: recorded at once; no name is refused as before", async () => {
+    const cases: Array<[string, () => void, Record<string, string>]> = [
+      ["agrees", () => on(ANA), LEAD],
+      ["shared", () => on(DAN, BETO), LEAD],
+      ["nobody", () => on(), LEAD],
+      ["no name", () => on(DAN), { need: "quote" }],
+      ["failed read", () => dbMocks.listContactsOnNumber.mockRejectedValue(new Error("db blip")), LEAD],
+    ];
+    expect(cases).toHaveLength(5);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [label, setup, fields] of cases) {
+      setup();
+      const r = await runTool(emptyCallState(), ctx, "capture_lead", { fields });
+      if (label === "no name") { expect(r.result, label).toMatchObject({ ok: false, missing: ["fullName"] }); continue; }
+      expect(r.result, label).toEqual({ ok: true });
+      expect(r.state.leads, label).toHaveLength(1);
+    }
+    err.mockRestore();
+  });
+});
+
+describe("S-47e: take_message asks for a name on a shared number (plan Task 7)", () => {
+  const ANA = { id: "ct1", first_name: "Ana", last_name: "Prueba", phone: "+19562921696", email_key: null, holds_shared_number: false };
+  const BETO = { ...ANA, id: "ct2", first_name: "Beto" };
+  const on = (...rows: object[]) => dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+
+  it("shared, nobody confirmed, no name: asks once, then records it (P6; mutation: drop the messageNameAsked check -> FAILS)", async () => {
+    on(ANA, BETO);
+    const ask = await runTool(emptyCallState(), ctx, "take_message", { body: "call me" });
+    expect(ask.result).toEqual(MESSAGE_ASK_NAME);
+    expect(ask.state.messages).toHaveLength(0);
+    expect(ask.state.identity.messageNameAsked).toBe(true);
+    const again = await runTool(ask.state, ctx, "take_message", { body: "call me" });
+    expect(again.result).toEqual({ ok: true });
+    expect(again.state.messages).toHaveLength(1);
+  });
+
+  it("a name, or a declined name, is recorded with no read", async () => {
+    on(ANA, BETO);
+    const named = await runTool(emptyCallState(), ctx, "take_message", { body: "call me", name: "Ana Prueba" });
+    expect(named.state.messages[0]).toMatchObject({ body: "call me", name: "Ana Prueba" });
+    const declined = await runTool(emptyCallState(), ctx, "take_message", { body: "call me", nameDeclined: true });
+    expect(declined.state.messages[0]).toMatchObject({ body: "call me", nameDeclined: true });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
+  it("one contact on the number, a confirmed caller, or a failed read: recorded", async () => {
+    on(ANA);
+    expect((await runTool(emptyCallState(), ctx, "take_message", { body: "a" })).state.messages).toHaveLength(1);
+    on(ANA, BETO);
+    dbMocks.listContactsOnNumber.mockClear();
+    expect((await runTool(owns("ct1"), ctx, "take_message", { body: "b" })).state.messages).toHaveLength(1);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    dbMocks.listContactsOnNumber.mockRejectedValue(new Error("db blip"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failed = await runTool(emptyCallState(), { ...ctx, callRowId: "call-9" }, "take_message", { body: "c" });
+    const lines = err.mock.calls.map((x) => String(x[0]));
+    err.mockRestore();
+    expect(failed.state.messages).toHaveLength(1);
+    expect(lines.some((l) => l.startsWith("voice take_message call-9: number read failed"))).toBe(true);
   });
 });

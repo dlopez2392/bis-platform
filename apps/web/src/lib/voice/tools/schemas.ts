@@ -9,11 +9,13 @@ const BOOKING_TOOLS = [
     parameters: { type: "object", properties: { date: { type: "string", description: "YYYY-MM-DD in the business's timezone" } }, required: ["date"] } },
   { type: "function", name: "book_appointment",
     description: "Book an appointment at an available ISO start time. Requires the caller's name and a phone number (their caller ID is used if they don't give one). You MUST first ask whether they would like an email confirmation: pass their email, or emailDeclined: true if they said no. The tool refuses to book without one of the two.",
-    parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, notes: { type: "string" } }, required: ["startsAt", "name"] } },
-  // Booking tools are bound to the caller ID (registry.ts): the two
-  // below refuse a booking that is neither under the caller ID nor made on
-  // this call, and find_my_booking takes no number at all — the contract
-  // says so, so the model never asks a caller for one to look up.
+    parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, notes: { type: "string" }, forSomeoneElse: { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." } }, required: ["startsAt", "name"] } },
+  // Booking tools are bound to the caller ID (registry.ts): find_my_booking
+  // takes no number at all — the contract says so, so the model never asks a
+  // caller for one to look up — and the two below move or cancel only a
+  // booking made on this call, or one whose contact this call has confirmed
+  // (S-47e: on a shared number that is the person named, not the caller ID
+  // alone; flow.ts ownsStep).
   { type: "function", name: "reschedule_appointment",
     description: "Move an existing booking to a new ISO start time. Only for a booking find_my_booking returned on this call, or one booked on this call.",
     parameters: { type: "object", properties: { bookingId: { type: "string" }, startsAt: { type: "string" } }, required: ["bookingId", "startsAt"] } },
@@ -32,10 +34,10 @@ const BOOKING_TOOLS = [
 const CORE_TOOLS = [
   { type: "function", name: "capture_lead",
     description: "Record who the caller is and what they need. For callbackNumber, write the digits as spoken, with no country code unless the caller said one.",
-    parameters: { type: "object", properties: { fields: { type: "object", additionalProperties: { type: "string" } } }, required: ["fields"] } },
+    parameters: { type: "object", properties: { fields: { type: "object", additionalProperties: { type: "string" } }, forSomeoneElse: { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." } }, required: ["fields"] } },
   { type: "function", name: "take_message",
     description: "Leave a message for a human callback.",
-    parameters: { type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." } }, required: ["body"] } },
+    parameters: { type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." } }, required: ["body"] } },
   { type: "function", name: "log_transcript",
     description: "Log a spoken turn for staff review.",
     parameters: { type: "object", properties: { role: { type: "string", enum: ["caller", "assistant"] }, text: { type: "string" } }, required: ["role", "text"] } },

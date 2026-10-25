@@ -36,9 +36,10 @@ import { capturePhoneLead, messageBody, bookingName, stripPlaceholderSegments, w
 import type { TradeModuleId } from "../modules";
 import { requiredRung } from "../identity/ladder";
 import { readCandidates } from "../identity/candidates";
-import { findNeedsRead, findStep, confirmStep, ownsStep, type CandidateRead } from "../identity/flow";
+import { findNeedsRead, findStep, confirmStep, ownsStep, messageNeedsNameCheck, messageNameStep, messageName, type CandidateRead } from "../identity/flow";
 import { isLocked } from "../identity/state";
-import { lockedResult, noCallerId, FOUND_BY_NAME_NEXT, type ToolResult } from "../identity/results";
+import { lockedResult, noCallerId, FOUND_BY_NAME_NEXT, BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, type ToolResult } from "../identity/results";
+import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, type RecordPick } from "../identity/record";
 
 export type ToolName =
   | "check_availability" | "book_appointment" | "reschedule_appointment"
@@ -378,15 +379,46 @@ export async function runTool(
       // name is no name, so the no-name path applies. The corpus stub runs this same function.
       const { fields, result } = capturePhoneLead(args?.fields, ctx.callerNumber);
       if (result.ok !== true) return { state, result };
-      return { state: withLead(state, { fields }), result };
+      const forSomeoneElse = typeof args?.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined;
+      // S-47e (plan P27): a lead whose name is not the ONE contact on its number asks, once, whose it is.
+      if (leadNeedsWhoseCheck(state, fields.fullName, forSomeoneElse)) {
+        const number = e164Of(spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? "");
+        if (number) {
+          let read: CandidateRead = { ok: false };
+          try {
+            read = { ok: true, ...(await readCandidates(ctx.db, ctx.accountId, number)) };
+          } catch (e) {
+            console.error(`voice capture_lead ${ctx.callRowId ?? "(no row)"}: number read failed, lead recorded: ${String(e)}`);
+          }
+          const ask = leadWhoseStep(state, read, fields.fullName);
+          if (ask) return { state: ask.state, result: ask.result };
+        }
+      }
+      return { state: withLead(state, { fields, ...(forSomeoneElse === undefined ? {} : { forSomeoneElse }) }), result };
     }
 
     case "take_message": {
       const { body, dropped } = messageBody(args?.body);
       if (!body) return { state, result: withDroppedNote({ ok: false, error: "message body required" }, dropped, "phone") };
       const callbackNumber = e164Of(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
+      const a = (args ?? {}) as { name?: unknown; nameDeclined?: unknown };
+      // S-47e (spec 5.10.5; plan P6): on a shared number with nobody confirmed, ask once for a name.
+      if (messageNeedsNameCheck(state, ctx.callerNumber, a)) {
+        let read: CandidateRead = { ok: false };
+        try {
+          read = { ok: true, ...(await readCandidates(ctx.db, ctx.accountId, ctx.callerNumber!)) };
+        } catch (e) {
+          console.error(`voice take_message ${ctx.callRowId ?? "(no row)"}: number read failed, message recorded: ${String(e)}`);
+        }
+        const ask = messageNameStep(state, read);
+        if (ask) return { state: ask.state, result: ask.result };
+      }
+      const name = messageName(a);
       return {
-        state: withMessage(state, { body, callbackNumber, at: now.toISOString() }),
+        state: withMessage(state, {
+          body, callbackNumber, at: now.toISOString(),
+          ...(name ? { name } : {}), ...(a.nameDeclined === true ? { nameDeclined: true } : {}),
+        }),
         result: withDroppedNote({ ok: true }, dropped, "phone"),
       };
     }
@@ -484,39 +516,76 @@ export async function runTool(
       // most ACT_RECORD_TIMEOUT_MS once per tool call. Never changes what the tool answers.
       const source = voiceSource(ctx.callRowId);
       const acts: NewAiAct[] = [];
-      let contactId = state.contactId;
-      if (!contactId) {
-        const space = name.lastIndexOf(" ");
-        const firstName = space > 0 ? name.slice(0, space) : name;
-        const lastName = space > 0 ? name.slice(space + 1) : undefined;
-        const created = await createContact(ctx.db, ctx.accountId,
-          { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
-          "voice", "ai");
-        contactId = created.id;
-        if (!created.existing) {
-          acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
-        }
-        // Dedupe returns the existing row untouched — backfill blanks so a
-        // repeat caller stops being "Caller" with no email (the unsendable-
-        // reminder casualty). ONLY on the caller's own contact: the dedupe
-        // matches email first, then phone, and either can be something the
-        // caller merely said, so the match may be someone else's record. The
-        // booking still lands on it; nothing of this caller's is written
-        // onto it. `phone` is never passed — on the caller's own contact it
-        // already is the caller ID. A withheld caller ID fills nothing.
-        // Failure here (the read or the fill) must NEVER fail the booking.
-        if (created.existing && ctx.callerNumber) {
+      const space = name.lastIndexOf(" ");
+      const firstName = space > 0 ? name.slice(0, space) : name;
+      const lastName = space > 0 ? name.slice(space + 1) : undefined;
+      // S-47e (E7, spec 5.10.1, S23): every booking with a number picks its record on THAT number, the call's
+      // second booking included. A read failure throws to call-events' net; nothing is written.
+      const number = phone ? e164Of(phone) : null;
+      const onCallerId = number !== null && number === ctx.callerNumber;
+      let pick: RecordPick = { kind: "today" };
+      if (number) {
+        const { candidates, truncated } = await readCandidates(ctx.db, ctx.accountId, number);
+        pick = pickRecordOnNumber({ onNumber: candidates, truncated, name, email,
+          confirmedId: onCallerId ? state.identity.confirmed?.contactId ?? null : null,
+          forSomeoneElse: typeof args?.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined });
+      }
+      if (pick.kind === "ask_name") return { state, result: BOOK_ASK_NAME };
+      if (pick.kind === "ask_whose") return { state, result: BOOK_ASK_WHOSE };
+      if (pick.kind === "ambiguous") return { state, result: BOOK_AMBIGUOUS };
+      let contactId: string | null;
+      if (pick.kind === "existing") {
+        contactId = pick.contactId;
+        // 5.10.2: decision 19's fill, ONLY on a record picked on the caller-ID number. Never fails the booking.
+        if (onCallerId) {
           try {
-            const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
-            if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
-              const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
-                { firstName, lastName, email: email ?? undefined },
-                "voice", "ai");
-              acts.push(...fieldFillActs(source, contactId, filled));
-            }
+            const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
+              { firstName, lastName, email: email ?? undefined }, "voice", "ai");
+            acts.push(...fieldFillActs(source, contactId, filled));
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
           }
+        }
+      } else if (pick.kind === "create") {
+        // S21: a new person on the number. The email still wins (matchBy "email_only"); a record reached that way
+        // was not picked by name, so nothing of this caller's is written onto it.
+        const created = await createContact(ctx.db, ctx.accountId,
+          { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice", matchBy: "email_only" },
+          "voice", "ai");
+        contactId = created.id;
+        if (!created.existing) acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+      } else {
+        contactId = state.contactId;
+        if (!contactId) {
+            const created = await createContact(ctx.db, ctx.accountId,
+              { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
+              "voice", "ai");
+            contactId = created.id;
+            if (!created.existing) {
+              acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+            }
+            // Dedupe returns the existing row untouched — backfill blanks so a
+            // repeat caller stops being "Caller" with no email (the unsendable-
+            // reminder casualty). ONLY on the caller's own contact: the dedupe
+            // matches email first, then phone, and either can be something the
+            // caller merely said, so the match may be someone else's record. The
+            // booking still lands on it; nothing of this caller's is written
+            // onto it. `phone` is never passed — on the caller's own contact it
+            // already is the caller ID. A withheld caller ID fills nothing.
+            // Failure here (the read or the fill) must NEVER fail the booking.
+            if (created.existing && ctx.callerNumber) {
+              try {
+                const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
+                if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+                  const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
+                    { firstName, lastName, email: email ?? undefined },
+                    "voice", "ai");
+                  acts.push(...fieldFillActs(source, contactId, filled));
+                }
+              } catch (e) {
+                console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
+              }
+            }
         }
       }
 

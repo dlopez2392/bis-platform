@@ -27,6 +27,19 @@ describe("withMiss", () => {
     expect(s.identity.misses).toBe(2);
     expect(s.identity.locked).toBe("misses");
   });
+
+  it("clears a confirmation made by a name or a name and email (Task 6 review ruling; mutation: keep it -> FAILS)", () => {
+    for (const by of ["name", "name_email"] as const) {
+      const s = withMiss(withConfirmed(emptyCallState(), { contactId: "c2", rung: 1, by }));
+      expect(s.identity.confirmed, by).toBeNull();
+      expect(s.identity.misses, by).toBe(1);
+    }
+  });
+
+  it("keeps a confirmation made by the caller ID alone", () => {
+    const s = withMiss(withConfirmed(emptyCallState(), { contactId: "c1", rung: 1, by: "caller_id" }));
+    expect(s.identity.confirmed).toEqual({ contactId: "c1", rung: 1, by: "caller_id" });
+  });
 });
 
 describe("withLocked", () => {
