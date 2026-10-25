@@ -67,6 +67,11 @@ describe("nameMatch / nameMatches — spec 5.3 rules 1-4", () => {
     expect(nameMatch(nameWords("María García López"), sole)).toBe("partial");
   });
 
+  it("whole words only, never a prefix: \"Ana Gar\" is not \"Ana Garcia\" (T17 review M1; mutation: `w === a[i]` -> `w.startsWith(a[i])` in inOrder -> partial, FAILS)", () => {
+    expect(nameMatch(["ana", "gar"], ["ana", "garcia"])).toBeNull();
+    expect(nameMatch(nameWords("Ana Gar"), nameWords("Ana García"))).toBeNull();
+  });
+
   it("nameHits prefers the exact hits over the partial ones (P26)", () => {
     const father: Candidate = { id: "father", words: nameWords("José Luis Garza"), emailKey: null };
     const son: Candidate = { id: "son", words: nameWords("José Garza"), emailKey: null };
@@ -157,6 +162,13 @@ describe("decideIdentity — spec 5.3's table, amended (P25, P26)", () => {
     expect(decideIdentity({
       candidates: [ana], truncated: false, required: 1, fullName: "Ana Prueba",
     })).toEqual({ kind: "confirmed", contactId: "ana", rung: 1, by: "name" });
+  });
+
+  it("rung 1, one candidate, a name that is only a prefix of the record's -> miss, never confirmed (T17 review M1)", () => {
+    const garcia: Candidate = { id: "garcia", words: nameWords("Ana Garcia"), emailKey: null };
+    expect(decideIdentity({
+      candidates: [garcia], truncated: false, required: 1, fullName: "Ana Gar",
+    })).toEqual({ kind: "miss" });
   });
 
   it("rung 1, one candidate, a one-word name -> ask_name", () => {

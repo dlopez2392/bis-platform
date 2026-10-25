@@ -2308,6 +2308,18 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(bookedOn()).toEqual(["ct5", "ct6"]);
   });
 
+  it("R3: Ana on the empty caller ID, then Ana Prueba again on a recited empty number: the record is made on THAT number, never the earlier one (T17 review M2; mutation: `if (state.contactId)` for any number -> FAILS)", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ id: "ct5", existing: false }).mockResolvedValueOnce({ id: "ct6", existing: false });
+    // The earlier record agrees by name: only the number rule keeps the second booking off it.
+    dbMocks.getContact.mockResolvedValue({ id: "ct5", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    await book(first.state, { name: "Ana Prueba", phone: "956 555 0199" });
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(2);
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1",
+      expect.objectContaining({ firstName: "Ana", lastName: "Prueba", phone: "956 555 0199" }), "voice", "ai");
+    expect(bookedOn()).toEqual(["ct5", "ct6"]);
+  });
+
   it("P2: caller ID withheld, Ana then Beto each with their own email: two records (mutation: reuse state.contactId -> FAILS)", async () => {
     const hidden: ToolContext = { ...ctx, callerNumber: null };
     dbMocks.createContact.mockResolvedValueOnce({ id: "ct4", existing: false }).mockResolvedValueOnce({ id: "ct10", existing: false });

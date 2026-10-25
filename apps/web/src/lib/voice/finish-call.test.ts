@@ -2381,6 +2381,9 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
 
     it("booked Beto, then \"this is Ana, take a message\": the message lands on Ana, not Beto", async () => {
       await finishCall(afterBetosBooking(withMessage(caller(), { body: "Call me", at: "t", name: "Ana Prueba" })), ctx, meta);
+      // The yield read is this account's own (T17 review M3; mutation: read with another account id -> FAILS).
+      expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct2");
+      expect(dbMocks.getContact.mock.calls.every((c) => c[1] === "a1")).toBe(true);
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
       expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
     });
