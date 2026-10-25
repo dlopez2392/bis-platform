@@ -168,12 +168,17 @@ vi.mock("@bis/db", () => ({
   // D-061: the gate's own account-level send switch, for both composer
   // sends. Allowed by default.
   isAccountOutboundSuppressed: vi.fn(async () => false),
+  // S-47e (E8): the inbox Move's own write, on the service client.
+  moveHoldingThread: vi.fn(),
 }));
 
-import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
+import {
+  sendEmailAction, sendSmsAction, markConversationReadAction,
+  moveHoldingThreadAction, undoMoveHoldingThreadAction,
+} from "./actions";
 import {
   createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
-  readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed,
+  readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed, moveHoldingThread,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 import { sendRejectedReason } from "./send-errors";
@@ -214,6 +219,7 @@ beforeEach(() => {
   svc.provider.redirectTo = undefined;
   recordUsageMock.mockReset().mockResolvedValue("recorded");
   vi.mocked(sendEmailOrThrow).mockClear();
+  vi.mocked(moveHoldingThread).mockReset();
 });
 
 /**
@@ -826,5 +832,226 @@ describe("sendEmailAction/sendSmsAction — rejections speak the signed-in perso
       .catch((err: unknown) => err);
 
     expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed.es"]);
+  });
+});
+
+/**
+ * S-47e (E8, spec 5.12.5): staff move a shared number's holding thread to the
+ * right person, with Undo. The role check (Owner/Staff/agency, never a
+ * Technician) runs before any read; the SQL function (0098) checks the
+ * account and the holding side again, so this only proves what the caller
+ * may see first. No id list ever leaves the server (plan P1) — the Undo
+ * token carries only the move's own id and the two thread ids, which the
+ * `toEqual` assertions below pin exactly (an extra key would fail them).
+ */
+describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () => {
+  const CONV = "11111111-1111-4111-8111-111111111111";
+  const CT2 = "22222222-2222-4222-8222-222222222222";
+  const BC = "33333333-3333-4333-8333-333333333333";
+  const BETO = { id: CT2, first_name: "Beto", last_name: "Prueba", holds_shared_number: false } as never;
+
+  describe("the role check", () => {
+    it("refuses a Technician before any read is made (mutation: drop the role check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "technician" });
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveRole" });
+      expect(callerCanSeeMock).not.toHaveBeenCalled();
+      expect(vi.mocked(getContact)).not.toHaveBeenCalled();
+      expect(vi.mocked(moveHoldingThread)).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Technician's Undo before any call (mutation: drop the role check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "technician" });
+
+      const result = await undoMoveHoldingThreadAction("a1", { moveId: 41, fromConversationId: CONV, toConversationId: BC });
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveRole" });
+      expect(vi.mocked(moveHoldingThread)).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["an Owner", { isAgency: false, role: "owner" }],
+      ["Staff", { isAgency: false, role: "staff" }],
+      ["the agency", { isAgency: true, role: null }],
+    ])("%s may move the thread", async (_label, access) => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", ...access });
+      vi.mocked(getContact).mockResolvedValueOnce(BETO);
+      vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 9, messageIds: [], callIds: [] });
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("a successful move", () => {
+    it("reads the target, writes the move on the service client, and hands back an Undo token with no id list (P1) (mutation: swap `from`/`to` in the moveHoldingThread call -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce(BETO);
+      vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 41, messageIds: ["m1"], callIds: ["k1"] });
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "a1", CONV);
+      expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["a1", CT2]);
+      expect(vi.mocked(ensureConversation)).toHaveBeenCalledWith(svc.db, "a1", CT2, "user_1", "user");
+      expect(vi.mocked(moveHoldingThread)).toHaveBeenCalledWith(svc.db, "a1", { from: CONV, to: BC, actor: "user_1" });
+      expect(result).toEqual({
+        ok: true, toConversationId: BC, name: "Beto Prueba",
+        undo: { moveId: 41, fromConversationId: CONV, toConversationId: BC },
+      });
+    });
+  });
+
+  describe("moveFailed", () => {
+    it("refuses a target that is itself a holding record (mutation: drop the holds_shared_number check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce(
+        { id: CT2, first_name: "Caller", last_name: null, holds_shared_number: true } as never,
+      );
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(vi.mocked(ensureConversation)).not.toHaveBeenCalled();
+      expect(vi.mocked(moveHoldingThread)).not.toHaveBeenCalled();
+    });
+
+    it("refuses a target getContact cannot see (mutation: drop the null check -> FAILS, TypeError reading holds_shared_number)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce(null);
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(vi.mocked(ensureConversation)).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the caller cannot see the conversation, without reading the target (mutation: drop the callerCanSee check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      callerCanSeeMock.mockResolvedValueOnce(false);
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(vi.mocked(getContact)).not.toHaveBeenCalled();
+    });
+
+    it("refuses a non-UUID conversation id without calling callerCanSee (mutation: drop the isUuid check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+
+      const result = await moveHoldingThreadAction("a1", "not-a-uuid", CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(callerCanSeeMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a non-UUID target contact id without calling callerCanSee (mutation: drop the isUuid check -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+
+      const result = await moveHoldingThreadAction("a1", CONV, "not-a-uuid");
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(callerCanSeeMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["invalid", "not_found"] as const)(
+      "moveHoldingThread answering %s refuses with moveFailed",
+      async (status) => {
+        requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+        vi.mocked(getContact).mockResolvedValueOnce(BETO);
+        vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+        vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status });
+
+        const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+        expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      },
+    );
+  });
+
+  describe("moveHoldingThread answering empty (P32)", () => {
+    it("refuses with moveEmpty, and still revalidates so the tab shows where the texts went (mutation: answer moveFailed for empty -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce(BETO);
+      vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "empty" });
+      const { revalidatePath } = await import("next/cache");
+      vi.mocked(revalidatePath).mockClear();
+
+      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveEmpty" });
+      expect(vi.mocked(revalidatePath)).toHaveBeenCalledWith("/dashboard/accounts/a1/conversations");
+    });
+  });
+
+  describe("the Undo", () => {
+    it("calls moveHoldingThread with undoOf and the reversed direction, on the service client (mutation: drop undoOf, or swap from/to -> FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 41, messageIds: ["m1"], callIds: ["k1"] });
+
+      const result = await undoMoveHoldingThreadAction("a1", { moveId: 41, fromConversationId: CONV, toConversationId: BC });
+
+      expect(vi.mocked(moveHoldingThread)).toHaveBeenCalledWith(svc.db, "a1", {
+        from: BC, to: CONV, actor: "user_1", undoOf: 41,
+      });
+      expect(result).toEqual({ ok: true, conversationId: CONV });
+    });
+
+    it.each([
+      ["a non-integer moveId", { moveId: 1.5, fromConversationId: CONV, toConversationId: BC }],
+      ["a zero moveId", { moveId: 0, fromConversationId: CONV, toConversationId: BC }],
+      ["a negative moveId", { moveId: -1, fromConversationId: CONV, toConversationId: BC }],
+      ["a non-UUID fromConversationId", { moveId: 41, fromConversationId: "not-a-uuid", toConversationId: BC }],
+      ["a non-UUID toConversationId", { moveId: 41, fromConversationId: CONV, toConversationId: "not-a-uuid" }],
+    ])("refuses %s without calling moveHoldingThread (mutation: drop the guard -> FAILS)", async (_label, undo) => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+
+      const result = await undoMoveHoldingThreadAction("a1", undo);
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+      expect(vi.mocked(moveHoldingThread)).not.toHaveBeenCalled();
+    });
+
+    it("a forged moveId is the function's own to refuse: moveHoldingThread answering invalid -> moveFailed", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "invalid" });
+
+      const result = await undoMoveHoldingThreadAction("a1", { moveId: 999, fromConversationId: CONV, toConversationId: BC });
+
+      expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
+    });
+  });
+
+  describe("second account — every call carries the action's own accountId (mutation: hardcode an account id -> FAILS)", () => {
+    it("moveHoldingThreadAction", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce(BETO);
+      vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 50, messageIds: [], callIds: [] });
+
+      await moveHoldingThreadAction("a2", CONV, CT2);
+
+      expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "a2", CONV);
+      expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["a2", CT2]);
+      expect(vi.mocked(ensureConversation)).toHaveBeenCalledWith(svc.db, "a2", CT2, "user_1", "user");
+      expect(vi.mocked(moveHoldingThread)).toHaveBeenCalledWith(svc.db, "a2", { from: CONV, to: BC, actor: "user_1" });
+    });
+
+    it("undoMoveHoldingThreadAction", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 41, messageIds: [], callIds: [] });
+
+      await undoMoveHoldingThreadAction("a2", { moveId: 41, fromConversationId: CONV, toConversationId: BC });
+
+      expect(vi.mocked(moveHoldingThread)).toHaveBeenCalledWith(svc.db, "a2", {
+        from: BC, to: CONV, actor: "user_1", undoOf: 41,
+      });
+    });
   });
 });

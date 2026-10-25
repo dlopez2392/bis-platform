@@ -3,11 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { requireAccountAccess } from "@/lib/auth";
 import { callerCanSee } from "@/lib/auth/visible";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { isUuid } from "@/lib/assign/action-guards";
 import { dbForRequest } from "@/lib/db";
 import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
   clearUnreadCount, serviceDb, isAccountOutboundSuppressed,
+  moveHoldingThread, type HoldingMove,
 } from "@bis/db";
+import { contactDisplayName } from "@/lib/format";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -303,4 +307,70 @@ export async function markConversationReadAction(
   // (messaging.test.ts pins that with two real accounts).
   await clearUnreadCount(serviceDb(), accountId, conversationId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+}
+
+// S-47e (E8, spec 5.12.5): staff move a shared number's holding thread to the right person, with Undo.
+// Owners, Staff and the agency (the people who reply in the inbox), never a Technician. The SQL function
+// (0098) checks the account and the holding side again; this proves what the caller may see first.
+/** The Undo token: the move's own event and its two threads. The function reads the moved ids from that event
+ *  (0098, plan P1), so nothing a browser sends can name a row. */
+export type HoldingMoveUndo = { moveId: number; fromConversationId: string; toConversationId: string };
+export type MoveHoldingResult =
+  | { ok: true; toConversationId: string; name: string; undo: HoldingMoveUndo }
+  | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" | "conversation.holding.moveEmpty" };
+const MOVE_FAILED = { ok: false, error: "conversation.holding.moveFailed" } as const;
+const MOVE_EMPTY = { ok: false, error: "conversation.holding.moveEmpty" } as const;
+const MOVE_ROLE = { ok: false, error: "conversation.holding.moveRole" } as const;
+
+export async function moveHoldingThreadAction(
+  accountId: string, conversationId: string, toContactId: string,
+): Promise<MoveHoldingResult> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return MOVE_ROLE;
+  if (!isUuid(conversationId) || !isUuid(toContactId)) return MOVE_FAILED;
+  try {
+    if (!(await callerCanSee("conversations", accountId, conversationId))) return MOVE_FAILED;
+    const db = await dbForRequest();
+    const person = (await getContact(db, accountId, toContactId)) as
+      { first_name: string | null; last_name: string | null; holds_shared_number?: boolean } | null;
+    if (!person || person.holds_shared_number) return MOVE_FAILED;
+    const svc = serviceDb();
+    const target = await ensureConversation(svc, accountId, toContactId, access.userId, "user");
+    const moved: HoldingMove = await moveHoldingThread(svc, accountId, { from: conversationId, to: target.id, actor: access.userId });
+    if (moved.status === "empty") {
+      // Someone, or another tab, moved them first (P32): say so, and refresh the inbox to show where they went.
+      revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+      return MOVE_EMPTY;
+    }
+    if (moved.status !== "ok") return MOVE_FAILED;
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    return {
+      ok: true, toConversationId: target.id,
+      name: contactDisplayName({ first_name: person.first_name, last_name: person.last_name }),
+      undo: { moveId: moved.moveId, fromConversationId: conversationId, toConversationId: target.id },
+    };
+  } catch (e) {
+    console.error(`moveHoldingThreadAction (account ${accountId}): ${e instanceof Error ? e.message : String(e)}`);
+    return MOVE_FAILED;
+  }
+}
+
+export async function undoMoveHoldingThreadAction(
+  accountId: string, undo: HoldingMoveUndo,
+): Promise<{ ok: true; conversationId: string } | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" }> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return MOVE_ROLE;
+  if (!isUuid(undo?.fromConversationId) || !isUuid(undo?.toConversationId)
+    || !Number.isSafeInteger(undo?.moveId) || undo.moveId <= 0) return MOVE_FAILED;
+  try {
+    const moved = await moveHoldingThread(serviceDb(), accountId, {
+      from: undo.toConversationId, to: undo.fromConversationId, actor: access.userId, undoOf: undo.moveId,
+    });
+    if (moved.status !== "ok") return MOVE_FAILED;
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    return { ok: true, conversationId: undo.fromConversationId };
+  } catch (e) {
+    console.error(`undoMoveHoldingThreadAction (account ${accountId}): ${e instanceof Error ? e.message : String(e)}`);
+    return MOVE_FAILED;
+  }
 }
