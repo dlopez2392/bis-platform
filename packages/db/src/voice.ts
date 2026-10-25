@@ -3,6 +3,8 @@ import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { withTimelinePage, forContacts, type TimelineCursor } from "./timeline-cursor";
 import type { BusinessStatusCode } from "./business-status";
+// S-47e: contacts.ts imports nothing from voice.ts, so there is no cycle.
+import { phoneDigits, phoneFields } from "./contacts";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -724,6 +726,153 @@ export async function ensureCallbackTask(
     throw new Error(`ensureCallbackTask: already there but unreadable: ${readErr?.message ?? "no row"}`);
   }
   return { id: (found as { id: string }).id, created: false };
+}
+
+/** S-47e (spec 4, 5.2): one contact on a number, as the identity check and the record picker read it. The raw
+ *  stored email is never selected (spec E2, S3): only its key. */
+export type NumberContactRow = {
+  id: string; first_name: string | null; last_name: string | null; phone: string | null;
+  email_key: string | null; holds_shared_number: boolean;
+};
+
+/** More than this many contacts on one number cannot be narrowed by name on a call (spec S6). */
+export const CONTACTS_ON_NUMBER_LIMIT = 20;
+
+/**
+ * The phone_key values a stored phone that reads as this E.164 can carry (spec 4; plan P4): its own digits key
+ * (phoneDigits folds a leading NANP 1), and for a Mexican number its ten national digits plus both the 52 and
+ * 521 forms of them, because "+52 1 899 922 1234" reads as +528999221234 but keys 5218999221234. A superset on
+ * purpose: isCallerIdNumber decides who is really on the number.
+ */
+export function phoneKeysOf(e164: string): string[] {
+  const key = phoneDigits(e164);
+  const ten = /^521(\d{10})$/.exec(key)?.[1] ?? /^52(\d{10})$/.exec(key)?.[1] ?? null;
+  return ten === null ? [key] : [...new Set([key, ten, `52${ten}`, `521${ten}`])];
+}
+
+/**
+ * Every contact of THIS account whose phone_key could be this number, oldest first, at most
+ * CONTACTS_ON_NUMBER_LIMIT; `truncated` when more came back. Holding records come back flagged; the callers
+ * treat them as nobody (spec 5.12.3). The rows are NOT yet filtered by isCallerIdNumber (the app does that,
+ * spec S1). Throws on a read error: every caller fails closed or has a net (spec S5).
+ */
+export async function listContactsOnNumber(
+  db: SupabaseClient, accountId: string, e164: string,
+): Promise<{ rows: NumberContactRow[]; truncated: boolean }> {
+  const { data, error } = await db.from("contacts")
+    .select("id, first_name, last_name, phone, email_key, holds_shared_number")
+    .eq("account_id", accountId).in("phone_key", phoneKeysOf(e164))
+    .order("created_at", { ascending: true }).order("id", { ascending: true })
+    .limit(CONTACTS_ON_NUMBER_LIMIT + 1);
+  if (error) throw new Error(`listContactsOnNumber failed: ${error.message}`);
+  const all = (data ?? []) as NumberContactRow[];
+  return { rows: all.slice(0, CONTACTS_ON_NUMBER_LIMIT), truncated: all.length > CONTACTS_ON_NUMBER_LIMIT };
+}
+
+/** The soonest booked, future booking of ONE contact on this account (spec S17), or null. Throws on error. */
+export async function findUpcomingBookingForContact(
+  db: SupabaseClient, accountId: string, contactId: string, nowIso: string,
+): Promise<{ bookingId: string; startsAt: string } | null> {
+  const { data, error } = await db.from("bookings")
+    .select("id, starts_at").eq("account_id", accountId).eq("contact_id", contactId)
+    .eq("status", "booked").gt("starts_at", nowIso)
+    .order("starts_at", { ascending: true }).limit(1);
+  if (error) throw new Error(`findUpcomingBookingForContact failed: ${error.message}`);
+  const row = (data ?? [])[0] as { id: string; starts_at: string } | undefined;
+  return row ? { bookingId: row.id, startsAt: row.starts_at } : null;
+}
+
+/**
+ * Thrown when the number's holding record can be neither found nor made: a 23505 on
+ * contacts_one_holding_per_number followed by a read that finds no row (it was deleted in between). A retry
+ * recovers, so the inbound route treats it as FilingFailed (503, Telnyx retries; plan P23); the text-back sends
+ * nothing. Its message names no number.
+ */
+export class HoldingContactUnavailable extends Error {
+  constructor(accountId: string) {
+    super(`the shared number's holding record could not be read or made (account ${accountId})`);
+    this.name = "HoldingContactUnavailable";
+  }
+}
+
+/**
+ * The ONE holding record of this account and number (0098, spec 5.12.2), made when there is none. Never through
+ * createContact, whose phone match would return a household member. service_role only (0098's trigger stores
+ * false for a signed-in insert). Keyed by the exact E.164 (0098's index and CHECK, plan P23). Two calls at once:
+ * the loser's insert is 23505, and it reads again, once. No contact_created act is recorded (spec 5.12.1).
+ * Throws on any other error; every caller has a net.
+ *
+ * The read is by the phone AS STORED (phoneFields), never the raw argument: a caller ID in the old Mexican
+ * mobile form ("+5218999221234") is stored as "+528999221234", so a read by the raw text would miss the row it
+ * made, and every later call would hit 23505, miss again and throw (a 503 Telnyx retries forever).
+ */
+export async function ensureHoldingContact(
+  db: SupabaseClient, accountId: string, e164: string,
+): Promise<{ id: string; created: boolean }> {
+  const fields = phoneFields(e164);
+  const phone = fields.phone;
+  if (phone === null) throw new Error("ensureHoldingContact: no phone");
+  const find = async (): Promise<string | null> => {
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone", phone).eq("holds_shared_number", true).maybeSingle();
+    if (error) throw new Error(`ensureHoldingContact read failed: ${error.message}`);
+    return (data as { id: string } | null)?.id ?? null;
+  };
+  const existing = await find();
+  if (existing) return { id: existing, created: false };
+  const { data, error } = await db.from("contacts").insert({
+    account_id: accountId, first_name: "Caller", ...fields, source: "voice",
+    holds_shared_number: true, author_kind: "ai", author_id: null,
+  }).select("id").single();
+  if (error?.code === "23505") {
+    const again = await find();
+    if (again) return { id: again, created: false };
+    throw new HoldingContactUnavailable(accountId);
+  }
+  if (error || !data) throw new Error(`ensureHoldingContact failed: ${error?.message ?? "no row"}`);
+  const id = (data as { id: string }).id;
+  try {
+    await emit(db, accountId, "contact.created", "voice", { contactId: id, holding: true }, "ai");
+  } catch (e) {
+    console.error(`ensureHoldingContact: holding record ${id} written, but its contact.created emit failed: ${String(e)}`);
+  }
+  return { id, created: true };
+}
+
+/**
+ * 0098's move_holding_thread answers, exactly: ok (with the move's event id and the ids it moved; a second
+ * Undo of one move is ok with both lists empty), invalid, not_found, or empty (a forward move that found
+ * nothing left to move: no event, so nothing can claim or undo it; plan P32).
+ */
+export type HoldingMove =
+  | { status: "ok"; moveId: number; messageIds: string[]; callIds: string[] }
+  | { status: "invalid" | "not_found" | "empty" };
+
+/**
+ * 0098's move_holding_thread through PostgREST, on the SERVICE client (the caller has checked the role, spec
+ * 5.12.5). A move names no event; its Undo names the move's own `moveId` and nothing else (plan P1): the
+ * function moves back only the ids that move recorded. Throws on a transport error or an answer the function
+ * never gives. A move that finds nothing left to move is `empty` (plan P32), never an `ok` with no ids.
+ */
+export async function moveHoldingThread(
+  db: SupabaseClient, accountId: string,
+  input: { from: string; to: string; actor: string; undoOf?: number },
+): Promise<HoldingMove> {
+  const { data, error } = await db.rpc("move_holding_thread", {
+    p_account_id: accountId, p_from_conversation: input.from, p_to_conversation: input.to, p_actor: input.actor,
+    p_undo_of: input.undoOf ?? null,
+  });
+  if (error) throw new Error(`moveHoldingThread failed: ${error.message}`);
+  const r = (data ?? null) as { status?: unknown; moveId?: unknown; messageIds?: unknown; callIds?: unknown } | null;
+  if (r?.status === "ok" && typeof r.moveId === "number") {
+    return {
+      status: "ok", moveId: r.moveId,
+      messageIds: Array.isArray(r.messageIds) ? r.messageIds.map(String) : [],
+      callIds: Array.isArray(r.callIds) ? r.callIds.map(String) : [],
+    };
+  }
+  if (r?.status === "invalid" || r?.status === "not_found" || r?.status === "empty") return { status: r.status };
+  throw new Error("moveHoldingThread: unexpected answer");
 }
 
 export async function countCallsSince(
