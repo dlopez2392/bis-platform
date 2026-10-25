@@ -496,6 +496,24 @@ describe("0098 move_holding_thread", () => {
       expect(await handed(c, u.moveId!)).toBe(1);
     }));
 
+  it("an Undo naming an event that recorded a negative unread hands back none: both counts stay as they are (T17 review M5, the floor; mutation: drop greatest(..., 0) -> the person thread gains and the holding thread goes below zero, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      await move(c, s.a.accountId, s.hc, s.bc);                          // m1 and m2 on Beto's thread: holding 0, Beto 2
+      // Written here as the table owner, exactly as the function writes a move (system actor, its writer, the two
+      // threads, m1), but recording unread -5: only the floor stands between it and the counts.
+      const { rows: [forged] } = await c.query<{ id: number }>(
+        `insert into public.events (account_id, type, actor_type, actor_id, payload)
+         values ($1, 'conversation.moved', 'system', 'user_staff', jsonb_build_object('writer', 'move_holding_thread', 'by', 'user_staff',
+                 'undo', false, 'fromConversationId', $2::text, 'toConversationId', $3::text, 'unread', -5,
+                 'messageIds', jsonb_build_array($4::text), 'callIds', '[]'::jsonb)) returning id::int as id`,
+        [s.a.accountId, s.hc, s.bc, s.m1]);
+      const u = await move(c, s.a.accountId, s.bc, s.hc, forged!.id);
+      expect(u).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [s.m1], callIds: [] });
+      expect(await unread(c, [s.hc, s.bc])).toEqual({ [s.hc]: 0, [s.bc]: 2 });
+      expect(await handed(c, u.moveId!)).toBe(0);
+    }));
+
   it("a second Undo of the same move moves nothing and hands back no unread, even when the person has new unread (mutation: hand back on an Undo that moved nothing -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await household(c);
