@@ -39,6 +39,13 @@ export type CreateContactInput = ContactInput & {
    *  `import`; a web-chat lead, always `ai`). `undefined` falls back to `contactAuthor(actorType,
    *  actorId)` — the ordinary path, for every other caller. */
   author?: RowAuthor;
+  /** S-47e (E7, spec 5.10.1; plan P29): "email_only" dedupes on the email alone: a phone match never makes this
+   *  write land on an existing contact (no phone winner, no legacy-key read, no country twin). The direct phone
+   *  read still runs, and its first match is filed for the merge queue with the new contact (reason
+   *  phone_shared_new_person), so a nickname made into a second person ("Beto" beside "Roberto") is found later.
+   *  Sofía passes it when a name on a shared number makes a new person. Read only by createContact (as
+   *  assignedTo and author are); toRow never sees it. Absent = today's dedupe. */
+  matchBy?: "email_only";
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -66,8 +73,10 @@ export type CreateContactInput = ContactInput & {
 // (contactAuthor's own set). Read here so the record page's "Added by" fact and the contact-created
 // act's Undo (a contact's own `canDelete`/`heldBy` display) have it off the SAME row every other field
 // comes from.
+// `holds_shared_number` (0098, S-47e E8): a shared number's holding record. The record page redirects it to
+// its thread, and the group actions refuse it, off the SAME row (spec 5.12.3, 5.12.4).
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id, holds_shared_number";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -260,6 +269,10 @@ type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; co
  */
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
+  // S-47e (plan P29): with emailOnly the direct phone read still runs (its match is filed, never the winner,
+  // createContact decides that), and the legacy-key fallback below is skipped. Both phone reads skip a
+  // shared number's holding record (0098; spec 5.12.3): it is never a phone match and never a country twin.
+  opts: { emailOnly?: boolean } = {},
 ): Promise<DuplicateMatch> {
   const result: DuplicateMatch = { emailMatch: null, phoneMatch: null, countryTwin: null };
 
@@ -274,7 +287,7 @@ async function findDuplicate(
   const pKey = phone ? phoneKeyOf(phone) : "";
   if (pKey) {
     const { data, error } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("phone_key", pKey).limit(1);
+      .eq("account_id", accountId).eq("holds_shared_number", false).eq("phone_key", pKey).limit(1);
     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
     if (data && data.length > 0) result.phoneMatch = data[0]!.id as string;
 
@@ -322,10 +335,10 @@ async function findDuplicate(
     // contact.
     let legacyTenDigits: string | null = null;
     let legacyKeys: string[] = [];
-    if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
+    if (!opts.emailOnly && !result.phoneMatch && /^52\d{10}$/.test(pKey)) {
       legacyTenDigits = pKey.slice(2);
       legacyKeys = [legacyTenDigits, `521${legacyTenDigits}`];
-    } else if (!result.phoneMatch && /^\d{10}$/.test(pKey) && phone === `+1${pKey}`) {
+    } else if (!opts.emailOnly && !result.phoneMatch && /^\d{10}$/.test(pKey) && phone === `+1${pKey}`) {
       // Narrowed to a FIRM +1 reading of the incoming number, not merely a
       // bare ten-digit key: `phoneKeyOf` keys unparseable typed text (kept
       // as-is by `phoneFields` when it cannot normalise — "0123456789", a
@@ -340,7 +353,7 @@ async function findDuplicate(
     }
     if (legacyTenDigits) {
       const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
-        .eq("account_id", accountId).in("phone_key", legacyKeys).limit(10);
+        .eq("account_id", accountId).eq("holds_shared_number", false).in("phone_key", legacyKeys).limit(10);
       if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
       const hits = (bare ?? []) as { id: string; phone: string | null }[];
       const bareHit = hits.find((h) =>
@@ -410,8 +423,10 @@ async function flagDuplicatesAfterWrite(
     }
   }
   if (typeof written.phone === "string" && written.phone) {
+    // S-47e (spec 5.12.3): no duplicate flag ever pairs a household member with the number's holding record.
     const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("phone_key", phoneDigits(written.phone)).neq("id", contactId).limit(1);
+      .eq("account_id", accountId).eq("holds_shared_number", false)
+      .eq("phone_key", phoneDigits(written.phone)).neq("id", contactId).limit(1);
     if (twinErr) {
       console.error(`contact duplicate check (phone) for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
     } else {
@@ -436,8 +451,10 @@ export async function createContact(
   const email = input.email?.trim().toLowerCase();
   // The phone as it will be STORED, so the event names what the row holds.
   const phone = phoneFields(input.phone).phone ?? undefined;
-  const match = await findDuplicate(db, accountId, email || undefined, phone);
-  const winner = match.emailMatch ?? match.phoneMatch;
+  const emailOnly = input.matchBy === "email_only";
+  const match = await findDuplicate(db, accountId, email || undefined, phone, { emailOnly });
+  // S-47e (plan P29): with emailOnly a phone match never wins; it is filed with the new contact below.
+  const winner = emailOnly ? match.emailMatch : (match.emailMatch ?? match.phoneMatch);
 
   // Two DIFFERENT existing contacts both look like this person. The row still
   // lands on the email match, unchanged — but the second one is the thing that
@@ -488,9 +505,14 @@ export async function createContact(
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
+  // S-47e (plan P29): a new person on a number someone already has goes to the merge queue with them, so a
+  // nickname made into a second person ("Beto" beside "Roberto") is found later. The number stays shared until
+  // staff merge the two. Logged, never thrown, like every flag after a write that landed.
+  const sharedFlagged = emailOnly && match.phoneMatch !== null
+    && await flagDuplicatePair(flagDb, accountId, data.id, match.phoneMatch, "phone_shared_new_person");
   const twinFlagged = match.countryTwin !== null
     && await flagDuplicatePair(flagDb, accountId, data.id, match.countryTwin, "phone_country_twin");
-  return { id: data.id, existing: false, flagged: twinFlagged };
+  return { id: data.id, existing: false, flagged: twinFlagged || sharedFlagged };
 }
 
 /**
@@ -509,8 +531,9 @@ export async function flagMatchesOf(db: SupabaseClient, accountId: string, conta
     me.phone_key ? `phone_key.eq.${quoteFilterValue(String(me.phone_key))}` : null,
   ].filter((v): v is string => v !== null);
   if (ors.length === 0) return 0;
+  // S-47e (spec 5.12.3): a shared number's holding record is nobody's duplicate.
   const { data: hits, error: hErr } = await db.from("contacts").select("id")
-    .eq("account_id", accountId).neq("id", contactId).or(ors.join(",")).limit(20);
+    .eq("account_id", accountId).eq("holds_shared_number", false).neq("id", contactId).or(ors.join(",")).limit(20);
   if (hErr) throw new Error(`flagMatchesOf lookup failed: ${hErr.message}`);
   let written = 0;
   for (const h of (hits ?? []) as { id: string }[]) {
@@ -888,7 +911,8 @@ export async function listContacts(
   const column = SORT_COLUMN[sort.key];
   const ascending = sort.dir === "asc";
 
-  let q = db.from("contacts").select(COLS).eq("account_id", accountId)
+  // S-47e (spec 5.12.4, S29): a shared number's holding record is not a customer; the list never shows it.
+  let q = db.from("contacts").select(COLS).eq("account_id", accountId).eq("holds_shared_number", false)
     // Two-key ordering: the sort column alone is not unique — two contacts
     // can share a name or a company, and a CSV import (Task 6) writes
     // thousands of rows in the same created_at millisecond — so id breaks
@@ -993,8 +1017,9 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
 export async function countContacts(
   db: SupabaseClient, accountId: string, opts: { search?: string; assignee?: AssigneeFilter } = {},
 ): Promise<number> {
+  // S-47e: the same holding skip as listContacts, so the header total and the rows agree.
   let q = db.from("contacts").select("id", { count: "exact", head: true })
-    .eq("account_id", accountId);
+    .eq("account_id", accountId).eq("holds_shared_number", false);
   q = withSearch(q, opts.search);
   q = withAssignee(q, opts.assignee);
   const { count, error } = await q;

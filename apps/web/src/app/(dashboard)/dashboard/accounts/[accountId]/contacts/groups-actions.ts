@@ -29,6 +29,9 @@ const refused = { ok: false, error: "groups.refused" } as const;
 const failed = { ok: false, error: "groups.failed" } as const;
 const tooLong = { ok: false, error: "groups.tooLong" } as const;
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
+/** S-47e (spec 5.12.3): the refusal reason when the contact is a shared number's holding record (0098), which no
+ *  household or business ever holds. getContact reads the mark off the same row it proves. */
+const HOLDING = "shared number holding record";
 /** S-03 part 2: the group's own record page, which shows its members and who we call first. */
 const groupPath = (accountId: string, groupId: string) => `/dashboard/accounts/${accountId}/groups/${groupId}`;
 
@@ -103,7 +106,9 @@ export async function createGroupAction(
   if (typeof name !== "string" || dbTrimmedLength(name) === 0) return failed;
   if (dbTrimmedLength(name) > GROUP_NAME_MAX) return tooLong;
   return guarded<{ memberId: string; name: string; existed: boolean }>(L, accountId, async () => {
-    if (!(await getContact(await dbForRequest(), accountId, contactId))) return refuse(L, accountId, "contact not visible", { contact: contactId });
+    const contact = await getContact(await dbForRequest(), accountId, contactId);
+    if (!contact) return refuse(L, accountId, "contact not visible", { contact: contactId });
+    if (contact.holds_shared_number) return refuse(L, accountId, HOLDING, { contact: contactId });
     const r = await createGroupWithMember(serviceDb(), accountId, contactId, kind, name, null, userId);
     if (r.status !== "ok") return r.status === "invalid_name" ? failed : refuse(L, accountId, r.status, { contact: contactId });
     revalidateContacts(accountId, contactId);
@@ -123,9 +128,11 @@ export async function addToGroupAction(
   return guarded<{ memberId: string }>(L, accountId, async () => {
     const db = await dbForRequest();
     // Both proofs on the request client: the contact, and a group the caller can see (search showed it).
-    if (!(await getContact(db, accountId, contactId)) || !(await readGroup(db, accountId, groupId))) {
+    const contact = await getContact(db, accountId, contactId);
+    if (!contact || !(await readGroup(db, accountId, groupId))) {
       return refuse(L, accountId, "contact or group not visible", ids);
     }
+    if (contact.holds_shared_number) return refuse(L, accountId, HOLDING, ids);
     const r = await addContactToGroup(serviceDb(), accountId, contactId, groupId, null, userId);
     if (r.status !== "ok") return refuse(L, accountId, r.status, ids);
     // Joining a business rewrites contacts.company_name (0069's trigger), which the list and the page show.
@@ -257,7 +264,9 @@ export async function restoreMembershipAction(accountId: string, raw: GroupMembe
     ...raw, id: raw.id.toLowerCase(), contact_id: raw.contact_id.toLowerCase(), client_group_id: raw.client_group_id.toLowerCase(),
   };
   return guarded<object>(L, accountId, async () => {
-    if (!(await getContact(await dbForRequest(), accountId, snapshot.contact_id))) return refuse(L, accountId, "contact not visible", ids);
+    const contact = await getContact(await dbForRequest(), accountId, snapshot.contact_id);
+    if (!contact) return refuse(L, accountId, "contact not visible", ids);
+    if (contact.holds_shared_number) return refuse(L, accountId, HOLDING, ids);
     let toRestore: GroupMemberSnapshot = snapshot;
     if (!seesWholeAccount(access)) {
       const removal = await removedByCaller(accountId, userId, snapshot);

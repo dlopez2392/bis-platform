@@ -897,6 +897,14 @@ describe("setContactBusinessAction", () => {
     expect(r.ok).toBe(false);
     expect(dbMocks.setContactsBusiness).not.toHaveBeenCalled();
   });
+  it("refuses a shared number's holding record before any service write (S-47e, spec 5.12.3; mutation: drop the holding check -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", company_name: null, holds_shared_number: true });
+    dbMocks.setContactsBusiness.mockResolvedValue([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
+    expect(await setContactBusinessAction("a1", "c1", "Acme")).toEqual({ ok: false, error: "Save failed — please try again." });
+    expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "c1");
+    expect(dbMocks.setContactsBusiness).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
   it("returns the server's own undo payload and the spelling it stored, read back after the write (I3: linking an existing business keeps ITS spelling; mutation: shown = the typed name -> FAILS)", async () => {
     const removed = { id: "m1", account_id: "a1", client_group_id: "g1", contact_id: "c1", role: null, is_primary: true, is_billing: false, created_at: "2026-01-01" };
     dbMocks.getContact

@@ -53,7 +53,20 @@ export type ConversationSummary = {
   unreadCount: number;
   /** S-09 §9: the contact's own language, for the inbound bubble's `lang` attribute; null when not set. */
   contactLanguage: "en" | "es" | null;
+  /** S-47e (E8, spec 5.12.4): this thread belongs to a shared number's holding record (0098). */
+  holdsSharedNumber: boolean;
+  /** The holding record's phone, for the "Shared number {number}" label; null on every other thread (plan P9). */
+  sharedNumber: string | null;
 };
+
+/** S-47e (plan P9): the two holding fields off a conversation row's embedded contact, one rule for the three
+ *  inbox reads. */
+function holdingFields(contact: { phone?: string | null; holds_shared_number?: boolean } | null | undefined): {
+  holdsSharedNumber: boolean; sharedNumber: string | null;
+} {
+  const holds = contact?.holds_shared_number === true;
+  return { holdsSharedNumber: holds, sharedNumber: holds ? (contact?.phone ?? null) : null };
+}
 
 /** A row's position in `listConversations`'s ordering (last_message_at
  *  desc, id desc as the tiebreaker) — `v` is the last row's own
@@ -641,7 +654,7 @@ export async function listConversations(
   // row, so an unmatched conversation would still come back with a null
   // `contacts` rather than being excluded — `!inner` is what makes the
   // filter apply to the conversation row itself (Mine/Unassigned, spec §8).
-  const embed = opts.assignee ? "contacts!inner(first_name, last_name, language, assigned_to)" : "contacts(first_name, last_name, language)";
+  const embed = opts.assignee ? "contacts!inner(first_name, last_name, language, phone, holds_shared_number, assigned_to)" : "contacts(first_name, last_name, language, phone, holds_shared_number)";
   let q = db.from("conversations")
     // S-06 part 1, fix round 3: the owner's rule is "list a conversation that holds at least one
     // message" — EXISTENCE, not `last_message_at is not null`. That column is only a proxy, and it is
@@ -725,6 +738,7 @@ export async function listConversations(
     lastMessagePreview: previews[i] ?? null,
     unreadCount: r.unread_count ?? 0,
     contactLanguage: r.contacts?.language ?? null,
+    ...holdingFields(r.contacts),
   }));
 }
 
@@ -764,7 +778,7 @@ export async function getConversationSummary(
   db: SupabaseClient, accountId: string, conversationId: string,
 ): Promise<ConversationSummary | null> {
   const { data, error } = await db.from("conversations")
-    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language)")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language, phone, holds_shared_number)")
     .eq("account_id", accountId).eq("id", conversationId)
     .maybeSingle();
   if (error) throw new Error(`getConversationSummary failed: ${error.message}`);
@@ -779,7 +793,18 @@ export async function getConversationSummary(
     lastMessagePreview: await fetchConversationPreview(db, accountId, r.id),
     unreadCount: r.unread_count ?? 0,
     contactLanguage: r.contacts?.language ?? null,
+    ...holdingFields(r.contacts),
   };
+}
+
+/** S-47e (spec 5.12.4): the one conversation of this contact, or null (one per contact, 0005). Throws on error. */
+export async function findConversationForContact(
+  db: SupabaseClient, accountId: string, contactId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("conversations").select("id")
+    .eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (error) throw new Error(`findConversationForContact failed: ${error.message}`);
+  return (data as { id: string } | null)?.id ?? null;
 }
 
 /**
@@ -910,7 +935,7 @@ export async function searchConversations(
   if (ids.length === 0) return [];
 
   const { data, error } = await db.from("conversations")
-    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language)")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language, phone, holds_shared_number)")
     .eq("account_id", accountId)
     .in("id", ids);
   if (error) throw new Error(`searchConversations failed: ${error.message}`);
@@ -931,6 +956,7 @@ export async function searchConversations(
       lastMessagePreview: preview.get(id) ?? null,
       unreadCount: r.unread_count ?? 0,
       contactLanguage: r.contacts?.language ?? null,
+      ...holdingFields(r.contacts),
     }];
   });
 }
