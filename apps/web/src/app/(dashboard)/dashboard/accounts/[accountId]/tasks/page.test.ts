@@ -1066,6 +1066,35 @@ describe("TasksPage — the tray grouped by customer, then call (item 8b-2)", ()
   });
 });
 
+describe("TasksPage — a To-do on a shared number's holding record (S-47e P19; T17 review M9)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    resetFake();
+    fake.tables = {
+      contacts: [
+        { id: "ct-hold", account_id: "acct1", first_name: "Caller", last_name: null, phone: "+19565550142", holds_shared_number: true },
+        { id: "ct-ana", account_id: "acct1", first_name: "Ana", last_name: "López", phone: "+19565550142", holds_shared_number: false },
+      ],
+    };
+  });
+
+  it("names the number, never \"Caller\"; a customer's row keeps their name (mutation: contactDisplayName for every row -> \"Caller\", FAILS)", async () => {
+    workRows = [
+      taskRow({ id: "task:hold", contactId: "ct-hold", title: "A reply from a shared number couldn't be matched to one appointment", dueAt: "2099-01-01T12:00:00Z" }),
+      taskRow({ id: "task:ana", contactId: "ct-ana", title: "Call Ana back", dueAt: "2099-01-01T12:00:00Z" }),
+    ];
+    const { default: TasksPage } = await import("./page");
+    const text = renderedText(renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) })));
+    expect(text).toContain("Shared number (956) 555-0142");
+    expect(text).toContain("Ana López");
+    expect(text).not.toMatch(/\bCaller\b/);
+  });
+});
+
 describe("the To do route's loading skeleton: the tray is grouped (item 8b-2)", () => {
   it("a group heading's label bar sits above the skeleton cards, never a card around them (mutation: drop grouped -> FAILS)", async () => {
     const { default: Loading } = await import("./loading");

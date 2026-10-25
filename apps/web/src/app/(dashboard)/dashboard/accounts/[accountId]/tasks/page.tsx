@@ -15,6 +15,7 @@ import { dbForRequest } from "@/lib/db";
 import { loadAssignView } from "@/lib/assign/view";
 import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
+import { holdingLabel } from "@/lib/contacts/holding-label";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
@@ -164,12 +165,13 @@ export default async function TasksPage({
   if (contactIds.length > 0) {
     const { data: contacts, error } = await db
       .from("contacts")
-      .select("id, first_name, last_name")
+      .select("id, first_name, last_name, phone, holds_shared_number")
       .eq("account_id", accountId)
       .in("id", contactIds);
     if (error) throw new Error(`tasks: contacts lookup failed: ${error.message}`);
     for (const c of contacts ?? []) {
-      contactNames[c.id] = contactDisplayName(c);
+      // S-47e (P19): a To-do on a shared number's holding record names the number, never "Caller".
+      contactNames[c.id] = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c);
     }
   }
 
