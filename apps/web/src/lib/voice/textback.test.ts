@@ -16,6 +16,8 @@ const dbMocks = vi.hoisted(() => ({
   // would fall through to the real implementation and throw against this
   // file's fake DB. Allowed by default.
   isAccountOutboundSuppressed: vi.fn(),
+  // S-47e (plan Task 8): who is on the caller ID, and the shared number's one holding record.
+  listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -57,6 +59,8 @@ const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
+  dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
+  dbMocks.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });
   senderMocks.resolveSmsSender.mockReset().mockResolvedValue({ ok: true, from: "+19565550100", ownedNumbers: ["+19565550100"] });
   dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "m_tb" });
@@ -105,7 +109,7 @@ describe("prepareTextback: the send gate decides before any row", () => {
 
   it("a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)", async () => {
     const outcome = await prepareTextback(DB, "a1", request({ now: TEN_PM, language: "es" }));
-    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "held" });
+    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "held", holding: false });
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(logWrites()).toEqual([{
       accountId: "a1", source: "textback", channel: "sms", subjectKey: "call:call1", contactId: "ct_1",
@@ -154,7 +158,7 @@ describe("prepareTextback: the send gate decides before any row", () => {
   it("a hold write that fails keeps the call's contact and conversation, and says the text-back is lost (review R2 minor; mutation: let the throw escape → rejects, FAILS)", async () => {
     dbMocks.recordAutomationLog.mockRejectedValue(new Error("db down"));
     const outcome = await prepareTextback(DB, "a1", request({ now: TEN_PM }));
-    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "unheld" });
+    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "unheld", holding: false });
   });
 
   it("an account not cleared to text writes NOTHING, not even a contact (mutation: resolve the contact first → FAILS)", async () => {
@@ -493,5 +497,57 @@ describe("contactForCallerId: Sofía's acts (item 8c)", () => {
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(failed).toEqual(ok);
     expect(dbMocks.createMessage.mock.calls.at(-1)).toEqual(okMessage);
+  });
+});
+
+describe("S-47e: a shared number's text-back (plan Task 8)", () => {
+  const person = (id: string, first: string, last: string) =>
+    ({ id, first_name: first, last_name: last, phone: "+19562921696", email_key: null, holds_shared_number: false });
+  beforeEach(() => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct_new", existing: false });
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
+    dbMocks.insertAiActs.mockResolvedValue(undefined);
+  });
+
+  it("two customers on the number: the text files on its ONE holding record, made by voice, and nobody is phone-picked or filled", async () => {
+    dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba")], truncated: false });
+    const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
+    expect(outcome.holding).toBe(true);
+    expect(outcome.contactId).toBe("ct_hold");
+    expect(dbMocks.ensureHoldingContact).toHaveBeenCalledWith(DB, "a1", "+19562921696", "voice");
+    expect(dbMocks.ensureConversation).toHaveBeenCalledWith(DB, "a1", "ct_hold", "voice", "ai");
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+  });
+
+  it("one customer on the number: today's Caller contact, not the holding record", async () => {
+    dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [person("ct1", "Ana", "Prueba")], truncated: false });
+    const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
+    expect(dbMocks.createContact).toHaveBeenCalledWith(DB, "a1", { firstName: "Caller", phone: "+19562921696", source: "voice" }, "voice", "ai");
+    expect(dbMocks.ensureHoldingContact).not.toHaveBeenCalled();
+    expect(outcome.holding).toBe(false);
+    expect(outcome.contactId).toBe("ct_new");
+  });
+
+  it("a resolver's answer says whether the text is on a holding record", async () => {
+    const holding = await prepareTextback(DB, "a1", request({ contactId: null, resolveContact: async () => ({ id: "ct_hold", holding: true }) }));
+    expect(holding).toMatchObject({ contactId: "ct_hold", holding: true });
+    expect(dbMocks.ensureConversation).toHaveBeenLastCalledWith(DB, "a1", "ct_hold", "voice", "ai");
+    const person9 = await prepareTextback(DB, "a1", request({ contactId: null, resolveContact: async () => "ct_9" }));
+    expect(person9).toMatchObject({ contactId: "ct_9", holding: false });
+  });
+
+  it("a given contact (the release, the handoff route) never reads the number and is never a holding record", async () => {
+    const outcome = await prepareTextback(DB, "a1", request({ contactId: "ct_1" }));
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    expect(dbMocks.ensureHoldingContact).not.toHaveBeenCalled();
+    expect(outcome.holding).toBe(false);
+  });
+
+  it("an account not cleared to text answers holding false and resolves nobody", async () => {
+    senderMocks.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
+    expect(outcome).toEqual({ contactId: null, conversationId: null, pending: null, notSent: "sender_refused", holding: false });
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
   });
 });

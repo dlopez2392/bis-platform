@@ -26,8 +26,9 @@ import type { serviceDb, AutomationLogRow } from "@bis/db";
 import {
   createContact, fillContactBlanksReport, ensureConversation, createMessage,
   updateMessageStatus, hasRecentOutboundSms, recordAutomationLog, getVoiceProfile, getBranding,
-  callerInTouchSince, chooseBody,
+  callerInTouchSince, chooseBody, ensureHoldingContact,
 } from "@bis/db";
+import { readCandidates, isShared } from "./identity/candidates";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { decideSms, deliverSms, type ClearedSms } from "@/lib/consent/gate";
 import { writeHeld, logSkipped, subjectOf, REASONS, BLOCK_REASONS, type LogSubject, type Releaser } from "@/lib/automations/hold-or-send";
@@ -62,17 +63,21 @@ const ACTOR_TYPE = "ai" as const;
 const TEXTBACK_COOLDOWN_HOURS = 24;
 const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
 
+/** S-47e (E8, plan P16): a real contact (a string), or a shared number's holding record. */
+export type ResolvedTextbackContact = string | { id: string; holding: true } | null;
+
 export interface TextbackRequest {
   /** E.164, already normalised. No number, no text — the caller decides that. */
   callerNumber: string;
   /** A contact this call already established, if any. Null means resolve one
-   *  from caller ID: the minimal "Caller" + number record. */
+   *  from caller ID: the minimal "Caller" + number record, or, on a number
+   *  several customers share, its one holding record (S-47e E8). */
   contactId: string | null;
   /** Overrides how a null `contactId` is resolved. A FUNCTION, not an id, so
    *  it runs on the far side of the A2P check: an account that is not
    *  cleared to text must not accumulate contacts for callers it can never
    *  reach. */
-  resolveContact?: () => Promise<string | null>;
+  resolveContact?: () => Promise<ResolvedTextbackContact>;
   /** The language the CALLER spoke, not the profile's setting. */
   language: "en" | "es";
   /** Customer-facing name, `brandDisplayName` already applied. NEVER
@@ -137,6 +142,9 @@ export interface TextbackOutcome {
   /** Null when nothing goes out NOW; `notSent` says why. */
   pending: PendingTextback | null;
   notSent: null | "sender_refused" | "no_contact" | "cooldown" | "held" | "blocked" | "unheld";
+  /** S-47e (E8): the text lives on the shared number's holding record. finishCall then keeps the call row's
+   *  contact null and records only the conversation (spec 5.10.4). False on every other path. */
+  holding: boolean;
 }
 
 export interface PendingTextback {
@@ -160,7 +168,14 @@ export async function contactForCallerId(
   db: VoiceDb, accountId: string, callerNumber: string,
   /** The call's own row (item 8c): the act's source. Null records nothing, and says so. */
   callId: string | null,
-): Promise<string> {
+): Promise<string | { id: string; holding: true }> {
+  // S-47e (E8, S25): a number several customers share files its text on its ONE holding record, never on a
+  // household member by phone. Its phone-only fill (below) never runs on a holding record. The service client
+  // (VoiceDb), and the writer said: a call Sofía took.
+  if (isShared(await readCandidates(db, accountId, callerNumber))) {
+    const holding = await ensureHoldingContact(db, accountId, callerNumber, "voice");
+    return { id: holding.id, holding: true };
+  }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];
   const created = await createContact(db, accountId, {
@@ -216,7 +231,7 @@ export async function prepareTextback(
   db: VoiceDb, accountId: string, r: TextbackRequest,
 ): Promise<TextbackOutcome> {
   const sender = await resolveSmsSender(db, accountId);
-  if (!sender.ok) return { contactId: null, conversationId: null, pending: null, notSent: "sender_refused" };
+  if (!sender.ok) return { contactId: null, conversationId: null, pending: null, notSent: "sender_refused", holding: false };
 
   // The caller's spoken language stays the rule (live, spec §10.1). New in
   // S-09 PR 2: the Spanish box. NULL = our Spanish default; '' = emptied, so
@@ -234,12 +249,14 @@ export async function prepareTextback(
   });
   const body = chosen.text;
 
-  const contactId = r.contactId
+  const resolved: ResolvedTextbackContact = r.contactId
     ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber, r.callId));
+  const contactId = typeof resolved === "string" ? resolved : resolved?.id ?? null;
+  const holding = resolved !== null && typeof resolved === "object";
   // A resolver that came back empty is not an error: `finishCall`'s can, when
   // there is neither a lead nor a caller id to build a contact from. Nothing
   // to hang a conversation on, so nothing to send.
-  if (!contactId) return { contactId: null, conversationId: null, pending: null, notSent: "no_contact" };
+  if (!contactId) return { contactId: null, conversationId: null, pending: null, notSent: "no_contact", holding: false };
   const conversation = await ensureConversation(db, accountId, contactId, ACTOR_ID, ACTOR_TYPE);
   const conversationId = conversation.id;
 
@@ -253,7 +270,7 @@ export async function prepareTextback(
       `${r.label}: text-back suppressed — conversation ${conversationId} ` +
       `already had an outbound SMS within ${TEXTBACK_COOLDOWN_HOURS}h`,
     );
-    return { contactId, conversationId, pending: null, notSent: "cooldown" };
+    return { contactId, conversationId, pending: null, notSent: "cooldown", holding };
   }
 
   const subject: LogSubject | null = r.callId === null ? null : {
@@ -273,7 +290,7 @@ export async function prepareTextback(
   if (decision.kind === "deferred" || retry) {
     if (!subject) {
       console.error(`${r.label}: text-back NOT sent — ${retry ? "consent state unreadable" : "outside the sending hours"}, and a call with no row cannot be held`);
-      return { contactId, conversationId, pending: null, notSent: "unheld" };
+      return { contactId, conversationId, pending: null, notSent: "unheld", holding };
     }
     // The call row still gets its contact and conversation if the hold write
     // fails: logged, and this call's text-back is lost (review R2 minor).
@@ -282,9 +299,9 @@ export async function prepareTextback(
       else await writeHeld({ db }, subject, new Date(r.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
     } catch (e) {
       console.error(`${r.label}: text-back NOT held, the hold write failed: ${String(e)}`);
-      return { contactId, conversationId, pending: null, notSent: "unheld" };
+      return { contactId, conversationId, pending: null, notSent: "unheld", holding };
     }
-    return { contactId, conversationId, pending: null, notSent: "held" };
+    return { contactId, conversationId, pending: null, notSent: "held", holding };
   }
   if (decision.kind === "blocked") {
     console.error(`${r.label}: text-back not sent — the send gate refused it (${decision.reason})`);
@@ -295,7 +312,7 @@ export async function prepareTextback(
     if (subject && decision.reason !== "ledger_unavailable" && decision.reason !== "stop_confirmation_stale") {
       await recordBlocked(db, subject, decision.reason, r.label);
     }
-    return { contactId, conversationId, pending: null, notSent: "blocked" };
+    return { contactId, conversationId, pending: null, notSent: "blocked", holding };
   }
 
   // WRITE THEN SEND: the row exists before anything leaves the building, with
@@ -305,7 +322,7 @@ export async function prepareTextback(
     conversationId, channel: "sms", direction: "outbound", body: decision.send.body,
   }, ACTOR_ID, ACTOR_TYPE);
   return {
-    contactId, conversationId, notSent: null,
+    contactId, conversationId, notSent: null, holding,
     pending: { messageId, conversationId, cleared: decision.send, subject, now: r.now },
   };
 }
