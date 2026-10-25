@@ -21,6 +21,8 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 import { summaryFactLine } from "./summarize";
 import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
@@ -923,12 +925,23 @@ export async function finishCall(
   // Read by the proposals below (owner ruling 2026-10-09): with the callback
   // already a To do, they do not also suggest it. True only once the write
   // (or an existing row) is confirmed.
+  // S-47e (spec 5.6, S10): a call whose identity check locked leaves THE call's one To-do (tasks_call_once):
+  // E5's sentence, in the ACCOUNT's language, on no customer (nobody was confirmed). Not for a call a person
+  // took (transferred), a recording, or a call with no row. The callback number and the message stay on the
+  // call card and in the alert.
+  const identityTodo = state.identity.locked !== null && !state.recordedCaller && !wasTransferred(state);
+  if (state.identity.locked !== null && (!identityTodo || !meta.callRowId)) {
+    console.log(`finishCall ${meta.callRowId ?? "(no row)"}: identity To do not filed (transferred, a recording, or no row), account ${ctx.accountId}`);
+  }
   let callbackTodo = false;
-  if (meta.callRowId && callbackLine) {
+  if (meta.callRowId && (identityTodo || callbackLine)) {
     try {
       await ensureCallbackTask(ctx.db, ctx.accountId, {
-        callId: meta.callRowId, contactId,
-        title: callbackLine,
+        callId: meta.callRowId,
+        contactId: identityTodo ? null : contactId,
+        title: identityTodo
+          ? t(m, "voice.todo.identity", resolveLocale(undefined, ctx.accountLanguage ?? null))
+          : callbackLine!,
         dueAt: meta.endedAt.toISOString(),
       }, ACTOR_ID, ACTOR_TYPE);
       callbackTodo = true;

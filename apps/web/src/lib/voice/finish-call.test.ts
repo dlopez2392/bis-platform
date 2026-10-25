@@ -100,7 +100,7 @@ import {
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { HoldingContactUnavailable } from "@bis/db";
-import { withConfirmed } from "./identity/state";
+import { withConfirmed, withLocked } from "./identity/state";
 
 /**
  * The two raw-table reads `resolveOpenOpportunity` (finish-call.ts) makes —
@@ -1854,6 +1854,66 @@ describe("finishCall — the call card and the callback To do", () => {
     expect(r).toEqual({ stored: true, notified: true, outcome: "message" });
     expect(proposalsMocks.generateProposals).toHaveBeenCalled();
     expect(err.mock.calls.some((c) => String(c[0]).includes("call card failed"))).toBe(true);
+  });
+
+  // S-47e (spec 5.6, S10): a call whose identity check locked leaves THE call's one To do — never a
+  // second one alongside whatever the callback leg would otherwise have filed.
+  it("a locked call that took a message files exactly ONE To do: the identity sentence, no contact, the call's own id, due at the call's end (mutation: file the callback title → FAILS)", async () => {
+    await finishCall(withLocked(messageState(), "misses"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", {
+      callId: "call1", contactId: null,
+      title: "Someone asked about an appointment and couldn't confirm who they are",
+      dueAt: "2027-06-01T17:02:00.000Z",
+    }, "voice", "ai");
+  });
+
+  it("the identity To do's title is the ACCOUNT's Spanish when accountLanguage is 'es', never the caller's language or the actor's", async () => {
+    await finishCall(withLocked(messageState(), "misses"), { ...ctx, accountLanguage: "es" }, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      title: "Alguien preguntó por una cita y no pudo confirmar quién es",
+    }), "voice", "ai");
+  });
+
+  it("accountLanguage: null still reads English", async () => {
+    await finishCall(withLocked(messageState(), "misses"), { ...ctx, accountLanguage: null }, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("a locked call with no message and no lead still files the identity To do (callbackLine null) (mutation: gate on callbackLine alone → FAILS)", async () => {
+    await finishCall(withLocked(caller(), "misses"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("a 'cannot' lock files the identity To do too (mutation: gate on locked === 'misses' only → FAILS)", async () => {
+    await finishCall(withLocked(caller(), "cannot"), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+      contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+    }), "voice", "ai");
+  });
+
+  it("locked + transferred, locked + a recording, and locked + no row file no To do; the skipped case logs one line naming the account id and no number (mutation: log the caller number too → FAILS)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await finishCall(withLocked(withTransferred(caller()), "misses"), ctx, meta);
+    await finishCall(withLocked(withRecordedCaller(caller()), "misses"), ctx, meta);
+    await finishCall(withLocked(caller(), "misses"), ctx, { ...meta, callRowId: null });
+    expect(dbMocks.ensureCallbackTask).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual([
+      "finishCall call1: identity To do not filed (transferred, a recording, or no row), account a1",
+      "finishCall call1: identity To do not filed (transferred, a recording, or no row), account a1",
+      "finishCall (no row): identity To do not filed (transferred, a recording, or no row), account a1",
+    ]);
+    log.mockRestore();
+  });
+
+  it("the identity To do also tells the proposals a callback To do exists, so they do not duplicate it (mutation: skip callbackTodo for the identity branch → FAILS)", async () => {
+    await finishCall(withLocked(messageState(), "misses"), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: true }));
   });
 });
 
