@@ -11,7 +11,15 @@ vi.mock("@/lib/billing/stripe-gateway", async (importOriginal) => ({
   billingGatewayFromEnv: () => gatewayMocks.fromEnv(),
 }));
 
-import type { BilledUsageAccount, UsageRow } from "@bis/db";
+// The nightly step (M7a PR-4 plan G14) has its own suite (lib/billing/
+// nightly.test.ts); here only WHEN and HOW the pass calls it.
+const nightlyMocks = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("@/lib/billing/nightly", () => ({ runBillingNightly: nightlyMocks.run }));
+const NIGHTLY_ZERO = {
+  remirrored: 0, reconciled: 0, mismatched: 0, heldStamped: 0, heldSent: 0, reconcileFailed: 0, reconcileSkippedBudget: 0,
+};
+
+import { USAGE_HOLD_AFTER_MS, type BilledUsageAccount, type UsageRow } from "@bis/db";
 import { FakeGateway } from "@/lib/billing/fake-gateway";
 import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP, METER_EVENT_WORST_CASE_MS } from "../caps";
 import type { PassContext } from "../context";
@@ -38,6 +46,7 @@ const ctx = (): PassContext => ({
 const EMPTY = {
   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
   skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+  remirrored: 0, reconciled: 0, mismatched: 0, heldStamped: 0, heldSent: 0, reconcileFailed: 0, reconcileSkippedBudget: 0,
 };
 const stripeError = (type: string) => Object.assign(new Error(type), { type });
 
@@ -67,9 +76,11 @@ beforeEach(() => {
   dbMocks.countExpiredUsage.mockResolvedValue(0);
   dbMocks.staleUsageAccountIds.mockResolvedValue([]);
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.stubEnv("BILLING_ENFORCE", "");
+  nightlyMocks.run.mockReset().mockResolvedValue(NIGHTLY_ZERO);
 });
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("usageReportPass", () => {
   it("reports under the key usageReport; with no billed account it returns idle counters and never builds Stripe (mutation: build the gateway before listing accounts → FAILS)", async () => {
@@ -276,5 +287,50 @@ describe("usageReportPass", () => {
     expect(USAGE_REPORT_BUDGET_MS).toBe(60_000);
     expect(METER_EVENT_WORST_CASE_MS).toBe(21_000);
     expect(USAGE_REPORT_BUDGET_MS - METER_EVENT_WORST_CASE_MS).toBe(39_000);
+  });
+});
+
+describe("usageReportPass with BILLING_ENFORCE (M7a PR-4: the hold and the nightly step)", () => {
+  it("with the switch on the reporter passes holdAfterMs = USAGE_HOLD_AFTER_MS; off, it passes nothing (mutation: always hold → FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    await usageReportPass.run(ctx());
+    expect(dbMocks.listReportableUsage.mock.calls[0]).toHaveLength(4);
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.listReportableUsage.mockClear();
+    await usageReportPass.run(ctx());
+    expect(dbMocks.listReportableUsage.mock.calls[0]![4]).toEqual({ holdAfterMs: USAGE_HOLD_AFTER_MS });
+  });
+
+  it("the nightly step runs AFTER the bookkeeping, with the tick's context, the pass's gateway and the pass's OWN clock, and its counters join the pass's (mutation: a fresh startedAt inside the step → FAILS; run it before the sends → call order FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1")];
+    nightlyMocks.run.mockResolvedValue({ ...NIGHTLY_ZERO, reconciled: 3, mismatched: 1 });
+    // Date.now(): the pass's startedAt, then the one row's budget check.
+    vi.spyOn(Date, "now").mockReturnValueOnce(5_000).mockReturnValueOnce(5_000).mockReturnValue(9_000);
+    const c = ctx();
+    expect(await usageReportPass.run(c)).toEqual({ ...EMPTY, reported: 1, reconciled: 3, mismatched: 1 });
+    expect(nightlyMocks.run).toHaveBeenCalledTimes(1);
+    const [passedCtx, passedGateway, clock] = nightlyMocks.run.mock.calls[0] as [unknown, unknown, { startedAt: number; nowMs: () => number }];
+    expect(passedCtx).toBe(c);
+    expect(passedGateway).toBe(fake);
+    expect(clock.startedAt).toBe(5_000);
+    expect(clock.nowMs()).toBe(9_000);
+    expect(nightlyMocks.run.mock.invocationCallOrder[0])
+      .toBeGreaterThan(dbMocks.countExpiredUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("a nightly step that throws is logged and the report's own counters stand (mutation: drop the catch → the pass errors, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1")];
+    nightlyMocks.run.mockRejectedValue(new Error("boom"));
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1 });
+    expect(vi.mocked(console.error).mock.calls.map((x) => String(x[0])).join("\n")).toMatch(/nightly billing step failed outright: Error: boom/);
+  });
+
+  it("with no usable Stripe key the nightly step does not run (mutation: run it on the no-Stripe path → FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    gatewayMocks.fromEnv.mockReturnValue({ ok: false, reason: "no_key" });
+    await usageReportPass.run(ctx());
+    expect(nightlyMocks.run).not.toHaveBeenCalled();
   });
 });

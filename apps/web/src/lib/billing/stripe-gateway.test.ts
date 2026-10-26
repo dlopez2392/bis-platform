@@ -42,6 +42,8 @@ type StubOverrides = {
   /** checkout.sessions.retrieve's `status`. */
   sessionStatus?: string | null;
   portalHasMore?: boolean;
+  /** billing.meters.listEventSummaries' page (M7a PR-4 meterTotal). */
+  summaries?: { aggregated_value: number }[];
 };
 
 /** A portal configuration's `features` as Stripe returns them: every
@@ -100,6 +102,10 @@ function stubStripe(overrides: StubOverrides = {}) {
           data: [{ id: "mtr_sms", event_name: "bis_sms_segments" }], has_more: overrides.hasMore ?? false,
         })),
         create: vi.fn(async (p: { event_name: string }) => ({ id: "mtr_new", event_name: p.event_name })),
+        listEventSummaries: vi.fn(async () => ({
+          object: "list", has_more: false,
+          data: (overrides.summaries ?? []).map((x, i) => ({ id: `mtrusum_${i}`, object: "billing.meter_event_summary", ...x })),
+        })),
       },
       meterEvents: {
         create: vi.fn(async () => ({ object: "billing.meter_event", identifier: "u_1", livemode: false })),
@@ -780,5 +786,77 @@ describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub cli
       .toEqual({ url: "https://billing.stripe.com/p/session/x" });
     expect(s.billingPortal.sessions.create)
       .toHaveBeenCalledWith({ customer: "cus_1", return_url: "https://app.example/a/billing", configuration: "bpc_1" });
+  });
+});
+
+describe("the nightly step's Stripe reads (M7a PR-4 plan I2: one bounded attempt each)", () => {
+  const BOUNDED = { maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS };
+
+  it("meterTotal asks listEventSummaries with exactly { customer, start_time, end_time } and { maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS } (mutation: pass value_grouping_window → FAILS)", async () => {
+    const s = stubStripe({ summaries: [{ aggregated_value: 42 }] });
+    const total = await stripeGateway(s as unknown as Stripe).meterTotal({
+      meterId: "mtr_sms", customerId: "cus_1", startSeconds: 1_790_000_040, endSeconds: 1_790_086_440,
+    });
+    expect(total).toBe(42);
+    expect(s.billing.meters.listEventSummaries).toHaveBeenCalledTimes(1);
+    expect(s.billing.meters.listEventSummaries).toHaveBeenCalledWith(
+      "mtr_sms", { customer: "cus_1", start_time: 1_790_000_040, end_time: 1_790_086_440 }, BOUNDED,
+    );
+  });
+
+  it("an empty summary list is 0 (mutation: return null → FAILS)", async () => {
+    const s = stubStripe({ summaries: [] });
+    expect(await stripeGateway(s as unknown as Stripe).meterTotal({
+      meterId: "mtr_sms", customerId: "cus_1", startSeconds: 60, endSeconds: 120,
+    })).toBe(0);
+  });
+
+  it("retrieveSubscription and listActiveMeters send the bounded options only when asked (mutation: always bounded → FAILS: the webhook path changes)", async () => {
+    const s = stubStripe();
+    const g = stripeGateway(s as unknown as Stripe);
+    await g.retrieveSubscription("sub_1");
+    await g.retrieveSubscription("sub_1", { bounded: false });
+    await g.retrieveSubscription("sub_1", { bounded: true });
+    expect(s.subscriptions.retrieve.mock.calls).toEqual([["sub_1"], ["sub_1"], ["sub_1", {}, BOUNDED]]);
+    expect(s.subscriptions.retrieve.mock.calls[0]).toHaveLength(1);
+    await g.listActiveMeters();
+    await g.listActiveMeters({ bounded: true });
+    expect(s.billing.meters.list.mock.calls).toEqual([[{ status: "active", limit: 100 }], [{ status: "active", limit: 100 }, BOUNDED]]);
+    expect(s.billing.meters.list.mock.calls[0]).toHaveLength(1);
+  });
+});
+
+describe("FakeGateway's meter totals and transport (M7a PR-4)", () => {
+  const EV = (over: Partial<MeterEventInput> = {}): MeterEventInput => ({
+    eventName: "bis_sms_segments", customerId: "cus_1", value: 3, identifier: "u_1", timestampSeconds: 120, ...over,
+  });
+
+  it("meterTotal sums the reported events of that meter's event name and customer in [start, end), plus what was seeded (mutation: include the end instant → FAILS)", async () => {
+    const g = new FakeGateway();
+    g.meters = [{ id: "mtr_sms", eventName: "bis_sms_segments" }, { id: "mtr_voice", eventName: "bis_voice_minutes" }];
+    await g.reportMeterEvent(EV({ identifier: "a", timestampSeconds: 60 }), "k1");
+    await g.reportMeterEvent(EV({ identifier: "b", timestampSeconds: 119 }), "k2");
+    await g.reportMeterEvent(EV({ identifier: "c", timestampSeconds: 120 }), "k3");                        // at the end: out
+    await g.reportMeterEvent(EV({ identifier: "d", customerId: "cus_2", timestampSeconds: 61 }), "k4");     // other customer
+    await g.reportMeterEvent(EV({ identifier: "e", eventName: "bis_voice_minutes", timestampSeconds: 61 }), "k5"); // other meter
+    expect(await g.meterTotal({ meterId: "mtr_sms", customerId: "cus_1", startSeconds: 60, endSeconds: 120 })).toBe(6);
+    g.seedMeterTotal("mtr_sms", "cus_1", 10);
+    expect(await g.meterTotal({ meterId: "mtr_sms", customerId: "cus_1", startSeconds: 60, endSeconds: 120 })).toBe(16);
+    expect(g.calls.filter((c) => c.op === "meterTotal")).toHaveLength(2);
+  });
+
+  it("records whether each read asked for the bounded transport (mutation: record true always → FAILS)", async () => {
+    const g = new FakeGateway();
+    g.subscriptions.set("sub_1", { id: "sub_1" } as unknown as SubscriptionSnapshot);
+    await g.retrieveSubscription("sub_1");
+    await g.retrieveSubscription("sub_1", { bounded: true });
+    await g.listActiveMeters({ bounded: true });
+    await g.listActiveMeters();
+    await g.meterTotal({ meterId: "mtr_x", customerId: "cus_1", startSeconds: 0, endSeconds: 60 });
+    expect(g.transport).toEqual([
+      { op: "retrieveSubscription", bounded: false }, { op: "retrieveSubscription", bounded: true },
+      { op: "listActiveMeters", bounded: true }, { op: "listActiveMeters", bounded: false },
+      { op: "meterTotal", bounded: true },
+    ]);
   });
 });

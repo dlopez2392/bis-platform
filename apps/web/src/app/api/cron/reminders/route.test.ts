@@ -209,6 +209,20 @@ vi.mock("@bis/db", async () => {
   listPauseCandidates: vi.fn(async () => []),
   pauseBilling: async () => { throw new Error("route.test: no account is billed"); },
   clearBillingPause: async () => { throw new Error("route.test: no account is billed"); },
+  // M7a PR-4 Task 8: the usage report's hold and nightly step. Reached only past a billed account AND with
+  // BILLING_ENFORCE on, neither of which this suite has, so the reads and writers THROW (this file's
+  // convention) and the constants are the real ones.
+  USAGE_HOLD_AFTER_MS: actual.USAGE_HOLD_AFTER_MS,
+  PAST_DUE_STATUSES: actual.PAST_DUE_STATUSES,
+  ALERTING_VERDICTS: actual.ALERTING_VERDICTS,
+  reconcileNightStart: actual.reconcileNightStart,
+  listReconcilableAccounts: async () => { throw new Error("route.test: no account is billed"); },
+  reconciledSince: async () => { throw new Error("route.test: no account is billed"); },
+  latestReconciliations: async () => { throw new Error("route.test: no account is billed"); },
+  readUsageBands: async () => { throw new Error("route.test: no account is billed"); },
+  saveReconciliation: async () => { throw new Error("route.test: no account is billed"); },
+  healPermissions: async () => { throw new Error("route.test: no account is billed"); },
+  mirrorSubscription: async () => { throw new Error("route.test: no account is billed"); },
   };
 });
 
@@ -359,6 +373,7 @@ const EMPTY_QUOTE_FOLLOWUPS = {
 const EMPTY_USAGE_REPORT = {
   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
   skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+  remirrored: 0, reconciled: 0, mismatched: 0, heldStamped: 0, heldSent: 0, reconcileFailed: 0, reconcileSkippedBudget: 0,
 };
 const EMPTY_OPS_WATCH = { alerted: 0, recovered: 0, sent: 0, failed: 0, unmarked: 0 };
 /** M7a PR-4: the billing pause, FIRST in the registry; no account is billed here. */
