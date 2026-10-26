@@ -17,8 +17,9 @@
  */
 import { headers } from "next/headers";
 import {
-  ENDED_STATUSES, changeComplimentaryPlan, getAccountBilling, getBillingLink, getBranding, getPlan,
-  markComplimentary, mirrorSubscription, serviceDb, unmarkComplimentary, type Plan, type SupabaseClient,
+  ENDED_STATUSES, bumpHeldForAccount, changeComplimentaryPlan, clearBillingPause, getAccountBilling, getBillingLink,
+  getBranding, getPlan, markComplimentary, mirrorSubscription, serviceDb, undoLiftBillingPause, unmarkComplimentary,
+  type Plan, type SupabaseClient,
 } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
 import { loggableError, sendBillingLink, type SendBillingLinkResult } from "@/lib/billing/billing-link";
@@ -209,6 +210,40 @@ export async function removeComplimentaryAction(accountId: string): Promise<Bill
   await requireAgency();
   if (!isUuid(accountId)) return fail("billing.error.stale");
   return (await unmarkComplimentary(serviceDb(), accountId)) ? { ok: true } : fail("billing.error.stale");
+}
+
+export type LiftResult = { ok: true; liftedAt: string; pausedAt: string } | { ok: false; error: string };
+
+/** Lift pause (spec section 5; plan G3): immediate, with Undo (rule 6).
+ *  Returns the pause's own start for the Undo (re-review m1), and bumps the
+ *  account's held automations so they go next tick (m7). */
+export async function liftPauseAction(accountId: string): Promise<LiftResult> {
+  await requireAgency();
+  if (!isUuid(accountId)) return { ok: false, error: m["billing.error.stale"] };
+  const db = serviceDb();
+  const now = new Date();
+  const billing = await getAccountBilling(db, accountId);
+  if (!billing?.billingPausedAt) return { ok: false, error: m["billing.error.notPaused"] };
+  const r = await clearBillingPause(db, { accountId, expectedUpdatedAt: billing.updatedAt, now, lift: true });
+  if (r === "conflict") return { ok: false, error: m["billing.error.notPaused"] };
+  console.log(`billing: pause lifted by the agency for account ${accountId}`);
+  try {
+    // S-47d's own helper (@bis/db automation-log.ts): every held row due now. A
+    // failure only delays them to their next whole hour (G7a); never the lift.
+    await bumpHeldForAccount(db, accountId);
+  } catch (e) {
+    console.error(`billing: held automations not bumped after the lift of account ${accountId}: ${loggableError(e)}`);
+  }
+  return { ok: true, liftedAt: now.toISOString(), pausedAt: billing.billingPausedAt };
+}
+
+/** The Lift's Undo: re-pauses only while THAT lift still stands, from the
+ *  pause's own start (G3; m1). */
+export async function undoLiftPauseAction(accountId: string, liftedAt: string, pausedAt: string): Promise<BillingActionResult> {
+  await requireAgency();
+  if (!isUuid(accountId) || Number.isNaN(Date.parse(liftedAt)) || Number.isNaN(Date.parse(pausedAt))) return fail("billing.error.stale");
+  const r = await undoLiftBillingPause(serviceDb(), { accountId, liftedAt, pausedAt, now: new Date() });
+  return r === "repaused" ? { ok: true } : fail("billing.error.cannotRepause");
 }
 
 export async function changePlanAction(accountId: string, formData: FormData): Promise<BillingActionResult> {

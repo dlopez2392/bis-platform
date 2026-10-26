@@ -23,12 +23,14 @@ const dbm = vi.hoisted(() => ({
   account: null as { id: string; agency_id: string; timezone: string | null; name: string } | null,
   getPlan: vi.fn(), getAccountBilling: vi.fn(), getBillingLink: vi.fn(), getBranding: vi.fn(),
   markComplimentary: vi.fn(), unmarkComplimentary: vi.fn(), changeComplimentaryPlan: vi.fn(), mirrorSubscription: vi.fn(),
+  clearBillingPause: vi.fn(), undoLiftBillingPause: vi.fn(), bumpHeldForAccount: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getPlan: dbm.getPlan, getAccountBilling: dbm.getAccountBilling, getBillingLink: dbm.getBillingLink, getBranding: dbm.getBranding,
   markComplimentary: dbm.markComplimentary, unmarkComplimentary: dbm.unmarkComplimentary,
   changeComplimentaryPlan: dbm.changeComplimentaryPlan, mirrorSubscription: dbm.mirrorSubscription,
+  clearBillingPause: dbm.clearBillingPause, undoLiftBillingPause: dbm.undoLiftBillingPause, bumpHeldForAccount: dbm.bumpHeldForAccount,
   serviceDb: () => {
     guard.clients += 1;
     return {
@@ -108,7 +110,8 @@ beforeEach(() => {
   guard.gateways = 0;
   dbm.account = { id: ACCOUNT, agency_id: "ag", timezone: "America/Chicago", name: "Rio Roofing — trial" };
   for (const f of [dbm.getPlan, dbm.getAccountBilling, dbm.getBillingLink, dbm.getBranding, dbm.markComplimentary,
-    dbm.unmarkComplimentary, dbm.changeComplimentaryPlan, dbm.mirrorSubscription, sendMock]) f.mockReset();
+    dbm.unmarkComplimentary, dbm.changeComplimentaryPlan, dbm.mirrorSubscription, dbm.clearBillingPause,
+    dbm.undoLiftBillingPause, dbm.bumpHeldForAccount, sendMock]) f.mockReset();
   dbm.getPlan.mockImplementation(async (_db: unknown, id: string) => plan(id));
   dbm.getBranding.mockResolvedValue({ brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null });
   dbm.getBillingLink.mockResolvedValue(null);
@@ -137,12 +140,15 @@ describe("the agency's billing actions", () => {
       actions.markComplimentaryAction(ACCOUNT, form({ planId: P1 })),
       actions.removeComplimentaryAction(ACCOUNT),
       actions.changePlanAction(ACCOUNT, form({ planId: P2, expectedPlanId: P1, requestId: REQ })),
+      actions.liftPauseAction(ACCOUNT),
+      actions.undoLiftPauseAction(ACCOUNT, "2026-10-20T00:00:00.000Z", "2026-10-01T00:00:00.000Z"),
     ]);
-    expect(settled.map((s) => s.status === "rejected" && String((s.reason as Error).message))).toEqual(Array(4).fill("NEXT_REDIRECT"));
+    expect(settled.map((s) => s.status === "rejected" && String((s.reason as Error).message))).toEqual(Array(6).fill("NEXT_REDIRECT"));
     expect({ reads: guard.reads, clients: guard.clients, gateways: guard.gateways }).toEqual({ reads: 0, clients: 0, gateways: 0 });
     const untouched = { getPlan: dbm.getPlan, getAccountBilling: dbm.getAccountBilling, getBillingLink: dbm.getBillingLink,
       getBranding: dbm.getBranding, markComplimentary: dbm.markComplimentary, unmarkComplimentary: dbm.unmarkComplimentary,
-      changeComplimentaryPlan: dbm.changeComplimentaryPlan, mirrorSubscription: dbm.mirrorSubscription, sendBillingLink: sendMock };
+      changeComplimentaryPlan: dbm.changeComplimentaryPlan, mirrorSubscription: dbm.mirrorSubscription, sendBillingLink: sendMock,
+      clearBillingPause: dbm.clearBillingPause, undoLiftBillingPause: dbm.undoLiftBillingPause, bumpHeldForAccount: dbm.bumpHeldForAccount };
     expect(Object.entries(untouched).filter(([, f]) => f.mock.calls.length > 0).map(([name]) => name)).toEqual([]);
     expect(fake.calls).toEqual([]);
   });
@@ -462,5 +468,85 @@ describe("the agency's billing actions", () => {
     dbm.getAccountBilling.mockResolvedValue(billing({ planId: P2 }));
     expect(await actions.changePlanAction(ACCOUNT, form({ planId: P2, expectedPlanId: P1, requestId: REQ }))).toEqual({ ok: false, error: m["billing.error.stale"] });
     expect(fake.calls).toEqual([]);
+  });
+});
+
+describe("lift pause and its Undo (G3; M7a PR-4 Task 9)", () => {
+  const PAUSED_AT = "2026-10-01T00:00:00.000Z";
+  const LIFTED_AT = "2026-10-20T00:00:00.000Z";
+
+  it("lifts with the stored updated_at and returns the liftedAt it wrote and the pausedAt it cleared (mutation: return Date.now() later → FAILS: Undo never matches; mutation: omit pausedAt → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing({ billingPausedAt: PAUSED_AT, updatedAt: "v7" }));
+    let clearedWithNow: Date | undefined;
+    dbm.clearBillingPause.mockImplementation(async (_db: unknown, input: { now: Date }) => { clearedWithNow = input.now; return "cleared"; });
+    dbm.bumpHeldForAccount.mockResolvedValue(0);
+    const r = await actions.liftPauseAction(ACCOUNT);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.pausedAt).toBe(PAUSED_AT);
+    // The returned liftedAt must be the SAME instant clearBillingPause was
+    // handed (`now`), not a second, later Date.now() call: otherwise the
+    // Undo toast carries a lifted-at the stored row never agreed to, and
+    // undoLiftBillingPause's `sameLift` compare never matches.
+    expect(clearedWithNow).toBeDefined();
+    expect(r.liftedAt).toBe(clearedWithNow!.toISOString());
+    expect(dbm.clearBillingPause).toHaveBeenCalledWith(expect.anything(), { accountId: ACCOUNT, expectedUpdatedAt: "v7", now: clearedWithNow, lift: true });
+  });
+
+  it("a successful lift bumps the account's held automations; a bump failure is logged and the lift still answers ok (mutation: skip the bump → FAILS; mutation: let it throw → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing({ billingPausedAt: PAUSED_AT, updatedAt: "v7" }));
+    dbm.clearBillingPause.mockResolvedValue("cleared");
+    dbm.bumpHeldForAccount.mockResolvedValue(3);
+    expect((await actions.liftPauseAction(ACCOUNT)).ok).toBe(true);
+    expect(dbm.bumpHeldForAccount).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+
+    dbm.bumpHeldForAccount.mockReset();
+    dbm.bumpHeldForAccount.mockRejectedValue(new Error("automation_log unreachable"));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await actions.liftPauseAction(ACCOUNT);
+    expect(r).toEqual(expect.objectContaining({ ok: true, pausedAt: PAUSED_AT }));
+    expect(logged.mock.calls.map((c) => String(c[0])).some((l) => l.includes(ACCOUNT) && l.includes("automation_log unreachable"))).toBe(true);
+  });
+
+  it("not paused → billing.error.notPaused, and clearBillingPause is never called (mutation: lift anyway → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing({ billingPausedAt: null }));
+    expect(await actions.liftPauseAction(ACCOUNT)).toEqual({ ok: false, error: m["billing.error.notPaused"] });
+    expect(dbm.clearBillingPause).not.toHaveBeenCalled();
+    dbm.getAccountBilling.mockResolvedValue(null);
+    expect(await actions.liftPauseAction(ACCOUNT)).toEqual({ ok: false, error: m["billing.error.notPaused"] });
+    expect(dbm.clearBillingPause).not.toHaveBeenCalled();
+  });
+
+  it("a lost race (another write changed the row since it was read) → billing.error.notPaused, and the held automations are never bumped (mutation: report ok on conflict → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing({ billingPausedAt: PAUSED_AT, updatedAt: "v7" }));
+    dbm.clearBillingPause.mockResolvedValue("conflict");
+    expect(await actions.liftPauseAction(ACCOUNT)).toEqual({ ok: false, error: m["billing.error.notPaused"] });
+    expect(dbm.bumpHeldForAccount).not.toHaveBeenCalled();
+  });
+
+  it("liftPauseAction refuses an account id that is not a UUID as 'something changed', before any database read (mutation: drop the uuid check → FAILS)", async () => {
+    expect(await actions.liftPauseAction("not-a-uuid")).toEqual({ ok: false, error: m["billing.error.stale"] });
+    expect(dbm.getAccountBilling).not.toHaveBeenCalled();
+    expect(guard.clients).toBe(0);
+  });
+
+  it("the Undo passes pausedAt through to undoLiftBillingPause, never liftedAt in its place (mutation: pass liftedAt as pausedAt → FAILS)", async () => {
+    dbm.undoLiftBillingPause.mockResolvedValue("repaused");
+    expect(await actions.undoLiftPauseAction(ACCOUNT, LIFTED_AT, PAUSED_AT)).toEqual({ ok: true });
+    expect(dbm.undoLiftBillingPause).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT, liftedAt: LIFTED_AT, pausedAt: PAUSED_AT }));
+  });
+
+  it("undoLiftPauseAction stale → billing.error.cannotRepause (mutation: report ok on stale → FAILS)", async () => {
+    dbm.undoLiftBillingPause.mockResolvedValue("stale");
+    expect(await actions.undoLiftPauseAction(ACCOUNT, LIFTED_AT, PAUSED_AT)).toEqual({ ok: false, error: m["billing.error.cannotRepause"] });
+  });
+
+  it("undoLiftPauseAction refuses a bad account id, liftedAt or pausedAt as 'something changed', reading nothing (mutation: drop the uuid check → FAILS)", async () => {
+    const stale = { ok: false, error: m["billing.error.stale"] };
+    expect(await actions.undoLiftPauseAction("not-a-uuid", LIFTED_AT, PAUSED_AT)).toEqual(stale);
+    expect(await actions.undoLiftPauseAction(ACCOUNT, "not-a-date", PAUSED_AT)).toEqual(stale);
+    expect(await actions.undoLiftPauseAction(ACCOUNT, LIFTED_AT, "not-a-date")).toEqual(stale);
+    expect(dbm.undoLiftBillingPause).not.toHaveBeenCalled();
+    expect(guard.clients).toBe(0);
   });
 });
