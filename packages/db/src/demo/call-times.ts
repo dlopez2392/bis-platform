@@ -27,8 +27,9 @@ import { DEMO_OPEN_HOURS } from "./fiction";
  */
 
 /** Calls per local day, most recent day first: `[k, count]`, where `k` days
- *  before the seed's local date. Today (k=0) has none: the seed runs at 5 AM,
- *  and a 2 AM call on a marketing screenshot reads as a bug. 4+4+3·4 = 20 in
+ *  before the seed's local date. Today (k=0) is not in this list: its calls
+ *  depend on the time the seed runs, so `planTodayCalls` places them, in the
+ *  hour before it. 4+4+3·4 = 20 in
  *  the dashboard's current window (k=0..6), 2·7 = 14 in the prior (k=7..13).
  *
  *  And 2·7 = 14 more, k=14..20, that the dashboard never reads (2026-10-12).
@@ -107,6 +108,7 @@ export interface PlannedCall {
  */
 export function planDemoCalls(
   now: number, timezone: string, outcomes: readonly string[], pinAfterHours: readonly number[] = [],
+  todayAfterHours = 0,
 ): PlannedCall[] {
   if (outcomes.length !== DEMO_CALL_COUNT) {
     throw new Error(`planDemoCalls: expected ${DEMO_CALL_COUNT} outcomes, got ${outcomes.length}`);
@@ -140,7 +142,10 @@ export function planDemoCalls(
     for (const s of answered) if (pinned(s)) afterHours.add(s.i);
     const forced = answered.filter(pinned).length;
     const candidates = answered.filter((s) => !pinned(s));
-    const need = Math.min(candidates.length, Math.max(0, AFTER_HOURS[window] - forced));
+    // Today's answered after-hours calls (planTodayCalls) are in the current
+    // window too, so they count toward its target rather than on top of it.
+    const already = forced + (window === "current" ? todayAfterHours : 0);
+    const need = Math.min(candidates.length, Math.max(0, AFTER_HOURS[window] - already));
     for (let n = 0; n < need; n++) {
       afterHours.add(candidates[Math.floor((n * candidates.length) / need)]!.i);
     }
@@ -172,4 +177,39 @@ export function planDemoCalls(
       afterHours: afterHours.has(s.i) || !s.open,
     };
   });
+}
+
+/** How long before the seed's `now` each of today's calls starts, latest
+ *  first, in minutes. */
+export const TODAY_CALL_OFFSETS_MIN = [22, 61] as const;
+
+/**
+ * Today's calls (2026-10-26). With none, every capture of the call log read
+ * "0 of 50 calls today" and the chart's last bar sat at zero, on a business
+ * the rest of the page shows busy. They start in the hour before `now`, so
+ * they are always in the past whatever time the seed runs — before opening on
+ * the 5 AM rebuild, in the working day on a capture dispatched by hand — and
+ * each is flagged as the dashboard would judge it. A call that would fall
+ * before local midnight (a seed run just after it) is dropped, never moved to
+ * yesterday.
+ *
+ * They are planned apart from `planDemoCalls` so nothing about the other
+ * calls moves: seed.ts gives them their own random stream and their own
+ * scripts, and passes their after-hours count to `planDemoCalls` so the
+ * after-hours tile still reads AFTER_HOURS.current.
+ */
+export function planTodayCalls(now: number, timezone: string): PlannedCall[] {
+  const today = zoneParts(now, timezone);
+  const startOfDay = localToUtc(today.y, today.m, today.d, 0, timezone);
+  const date = new Date(Date.UTC(today.y, today.m - 1, today.d));
+  const hours = DEMO_OPEN_HOURS[WEEKDAY_KEYS[date.getUTCDay()]!]?.[0];
+  const open = hours ? [minutesOf(hours[0]), minutesOf(hours[1])] : null;
+  return TODAY_CALL_OFFSETS_MIN
+    .map((m) => now - m * 60_000)
+    .filter((at) => at >= startOfDay + 5 * 60_000)
+    .map((at) => {
+      const p = zoneParts(at, timezone);
+      const minutes = p.hh * 60 + p.mi;
+      return { startedAt: at, afterHours: !open || minutes < open[0]! || minutes >= open[1]! };
+    });
 }

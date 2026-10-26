@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planDemoCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT, AFTER_HOURS } from "./call-times";
+import { planDemoCalls, planTodayCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT, AFTER_HOURS, TODAY_CALL_OFFSETS_MIN } from "./call-times";
 import { DEMO_OPEN_HOURS, DEMO_TIMEZONE } from "./fiction";
 import { DEMO_TRANSCRIPTS } from "./transcripts";
 
@@ -147,4 +147,53 @@ describe("planDemoCalls", () => {
   it("refuses an outcome list of the wrong length", () => {
     expect(() => planDemoCalls(RUNS[0]!, DEMO_TIMEZONE, OUTCOMES.slice(1))).toThrow(new RegExp(`expected ${DEMO_CALL_COUNT}`));
   });
+});
+
+describe("planTodayCalls", () => {
+  const isAfterHours = (ms: number) => {
+    const l = local(ms);
+    const hours = DEMO_OPEN_HOURS[l.weekday]?.[0];
+    if (!hours) return true;
+    const [a, b] = hours.map((h) => Number(h.slice(0, 2)) * 60 + Number(h.slice(3)));
+    return l.minutes < a! || l.minutes >= b!;
+  };
+
+  it.each(RUNS.map((ms) => [new Date(ms).toISOString(), ms] as const))(
+    "on a run at %s: every call is today, before now, latest first, flagged as the dashboard would",
+    (_label, now) => {
+      const today = planTodayCalls(now, DEMO_TIMEZONE);
+      expect(today.length).toBe(TODAY_CALL_OFFSETS_MIN.length);
+      for (const call of today) {
+        expect(call.startedAt).toBeLessThan(now);
+        expect(local(call.startedAt).day).toBe(local(now).day);
+        expect(call.afterHours).toBe(isAfterHours(call.startedAt));
+      }
+      expect(today[0]!.startedAt).toBeGreaterThan(today[1]!.startedAt);
+    },
+  );
+
+  it("the 5 AM rebuild's calls land before opening, so they are after-hours", () => {
+    const today = planTodayCalls(RUNS[0]!, DEMO_TIMEZONE);
+    expect(today.every((c) => c.afterHours)).toBe(true);
+  });
+
+  it("a run just after local midnight keeps only the call that is still today (mutation: drop the midnight floor -> FAILS)", () => {
+    const now = Date.UTC(2026, 9, 14, 5, 30); // Wed Oct 14, 00:30 CDT
+    const today = planTodayCalls(now, DEMO_TIMEZONE);
+    expect(today.length).toBe(1);
+    expect(local(today[0]!.startedAt).day).toBe(local(now).day);
+  });
+
+  it.each(RUNS.map((ms) => [new Date(ms).toISOString(), ms] as const))(
+    "with today's calls in, the after-hours tile still reads its planned count on a run at %s (mutation: ignore todayAfterHours -> FAILS)",
+    (_label, now) => {
+      const today = planTodayCalls(now, DEMO_TIMEZONE);
+      const todayAfter = today.filter((c) => c.afterHours).length;
+      const plan = planDemoCalls(now, DEMO_TIMEZONE, OUTCOMES, [], todayAfter);
+      const current = new Set(dayKeysBack(now, 7));
+      const planned = plan.filter((c, i) => i < DASHBOARD_CALL_COUNT && current.has(local(c.startedAt).day)
+        && OUTCOMES[i] !== "spam" && OUTCOMES[i] !== "abandoned" && isAfterHours(c.startedAt)).length;
+      expect(planned + todayAfter).toBe(AFTER_HOURS.current);
+    },
+  );
 });

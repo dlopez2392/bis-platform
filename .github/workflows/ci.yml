@@ -255,10 +255,12 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # 40 since 2026-10-26: the Chromium step's worst case grew to 18 minutes
+    # (two 6-minute attempts and up to 4 minutes' wait for apt's lock).
     # 30 minutes, set when e2e ran on the shared project. Its last run there on
     # main (752c070f) took 8.0 minutes, 7.1 of them in Playwright; the stack
     # adds about two (verify's: `supabase start` 85s, schema 28s).
-    timeout-minutes: 30
+    timeout-minutes: 40
     # NO `needs: verify` and NO `concurrency:`, on purpose (2026-10-08).
     #
     # `needs: verify` put e2e AFTER verify because the two raced for one
@@ -439,16 +441,27 @@ jobs:
       # install takes about a minute. Each attempt gets 6 minutes, a second
       # attempt covers a mirror that recovers, and the step's own cap makes a
       # hang a fast, clearly named failure rather than a cancelled job.
+      #
+      # The wait between attempts (2026-10-26): `timeout` kills pnpm, but the
+      # apt-get Playwright started under sudo runs on and holds the dpkg lock,
+      # so attempt 2 used to fail at once with "Could not get lock" (PR #291
+      # run 40358943682, PR #292 run 40365715811, main at 15:35 that day, each
+      # stalled downloading fonts from the Ubuntu 26 mirror). The retry could
+      # never help. Now it waits, up to 4 minutes, for that apt-get to finish
+      # or give up; what it downloaded stays in apt's cache for attempt 2.
       - name: Install Chromium for Playwright
         if: steps.scope.outputs.docs_only != 'true'
-        timeout-minutes: 14
+        timeout-minutes: 18
         run: |
           for attempt in 1 2; do
             if timeout --kill-after=20s 6m pnpm --filter web exec playwright install --with-deps chromium; then
               exit 0
             fi
             echo "::warning::Chromium install attempt $attempt failed or exceeded 6 minutes"
-            sleep 15
+            for _ in $(seq 1 48); do
+              sudo fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1 || break
+              sleep 5
+            done
           done
           echo "::error::Chromium install failed twice; see the apt output above"
           exit 1
