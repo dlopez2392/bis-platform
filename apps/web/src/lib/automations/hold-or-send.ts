@@ -143,6 +143,9 @@ export const REASONS = {
    *  pause deadline has passed. */
   heldBillingPaused: m["automations.reason.heldBillingPaused"],
   skippedBillingPaused: m["automations.reason.skippedBillingPaused"],
+  /** The pause's refusal for a send that is not held (the document request): no deadline passed, so never
+   *  the "too late" line above. */
+  billingPaused: m["automations.reason.billingPaused"],
   /** The consent gate's refusals (lib/consent/gate.ts), in the words the
    *  client reads on the Activity page. */
   textsStopped: m["automations.reason.textsStopped"],
@@ -285,7 +288,7 @@ export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
   suppressed_account: REASONS.accountSuppressed,
   // holdOrSend HOLDS this one before it could be read here (G7a); the words are
   // for a path that logs a refusal itself (the document request).
-  billing_paused: REASONS.skippedBillingPaused,
+  billing_paused: REASONS.billingPaused,
 };
 
 /** Every refusal the EMAIL gate can hand an automation, as the Activity page
@@ -298,7 +301,7 @@ export const EMAIL_BLOCK_REASONS: Record<Exclude<EmailBlockReason, "ledger_unava
   window_after_deadline: REASONS.windowAfterDeadline,
   suppressed_account: REASONS.accountSuppressed,
   // As BLOCK_REASONS: holdOrSend holds it first (G7a).
-  billing_paused: REASONS.skippedBillingPaused,
+  billing_paused: REASONS.billingPaused,
 };
 
 function hoursRuleOf(s: HoldSubject): HoursRule {

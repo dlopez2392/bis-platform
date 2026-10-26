@@ -505,8 +505,10 @@ describe("holdOrSend: the non-payment pause HOLDS, never drops (owner answer I6,
     expect(send).toHaveBeenCalledTimes(3);
   });
 
-  it("BLOCK_REASONS and EMAIL_BLOCK_REASONS name billing_paused with the skipped words (the exhaustive Records; holdOrSend intercepts it first)", () => {
-    expect(BLOCK_REASONS.billing_paused).toBe(REASONS.skippedBillingPaused);
-    expect(EMAIL_BLOCK_REASONS.billing_paused).toBe(REASONS.skippedBillingPaused);
+  it("BLOCK_REASONS and EMAIL_BLOCK_REASONS name billing_paused in their own words, not the deadline skip's 'too late' (the exhaustive Records; holdOrSend intercepts it first; review item 2; mutation: map it to skippedBillingPaused → FAILS)", () => {
+    expect(BLOCK_REASONS.billing_paused).toBe("Not sent: the account is paused");
+    expect(EMAIL_BLOCK_REASONS.billing_paused).toBe(REASONS.billingPaused);
+    expect(REASONS.billingPaused).toBe(m["automations.reason.billingPaused"]);
+    expect(m["automations.reason.billingPaused.es"]).toBe("No se envió: la cuenta está en pausa");
   });
 });

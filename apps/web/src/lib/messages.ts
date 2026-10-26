@@ -2559,6 +2559,10 @@ export const m = {
   "automations.reason.heldBillingPaused.es": "En espera: la cuenta está en pausa hasta que se reciba un pago",
   "automations.reason.skippedBillingPaused": "Not sent: too late, the account was paused",
   "automations.reason.skippedBillingPaused.es": "No se envió: demasiado tarde, la cuenta estaba en pausa",
+  // M7a PR-4 (review item 2): a send a person asked for (the document request) refused while paused; an
+  // automation never reads it, holdOrSend holds those first.
+  "automations.reason.billingPaused": "Not sent: the account is paused",
+  "automations.reason.billingPaused.es": "No se envió: la cuenta está en pausa",
   "calls.detail.businessStatus": "Status at the start",
   "calls.detail.businessStatus.es": "Estado al empezar",
   "calls.detail.businessStatus.open": "Open",
@@ -4738,6 +4742,8 @@ export const m = {
   "documents.request.reason.bounced.es": "este correo rebotó",
   "documents.request.reason.failed": "it couldn't be delivered",
   "documents.request.reason.failed.es": "no se pudo entregar",
+  "documents.request.reason.accountPaused": "texts to customers are stopped while this account is paused",
+  "documents.request.reason.accountPaused.es": "los mensajes de texto a clientes están detenidos mientras esta cuenta está en pausa",
   "documents.request.task.received": "{name} sent documents · Review",
   "documents.request.task.received.es": "{name} mandó documentos · Revisar",
   "documents.request.task.receivedNoName": "A customer sent documents · Review",
