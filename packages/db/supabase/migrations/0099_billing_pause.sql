@@ -42,8 +42,8 @@
 --
 -- LOCKS. The ALTERs take ACCESS EXCLUSIVE on account_billing, forwarded_calls and screened_calls for the
 -- length of this file; lock_timeout 5s is the protection. The added columns are nullable with no default
--- (no rewrite). The widened CHECKs are added NOT VALID and then validated, so the scan runs under SHARE
--- UPDATE EXCLUSIVE, not under the ALTER's lock.
+-- (no rewrite). The widened CHECKs are added NOT VALID and then validated, as the repo does; inside one
+-- transaction that saves no lock (0095), and both tables are small, so the scan is brief.
 --
 -- APPLY ORDER: after 0098 everywhere. CI project (ci-project-setup.yml: push-dry-run, then push), then
 -- production (MCP apply_migration, once), then the parity check, then merge.
