@@ -36,7 +36,7 @@ describe("0059 forwarded_calls: grants and shape", () => {
       )).rejects.toThrow(/permission denied/i);
     }));
 
-  it("refuses a kind outside the two, and the TS list matches the CHECK (mutation: drop forwarded_calls_kind_check → FAILS)", () =>
+  it("refuses a kind outside the four, and the TS list matches the CHECK (mutation: drop forwarded_calls_kind_check → FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ def: string }>(
         `select pg_get_constraintdef(oid) as def from pg_constraint
@@ -104,7 +104,7 @@ describe("0059 forwarded_calls: record and count, through serviceDb()", () => {
     expect(count).toBe(0);
   });
 
-  it("a kind outside the two throws rather than being swallowed", () =>
+  it("a kind outside the four throws rather than being swallowed", () =>
     withTestAccount(async (db, accountId) => {
       await expect(recordForwardedCall(db, {
         accountId, phoneNumberId: null, calledE164: "+19565550999", callerE164: null,

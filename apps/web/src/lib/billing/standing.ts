@@ -21,9 +21,14 @@ export const PAUSE_FORWARD_MS = 30 * DAY_MS;
 
 export type PauseDecision = "pause" | "unpause" | "keep" | "unconfirmed";
 
-/** An instant, or null for a missing OR unreadable stamp: a stamp that does
- *  not parse never counts as "long enough ago" to pause on (NaN would slip
- *  past every `<` below). */
+/** An instant, or null for a missing OR unreadable stamp (NaN would slip
+ *  past every `<` below). What null means is per field, in decidePause:
+ *   - pastDueSince: never "long enough ago" → keep (no pause on a bad stamp);
+ *   - pauseLiftedAt: no lift → the lift does not hold, so the row may pause;
+ *   - stripeCheckedAt: no confirmation → "unconfirmed", never pause;
+ *   - currentPeriodEnd on a CANCELED plan: no end to wait for → it PAUSES
+ *     (unless any lift stands: with no end to compare, any lift keeps — the
+ *     deferred edge in plan G1, assumption S3). */
 const at = (iso: string | null): number | null => {
   if (iso === null) return null;
   const ms = Date.parse(iso);

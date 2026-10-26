@@ -46,7 +46,7 @@ describe("screened_calls grants", () => {
       ).rejects.toThrow(/permission denied/i);
     }));
 
-  it("refuses a reason outside the six (mutation: drop screened_calls_reason_check -> FAILS)", () =>
+  it("refuses a reason outside the eight (mutation: drop screened_calls_reason_check -> FAILS)", () =>
     withRollback(async (c) => {
       await expect(
         c.query(

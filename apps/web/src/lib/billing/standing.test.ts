@@ -116,8 +116,9 @@ describe("decidePause: an ended plan (spec flow 6)", () => {
     expect(decidePause(canceled({ currentPeriodEnd: iso(T) }), NOW)).toBe("pause");
   });
 
-  it("8. canceled and lifted after its end → keep; lifted before its end → pause (mutation: ignore lifts on ended plans → FAILS)", () => {
+  it("8. canceled and lifted after its end → keep; lifted exactly AT its end → keep; lifted before its end → pause (mutation: ignore lifts on ended plans → FAILS; mutation: `>` instead of `>=` on lift vs end → FAILS at the exact end)", () => {
     expect(decidePause(canceled({ currentPeriodEnd: ago(3 * DAY), pauseLiftedAt: ago(DAY) }), NOW)).toBe("keep");
+    expect(decidePause(canceled({ currentPeriodEnd: ago(3 * DAY), pauseLiftedAt: ago(3 * DAY) }), NOW)).toBe("keep");
     expect(decidePause(canceled({ currentPeriodEnd: ago(3 * DAY), pauseLiftedAt: ago(10 * DAY) }), NOW)).toBe("pause");
     expect(decidePause(canceled({ currentPeriodEnd: null, pauseLiftedAt: ago(DAY) }), NOW)).toBe("keep");
   });
