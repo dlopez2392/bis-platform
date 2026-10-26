@@ -13,6 +13,7 @@ import { reconcileMeter } from "../src/lib/billing/reconcile";
 import { STRIPE_API_VERSION, stripeGateway, type MeterEventInput } from "../src/lib/billing/stripe-gateway";
 import { ensureMeters, METERS } from "../src/lib/billing/stripe-catalog";
 import { m } from "../src/lib/messages";
+import { restoreStoredTheme } from "./stored-theme";
 
 // Same two dotenv lines as plans.spec.ts / billing.spec.ts.
 loadEnv({ path: "apps/web/.env.local" });
@@ -212,6 +213,12 @@ test(
   "a change while paused is not saved and lands back on the same page (N1) (mutation: refuseActionWhilePaused not called from requireAccountAccess → FAILS: the status changes)",
   async ({ browser, baseURL }) => {
     const client = await browser.newContext({ storageState: "e2e/.auth/client-state.json", baseURL });
+    // The theme click below saves a real choice to the fixture Owner's
+    // users.theme, which outranks the tenant's brand_mode for every later
+    // spec signed in as them. Left behind, it painted client-access.spec's
+    // brand_mode "dark" tenant light (CI e2e on 69d55e94). `undefined` =
+    // not read yet, so nothing is written back that was never read.
+    let themeBefore: string | null | undefined;
     try {
       const page = await client.newPage();
       const dashboardUrl = `/dashboard/accounts/${accountId}/dashboard`;
@@ -243,7 +250,7 @@ test(
       // though the action it "answers for" never touched billing. Cover that
       // the save still lands despite that extra redirect.
       const clerkUserId = fixture!.clerkUserId;
-      const themeBefore = (await readPersonPrefs(serviceDb(), clerkUserId))?.theme ?? null;
+      themeBefore = (await readPersonPrefs(serviceDb(), clerkUserId))?.theme ?? null;
       const urlBeforeTheme = page.url();
       await page.getByTestId("theme-toggle").click();
       await expect
@@ -256,6 +263,7 @@ test(
       await expect(page).toHaveURL(urlBeforeTheme);
     } finally {
       await client.close();
+      if (themeBefore !== undefined) await restoreStoredTheme(fixture!.clerkUserId, themeBefore);
     }
   },
 );
