@@ -2106,3 +2106,129 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
     expect(cat["conversation.holding.notice.es"]).not.toMatch(/asign|archivad/i);
   });
 });
+
+/**
+ * M7a PR-4 (plan Task 3): the pause's banners (client, agency), the client
+ * Billing page, the agency's Billing card (pause + Lift pause + the nightly
+ * reconciliation result), the automation hold/skip reasons and the SMS
+ * composer's send-time refusal. billing.banner.* existed English-only
+ * before this task (rollout step 3); here they gain their first Spanish
+ * twin, which is why they leave catalogue-baseline.json once regenerated
+ * (Step 3 of the task).
+ */
+describe("M7a PR-4 copy (billing pause, English and Spanish)", () => {
+  const WANT: Record<string, string> = {
+    "billing.banner.client": "Your payment didn't go through. Update your card to keep automations running.",
+    "billing.banner.client.es": "Su pago no se completó. Actualice su tarjeta para que las automatizaciones sigan funcionando.",
+    "billing.banner.clientAction": "Go to Billing",
+    "billing.banner.clientAction.es": "Ir a Facturación",
+    "billing.banner.agency": "This client's last payment didn't go through.",
+    "billing.banner.agency.es": "El último pago de este cliente no se completó.",
+    "billing.banner.agencyAction": "See billing",
+    "billing.banner.agencyAction.es": "Ver facturación",
+    "billing.paused.client.payment": "Your account is paused because a payment didn't go through. Your receptionist isn't answering calls, texts to your customers are stopped, automations are waiting, and nothing here can be changed until it's paid.",
+    "billing.paused.client.payment.es": "Su cuenta está en pausa porque un pago no se completó. Su recepcionista no está contestando llamadas, los mensajes a sus clientes están detenidos, las automatizaciones están en espera, y aquí no se puede cambiar nada hasta que se pague.",
+    "billing.paused.client.ended": "Your plan has ended, so your account is paused. Your receptionist isn't answering calls, texts to your customers are stopped, automations are waiting, and nothing here can be changed.",
+    "billing.paused.client.ended.es": "Su plan terminó, así que su cuenta está en pausa. Su recepcionista no está contestando llamadas, los mensajes a sus clientes están detenidos, las automatizaciones están en espera, y aquí no se puede cambiar nada.",
+    "billing.paused.client.action": "Go to Billing",
+    "billing.paused.client.action.es": "Ir a Facturación",
+    "billing.paused.client.staff": "The account owner can turn everything back on from the Billing page.",
+    "billing.paused.client.staff.es": "El dueño de la cuenta puede volver a activar todo desde la página de Facturación.",
+    "billing.paused.agency": "This client is paused: the receptionist isn't answering, texts to their customers are stopped, automations are waiting, and their dashboard is read-only.",
+    "billing.paused.agency.es": "Este cliente está en pausa: la recepcionista no está contestando, los mensajes a sus clientes están detenidos, las automatizaciones están en espera, y su panel es de solo lectura.",
+    "billing.paused.agencyAction": "See billing",
+    "billing.paused.agencyAction.es": "Ver facturación",
+    "billing.page.paused.payment": "Your account is paused until the payment goes through. Update your card below to turn everything back on.",
+    "billing.page.paused.payment.es": "Su cuenta está en pausa hasta que se complete el pago. Actualice su tarjeta abajo para volver a activar todo.",
+    "billing.page.paused.ended": "Your plan has ended, so your account is paused. To start again, contact us.",
+    "billing.page.paused.ended.es": "Su plan terminó, así que su cuenta está en pausa. Para volver a empezar, comuníquese con nosotros.",
+    "billing.card.pausedPayment": "Paused since {date}: the payment failed on {failed}.",
+    "billing.card.pausedPayment.es": "En pausa desde el {date}: el pago falló el {failed}.",
+    "billing.card.pausedEnded": "Paused since {date}: the plan ended.",
+    "billing.card.pausedEnded.es": "En pausa desde el {date}: el plan terminó.",
+    "billing.card.noForward": "Calls are no longer forwarded: the account has been paused for over 30 days.",
+    "billing.card.noForward.es": "Las llamadas ya no se desvían: la cuenta lleva más de 30 días en pausa.",
+    "billing.card.pauseOff": "Pausing is switched off here, so this pause changes nothing.",
+    "billing.card.pauseOff.es": "La pausa está desactivada aquí, así que no cambia nada.",
+    "billing.card.lifted": "Pause lifted {date}.",
+    "billing.card.lifted.es": "Pausa quitada el {date}.",
+    "billing.card.liftPause": "Lift pause",
+    "billing.card.liftPause.es": "Quitar la pausa",
+    "billing.card.liftPauseHelp": "Turns calls, texts and automations back on now. It stays lifted until they pay or another payment fails.",
+    "billing.card.liftPauseHelp.es": "Vuelve a activar llamadas, mensajes y automatizaciones ahora. Sigue así hasta que paguen o falle otro pago.",
+    "billing.card.liftedToast": "Pause lifted.",
+    "billing.card.liftedToast.es": "Pausa quitada.",
+    "billing.card.repausedToast": "Paused again.",
+    "billing.card.repausedToast.es": "En pausa de nuevo.",
+    "billing.card.reconcile.title": "Usage doesn't match Stripe",
+    "billing.card.reconcile.title.es": "El uso no coincide con Stripe",
+    "billing.card.reconcile.line": "{meter}: Stripe counts {stripe}, BIS counts {bis}. Checked {when}.",
+    "billing.card.reconcile.line.es": "{meter}: Stripe cuenta {stripe}, BIS cuenta {bis}. Revisado el {when}.",
+    "billing.card.reconcile.help": "Check this client's invoice in Stripe before it's finalised. The billing runbook says how.",
+    "billing.card.reconcile.help.es": "Revise la factura de este cliente en Stripe antes de que se cierre. La guía de facturación explica cómo.",
+    "billing.card.reconcile.meter.voice_minutes": "Call minutes",
+    "billing.card.reconcile.meter.voice_minutes.es": "Minutos de llamadas",
+    "billing.card.reconcile.meter.sms": "Texts",
+    "billing.card.reconcile.meter.sms.es": "Mensajes de texto",
+    "billing.card.reconcile.meter.ai_chats": "Website chats",
+    "billing.card.reconcile.meter.ai_chats.es": "Chats del sitio web",
+    "billing.error.notPaused": "This account isn't paused any more. Refresh to see its billing.",
+    "billing.error.notPaused.es": "Esta cuenta ya no está en pausa. Actualice la página para ver su facturación.",
+    "billing.error.cannotRepause": "This account's billing changed, so it can't be paused again from here. Refresh to see it.",
+    "billing.error.cannotRepause.es": "La facturación de esta cuenta cambió, así que no se puede volver a pausar desde aquí. Actualice la página para verla.",
+    "automations.reason.heldBillingPaused": "Held: the account is paused until a payment goes through",
+    "automations.reason.heldBillingPaused.es": "En espera: la cuenta está en pausa hasta que se reciba un pago",
+    "automations.reason.skippedBillingPaused": "Not sent: too late, the account was paused",
+    "automations.reason.skippedBillingPaused.es": "No se envió: demasiado tarde, la cuenta estaba en pausa",
+    "compose.smsBlockedPaused": "Texts are stopped while this account is paused for billing.",
+    "compose.smsBlockedPaused.es": "Los mensajes están detenidos mientras esta cuenta está en pausa por facturación.",
+  };
+
+  // Agency-only (`work.agency.` prefix — lib/i18n/ratchet-scan.ts's
+  // AGENCY_ONLY_KEY_PREFIXES): English only, no Spanish twin required.
+  const AGENCY_WANT: Record<string, string> = {
+    "work.agency.billing.paymentFailed": "Payment failed:",
+    "work.agency.billing.paused": "Paused:",
+    "work.agency.billing.pausedNoForward": "Paused 30+ days, calls are no longer forwarded:",
+    "work.agency.billing.mismatch": "Usage doesn't match Stripe:",
+    "work.agency.billing.more": "and {n} more",
+  };
+
+  it("every PR-4 key is the plan's wording, in both languages (mutation: change any one string → FAILS naming it)", () => {
+    const cat = m as Record<string, string>;
+    for (const [k, v] of Object.entries(WANT)) expect(cat[k], k).toBe(v);
+    for (const [k, v] of Object.entries(AGENCY_WANT)) expect(cat[k], k).toBe(v);
+  });
+
+  it("every English key (outside the agency-only work.agency.billing.* lines) has its .es twin directly on the next line (mutation: move a twin → FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("a placeholder in English is a placeholder in Spanish (mutation: drop {failed} from billing.card.pausedPayment.es → FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const holes = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort().join(",");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      expect(holes(cat[`${k}.es`]!), k).toBe(holes(cat[k]!));
+    }
+  });
+
+  it("the Spanish is usted, never tú (mutation: restore a tú verb/pronoun in any .es line → FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const TU = /\b(actualiza|usa|ve|tu|tus)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(cat[k]!), `${k}: ${cat[k]}`).toBe(false);
+    }
+  });
+
+  it("the paused banner never promises a forward — no .paused. value names a phone (M3: true whether or not the account has a transfer number, and whatever day of the pause it is) (mutation: add 'calls forward to your phone' to billing.paused.client.payment → FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of Object.keys(WANT).filter((x) => x.includes(".paused."))) {
+      expect(cat[k]!.toLowerCase(), k).not.toMatch(/\bphone\b|\btel[eé]fono\b/);
+    }
+  });
+});
