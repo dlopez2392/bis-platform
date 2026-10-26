@@ -7,6 +7,9 @@ import type { CallOutcome, TranscriptEvent } from "@bis/db";
 export type MirroredBooking = {
   id: string; contactName: string; startsAt: string; endsAt: string;
   status?: "booked" | "cancelled";
+  /** The contact the booking landed on. finishCall files a call whose bookings landed on two or more people on
+   *  none of them (call 42ed4822). Absent on a mirror that did not know it (the corpus stub). */
+  contactId?: string;
 };
 export type CapturedLead = {
   fields: Record<string, string>;

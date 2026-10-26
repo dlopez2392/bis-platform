@@ -767,7 +767,8 @@ describe("reschedule / cancel", () => {
     // The AI did this, not a signed-in user.
     expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
-    expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
+    // The replacement is the old booking's contact's (call 42ed4822 follow-up; mutation: drop contactId -> FAILS).
+    expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked", contactId: "ct1" });
     expect(state.served).toEqual(["rescheduled"]);
   });
   // D-035: the new row names the one it replaces, so the dashboard, the
@@ -2182,6 +2183,16 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(r.result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(bookedOn()).toEqual(["ct2"]);
     expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  // Production call 42ed4822 (Ana and Beto on one call): finishCall can only tell a two-person call from a
+  // one-person call if each mirrored booking remembers whose it is.
+  it("each mirrored booking carries the contact it landed on, so a call for two people is two contacts (mutation: drop contactId from the mirror -> FAILS)", async () => {
+    on(ANA, BETO);
+    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" }).mockResolvedValueOnce({ id: "bk2", cancelToken: "t2" });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    const second = await book(first.state, { name: "Beto Prueba" });
+    expect(second.state.bookings.map((b) => [b.id, b.contactId])).toEqual([["bk1", "ct1"], ["bk2", "ct2"]]);
   });
 
   it("the same with an email: still that record, and its blanks are filled once (decision 19, on the caller ID)", async () => {

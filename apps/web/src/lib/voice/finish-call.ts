@@ -293,6 +293,11 @@ async function resolveOpenOpportunity(
   }
 }
 
+/** Call 42ed4822: the bookings this call made landed on two or more different contacts. */
+function bookedForSeveral(state: CallState): boolean {
+  return new Set(state.bookings.flatMap((b) => (b.contactId ? [b.contactId] : []))).size >= 2;
+}
+
 /** S-47e (Task 8 review M1): the name the record below is chosen by: the lead's, or with no lead the last
  *  message's when the caller did not decline it. Undefined when none was given. */
 function nameSaidAfter(state: CallState): string | undefined {
@@ -332,8 +337,13 @@ function nameSaidAfter(state: CallState): string | undefined {
  * keeps the message, the identity To do (filed below, contactId null) is the team's hand-off, and staff can
  * make the person from the call page. Decided on the state, never on what Sofía was told to say. A locked
  * call with no message (a booking, S18; a lead) resolves as before.
+ *
+ * Call 42ed4822: a call whose bookings landed on two or more different contacts files on NO customer: its
+ * summary names every person's appointment, and each person's own booking is already on their own record.
+ * Every booking the call made counts, a cancelled one too (the summary's transcript still tells of it).
  */
 async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
+  if (bookedForSeveral(state)) return null;
   if (state.identity.locked !== null && state.messages.length > 0) return null;
   if (state.contactId) {
     const said = nameSaidAfter(state);

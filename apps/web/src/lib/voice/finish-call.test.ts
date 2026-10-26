@@ -2458,9 +2458,54 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
     it("regression: a booking on a locked call, with no message, still files on the booked contact (S18 unchanged)", async () => {
       onCallerId(...GARCIAS);
       const booked = withBooking({ ...lockedByCarla(), contactId: "ct2" },
-        { id: "bk1", contactName: "Beto García", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
+        { id: "bk1", contactId: "ct2", contactName: "Beto García", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
       await finishCall(booked, ctx, meta);
       expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(patch().contactId).toBe("ct2");
+    });
+  });
+
+  // Production call 42ed4822: Ana and Beto booked on one call, and the summary ("Booked: Ana García at …; Beto
+  // García at …") went on Beto's thread only, naming Ana's appointment on Beto's record. Each person's own
+  // booking is already on their own record, so a call whose bookings landed on two or more people files on none.
+  describe("a call that booked two different people files on no customer (call 42ed4822)", () => {
+    const at = (h: number) => ({ startsAt: `2027-06-02T${h}:00:00.000Z`, endsAt: `2027-06-02T${h + 1}:00:00.000Z` });
+    const bookedFor = (s: ReturnType<typeof caller>, ...who: [string, string, string][]) =>
+      who.reduce((acc, [id, contactId, name], i) =>
+        withBooking({ ...acc, contactId }, { id, contactId, contactName: name, ...at(14 + i) }), s);
+
+    it("Ana and Beto booked: no thread, no new contact, the call row keeps no contact; the row, the alert and the proposals still run (mutation: drop the two-people guard → Beto's thread, FAILS)", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      await finishCall(bookedFor(caller(), ["bk1", "ct1", "Ana García"], ["bk2", "ct2", "Beto García"]), ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
+      expect(patch().contactId).toBeUndefined();
+      expect(dbMocks.finishCallRow.mock.calls[0]![3]).toMatchObject({ outcome: "booked", bookingId: "bk1" });
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ contactId: null }));
+    });
+
+    it("a booking made and cancelled for Ana, then one for Beto: still two people (every booking the call made counts, whatever its status)", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      const s = bookedFor(caller(), ["bk1", "ct1", "Ana García"], ["bk2", "ct2", "Beto García"]);
+      await finishCall(withBookingCancelled(s, "bk1"), ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("regression: two bookings for the SAME person still file on that person", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      await finishCall(bookedFor(caller(), ["bk1", "ct1", "Ana García"], ["bk2", "ct1", "Ana García"]), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(patch().contactId).toBe("ct1");
+    });
+
+    it("regression: one booking files on its person, as today", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      await finishCall(bookedFor(caller(), ["bk1", "ct2", "Beto García"]), ctx, meta);
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
       expect(patch().contactId).toBe("ct2");
     });
