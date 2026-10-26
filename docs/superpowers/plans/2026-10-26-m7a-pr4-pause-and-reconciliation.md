@@ -108,7 +108,7 @@ Assumptions (not verified; each names what settles it):
 - **S6. Stripe's own `paused` status never occurs** (it needs a trial without a payment method; there are no trials, DECISION 5). `decidePause` neither pauses nor heals on it.
 - **S7. Identifier uniqueness lasts at least 24 h** (Stripe docs, PR-3 B10). The hold starts at 20 h (`USAGE_HOLD_AFTER_MS`).
 - **S8. Stripe finalises a period's invoice about an hour after the period ends** (Stripe docs on draft invoices, not re-read). So the just-closed period's comparison (G14) usually REPORTS a mismatch after the invoice is final; it cannot prevent it. **Settled by:** the probe reads the invoice's `finalized_at`.
-- **N1. `next-action` is on the request of every server action, readable through `headers()` inside the action body; `redirect()` there navigates the browser** (documented). **Settled by:** Task 12's e2e test 3.
+- **N1. A server action is recognisable through `headers()` inside the action body, and `redirect()` there navigates the browser** (documented). Verified in Next 16.3.6's source (Task 7 review I1): a POST is an action when it carries `next-action` (the client's fetch) OR its body is a form, multipart or url-encoded, with no header at all (a no-JS form post; `server-action-request-meta.js`, `isMultipartAction` / `isURLEncodedAction`), which Next answers with a plain 303 after its write has run; and the render Next forwards after an action's redirect drops `next-action` but keeps the form's content-type and sends `rsc: 1` (`action-handler.js:276-313`). So `isActionRequest` counts `next-action`, or no `rsc` header and a form content-type. **Settled by:** Task 12's e2e test 3.
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
@@ -136,7 +136,7 @@ Assumptions (not verified; each names what settles it):
   - otherwise (paused 30 days or more, no usable transfer number, or the call was not cleared) the caller hears `COPY.unavailable` in the profile's languages, and the call is recorded in `screened_calls` with the same reason, which the agency's Screened calls list shows.
   An uncleared call is never forwarded (`route.ts:708-711`'s rule). A failed billing read changes nothing (fail open). The deployment-wide `VOICE_FORWARD_TO` still runs first. The SIP webhook gets no billing check (a paused call reaches Sofía only when the TeXML route's own read failed, and a decline there would be dead air). The billing read starts before the caps' `Promise.all` with its own catch, so it adds no latency and a billing failure can never mark the call uncleared (M1).
 - **G10. What stops, what does not** (Q6): stop = customer texts (G7), automations held (G7a, G8), Sofía (G9), the website chat (every entry point answers as for a switched-off chat: 404), AI record summaries (the summary route's gate answers "none"; M2), client writes (G11). Keep = the public booking page and forms (and their emails), inbound email and SMS (recorded), STOP/HELP/START replies, owner alerts, the weekly report, the demo (BIS's own number, never billed), the agency's own actions.
-- **G11. "Dashboard read-only"** = a CLIENT caller's server action on a paused account is refused inside `requireAccountAccess`: it redirects to the page the action came from (the `referer`'s path, only when it is inside `/dashboard/accounts/<id>/`), else the caller's account home; nothing is written, and the paused banner on that page says why. Pages, layouts and GETs are untouched (no `next-action` header). The agency is never read-only. Exactly these server actions stay usable while paused, each opting out with `{ duringPause: "allow" }` and pinned with its reason by `lib/billing/read-only.test.ts`: Manage billing (`openBillingPortalAction`: the way to pay), the shell's snapshot poll (`getShellSnapshot`), and every other action Task 7's audit finds to write nothing and call no model or provider (starting candidates: `getDocumentUrlAction`, `countContactDocumentsAction`, `searchGroupsAction`, `searchRelatableContactsAction`; `getForwardingAddressAction` is NOT one: it creates the forwarding address on first use, a write, M6). An allowed action must not revalidate; the scan pins that too. The one client API write, `ai-summary`'s POST (Regenerate), is covered by G10's AI gate, which answers "none" while paused, for every caller.
+- **G11. "Dashboard read-only"** = a CLIENT caller's server action on a paused account is refused inside `requireAccountAccess`: it redirects to the page the action came from (the `referer`'s path, only when it is inside `/dashboard/accounts/<id>/`), else the caller's account home; nothing is written, and the paused banner on that page says why. Pages, layouts and GETs are untouched: an action is a request with `next-action`, or a no-JS form post (multipart or url-encoded body, no `rsc` header; N1), and a render is neither. The agency is never read-only. Exactly these server actions stay usable while paused, each opting out with `{ duringPause: "allow" }` and pinned with its reason by `lib/billing/read-only.test.ts`: Manage billing (`openBillingPortalAction`: the way to pay), the shell's snapshot poll (`getShellSnapshot`), read state (`markConversationReadAction`, which writes only the unread counter and no longer revalidates; MarkRead refreshes the page after it, Task 7 review I2), and every other action Task 7's audit finds to write nothing and call no model or provider (starting candidates: `getDocumentUrlAction`, `countContactDocumentsAction`, `searchGroupsAction`, `searchRelatableContactsAction`; `getForwardingAddressAction` is NOT one: it creates the forwarding address on first use, a write, M6). An allowed action must not revalidate; the scan pins that too. The one client API write, `ai-summary`'s POST (Regenerate), is covered by G10's AI gate, which answers "none" while paused, for every caller.
 - **G12. The paused banner** is mounted beside the payment-failed one in the account layout, for every member (Owner, Staff, Technician) and the agency, read through `billingVerdictFor` (service role, cached per request). It shows only while the switch is on and the account is paused. Its sentence is true whether or not the account has a transfer number and whatever day of the pause it is (M3): "Your receptionist isn't answering calls, texts to your customers are stopped, automations are waiting, and nothing here can be changed …". Two causes, two sentences (payment / ended); the client Owner gets a link to Billing, Staff and Technicians a line saying the owner can turn it back on (Billing is Owner-only), the agency the Settings link. `role="note"`, `tone="crit"`, the sentence is the marker (DESIGN rule 3).
 - **G13. The agency alert** (spec flow 5; PR-3 Next plans (f); I7): one derived banner on the work queue (`/dashboard/work`), LineDownBanner's pattern (derived, nothing stored, renders nothing at zero), listing by name, each linking to the account's `settings#billing`, at most five names per line plus "and N more". Lines and how each ENDS (M8):
   - "Payment failed:" while `past_due_since` is set and the row is not paused (the mirror clears it on any other status, a cancellation included);
@@ -1553,6 +1553,16 @@ import { billingVerdictFor } from "./standing-read";
 /** Next 16.3.6's server-action request header (app-router-headers.js:96). */
 export const ACTION_HEADER = "next-action";
 
+/** A server action (N1, review I1): `next-action`, or a form body with no
+ *  `rsc` header (a no-JS form post; the forwarded render after a redirect
+ *  sends `rsc: 1` with the form's content-type). */
+export function isActionRequest(h: Headers): boolean {
+  if (h.get(ACTION_HEADER) !== null) return true;
+  if (h.get("rsc") !== null) return false;
+  const type = (h.get("content-type") ?? "").toLowerCase();
+  return type.startsWith("multipart/form-data") || type.startsWith("application/x-www-form-urlencoded");
+}
+
 /** The path of `referer` when it is inside THIS account, else null. Only the
  *  path is kept, so the redirect is always same-origin. */
 export function sameAccountPath(referer: string | null, accountId: string): string | null {
@@ -1564,16 +1574,17 @@ export function sameAccountPath(referer: string | null, accountId: string): stri
 
 /**
  * "Dashboard read-only" (spec flow 5; plan G11). Called by requireAccountAccess
- * for a CLIENT caller only. Refuses a SERVER ACTION (the request carries
- * `next-action`; a page render, a layout and a GET never do) on a paused
- * account by sending the browser back to the page it came from, where the
- * paused banner says why. Nothing is written. Switch off: returns at once. A
- * failed read: allowed (billingVerdictFor fails open).
+ * for a CLIENT caller only. Refuses a SERVER ACTION (isActionRequest: the
+ * `next-action` header, or a no-JS form post; a page render, a layout and a
+ * GET carry neither) on a paused account by sending the browser back to the
+ * page it came from, where the paused banner says why. Nothing is written.
+ * Switch off: returns at once. A failed read: allowed (billingVerdictFor
+ * fails open).
  */
 export async function refuseActionWhilePaused(accountId: string, fallback: string): Promise<void> {
   if (!billingEnforced()) return;
   const h = await headers();
-  if (h.get(ACTION_HEADER) === null) return;
+  if (!isActionRequest(h)) return;
   if (!(await billingVerdictFor(accountId)).paused) return;
   console.log(`read-only: refused a client action on paused account ${accountId}`);
   redirect(sameAccountPath(h.get("referer"), accountId) ?? fallback);
