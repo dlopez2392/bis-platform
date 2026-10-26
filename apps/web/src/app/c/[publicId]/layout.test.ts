@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("next/font/google", () => ({
   Geist: (o: unknown) => o, Inter: (o: unknown) => o, Source_Serif_4: (o: unknown) => o,
@@ -6,7 +6,9 @@ vi.mock("next/font/google", () => ({
 
 // F-102 review round, fix 2 (the layout-wiring half) — same reasoning as
 // `app/f/[publicId]/layout.test.ts`'s identical file.
-const { getVoiceProfileAnyStatusByPublicIdMock, getBrandingMock } = vi.hoisted(() => ({
+const { getVoiceProfileAnyStatusByPublicIdMock, getBrandingMock, readBillingStandingMock } = vi.hoisted(() => ({
+  // M7a PR-4 (plan G10, M12): standing-read.ts reads it only while BILLING_ENFORCE is "1".
+  readBillingStandingMock: vi.fn(),
   getVoiceProfileAnyStatusByPublicIdMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
@@ -17,6 +19,7 @@ vi.mock("@bis/db", async () => {
     serviceDb: () => ({}),
     getVoiceProfileAnyStatusByPublicId: getVoiceProfileAnyStatusByPublicIdMock,
     getBranding: getBrandingMock,
+    readBillingStanding: readBillingStandingMock,
     brandLogoUrl: () => null,
   };
 });
@@ -36,6 +39,7 @@ const PROFILE = {
 beforeEach(() => {
   getVoiceProfileAnyStatusByPublicIdMock.mockReset();
   getBrandingMock.mockReset();
+  readBillingStandingMock.mockReset().mockResolvedValue(null);
 });
 
 describe("ConciergeSegmentLayout (F-102 review round, fix 2 — layout wiring)", () => {
@@ -85,5 +89,39 @@ describe("ConciergeSegmentLayout (F-102 review round, fix 2 — layout wiring)",
     expect(wrapper.props["data-tenant-theme"]).toBe("");
     expect(wrapper.props.style).toHaveProperty("--background");
     expect(wrapper.props.style).toHaveProperty("--accent");
+  });
+});
+
+// M7a PR-4 (plan G10, M12): the layout asks the SAME question the page does,
+// so a paused account's chat 404s with the brand a switched-off one carries.
+describe("ConciergeSegmentLayout while billing is enforced (BILLING_ENFORCE)", () => {
+  const LIVE = { ...PROFILE, concierge_enabled: true, concierge_form_id: "f1", concierge_form_published: true };
+  const PAUSED = {
+    complimentary: false, pausedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    subscriptionStatus: "past_due", features: { voice_receptionist: true, web_concierge: true },
+  };
+  beforeEach(() => { vi.stubEnv("BILLING_ENFORCE", "1"); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("a paused chat's not-found page is branded like a switched-off one, and its tab title is the brand's (mutation: keep isConciergeLive alone in the layout → FAILS)", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(LIVE);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    readBillingStandingMock.mockResolvedValue(PAUSED);
+    const el = await ConciergeSegmentLayout({ params: Promise.resolve({ publicId: "p1" }), children: SENTINEL });
+    const wrapper = el.props.children.props.children;
+    expect(wrapper).not.toBe(SENTINEL);
+    expect(wrapper.type).toBe("div");
+    const meta = await generateMetadata({ params: Promise.resolve({ publicId: "p1" }) });
+    expect(meta.title).toContain("Acme Plumbing");
+  });
+
+  it("a paying live chat: no brand from the layout (the page brands itself), the brand-free fallback title", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(LIVE);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    readBillingStandingMock.mockResolvedValue({ ...PAUSED, pausedAt: null, subscriptionStatus: "active" });
+    const el = await ConciergeSegmentLayout({ params: Promise.resolve({ publicId: "p1" }), children: SENTINEL });
+    expect(el.props.children.props.children).toBe(SENTINEL);
+    const meta = await generateMetadata({ params: Promise.resolve({ publicId: "p1" }) });
+    expect(meta.title).not.toContain("Acme Plumbing");
   });
 });

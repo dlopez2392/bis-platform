@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { isConciergeLive, brandDisplayName, brandLogoUrl } from "@bis/db";
+import { brandDisplayName, brandLogoUrl } from "@bis/db";
+import { conciergeOpen } from "@/lib/billing/standing-read";
 import { PublicHtml } from "@/components/public/public-html";
 import { PublicBrand } from "@/components/public-brand";
 import { PublicLocaleProvider } from "@/components/public/locale-context";
@@ -34,7 +35,7 @@ export default async function ConciergeSegmentLayout({
   const { publicId } = await params;
   const profile = await loadProfileSafe(publicId);
   const lang = profileLangDefault(profile);
-  const showNotFoundBrand = !!profile && !isConciergeLive(profile);
+  const showNotFoundBrand = !!profile && !(await conciergeOpen(profile));
   const branding = showNotFoundBrand ? await loadProfileBranding(profile.account_id, publicId) : null;
   const theme = branding ? publicFormTheme(branding, false, null) : null;
 
@@ -65,7 +66,7 @@ export async function generateMetadata(
   const profile = await loadProfileSafe(publicId);
   const lang = profileLangDefault(profile);
   const strings = conciergeStrings(lang);
-  if (!profile || isConciergeLive(profile)) return { title: strings.tabTitleNoBrand, ...FAVICON };
+  if (!profile || (await conciergeOpen(profile))) return { title: strings.tabTitleNoBrand, ...FAVICON };
   const branding = (await loadProfileBranding(profile.account_id, publicId)) ?? UNBRANDED;
   return {
     title: publicTabTitle(strings, brandDisplayName(branding)),

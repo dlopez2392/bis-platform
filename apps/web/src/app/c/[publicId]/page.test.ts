@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // `vi.hoisted` because `vi.mock` factories are hoisted above ALL other
 // module-level code, including these two `const`s — a bare
@@ -15,7 +15,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // null` while its own comment claimed it was "real logic, not mocked" — a
 // copy that could drift from the real predicate silently, and exactly the
 // shape a reviewer flagged.
-const { getVoiceProfileAnyStatusByPublicIdMock, getBrandingMock } = vi.hoisted(() => ({
+const { getVoiceProfileAnyStatusByPublicIdMock, getBrandingMock, readBillingStandingMock } = vi.hoisted(() => ({
+  // M7a PR-4 (plan G10, M12): standing-read.ts reads it only while BILLING_ENFORCE is "1".
+  readBillingStandingMock: vi.fn(),
   getVoiceProfileAnyStatusByPublicIdMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
@@ -26,6 +28,7 @@ vi.mock("@bis/db", async () => {
     serviceDb: () => ({}),
     getVoiceProfileAnyStatusByPublicId: getVoiceProfileAnyStatusByPublicIdMock,
     getBranding: getBrandingMock,
+    readBillingStanding: readBillingStandingMock,
     brandLogoUrl: () => null,
   };
 });
@@ -51,6 +54,7 @@ const noSearchParams = Promise.resolve({});
 beforeEach(() => {
   getVoiceProfileAnyStatusByPublicIdMock.mockReset();
   getBrandingMock.mockReset();
+  readBillingStandingMock.mockReset().mockResolvedValue(null);
 });
 
 describe("/c/[publicId] metadata", () => {
@@ -260,5 +264,53 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     expect(chat.props.greeting).toBe(
       "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hi! How can I help?",
     );
+  });
+});
+
+// M7a PR-4 (plan G10, M12; owner answer Q5): a paused account's chat, or a
+// plan without the website chat, answers exactly as a switched-off one does.
+describe("ConciergePage while billing is enforced (BILLING_ENFORCE)", () => {
+  const PAUSED = {
+    complimentary: false, pausedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    subscriptionStatus: "past_due", features: { voice_receptionist: true, web_concierge: true },
+  };
+  beforeEach(() => { vi.stubEnv("BILLING_ENFORCE", "1"); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("switch on, paused → notFound (mutation: drop the conciergeOpen check → FAILS)", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(PROFILE);
+    readBillingStandingMock.mockResolvedValue(PAUSED);
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+    expect(readBillingStandingMock).toHaveBeenCalledWith(expect.anything(), "a1");
+  });
+
+  it("switch on, a plan without the website chat → notFound", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(PROFILE);
+    readBillingStandingMock.mockResolvedValue({ ...PAUSED, pausedAt: null, subscriptionStatus: "active",
+      features: { voice_receptionist: true, web_concierge: false } });
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  it("switch on, paying: the chat renders", async () => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(PROFILE);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    readBillingStandingMock.mockResolvedValue({ ...PAUSED, pausedAt: null, subscriptionStatus: "active" });
+    const el = await ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams });
+    expect(el.type).toBe("main");
+  });
+
+  it("generateMetadata returns robots only for it (mutation: brand its title → FAILS)", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(PROFILE);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    readBillingStandingMock.mockResolvedValue(PAUSED);
+    const meta = await generateMetadata({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
+    });
+    expect(meta).toEqual({ robots: { index: false, follow: false } });
   });
 });

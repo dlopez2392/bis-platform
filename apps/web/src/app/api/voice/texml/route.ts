@@ -55,6 +55,7 @@ import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallba
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
+import { billingEnforced } from "@/lib/billing/enforce";
 import type { ScreenedCallInput, ForwardedCallInput } from "@bis/db";
 
 export const runtime = "nodejs";
@@ -71,18 +72,26 @@ export type Languages = "en" | "es" | "both";
  *     the fallback; it gets today's hang-up.
  *   - `lookupFailed`: the number lookup itself threw — the one failure that
  *     is this route's own outage, stamped as such.
- *   - `phoneNumberId`: the called line's row, on a cleared call only — what
- *     a forwarded call's record (0059) points at.
- *   - `languages` / `firstTimeCaller`: on a cleared call only, for the
- *     press-1 screen — the profile's languages for its question, and whether
- *     this caller has NO answered call in the reputation window. Read from
- *     the same history batch as Guard 2, so the screen adds no DB read.
+ *   - `phoneNumberId`: the called line's row, whenever the profile was read —
+ *     what a forwarded or screened call's record (0059, 0039) points at.
+ *   - `languages` / `firstTimeCaller`: the profile's languages (for the
+ *     press-1 screen's question and the unavailable sentence), and whether
+ *     this caller has NO answered call in the reputation window (cleared
+ *     calls only). Read from the same history batch as Guard 2, so the screen
+ *     adds no DB read. `languages` and `phoneNumberId` also ride an UNCLEARED
+ *     call (a count read failed), for the unavailable sentence and its record.
+ *   - `noVoice` (M7a PR-4, plan G9): set only when BILLING_ENFORCE is on and
+ *     the account's verdict has no Sofía (paused, or a plan without the
+ *     receptionist), with whether the call may still ring the business.
+ *     Absent when the billing read failed (fail open: today's path).
  */
+type NoVoice = { reason: "billing-paused" | "plan-no-voice"; forward: boolean };
 type Routability =
   | {
     kind: "dial"; accountId?: string; phoneNumberId?: string; forwardCalls?: boolean;
     cleared?: boolean; lookupFailed?: boolean;
     languages?: Languages; firstTimeCaller?: boolean;
+    noVoice?: NoVoice;
   }
   | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
   | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
@@ -104,6 +113,13 @@ const COPY = {
   cap: {
     en: "We're sorry — we can't take more calls today. Please call back tomorrow.",
     es: "Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.",
+  },
+  // M7a PR-4 (plan G9; owner answers Q2 and I7): a paused account, or a plan
+  // with no receptionist, when the call cannot or may no longer be forwarded.
+  // Not the refusal sentence: nobody can pick up right now.
+  unavailable: {
+    en: "Thanks for calling. No one can take your call right now. Please call back later.",
+    es: "Gracias por llamar. En este momento nadie puede atender su llamada. Por favor llame más tarde.",
   },
 } as const;
 
@@ -205,10 +221,13 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
   // in this try (lookup, profile read) falls to the outer catch and fails
   // open to dial — the webhook resolver still gates authoritatively.
   try {
+    // The module is kept whole so `readBillingStanding` is touched only with
+    // BILLING_ENFORCE on, inside the billing read's own catch below.
+    const dbModule = await import("@bis/db");
     const {
       serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince,
       countCallsByCallerSince, countCallerHistorySince, countForwardedCallsSince,
-    } = await import("@bis/db");
+    } = dbModule;
     const { readLimitConfig, decideLimit, utcDayStart } = await import("@/lib/voice/call-limits");
     const {
       readReputationConfig, decideReputation, windowStart,
@@ -284,6 +303,28 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     // The incoming webhook makes the opposite trade for the opposite reason:
     // it binds, it is not on the carrier's clock, and its two reads each carry
     // their own try/catch so neither can take the other down.
+    // M7a PR-4 (plan G9, review M1). Started now, awaited after the counts:
+    // no added latency, and its own catch, so a billing failure is today's
+    // path (fail open, logged) and never marks the call uncleared. An async
+    // IIFE so the read STARTS before the counts below (its body runs
+    // synchronously to the first await) and a synchronous throw becomes a
+    // rejection the catch sees. Only `dial` returns wait for it; a refusal
+    // or a cap never does.
+    const accountId = row.account_id;
+    const billingRead: Promise<NoVoice | null> = billingEnforced()
+      ? (async () => {
+        const standing = await dbModule.readBillingStanding(db, accountId);
+        const { billingVerdict, voiceBlock } = await import("@/lib/billing/standing");
+        return voiceBlock(billingVerdict(standing, true, new Date()));
+      })().catch((e: unknown) => {
+        console.error(`texml billing read failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
+        return null;
+      })
+      : Promise.resolve(null);
+    const withBilling = async (): Promise<{ noVoice?: NoVoice }> => {
+      const noVoice = await billingRead;
+      return noVoice ? { noVoice } : {};
+    };
     let firstTimeCaller = false;
     try {
       const now = new Date();
@@ -350,12 +391,16 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       firstTimeCaller = history.answeredCalls === 0;
     } catch (e) {
       console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
-      return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: false };
+      return {
+        kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
+        forwardCalls: profile.forward_calls === true, cleared: false,
+        languages: profile.languages, ...(await withBilling()),
+      };
     }
     return {
       kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
       forwardCalls: profile.forward_calls === true, cleared: true,
-      languages: profile.languages, firstTimeCaller,
+      languages: profile.languages, firstTimeCaller, ...(await withBilling()),
     };
   } catch (e) {
     console.error(`texml lookup failed for ${calledE164}: ${String(e)}`);
@@ -519,6 +564,32 @@ export function xmlResponse(body: string): NextResponse {
  * where the call was going anyway; never to dead air.
  */
 async function accountForwardTarget(accountId: string): Promise<string | null> {
+  const target = await resolveTransferTarget(accountId);
+  if (target.to !== null) return target.to;
+  // The three lines this wrapper has always logged, byte for byte (a test
+  // pins them): an unusable target and a BIS line are logs, a failed read is
+  // an error.
+  if (target.why === "bis-line") {
+    console.log(`texml forward is on but its transfer number is a BIS line — Sofía answers, accountId ${accountId}`);
+  } else if (target.error !== undefined) {
+    console.error(`texml forward lookup failed — Sofía answers, accountId ${accountId}: ${target.error}`);
+  } else {
+    console.log(`texml forward is on but unusable (${target.why}) — Sofía answers, accountId ${accountId}`);
+  }
+  return null;
+}
+
+/**
+ * The account's transfer number, through the handoff feature's own
+ * `resolveHandoffTarget` (own-number guard included) and the any-BIS-line
+ * guard, or WHY there is none: `not-configured` / `own-number` (the
+ * resolver's reasons), `bis-line`, or `lookup-failed` with the error. Shared
+ * by the per-account forward and the billing forward (M7a PR-4, plan G9), so
+ * both carry the same loop guards. Never throws.
+ */
+async function resolveTransferTarget(
+  accountId: string,
+): Promise<{ to: string } | { to: null; why: string; error?: string }> {
   try {
     const { serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164 } = await import("@bis/db");
     const db = serviceDb();
@@ -530,22 +601,15 @@ async function accountForwardTarget(accountId: string): Promise<string | null> {
       transferPhone,
       owned.filter((n) => n.status === "testing" || n.status === "live").map((n) => n.e164),
     );
-    if (!target.available) {
-      console.log(`texml forward is on but unusable (${target.reason}) — Sofía answers, accountId ${accountId}`);
-      return null;
-    }
+    if (!target.available) return { to: null, why: target.reason };
     // ANY number this platform owns, not only this account's: two accounts
     // forwarding to each other's lines would ping-pong a call between this
     // route's two forwards, and a forwarded call writes no row that a cap
     // could count. A number we own is never a person's phone.
-    if (await getPhoneNumberByE164(db, target.to)) {
-      console.log(`texml forward is on but its transfer number is a BIS line — Sofía answers, accountId ${accountId}`);
-      return null;
-    }
-    return target.to;
+    if (await getPhoneNumberByE164(db, target.to)) return { to: null, why: "bis-line" };
+    return { to: target.to };
   } catch (e) {
-    console.error(`texml forward lookup failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
-    return null;
+    return { to: null, why: "lookup-failed", error: String(e) };
   }
 }
 
@@ -556,6 +620,40 @@ async function accountForwardTarget(accountId: string): Promise<string | null> {
  * answer deadline, and a failed write must never cost the caller the forward.
  * A missed row under-counts one call; it never refuses one.
  */
+function recordScreenedCallLater(screened: ScreenedCallInput): void {
+  // `after()` because this route sits on Telnyx's carrier answer
+  // deadline and its own comments say wall-clock is the one thing it
+  // cannot spend. Same pattern, same reason, as incoming/route.ts's own
+  // `after(() => runCallLifecycle(...))`.
+  //
+  // BEST-EFFORT, and that is a contract: a failed write OR A FAILED
+  // SCHEDULE logs and changes nothing about the refusal, the spoken
+  // copy, or the hang-up. The console.log lines in classify() are
+  // untouched and remain the evidence if this write is itself broken.
+  try {
+    // `after()` itself has synchronous throw paths distinct from the
+    // callback rejecting (no work store; `errorWaitUntilNotAvailable`).
+    // Neither is caught by the try/catch INSIDE the callback below, so
+    // scheduling gets its own — otherwise the throw escapes `answer()`
+    // (there is no enclosing catch in GET/POST) and Telnyx gets a 500
+    // instead of the refusal document: dead air instead of the sentence
+    // this whole branch exists to speak.
+    after(async () => {
+      try {
+        // Lazy import: a module-scope DB import here breaks `next build`
+        // during page-data collection — same reason as `classify()`'s own
+        // lazy `@bis/db` import above.
+        const { serviceDb, recordScreenedCall } = await import("@bis/db");
+        await recordScreenedCall(serviceDb(), screened);
+      } catch (e) {
+        console.error(`texml: screened-call write failed (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+      }
+    });
+  } catch (e) {
+    console.error(`texml: could not schedule the screened-call write (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
+  }
+}
+
 function recordForwardedCallLater(input: ForwardedCallInput): void {
   try {
     after(async () => {
@@ -632,40 +730,9 @@ async function route(
     const result = await classify(calledE164, callerE164);
     if (result.kind !== "dial") {
       // ONE write site for all six refusals, not one per branch — six call
-      // sites would be six chances for the next reason to forget one.
-      //
-      // `after()` because this route sits on Telnyx's carrier answer
-      // deadline and its own comments say wall-clock is the one thing it
-      // cannot spend. Same pattern, same reason, as incoming/route.ts's own
-      // `after(() => runCallLifecycle(...))`.
-      //
-      // BEST-EFFORT, and that is a contract: a failed write OR A FAILED
-      // SCHEDULE logs and changes nothing about the refusal, the spoken
-      // copy, or the hang-up. The console.log lines in classify() are
-      // untouched and remain the evidence if this write is itself broken.
-      const screened = result.screened;
-      try {
-        // `after()` itself has synchronous throw paths distinct from the
-        // callback rejecting (no work store; `errorWaitUntilNotAvailable`).
-        // Neither is caught by the try/catch INSIDE the callback below, so
-        // scheduling gets its own — otherwise the throw escapes `answer()`
-        // (there is no enclosing catch in GET/POST) and Telnyx gets a 500
-        // instead of the refusal document: dead air instead of the sentence
-        // this whole branch exists to speak.
-        after(async () => {
-          try {
-            // Lazy import: a module-scope DB import here breaks `next build`
-            // during page-data collection — same reason as `classify()`'s own
-            // lazy `@bis/db` import above.
-            const { serviceDb, recordScreenedCall } = await import("@bis/db");
-            await recordScreenedCall(serviceDb(), screened);
-          } catch (e) {
-            console.error(`texml: screened-call write failed (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
-          }
-        });
-      } catch (e) {
-        console.error(`texml: could not schedule the screened-call write (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
-      }
+      // sites would be six chances for the next reason to forget one. (The
+      // billing message below is the one other caller, with its own reason.)
+      recordScreenedCallLater(result.screened);
     }
     if (result.kind === "refuse") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
     // Deliberately the same sentence as `refuse`, and deliberately ABOVE the
@@ -701,6 +768,37 @@ async function route(
           : `texml screen asking ${calledE164}, caller ${callerE164 ?? "unknown"} to press 1 (first-time), accountId ${accountId}`);
         return done(xmlResponse(screenXml(languages, screenActionUrl(origin, languages, accountId))));
       }
+    }
+    // M7a PR-4 (plan G9; owner answers Q2, Q5, I7): a paused account, or a
+    // plan with no receptionist. After every guard and the screen; before the
+    // per-account forward and the bridge. A CLEARED call the verdict still
+    // lets ring the business (a pause under 30 days, or a plan without Sofía)
+    // goes to the transfer number, with the per-account forward's loop
+    // guards; anything else hears the short message. Both are recorded, and
+    // the forwarded ones count toward the daily caps (0059). An uncleared
+    // call is never forwarded: a forward has no webhook behind it to re-check.
+    // Known (M13): a paused account in Closed today or Storm forwards in its
+    // first 30 days like any other; this route reads no business status.
+    if (result.accountId && result.noVoice) {
+      const { reason, forward } = result.noVoice;
+      const target = result.cleared && forward
+        ? await resolveTransferTarget(result.accountId)
+        : { to: null, why: forward ? "not cleared" : "paused 30 days or more" };
+      if (target.to !== null) {
+        console.log(`texml FORWARDING account ${result.accountId} to its transfer number — ${reason}`);
+        recordForwardedCallLater({
+          accountId: result.accountId, phoneNumberId: result.phoneNumberId ?? null,
+          calledE164, callerE164, kind: reason,
+        });
+        return done(xmlResponse(forwardXml(target.to, calledE164)));
+      }
+      const why = "error" in target && target.error !== undefined ? `${target.why}: ${target.error}` : target.why;
+      console.log(`texml unavailable message for account ${result.accountId} — ${reason}, no forward (${why})`);
+      recordScreenedCallLater({
+        accountId: result.accountId, phoneNumberId: result.phoneNumberId ?? null,
+        calledE164, callerE164, reason,
+      });
+      return done(xmlResponse(sayXml(result.languages ?? "en", COPY.unavailable)));
     }
     // The per-account forward, if the agency turned it on,
     // takes the place of the bridge; otherwise the same dial path as

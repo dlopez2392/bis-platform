@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
+import type { BillingStanding } from "@bis/db";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -18,6 +19,8 @@ const transferPhoneMock = vi.hoisted(() => vi.fn());
 const ownedNumbersMock = vi.hoisted(() => vi.fn());
 const countForwardedMock = vi.hoisted(() => vi.fn());
 const recordForwardedCallMock = vi.hoisted(() => vi.fn());
+// M7a PR-4 (plan G9): read only while BILLING_ENFORCE is "1".
+const readBillingStandingMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   getTransferPhone: (...a: unknown[]) => transferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => ownedNumbersMock(...a),
@@ -30,6 +33,7 @@ vi.mock("@bis/db", () => ({
   recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
   countForwardedCallsSince: (...a: unknown[]) => countForwardedMock(...a),
   recordForwardedCall: (...a: unknown[]) => recordForwardedCallMock(...a),
+  readBillingStanding: (...a: unknown[]) => readBillingStandingMock(...a),
 }));
 
 // `after()` becomes a recorder we invoke ourselves — same pattern as
@@ -94,6 +98,10 @@ beforeEach(() => {
   // test still counts only what it arranged.
   countForwardedMock.mockReset().mockResolvedValue({ forAccount: 0, forCaller: 0 });
   recordForwardedCallMock.mockReset().mockResolvedValue(undefined);
+  // The billing switch is OFF unless a test turns it on (M7a PR-4): every
+  // test above the billing block predates it. Unbilled by default.
+  delete process.env.BILLING_ENFORCE;
+  readBillingStandingMock.mockReset().mockResolvedValue(null);
 });
 
 describe("texml route", () => {
@@ -1529,5 +1537,205 @@ describe("ANSWERED_CALL_OUTCOMES (packages/db) and ANSWERED_OUTCOMES (weekly rep
     const { ANSWERED_CALL_OUTCOMES } = await vi.importActual<typeof import("@bis/db")>("@bis/db");
     const { ANSWERED_OUTCOMES } = await import("@/lib/reports/weekly-metrics");
     expect([...ANSWERED_CALL_OUTCOMES].sort()).toEqual([...ANSWERED_OUTCOMES].sort());
+  });
+});
+
+// M7a PR-4 (plan G9; owner answers Q2, Q5 and I7). A paused account, or a
+// plan with no receptionist: after every guard and the press-1 screen, and
+// before the per-account forward and the bridge, a CLEARED call the verdict
+// still lets ring the business goes to the transfer number; anything else
+// hears the short call-back sentence. Both are recorded.
+describe("billing: a paused or receptionist-less account (BILLING_ENFORCE)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const LINE = { id: "pn1", account_id: ACCOUNT, e164: "+19565550999", telnyx_id: null, status: "live" };
+  const CALLER = "+19565550111";
+  const TRANSFER = "+19565550123";
+  const DAY = 24 * 60 * 60 * 1000;
+  const UNAVAILABLE_EN = "<Say>Thanks for calling. No one can take your call right now. Please call back later.</Say>";
+  const UNAVAILABLE_ES = "<Say language=\"es-MX\">Gracias por llamar. En este momento nadie puede atender su llamada. Por favor llame más tarde.</Say>";
+  const call = () => GET(new Request(`https://x.example/api/voice/texml?To=%2B19565550999&From=${encodeURIComponent(CALLER)}`));
+  const standing = (over: Partial<BillingStanding> = {}): BillingStanding => ({
+    complimentary: false, pausedAt: null, subscriptionStatus: "active",
+    features: { voice_receptionist: true, web_concierge: true }, ...over,
+  });
+  const pausedDaysAgo = (days: number) => standing({
+    pausedAt: new Date(Date.now() - days * DAY).toISOString(), subscriptionStatus: "past_due",
+  });
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    process.env.BILLING_ENFORCE = "1";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    delete process.env.APP_ORIGIN;
+    // The called line is ours; the transfer number is nobody's BIS line.
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) => (e164 === LINE.e164 ? LINE : null));
+    ownedNumbersMock.mockResolvedValue([LINE]);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT });
+    transferPhoneMock.mockResolvedValue(TRANSFER);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.BILLING_ENFORCE;
+    delete process.env.VOICE_FORWARD_TO;
+    delete process.env.VOICE_SCREEN_NUMBERS;
+  });
+
+  it("switch on, paused under 30 days, cleared call with a usable transfer number: the forward document, recorded billing-paused (mutation: record account-forward → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    const xml = await (await call()).text();
+    expect(xml).toContain(`<Dial callerId="+19565550999" timeout="30" timeLimit="3600">${TRANSFER}</Dial>`);
+    expect(xml).not.toContain("<Sip>");
+    expect(readBillingStandingMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+    await flushAfter();
+    expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999", callerE164: CALLER, kind: "billing-paused",
+    });
+    expect(recordScreenedCallMock).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(`texml FORWARDING account ${ACCOUNT} to its transfer number — billing-paused`);
+  });
+
+  it("I7: paused 30 days or more: the unavailable sentence and a screened_calls row billing-paused, never the forward, even with a transfer number (mutation: ignore verdict.forward → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(31));
+    const xml = await (await call()).text();
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${UNAVAILABLE_EN}<Hangup/></Response>`);
+    expect(transferPhoneMock).not.toHaveBeenCalled();
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999", callerE164: CALLER, reason: "billing-paused",
+    });
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(`texml unavailable message for account ${ACCOUNT} — billing-paused, no forward (paused 30 days or more)`);
+  });
+
+  it("plan without the receptionist: the forward, recorded plan-no-voice (mutation: drop the plan half of voiceBlock → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(standing({ features: { voice_receptionist: false, web_concierge: true } }));
+    const xml = await (await call()).text();
+    expect(xml).toContain(`>${TRANSFER}</Dial>`);
+    expect(xml).not.toContain("<Sip>");
+    await flushAfter();
+    expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ kind: "plan-no-voice" }));
+  });
+
+  it("paused, NO transfer number: the unavailable sentence in the profile's languages, a screened_calls row billing-paused, never the bridge (mutation: fall through to the bridge → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    transferPhoneMock.mockResolvedValue(null);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "both" });
+    const xml = await (await call()).text();
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${UNAVAILABLE_EN}${UNAVAILABLE_ES}<Hangup/></Response>`);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "es" });
+    const es = await (await call()).text();
+    expect(es).toContain(UNAVAILABLE_ES);
+    expect(es).not.toContain(UNAVAILABLE_EN);
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT, reason: "billing-paused" }));
+    expect(logSpy).toHaveBeenCalledWith(`texml unavailable message for account ${ACCOUNT} — billing-paused, no forward (not-configured)`);
+  });
+
+  it("paused, call NOT cleared (a cap read failed): the message, never the forward (mutation: forward uncleared calls → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    countCallerHistorySinceMock.mockRejectedValue(new Error("statement timeout"));
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "es" });
+    const xml = await (await call()).text();
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${UNAVAILABLE_ES}<Hangup/></Response>`);
+    expect(transferPhoneMock).not.toHaveBeenCalled();
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999", callerE164: CALLER, reason: "billing-paused",
+    });
+    expect(logSpy).toHaveBeenCalledWith(`texml unavailable message for account ${ACCOUNT} — billing-paused, no forward (not cleared)`);
+  });
+
+  it("the guards still answer first: an over-cap caller on a paused account hears the cap sentence (mutation: act on billing inside classify before the caps → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    const xml = await (await call()).text();
+    expect(xml).toContain("can't take more calls today");
+    expect(xml).not.toContain("No one can take your call");
+    expect(xml).not.toContain("<Dial");
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ reason: "over-cap" }));
+  });
+
+  it("the press-1 screen still comes first for a first-time caller (mutation: billing before the screen → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    process.env.VOICE_SCREEN_NUMBERS = LINE.e164;
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Gather");
+    expect(xml).not.toContain("<Dial");
+    expect(transferPhoneMock).not.toHaveBeenCalled();
+    await flushAfter();
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+    expect(recordScreenedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("a billing read that throws changes nothing: the bridge, cleared as today (mutation: let the billing error reach the caps' catch → FAILS: the call is uncleared)", async () => {
+    readBillingStandingMock.mockRejectedValue(new Error("billing: standing read failed: boom"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    // The fallback ticket rides only a CLEARED call's bridge.
+    expect(xml).toContain("&amp;f=");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining(`texml billing read failed — Sofía answers, accountId ${ACCOUNT}`));
+    await flushAfter();
+    expect(recordScreenedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("the billing read starts before the caps' counts and is awaited after them (mutation: await it before starting the counts → FAILS: the stub records the order)", async () => {
+    const events: string[] = [];
+    const traced = <T,>(name: string, value: T) => () => {
+      events.push(`start:${name}`);
+      return new Promise<T>((resolve) => setTimeout(() => {
+        events.push(`end:${name}`);
+        resolve(value);
+      }, 0));
+    };
+    readBillingStandingMock.mockImplementation(traced("billing", pausedDaysAgo(3)));
+    countCallsSinceMock.mockImplementation(traced("account", 0));
+    countCallsByCallerSinceMock.mockImplementation(traced("caller", 0));
+    countCallerHistorySinceMock.mockImplementation(traced("history", { spamCalls: 0, otherCalls: 0, answeredCalls: 1 }));
+    countForwardedMock.mockImplementation(traced("forwarded", { forAccount: 0, forCaller: 0 }));
+    const xml = await (await call()).text();
+    expect(xml).toContain(`>${TRANSFER}</Dial>`);
+    expect(events[0]).toBe("start:billing");
+    // Every count is in flight before the billing read comes back.
+    expect(events.slice(0, 5).sort()).toEqual(["start:account", "start:billing", "start:caller", "start:forwarded", "start:history"]);
+  });
+
+  it("switch OFF and paused: the bridge, and readBillingStanding is never called (mutation: read regardless → FAILS)", async () => {
+    delete process.env.BILLING_ENFORCE;
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(31));
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(readBillingStandingMock).not.toHaveBeenCalled();
+    process.env.BILLING_ENFORCE = "true";
+    expect(await (await call()).text()).toContain("<Sip>");
+    expect(readBillingStandingMock).not.toHaveBeenCalled();
+  });
+
+  it("VOICE_FORWARD_TO still wins over everything (mutation: billing before the deployment-wide forward → FAILS)", async () => {
+    process.env.VOICE_FORWARD_TO = "+19565550777";
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(31));
+    const xml = await (await call()).text();
+    expect(xml).toContain(">+19565550777</Dial>");
+    expect(readBillingStandingMock).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("accountForwardTarget's three log lines are byte-identical after the resolver is extracted (mutation: reword one → FAILS)", async () => {
+    delete process.env.BILLING_ENFORCE;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    transferPhoneMock.mockResolvedValue(null);
+    expect(await (await call()).text()).toContain("<Sip>");
+    expect(logSpy).toHaveBeenCalledWith(`texml forward is on but unusable (not-configured) — Sofía answers, accountId ${ACCOUNT}`);
+    transferPhoneMock.mockResolvedValue(TRANSFER);
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) =>
+      e164 === LINE.e164 ? LINE : e164 === TRANSFER ? { id: "pnB", account_id: "someone-else", e164, telnyx_id: null, status: "live" } : null);
+    expect(await (await call()).text()).toContain("<Sip>");
+    expect(logSpy).toHaveBeenCalledWith(`texml forward is on but its transfer number is a BIS line — Sofía answers, accountId ${ACCOUNT}`);
+    transferPhoneMock.mockRejectedValue(new Error("db down"));
+    expect(await (await call()).text()).toContain("<Sip>");
+    expect(err).toHaveBeenCalledWith(`texml forward lookup failed — Sofía answers, accountId ${ACCOUNT}: Error: db down`);
   });
 });

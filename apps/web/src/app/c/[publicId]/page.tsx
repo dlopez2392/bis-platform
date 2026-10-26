@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { isConciergeLive, brandDisplayName, brandLogoUrl, type Branding } from "@bis/db";
+import { brandDisplayName, brandLogoUrl, type Branding } from "@bis/db";
+import { conciergeOpen } from "@/lib/billing/standing-read";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
 import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
@@ -40,7 +41,7 @@ export async function generateMetadata(
   const robots = { index: false, follow: false };
   const { publicId } = await params;
   const profile = await loadProfileSafe(publicId);
-  if (!profile || !isConciergeLive(profile)) return { robots };
+  if (!profile || !(await conciergeOpen(profile))) return { robots };
   const branding = await loadProfileBranding(profile.account_id, publicId);
   const sp = await searchParams;
   const locale = normalizeLocale(
@@ -85,7 +86,10 @@ export default async function ConciergePage({
   // brand the first two (the account is known); only a truly unknown
   // public id gets the neutral page (see `getPublishedFormByPublicId`'s doc
   // in `packages/db/src/forms.ts` for why that split is sanctioned).
-  if (!profile || !isConciergeLive(profile)) notFound();
+  // `conciergeOpen` is `isConciergeLive` AND the account's billing allows the
+  // chat (M7a PR-4, plan G10, M12): a paused account's chat, or a plan
+  // without it, is a switched-off chat, here and in `layout.tsx` alike.
+  if (!profile || !(await conciergeOpen(profile))) notFound();
 
   const branding: Branding = (await loadProfileBranding(profile.account_id, publicId)) ?? UNBRANDED;
 

@@ -148,8 +148,7 @@ const NON_GET_HANDLERS: Record<string, string> = {
   "app/api/accounts/[accountId]/contacts/[contactId]/ai-summary/route.ts#POST": "AI off while paused (G21)",
 };
 
-/** Plan Global Constraints: the only non-test files that read the billing standing. Tasks 5 and 6 add the
- *  first four; until both have landed this is a ceiling, and standing-read.ts must already be one of them. */
+/** Plan Global Constraints: the only non-test files that read the billing standing, exactly these five. */
 const STANDING_READERS = [
   "lib/consent/gate.ts",
   "lib/consent/email-gate.ts",
@@ -276,8 +275,8 @@ describe("the allow-list (plan G11, Task 7 Step 1)", () => {
 describe("one decision, read in few places (plan Global Constraints)", () => {
   it("only the five named non-test files import readBillingStanding, standing-read.ts among them (mutation: import it from a pass → FAILS by name)", () => {
     const readers = walk(SRC).filter((p) => /\breadBillingStanding\b/.test(readFileSync(p, "utf8"))).map(rel).sort();
-    expect(readers.filter((r) => !(STANDING_READERS as readonly string[]).includes(r))).toEqual([]);
-    expect(readers).toContain("lib/billing/standing-read.ts");
+    // Exact since Task 6 (the TeXML and concierge turn routes) landed beside Task 5's two gates.
+    expect(readers).toEqual([...STANDING_READERS].sort());
   });
 });
 

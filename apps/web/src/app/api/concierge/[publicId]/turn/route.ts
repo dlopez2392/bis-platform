@@ -63,6 +63,7 @@ import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
+import { billingEnforced } from "@/lib/billing/enforce";
 import { fileLead, leadHasContact } from "@/lib/concierge/lead";
 import { sanitizeWebLead, withDroppedNote, type Dropped } from "@/lib/voice/tools/placeholders";
 
@@ -197,7 +198,7 @@ export async function POST(
     countConciergeConversationsByIp, countConciergeConversationsForAccount,
     brandDisplayName, recordAutomationLog, syncWebchatTurns,
     listVoiceServices, ensureKnowledgeSnapshot, getKnowledgeSnapshot,
-    getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount,
+    getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount, readBillingStanding,
   } = await import("@bis/db");
 
   const ipHash = hashIp(clientIp(req.headers));
@@ -223,6 +224,23 @@ export async function POST(
     // Unknown id, concierge off, or no destination form — all one answer. The
     // accessor makes those three indistinguishable on purpose.
     if (!profile) return NextResponse.json({ error: "not_found" }, { status: 404 });
+
+    // M7a PR-4 (plan G10; owner answer Q5): a paused account, or a plan
+    // without the website chat, answers exactly as a switched-off chat does.
+    // Before anything is spent. A read error lets the chat answer (fail open,
+    // logged): wrongly closing a paying client's chat is worse than one
+    // unbilled chat. `standing` is imported lazily for the reason the
+    // `@bis/db` import above is: it reads that package at module scope.
+    if (billingEnforced()) {
+      try {
+        const { billingVerdict } = await import("@/lib/billing/standing");
+        if (!billingVerdict(await readBillingStanding(db, profile.account_id), true, new Date()).concierge) {
+          return NextResponse.json({ error: "not_found" }, { status: 404 });
+        }
+      } catch (e) {
+        log("billing read failed, chat answers", { accountId: profile.account_id, error: String(e) });
+      }
+    }
 
     // The business name, timezone and OpenAI key, resolved together and
     // ALWAYS before anything that spends a visitor's budget or inflates a
