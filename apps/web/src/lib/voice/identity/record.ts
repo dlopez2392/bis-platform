@@ -3,7 +3,7 @@
 // name, confirm or say was them. Pure.
 import type { CallState } from "../call-state";
 import { nameWords, nameMatch, nameHits, spokenEmailKey, type Candidate } from "./match";
-import { withLeadWhoseAsked } from "./state";
+import { withLeadWhoseAsked, isLocked } from "./state";
 import { LEAD_ASK_WHOSE, type ToolResult } from "./results";
 
 export type RecordPick =
@@ -71,10 +71,17 @@ export function sameNameAsRecord(
   return !isPlaceholder(words) && agreesWithSole(nameWords(name), words);
 }
 
+/** Owner ruling 2026-10-26 (a): two names the caller gave on one call are one person when they agree by the rule
+ *  above (equal first words; a first name alone agrees with a full name). An empty name agrees with nothing. */
+export function namesAgree(a: string | null | undefined, b: string | null | undefined): boolean {
+  return agreesWithSole(nameWords(a), nameWords(b));
+}
+
 /** capture_lead asks "for you or for someone else?" once per call, and only when the lead has a name and a number
- *  and the caller has not already answered (plan P27). */
+ *  and the caller has not already answered (plan P27). Never on a locked call (owner ruling 2026-10-26 (b)): its
+ *  lead files on no customer, so the answer would decide nothing. */
 export function leadNeedsWhoseCheck(state: CallState, fullName: string | undefined, forSomeoneElse: boolean | undefined): boolean {
-  return !state.identity.leadWhoseAsked && forSomeoneElse === undefined && nameWords(fullName).length > 0;
+  return !isLocked(state) && !state.identity.leadWhoseAsked && forSomeoneElse === undefined && nameWords(fullName).length > 0;
 }
 
 /** The ask, or null to record the lead (a failed read records it: a lead is never lost on our outage). */

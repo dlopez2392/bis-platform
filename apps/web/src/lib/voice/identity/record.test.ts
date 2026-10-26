@@ -1,9 +1,9 @@
 // S-47e (E7, spec 5.10.0 as amended by plan P26, P27): which record a voice write lands on. Literal candidates.
 import { describe, it, expect } from "vitest";
-import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord } from "./record";
+import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, sameNameAsRecord, namesAgree } from "./record";
 import { candidateOf, type Candidate } from "./match";
 import { emptyCallState } from "../call-state";
-import { withLeadWhoseAsked } from "./state";
+import { withLeadWhoseAsked, withLocked } from "./state";
 import { LEAD_ASK_WHOSE } from "./results";
 
 const cand = (id: string, first: string | null, last: string | null, emailKey: string | null = null): Candidate =>
@@ -112,6 +112,27 @@ describe("leadNeedsWhoseCheck", () => {
     expect(leadNeedsWhoseCheck(s, undefined, undefined)).toBe(false);
     expect(leadNeedsWhoseCheck(s, "  ", undefined)).toBe(false);
     expect(leadNeedsWhoseCheck(s, "Ana Prueba", undefined)).toBe(true);
+  });
+  // Owner ruling 2026-10-26 (b): a lead on a locked call files on no customer, so "for you or someone else?"
+  // would decide nothing.
+  it("never on a locked call, by misses or by cannot (mutation: drop the lock check -> FAILS)", () => {
+    expect(leadNeedsWhoseCheck(withLocked(emptyCallState(), "misses"), "Ana Prueba", undefined)).toBe(false);
+    expect(leadNeedsWhoseCheck(withLocked(emptyCallState(), "cannot"), "Ana Prueba", undefined)).toBe(false);
+  });
+});
+
+// Owner ruling 2026-10-26 (a): two names the caller gave on one call are one person only when they agree by the
+// booking's own rule (agreesWithSole): equal first words, and a first name alone agrees with a full name.
+describe("namesAgree", () => {
+  it("the same person, a first name alone, and case and accents as said", () => {
+    expect(namesAgree("Ana García", "Ana García")).toBe(true);
+    expect(namesAgree("Ana", "Ana García")).toBe(true);
+    expect(namesAgree("Ana García", "ana  garcía")).toBe(true);
+  });
+  it("different people, and an empty name, do not agree (mutation: return true -> FAILS)", () => {
+    expect(namesAgree("Ana García", "Beto García")).toBe(false);
+    expect(namesAgree("Ana García", "Ana López")).toBe(false);
+    expect(namesAgree("", "Ana García")).toBe(false);
   });
 });
 

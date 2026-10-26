@@ -2369,7 +2369,9 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
     });
   });
 
-  describe("the call's own record yields to a name that is not its own (Task 8 review M1, spec 5.10.3 step 1; mutation: the unconditional state.contactId shortcut → FAILS)", () => {
+  // Owner ruling 2026-10-26 (a) amends spec 5.10.3 step 1: the call's record and a name that is not its own are
+  // two people, so the call files on NO customer (it used to file on the named one).
+  describe("the call's own record and a name that is not its own are two people: no customer (owner ruling 2026-10-26, spec 5.10.3 step 1 as amended; mutation: the unconditional state.contactId shortcut → FAILS)", () => {
     const stored: Record<string, { id: string; first_name: string; last_name: string }> = {
       ct1: { id: "ct1", first_name: "Ana", last_name: "Prueba" },
       ct2: { id: "ct2", first_name: "Beto", last_name: "Prueba" },
@@ -2381,19 +2383,51 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
     // A booking for Beto (or one that lost its slot, SlotTakenError) leaves state.contactId on Beto.
     const afterBetosBooking = (s: ReturnType<typeof caller>) => ({ ...s, contactId: "ct2" });
 
-    it("booked Beto, then \"this is Ana, take a message\": the message lands on Ana, not Beto", async () => {
+    it("Beto's booking lost its slot, then \"this is Ana, take a message\": on NO customer, neither Ana nor Beto, and nobody is made (owner ruling 2026-10-26)", async () => {
       await finishCall(afterBetosBooking(withMessage(caller(), { body: "Call me", at: "t", name: "Ana Prueba" })), ctx, meta);
-      // The yield read is this account's own (T17 review M3; mutation: read with another account id -> FAILS).
+      // The record read is this account's own (T17 review M3; mutation: read with another account id -> FAILS).
       expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct2");
       expect(dbMocks.getContact.mock.calls.every((c) => c[1] === "a1")).toBe(true);
-      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
-      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
     });
 
-    it("booked Beto, then a lead for Ana: the lead lands on Ana", async () => {
+    it("Beto's booking lost its slot, then a lead for Ana: on NO customer, and no contact is made for Ana (owner ruling 2026-10-26)", async () => {
       await finishCall(afterBetosBooking(withLead(caller(), { fields: { fullName: "Ana Prueba", need: "quote" } })), ctx, meta);
-      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
-      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("concern 1: Beto BOOKED (a real mirrored booking), then \"this is Ana, take a message\": on NO customer (owner ruling 2026-10-26; mutation: drop the name-vs-record check → Beto's thread, FAILS)", async () => {
+      const booked = withBooking({ ...caller(), contactId: "ct2" },
+        { id: "bk2", contactId: "ct2", contactName: "Beto Prueba", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
+      await finishCall(withMessage(booked, { body: "Call me", at: "t", name: "Ana Prueba" }), ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+      expect(dbMocks.finishCallRow.mock.calls[0]![3]).toMatchObject({ outcome: "booked", bookingId: "bk2" });
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("concern 3: Ana BOOKED, then Beto's booking lost its slot (state.contactId is Beto): on NO customer, with no read of anyone (owner ruling 2026-10-26; mutation: count only the bookings' contacts → Beto's thread, FAILS)", async () => {
+      const anaBooked = withBooking({ ...caller(), contactId: "ct1" },
+        { id: "bk1", contactId: "ct1", contactName: "Ana Prueba", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
+      await finishCall({ ...anaBooked, contactId: "ct2" }, ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+      expect(dbMocks.getContact).not.toHaveBeenCalledWith({}, "a1", "ct2");
+    });
+
+    it("a reschedule mirrors its contact without setting the call's record: a message for someone else is still two people (mutation: ignore the bookings when state.contactId is null → Ana's thread, FAILS)", async () => {
+      const moved = withBooking(caller(),
+        { id: "bk9", contactId: "ct2", contactName: "", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
+      await finishCall(withMessage(moved, { body: "Call me", at: "t", name: "Ana Prueba" }), ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
     });
 
     it.each([
@@ -2410,7 +2444,7 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
   // Owner decision 2026-10-26 (production call 956c8f8a): once the identity check has LOCKED, a message left on
   // that call files on no customer. The call row keeps it and the identity To do is the hand-off; no contact is
   // made or matched from a name given on that call. A booking on a locked call follows today's rules (S18).
-  describe("a message on a locked call files on no customer (owner decision 2026-10-26)", () => {
+  describe("a message or a lead on a locked call files on no customer (owner decision and ruling (b) 2026-10-26)", () => {
     const GARCIAS = [person("ct1", "Ana", "García"), person("ct2", "Beto", "García")] as const;
     /** The production sequence: "Carla García" twice -> two misses -> locked (misses), through the real step. */
     const lockedByCarla = () => {
@@ -2455,6 +2489,35 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
     });
 
+    // Owner ruling 2026-10-26 (b): a LEAD on a locked call follows the message's rule.
+    it("two misses, the lock, then a lead in the failed name: NO contact made or filled, no thread, the identity To do filed once (mutation: guard messages only → createContact \"Carla García\", FAILS)", async () => {
+      onCallerId(...GARCIAS);
+      await finishCall(withLead(lockedByCarla(), { fields: { fullName: "Carla García", need: "my appointment" } }), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+      }), "voice", "ai");
+    });
+
+    it("a lead on a locked call in the name of someone ON the number is not filed on them either (the insurance case: right name, wrong email)", async () => {
+      onCallerId(...GARCIAS);
+      await finishCall(withLead(withLocked(caller(), "misses"), { fields: { fullName: "Ana García", need: "quote" } }), ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("regression: the same lead on an UNLOCKED call still makes the new person, as today (S21)", async () => {
+      onCallerId(...GARCIAS);
+      await finishCall(withLead(caller(), { fields: { fullName: "Carla García", need: "quote" } }), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ firstName: "Carla", lastName: "García", matchBy: "email_only" }), "voice", "ai");
+    });
+
     it("regression: a booking on a locked call, with no message, still files on the booked contact (S18 unchanged)", async () => {
       onCallerId(...GARCIAS);
       const booked = withBooking({ ...lockedByCarla(), contactId: "ct2" },
@@ -2469,7 +2532,7 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
   // Production call 42ed4822: Ana and Beto booked on one call, and the summary ("Booked: Ana García at …; Beto
   // García at …") went on Beto's thread only, naming Ana's appointment on Beto's record. Each person's own
   // booking is already on their own record, so a call whose bookings landed on two or more people files on none.
-  describe("a call that booked two different people files on no customer (call 42ed4822)", () => {
+  describe("a call that touched two different people, by bookings, a lead or a message, files on no customer (call 42ed4822; owner ruling (a) 2026-10-26)", () => {
     const at = (h: number) => ({ startsAt: `2027-06-02T${h}:00:00.000Z`, endsAt: `2027-06-02T${h + 1}:00:00.000Z` });
     const bookedFor = (s: ReturnType<typeof caller>, ...who: [string, string, string][]) =>
       who.reduce((acc, [id, contactId, name], i) =>
@@ -2501,6 +2564,44 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       await finishCall(bookedFor(caller(), ["bk1", "ct1", "Ana García"], ["bk2", "ct1", "Ana García"]), ctx, meta);
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
       expect(patch().contactId).toBe("ct1");
+    });
+
+    // Owner ruling 2026-10-26 (a): bookings, a lead or a message, in any mix.
+    it("a lead for Ana and a message for Beto, no booking: two people, on NO customer, and nobody is made (mutation: drop the names-agree check → Ana's lead path, FAILS)", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      const s = withMessage(withLead(caller(), { fields: { fullName: "Ana García", need: "quote" } }),
+        { body: "Call me", at: "t", name: "Beto García" });
+      await finishCall(s, ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("two leads for two people: on NO customer (the second lead is no longer ignored)", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      const s = withLead(withLead(caller(), { fields: { fullName: "Ana García", need: "quote" } }),
+        { fields: { fullName: "Beto García", need: "quote" } });
+      await finishCall(s, ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("regression: a lead and a message from the SAME person (a first name alone agrees) still file on that person", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      const s = withMessage(withLead(caller(), { fields: { fullName: "Ana García", need: "quote" } }),
+        { body: "Call me", at: "t", name: "Ana" });
+      await finishCall(s, ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(patch().contactId).toBe("ct1");
+    });
+
+    it("regression: a booking for Beto and a message in Beto's own name file on Beto", async () => {
+      onCallerId(person("ct1", "Ana", "García"), person("ct2", "Beto", "García"));
+      dbMocks.getContact.mockResolvedValue({ id: "ct2", first_name: "Beto", last_name: "García", email: null, phone: "+19562921696" });
+      await finishCall(withMessage(bookedFor(caller(), ["bk2", "ct2", "Beto García"]), { body: "Call me", at: "t", name: "Beto García" }), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(patch().contactId).toBe("ct2");
     });
 
     it("regression: one booking files on its person, as today", async () => {

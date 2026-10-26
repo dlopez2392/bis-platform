@@ -2445,6 +2445,21 @@ describe("S-47e: capture_lead asks whose it is, once (plan Task 7)", () => {
     expect(again.state.leads[0]).not.toHaveProperty("forSomeoneElse");
   });
 
+  // Owner ruling 2026-10-26 (b): a lead on a locked call files on no customer (finish-call.ts), so the
+  // whose-is-it question would decide nothing.
+  it("a locked call: the lead is recorded at once, with no read and no whose-is-it ask (mutation: drop the lock check in leadNeedsWhoseCheck -> FAILS)", async () => {
+    on(DAN);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla García" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla García" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    dbMocks.listContactsOnNumber.mockClear();
+    const r = await runTool(locked, ctx, "capture_lead", { fields: LEAD });
+    expect(r.result).toMatchObject({ ok: true });
+    expect(r.state.leads).toHaveLength(1);
+    expect(r.state.identity.leadWhoseAsked).toBe(false);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
   it("an answered forSomeoneElse is recorded with the lead, with no read", async () => {
     on(DAN);
     const r = await runTool(emptyCallState(), ctx, "capture_lead", { fields: LEAD, forSomeoneElse: true });

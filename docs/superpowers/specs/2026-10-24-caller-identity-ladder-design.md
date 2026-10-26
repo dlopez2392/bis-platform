@@ -804,11 +804,27 @@ their own comments) run only where their record was picked by this rule.
 
 The new order:
 
-1. `state.contactId` (308): an in-call booking, already picked by 5.10.1. Amended (Task 8 review M1, orchestrator
-   ruling): that id is also set by a booking that lost its slot (`SlotTakenError`), so it YIELDS when the lead's
-   `fullName` (or, with no lead, the last message's `name`, unless declined) does not agree with that record's
-   stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule); resolution then continues at
-   step 3. No name given keeps it. "Booked Beto, then 'this is Ana, take a message'" files on Ana, never Beto.
+0. (Added, owner rulings 2026-10-26, after the production test calls 956c8f8a and 42ed4822.) Two checks run
+   first, on the call state alone, and each answers null (step 5: no customer, nothing made, matched or
+   filled):
+   - A call whose identity check LOCKED (5.4.1) and that took a message or a lead, whatever name it carries
+     and whoever is on the number. The identity To-do (5.6) is the team's hand-off; staff can make the person
+     from the call page. In the call, `take_message` no longer asks for a name (5.10.5) and `capture_lead` no
+     longer asks "for you or someone else?" on a locked call, because the answer would decide nothing. A
+     locked call that only booked follows step 1 (S18).
+   - A call that touched two or more DIFFERENT people, by bookings, a lead or a message in any mix: two
+     booked contacts (every mirrored booking's `contactId`, any status, plus `state.contactId`, so a booking
+     that lost its slot counts), two names given to leads or messages that do not agree (`namesAgree`,
+     `identity/record.ts`), or a name that does not agree with the booked contact's stored name (step 1).
+     Each person's own booking is already on their own record.
+1. `state.contactId` (308), or with none the one contact a mirrored booking landed on (a reschedule mirrors
+   its contact without setting `state.contactId`): an in-call booking, already picked by 5.10.1. No name given
+   keeps it, and so does a name that agrees with its stored name by `sameNameAsRecord` (`identity/record.ts`,
+   the booking's own rule). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
+   the named person): a name that does NOT agree is a second person, so the call files on no customer.
+   "Booked Beto, then 'this is Ana, take a message'" files on no customer, neither Ana nor Beto; so does a
+   booking that lost its slot (`SlotTakenError`, which also sets `state.contactId`) followed by another
+   person's name.
 2. (Amended, R2 finding 9: no confirmed-first step. The confirmation counts inside the picker, only on the
    caller-ID number, exactly as for a booking.)
 3. A lead (313-350): the number is `e164Of(spokenPhone(fields.callbackNumber, callerNumber))`; the picker
