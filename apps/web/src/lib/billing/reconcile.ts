@@ -54,24 +54,31 @@ export function closedPeriodWindow(
  * usage MAY be; whether its held rows are is what this decides. Exact
  * integers only (assumption S5: a `sum` meter of whole numbers sums to a
  * whole number); a fraction is never rounded into an answer.
+ *
+ * The held rows are judged ALL or NONE, so every PARTIAL set at Stripe must
+ * be ruled out first (review item 2): with held rows q1..qn (sum H, smallest
+ * m), a total in [lo, hi] is "none at Stripe" only while it is below
+ * lo + m (no single held row fits under it), and a total in [lo + H, hi + H]
+ * is "all at Stripe" only while it is above hi + H − m (leaving out any one
+ * held row cannot reach it). Anything else is ambiguous: stamping a partial
+ * set loses usage, sending one bills it twice.
  */
 export function reconcileMeter(
-  bands: { settled: number; inFlight: number; held: number }, stripeTotal: number,
+  bands: { settled: number; inFlight: number; heldQuantities: readonly number[] }, stripeTotal: number,
 ): ReconciliationVerdict {
   if (!Number.isInteger(stripeTotal)) return "ambiguous";
   const lo = bands.settled;
   const hi = bands.settled + bands.inFlight;
   const inRange = (x: number, a: number, b: number) => x >= a && x <= b;
-  if (bands.held === 0) {
+  if (bands.heldQuantities.length === 0) {
     if (inRange(stripeTotal, lo, hi)) return "match";
     return stripeTotal < lo ? "stripe_under" : "stripe_over";
   }
-  const missing = inRange(stripeTotal, lo, hi);
-  const present = inRange(stripeTotal, lo + bands.held, hi + bands.held);
-  if (present && !missing) return "held_at_stripe";
-  if (missing && !present) return "held_missing";
-  if (missing && present) return "ambiguous";
+  const held = bands.heldQuantities.reduce((sum, q) => sum + q, 0);
+  const smallest = Math.min(...bands.heldQuantities);
+  if (inRange(stripeTotal, lo, hi) && stripeTotal < lo + smallest) return "held_missing";
+  if (inRange(stripeTotal, lo + held, hi + held) && stripeTotal > hi + held - smallest) return "held_at_stripe";
   if (stripeTotal < lo) return "stripe_under";
-  if (stripeTotal > hi + bands.held) return "stripe_over";
+  if (stripeTotal > hi + held) return "stripe_over";
   return "ambiguous";
 }

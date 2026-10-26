@@ -283,3 +283,86 @@ describe("runBillingNightly", () => {
     expect(db.saveReconciliation.mock.calls.map((x) => (x[1] as Reconciliation).accountId).filter((a) => a === "acct_b")).toHaveLength(3);
   });
 });
+
+describe("runBillingNightly, review fixes (82634ba4 review items 1, 3, 4, 6, 7)", () => {
+  it("I9 across ticks: a period checked at 08:05 on the day it rolls over at 15:00 is still compared to its end, once (mutation: consult done for the closing window → FAILS: the old row ends at 08:05)", async () => {
+    // An in-memory billing_reconciliations: keyed as 0099's primary key.
+    const store = new Map<string, Reconciliation>();
+    db.saveReconciliation.mockImplementation(async (_d: unknown, w: Reconciliation) => {
+      store.set(`${w.accountId}:${w.meter}:${Date.parse(w.windowStart)}`, { ...w });
+    });
+    db.reconciledSince.mockImplementation(async (_d: unknown, since: string) =>
+      new Set([...store].filter(([, r]) => Date.parse(r.checkedAt) >= Date.parse(since)).map(([k]) => k)));
+    db.latestReconciliations.mockImplementation(async () => {
+      const out = new Map<string, Reconciliation>();
+      for (const r of [...store.values()].sort((a, b) => Date.parse(b.windowStart) - Date.parse(a.windowStart))) {
+        if (!out.has(`${r.accountId}:${r.meter}`)) out.set(`${r.accountId}:${r.meter}`, r);
+      }
+      return out;
+    });
+    const before = bill({ currentPeriodStart: "2026-09-20T15:00:00+00:00" });
+    const after = bill({ currentPeriodStart: "2026-10-20T15:00:00+00:00" });
+    const tick = async (iso: string, row: AccountBilling) => {
+      db.listReconcilableAccounts.mockResolvedValue([row]);
+      await runBillingNightly({ ...ctx(), now: new Date(iso) }, fake, clockAt(0));
+    };
+    await tick("2026-10-20T08:05:00.000Z", before);
+    await tick("2026-10-20T15:05:00.000Z", after);
+    await tick("2026-10-21T08:05:00.000Z", after);
+    await tick("2026-10-22T08:05:00.000Z", after);
+    const sms = [...store.values()].filter((r) => r.meter === "sms").map((r) => [r.windowStart, r.windowEnd]).sort();
+    expect(sms).toEqual([
+      ["2026-09-20T15:00:00.000Z", "2026-10-20T15:00:00.000Z"],
+      ["2026-10-20T15:00:00.000Z", "2026-10-22T08:05:00.000Z"],
+    ]);
+    // Once: the 08:05 check of the then-current period, and the one closing comparison.
+    expect(db.saveReconciliation.mock.calls.map((c) => c[1] as Reconciliation)
+      .filter((r) => r.meter === "sms" && r.windowStart === "2026-09-20T15:00:00.000Z")).toHaveLength(2);
+  });
+
+  it("each held send needs its own worst case of budget: the second waits for the next tick (mutation: drop the need(1) before a held send → FAILS)", async () => {
+    smsBands({ settled: 0, inFlight: 0, held: 3, heldRows: [held("h1", 1), held("h2", 2)] });
+    let elapsed = 0;
+    const send = fake.reportMeterEvent.bind(fake);
+    vi.spyOn(fake, "reportMeterEvent").mockImplementation(async (input, key) => {
+      await send(input, key);
+      elapsed = USAGE_REPORT_BUDGET_MS - METER_EVENT_WORST_CASE_MS;
+    });
+    const c = await runBillingNightly(ctx(), fake, { startedAt: 0, nowMs: () => elapsed });
+    expect(fake.meterEvents.map((e) => e.identifier)).toEqual(["h1"]);
+    expect(db.markUsageReported.mock.calls.map((x) => x[1])).toEqual(["h1"]);
+    expect(c).toMatchObject({ heldSent: 1, reconcileSkippedBudget: 1 });
+  });
+
+  it("a closed period whose held rows Stripe already counts is still report-only: nothing stamped (mutation: stamp held_at_stripe rows of a closed period → FAILS)", async () => {
+    db.latestReconciliations.mockResolvedValue(new Map([["acct_a:sms", {
+      accountId: "acct_a", meter: "sms", windowStart: "2026-09-20T00:00:00+00:00", windowEnd: "2026-10-19T08:00:00+00:00",
+      bisSettled: 0, bisInFlight: 0, bisHeld: 0, stripeTotal: 0, verdict: "match", checkedAt: "2026-10-19T08:15:00+00:00",
+    } satisfies Reconciliation]]));
+    smsBands(NO_BANDS, { settled: 0, inFlight: 0, held: 3, heldRows: [held("h1", 1), held("h2", 2)] });
+    fake.seedMeterTotal("mtr_sms", "cus_a", 3);
+    await runBillingNightly(ctx(), fake, clockAt(0));
+    expect(savedFor("sms")[0]).toMatchObject({ windowStart: "2026-09-20T00:00:00.000Z", verdict: "held_at_stripe" });
+    expect(db.markUsageReported).not.toHaveBeenCalled();
+  });
+
+  it("a re-mirror reads Stripe at most twice in the nightly path: a lost race is retried next tick, not here (mutation: no cap → 3 reads, FAILS)", async () => {
+    db.listReconcilableAccounts.mockResolvedValue([]);
+    db.listPauseCandidates.mockResolvedValue([bill({ stripeSubscriptionId: "sub_u", subscriptionStatus: "unpaid" })]);
+    fake.subscriptions.set("sub_u", { id: "sub_u", accountId: "acct_a", status: "unpaid" } as unknown as SubscriptionSnapshot);
+    db.mirrorSubscription.mockImplementation(async (_db: unknown, read: () => Promise<SubscriptionSnapshot>) => {
+      await read(); await read(); await read();   // a mirror that lost one race
+      return { kind: "written", accountId: "acct_a", planId: "plan_1", status: "unpaid" };
+    });
+    const c = await runBillingNightly(ctx(), fake, clockAt(0));
+    expect(fake.calls.filter((x) => x.op === "retrieveSubscription")).toHaveLength(2);
+    expect(c).toMatchObject({ remirrored: 0, reconcileFailed: 1 });
+  });
+
+  it("nothing due this window → Stripe is not asked even for its meters (mutation: list the meters before computing what is due → FAILS)", async () => {
+    db.reconciledSince.mockResolvedValue(new Set(["voice_minutes", "sms", "ai_chats"].map((m) => `acct_a:${m}:${CURRENT_START_MS}`)));
+    expect(await runBillingNightly(ctx(), fake, clockAt(0))).toEqual(ZERO);
+    expect(fake.calls).toEqual([]);
+    expect(db.healPermissions).not.toHaveBeenCalled();
+  });
+});

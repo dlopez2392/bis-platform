@@ -67,7 +67,7 @@ describe("closedPeriodWindow (I9: the just-closed period, once, to its end)", ()
 
 describe("reconcileMeter (plan G14: settled MUST be at Stripe, in flight MAY be, held is what this decides)", () => {
   it("no held rows: Stripe between settled and settled + in flight → match; below → stripe_under; above → stripe_over (mutation: ignore in-flight → FAILS)", () => {
-    const bands = { settled: 10, inFlight: 3, held: 0 };
+    const bands = { settled: 10, inFlight: 3, heldQuantities: [] };
     expect(reconcileMeter(bands, 10)).toBe("match");
     expect(reconcileMeter(bands, 12)).toBe("match");
     expect(reconcileMeter(bands, 13)).toBe("match");
@@ -77,31 +77,57 @@ describe("reconcileMeter (plan G14: settled MUST be at Stripe, in flight MAY be,
 
   it("held rows Stripe already counts → held_at_stripe (mutation: send them anyway → FAILS)", () => {
     // settled 10, in flight 0..2, held 5: present = [15, 17], missing = [10, 12].
-    expect(reconcileMeter({ settled: 10, inFlight: 2, held: 5 }, 15)).toBe("held_at_stripe");
-    expect(reconcileMeter({ settled: 10, inFlight: 2, held: 5 }, 17)).toBe("held_at_stripe");
+    expect(reconcileMeter({ settled: 10, inFlight: 2, heldQuantities: [5] }, 15)).toBe("held_at_stripe");
+    expect(reconcileMeter({ settled: 10, inFlight: 2, heldQuantities: [5] }, 17)).toBe("held_at_stripe");
   });
 
   it("held rows Stripe does not count → held_missing (mutation: stamp them → FAILS)", () => {
-    expect(reconcileMeter({ settled: 10, inFlight: 2, held: 5 }, 10)).toBe("held_missing");
-    expect(reconcileMeter({ settled: 10, inFlight: 2, held: 5 }, 12)).toBe("held_missing");
+    expect(reconcileMeter({ settled: 10, inFlight: 2, heldQuantities: [5] }, 10)).toBe("held_missing");
+    expect(reconcileMeter({ settled: 10, inFlight: 2, heldQuantities: [5] }, 12)).toBe("held_missing");
   });
 
   it("the two ranges overlap → ambiguous (mutation: prefer held_at_stripe on overlap → FAILS)", () => {
     // missing = [10, 14], present = [12, 16]: 12..14 is in both.
-    expect(reconcileMeter({ settled: 10, inFlight: 4, held: 2 }, 13)).toBe("ambiguous");
-    expect(reconcileMeter({ settled: 10, inFlight: 4, held: 2 }, 12)).toBe("ambiguous");
+    expect(reconcileMeter({ settled: 10, inFlight: 4, heldQuantities: [2] }, 13)).toBe("ambiguous");
+    expect(reconcileMeter({ settled: 10, inFlight: 4, heldQuantities: [2] }, 12)).toBe("ambiguous");
   });
 
   it("Stripe between the ranges → ambiguous (mutation: call it stripe_under → FAILS)", () => {
     // missing = [10, 11], present = [15, 16]: 13 is in neither.
-    expect(reconcileMeter({ settled: 10, inFlight: 1, held: 5 }, 13)).toBe("ambiguous");
+    expect(reconcileMeter({ settled: 10, inFlight: 1, heldQuantities: [5] }, 13)).toBe("ambiguous");
     // Outside both: under and over still say so.
-    expect(reconcileMeter({ settled: 10, inFlight: 1, held: 5 }, 9)).toBe("stripe_under");
-    expect(reconcileMeter({ settled: 10, inFlight: 1, held: 5 }, 17)).toBe("stripe_over");
+    expect(reconcileMeter({ settled: 10, inFlight: 1, heldQuantities: [5] }, 9)).toBe("stripe_under");
+    expect(reconcileMeter({ settled: 10, inFlight: 1, heldQuantities: [5] }, 17)).toBe("stripe_over");
   });
 
   it("a non-integer Stripe total → ambiguous (mutation: Math.round → FAILS)", () => {
-    expect(reconcileMeter({ settled: 10, inFlight: 0, held: 0 }, 10.4)).toBe("ambiguous");
-    expect(reconcileMeter({ settled: 10, inFlight: 0, held: 5 }, 14.6)).toBe("ambiguous");
+    expect(reconcileMeter({ settled: 10, inFlight: 0, heldQuantities: [] }, 10.4)).toBe("ambiguous");
+    expect(reconcileMeter({ settled: 10, inFlight: 0, heldQuantities: [5] }, 14.6)).toBe("ambiguous");
+  });
+});
+
+describe("reconcileMeter with SEVERAL held rows (review item 2: a partial set at Stripe is not a whole one)", () => {
+  // settled 10, in flight 0..5, held rows of 3 and 5 (8 in all). Every
+  // subset of the held rows at Stripe gives a total in [10, 23].
+  const bands = { settled: 10, inFlight: 5, heldQuantities: [3, 5] };
+
+  it("total 18 could be ALL held rows (10 + 8) or only the 5 with 3 in flight: ambiguous, never held_at_stripe (mutation: present = in [lo + held, hi + held] alone → held_at_stripe, FAILS: the 3 would be stamped and never billed)", () => {
+    expect(reconcileMeter(bands, 18)).toBe("ambiguous");
+  });
+
+  it("total 13 could be NO held row (10 + 3 in flight) or only the 3: ambiguous, never held_missing (mutation: missing = in [lo, hi] alone → held_missing, FAILS: the 3 would be sent twice)", () => {
+    expect(reconcileMeter(bands, 13)).toBe("ambiguous");
+  });
+
+  it("past every partial set the answers stand: 21 or more is held_at_stripe, under 13 is held_missing, and the edges are judged by the SMALLEST held row (mutation: the largest held row instead of the smallest → 20 and 14 decided, FAILS)", () => {
+    // 20 = 10 + 5 in flight + only the 5; 14 = 10 + 1 in flight + only the 3.
+    expect(reconcileMeter(bands, 20)).toBe("ambiguous");
+    expect(reconcileMeter(bands, 14)).toBe("ambiguous");
+    expect(reconcileMeter(bands, 21)).toBe("held_at_stripe");
+    expect(reconcileMeter(bands, 23)).toBe("held_at_stripe");
+    expect(reconcileMeter(bands, 12)).toBe("held_missing");
+    expect(reconcileMeter(bands, 10)).toBe("held_missing");
+    expect(reconcileMeter(bands, 24)).toBe("stripe_over");
+    expect(reconcileMeter(bands, 9)).toBe("stripe_under");
   });
 });

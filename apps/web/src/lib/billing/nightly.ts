@@ -19,6 +19,11 @@ export type NightlyCounters = {
  *  (not an error); the next tick resumes where this one stopped. */
 class BudgetSpent extends Error {}
 
+/** The most Stripe reads one re-mirror may make here (review item 6): the
+ *  normal case. A need(REMIRROR_READS) before it keeps its worst case inside
+ *  the budget; mirrorSubscription alone could make 1 + MIRROR_ATTEMPTS. */
+export const REMIRROR_READS = 2;
+
 /**
  * The nightly billing step (spec section 4; M7a PR-4 plan G6, G14, G15, G4).
  * Runs INSIDE usageReportPass, after its sends and bookkeeping, ONLY with
@@ -26,8 +31,9 @@ class BudgetSpent extends Error {}
  * that pass's OWN clock and budget, so the budget sum cron-coupling.test.ts
  * pins is unchanged. Every Stripe call is bounded (one attempt, the meter
  * event timeout; I2) and starts only while its worst case still fits:
- * two worst cases before a re-mirror (it reads Stripe twice in the normal
- * case), one before the meter list, each meter total and each held send.
+ * REMIRROR_READS (2) worst cases before a re-mirror, whose reads are capped
+ * at that here, and one before the meter list, each meter total and each
+ * held send.
  * The unit of work is one (account, meter, period) not checked since this
  * window's 08:00 UTC start (reconcileNightStart, the same function the
  * agency's alert keys a night by; I4), so the next tick resumes and each
@@ -69,11 +75,30 @@ export async function runBillingNightly(
       const unpaid = row.billingPausedAt !== null || (status !== null && PAST_DUE_STATUSES.includes(status));
       if (!unpaid || !row.stripeSubscriptionId) continue;
       if (row.stripeCheckedAt && Date.parse(row.stripeCheckedAt) >= runStart.getTime()) continue;
-      need(2); // a mirror reads Stripe twice in the normal case (MIRROR_ATTEMPTS bounds the rest)
+      // A mirror reads Stripe once, then once per attempt (1 + MIRROR_ATTEMPTS
+      // = 4 reads at worst, more than this budget holds). Here it may read
+      // only TWICE, the normal case: a third read means it lost a race with
+      // a concurrent write (nothing was written), so it throws, is counted,
+      // and the row is re-read next tick (review item 6).
+      need(REMIRROR_READS);
       const subId = row.stripeSubscriptionId;
+      let reads = 0;
+      const read = () => {
+        if (++reads > REMIRROR_READS) {
+          throw new Error(`the billing row kept changing; re-read next tick (more than ${REMIRROR_READS} Stripe reads)`);
+        }
+        return gateway.retrieveSubscription(subId, { bounded: true });
+      };
       try {
-        const out = await mirrorSubscription(ctx.db, () => gateway.retrieveSubscription(subId, { bounded: true }), () => ctx.now);
+        const out = await mirrorSubscription(ctx.db, read, () => ctx.now);
         if (out.kind === "refused") {
+          // A refusal writes nothing, so stripe_checked_at stays old and the
+          // row is re-read every tick of this window (review item 5; bound
+          // stated, not fixed): at most REMIRROR_READS bounded reads per row
+          // per tick, inside this pass's budget, and logged each time (the
+          // alert channel, G17). Writing stripe_checked_at on a refusal would
+          // let a pause rest on a status Stripe never confirmed for this row
+          // (G6), and no column records a refusal without a migration.
           console.error(`billing nightly: re-mirror of ${subId} (account ${row.accountId}) refused: ${out.reason}`);
         } else {
           c.remirrored++;
@@ -89,6 +114,30 @@ export async function runBillingNightly(
     if (accounts.length === 0) return c;
     const done = await reconciledSince(ctx.db, runStart.toISOString());
     const latest = await latestReconciliations(ctx.db, accounts.map((a) => a.accountId), ctx.now);
+    // What is due, per account, BEFORE any Stripe call (review item 7):
+    // nothing due → not even the meter list is asked for.
+    //  - the current period: unless checked since this window's start (I4);
+    //  - the just-closed period: whenever closedPeriodWindow returns one. It
+    //    is NOT looked up in `done` (review item 1): its key is the old
+    //    period's window_start, which the same 08:00 window may already hold
+    //    from a check BEFORE the rollover, and skipping it then would never
+    //    compare the period to its end. Its own once-guard is
+    //    closedPeriodWindow's: the saved row reaches the current start.
+    const due: { row: AccountBilling; pairs: { meter: MeterKey; window: ReconcileWindow; closing: boolean }[] }[] = [];
+    for (const row of accounts) {
+      if (!row.stripeCustomerId) continue;
+      const pairs: { meter: MeterKey; window: ReconcileWindow; closing: boolean }[] = [];
+      for (const meter of METER_KEYS) {
+        const closed = closedPeriodWindow(latest.get(`${row.accountId}:${meter}`) ?? null, row);
+        if (closed) pairs.push({ meter, window: closed, closing: true });
+        const current = reconcileWindow(row, ctx.now);
+        if (current && !done.has(`${row.accountId}:${meter}:${current.start.getTime()}`)) {
+          pairs.push({ meter, window: current, closing: false });
+        }
+      }
+      if (pairs.length > 0) due.push({ row, pairs });
+    }
+    if (due.length === 0) return c;
     need(1);
     let meterIds: Map<string, string>;
     try {
@@ -98,27 +147,21 @@ export async function runBillingNightly(
       console.error(`billing nightly: Stripe's meters could not be listed; nothing reconciled this tick: ${String(e)}`);
       return c;
     }
-    for (const row of accounts) {
-      if (!row.stripeCustomerId) continue;
+    for (const { row, pairs } of due) {
       let touched = false;
-      for (const meter of METER_KEYS) {
+      for (const { meter, window, closing } of pairs) {
         const meterId = meterIds.get(METERS[meter].eventName);
         if (!meterId) {
           console.error(`billing nightly: no active Stripe meter for ${meter}`);
           continue;
         }
-        const closed = closedPeriodWindow(latest.get(`${row.accountId}:${meter}`) ?? null, row);
-        const current = reconcileWindow(row, ctx.now);
-        for (const [window, closing] of [[closed, true], [current, false]] as const) {
-          if (!window || done.has(`${row.accountId}:${meter}:${window.start.getTime()}`)) continue;
-          try {
-            await reconcileOne(ctx, gateway, c, need, row, meter, meterId, window, closing);
-            touched = true;
-          } catch (e) {
-            if (e instanceof BudgetSpent) throw e;
-            c.reconcileFailed++;
-            console.error(`billing nightly: ${meter} for account ${row.accountId} not reconciled: ${String(e)}`);
-          }
+        try {
+          await reconcileOne(ctx, gateway, c, need, row, meter, meterId, window, closing);
+          touched = true;
+        } catch (e) {
+          if (e instanceof BudgetSpent) throw e;
+          c.reconcileFailed++;
+          console.error(`billing nightly: ${meter} for account ${row.accountId} not reconciled: ${String(e)}`);
         }
       }
       if (touched) {
@@ -148,7 +191,9 @@ async function reconcileOne(
   const stripeTotal = await gateway.meterTotal({
     meterId, customerId, startSeconds: window.start.getTime() / 1000, endSeconds: window.end.getTime() / 1000,
   });
-  const verdict = reconcileMeter(bands, stripeTotal);
+  const verdict = reconcileMeter(
+    { settled: bands.settled, inFlight: bands.inFlight, heldQuantities: bands.heldRows.map((h) => h.quantity) }, stripeTotal,
+  );
   // A closed period is report-only (I9, assumption S8): its invoice is final,
   // so its held rows are neither sent nor stamped; a person decides (runbook).
   if (!closing && verdict === "held_at_stripe") {
