@@ -117,3 +117,33 @@ Self-serve sign-up (#2), multi-agency / Stripe Connect (#3), non-USD currencies,
 - Stripe Checkout supports a subscription mixing one licensed price and three metered prices.
 - Stripe test-mode keys are available to CI as repository secrets and live keys only in Vercel production — **this
   needs a Stripe account and danlo to add the keys** (see the plan's prerequisites).
+
+## 9. Amendments for rollout step 4 (2026-10-26, PR-4 plan)
+
+Forced by code that shipped after this spec was approved; each is restated, with its reason, in
+`docs/superpowers/plans/2026-10-26-m7a-pr4-pause-and-reconciliation.md` (G-items). Product choices the spec
+leaves open are NOT decided here; they are that plan's owner questions.
+
+- **Section 2, "voice/concierge gating reads [accounts.permissions]"** → the gates read the plan's `features`
+  at READ time through `account_billing.plan_id` (one embed read, `readBillingStanding`). PR-3's mirror writes
+  `accounts.permissions` outside its compare-and-set (PR-3 plan B5), so two racing webhook deliveries can
+  leave it from the older one; a value derived from the row the compare-and-set guarantees cannot drift.
+  `accounts.permissions` is still written (the Setup wizard reads it) and the nightly step rewrites it from
+  the plan.
+- **Section 2, account_billing** gains `pause_lifted_at` (the agency's Lift pause: the pass does not pause
+  the same unpaid episode again) and `stripe_checked_at` (the last time the mirror wrote what Stripe said;
+  a past-due pause needs it fresh). New table `billing_reconciliations` (the nightly comparison's latest
+  result per account and meter, agency-read, service-written). `forwarded_calls.kind` and
+  `screened_calls.reason` each gain `billing-paused` and `plan-no-voice`. Migration 0099.
+- **Section 3 flow 5**: the 7-day pass runs every cron tick; it pauses a past-due account only while
+  Stripe confirmed the unpaid status within the last 26 hours (the nightly step re-reads every unpaid
+  subscription), so a missed `invoice.paid` webhook can never pause a client who paid. Payment clears the
+  pause in the webhook mirror itself. `incomplete_expired` (a first checkout never paid) is not paused.
+- **Section 3 flow 5, "every outbound SMS stops" and "dashboard read-only"** are enforced at the two send
+  gates (`lib/consent/gate.ts`, `lib/consent/email-gate.ts`) and at `requireAccountAccess` (server actions
+  only, client callers only), never per caller. The exact lists are the plan's.
+- **Section 4, rollout (4) "behind its own switch"**: the switch is the env var `BILLING_ENFORCE=1`, off by
+  default, and it gates the plan-feature gates too.
+- **Section 4, nightly reconciliation** runs inside the existing usage-report pass, under that pass's own
+  wall-clock budget (the cron tick's budgets already sum to its `maxDuration`, and `docs/crm-features.md`
+  §3.2 rule 9 caps new passes). It also resolves PR-3's held >24 h usage rows (PR-3 plan B10).
