@@ -90,8 +90,20 @@ describe("account layout: the payment-failed banner (G21)", () => {
     expect(find(await render(), BillingBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["agency"]);
   });
 
-  it("shows no banner once billing is paused, even on a past-due subscription (mutation: swap showsPaymentFailedBanner for a bare subscriptionStatus === \"past_due\" check → FAILS)", async () => {
+  it("shows no payment-failed banner while the VERDICT says paused, even on a past-due subscription (mutation: swap showsPaymentFailedBanner for a bare subscriptionStatus === \"past_due\" check → FAILS)", async () => {
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-09-01T00:00:00Z" });
+    expect(find(await render(), BillingBanner)).toHaveLength(0);
+  });
+
+  it("a past-due row with a pause stamp but NO live verdict (switch off, or the verdict read failed open) shows the payment-failed banner, never neither (design review I1) (mutation: decide from billingPausedAt again → FAILS: no banner at all)", async () => {
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue(NOT_PAUSED);
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner)).toHaveLength(0);
+    expect(find(tree, BillingBanner)).toHaveLength(1);
+    // Complimentary still never shows it.
+    billing.read.mockResolvedValue({ complimentary: true, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
     expect(find(await render(), BillingBanner)).toHaveLength(0);
   });
 

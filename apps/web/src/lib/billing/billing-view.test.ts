@@ -67,13 +67,20 @@ describe("billingStatusOf (G13)", () => {
 });
 
 describe("showsPaymentFailedBanner (G21)", () => {
-  it("is true only for past_due/unpaid, never incomplete, complimentary or paused (mutation: include incomplete → FAILS; ignore complimentary → FAILS; ignore billingPausedAt → FAILS)", () => {
-    expect(showsPaymentFailedBanner(null)).toBe(false);
-    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due" }))).toBe(true);
-    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "unpaid" }))).toBe(true);
-    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "incomplete" }))).toBe(false);
-    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due", complimentary: true }))).toBe(false);
-    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due", billingPausedAt: "2026-10-10T00:00:00Z" }))).toBe(false);
+  it("is true only for past_due/unpaid, never incomplete, complimentary or while the verdict is paused (mutation: include incomplete → FAILS; ignore complimentary → FAILS; ignore the verdict → FAILS)", () => {
+    const LIVE = { paused: false };
+    expect(showsPaymentFailedBanner(null, LIVE)).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due" }), LIVE)).toBe(true);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "unpaid" }), LIVE)).toBe(true);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "incomplete" }), LIVE)).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due", complimentary: true }), LIVE)).toBe(false);
+    expect(showsPaymentFailedBanner(row({ subscriptionStatus: "past_due" }), { paused: true })).toBe(false);
+  });
+
+  it("decides from the VERDICT, not the stored pause stamp: a stamped past-due row with no live pause (switch off, verdict failed open) still shows it (design review I1) (mutation: also require !billingPausedAt → FAILS)", () => {
+    const stamped = row({ subscriptionStatus: "past_due", billingPausedAt: "2026-10-10T00:00:00Z" });
+    expect(showsPaymentFailedBanner(stamped, { paused: false })).toBe(true);
+    expect(showsPaymentFailedBanner(stamped, { paused: true })).toBe(false);
   });
 });
 

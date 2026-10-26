@@ -38,9 +38,14 @@ export function billingStatusOf(billing: AccountBilling | null, link: Pick<Billi
 
 /** The payment-failed banner (G21): only a subscription whose payment
  *  FAILED (past_due, unpaid). Not `incomplete`: a first payment still in
- *  progress has not failed, and the card already shows that state. */
-export function showsPaymentFailedBanner(billing: AccountBilling | null): boolean {
-  return billing !== null && !billing.complimentary && !billing.billingPausedAt
+ *  progress has not failed, and the card already shows that state.
+ *  Decided from the live VERDICT (design review I1), never from the stored
+ *  pause stamp: with the switch off, or a verdict read that failed open, a
+ *  stamped past-due row has no paused banner, so it must get this one —
+ *  otherwise it got neither. While the verdict is paused the paused banner
+ *  stands instead (never both). */
+export function showsPaymentFailedBanner(billing: AccountBilling | null, verdict: { paused: boolean }): boolean {
+  return !verdict.paused && billing !== null && !billing.complimentary
     && billing.subscriptionStatus !== null && PAST_DUE_STATUSES.includes(billing.subscriptionStatus);
 }
 

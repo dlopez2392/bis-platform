@@ -54,10 +54,11 @@ export default async function AccountWorkspaceLayout({
   // rather than throwing, and showsPaymentFailedBanner(null) is already
   // `false`, so a Staff session takes the exact same "no banner" path an
   // unbilled account's Owner does: no throw, this catch never runs, and a
-  // client Staff never sees this banner. billingVerdictFor's own switch/fail
-  // handling means the two banners are never BOTH shown: a paused row's
-  // showsPaymentFailedBanner is already false (billingPausedAt is set), and
-  // with the switch off verdict.paused is always false.
+  // client Staff never sees this banner. The two banners are never BOTH
+  // shown, and never NEITHER on a past-due row (design review I1): the
+  // payment-failed one is decided from the same verdict, shown only while
+  // verdict.paused is false — so with the switch off, or a verdict read that
+  // failed open, a past-due row whose pause is stamped still gets it.
   const [billingRow, verdict] = await Promise.all([
     readAccountBilling(accountId).catch((e: unknown) => {
       console.error(`account layout: billing read failed for ${accountId}: ${e instanceof Error ? e.message : String(e)}`);
@@ -65,7 +66,7 @@ export default async function AccountWorkspaceLayout({
     }),
     billingVerdictFor(accountId),
   ]);
-  const paymentFailed = showsPaymentFailedBanner(billingRow);
+  const paymentFailed = showsPaymentFailedBanner(billingRow, verdict);
 
   // Owner decision 1 (2026-10-10, plan-review C2): account.language governs
   // CLIENT-role sessions only — `isOperator: isAgency` is this layout's own
