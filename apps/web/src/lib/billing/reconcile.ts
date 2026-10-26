@@ -75,7 +75,9 @@ export function reconcileMeter(
     return stripeTotal < lo ? "stripe_under" : "stripe_over";
   }
   const held = bands.heldQuantities.reduce((sum, q) => sum + q, 0);
-  const smallest = Math.min(...bands.heldQuantities);
+  // reduce, not Math.min(...spread): a long held list cannot overflow the
+  // argument limit. heldQuantities is non-empty here.
+  const smallest = bands.heldQuantities.reduce((min, q) => (q < min ? q : min), bands.heldQuantities[0]!);
   if (inRange(stripeTotal, lo, hi) && stripeTotal < lo + smallest) return "held_missing";
   if (inRange(stripeTotal, lo + held, hi + held) && stripeTotal > hi + held - smallest) return "held_at_stripe";
   if (stripeTotal < lo) return "stripe_under";

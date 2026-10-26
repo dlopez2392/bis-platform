@@ -149,7 +149,14 @@ export async function runBillingNightly(
     }
     for (const { row, pairs } of due) {
       let touched = false;
+      // A meter whose closing comparison failed this tick (anything but the
+      // budget): its current pair waits too. Saving the current period's row
+      // would make it the newest, closedPeriodWindow would return null on the
+      // next tick, and the closed period would never be compared to its end
+      // (plan G14, closed-period retry rule). Pairs are pushed closed-first.
+      const closingFailed = new Set<MeterKey>();
       for (const { meter, window, closing } of pairs) {
+        if (!closing && closingFailed.has(meter)) continue;
         const meterId = meterIds.get(METERS[meter].eventName);
         if (!meterId) {
           console.error(`billing nightly: no active Stripe meter for ${meter}`);
@@ -161,7 +168,10 @@ export async function runBillingNightly(
         } catch (e) {
           if (e instanceof BudgetSpent) throw e;
           c.reconcileFailed++;
-          console.error(`billing nightly: ${meter} for account ${row.accountId} not reconciled: ${String(e)}`);
+          if (closing) closingFailed.add(meter);
+          console.error(
+            `billing nightly: ${meter} for account ${row.accountId}${closing ? " (closed period; its current period waits for the next tick)" : ""} not reconciled: ${String(e)}`,
+          );
         }
       }
       if (touched) {

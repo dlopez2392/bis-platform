@@ -359,6 +359,48 @@ describe("runBillingNightly, review fixes (82634ba4 review items 1, 3, 4, 6, 7)"
     expect(c).toMatchObject({ remirrored: 0, reconcileFailed: 1 });
   });
 
+  it("a failed closed-period comparison is retried next tick: that meter's current pair waits, so the closed row stays newest (mutation: run the current pair anyway → FAILS: tick 2 never compares the closed period)", async () => {
+    const store = new Map<string, Reconciliation>();
+    store.set(`acct_a:sms:${Date.parse("2026-09-20T00:00:00.000Z")}`, {
+      accountId: "acct_a", meter: "sms", windowStart: "2026-09-20T00:00:00.000Z", windowEnd: "2026-10-19T08:00:00.000Z",
+      bisSettled: 0, bisInFlight: 0, bisHeld: 0, stripeTotal: 0, verdict: "match", checkedAt: "2026-10-19T08:15:00.000Z",
+    });
+    db.saveReconciliation.mockImplementation(async (_d: unknown, w: Reconciliation) => {
+      store.set(`${w.accountId}:${w.meter}:${Date.parse(w.windowStart)}`, { ...w });
+    });
+    db.reconciledSince.mockImplementation(async (_d: unknown, since: string) =>
+      new Set([...store].filter(([, r]) => Date.parse(r.checkedAt) >= Date.parse(since)).map(([k]) => k)));
+    db.latestReconciliations.mockImplementation(async () => {
+      const out = new Map<string, Reconciliation>();
+      for (const r of [...store.values()].sort((a, b) => Date.parse(b.windowStart) - Date.parse(a.windowStart))) {
+        if (!out.has(`${r.accountId}:${r.meter}`)) out.set(`${r.accountId}:${r.meter}`, r);
+      }
+      return out;
+    });
+    const CLOSED_START_S = Date.parse("2026-09-20T00:00:00.000Z") / 1000;
+    const total = fake.meterTotal.bind(fake);
+    let failed = false;
+    vi.spyOn(fake, "meterTotal").mockImplementation(async (input) => {
+      if (!failed && input.meterId === "mtr_sms" && input.startSeconds === CLOSED_START_S) {
+        failed = true;
+        throw new Error("Stripe 500");
+      }
+      return total(input);
+    });
+    const closedSms = () => [...store.values()].filter((r) => r.meter === "sms" && r.windowStart === "2026-09-20T00:00:00.000Z");
+    const currentSms = () => [...store.values()].filter((r) => r.meter === "sms" && r.windowStart === "2026-10-20T00:00:00.000Z");
+
+    const tick1 = await runBillingNightly(ctx(), fake, clockAt(0));
+    expect(tick1).toMatchObject({ reconcileFailed: 1 });
+    expect(closedSms()[0]!.windowEnd).toBe("2026-10-19T08:00:00.000Z");   // not compared yet
+    expect(currentSms()).toEqual([]);                                       // waited
+    expect(savedFor("voice_minutes")).toHaveLength(1);                      // other meters unaffected
+
+    await runBillingNightly({ ...ctx(), now: new Date("2026-10-26T10:30:00.000Z") }, fake, clockAt(0));
+    expect(closedSms()[0]!.windowEnd).toBe("2026-10-20T00:00:00.000Z");   // compared to its end on tick 2
+    expect(currentSms()).toHaveLength(1);
+  });
+
   it("nothing due this window → Stripe is not asked even for its meters (mutation: list the meters before computing what is due → FAILS)", async () => {
     db.reconciledSince.mockResolvedValue(new Set(["voice_minutes", "sms", "ai_chats"].map((m) => `acct_a:${m}:${CURRENT_START_MS}`)));
     expect(await runBillingNightly(ctx(), fake, clockAt(0))).toEqual(ZERO);
