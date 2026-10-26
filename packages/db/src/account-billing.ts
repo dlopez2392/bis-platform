@@ -705,13 +705,18 @@ export type BillingAlert = {
   since: string;
 };
 
+/** listBillingAlerts' answer: the lines, and whether the reconciliation read
+ *  failed (design review I3), so the banner can say it couldn't check rather
+ *  than present "no mismatch" as a fact. */
+export type BillingAlerts = { alerts: BillingAlert[]; reconciliationUnchecked: boolean };
+
 /** The agency's work-queue banner (G13). Agency only: the caller has run
  *  requireAgency() and passes serviceDb(). Names come from accounts.name,
  *  the agency's own label (agency eyes only, never a client's). Every line
  *  ENDS (M8): payment_failed when the mirror clears past_due_since or the
  *  pass pauses; paused / paused_no_forward at PAUSE_ALERT_END_MS; a
  *  usage_mismatch after the next night's run or RECONCILE_ALERT_FRESH_MS. */
-export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { enforced: boolean }): Promise<BillingAlert[]> {
+export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { enforced: boolean }): Promise<BillingAlerts> {
   const t = now.getTime();
   const alerts: BillingAlert[] = [];
   for (let from = 0; ; ) {
@@ -752,6 +757,20 @@ export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { e
   // max_rows and silently dropped the oldest-checked alert), in a stable
   // total order: newest check first (the night logic relies on it), then the
   // key, so a page boundary between equal checked_at values is deterministic.
+  // Its failure is caught HERE (design review I3, plan G13): the paused and
+  // payment lines above still stand, no partial mismatch set is returned, and
+  // the caller is told the check could not be made. The first read's failure
+  // still throws: those lines are the banner's point.
+  try {
+    return { alerts: [...alerts, ...(await readMismatchAlerts(db, t))], reconciliationUnchecked: false };
+  } catch (e) {
+    console.error(`listBillingAlerts: ${e instanceof Error ? e.message : String(e)}; the paused and payment lines stand`);
+    return { alerts, reconciliationUnchecked: true };
+  }
+}
+
+async function readMismatchAlerts(db: SupabaseClient, t: number): Promise<BillingAlert[]> {
+  const alerts: BillingAlert[] = [];
   const nightOf = new Map<string, number>();
   const flagged = new Set<string>();
   const freshSince = new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString();

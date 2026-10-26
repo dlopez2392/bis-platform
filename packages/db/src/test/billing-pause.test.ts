@@ -221,12 +221,39 @@ describe("M7a PR-4 data layer, live (0099)", () => {
       const currentAt = night + Math.floor((2 * (now - night)) / 3);
       await saveReconciliation(db, w(now - 40 * DAY, "stripe_over", closedAt));
       await saveReconciliation(db, w(now - 10 * DAY, "match", currentAt));
-      const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true }))
+      const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true })).alerts
         .filter((a) => a.accountId === failing || a.accountId === mismatched);
       expect(alerts.map((a) => ({ ...a, since: Date.parse(a.since) }))).toEqual([
         { accountId: failing, accountName: "Fixture Co", kind: "payment_failed", since: Date.parse(since) },
         { accountId: mismatched, accountName: "Fixture Co", kind: "usage_mismatch", since: closedAt },
       ]);
+    })));
+
+  it("listBillingAlerts, live: a reconciliation read PostgREST refuses keeps the payment line and returns reconciliationUnchecked, never a thrown banner (design review I3) (mutation: let readMismatchAlerts throw → FAILS)", () =>
+    withPlan((planId) => withTestAccount(async (db, acct) => {
+      const since = iso(Date.now() - 3 * DAY);
+      await bill(db, acct, planId, { subscription_status: "past_due", past_due_since: since });
+      // The real client, with ONLY the reconciliation read pointed at a table
+      // PostgREST does not know: a real over-the-wire refusal (PGRST205).
+      const broken = new Proxy(db, {
+        get: (target, prop, recv) => prop === "from"
+          ? (table: string) => target.from(table === "billing_reconciliations" ? "billing_reconciliations_gone" : table)
+          : Reflect.get(target, prop, recv),
+      }) as SupabaseClient;
+      const errors: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => { errors.push(args); };
+      try {
+        const out = await listBillingAlerts(broken, new Date(), { enforced: true });
+        expect(out.reconciliationUnchecked).toBe(true);
+        expect(out.alerts.filter((a) => a.accountId === acct).map((a) => a.kind)).toEqual(["payment_failed"]);
+        expect(out.alerts.some((a) => a.kind === "usage_mismatch")).toBe(false);
+        expect(errors.flat().join(" ")).toContain("reconciliation read failed");
+      } finally {
+        console.error = original;
+      }
+      const ok = await listBillingAlerts(db, new Date(), { enforced: true });
+      expect(ok.reconciliationUnchecked).toBe(false);
     })));
 
   it("listBillingAlerts still alerts when the alerting reconciliation is past PostgREST's max_rows: 1,200 fresh rows, the one stripe_under checked oldest (review I) (mutation: one unpaged read → FAILS)", () =>
@@ -244,7 +271,7 @@ describe("M7a PR-4 data layer, live (0099)", () => {
         accountId: oldest!, meter: "sms", windowStart: iso(now - 10 * DAY), windowEnd: iso(now - HOUR),
         bisSettled: 5, bisInFlight: 0, bisHeld: 0, stripeTotal: 4, verdict: "stripe_under", checkedAt: iso(now - 2 * HOUR),
       });
-      const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true })).filter((a) => a.accountId === oldest);
+      const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true })).alerts.filter((a) => a.accountId === oldest);
       expect(alerts.map((a) => ({ ...a, since: Date.parse(a.since) }))).toEqual([
         { accountId: oldest, accountName: "Fixture Co", kind: "usage_mismatch", since: now - 2 * HOUR },
       ]);

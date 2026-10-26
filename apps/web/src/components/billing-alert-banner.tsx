@@ -35,9 +35,16 @@ const CRITICAL_KINDS: ReadonlySet<BillingAlert["kind"]> = new Set(["paused", "pa
  * `role="note"`: a standing fact already true when the page loaded, not
  * something that just happened (LineDownBanner's own reasoning for
  * overriding Notice's default `role="alert"`).
+ *
+ * `reconciliationUnchecked` (design review I3): listBillingAlerts could not
+ * read the nightly's results, so a last line says usage couldn't be checked
+ * rather than letting "no mismatch line" read as "nothing is wrong". Alone it
+ * still renders, in `warn`.
  */
-export function BillingAlertBanner({ alerts }: { alerts: BillingAlert[] }) {
-  if (alerts.length === 0) return null;
+export function BillingAlertBanner(
+  { alerts, reconciliationUnchecked = false }: { alerts: BillingAlert[]; reconciliationUnchecked?: boolean },
+) {
+  if (alerts.length === 0 && !reconciliationUnchecked) return null;
   const byKind = new Map<BillingAlert["kind"], BillingAlert[]>();
   for (const a of alerts) {
     const list = byKind.get(a.kind);
@@ -54,7 +61,7 @@ export function BillingAlertBanner({ alerts }: { alerts: BillingAlert[] }) {
           const shown = rows.slice(0, MAX_NAMES);
           const rest = rows.length - shown.length;
           return (
-            <p key={kind}>
+            <p key={kind} className="break-words">
               {m[KIND_LABEL[kind]]}{" "}
               {shown.map((a, i) => (
                 <span key={a.accountId}>
@@ -72,6 +79,7 @@ export function BillingAlertBanner({ alerts }: { alerts: BillingAlert[] }) {
             </p>
           );
         })}
+        {reconciliationUnchecked ? <p>{m["work.agency.billing.unchecked"]}</p> : null}
       </div>
     </Notice>
   );

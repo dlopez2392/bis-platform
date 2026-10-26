@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   decideMirror, mirrorSubscription, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
@@ -863,7 +863,7 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
     expect(PAUSE_ALERT_FORWARD_MS).toBe(30 * DAY);
     expect(PAUSE_ALERT_END_MS).toBe(44 * DAY);
     const { db, log } = alertsWorld(ROWS, []);
-    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+    expect((await listBillingAlerts(db, NOW, { enforced: true })).alerts).toEqual([
       { accountId: "id_Failing", accountName: "Failing", kind: "payment_failed", since: ago(3 * DAY) },
       { accountId: "id_Paused10", accountName: "Paused10", kind: "paused", since: ago(10 * DAY) },
       { accountId: "id_Paused30", accountName: "Paused30", kind: "paused_no_forward", since: ago(30 * DAY) },
@@ -877,7 +877,7 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
 
   it("listBillingAlerts, switch off: a 30- or 35-day pause is `paused`, never `paused_no_forward`, and still leaves at day 44 (mutation: ignore opts.enforced → FAILS)", async () => {
     const { db } = alertsWorld(ROWS, []);
-    expect(await listBillingAlerts(db, NOW, { enforced: false })).toEqual([
+    expect((await listBillingAlerts(db, NOW, { enforced: false })).alerts).toEqual([
       { accountId: "id_Failing", accountName: "Failing", kind: "payment_failed", since: ago(3 * DAY) },
       { accountId: "id_Paused10", accountName: "Paused10", kind: "paused", since: ago(10 * DAY) },
       { accountId: "id_Paused30", accountName: "Paused30", kind: "paused", since: ago(30 * DAY) },
@@ -904,7 +904,7 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
       rec("Lingering", "sms", CLOSED, "stripe_under", 25 * HOUR),      // LAST night's closed-period find
     ];
     const { db, log } = alertsWorld([], recs);
-    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+    expect((await listBillingAlerts(db, NOW, { enforced: true })).alerts).toEqual([
       { accountId: "id_Tonight", accountName: "Tonight", kind: "usage_mismatch", since: ago(1.5 * HOUR) },
       { accountId: "id_Persisting", accountName: "Persisting", kind: "usage_mismatch", since: ago(2 * HOUR) },
     ]);
@@ -923,7 +923,7 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
     const recs = [rec("A", "match", 1 * HOUR), rec("B", "match", 1.1 * HOUR), rec("C", "match", 1.2 * HOUR),
       rec("D", "match", 1.3 * HOUR), rec("Oldest", "stripe_under", 1.4 * HOUR)];
     const { db, log } = alertsWorld([], recs, 2);
-    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+    expect((await listBillingAlerts(db, NOW, { enforced: true })).alerts).toEqual([
       { accountId: "id_Oldest", accountName: "Oldest", kind: "usage_mismatch", since: ago(1.4 * HOUR) },
     ]);
     const reads = log.filter((l) => l.table === "billing_reconciliations").map((l) => l.calls);
@@ -934,6 +934,37 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
         ["order", "meter", { ascending: true }], ["order", "window_start", { ascending: true }],
       ]);
     }
+  });
+
+  it("listBillingAlerts: a failed reconciliation read keeps the first read's lines and says so — even after an alerting page was read, no partial mismatch set is returned (design review I3) (mutation: let it throw → FAILS; keep the partial pages' mismatch → FAILS)", async () => {
+    const HOUR = 60 * 60 * 1000;
+    let billingPages = 0;
+    let recPages = 0;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = pgFake((table) => {
+      if (table === "account_billing") { billingPages += 1; return { data: billingPages === 1 ? ROWS.slice(0, 2) : [], error: null }; }
+      recPages += 1;
+      return recPages === 1
+        ? { data: [{ account_id: "id_X", meter: "sms", window_start: "2026-09-21T14:13:00+00:00", checked_at: ago(1 * HOUR), verdict: "stripe_under", accounts: { name: "X" } }], error: null }
+        : { data: null, error: { message: "canceling statement due to statement timeout" } };
+    });
+    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual({
+      alerts: [
+        { accountId: "id_Failing", accountName: "Failing", kind: "payment_failed", since: ago(3 * DAY) },
+        { accountId: "id_Paused10", accountName: "Paused10", kind: "paused", since: ago(10 * DAY) },
+      ],
+      reconciliationUnchecked: true,
+    });
+    expect(errors.mock.calls.flat().join(" ")).toContain("statement timeout");
+    errors.mockRestore();
+  });
+
+  it("listBillingAlerts: a good reconciliation read says reconciliationUnchecked: false; a failed FIRST read still throws (the paused lines are the point) (mutation: catch the first read too → FAILS)", async () => {
+    const { db } = alertsWorld(ROWS.slice(0, 1), []);
+    expect((await listBillingAlerts(db, NOW, { enforced: true })).reconciliationUnchecked).toBe(false);
+    const { db: broken } = pgFake((table) =>
+      table === "account_billing" ? { data: null, error: { message: "permission denied" } } : { data: [], error: null });
+    await expect(listBillingAlerts(broken, NOW, { enforced: true })).rejects.toThrow(/listBillingAlerts failed: permission denied/);
   });
 
   it("listBillingAlerts: one night is the 08:00 UTC window holding a key's newest check, exactly: a row checked at 07:59 belongs to the night before one checked at 08:01, and a run the budget resumed eight hours later in the same window is the same night (review m3) (mutation: a 6-hour span between checks → FAILS; nights from midnight UTC → FAILS)", async () => {
@@ -950,7 +981,7 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
       rec("Resumed", CLOSED, "stripe_under", "2026-09-30T09:00:00+00:00"), // the 09-30 window, first tick
     ];
     const { db } = alertsWorld([], recs);
-    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+    expect((await listBillingAlerts(db, NOW, { enforced: true })).alerts).toEqual([
       { accountId: "id_Resumed", accountName: "Resumed", kind: "usage_mismatch", since: "2026-09-30T09:00:00+00:00" },
     ]);
   });

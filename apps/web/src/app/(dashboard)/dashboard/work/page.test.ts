@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow, BillingAlert, Proposal } from "@bis/db";
+import type { AgencyWorkRow, BillingAlert, BillingAlerts, Proposal } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 import { makeTr } from "@/lib/record/copy";
@@ -33,8 +33,9 @@ const listPendingProposalsForAgencyMock = vi.fn(async (..._a: unknown[]): Promis
 const listAccountsWithStaleUsageMock = vi.fn<(db: unknown, now: Date) => Promise<string[]>>(async () => []);
 // Task 11's own read (plan G13) — defaults to [] (no banner) so every case
 // above is unaffected. Real signature: packages/db/src/account-billing.ts,
-// `(db, now, opts: { enforced: boolean }) => Promise<BillingAlert[]>`.
-const listBillingAlertsMock = vi.fn<(db: unknown, now: Date, opts: { enforced: boolean }) => Promise<BillingAlert[]>>(async () => []);
+// `(db, now, opts: { enforced: boolean }) => Promise<BillingAlerts>`.
+const NO_ALERTS: BillingAlerts = { alerts: [], reconciliationUnchecked: false };
+const listBillingAlertsMock = vi.fn<(db: unknown, now: Date, opts: { enforced: boolean }) => Promise<BillingAlerts>>(async () => NO_ALERTS);
 /**
  * The service client, as a recording fake (item 8b-2): every `from(table)` logs its `.eq`/`.in`/`.limit`
  * filters and answers the table's rows FILTERED by them, so a read that drops a filter really draws another
@@ -132,7 +133,7 @@ describe("AgencyWorkPage", () => {
     countLinesTurningCallersAwayMock.mockReset().mockResolvedValue(0);
     listPendingProposalsForAgencyMock.mockReset().mockResolvedValue([]);
     listAccountsWithStaleUsageMock.mockReset().mockResolvedValue([]);
-    listBillingAlertsMock.mockReset().mockResolvedValue([]);
+    listBillingAlertsMock.mockReset().mockResolvedValue(NO_ALERTS);
     vi.unstubAllEnvs();
     fake.tables = {};
     fake.fail.clear();
@@ -489,7 +490,7 @@ describe("AgencyWorkPage", () => {
   });
 
   it("renders the billing-alert banner below the stale-usage banner when there are alerts, reading the real clock and the enforced switch (mutation: hard-code enforced true or false → FAILS)", async () => {
-    listBillingAlertsMock.mockResolvedValueOnce([PAUSED]);
+    listBillingAlertsMock.mockResolvedValueOnce({ alerts: [PAUSED], reconciliationUnchecked: false });
     const before = Date.now();
     vi.stubEnv("BILLING_ENFORCE", "1");
     const html = renderToStaticMarkup(await AgencyWorkPage());
@@ -505,10 +506,20 @@ describe("AgencyWorkPage", () => {
     expect(now.getTime()).toBeLessThanOrEqual(after);
     expect(opts).toEqual({ enforced: true });
 
-    listBillingAlertsMock.mockClear().mockResolvedValueOnce([PAUSED]);
+    listBillingAlertsMock.mockClear().mockResolvedValueOnce({ alerts: [PAUSED], reconciliationUnchecked: false });
     vi.stubEnv("BILLING_ENFORCE", undefined);
     await AgencyWorkPage();
     expect(listBillingAlertsMock.mock.calls[0]![2]).toEqual({ enforced: false });
+  });
+
+  it("a reconciliation read listBillingAlerts could not make shows the banner's \"couldn't check\" line beside the paused line it still has (design review I3) (mutation: drop reconciliationUnchecked on the way to the banner → FAILS)", async () => {
+    listBillingAlertsMock.mockResolvedValueOnce({ alerts: [PAUSED], reconciliationUnchecked: true });
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).toContain(m["work.agency.billing.paused"]);
+    expect(text).toContain(m["work.agency.billing.unchecked"]);
+    listBillingAlertsMock.mockResolvedValueOnce({ alerts: [], reconciliationUnchecked: true });
+    expect(renderedText(renderToStaticMarkup(await AgencyWorkPage()))).toContain(m["work.agency.billing.unchecked"]);
+    expect(renderedText(renderToStaticMarkup(await AgencyWorkPage()))).not.toContain(m["work.agency.billing.unchecked"]);
   });
 
   it("swallows a failed billing-alerts read and still renders the whole queue (mutation: let the rejection propagate → FAILS)", async () => {
@@ -534,7 +545,7 @@ describe("AgencyWorkPage", () => {
     listBillingAlertsMock.mockReset().mockImplementation(async () => {
       alertsCalled = true;
       while (!listCalled) await new Promise((r) => setTimeout(r, 1));
-      return [];
+      return NO_ALERTS;
     });
 
     await expect(AgencyWorkPage()).resolves.toBeTruthy();

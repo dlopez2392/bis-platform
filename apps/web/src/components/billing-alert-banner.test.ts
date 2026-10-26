@@ -15,6 +15,24 @@ const render = (alerts: BillingAlert[]) => renderToStaticMarkup(createElement(Bi
 describe("BillingAlertBanner", () => {
   it("renders nothing at zero (mutation: render an empty Notice shell -> FAILS)", () => {
     expect(render([])).toBe("");
+    expect(renderToStaticMarkup(createElement(BillingAlertBanner, { alerts: [], reconciliationUnchecked: false }))).toBe("");
+  });
+
+  it("a reconciliation it could not check adds one \"couldn't check\" line, last, even with no other alert (design review I3) (mutation: ignore reconciliationUnchecked -> FAILS; render nothing at zero alerts -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(BillingAlertBanner, {
+      alerts: [alert({ accountId: "p1", kind: "paused" })], reconciliationUnchecked: true,
+    }));
+    const text = renderedText(html);
+    expect(text).toContain(m["work.agency.billing.unchecked"]);
+    expect(text.indexOf(m["work.agency.billing.paused"])).toBeLessThan(text.indexOf(m["work.agency.billing.unchecked"]));
+    const alone = renderToStaticMarkup(createElement(BillingAlertBanner, { alerts: [], reconciliationUnchecked: true }));
+    expect(renderedText(alone)).toContain(m["work.agency.billing.unchecked"]);
+    expect(alone).toContain("bg-[var(--warn-bg)]");
+  });
+
+  it("each names line wraps a long account name instead of overflowing at 360 px (design review M6) (mutation: drop break-words -> FAILS)", () => {
+    const html = render([alert({ accountId: "a1", kind: "paused" })]);
+    expect(html).toMatch(/<p class="[^"]*\bbreak-words\b/);
   });
 
   it("names up to five accounts by link, then 'and N more' for the rest (mutation: drop the cap -> all seven names show, FAILS)", () => {

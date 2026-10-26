@@ -235,7 +235,7 @@ export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptio
          PAID_STATUSES, nextVersion, readBillingStanding, listPauseCandidates, pauseBilling, clearBillingPause,
          undoLiftBillingPause, healPermissions, listBillingAlerts, listReconcilableAccounts,
          PAUSE_ALERT_FORWARD_MS, PAUSE_ALERT_END_MS, RECONCILE_ALERT_FRESH_MS,
-         type BillingStanding, type BillingAlert,
+         type BillingStanding, type BillingAlert, type BillingAlerts,
          type SubscriptionStatus, type AccountBilling, type BillingLink, type BillingLinkWrite,
          type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
          type MirrorOutcome, type MirrorPlan } from "./account-billing";

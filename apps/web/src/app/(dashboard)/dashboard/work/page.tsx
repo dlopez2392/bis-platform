@@ -9,7 +9,7 @@
 // (apps/web/e2e/work-queue.spec.ts, Task 6 Step 1).
 import {
   countLinesTurningCallersAway, listAccountsWithStaleUsage, listAgencyWork, listBillingAlerts, listPendingProposalsForAgency,
-  serviceDb, type Proposal,
+  serviceDb, type BillingAlerts, type Proposal,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { BillingAlertBanner } from "@/components/billing-alert-banner";
@@ -96,18 +96,13 @@ export default async function AgencyWorkPage() {
     }),
     // Task 11 (plan G13): the agency's billing banner (paused, paused 30+
     // days, payment failed, usage mismatch). A banner is cosmetic, the queue
-    // is the page — same swallow as every other banner's read above. NOTE
-    // (G13 review): listBillingAlerts reads the paused/payment rows THEN the
-    // reconciliation rows, in one function, and throws on either read
-    // failing — so a reconciliation-read outage here loses the already-
-    // computed paused/payment-failed lines too, not just the mismatch line.
-    // Fixing that needs listBillingAlerts itself (packages/db, Task 2's
-    // file) to catch its second read internally and still return the first
-    // read's rows; out of this task's file ownership, so flagged rather than
-    // fixed here.
-    listBillingAlerts(db, now, { enforced: billingEnforced() }).catch((e: unknown) => {
+    // is the page — same swallow as every other banner's read above.
+    // listBillingAlerts catches its own reconciliation read (design review
+    // I3) and still returns the paused/payment lines with
+    // reconciliationUnchecked, so only a failure of THAT first read lands here.
+    listBillingAlerts(db, now, { enforced: billingEnforced() }).catch((e: unknown): BillingAlerts => {
       console.error(`work queue: billing-alerts read failed, rendering no banner: ${String(e)}`);
-      return [] as Awaited<ReturnType<typeof listBillingAlerts>>;
+      return { alerts: [], reconciliationUnchecked: false };
     }),
     // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
     getPersonPrefs(),
@@ -216,7 +211,7 @@ export default async function AgencyWorkPage() {
       <div className="space-y-4 p-6">
         <LineDownBanner count={linesDown} />
         <UsageStaleBanner count={staleUsage.length} />
-        <BillingAlertBanner alerts={billingAlerts} />
+        <BillingAlertBanner alerts={billingAlerts.alerts} reconciliationUnchecked={billingAlerts.reconciliationUnchecked} />
         <AgencyWorkList
           buckets={buckets}
           contactNames={contactNames}

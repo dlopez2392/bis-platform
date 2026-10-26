@@ -334,7 +334,7 @@ test(
       expect(error).toBeNull();
     }
 
-    const alertsPaused = await listBillingAlerts(serviceDb(), pausedAt, { enforced: true });
+    const alertsPaused = (await listBillingAlerts(serviceDb(), pausedAt, { enforced: true })).alerts;
     const fixturePaused = alertsPaused.find((a) => a.accountId === accountId);
     expect(fixturePaused?.kind, "freshly paused, well under the 30-day no-forward boundary").toBe("paused");
     const pausedOfKind = alertsPaused.filter((a) => a.kind === "paused");
@@ -358,7 +358,7 @@ test(
       expect(error).toBeNull();
     }
 
-    const alertsFailed = await listBillingAlerts(serviceDb(), liftedAt, { enforced: true });
+    const alertsFailed = (await listBillingAlerts(serviceDb(), liftedAt, { enforced: true })).alerts;
     const fixtureFailed = alertsFailed.find((a) => a.accountId === accountId);
     expect(fixtureFailed?.kind, "unpaused, still past_due since the beforeAll stamp").toBe("payment_failed");
     const failedOfKind = alertsFailed.filter((a) => a.kind === "payment_failed");
