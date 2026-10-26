@@ -170,6 +170,11 @@ vi.mock("../places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps
 vi.mock("../documents-card", () => ({
   DocumentsCard: (p: Record<string, unknown>) => createElement("div", { "data-documents-mock": JSON.stringify(p) }),
 }));
+// M7a PR-4 (design review I5): the account's billing verdict, switchable; not paused by default.
+const verdictPaused = vi.hoisted(() => ({ on: false }));
+vi.mock("@/lib/billing/standing-read", () => ({
+  billingVerdictFor: async () => ({ paused: verdictPaused.on, voice: true, concierge: true, forward: true, cause: null, pausedAt: null }),
+}));
 const timelineProps = vi.fn();
 vi.mock("./activity-timeline", () => ({
   ActivityTimeline: (props: Record<string, unknown>) => {
@@ -426,6 +431,19 @@ describe("ContactDetailPage: the recipient's texts state", () => {
   it("an ok recipient: no line, the form shows (mutation: always pass the held line → FAILS)", async () => {
     await render();
     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: null });
+  });
+
+  it("a paused account hands the composer accountPaused, so its Text tab says texts are stopped (design review I5) (mutation: drop the accountPaused prop → FAILS)", async () => {
+    await render();
+    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ accountPaused: false });
+    timelineProps.mockClear();
+    verdictPaused.on = true;
+    try {
+      await render();
+      expect(timelineProps.mock.calls[0]![0]).toMatchObject({ accountPaused: true });
+    } finally {
+      verdictPaused.on = false;
+    }
   });
 
   it("an unreadable state closes the composer with the error line, never an open form", async () => {

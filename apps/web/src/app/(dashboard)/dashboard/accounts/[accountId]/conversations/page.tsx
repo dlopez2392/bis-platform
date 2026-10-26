@@ -39,6 +39,7 @@ import { ConversationBack } from "./conversation-back";
 import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
 import { MessageComposer } from "../contacts/[contactId]/message-composer";
 import { loadInboxComposer } from "./composer-facts";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { HeldEmailList, type HeldItemView } from "./held-email-list";
 import { HeldEmailSkeleton } from "./held-email-skeleton";
 
@@ -358,6 +359,8 @@ export default async function ConversationsPage({
       log: (line) => console.error(`conversations: account ${accountId} composer: ${line}`),
     }, { messages, zone: zone.zone, locale })
     : null;
+  // M7a PR-4 (design review I5): the layout's cached verdict; the Text tab says a paused account's texts are stopped.
+  const accountPaused = composerFacts ? (await billingVerdictFor(accountId)).paused : false;
 
   return (
     <>
@@ -421,6 +424,7 @@ export default async function ConversationsPage({
                   contactHasEmail={composerFacts.contactHasEmail}
                   contactHasPhone={composerFacts.contactHasPhone}
                   smsGate={composerFacts.smsGate}
+                  accountPaused={accountPaused}
                   smsBlockedLine={composerFacts.smsBlockedLine}
                   emailNoticeLine={composerFacts.emailNoticeLine}
                   emailAction={sendEmailAction.bind(null, accountId)}

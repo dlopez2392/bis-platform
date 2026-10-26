@@ -85,6 +85,11 @@ describe("messageFailureReason", () => {
     expect(messageFailureReason({ status: "failed", error: "email not sent: suppressed_account" }))
       .toBe(m["automations.reason.accountSuppressed"]);
   });
+
+  it("a staff email the gate blocked `billing_paused` (M7a PR-4) reads \"Not sent: the account is paused\", in the reader's language, never the generic line (mutation: drop the mapping → FAILS)", () => {
+    expect(messageFailureReason({ status: "failed", error: "email not sent: billing_paused" })).toBe(m["automations.reason.billingPaused"]);
+    expect(messageFailureReason({ status: "failed", error: "email not sent: billing_paused" }, "es")).toBe(m["automations.reason.billingPaused.es"]);
+  });
 });
 
 describe("failure reasons in Spanish (S-03 1b)", () => {

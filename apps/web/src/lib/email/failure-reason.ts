@@ -39,6 +39,12 @@ const SUPPRESSED_BLOCK_MESSAGE = "email not sent: suppressed";
 const SUPPRESSED_ACCOUNT_BLOCK_MESSAGE = "email not sent: suppressed_account";
 
 /**
+ * M7a PR-4: the gate's `billing_paused` reason (`email not sent: billing_paused`), for a staff
+ * email sent while the account is paused. Matched exactly, as the two above.
+ */
+const BILLING_PAUSED_BLOCK_MESSAGE = "email not sent: billing_paused";
+
+/**
  * D-017. The thread (`message-thread.tsx`) and the contact timeline
  * (`activity-timeline.tsx`) stored a failure reason on every outbound
  * message that bounced or failed and showed NEITHER of them — an operator
@@ -65,6 +71,7 @@ export function messageFailureReason(
   if (message.status === "failed") {
     if (message.error === SUPPRESSED_BLOCK_MESSAGE) return t(m, "conversations.failureReason.suppressed", locale);
     if (message.error === SUPPRESSED_ACCOUNT_BLOCK_MESSAGE) return t(m, "automations.reason.accountSuppressed", locale);
+    if (message.error === BILLING_PAUSED_BLOCK_MESSAGE) return t(m, "automations.reason.billingPaused", locale);
     return t(m, "conversations.failureReason.failed", locale);
   }
   return null;

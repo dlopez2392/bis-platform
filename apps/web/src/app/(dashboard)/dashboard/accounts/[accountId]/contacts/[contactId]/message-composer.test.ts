@@ -94,6 +94,24 @@ describe("smsFormBlock: the one line the Text tab shows instead of the form", ()
   });
 });
 
+describe("smsFormBlock: a paused account (M7a PR-4, design review I5)", () => {
+  const open = { ok: true as const, from: "+19565550000", ownedNumbers: ["+19565550000"] };
+  it("a paused account's Text tab says texts are stopped BEFORE the A2P line, the gate's own order (gate.ts) (mutation: check paused after the gate → FAILS: the A2P line shows)", () => {
+    expect(smsFormBlock({ ok: false, reason: "a2p_not_approved" }, true, null, "en", true)).toEqual({ text: m["compose.smsBlockedPaused"], consent: false });
+    expect(smsFormBlock(open, true, null, "en", true)).toEqual({ text: m["compose.smsBlockedPaused"], consent: false });
+    expect(smsFormBlock(open, true, null, "es", true)).toEqual({ text: m["compose.smsBlockedPaused.es"], consent: false });
+    expect(smsFormBlock(open, true, null, "en", false)).toBeNull();
+  });
+  it("the composer renders the paused line in place of the Text form, so nothing is typed only to be refused at Send (mutation: drop accountPaused on the way to smsFormBlock → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(MessageComposer, {
+      contactId: "c1", contactHasEmail: true, contactHasPhone: true, smsGate: open, smsBlockedLine: null, emailNoticeLine: null,
+      emailAction: async () => {}, smsAction: async () => {}, modes: ["sms", "email"], initialMode: "sms", accountPaused: true,
+    } as never));
+    expect(renderedText(html)).toContain(m["compose.smsBlockedPaused"]);
+    expect(html).not.toContain("<textarea");
+  });
+});
+
 describe("the composer in Spanish (S-03 1b, spec §10.2)", () => {
   it("smsFormBlock answers in the page's language (mutation: drop the locale -> English, FAILS)", () => {
     expect(smsFormBlock(null, true, null, "es")).toEqual({ text: "No se pudo revisar si puede recibir textos. Vuelva a cargar la página para intentar de nuevo.", consent: false });
