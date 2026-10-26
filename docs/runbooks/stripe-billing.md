@@ -728,9 +728,26 @@ with a row Stripe already reports; it does not make Stripe report anything.
 6. **Read the next night's cron log** (9.6): `usageReport.reconciled` should
    be greater than 0 for every billed account, and `usageReport.mismatched`
    should be 0. Anything else, read 9.9 before doing anything by hand.
-7. **Rollback (required steps, M4) — unset `BILLING_ENFORCE` and redeploy.**
-   Every reader ignores the stamps at once; held automations go out within the
-   hour; the usage report stops holding; the nightly step stops running. Then
+7. **Rollback (required steps, M4) — first, the held usage; then unset
+   `BILLING_ENFORCE` and redeploy.** With the switch off the usage report
+   stops HOLDING: every usage row still held is resent on the next tick. A
+   row Stripe already has, resent more than 24 hours after its first send, is
+   past Stripe's identifier dedupe (assumption S7, section 5.6) and is BILLED
+   TWICE. So BEFORE you unset it, list every account, meter and window whose
+   newest check is ambiguous or held:
+   ```sql
+   select distinct on (account_id, meter) account_id, meter, window_start, window_end,
+          bis_held, stripe_total, verdict, checked_at
+   from billing_reconciliations
+   where verdict in ('ambiguous', 'held_at_stripe', 'held_missing')
+   order by account_id, meter, checked_at desc;
+   ```
+   For each, open that customer's invoice in Stripe and decide its held rows
+   by 9.11's method: stamp the ones Stripe already counts (so they are never
+   resent), and leave unstamped only the ones it genuinely lacks. Only then
+   unset the switch. Every reader ignores the stamps at once; held automations
+   go out within the hour; the usage report stops holding; the nightly step
+   stops running. Then
    run 9.12's ONE SQL statement, so no card still says Paused and no stale
    stamp re-enforces the moment the switch comes back on. **Do not use Lift
    pause for this** — a Lift stamp would stop those accounts re-pausing for
@@ -814,6 +831,16 @@ order by checked_at desc;
 | `stripe_under` | Stripe's total is LOWER than BIS settled alone. Stripe dropped an event it accepted (assumption A12: a 200 from `meterEvents.create` means RECEIVED, not that it will bill). | A manual invoice item for the difference, or accept the loss — an owner decision, not automatic. |
 | `ambiguous` | The held and non-held ranges overlap, or Stripe's total is a non-integer, or it falls strictly between the two ranges. | Compare `usage_events` for the account, meter and window against Stripe's own `listEventSummaries` for the same window, by hand. |
 
+**A false `ambiguous` from a held send split across ticks.** The nightly
+step sends a `held_missing` window's held rows one at a time, each only while
+its worst case still fits the budget; when the budget runs out midway, the
+rest wait for the next tick. Until the next NIGHT re-checks that window,
+Stripe counts some of its held rows and not others — exactly the partial set
+the comparison refuses to decide — so a check in between reads `ambiguous`.
+Before working an `ambiguous` row by hand, wait for the next night's check of
+the same window: if the remaining rows went out, it reads `match` (or
+`held_at_stripe`) on its own.
+
 ### 9.10 A closed-period mismatch (S8)
 
 Stripe finalises a period's invoice about an hour after the period ends
@@ -857,7 +884,9 @@ where id = '<id>' and reported_at is null;
 
 ### 9.12 Rollback: clearing every pause stamp
 
-After unsetting `BILLING_ENFORCE` and redeploying (9.5 step 7), run this ONCE
+First the held usage (9.5 step 7's list, BEFORE the switch goes off: with it
+off, every held row is resent, and one Stripe already has bills twice past its
+24-hour dedupe). After unsetting `BILLING_ENFORCE` and redeploying, run this ONCE
 through MCP, against production, to clear every stamp the pause left behind —
 otherwise no card can be trusted ("Paused" may be stale) and turning the
 switch back ON would re-pause every account still genuinely past due, with no
