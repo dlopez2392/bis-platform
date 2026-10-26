@@ -204,11 +204,16 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     await expect(bubble).toContainText("Form submission");
     await expect(bubble).not.toContainText("Sent");
 
-    // Opening it for real does clear the count — but mark-read.tsx fires the
-    // clearing write fire-and-forget (an effect, `void action(...)`,
-    // deliberately unawaited: it exists specifically so a hover's Link
-    // prefetch can never trigger a read). Nothing on this page tells the
-    // test when that request's own server round trip lands, and leaving via
+    // Opening it for real does clear the count — but mark-read.tsx's effect
+    // fires the clearing write fire-and-forget (`void markReadThenRefresh(
+    // action, conversationId, () => router.refresh())`, deliberately
+    // unawaited: it exists specifically so a hover's Link prefetch can never
+    // trigger a read). markReadThenRefresh itself awaits the write before
+    // calling router.refresh() (M7a PR-4 review I2: the action no longer
+    // revalidates on its own, so MarkRead refreshes the page once the write
+    // has landed), but that ordering is internal to a promise this test never
+    // holds a handle to. Nothing on this page tells the test when that
+    // request's own server round trip lands, and leaving via
     // `page.goto` is a REAL navigation — proven, not assumed, to abort a
     // still-in-flight fetch from the page being left (see
     // forms-flake-report.md: with every POST on this page delayed 4s,
