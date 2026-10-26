@@ -359,7 +359,11 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
     // agrees with the name that booking was made under (review of 1406a5b1, item 1: "Daniel Lopez" booked onto
     // the stored "Dan Lopez", or a speech-to-text drift both times), or, last, with their stored name.
     const ownBookings = state.bookings.filter((b) => b.contactId === own);
-    const unmatched = ownBookings.some((b) => b.forSomeoneElse === false) ? []
+    const forMe = ownBookings.some((b) => b.forSomeoneElse === false);
+    // Orchestrator ruling 2026-10-26: "for me" never swallows a lead the caller explicitly said is for someone
+    // else. That lead is a second person, so the call files on no customer.
+    if (forMe && state.leads.some((l) => l.forSomeoneElse === true)) return null;
+    const unmatched = forMe ? []
       : said.filter((n) => !ownBookings.some((b) => namesAgree(n, b.contactName)));
     if (unmatched.length === 0) return own;
     const record = (await getContact(ctx.db, ctx.accountId, own)) as

@@ -828,7 +828,9 @@ The new order:
    person's bookings on this call was answered "for me" (`forSomeoneElse: false`, mirrored on the booking),
    when it agrees (`namesAgree`) with the name that booking was made under (`MirroredBooking.contactName`:
    "Daniel Lopez" booked onto the stored "Dan Lopez", or the same speech-to-text drift twice), or when it
-   agrees with the stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
+   agrees with the stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule). A "for me"
+   booking never swallows a lead the caller explicitly said is for someone else (`forSomeoneElse: true`):
+   that lead is a second person, so the call files on no customer (orchestrator ruling 2026-10-26). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
    the named person): a name that does NOT agree is a second person, so the call files on no customer.
    "Booked Beto, then 'this is Ana, take a message'" files on no customer, neither Ana nor Beto; so does a
    booking that lost its slot (`SlotTakenError`, which also sets `state.contactId`) followed by another

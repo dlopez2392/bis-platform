@@ -2650,6 +2650,22 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
         expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
       });
 
+      // Orchestrator ruling 2026-10-26: "for me" never swallows a lead the caller explicitly said is for someone else.
+      it("a \"for me\" booking for Dan, then a lead for \"Ana Garcia\" answered someone else: a second person, on NO customer, nobody made (mutation: drop the someone-else check → Dan's thread, FAILS)", async () => {
+        danOnly();
+        await finishCall(withLead(booking("Daniel Lopez", false), { fields: { fullName: "Ana Garcia", need: "quote" }, forSomeoneElse: true }), ctx, meta);
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(dbMocks.createContact).not.toHaveBeenCalled();
+        expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
+      });
+
+      it("control: the same lead with no someone-else answer stays with the \"for me\" booking's person", async () => {
+        danOnly();
+        await finishCall(withLead(booking("Daniel Lopez", false), { fields: { fullName: "Ana Garcia", need: "quote" } }), ctx, meta);
+        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      });
+
       it("control: the same third spelling after a booking NOT answered for me is a second person: no customer", async () => {
         danOnly();
         await finishCall(message(booking("Daniel Lopez"), "Danny Lopez"), ctx, meta);
