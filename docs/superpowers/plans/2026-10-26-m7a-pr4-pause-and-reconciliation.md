@@ -118,12 +118,16 @@ Assumptions (not verified; each names what settles it):
   - `canceled`: `pause` once `current_period_end ≤ now` (or it is null), unless lifted after that end;
   - anything else (`incomplete`, `incomplete_expired`, `paused`, `active`, `trialing`): `keep`. `incomplete_expired` is a first checkout that never paid: the account was never served on a plan, so it stays as an unbilled one would.
 - **G2. Payment clears the pause in the mirror** (spec flow 5). `decideMirror` writes `billing_paused_at: null` when the re-read status is `active` or `trialing`, and never otherwise. The pause pass heals the same case (G1).
-- **G3. Lift pause.** Agency only (`requireAgency`). Compare-and-set: clears `billing_paused_at`, stamps `pause_lifted_at = now`, moves `updated_at` with `nextVersion`. Undo re-pauses only while the row still carries that lift stamp, is still unpaid or ended, and is not complimentary; otherwise it says the billing changed. 0099's `account_billing_lift_check` forbids a lift stamp on a complimentary row.
+- **G3. Lift pause.** Agency only (`requireAgency`). Compare-and-set: clears `billing_paused_at`, stamps `pause_lifted_at = now`, moves `updated_at` with `nextVersion`. The Lift bumps the account's held automations so they go next tick (`bumpHeldForAccount`; re-review m7). Undo re-pauses only while the row still carries that lift stamp, is still unpaid or ended, and is not complimentary, and it RESTORES the pause's own start (returned by the Lift), so the 30-day forward clock does not restart (re-review m1); otherwise it says the billing changed. 0099's `account_billing_lift_check` forbids a lift stamp on a complimentary row.
 - **G4. Permissions (PR-3 Next plans (b)).** Enforcement derives the features from `account_billing.plan_id → plans.features` at READ time (`readBillingStanding`, one embed), so the PR-3 race (permissions written outside the compare-and-set) cannot reach a gate. `accounts.permissions` keeps being written (the Setup wizard reads it) and the nightly step rewrites it from the plan (`healPermissions`), so its drift lasts at most a day (switch on) and only changes which Setup steps show.
 - **G5. The verdict** (`billingVerdict(standing, enforced, now)`, pure). Not enforced, or no row (unbilled): everything on. Otherwise `paused = pausedAt !== null`; `voice = !paused && features.voice_receptionist`; `concierge = !paused && features.web_concierge`; `forward` = whether a call Sofía does not take may still ring the business: true for `plan-no-voice`, and for a pause only while `now − pausedAt < PAUSE_FORWARD_MS` (30 days, I7). Complimentary rows follow their plan's features and are never paused.
 - **G6. Stripe freshness (PR-3 Next plans (d); review I1).** The mirror stamps `stripe_checked_at = now` on every write (0099 column). With the switch on, the nightly step re-mirrors every subscription whose row is `past_due`, `unpaid` or paused (G14). A past-due pause needs BOTH `stripe_checked_at − past_due_since ≥ PAUSE_GRACE_MS` (Stripe said "still unpaid" after the 7 days were over, not before) AND `now − stripe_checked_at ≤ STRIPE_FRESH_MS` (26 h). So the pause lands between day 7 and day 8, on the first tick after the first confirmation past day 7. **The bound that holds** (not "never"): a client who pays after Stripe's last confirming read, and whose `invoice.paid` delivery fails, can be paused until Stripe's webhook retry is processed or the next nightly re-read clears it, whichever comes first (at most about 24 hours plus one tick). The webhook path itself is unchanged.
 - **G7. SMS while paused** (Q1): the SMS gate blocks with `billing_paused` every kind whose class is `customer_initiated`, `informational`, `marketing` or `staff_typed` (12 of the 15 kinds); `operator` and `consent_reply` (3 kinds) pass. A new step 3b, right after the suppression check (`gate.ts:192-197`), so it covers every SMS path, present and future.
-- **G7a. Automations are held, not dropped (I6).** `holdOrSend` turns a `billing_paused` refusal from either gate into a HOLD, the closure hold's shape: held until the earlier of `now + PAUSE_RECHECK_MS` (60 minutes) and the subject's deadline; a subject whose deadline is at or before now is `skipped` ("Not sent: the appointment passed while the account was paused"). The release pass brings each held row back at `held_until` and re-runs it through the same gate: still paused → held again; lifted or paid → sent (within the hour); switch off → sent. Subjects with no deadline (review and referral asks, quote follow-ups, reactivation) send after the lift, throttled by the existing per-account caps (`caps.ts:19-33`); stated as known behaviour for the reviewer. Non-automation sends (the staff composer) are refused with a sentence, not held.
+- **G7a. Automations are held, not dropped (I6).** `holdOrSend` turns a `billing_paused` refusal from either gate into a HOLD, the closure hold's shape, with three rules:
+  - **The hold is on a fixed grid (re-review I1).** `held_until` = the earlier of the subject's pause deadline and the NEXT WHOLE HOUR (UTC) after now. Every repeat hold within the same hour computes the same instant, so `writeHeld`'s "same held_until writes nothing" rule (`hold-or-send.ts:290-297`) holds and the Activity page is not re-sorted (`automation-log.ts:83-90`). And a pause hold still in force short-circuits BEFORE the gate: when the subject's log row is `held`, with the pause reason, and `held_until > now`, `holdOrSend` returns `held` on that one log read (the read `writeHeld` makes anyway) and asks no gate.
+  - **Stale ones drop (I6; re-review I2).** Each subject carries a `pauseDeadline`: the appointment for the booking recipes that already have a `deadline` (reminders, SMS reminder, appointment confirm); for the others, its recipe's OWN list-window end, because the release re-check (`getDue…ById`, `packages/db/src/automations.ts:329-352`) applies no age window while the list does (`:300-301`): review request = anchor + `REVIEW_REQUEST_MAX_AGE_MS` (`automations.ts:176`), referral ask = anchor + `REFERRAL_ASK_MAX_AGE_MS` (`:1038`), no-show nudge = anchor + `NO_SHOW_NUDGE_MAX_AGE_MS` (`:417`), quote follow-up = `stage_changed_at` + `QUOTE_FOLLOWUP_MAX_AGE_MS` (`:1859`); each anchor is the one that pass already computes (`laterOf(...)`, `review-request.ts:113`, `referral-ask.ts:117`, `no-show-nudge.ts:105`; `quote-followup.ts:102`). Once past it, the subject is `skipped` ("Not sent: it was no longer timely when the account's pause ended"). The follow-up already enforces `FOLLOWUP_MAX_AGE_MS` on release (`followup-timing.ts:86`); the instant reply and the text-back already stop at `RETRY_MAX_AGE_MS` (`send-sms.ts:71`, the re-hold age cap `hold-or-send.ts:121`). **Reactivation has no max-age constant** (its list is "lapsed for N months", which stays true): its release re-check (`getDueReactivationById`, `automations.ts:1716`) re-reads eligibility (unstamped, still lapsed, recipe on), and `REACTIVATION_DAILY_CAP` throttles it, so it carries no pause deadline. Stated for the owner to overrule.
+  - **Release.** The release pass brings each held row back at `held_until`: still paused → held again (no write within the hour); lifted → the Lift bumps every held row of the account (`bumpHeldForAccount`, `automation-log.ts:131`), so they go next tick; paid → within the hour; switch off → sent.
+  Non-automation sends (the staff composer) are refused with a sentence, not held.
 - **G8. Email while paused**: the email gate blocks with `billing_paused` every `automation.*` kind, which `holdOrSend` then holds (G7a); every other kind passes: booking and form receipts (Q6), operator alerts, staff-typed mail, and `staff.document_request_email`, which is an email to the customer and so keeps going per Q6, while its SMS twin `staff.document_request_sms` stops with the other customer texts (M11). The read-only guard already limits staff-typed mail and document requests to the agency while paused.
 - **G9. Calls while paused or without Sofía** (Q2, Q5, I7). In the TeXML route, AFTER every guard and the press-1 screen and BEFORE the per-account forward and the bridge, a call whose verdict has `voice = false`:
   - a CLEARED call whose verdict has `forward = true` is forwarded to the account's transfer number (the same resolver and loop guards as the per-account forward), recorded in `forwarded_calls` with kind `billing-paused` or `plan-no-voice` (so the daily caps count it);
@@ -135,7 +139,7 @@ Assumptions (not verified; each names what settles it):
 - **G13. The agency alert** (spec flow 5; PR-3 Next plans (f); I7): one derived banner on the work queue (`/dashboard/work`), LineDownBanner's pattern (derived, nothing stored, renders nothing at zero), listing by name, each linking to the account's `settings#billing`, at most five names per line plus "and N more". Lines and how each ENDS (M8):
   - "Payment failed:" while `past_due_since` is set and the row is not paused (the mirror clears it on any other status, a cancellation included);
   - "Paused:" while paused and `now − billing_paused_at < 30 days`;
-  - "Paused 30+ days, calls are no longer forwarded:" (I7's work-queue item) while paused and `30 days ≤ now − billing_paused_at < 44 days`; after that the account leaves the banner (its card still says Paused), so a client who left does not stay on the queue for ever;
+  - "Paused 30+ days, calls are no longer forwarded:" (I7's work-queue item) while the switch is on, paused, and `30 days ≤ now − billing_paused_at < 44 days` (switch off: such an account stays under "Paused:" to day 44, because nothing is forwarding or not; re-review m3); after that the account leaves the banner (its card still says Paused), so a client who left does not stay on the queue for ever;
   - "Usage doesn't match Stripe:" while a row of the newest night's run for an (account, meter) has an alerting verdict and was checked within 48 hours (a current period's row is re-checked nightly, so its alert lasts while the mismatch does; a closed period's row is checked once, so its alert shows until the next night's run, and the card and the runbook carry it from there).
   The item is a line on the work queue, not a stored To-do: it clears itself when the account pays or is lifted. Read failure → no banner, logged (the queue is the page).
 - **G14. Nightly reconciliation (spec section 4; PR-3 Next plans (g); I4, I9).** Inside `usageReportPass`, after the sends and bookkeeping, only with the switch on, sharing the pass's 60 s budget. **Once per 24-hour window starting 08:00 UTC** (`nightlyRunStart(now)` = the most recent 08:00 UTC): the unit of work is one (account, meter, period) not yet checked since that instant, so whatever a tick's budget does not reach, the next tick does, and a pair is checked once per window. For each live subscription (not ended, not complimentary):
@@ -147,7 +151,7 @@ Assumptions (not verified; each names what settles it):
 - **G16. Pass order.** `billingPause` runs FIRST, ahead of `releaseHeld`: a pause stamped this tick is read by every gate in the same tick, and the release pass re-holds rather than sends. It touches no automation state, so the release-first contract (`registry.ts:22-26`) stands between the release and the recipes; `route.ts`'s and `release-held.ts`'s "the FIRST pass" wording becomes "the release pass". No Stripe call, no wall-clock budget.
 - **G17. Alert channels**: banners (work queue, card) + `console.error` per tick/night. No email, no heartbeat failure. The `usageReport` pass's counters gain `remirrored`, `reconciled`, `mismatched`, `heldStamped`, `heldSent`, `reconcileFailed`, `reconcileSkippedBudget`.
 - **G18. Cancellation's usage (PR-3 Next plans (e))**: the reporter keeps sending rows of a canceled account (S4: never invoiced); nothing new is recorded once paused. No code change.
-- **G19. The card**: status word already covers Paused. Lines: "Paused since Oct 20: the payment failed on Oct 13." / "Paused since Oct 20: the plan ended."; from day 30, "Calls are no longer forwarded: the account has been paused for over 30 days."; after a lift, on a still-unpaid OR ended plan, "Pause lifted Oct 26." (M10); the ghost **Lift pause** (only while paused); with the switch off and a stamp present, "Pausing is switched off here, so this pause changes nothing."; reconciliation alerts as one line per meter with when it was checked.
+- **G19. The card**: status word already covers Paused. Lines: "Paused since Oct 20: the payment failed on Oct 13." / "Paused since Oct 20: the plan ended."; from day 30 and only while the switch is on, "Calls are no longer forwarded: the account has been paused for over 30 days." (re-review m3); after a lift, on a still-unpaid OR ended plan, "Pause lifted Oct 26." (M10); the ghost **Lift pause** (only while paused); with the switch off and a stamp present, "Pausing is switched off here, so this pause changes nothing."; reconciliation alerts as one line per meter with when it was checked.
 - **G20. Client Billing page**: one paused line above Manage billing (payment / ended); Manage billing stays available while paused (it is how they pay; an ended plan's portal shows invoices only, PR-3 G19).
 - **G21. The AI summary while paused (M2).** The route's gate callback answers "account AI off" when `billingVerdictFor(accountId).paused`, so GET and POST both answer `{ state: "none" }` (no completion, no cached text) for every caller, through `serveRecordSummary`'s existing gate path (`ai-summary-service.ts:38-43`). No new client-API refusal is needed.
 - **G22. Spec section 4's Preview line is stale**: Preview has held no production credential and has run on the CI project since 2026-10-07 (CLAUDE.md), so `stripeKeyVerdict` would accept a test key there; whether one is set is a Vercel setting, not a repo fact. Fixed in spec section 4 and noted in section 9.
@@ -409,11 +413,11 @@ notify pgrst, 'reload schema';
   - `listPauseCandidates(db): Promise<AccountBilling[]>`.
   - `pauseBilling(db, { accountId, expectedUpdatedAt, now }): Promise<"paused" | "conflict">`.
   - `clearBillingPause(db, { accountId, expectedUpdatedAt, now, lift }): Promise<"cleared" | "conflict">`.
-  - `undoLiftBillingPause(db, { accountId, liftedAt, now }): Promise<"repaused" | "stale">`.
+  - `undoLiftBillingPause(db, { accountId, liftedAt, pausedAt, now }): Promise<"repaused" | "stale">` (restores the pre-lift `pausedAt`, re-review m1).
   - `healPermissions(db, accountId): Promise<void>`.
-  - `PAUSE_ALERT_FORWARD_MS` (30 days), `PAUSE_ALERT_END_MS` (44 days), `RECONCILE_ALERT_FRESH_MS` (48 h); `type BillingAlert = { accountId: string; accountName: string; kind: "payment_failed" | "paused" | "paused_no_forward" | "usage_mismatch"; since: string }`; `listBillingAlerts(db, now): Promise<BillingAlert[]>`.
+  - `PAUSE_ALERT_FORWARD_MS` (30 days), `PAUSE_ALERT_END_MS` (44 days), `RECONCILE_ALERT_FRESH_MS` (48 h); `type BillingAlert = { accountId: string; accountName: string; kind: "payment_failed" | "paused" | "paused_no_forward" | "usage_mismatch"; since: string }`; `listBillingAlerts(db, now, opts: { enforced: boolean }): Promise<BillingAlert[]>` (with the switch off a long pause stays `paused` and never claims calls stopped forwarding, re-review m3).
   - `listReconcilableAccounts(db): Promise<AccountBilling[]>`.
-  - From `billing-reconciliations.ts`: `RECONCILIATION_VERDICTS`, `ALERTING_VERDICTS`, `type ReconciliationVerdict`, `type ReconciliationWrite`, `type Reconciliation`, `saveReconciliation(db, w)`, `listReconciliations(db, accountId)` (the latest row per meter), `latestReconciliations(db, accountIds): Promise<Map<string, Reconciliation>>` (key `"<accountId>:<meter>"`, newest `window_start`), `reconciledSince(db, sinceIso): Promise<Set<string>>` (key `"<accountId>:<meter>:<windowStartMs>"`).
+  - From `billing-reconciliations.ts`: `RECONCILIATION_VERDICTS`, `ALERTING_VERDICTS`, `type ReconciliationVerdict`, `type ReconciliationWrite`, `type Reconciliation`, `saveReconciliation(db, w)`, `listReconciliations(db, accountId, now)` (the latest row per meter), `latestReconciliations(db, accountIds, now): Promise<Map<string, Reconciliation>>` (key `"<accountId>:<meter>"`, newest `window_start`; bounded: periods starting in the last `RECONCILE_LOOKBACK_MS` (70 days), accounts in groups of 50, pages of 1,000 until an empty page, re-review m6), `reconciledSince(db, sinceIso): Promise<Set<string>>` (key `"<accountId>:<meter>:<windowStartMs>"`).
   - From `usage.ts`: `USAGE_HOLD_AFTER_MS` (20 h); `listReportableUsage(db, accounts, now, limit, opts?: { holdAfterMs?: number | null })`; `type UsageBands = { settled: number; inFlight: number; held: number; heldRows: UsageRow[] }`; `readUsageBands(db, { accountId, meter, startIso, endIso, now, settleMs }): Promise<UsageBands>`.
 
 - [ ] **Step 1: Write the failing unit tests** in `packages/db/src/account-billing.test.ts` (extend `stored()` with the two new fields):
@@ -425,13 +429,14 @@ notify pgrst, 'reload schema';
   6. "clearBillingPause with lift stamps pause_lifted_at; without lift it does not (mutation: always stamp → FAILS)".
   7. "undoLiftBillingPause refuses when the stored lift is not the one passed, comparing instants (mutation: compare the strings → FAILS on `…123Z` vs `…123+00:00`)".
   8. "undoLiftBillingPause refuses a row that is now active, complimentary, or has no subscription (mutation: drop the status check → FAILS)".
+  8b. "undoLiftBillingPause restores the pre-lift billing_paused_at, not now (mutation: write now → FAILS: the 30-day forward clock restarts); a pausedAt after the lift, or unparseable, is stale (mutation: accept it → FAILS)".
   9. "readBillingStanding returns null with no row, the status and the plan's features from the embed, and throws on an error or a missing embed (mutation: default features to true when the embed is missing → FAILS)".
   10. "listPauseCandidates pages until an EMPTY page (mutation: stop on a short page → FAILS)".
-  11. "listBillingAlerts: payment_failed for past_due/unpaid not paused; paused under 30 days; paused_no_forward from day 30 to day 44, nothing after (mutation: drop the 44-day end → FAILS)".
+  11. "listBillingAlerts: payment_failed for past_due/unpaid not paused; paused under 30 days; paused_no_forward from day 30 to day 44, nothing after (mutation: drop the 44-day end → FAILS)"; "switch off: a 35-day pause is `paused`, never `paused_no_forward` (mutation: ignore opts.enforced → FAILS)" (m3).
   12. "listBillingAlerts: usage_mismatch only from each (account, meter)'s newest night's rows, alerting verdict, checked within 48 h; a closed-period mismatch found tonight beside a matching current period alerts, and drops after the next night (mutation: newest window_start only → FAILS: tonight's closed-period mismatch is hidden; mutation: any alerting row → FAILS: it stays for ever)".
   `billing-reconciliations.test.ts`:
   13. "saveReconciliation upserts on (account_id, meter, window_start) with every field (mutation: onConflict 'account_id,meter' → FAILS)".
-  14. "listReconciliations and latestReconciliations return the newest window_start per meter (mutation: order ascending → FAILS)".
+  14. "listReconciliations and latestReconciliations return the newest window_start per meter (mutation: order ascending → FAILS)"; "latestReconciliations reads only periods starting within 70 days, pages until an EMPTY page, and splits 120 accounts into three reads (mutation: stop on a short page → FAILS; mutation: one read of every account → FAILS by call count)" (m6).
   15. "reconciledSince keys by account, meter and window start, checked at or after the instant (mutation: gt instead of gte → FAILS)".
   `usage.test.ts` (unit):
   16. "listReportableUsage with holdAfterMs leaves out a row recorded that long ago or more (mutation: drop the created_at filter → FAILS)"; "without it (switch off) it does not filter (mutation: always filter → FAILS)".
@@ -585,17 +590,21 @@ export async function clearBillingPause(
 /** Undo of a Lift (G3): re-pauses only while the row still carries THAT lift
  *  (compared as instants: PostgREST returns microseconds and +00:00), is not
  *  paused, is not complimentary, has a subscription and is still unpaid or
- *  ended. Anything else is "stale": the billing changed under the toast. */
+ *  ended. Anything else is "stale": the billing changed under the toast. It
+ *  RESTORES the pause's own start (`pausedAt`, returned by the Lift), so the
+ *  30-day forward clock (I7) does not restart (re-review m1). */
 export async function undoLiftBillingPause(
-  db: SupabaseClient, input: { accountId: string; liftedAt: string; now: Date },
+  db: SupabaseClient, input: { accountId: string; liftedAt: string; pausedAt: string; now: Date },
 ): Promise<"repaused" | "stale"> {
+  const pausedAtMs = Date.parse(input.pausedAt);
+  if (Number.isNaN(pausedAtMs) || pausedAtMs > Date.parse(input.liftedAt)) return "stale";
   const row = await getAccountBilling(db, input.accountId);
   const sameLift = row?.pauseLiftedAt != null && Date.parse(row.pauseLiftedAt) === Date.parse(input.liftedAt);
   const status = row?.subscriptionStatus ?? null;
   const pausable = status !== null && (PAST_DUE_STATUSES.includes(status) || status === "canceled");
   if (!row || !sameLift || row.billingPausedAt || row.complimentary || !row.stripeSubscriptionId || !pausable) return "stale";
   const { data, error } = await db.from("account_billing")
-    .update({ billing_paused_at: input.now.toISOString(), pause_lifted_at: null, updated_at: nextVersion(input.now, row.updatedAt) })
+    .update({ billing_paused_at: new Date(pausedAtMs).toISOString(), pause_lifted_at: null, updated_at: nextVersion(input.now, row.updatedAt) })
     .eq("account_id", input.accountId).eq("updated_at", row.updatedAt)
     .select("account_id");
   if (error) throw new Error(`undoLiftBillingPause failed: ${error.message}`);
@@ -633,7 +642,7 @@ export type BillingAlert = {
 /** The agency's work-queue banner (G13). Agency only: the caller has run
  *  requireAgency() and passes serviceDb(). Names come from accounts.name,
  *  the agency's own label (agency eyes only, never a client's). */
-export async function listBillingAlerts(db: SupabaseClient, now: Date): Promise<BillingAlert[]> {
+export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { enforced: boolean }): Promise<BillingAlert[]> {
   const t = now.getTime();
   const alerts: BillingAlert[] = [];
   for (let from = 0; ; ) {
@@ -651,7 +660,8 @@ export async function listBillingAlerts(db: SupabaseClient, now: Date): Promise<
       const accountName = r.accounts?.name ?? r.account_id;
       if (r.billing_paused_at) {
         const age = t - Date.parse(r.billing_paused_at);
-        if (age < PAUSE_ALERT_FORWARD_MS) alerts.push({ accountId: r.account_id, accountName, kind: "paused", since: r.billing_paused_at });
+        // m3: "calls are no longer forwarded" is true only while the switch enforces it.
+        if (age < PAUSE_ALERT_FORWARD_MS || (!opts.enforced && age < PAUSE_ALERT_END_MS)) alerts.push({ accountId: r.account_id, accountName, kind: "paused", since: r.billing_paused_at });
         else if (age < PAUSE_ALERT_END_MS) alerts.push({ accountId: r.account_id, accountName, kind: "paused_no_forward", since: r.billing_paused_at });
       } else if (r.past_due_since) {
         alerts.push({ accountId: r.account_id, accountName, kind: "payment_failed", since: r.past_due_since });
@@ -761,20 +771,40 @@ export async function saveReconciliation(db: SupabaseClient, w: ReconciliationWr
 }
 
 /** The newest period's row per meter, for the Billing card. */
-export async function listReconciliations(db: SupabaseClient, accountId: string): Promise<Reconciliation[]> {
-  return [...(await latestReconciliations(db, [accountId])).values()];
+export async function listReconciliations(db: SupabaseClient, accountId: string, now: Date): Promise<Reconciliation[]> {
+  return [...(await latestReconciliations(db, [accountId], now)).values()];
 }
 
-/** Newest window_start per (account, meter); key "<accountId>:<meter>". */
-export async function latestReconciliations(db: SupabaseClient, accountIds: string[]): Promise<Map<string, Reconciliation>> {
+/** Only periods that started this recently are read (two billing periods and
+ *  slack): an older row can be neither the current nor the just-closed one. */
+export const RECONCILE_LOOKBACK_MS = 70 * 24 * 60 * 60 * 1000;
+const ACCOUNTS_PER_READ = 50;
+const RECONCILE_PAGE = 1000;
+
+/** Newest window_start per (account, meter); key "<accountId>:<meter>".
+ *  Bounded (re-review m6): the lookback, accounts in groups, and pages of
+ *  RECONCILE_PAGE until an actually EMPTY page (PR-1's rule). */
+export async function latestReconciliations(
+  db: SupabaseClient, accountIds: string[], now: Date,
+): Promise<Map<string, Reconciliation>> {
   const out = new Map<string, Reconciliation>();
-  if (accountIds.length === 0) return out;
-  const { data, error } = await db.from("billing_reconciliations").select(COLUMNS)
-    .in("account_id", accountIds).order("window_start", { ascending: false });
-  if (error) throw new Error(`latestReconciliations failed: ${error.message}`);
-  for (const r of (data ?? []) as Row[]) {
-    const key = `${r.account_id}:${r.meter}`;
-    if (!out.has(key)) out.set(key, toReconciliation(r));
+  const since = new Date(now.getTime() - RECONCILE_LOOKBACK_MS).toISOString();
+  for (let i = 0; i < accountIds.length; i += ACCOUNTS_PER_READ) {
+    const group = accountIds.slice(i, i + ACCOUNTS_PER_READ);
+    for (let from = 0; ; ) {
+      const { data, error } = await db.from("billing_reconciliations").select(COLUMNS)
+        .in("account_id", group).gte("window_start", since)
+        .order("account_id", { ascending: true }).order("meter", { ascending: true })
+        .order("window_start", { ascending: false }).range(from, from + RECONCILE_PAGE - 1);
+      if (error) throw new Error(`latestReconciliations failed: ${error.message}`);
+      const rows = (data ?? []) as Row[];
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        const key = `${r.account_id}:${r.meter}`;
+        if (!out.has(key)) out.set(key, toReconciliation(r));
+      }
+      from += rows.length;
+    }
   }
   return out;
 }
@@ -797,7 +827,7 @@ export async function reconciledSince(db: SupabaseClient, sinceIso: string): Pro
 }
 ```
 
-(`latestReconciliations` reads every period of the given accounts; bounded by accounts × meters × periods, a few dozen rows per account per year. If a reviewer wants it bounded, add `.gte("window_start", <now − 70 days>)`.)
+(`latestReconciliations` is bounded three ways: the 70-day lookback, 50 accounts per read, and 1,000-row pages until an empty page.)
 
 - [ ] **Step 5: The usage hold and bands in `packages/db/src/usage.ts`.**
 
@@ -916,7 +946,7 @@ export async function readUsageBands(
 | `billing.error.notPaused` | This account isn't paused any more. Refresh to see its billing. | Esta cuenta ya no está en pausa. Actualice la página para ver su facturación. |
 | `billing.error.cannotRepause` | This account's billing changed, so it can't be paused again from here. Refresh to see it. | La facturación de esta cuenta cambió, así que no se puede volver a pausar desde aquí. Actualice la página para verla. |
 | `automations.reason.heldBillingPaused` | Held: the account is paused until a payment goes through | En espera: la cuenta está en pausa hasta que se reciba un pago |
-| `automations.reason.skippedBillingPaused` | Not sent: the appointment passed while the account was paused | No se envió: la cita pasó mientras la cuenta estaba en pausa |
+| `automations.reason.skippedBillingPaused` | Not sent: too late, the account was paused | No se envió: demasiado tarde, la cuenta estaba en pausa |
 | `compose.smsBlockedPaused` | Texts are stopped while this account is paused for billing. | Los mensajes están detenidos mientras esta cuenta está en pausa por facturación. |
 
 Agency-only (`work.agency.` prefix, English only):
@@ -969,7 +999,7 @@ Agency-only (`work.agency.` prefix, English only):
   15. "switch off: counts wouldPause, wouldUnpause and unconfirmed, writes NOTHING (mutation: write regardless of the switch → FAILS)".
   16. "switch on: pauses each 'pause' row with its own stored updated_at (mutation: pass ctx.now as the expected version → FAILS)".
   17. "a conflict is counted `raced`, never retried in the tick (mutation: loop on conflict → FAILS)".
-  18. "unconfirmed rows are counted and logged, not paused (mutation: pause unconfirmed → FAILS)".
+  18. "unconfirmed rows are counted and logged with console.log, never console.error, and not paused (mutation: pause unconfirmed → FAILS; mutation: console.error → FAILS)" (m4).
   19. "one row's write throwing is counted `failed` and the next row still runs (mutation: let it propagate → FAILS)".
   `sentinel.test.ts:296`: `["billingPause", "releaseHeld", …the existing 17…]` ("mutation: register billingPause after releaseHeld → FAILS").
 
@@ -1105,7 +1135,9 @@ export const billingPausePass: Pass = {
       if (decision === "keep") continue;
       if (decision === "unconfirmed") {
         c.unconfirmed++;
-        console.error(`billing pause: account ${row.accountId} is past the grace but Stripe has not confirmed it since; not paused this tick`);
+        // m4: expected every tick until the nightly re-read confirms it, so an
+        // info line (and the counter), never console.error each tick.
+        console.log(`billing pause: account ${row.accountId} is past the grace but Stripe has not confirmed it since; not paused this tick`);
         continue;
       }
       if (!enforced) {
@@ -1138,23 +1170,24 @@ export const billingPausePass: Pass = {
 
 - [ ] **Step 8: Commit** — `git commit -m "M7a PR-4: the switch, the pause policy (confirmed after the grace), and the billingPause pass, first in the tick"`.
 
-### Task 5: The two send gates and the pause hold (HIGH, bis-comms)
+### Task 5: The two send gates and the pause hold (HIGH, bis-comms for the gates; bis-automations for Steps 6-7b, the hold and the passes, in the same lane)
 
 **Files:**
 - Create: `apps/web/src/lib/automations/pause-hold.ts` (+ `.test.ts`).
+- Modify (the passes, Step 7b): `apps/web/src/lib/automations/hold-or-send.ts` (`HoldSubject.pauseDeadline`), `passes/review-request.ts`, `passes/referral-ask.ts`, `passes/no-show-nudge.ts`, `passes/quote-followup.ts`, `passes/reminders.ts`, `passes/sms-reminder.ts`, `passes/appointment-confirm.ts` (each subject builder, used by its run AND its releaser), and their tests.
 - Modify: `apps/web/src/lib/consent/classes.ts` (two functions), `apps/web/src/lib/consent/gate.ts:89-97` (reason), `:186-200` (step 3b) and its doc (`:17-57`), `apps/web/src/lib/consent/email-gate.ts:86-92` and `:252-260`, `apps/web/src/lib/automations/hold-or-send.ts:106-143, 255-276, 345-372`, `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts:238-252`, `in-account-service-reads.test.ts` (`lib/consent/gate.ts` gains a service client: entry `"configuration"`, "the account's billing pause flag, read on the service client so a Staff composer cannot read it as unbilled"; `email-gate.ts` is already listed — confirm).
 - Test: `lib/consent/gate.test.ts`, `email-gate.test.ts`, `classes.test.ts`, `lib/automations/hold-or-send.test.ts`, `conversations/actions.test.ts`; run `lib/consent/scans.test.ts`.
 
 **Interfaces:**
 - Consumes: `billingEnforced` (Task 4), `readBillingStanding`, `serviceDb` (Task 2), keys (Task 3).
-- Produces: `SmsBlockReason` and `EmailBlockReason` gain `"billing_paused"`; `smsStopsWhilePaused(kind)`; `emailStopsWhilePaused(kind)`; `PAUSE_RECHECK_MS` (60 min); `pauseHold(deadline: Date | null | undefined, now: Date): { kind: "held"; until: Date } | { kind: "skipped" }`.
+- Produces: `SmsBlockReason` and `EmailBlockReason` gain `"billing_paused"`; `smsStopsWhilePaused(kind)`; `emailStopsWhilePaused(kind)`; `pauseHoldUntil(now: Date): Date` (the next whole UTC hour); `pauseHold(pauseDeadline: Date | null | undefined, now: Date): { kind: "held"; until: Date } | { kind: "skipped" }`; `pauseHoldInForce(row: AutomationLogRow | null, now: Date): boolean`; `HoldSubject.pauseDeadline?: Date | null`.
 
 - [ ] **Step 1: Failing tests.**
   - `classes.test.ts`: "smsStopsWhilePaused: all 15 kinds, by name (mutation: let staff.composer_sms through → FAILS)" — literal table: `true` for the 7 `automation.*`, `voice.textback`, `staff.composer_sms`, `staff.document_request_sms`; `false` for `operator.alert_sms`, `operator.alert_phone_code`, `consent.stop_confirmation`, `consent.start_confirmation`, `consent.help`. "emailStopsWhilePaused: exactly the automation.* kinds (mutation: stop booking.confirmation or staff.document_request_email → FAILS)" — literal table of every email kind.
-  - `pause-hold.test.ts`: "no deadline → held for PAUSE_RECHECK_MS (mutation: 15 minutes → FAILS)"; "a deadline before the recheck → held until the deadline (mutation: ignore the deadline → FAILS)"; "a deadline at or before now → skipped (mutation: `<` instead of `<=` → FAILS at the exact instant)".
+  - `pause-hold.test.ts`: "no deadline → held until the next whole UTC hour (mutation: now + 60 min → FAILS)"; "two holds 15 minutes apart in the same hour give the same instant, so writeHeld writes once (mutation: now + 60 min → FAILS: two writes)" (re-review I1; through `writeHeld` with a recording `recordAutomationLog`); "at exactly the hour → the NEXT hour (mutation: ceil instead of floor + 1 h → FAILS: held until now, released at once)"; "a deadline before the next hour → held until the deadline (mutation: ignore the deadline → FAILS)"; "a deadline at or before now → skipped (mutation: `<` instead of `<=` → FAILS at the exact instant)"; "pauseHoldInForce: held, the pause reason, held_until in the future → true; any other reason, a past held_until, or another status → false (mutation: ignore the reason → FAILS: a quiet-hours hold would skip the gate)".
   - `gate.test.ts` (its `@bis/db` mock gains `readBillingStanding: vi.fn()` and `serviceDb: vi.fn(() => SVC)`; set/restore `process.env.BILLING_ENFORCE` per test): "switch on and paused: an automation text is blocked billing_paused BEFORE the A2P read (mutation: put the check after resolveSmsSender → FAILS: the sender mock is called)"; "the billing read uses serviceDb(), not the caller's client (mutation: pass `db` → FAILS: called with the caller's client)" (M9); "switch on and paused: operator.alert_sms and consent.help still clear (mutation: block every kind → FAILS)"; "switch on, not paused, or unbilled (null) → clears (mutation: block on a null standing → FAILS)"; "switch OFF and paused → clears, and readBillingStanding is never called (mutation: read regardless of the switch → FAILS)"; "an unreadable billing row blocks ledger_unavailable (mutation: fail open → FAILS)".
   - `email-gate.test.ts`: the same six, with `automation.reminder` blocked and `booking.confirmation`, `staff.document_request_email`, `operator.lead_alert` passing.
-  - `hold-or-send.test.ts`: "SMS billing_paused → a held row until now + PAUSE_RECHECK_MS with the held reason, never skipped (mutation: map it to BLOCK_REASONS → FAILS)" (I6); "email billing_paused → the same (mutation: skip it → FAILS)"; "billing_paused with a deadline already passed → skipped with skippedBillingPaused (mutation: hold it → FAILS)"; "a held row released while still paused is held again; released after the lift is sent (mutation: stamp it skipped on the second refusal → FAILS)" (through `holdOrSend` twice with a gate stub that flips).
+  - `hold-or-send.test.ts`: "SMS billing_paused → a held row until the next whole UTC hour with the held reason, never skipped (mutation: map it to BLOCK_REASONS → FAILS)" (I6); "email billing_paused → the same (mutation: skip it → FAILS)"; "billing_paused with a pause deadline already passed → skipped with skippedBillingPaused (mutation: hold it → FAILS)"; "a pause hold in force returns held without calling send() (mutation: drop the short-circuit → FAILS: the gate stub is called)" (re-review I1); "a subject with a deadline but no pauseDeadline uses its deadline (mutation: ignore deadline → FAILS)"; "a held row released while still paused is held again; released after the lift is sent (mutation: stamp it skipped on the second refusal → FAILS)" (through `holdOrSend` twice with a gate stub that flips).
   - `conversations/actions.test.ts`: "a paused account's composer text says why (mutation: fall through to composerBlockedLine → FAILS)".
 
 - [ ] **Step 2: Run** — `pnpm --filter web exec vitest run src/lib/consent src/lib/automations/hold-or-send.test.ts src/lib/automations/pause-hold.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts"`. Expected: FAIL.
@@ -1208,17 +1241,38 @@ Add item "3b" to the doc list. `deliver`'s recheck path stays as it is.
 /**
  * Owner answer I6: an automation due while its account is paused is HELD,
  * with S-47d's closure-hold shape (closures.ts:181-215): held until the
- * earlier of the next re-check and the subject's own deadline; skipped once
- * the deadline has passed (an appointment that is over). The release pass
- * re-runs it at held_until through the same gate: still paused → held
- * again; lifted, paid or switch off → sent.
+ * earlier of the next whole hour and the subject's pause deadline; skipped
+ * once that deadline has passed (it is no longer timely). The release pass
+ * re-runs it at held_until: still paused → held again (no write within the
+ * hour); lifted (the Lift bumps held rows), paid or switch off → sent.
  */
-export const PAUSE_RECHECK_MS = 60 * 60 * 1000;
+import type { AutomationLogRow } from "@bis/db";
+import { m } from "@/lib/messages";
 
-export function pauseHold(deadline: Date | null | undefined, now: Date): { kind: "held"; until: Date } | { kind: "skipped" } {
-  if (deadline && deadline.getTime() <= now.getTime()) return { kind: "skipped" };
-  const recheck = now.getTime() + PAUSE_RECHECK_MS;
-  return { kind: "held", until: new Date(deadline ? Math.min(recheck, deadline.getTime()) : recheck) };
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Re-review I1: a FIXED grid, the next whole UTC hour after now. Every
+ *  repeat hold within one hour computes the same instant, so writeHeld writes
+ *  nothing ("same held_until", hold-or-send.ts:290-297) and the Activity page
+ *  is not re-sorted. At exactly the hour it is the NEXT hour, never now. */
+export function pauseHoldUntil(now: Date): Date {
+  return new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS + HOUR_MS);
+}
+
+export function pauseHold(
+  pauseDeadline: Date | null | undefined, now: Date,
+): { kind: "held"; until: Date } | { kind: "skipped" } {
+  if (pauseDeadline && pauseDeadline.getTime() <= now.getTime()) return { kind: "skipped" };
+  const next = pauseHoldUntil(now).getTime();
+  return { kind: "held", until: new Date(pauseDeadline ? Math.min(next, pauseDeadline.getTime()) : next) };
+}
+
+/** A pause hold still in force: holdOrSend returns `held` on this row alone,
+ *  without asking the gate (re-review I1). Only OUR reason: a quiet-hours or
+ *  closure hold never skips the gate this way. */
+export function pauseHoldInForce(row: AutomationLogRow | null, now: Date): boolean {
+  return row !== null && row.status === "held" && row.reason === m["automations.reason.heldBillingPaused"]
+    && row.held_until !== null && Date.parse(row.held_until) > now.getTime();
 }
 ```
 
@@ -1229,18 +1283,44 @@ export function pauseHold(deadline: Date | null | undefined, now: Date): { kind:
     const pausedRefusal = (e instanceof SmsBlocked && e.reason === "billing_paused")
       || (e instanceof EmailNotSent && e.result.kind === "blocked" && e.result.reason === "billing_paused");
     if (pausedRefusal) {
-      const v = pauseHold(s.deadline, ctx.now);
+      const v = pauseHold(s.pauseDeadline ?? s.deadline, ctx.now);
       if (v.kind === "skipped") { await logSkipped(ctx, s, REASONS.skippedBillingPaused); return "skipped"; }
       await writeHeld(ctx, s, v.until, zone, REASONS.heldBillingPaused);
       return "held";
     }
 ```
 
-Update the module doc's table with the new row. The inline instant reply gets the same hold (the held row is released by the release pass, as for its quiet-hours hold).
+And BEFORE `await send()` (after the sending-hours check), the short-circuit (re-review I1):
+
+```ts
+  // G7a: a pause hold still in force answers on its own log row, so a held
+  // subject seen on every tick costs one log read and no gate read. Only the
+  // pause reason short-circuits; any other hold goes on as today.
+  if (billingEnforced()) {
+    const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+    if (pauseHoldInForce(existing, ctx.now)) return "held";
+  }
+```
+
+`HoldSubject` gains `pauseDeadline?: Date | null` (doc: "I6: when a pause-held subject is no longer timely (G7a); falls back to `deadline`"). Update the module doc's table with the new rows. The inline instant reply gets the same hold and still stops at `RETRY_MAX_AGE_MS`; so does the text-back.
+
+- [ ] **Step 7b: Each recipe's pause deadline (re-review I2).** In each pass's subject builder (the one its run AND its releaser use), set `pauseDeadline`:
+
+| Pass | `pauseDeadline` | Constant |
+|---|---|---|
+| `review-request.ts` (anchor `:113`) | `anchor + REVIEW_REQUEST_MAX_AGE_MS` | `automations.ts:176` |
+| `referral-ask.ts` (anchor `:117`) | `anchor + REFERRAL_ASK_MAX_AGE_MS` | `automations.ts:1038` |
+| `no-show-nudge.ts` (anchor `:105`) | `anchor + NO_SHOW_NUDGE_MAX_AGE_MS` | `automations.ts:417` |
+| `quote-followup.ts` (`stage_changed_at`, `:102`) | `stageChangedAt + QUOTE_FOLLOWUP_MAX_AGE_MS` | `automations.ts:1859` |
+| `reminders.ts`, `sms-reminder.ts`, `appointment-confirm.ts` | none: their existing `deadline` (the appointment) is used | — |
+| `followups.ts` | none: `FOLLOWUP_MAX_AGE_MS` is already enforced on release | `followup-timing.ts:86` |
+| `reactivation.ts` | none: no age constant; the release re-check re-reads eligibility (G7a) | — |
+
+Tests, one per recipe, each through its pass's releaser with a gate stub answering `billing_paused` and a clock moved past the deadline: "a review request held by the pause past anchor + 61 h is skipped, not sent after the lift (mutation: no pauseDeadline on the subject → FAILS: sent)"; "a referral ask past anchor + 85 h is skipped (mutation: REVIEW_REQUEST_MAX_AGE_MS instead → FAILS at 70 h)"; "a no-show nudge past anchor + 37 h is skipped (mutation: no pauseDeadline → FAILS)"; "a quote follow-up past stage_changed_at + 30 days is skipped (mutation: anchor on the hold's own start → FAILS)"; and, per recipe, "inside its deadline it is held, then sent after the lift (mutation: pauseDeadline = now → FAILS: skipped at once)".
 
 - [ ] **Step 8: `conversations/actions.ts`** — `case "billing_paused": rejectSend(t(m, "compose.smsBlockedPaused", locale));`.
 
-- [ ] **Step 9: Run** Step 2's suites, plus `src/lib/consent/scans.test.ts`, `src/lib/automations/send-sms.test.ts`, `src/lib/automations/passes/release-held.test.ts`, `src/lib/voice/textback.test.ts`, `src/lib/sms/alerts.test.ts`, `src/lib/automations/instant-reply.test.ts`, `src/lib/automations/closures.test.ts`, `in-account-service-reads.test.ts` (their `@bis/db` factories need nothing new: the new read happens only with the switch on). Lint, typecheck.
+- [ ] **Step 9: Run** Step 2's suites, plus `src/lib/consent/scans.test.ts`, `src/lib/automations/send-sms.test.ts`, `src/lib/automations/passes/release-held.test.ts`, `src/lib/voice/textback.test.ts`, `src/lib/sms/alerts.test.ts`, `src/lib/automations/instant-reply.test.ts`, `src/lib/automations/closures.test.ts`, the seven pass tests of Step 7b, `in-account-service-reads.test.ts` (their `@bis/db` factories need nothing new: the new read happens only with the switch on). Lint, typecheck.
 
 - [ ] **Step 10: Commit** — `git commit -m "M7a PR-4: customer texts stop and automations are held (not dropped) while an account is paused"`.
 
@@ -1736,7 +1816,7 @@ export async function runBillingNightly(
     const accounts = await listReconcilableAccounts(ctx.db);
     if (accounts.length === 0) return c;
     const done = await reconciledSince(ctx.db, runStart.toISOString());
-    const latest = await latestReconciliations(ctx.db, accounts.map((a) => a.accountId));
+    const latest = await latestReconciliations(ctx.db, accounts.map((a) => a.accountId), ctx.now);
     need(1);
     const meterIds = new Map((await gateway.listActiveMeters({ bounded: true })).map((m) => [m.eventName, m.id]));
     for (const row of accounts) {
@@ -1850,19 +1930,21 @@ The seven counters start at 0 in `c`. Doc: a step 5, and the hold.
 - Test: `settings/billing-actions.test.ts`, `lib/billing/billing-view.test.ts`.
 
 **Interfaces:**
-- Consumes: `clearBillingPause`, `undoLiftBillingPause`, `getAccountBilling`, `ALERTING_VERDICTS`, `type Reconciliation` (Task 2); `pauseCause`, `PAUSE_FORWARD_MS` (Task 4); keys (Task 3).
-- Produces: `liftPauseAction(accountId): Promise<{ ok: true; liftedAt: string } | { ok: false; error: string }>`; `undoLiftPauseAction(accountId, liftedAt): Promise<BillingActionResult>`; `BillingCardView` gains `pause: { line: string; noForward: string | null } | null`, `lifted: string | null`, `pauseOff: boolean`, `reconciliation: string[]`, `can.liftPause: boolean`; `billingCardView` input gains `reconciliations: Reconciliation[]` and `enforced: boolean`.
+- Consumes: `clearBillingPause`, `undoLiftBillingPause`, `getAccountBilling`, `ALERTING_VERDICTS`, `type Reconciliation` (Task 2); `bumpHeldForAccount` (existing, `automation-log.ts:131`); `pauseCause`, `PAUSE_FORWARD_MS` (Task 4); keys (Task 3).
+- Produces: `liftPauseAction(accountId): Promise<{ ok: true; liftedAt: string; pausedAt: string } | { ok: false; error: string }>`; `undoLiftPauseAction(accountId, liftedAt, pausedAt): Promise<BillingActionResult>`; `BillingCardView` gains `pause: { line: string; noForward: string | null } | null`, `lifted: string | null`, `pauseOff: boolean`, `reconciliation: string[]`, `can.liftPause: boolean`; `billingCardView` input gains `reconciliations: Reconciliation[]` and `enforced: boolean`.
 
-- [ ] **Step 1: Failing tests.** `billing-actions.test.ts`: "liftPauseAction calls requireAgency FIRST (mutation: move it after the read → FAILS)"; "lifts with the stored updated_at and returns the liftedAt it wrote (mutation: return Date.now() later → FAILS: Undo never matches)"; "not paused → billing.error.notPaused (mutation: lift anyway → FAILS)"; "a lost race → billing.error.notPaused (mutation: report ok on conflict → FAILS)"; "undoLiftPauseAction stale → billing.error.cannotRepause (mutation: report ok on stale → FAILS)"; "a bad uuid or liftedAt → billing.error.stale, nothing read (mutation: drop the uuid check → FAILS)". `billing-view.test.ts`: "a paused past_due row: the payment line with both dates, can.liftPause (mutation: offer Lift on a complimentary row → FAILS)"; "an ended row: the ended line (mutation: always the payment line → FAILS)"; "paused 30 days or more: the noForward line (mutation: show it from day 29 → FAILS)"; "lifted and still past_due: the lifted line, no Lift button (mutation: show Lift → FAILS)"; "lifted and the plan ended (canceled): the lifted line too (mutation: lifted only on payment_failed → FAILS)" (M10); "pauseOff only when a stamp exists and the switch is off (mutation: show it whenever off → FAILS)"; "reconciliation lines only for the alerting verdicts, with the meter's words and the check time in the account's zone (mutation: show held_missing → FAILS)".
+- [ ] **Step 1: Failing tests.** `billing-actions.test.ts`: "liftPauseAction calls requireAgency FIRST (mutation: move it after the read → FAILS)"; "lifts with the stored updated_at and returns the liftedAt it wrote and the pausedAt it cleared (mutation: return Date.now() later → FAILS: Undo never matches; mutation: omit pausedAt → FAILS)"; "a successful lift bumps the account's held automations; a bump failure is logged and the lift still answers ok (mutation: skip the bump → FAILS; mutation: let it throw → FAILS)" (m7); "the Undo passes pausedAt through (mutation: pass liftedAt as pausedAt → FAILS)" (m1); "not paused → billing.error.notPaused (mutation: lift anyway → FAILS)"; "a lost race → billing.error.notPaused (mutation: report ok on conflict → FAILS)"; "undoLiftPauseAction stale → billing.error.cannotRepause (mutation: report ok on stale → FAILS)"; "a bad uuid or liftedAt → billing.error.stale, nothing read (mutation: drop the uuid check → FAILS)". `billing-view.test.ts`: "a paused past_due row: the payment line with both dates, can.liftPause (mutation: offer Lift on a complimentary row → FAILS)"; "an ended row: the ended line (mutation: always the payment line → FAILS)"; "paused 30 days or more with the switch ON: the noForward line; with it off, none (mutation: show it from day 29 → FAILS; mutation: ignore `enforced` → FAILS)" (m3); "lifted and still past_due: the lifted line, no Lift button (mutation: show Lift → FAILS)"; "lifted and the plan ended (canceled): the lifted line too (mutation: lifted only on payment_failed → FAILS)" (M10); "pauseOff only when a stamp exists and the switch is off (mutation: show it whenever off → FAILS)"; "reconciliation lines only for the alerting verdicts, with the meter's words and the check time in the account's zone (mutation: show held_missing → FAILS)".
 
 - [ ] **Step 2: Run** — `pnpm --filter web exec vitest run src/lib/billing/billing-view.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.test.ts"`. Expected: FAIL.
 
 - [ ] **Step 3: The actions** (after `removeComplimentaryAction`):
 
 ```ts
-export type LiftResult = { ok: true; liftedAt: string } | { ok: false; error: string };
+export type LiftResult = { ok: true; liftedAt: string; pausedAt: string } | { ok: false; error: string };
 
-/** Lift pause (spec section 5; plan G3): immediate, with Undo (rule 6). */
+/** Lift pause (spec section 5; plan G3): immediate, with Undo (rule 6).
+ *  Returns the pause's own start for the Undo (re-review m1), and bumps the
+ *  account's held automations so they go next tick (m7). */
 export async function liftPauseAction(accountId: string): Promise<LiftResult> {
   await requireAgency();
   if (!isUuid(accountId)) return { ok: false, error: m["billing.error.stale"] };
@@ -1873,14 +1955,22 @@ export async function liftPauseAction(accountId: string): Promise<LiftResult> {
   const r = await clearBillingPause(db, { accountId, expectedUpdatedAt: billing.updatedAt, now, lift: true });
   if (r === "conflict") return { ok: false, error: m["billing.error.notPaused"] };
   console.log(`billing: pause lifted by the agency for account ${accountId}`);
-  return { ok: true, liftedAt: now.toISOString() };
+  try {
+    // S-47d's own helper (automation-log.ts:131): every held row due now. A
+    // failure only delays them to their next whole hour (G7a); never the lift.
+    await bumpHeldForAccount(db, accountId);
+  } catch (e) {
+    console.error(`billing: held automations not bumped after the lift of account ${accountId}: ${loggableError(e)}`);
+  }
+  return { ok: true, liftedAt: now.toISOString(), pausedAt: billing.billingPausedAt };
 }
 
-/** The Lift's Undo: re-pauses only while THAT lift still stands (G3). */
-export async function undoLiftPauseAction(accountId: string, liftedAt: string): Promise<BillingActionResult> {
+/** The Lift's Undo: re-pauses only while THAT lift still stands, from the
+ *  pause's own start (G3; m1). */
+export async function undoLiftPauseAction(accountId: string, liftedAt: string, pausedAt: string): Promise<BillingActionResult> {
   await requireAgency();
-  if (!isUuid(accountId) || Number.isNaN(Date.parse(liftedAt))) return fail("billing.error.stale");
-  const r = await undoLiftBillingPause(serviceDb(), { accountId, liftedAt, now: new Date() });
+  if (!isUuid(accountId) || Number.isNaN(Date.parse(liftedAt)) || Number.isNaN(Date.parse(pausedAt))) return fail("billing.error.stale");
+  const r = await undoLiftBillingPause(serviceDb(), { accountId, liftedAt, pausedAt, now: new Date() });
   return r === "repaused" ? { ok: true } : fail("billing.error.cannotRepause");
 }
 ```
@@ -1895,7 +1985,8 @@ export async function undoLiftPauseAction(accountId: string, liftedAt: string): 
           ? m["billing.card.pausedEnded"].replace("{date}", formatDay(new Date(pausedAt), zone))
           : m["billing.card.pausedPayment"].replace("{date}", formatDay(new Date(pausedAt), zone))
               .replace("{failed}", formatDay(new Date(billing.pastDueSince ?? pausedAt), zone)),
-        noForward: now.getTime() - Date.parse(pausedAt) >= PAUSE_FORWARD_MS ? m["billing.card.noForward"] : null,
+        // m3: a claim about calls, so only while the switch enforces it.
+        noForward: input.enforced && now.getTime() - Date.parse(pausedAt) >= PAUSE_FORWARD_MS ? m["billing.card.noForward"] : null,
       }
     : null;
   // M10: on a still-unpaid OR an ended plan.
@@ -2001,16 +2092,16 @@ When `verdict.paused`, render `<BillingPausedBanner audience={audience} accountI
 
 **Files:**
 - Create: `apps/web/src/components/billing-alert-banner.tsx` (+ `.test.ts`).
-- Modify: `settings/billing-section.tsx` (read `listReconciliations`, pass `enforced: billingEnforced()`, bind the two actions), `settings/billing-card.tsx`, `app/(dashboard)/dashboard/work/page.tsx:77-99, 199-201`, the styleguide (`page.tsx`, `billing-card-states.tsx`).
+- Modify: `settings/billing-section.tsx` (read `listReconciliations(db, accountId, now)`, pass `enforced: billingEnforced()`, bind the two actions: `liftPauseAction.bind(null, accountId)` and `(liftedAt, pausedAt) => undoLiftPauseAction(accountId, liftedAt, pausedAt)`), `settings/billing-card.tsx`, `app/(dashboard)/dashboard/work/page.tsx:77-99, 199-201`, the styleguide (`page.tsx`, `billing-card-states.tsx`).
 - Test: `billing-card.test.ts`, `billing-section.test.ts`, styleguide tests.
 
 - [ ] **Step 1: `BillingAlertBanner`** — props `{ alerts: BillingAlert[] }`; nothing at zero; one line per kind present, in the order paused, paused 30+ days, payment failed, usage mismatch (`work.agency.billing.paused`, `.pausedNoForward`, `.paymentFailed`, `.mismatch`); each line = the label + up to five account links (`/dashboard/accounts/<id>/settings#billing`, the account's name, `data-account-id` on each link) + `work.agency.billing.more` for the rest; `tone="crit"` when any paused, paused 30+ or mismatch, else `"warn"`; `role="note"`. Tests: zero → null; the cap at five with "and 2 more"; the tone rule; the order.
 
-- [ ] **Step 2: Work page** — `listBillingAlerts(db, now).catch(...)` joins the existing `Promise.all` (logged, `[]` on failure), and `<BillingAlertBanner alerts={billingAlerts} />` renders below `UsageStaleBanner`.
+- [ ] **Step 2: Work page** — `listBillingAlerts(db, now, { enforced: billingEnforced() }).catch(...)` joins the existing `Promise.all` (logged, `[]` on failure), and `<BillingAlertBanner alerts={billingAlerts} />` renders below `UsageStaleBanner`.
 
-- [ ] **Step 3: The card** — under the status chip: `view.pause?.line`, `view.pause?.noForward`, `view.lifted`, `view.pauseOff ? m["billing.card.pauseOff"] : null`; a reconciliation block when `view.reconciliation.length > 0` (`billing.card.reconcile.title`, the lines, `billing.card.reconcile.help`); and, when `view.can.liftPause`, a ghost button `billing.card.liftPause` with `billing.card.liftPauseHelp`, which runs `liftPause()` immediately and on success toasts `billing.card.liftedToast` with an Undo calling `undoLiftPause(liftedAt)` (success `billing.card.repausedToast`), through the card's existing `run(go, success, undo)` helper (`billing-card.tsx:106-125`). Send billing link stays the one primary.
+- [ ] **Step 3: The card** — under the status chip: `view.pause?.line`, `view.pause?.noForward`, `view.lifted`, `view.pauseOff ? m["billing.card.pauseOff"] : null`; a reconciliation block when `view.reconciliation.length > 0` (`billing.card.reconcile.title`, the lines, `billing.card.reconcile.help`); and, when `view.can.liftPause`, a ghost button `billing.card.liftPause` with `billing.card.liftPauseHelp`, which runs `liftPause()` immediately and on success toasts `billing.card.liftedToast` with an Undo calling `undoLiftPause(liftedAt, pausedAt)` (both from the Lift's answer; success `billing.card.repausedToast`), through the card's existing `run(go, success, undo)` helper (`billing-card.tsx:106-125`). Send billing link stays the one primary.
 
-- [ ] **Step 4: Tests** — Lift pause is ghost, never a second primary; Undo calls the undo action with the returned `liftedAt`; the reconciliation block renders; the section's `enforced` comes from `billingEnforced()` (hard-coding true is red).
+- [ ] **Step 4: Tests** — Lift pause is ghost, never a second primary; Undo calls the undo action with the returned `liftedAt` and `pausedAt`; the reconciliation block renders; the section's `enforced` comes from `billingEnforced()` (hard-coding true is red).
 
 - [ ] **Step 5: Styleguide** — the card Paused (payment), Paused (ended), paused 30+ days, lifted (payment and ended), pause-off, mismatch; `BillingPausedBanner` × three audiences × en/es; `BillingAlertBanner` with all four kinds and one with seven names.
 
@@ -2038,9 +2129,9 @@ When `verdict.paused`, render `<BillingPausedBanner audience={audience} accountI
 
 - [ ] **Step 2: The spec** (`billing-pause.spec.ts`; serial; sorts before `billing.spec.ts`; FAILS loudly, never skips, when `BILLING_ENFORCE !== "1"` under `CI`; uses `serviceDb()` from the runner like `forward-calls.spec.ts`; the client fixture from `e2e/.auth/client-fixture.json`). It acts ONLY on the fixture's own rows: never `billingPausePass.run`, never `listPauseCandidates`, never anything that reads or writes another account (I5). `beforeAll` captures the fixture's `account_billing` row (expected none), inserts an `E2E Plan <stamp>` plan (fake Stripe ids, both features on) and a row for the fixture: `stripe_customer_id: cus_e2e_<stamp>`, `stripe_subscription_id: sub_e2e_<stamp>`, `subscription_status: past_due`, `past_due_since: now − 8 days`, `stripe_checked_at: now − 1 hour`. `afterAll` (`finally`, each step attempted and reported): deletes the row and the plan, restores the captured row if any. Tests, each with the production mutation it catches:
   1. "the fixture's row is paused by decidePause + pauseBilling (mutation: decidePause ignores stripe_checked_at's grace rule → FAILS: the row would also pause with a day-6 confirmation, asserted by a second fixture state first)" — set `stripe_checked_at` to day 6 → `decidePause` is `unconfirmed`; set it to now − 1 h → `pause`; `pauseBilling(serviceDb(), { accountId, expectedUpdatedAt: row.updatedAt, now })` → `"paused"`; the row's `billing_paused_at` is set.
-  2. "the client Owner sees the paused banner on the dashboard and on Contacts, and the Billing page's paused line with Manage billing (mutation: the layout reads the verdict without the switch → FAILS only with the switch off; mutation: the banner on the dashboard page alone → FAILS on Contacts)".
+  2. "the client Owner sees the paused banner on the dashboard and on Contacts, and the Billing page's paused line with Manage billing (mutation: the banner on the dashboard page alone → FAILS on Contacts)".
   3. "a change while paused is not saved and lands back on the same page (N1) (mutation: refuseActionWhilePaused not called from requireAccountAccess → FAILS: the status changes)" — on the dashboard, flip the business status switch (`one-switch.spec.ts`'s locators); expect the URL unchanged, the banner visible, `business_status` unchanged in the database.
-  4. "the agency sees Paused on the Billing card, lifts it, sees the Undo, undoes, lifts again (mutation: Undo compares the lift stamps as strings → FAILS: 'can't be paused again')" — chip `Paused`, the pause line, `Lift pause`, toast `Pause lifted.` with Undo, Undo → `Paused again.`, Lift again; the row ends with `billing_paused_at` null and `pause_lifted_at` set.
+  4. "the agency sees Paused on the Billing card, lifts it, sees the Undo, undoes, lifts again (mutation: Undo compares the lift stamps as strings → FAILS: 'can't be paused again'; mutation: Undo re-pauses at now → FAILS: billing_paused_at after the Undo differs from before the Lift)" — chip `Paused`, the pause line, `Lift pause`, toast `Pause lifted.` with Undo, Undo → `Paused again.` and `billing_paused_at` equal (as an instant) to its value before the Lift, Lift again; the row ends with `billing_paused_at` null and `pause_lifted_at` set.
   5. "the work queue lists the fixture under Paused, then under Payment failed after the lift (mutation: listBillingAlerts drops paused rows → FAILS)" — robust to other paused accounts on a shared database (I5): assert through `listBillingAlerts(serviceDb(), new Date())` that the fixture is present with the expected kind, AND that the page shows the line's label; when that line holds more than five names, assert the "and N more" text instead of the fixture's link.
   6. "S1: a real test-mode meter reconciles (mutation: meterTotal passes a value_grouping_window → FAILS: Stripe answers per hour)" (skips without a Stripe test key, like `usage-meter.spec.ts`; throwaway customer, no DB): report two events through `stripeGateway(...).reportMeterEvent`, poll `meterTotal` until their sum (120 s, A16's bound), expect `reconcileMeter({ settled: sum, inFlight: 0, held: 0 }, total) === "match"`; then a third event, polled, and `reconcileMeter({ settled: sum, inFlight: 0, held: third }, total + third) === "held_at_stripe"`; delete the customer. "Unproven" is a `::warning`, not a failure (A16's rule).
 
@@ -2070,7 +2161,7 @@ When `verdict.paused`, render `<BillingPausedBanner audience={audience} accountI
 BILLING_ENFORCE=
 ```
 
-- [ ] **Step 2: Runbook section 9, "The pause and the nightly reconciliation"**: what pauses and when (G1, G6's bound); what stops and what does not (G7-G11, G21); automations held and released (G7a); the 30-day rule and the work-queue item (I7; the number is never released automatically); turning it on (Task 14 Step 6); reading the cron log (`billingPause` counters; `wouldPause`/`unconfirmed` while off); Lift pause and its Undo; "a client paid but is still paused" (the webhook + the nightly re-read clear it within a day; to clear it at once, Lift pause from the card); each reconciliation verdict and what to do (`stripe_over`: check the draft invoice before it finalises and credit the difference; `stripe_under`: Stripe dropped events (A12): a manual invoice item or accept; `ambiguous`: compare `usage_events` with the Stripe meter's events for the window by hand); a closed-period mismatch (S8: found after the invoice is final: credit it); a held row from a closed period (G15: decide by hand, then set `reported_at`); the rollback SQL that clears every stamp (`update public.account_billing set billing_paused_at = null, updated_at = clock_timestamp() where billing_paused_at is not null;`, run once through MCP after the switch is off: it clears without a lift stamp, so turning the switch back on re-pauses accounts still past due); the S2/S3/S4/S8 test-clock probe to run once in TEST mode before the switch goes on. Rewrite 5.6: the reporter now holds such rows (switch on) and reconciliation resolves them.
+- [ ] **Step 2: Runbook section 9, "The pause and the nightly reconciliation"**: what pauses and when (G1, G6's bound); what stops and what does not (G7-G11, G21); automations held and released (G7a); the 30-day rule and the work-queue item (I7; the number is never released automatically); turning it on (Task 14 Step 6); reading the cron log (`billingPause` counters; `wouldPause`/`unconfirmed` while off); Lift pause and its Undo; "a client paid but is still paused" (the webhook + the nightly re-read clear it within a day; to clear it at once, Lift pause from the card); each reconciliation verdict and what to do (`stripe_over`: check the draft invoice before it finalises and credit the difference; `stripe_under`: Stripe dropped events (A12): a manual invoice item or accept; `ambiguous`: compare `usage_events` with the Stripe meter's events for the window by hand); a closed-period mismatch (S8: found after the invoice is final: credit it); a held row from a closed period (G15: decide by hand, then set `reported_at`); the rollback SQL that clears every stamp (`update public.account_billing set billing_paused_at = null, updated_at = greatest(clock_timestamp(), updated_at + interval '1 millisecond') where billing_paused_at is not null;` — `updated_at` strictly forward even when a stored version is ahead of the clock, the `nextVersion` rule (re-review m2), run once through MCP after the switch is off: it clears without a lift stamp, so turning the switch back on re-pauses accounts still past due); the S2/S3/S4/S8 test-clock probe to run once in TEST mode before the switch goes on. Rewrite 5.6: the reporter now holds such rows (switch on) and reconciliation resolves them.
 
 - [ ] **Step 3: `crm-features.md`** — `:304` "Shipped (M7a PR-3); the pause and reconciliation ship behind `BILLING_ENFORCE` (M7a PR-4)"; `:948` rule 9 per Q7: "M7a's non-payment pause pass (its nightly Stripe reconciliation runs inside the usage report)", and note that the vault took three passes.
 
@@ -2127,3 +2218,17 @@ BILLING_ENFORCE=
 | M12 `/c` layout | Task 6 Step 5 (`conciergeOpen` in page and layout; test) |
 | M13 Closed today / Storm | Non-goals; Task 6 Step 3 note |
 | Spec §4 Preview line | G22; spec section 4 fixed |
+
+## Revision 3 changes (re-review of 7680f3ea; 0099 unchanged)
+
+| Item | Where it landed |
+|---|---|
+| I1 the hold rewrote every tick | G7a; Task 5 `pauseHoldUntil` (the next whole UTC hour), `pauseHoldInForce` short-circuit before the gate; tests "two holds 15 minutes apart in the same hour write once (mutation: now + 60 min → FAILS)" and "a pause hold in force returns held without calling send()" |
+| I2 stale non-appointment recipes | G7a; Task 5 Step 7b (`pauseDeadline` per recipe from its own max-age constant: review request, referral ask, no-show nudge, quote follow-up; one test per recipe); follow-up, instant reply and text-back already expire; reactivation has no age constant and relies on its release re-check (stated for the owner) |
+| m1 Undo restores pausedAt | G3; Task 2 `undoLiftBillingPause` (+ test 8b); Task 9 `liftPauseAction` returns `pausedAt`, Undo passes it; Task 11 wiring; Task 12 test 4 |
+| m2 rollback SQL | Task 13 runbook: `updated_at = greatest(clock_timestamp(), updated_at + interval '1 millisecond')` |
+| m3 30-day lines only when enforced | G13, G19; Task 2 `listBillingAlerts(db, now, { enforced })` (+ test); Task 9 `noForward` (+ test); Task 11 work page |
+| m4 unconfirmed log level | Task 4 pass: `console.log`, test 18 |
+| m5 e2e test 2 | the un-failable mutation clause removed |
+| m6 latestReconciliations bounded | Task 2: 70-day lookback, 50 accounts per read, 1,000-row pages until empty (+ test); callers pass `now` |
+| m7 Lift bumps held rows | G3, G7a; Task 9 `liftPauseAction` calls `bumpHeldForAccount` (+ test) |
