@@ -227,7 +227,11 @@ they re-resolve against the accent each element inherits.
   step dots, "Powered by BIS" footer) on `--surface-0`. Same component for
   embed and direct link.
 - **AI presence:** topbar indicator — "● Sofía · on a call" (pulse) /
-  "✓ N calls handled this week" (idle).
+  "✓ N calls handled in the last 7 days" (idle).
+  **Amended 2026-10-26 (owner):** the idle count is the last 7 local days,
+  today included — the dashboard's own "Calls answered" window — not the
+  calendar week. Counted from Monday it read "✓ 0 calls handled this week"
+  every Monday morning beside a tile showing a week of answered calls.
   **Amended 2026-10-24 (S-47d, the one switch; owner D7):** when the
   business is not open, the account's status replaces the idle count for
   everyone, as dot + word (Open `--good`, Running late `--warn`, every

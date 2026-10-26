@@ -102,7 +102,7 @@ export function closedWords(dotClass: string, short: string, full: string) {
 
 /**
  * DESIGN.md's "AI presence" key pattern: "● Sofía · on a call" (pulse) /
- * "✓ N calls handled this week" (idle) — rendered inside Topbar (still a
+ * "✓ N calls handled in the last 7 days" (idle) — rendered inside Topbar (still a
  * server component; this is the small "use client" child it mounts, per
  * Task 5's CORRECTED brief). In-account only: it renders nothing at all
  * outside an account.
@@ -143,7 +143,7 @@ export function TopbarPresence() {
     return asSwitch(
       // `data-testid` on the OUTER wrapper, not the Fragment it replaces
       // (F-107 r4 review, item 2 follow-on): the e2e sweep's own wait
-      // needs ONE unambiguous target — `getByText(/this week/)` matched
+      // needs ONE unambiguous target — `getByText(/last 7 days/)` matched
       // BOTH the `sm:hidden` and the `hidden sm:block` span (both contain
       // matching text) and `.first()` did not reliably resolve to the one
       // actually visible at phone width, so `waitFor({state:"visible"})`
