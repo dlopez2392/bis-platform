@@ -342,8 +342,8 @@ function namesSaid(state: CallState): string[] {
  * (a) Call 42ed4822 and its follow-ups: a call that touched two or more DIFFERENT people, by bookings, a lead or
  *     a message in any mix. Two booked contacts (any status, the call's record included, so a booking that lost
  *     its slot counts); two names given that do not agree (namesAgree); or a name that is not the booked
- *     person's: not a booking of theirs answered "for me", not the name that booking was made under, and not
- *     their stored name (sameNameAsRecord, the booking's own rule). This replaces spec 5.10.3 step 1's
+ *     person's: neither the name one of their bookings was made under nor their stored name (sameNameAsRecord,
+ *     the booking's own rule); a booking answered "for me" is not a waiver. This replaces spec 5.10.3 step 1's
  *     yield ("Booked Beto, then 'this is Ana, take a message'" filed on Ana): it now files on no customer. Each
  *     person's own booking is already on their own record. No name given keeps the booked contact.
  */
@@ -355,16 +355,18 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
   if (said.some((a, i) => said.slice(i + 1).some((b) => !namesAgree(a, b)))) return null;
   const own = [...booked][0];
   if (own) {
-    // A name is the booked person's when one of their bookings on this call was answered "for me", or when it
-    // agrees with the name that booking was made under (review of 1406a5b1, item 1: "Daniel Lopez" booked onto
-    // the stored "Dan Lopez", or a speech-to-text drift both times), or, last, with their stored name.
+    // A name is the booked person's ONLY when it agrees with the name one of their bookings on this call was made
+    // under (review of 1406a5b1, item 1: "Daniel Lopez" booked onto the stored "Dan Lopez", or a speech-to-text
+    // drift both times) or, failing that, with their stored name. Anything else is a second person.
+    // Orchestrator ruling 2026-10-26 (fix-review of 7245d21e): a booking answered "for me" is NOT a waiver. It
+    // lands that booking on the record and nothing more; a later name must still agree.
     const ownBookings = state.bookings.filter((b) => b.contactId === own);
-    const forMe = ownBookings.some((b) => b.forSomeoneElse === false);
-    // Orchestrator ruling 2026-10-26: "for me" never swallows a lead the caller explicitly said is for someone
-    // else. That lead is a second person, so the call files on no customer.
-    if (forMe && state.leads.some((l) => l.forSomeoneElse === true)) return null;
-    const unmatched = forMe ? []
-      : said.filter((n) => !ownBookings.some((b) => namesAgree(n, b.contactName)));
+    // Orchestrator ruling 2026-10-26: after a "for me" booking, a lead the caller explicitly said is for someone
+    // else is a second person, whatever its name.
+    if (ownBookings.some((b) => b.forSomeoneElse === false) && state.leads.some((l) => l.forSomeoneElse === true)) {
+      return null;
+    }
+    const unmatched = said.filter((n) => !ownBookings.some((b) => namesAgree(n, b.contactName)));
     if (unmatched.length === 0) return own;
     const record = (await getContact(ctx.db, ctx.accountId, own)) as
       { first_name: string | null; last_name: string | null } | null;

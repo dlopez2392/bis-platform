@@ -151,6 +151,9 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   (decision 19's purpose); a name that does not agree never makes a record silently: `book_appointment` and
   `capture_lead` carry a structured `forSomeoneElse`, and Sofía asks "Is this appointment for you or for
   someone else?". `false` is that contact, whatever the name (nicknames); `true` is a new contact (S21).
+  `false` lands THAT write on the contact and nothing more (owner ruling 2026-10-26): a later lead or message
+  on the call must still agree with the name booked under or the stored name, or the call files on no
+  customer (5.10.3 step 1).
   A booking writes nothing until it is answered; a lead asks once, and a lead still unanswered after the call
   is filed on no customer (5.10.3). Exception (owner ruling 2026-10-26): on a LOCKED call (5.4.1) a lead
   never asks, because it files on no customer whatever the answer (5.10.3 step 0); a booking still asks.
@@ -824,13 +827,15 @@ The new order:
      Each person's own booking is already on their own record.
 1. `state.contactId` (308), or with none the one contact a mirrored booking landed on (a reschedule mirrors
    its contact without setting `state.contactId`): an in-call booking, already picked by 5.10.1. No name given
-   keeps it. A name is the booked person's, and keeps it, when (review of 1406a5b1, item 1, S20) one of that
-   person's bookings on this call was answered "for me" (`forSomeoneElse: false`, mirrored on the booking),
-   when it agrees (`namesAgree`) with the name that booking was made under (`MirroredBooking.contactName`:
-   "Daniel Lopez" booked onto the stored "Dan Lopez", or the same speech-to-text drift twice), or when it
-   agrees with the stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule). A "for me"
-   booking never swallows a lead the caller explicitly said is for someone else (`forSomeoneElse: true`):
-   that lead is a second person, so the call files on no customer (orchestrator ruling 2026-10-26). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
+   keeps it. A name is the booked person's, and keeps it, ONLY when (review of 1406a5b1, item 1, S20) it agrees
+   (`namesAgree`) with the name one of that person's bookings on this call was made under
+   (`MirroredBooking.contactName`: "Daniel Lopez" booked onto the stored "Dan Lopez", or the same
+   speech-to-text drift twice), or with the stored name by `sameNameAsRecord` (`identity/record.ts`, the
+   booking's own rule). A booking answered "for me" (`forSomeoneElse: false`) is NOT a waiver (orchestrator
+   ruling 2026-10-26, fix-review of 7245d21e): it only lands that booking on the record, and a later name must
+   still agree, so "Danny Lopez" after a "Daniel Lopez" booking files on no customer. And after a "for me"
+   booking, a lead the caller explicitly said is for someone else (`forSomeoneElse: true`) is a second person
+   whatever its name, so the call files on no customer (orchestrator ruling 2026-10-26). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
    the named person): a name that does NOT agree is a second person, so the call files on no customer.
    "Booked Beto, then 'this is Ana, take a message'" files on no customer, neither Ana nor Beto; so does a
    booking that lost its slot (`SlotTakenError`, which also sets `state.contactId`) followed by another
@@ -1148,8 +1153,8 @@ Unit, route and db; no e2e (phone calls are tested by real calls, section 8).
 - **The locked and two-people rules (owner rulings 2026-10-26, `finish-call.test.ts`):** two misses then a
   message or a lead in the failed name make no contact and file on no customer, the identity To-do filed
   once; a "cannot" lock the same; two booked contacts, a lead and a message for two names that do not agree,
-  or a booking then another person's name file on no customer; a name matching the booking's stored name,
-  the name it was booked under, or a booking answered "for me" stays on the booked person.
+  or a booking then another person's name file on no customer, a booking answered "for me" included; a name
+  matching the booking's stored name or the name it was booked under stays on the booked person.
 - **The text-back (E8):** on a shared unconfirmed number, from `finishCall` and from `contactForCallerId`
   both, the text threads on the holding record, never a household member (red first: today's phone pick
   lands on one); the second missed call reuses it (mutation: create every time → FAILS); the call row gets

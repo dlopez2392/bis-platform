@@ -2644,14 +2644,25 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
         expect(patch().contactId).toBe("ct1");
       });
 
-      it("a booking answered \"for me\", then a message under a third spelling: still the booked person (mutation: drop the for-me clause → no customer, FAILS)", async () => {
+      // Orchestrator ruling 2026-10-26 (fix-review of 7245d21e): "for me" is NOT a waiver. It lands the booking on
+      // the record; a later name must still agree with the name booked under or the stored name.
+      it("a \"for me\" booking, then a message from \"Maria Hernandez\": a second person, on NO customer (mutation: \"for me\" waives the name check → Dan's thread, FAILS)", async () => {
+        danOnly();
+        await finishCall(message(booking("Daniel Lopez", false), "Maria Hernandez"), ctx, meta);
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(dbMocks.createContact).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
+      });
+
+      it("a \"for me\" booking, then a message under a third spelling (\"Danny Lopez\"): no customer, the conservative reading (mutation: \"for me\" waives the name check → Dan's thread, FAILS)", async () => {
         danOnly();
         await finishCall(message(booking("Daniel Lopez", false), "Danny Lopez"), ctx, meta);
-        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
       });
 
       // Orchestrator ruling 2026-10-26: "for me" never swallows a lead the caller explicitly said is for someone else.
-      it("a \"for me\" booking for Dan, then a lead for \"Ana Garcia\" answered someone else: a second person, on NO customer, nobody made (mutation: drop the someone-else check → Dan's thread, FAILS)", async () => {
+      it("a \"for me\" booking for Dan, then a lead for \"Ana Garcia\" answered someone else: a second person, on NO customer, nobody made", async () => {
         danOnly();
         await finishCall(withLead(booking("Daniel Lopez", false), { fields: { fullName: "Ana Garcia", need: "quote" }, forSomeoneElse: true }), ctx, meta);
         expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
@@ -2660,10 +2671,22 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
         expect(patch().contactId).toBeUndefined();
       });
 
-      it("control: the same lead with no someone-else answer stays with the \"for me\" booking's person", async () => {
+      it("a \"for me\" booking, then a lead for \"Ana Garcia\" with NO someone-else answer: still a second person, on NO customer (mutation: \"for me\" waives the name check → Dan's thread, FAILS)", async () => {
         danOnly();
         await finishCall(withLead(booking("Daniel Lopez", false), { fields: { fullName: "Ana Garcia", need: "quote" } }), ctx, meta);
-        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(dbMocks.createContact).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
+      });
+
+      // The explicit answer wins even where the name agrees: a "for me" booking for "Daniel Lopez", then a lead for
+      // "Daniel Lopez" the caller said is for SOMEONE ELSE (a son of the same name) is a second person.
+      it("a \"for me\" booking for \"Daniel Lopez\", then a lead for \"Daniel Lopez\" answered someone else: on NO customer (mutation: drop the someone-else check → Dan's thread, FAILS)", async () => {
+        danOnly();
+        await finishCall(withLead(booking("Daniel Lopez", false), { fields: { fullName: "Daniel Lopez", need: "quote" }, forSomeoneElse: true }), ctx, meta);
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(dbMocks.createContact).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
       });
 
       it("control: the same third spelling after a booking NOT answered for me is a second person: no customer", async () => {
