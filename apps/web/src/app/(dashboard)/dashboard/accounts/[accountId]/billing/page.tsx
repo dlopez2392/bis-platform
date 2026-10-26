@@ -7,8 +7,12 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { requireAccountOwner } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { BILLING_STATUS_TREATMENTS, billingCardView, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { dbForRequest } from "@/lib/db";
+import { t as tFn } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
 import { m } from "@/lib/messages";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { openBillingPortalAction } from "./actions";
 import { PAYMENT_PROCESSING } from "./client-status";
 import { ManageBillingButton } from "./manage-billing-button";
@@ -34,15 +38,21 @@ export const dynamic = "force-dynamic";
  */
 export default async function BillingPage({ params }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
-  await requireAccountOwner(accountId);
+  const { isAgency } = await requireAccountOwner(accountId);
   const db = await dbForRequest();
-  const [billing, account] = await Promise.all([
+  // The paused line (M7a PR-4 Task 10, plan G12) and its locale, read the
+  // account layout's own way — billingVerdictFor is cached per request, so
+  // this is the SAME read the layout already made on this navigation.
+  const [billing, account, verdict, prefs] = await Promise.all([
     readAccountBilling(accountId),
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle().then(({ data, error }) => {
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle().then(({ data, error }) => {
       if (error) throw new Error(`billing page: account read failed: ${error.message}`);
-      return data as { timezone: string | null } | null;
+      return data as { timezone: string | null; language: "en" | "es" | null } | null;
     }),
+    billingVerdictFor(accountId),
+    getPersonPrefs(),
   ]);
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language });
   const header = <PageHeader title={m["billing.page.title"]} subtitle={m["billing.page.subtitle"]} />;
   if (!billing) {
     // DECISION 4: the item is in the client's nav before billing starts, and
@@ -97,6 +107,11 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
             </div>
             {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{view.nextInvoice}</p> : null}
             {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{m["billing.page.canceled"]}</p> : null}
+            {verdict.paused ? (
+              <p className="text-sm text-foreground" lang={locale}>
+                {tFn(m, verdict.cause === "ended" ? "billing.page.paused.ended" : "billing.page.paused.payment", locale)}
+              </p>
+            ) : null}
             {!billing.complimentary && billing.stripeCustomerId ? (
               <ManageBillingButton
                 open={openBillingPortalAction.bind(null, accountId)}

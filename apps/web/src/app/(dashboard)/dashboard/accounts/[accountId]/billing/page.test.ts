@@ -2,20 +2,32 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import type { AccountBilling, Plan } from "@bis/db";
 
-const guard = vi.hoisted(() => ({ allowed: true, order: [] as string[] }));
+const guard = vi.hoisted(() => ({ allowed: true, order: [] as string[], isAgency: false }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountOwner: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: false }; },
+  requireAccountOwner: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: guard.isAgency }; },
 }));
 const dbm = vi.hoisted(() => ({ getAccountBilling: vi.fn(), getPlan: vi.fn(), sumUsageSince: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbm, serviceDb: () => ({ tag: "service" }),
 }));
+// `language`, beside the existing `timezone` field, for requestLocale — the
+// same per-request shape the account layout reads (M7a PR-4 Task 10).
+const accountRow = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => {
     guard.order.push("db");
-    return { tag: "rls", from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }) }; return c; } };
+    return { tag: "rls", from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { timezone: "America/Chicago", language: accountRow.language }, error: null }) }; return c; } };
   },
 }));
+// Mis preferencias: the person's own language, the same per-request read
+// the layout uses.
+const prefs = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: prefs.language, theme: null }) }));
+// The paused verdict (plan G12): mocked at this boundary, not @bis/db — see
+// the account layout's own test file for why (standing-read.test.ts already
+// proves billingVerdictFor's fail-soft/switch contract).
+const verdict = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("@/lib/billing/standing-read", () => ({ billingVerdictFor: (...a: unknown[]) => verdict.fn(...a) }));
 vi.mock("./actions", () => ({ openBillingPortalAction: async () => ({ ok: false, error: "x" }) }));
 
 const { default: BillingPage } = await import("./page");
@@ -36,6 +48,14 @@ const text = (node: ReactNode): string => {
   if (isValidElement(node)) return text((node.props as { children?: ReactNode }).children);
   return "";
 };
+/** Every element in the tree that carries a `lang` prop (same helper the
+ *  account layout's own test file uses). */
+function withLang(node: ReactNode): ReactElement[] {
+  if (!isValidElement(node)) return Array.isArray(node) ? node.flatMap(withLang) : [];
+  const props = node.props as { lang?: string; children?: ReactNode };
+  return [...(props.lang !== undefined ? [node] : []), ...withLang(props.children)];
+}
+const NOT_PAUSED = { paused: false, voice: true, concierge: true, forward: true, cause: null as "payment" | "ended" | null, pausedAt: null as string | null };
 
 const PLAN = { id: "p1", agencyId: "ag", name: "Growth", monthlyPriceCents: 14900, currency: "usd",
   features: { voice_receptionist: true, web_concierge: true }, allowances: { voice_minutes: 500, sms: 1000, ai_chats: 200 },
@@ -50,9 +70,14 @@ const page = () => BillingPage({ params: Promise.resolve({ accountId: "a" }) });
 beforeEach(() => {
   guard.allowed = true;
   guard.order = [];
+  guard.isAgency = false;
   for (const f of Object.values(dbm)) f.mockReset();
   dbm.getPlan.mockResolvedValue(PLAN);
   dbm.sumUsageSince.mockResolvedValue({ voice_minutes: 312, sms: 0, ai_chats: 0 });
+  accountRow.language = null;
+  prefs.language = null;
+  verdict.fn.mockReset();
+  verdict.fn.mockResolvedValue(NOT_PAUSED);
 });
 
 describe("the client Billing page", () => {
@@ -107,5 +132,43 @@ describe("the client Billing page", () => {
     const buttons = find(tree, ManageBillingButton);
     expect(buttons).toHaveLength(1);
     expect(buttons[0]!.props).toMatchObject({ help: m["billing.page.manageHelp.canceled"] });
+  });
+
+  // M7a PR-4 Task 10 (plan G12): the paused line sits above Manage billing,
+  // which keeps working while paused (the Owner's own way to fix it).
+  it("a payment-caused pause shows the payment words above Manage billing, which still renders (mutation: swap payment/ended text, or hide the button while paused → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await page();
+    const words = text(tree);
+    expect(words).toContain(m["billing.page.paused.payment"]);
+    expect(words).not.toContain(m["billing.page.paused.ended"]);
+    expect(find(tree, ManageBillingButton)).toHaveLength(1);
+  });
+
+  it("an ended-plan pause shows its own words, never the payment ones (mutation: default cause to 'payment' → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await page();
+    const words = text(tree);
+    expect(words).toContain(m["billing.page.paused.ended"]);
+    expect(words).not.toContain(m["billing.page.paused.payment"]);
+  });
+
+  it("no paused line at all when the account isn't paused (mutation: render the line unconditionally → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    const tree = await page();
+    const words = text(tree);
+    expect(words).not.toContain(m["billing.page.paused.payment"]);
+    expect(words).not.toContain(m["billing.page.paused.ended"]);
+  });
+
+  it("the paused line carries lang for a Spanish account, and reads in Spanish (mutation: drop the lang attribute or the t() lookup → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    prefs.language = "es";
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await page();
+    expect(withLang(tree).map((n) => (n.props as { lang: string }).lang)).toEqual(["es"]);
+    expect(text(tree)).toContain(m["billing.page.paused.payment.es"]);
   });
 });

@@ -40,6 +40,7 @@ import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
 import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
 import { EMAIL_TREATMENT } from "@/lib/consent/email-row";
 import { BillingBanner } from "@/components/billing-banner";
+import { BillingPausedBanner } from "@/components/billing-paused-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
 import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
@@ -868,11 +869,36 @@ export default async function StyleguidePage({
             </div>
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The client, on every page of their account</p>
-              <BillingBanner audience="client" accountId="styleguide" />
+              <BillingBanner audience="client" accountId="styleguide" locale="en" />
             </div>
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The agency, inside that account</p>
-              <BillingBanner audience="agency" accountId="styleguide" />
+              <BillingBanner audience="agency" accountId="styleguide" locale="en" />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Paused banner" file="components/billing-paused-banner.tsx">
+          {/* Task 10, plan G12: on every page of a paused account, for every
+              audience, in the resolved locale (English shown beside its
+              Spanish twin so a reviewer can compare them). role="note": a
+              standing fact, not an event (DESIGN rule 3: the sentence is the
+              marker). The agency's own line stays English always — the same
+              rule the work queue's billing banner above follows. */}
+          <div className="w-full space-y-5">
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The client Owner — a link to their own Billing page</p>
+              <BillingPausedBanner audience="owner" accountId="styleguide" cause="payment" locale="en" />
+              <BillingPausedBanner audience="owner" accountId="styleguide" cause="payment" locale="es" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Staff and Technicians — Billing is Owner-only, so a line instead of a link</p>
+              <BillingPausedBanner audience="member" accountId="styleguide" cause="ended" locale="en" />
+              <BillingPausedBanner audience="member" accountId="styleguide" cause="ended" locale="es" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The agency, inside that account — a link to the Settings card</p>
+              <BillingPausedBanner audience="agency" accountId="styleguide" cause="payment" locale="en" />
             </div>
           </div>
         </Section>
