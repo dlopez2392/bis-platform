@@ -399,14 +399,14 @@ describe("demo tenant — the seeder cannot write past the walls", () => {
    * content type and does NOT sniff the bytes — it trusts the caller to have
    * validated them — so the magic number is checked here instead.
    */
-  it("ships a real PNG for the demo company's mark", () => {
-    const png = fs.readFileSync(path.join(DEMO_DIR, "assets", "resaca-air-mark.png"));
-    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    // 256x256, big-endian, at the fixed IHDR offset.
-    expect(png.readUInt32BE(16)).toBe(256);
-    expect(png.readUInt32BE(20)).toBe(256);
-    // The editable source sits beside it; losing it makes the mark unfixable.
-    expect(fs.existsSync(path.join(DEMO_DIR, "assets", "resaca-air-mark.svg"))).toBe(true);
+  it("ships a real JPEG for the demo company's logo", () => {
+    const jpg = fs.readFileSync(path.join(DEMO_DIR, "assets", "resaca-air-logo.jpg"));
+    // SOI marker, then a JFIF/EXIF segment marker.
+    expect([...jpg.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    // The end-of-image marker: a truncated file would upload and render broken.
+    expect([...jpg.subarray(jpg.length - 2)]).toEqual([0xff, 0xd9]);
+    // Small enough to ship in the repo and upload on every morning's rebuild.
+    expect(jpg.length).toBeLessThan(100_000);
   });
 });
 

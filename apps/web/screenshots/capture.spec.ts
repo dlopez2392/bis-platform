@@ -247,9 +247,15 @@ test.describe("demo captures", () => {
     await shoot(page, "pipeline.png");
     await wide.close();
 
-    // 5. The booking page, LIGHT and signed out — this is what a customer
+    // 5. The booking page, DARK and signed out — this is what a customer
     //    sees, and a customer is not logged into anything. A fresh context
     //    rather than the authenticated one, so no dashboard chrome leaks in.
+    //    Dark since 2026-10-26 (owner's call): the demo company's logo is
+    //    drawn on black and sat as a black square on the light page, and the
+    //    site that shows this image is dark. It is asked for with `?theme=`,
+    //    the hint `embed.js` forwards from a host page — the hint stands in
+    //    for a mode nobody fixed — so the account keeps no brand mode and its
+    //    dashboard keeps BIS's own ground in the captures above.
     // `timezoneId` matters: the booking page renders slot times in the
     // VISITOR's zone and says so under the day strip. A runner with no zone
     // set is UTC, so the first capture read "Times shown in UTC" on a page
@@ -262,8 +268,8 @@ test.describe("demo captures", () => {
     });
     const pub = await phone.newPage();
     await pinClock(pub, demo);
-    await useTheme(pub, "light");
-    await pub.goto(`/b/${demo.calendarPublicId}`);
+    await useTheme(pub, "dark");
+    await pub.goto(`/b/${demo.calendarPublicId}?theme=dark`);
     await settled(pub);
     // Today is pre-selected, and after about midday its last slot has passed:
     // the 2026-10-06 run, started at lunchtime, photographed "No times
