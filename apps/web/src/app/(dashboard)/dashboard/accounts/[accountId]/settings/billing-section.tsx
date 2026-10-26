@@ -80,7 +80,7 @@ export async function BillingSection({ accountId }: { accountId: string }) {
       stopComplimentary={removeComplimentaryAction.bind(null, accountId)}
       changePlan={changePlanAction.bind(null, accountId)}
       liftPause={liftPauseAction.bind(null, accountId)}
-      undoLiftPause={(liftedAt, pausedAt) => undoLiftPauseAction(accountId, liftedAt, pausedAt)}
+      undoLiftPause={undoLiftPauseAction.bind(null, accountId)}
     />
   );
 }
