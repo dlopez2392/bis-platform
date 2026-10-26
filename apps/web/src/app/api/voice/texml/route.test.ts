@@ -1722,6 +1722,40 @@ describe("billing: a paused or receptionist-less account (BILLING_ENFORCE)", () 
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
+  it("forward_calls on AND paused 30 days or more: the unavailable sentence and a billing-paused screened row, never the per-account forward (mutation: skip the billing block when the call is cleared and forward_calls is on → FAILS)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(31));
+    const xml = await (await call()).text();
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${UNAVAILABLE_EN}<Hangup/></Response>`);
+    await flushAfter();
+    expect(recordScreenedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999", callerE164: CALLER, reason: "billing-paused",
+    });
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("forward_calls on AND paused under 30 days: forwarded and recorded billing-paused, never account-forward (mutation: skip the billing block when the call is cleared and forward_calls is on → FAILS)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    const xml = await (await call()).text();
+    expect(xml).toContain(`>${TRANSFER}</Dial>`);
+    await flushAfter();
+    expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999", callerE164: CALLER, kind: "billing-paused",
+    });
+    expect(recordScreenedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("paused and the transfer-number read throws: the unavailable sentence, logged as an ERROR naming the failure (mutation: log it with console.log → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue(pausedDaysAgo(3));
+    transferPhoneMock.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const xml = await (await call()).text();
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${UNAVAILABLE_EN}<Hangup/></Response>`);
+    expect(err).toHaveBeenCalledWith(`texml unavailable message for account ${ACCOUNT} — billing-paused, no forward (lookup-failed: Error: db down)`);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("texml unavailable message"));
+  });
+
   it("accountForwardTarget's three log lines are byte-identical after the resolver is extracted (mutation: reword one → FAILS)", async () => {
     delete process.env.BILLING_ENFORCE;
     const err = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -1361,6 +1361,9 @@ Tests, one per recipe, each through its pass's releaser with a gate stub answeri
   10. "switch OFF and paused: the bridge, and readBillingStanding is never called (mutation: read regardless → FAILS)".
   11. "VOICE_FORWARD_TO still wins over everything (mutation: billing before the deployment-wide forward → FAILS)".
   12. "accountForwardTarget's three log lines are byte-identical after the resolver is extracted (mutation: reword one → FAILS)".
+  13. (Task 6 review, item 1) "forward_calls on AND paused 30 days or more: the unavailable sentence and a billing-paused screened row, never the per-account forward (mutation: skip the billing block when the call is cleared and forward_calls is on → FAILS)".
+  14. (Task 6 review, item 1) "forward_calls on AND paused under 30 days: forwarded and recorded billing-paused, never account-forward (same mutation → FAILS)".
+  15. (Task 6 review, item 3) "paused and the transfer-number read throws: the unavailable sentence, logged as an ERROR naming the failure (mutation: log it with console.log → FAILS)".
   `wellformed.test.ts`: "the unavailable document is well-formed XML in en, es and both (mutation: drop the Hangup → FAILS)".
   `turn/route.test.ts`: "switch on, paused → 404 not_found before any counter is spent (mutation: check after createConciergeConversation → FAILS)"; "plan without the website chat → 404 (mutation: read voice instead of concierge → FAILS)"; "a billing read error → the chat answers (mutation: return 404 on a read error → FAILS)".
   `c/[publicId]/page.test.ts`: "switch on, paused → notFound (mutation: drop the conciergeOpen check → FAILS)"; "generateMetadata returns robots only for it (mutation: brand its title → FAILS)". `layout.test.ts`: "a paused chat's not-found page is branded like a switched-off one, and its tab title is the brand's (mutation: keep isConciergeLive alone in the layout → FAILS)" (M12).

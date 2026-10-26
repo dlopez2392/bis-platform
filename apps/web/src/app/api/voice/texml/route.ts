@@ -613,13 +613,7 @@ async function resolveTransferTarget(
   }
 }
 
-/**
- * The forwarded call's record (0059), which the caps above count. In
- * `after()` and best-effort, exactly like the screened-call write in
- * `route()`, for the same two reasons: this route cannot spend Telnyx's
- * answer deadline, and a failed write must never cost the caller the forward.
- * A missed row under-counts one call; it never refuses one.
- */
+/** A screened call's record (0039): every refusal, and the billing message. */
 function recordScreenedCallLater(screened: ScreenedCallInput): void {
   // `after()` because this route sits on Telnyx's carrier answer
   // deadline and its own comments say wall-clock is the one thing it
@@ -654,6 +648,13 @@ function recordScreenedCallLater(screened: ScreenedCallInput): void {
   }
 }
 
+/**
+ * The forwarded call's record (0059), which the caps above count. In
+ * `after()` and best-effort, exactly like the screened-call write
+ * (`recordScreenedCallLater`), for the same two reasons: this route cannot
+ * spend Telnyx's answer deadline, and a failed write must never cost the
+ * caller the forward. A missed row under-counts one call; it never refuses one.
+ */
 function recordForwardedCallLater(input: ForwardedCallInput): void {
   try {
     after(async () => {
@@ -792,8 +793,11 @@ async function route(
         });
         return done(xmlResponse(forwardXml(target.to, calledE164)));
       }
-      const why = "error" in target && target.error !== undefined ? `${target.why}: ${target.error}` : target.why;
-      console.log(`texml unavailable message for account ${result.accountId} — ${reason}, no forward (${why})`);
+      // A failed transfer-number read is an outage, not a setting: an error.
+      const failed = "error" in target && target.error !== undefined;
+      const line = `texml unavailable message for account ${result.accountId} — ${reason}, no forward (${failed ? `${target.why}: ${target.error}` : target.why})`;
+      if (failed) console.error(line);
+      else console.log(line);
       recordScreenedCallLater({
         accountId: result.accountId, phoneNumberId: result.phoneNumberId ?? null,
         calledE164, callerE164, reason,
