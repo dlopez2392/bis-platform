@@ -689,6 +689,7 @@ export async function runTool(
 
       const next = withBooking({ ...state, contactId }, {
         id: bookingId, contactName: name, contactId,
+        ...(typeof args?.forSomeoneElse === "boolean" ? { forSomeoneElse: args.forSomeoneElse } : {}),
         startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString(),
       });
       return { state: next, result: withDroppedNote({

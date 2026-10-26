@@ -334,14 +334,16 @@ function namesSaid(state: CallState): string[] {
  * Owner rulings 2026-10-26, checked first and decided on the state, never on what Sofía was told to say. Each
  * returns NO customer: the call row keeps no contact and the summary goes on no customer's thread; nothing is
  * made, matched or filled. The call card, the alert and the To do still go.
- * (b) Production call 956c8f8a: a call whose identity check LOCKED and that took a message or a lead, whatever
- *     name it carries and whoever is on the number. The identity To do (filed below, contactId null) is the
+ * (b) Production call 956c8f8a: a call whose identity check LOCKED, by misses or by "cannot" (kept on purpose:
+ *     an unverifiable caller's words never land on a real customer), and that took a message or a lead,
+ *     whatever name it carries and whoever is on the number. The identity To do (filed below, contactId null) is the
  *     team's hand-off, and staff can make the person from the call page. A locked call that only booked
  *     follows today's rules (S18).
  * (a) Call 42ed4822 and its follow-ups: a call that touched two or more DIFFERENT people, by bookings, a lead or
  *     a message in any mix. Two booked contacts (any status, the call's record included, so a booking that lost
- *     its slot counts); two names given that do not agree (namesAgree); or a name that does not agree with the
- *     booked contact's stored name (sameNameAsRecord, the booking's own rule). This replaces spec 5.10.3 step 1's
+ *     its slot counts); two names given that do not agree (namesAgree); or a name that is not the booked
+ *     person's: not a booking of theirs answered "for me", not the name that booking was made under, and not
+ *     their stored name (sameNameAsRecord, the booking's own rule). This replaces spec 5.10.3 step 1's
  *     yield ("Booked Beto, then 'this is Ana, take a message'" filed on Ana): it now files on no customer. Each
  *     person's own booking is already on their own record. No name given keeps the booked contact.
  */
@@ -353,10 +355,16 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
   if (said.some((a, i) => said.slice(i + 1).some((b) => !namesAgree(a, b)))) return null;
   const own = [...booked][0];
   if (own) {
-    if (said.length === 0) return own;
+    // A name is the booked person's when one of their bookings on this call was answered "for me", or when it
+    // agrees with the name that booking was made under (review of 1406a5b1, item 1: "Daniel Lopez" booked onto
+    // the stored "Dan Lopez", or a speech-to-text drift both times), or, last, with their stored name.
+    const ownBookings = state.bookings.filter((b) => b.contactId === own);
+    const unmatched = ownBookings.some((b) => b.forSomeoneElse === false) ? []
+      : said.filter((n) => !ownBookings.some((b) => namesAgree(n, b.contactName)));
+    if (unmatched.length === 0) return own;
     const record = (await getContact(ctx.db, ctx.accountId, own)) as
       { first_name: string | null; last_name: string | null } | null;
-    return said.every((n) => sameNameAsRecord(n, record)) ? own : null;
+    return unmatched.every((n) => sameNameAsRecord(n, record)) ? own : null;
   }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];

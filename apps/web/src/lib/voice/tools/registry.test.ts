@@ -2240,6 +2240,9 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     const mine = await book(emptyCallState(), { name: "Daniel Lopez", forSomeoneElse: false });
     expect(mine.result).toMatchObject({ ok: true });
     expect(bookedOn()).toEqual(["ct1"]);
+    // The mirror keeps the caller's answer and the name as said, so finishCall knows a later "Daniel Lopez"
+    // message is Dan's (review of 1406a5b1, item 1; mutation: drop forSomeoneElse from the mirror -> FAILS).
+    expect(mine.state.bookings[0]).toMatchObject({ contactId: "ct1", contactName: "Daniel Lopez", forSomeoneElse: false });
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     dbMocks.createContact.mockResolvedValue({ id: "ct6", existing: false });
     await book(emptyCallState(), { name: "Ana Prueba", forSomeoneElse: true });

@@ -10,6 +10,9 @@ export type MirroredBooking = {
   /** The contact the booking landed on. finishCall files a call whose bookings landed on two or more people on
    *  none of them (call 42ed4822). Absent on a mirror that did not know it (the corpus stub). */
   contactId?: string;
+  /** book_appointment's own forSomeoneElse answer (plan P27): false is "for me", so any later name on the call
+   *  is this booking's person. Absent when not asked or not answered. */
+  forSomeoneElse?: boolean;
 };
 export type CapturedLead = {
   fields: Record<string, string>;

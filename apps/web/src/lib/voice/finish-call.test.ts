@@ -2511,6 +2511,18 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       expect(patch().contactId).toBeUndefined();
     });
 
+    // Owner ruling 2026-10-26 (review of 1406a5b1, item 3): a "cannot" lock (no email on file on an insurance
+    // account, or too many contacts) is kept: an unverifiable caller's words never land on a real customer.
+    it("a \"cannot\" lock files a message and a lead on no customer too (mutation: guard locked === \"misses\" only → Ana's thread, FAILS)", async () => {
+      onCallerId(...GARCIAS);
+      const s = withMessage(withLead(withLocked(caller(), "cannot"), { fields: { fullName: "Ana García", need: "quote" } }),
+        { body: "Call me", at: "t", name: "Ana García" });
+      await finishCall(s, ctx, meta);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
     it("regression: the same lead on an UNLOCKED call still makes the new person, as today (S21)", async () => {
       onCallerId(...GARCIAS);
       await finishCall(withLead(caller(), { fields: { fullName: "Carla García", need: "quote" } }), ctx, meta);
@@ -2602,6 +2614,48 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       await finishCall(withMessage(bookedFor(caller(), ["bk2", "ct2", "Beto García"]), { body: "Call me", at: "t", name: "Beto García" }), ctx, meta);
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
       expect(patch().contactId).toBe("ct2");
+    });
+
+    // Review of 1406a5b1, item 1 (S20): the booked person's name is not only their STORED name. The name the
+    // caller booked under, and a booking they said was "for me", are the same person too. Stored ≠ spoken here,
+    // so a test that mocks identical names cannot pass these by accident.
+    describe("a later name that is the booked person's, though not their stored name", () => {
+      const danOnly = () => {
+        onCallerId(person("ct1", "Dan", "Lopez"));
+        dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Dan", last_name: "Lopez", email: null, phone: "+19562921696" });
+      };
+      const booking = (contactName: string, forSomeoneElse?: boolean) => withBooking({ ...caller(), contactId: "ct1" }, {
+        id: "bk1", contactId: "ct1", contactName, ...at(14), ...(forSomeoneElse === undefined ? {} : { forSomeoneElse }),
+      });
+      const message = (s: ReturnType<typeof caller>, name: string) => withMessage(s, { body: "Call me", at: "t", name });
+
+      it("Dan Lopez booked \"for Daniel Lopez\", answered for me, then a message from \"Daniel Lopez\": on Dan, as before this branch", async () => {
+        danOnly();
+        await finishCall(message(booking("Daniel Lopez", false), "Daniel Lopez"), ctx, meta);
+        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+        expect(patch().contactId).toBe("ct1");
+      });
+
+      it("speech-to-text drift: booked under \"Paula García\" on the stored Carla García, then a message from \"Paula García\": on Carla (mutation: drop the booking's spoken-name match → no customer, FAILS)", async () => {
+        onCallerId(person("ct1", "Carla", "García"));
+        dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Carla", last_name: "García", email: null, phone: "+19562921696" });
+        await finishCall(message(booking("Paula García"), "Paula García"), ctx, meta);
+        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+        expect(patch().contactId).toBe("ct1");
+      });
+
+      it("a booking answered \"for me\", then a message under a third spelling: still the booked person (mutation: drop the for-me clause → no customer, FAILS)", async () => {
+        danOnly();
+        await finishCall(message(booking("Daniel Lopez", false), "Danny Lopez"), ctx, meta);
+        expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      });
+
+      it("control: the same third spelling after a booking NOT answered for me is a second person: no customer", async () => {
+        danOnly();
+        await finishCall(message(booking("Daniel Lopez"), "Danny Lopez"), ctx, meta);
+        expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+        expect(patch().contactId).toBeUndefined();
+      });
     });
 
     it("regression: one booking files on its person, as today", async () => {
