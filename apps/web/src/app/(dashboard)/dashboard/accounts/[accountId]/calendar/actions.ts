@@ -262,7 +262,8 @@ export async function setBookingStatusAction(
 export async function cancelNoticeOptionAction(
   accountId: string, bookingId: string,
 ): Promise<CancelNoticeOptionResult> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): a read, so it stays usable while the account is paused (the cancel is refused).
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   // The suppression facts are read with serviceDb(): prove the booking first.
   const refused = await proveBooking("cancelNoticeOptionAction", accountId, bookingId);
   if (refused) return refused;

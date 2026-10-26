@@ -176,6 +176,11 @@ const ALLOWED: Record<string, Reason> = {
   // customer notice on the service client, scoped to that same account and act.
   "lib/ai-acts/actions.ts": "proven-target",
   "lib/auth.ts": "before-trust",
+  // M7a PR-4 (Task 7): the account's billing verdict (paused, its cause, the plan's two features), never
+  // customer data. A client Staff session reads no account_billing row (0066) and plans are agency-read,
+  // yet every member must see the pause; every caller has already passed requireAccountAccess (or is the
+  // public concierge, whose public id is its authorisation).
+  "lib/billing/standing-read.ts": "configuration",
   "lib/booking/availability.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",
   "lib/consent/email-context.ts": "proven-target",

@@ -4,14 +4,19 @@ const authMock = vi.fn();
 const getAccountByOrgId = vi.fn();
 const ensureAccountRole = vi.fn();
 const readStoredRole = vi.fn();
+// M7a PR-4 (plan G11): the read-only guard reads the request's headers and the billing standing.
+const readBillingStanding = vi.fn();
+const requestHeaders = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 
 vi.mock("@clerk/nextjs/server", () => ({ auth: () => authMock() }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => { throw new Error("REDIRECT:" + url); },
 }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers(requestHeaders.value) }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({ service: true }),
   getAccountByOrgId: (...a: unknown[]) => getAccountByOrgId(...a),
+  readBillingStanding: (...a: unknown[]) => readBillingStanding(...a),
 }));
 vi.mock("./team/ensure-role", () => ({
   ensureAccountRole: (...a: unknown[]) => ensureAccountRole(...a),
@@ -39,6 +44,9 @@ function asClient(role: "owner" | "staff" | "technician" | null) {
 beforeEach(() => {
   authMock.mockReset(); getAccountByOrgId.mockReset(); ensureAccountRole.mockReset(); readStoredRole.mockReset();
   readStoredRole.mockReturnValue(IN_FLIGHT);
+  readBillingStanding.mockReset();
+  requestHeaders.value = {};
+  vi.unstubAllEnvs();
 });
 
 describe("requireAccountAccess carries the caller's role (spec §7)", () => {
@@ -172,5 +180,81 @@ describe("the Owner-only and agency-only guards send a Technician to To do (spec
   it("requireAgencyOnlyAccountAccess still sends Staff to the dashboard", async () => {
     asClient("staff");
     await expect(requireAgencyOnlyAccountAccess(OWN)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/dashboard`);
+  });
+});
+
+// M7a PR-4 (plan G11): "dashboard read-only". With the switch on, a CLIENT's server action (the request
+// carries next-action) on a paused account is sent back to the page it came from; the agency never is.
+describe("a paused account is read-only for a client's server actions (plan G11)", () => {
+  const PAUSED = {
+    complimentary: false, pausedAt: "2026-10-20T08:00:00.000Z", subscriptionStatus: "past_due",
+    features: { voice_receptionist: true, web_concierge: true },
+  };
+  const FROM = `/dashboard/accounts/${OWN}/contacts?q=ana`;
+  function pausedAction() {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    readBillingStanding.mockResolvedValue(PAUSED);
+    requestHeaders.value = { "next-action": "7f00", referer: `https://app.example${FROM}` };
+  }
+
+  it("a client's server action on a paused account is redirected, the agency's is not (mutation: refuse the agency too → FAILS)", async () => {
+    pausedAction();
+    asClient("owner");
+    await expect(requireAccountAccess(OWN)).rejects.toThrow(`REDIRECT:${FROM}`);
+    asAgency();
+    expect(await requireAccountAccess(OWN)).toEqual({ userId: "user_agency", isAgency: true, role: null, canManage: true });
+  });
+
+  it("with no usable referer a client is sent to their own home: To do for a Technician (mutation: fall back to the literal dashboard → FAILS)", async () => {
+    pausedAction();
+    requestHeaders.value = { "next-action": "7f00" };
+    asClient("technician");
+    await expect(requireAccountAccess(OWN)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/tasks`);
+  });
+
+  it("a page render (no next-action) and an unpaused account are untouched (mutation: drop the header check → FAILS)", async () => {
+    pausedAction();
+    requestHeaders.value = { referer: `https://app.example${FROM}` };
+    asClient("staff");
+    expect(await requireAccountAccess(OWN)).toMatchObject({ isAgency: false, role: "staff" });
+    requestHeaders.value = { "next-action": "7f00" };
+    readBillingStanding.mockResolvedValue({ ...PAUSED, pausedAt: null });
+    expect(await requireAccountAccess(OWN)).toMatchObject({ isAgency: false, role: "staff" });
+  });
+
+  it("`duringPause: 'allow'` skips the refusal (mutation: ignore the option → FAILS)", async () => {
+    pausedAction();
+    asClient("owner");
+    expect(await requireAccountAccess(OWN, { duringPause: "allow" })).toEqual({ userId: "user_client", isAgency: false, role: "owner", canManage: true });
+  });
+
+  it("requireAccountOwner and requireNotTechnician pass the option through (mutation: drop it in requireAccountOwner → FAILS)", async () => {
+    pausedAction();
+    asClient("owner");
+    expect(await requireAccountOwner(OWN, { duringPause: "allow" })).toEqual({ userId: "user_client", isAgency: false });
+    await expect(requireAccountOwner(OWN)).rejects.toThrow(`REDIRECT:${FROM}`);
+    asClient("staff");
+    expect(await requireNotTechnician(OWN, { duringPause: "allow" })).toMatchObject({ isAgency: false, role: "staff" });
+    await expect(requireNotTechnician(OWN)).rejects.toThrow(`REDIRECT:${FROM}`);
+  });
+
+  it("the refusal comes after the account checks: a client asking for another account still goes to their own dashboard, unread (mutation: refuse before the account read → FAILS)", async () => {
+    pausedAction();
+    asClient("owner");
+    await expect(requireAccountAccess(OTHER)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/dashboard`);
+    expect(readBillingStanding).not.toHaveBeenCalled();
+  });
+
+  it("a failed billing read allows the action (fails open), and the switch off never reads (mutation: treat a read error as paused → FAILS)", async () => {
+    pausedAction();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    readBillingStanding.mockRejectedValue(new Error("billing: standing read failed: down"));
+    asClient("owner");
+    expect(await requireAccountAccess(OWN)).toMatchObject({ isAgency: false, role: "owner" });
+    err.mockRestore();
+    vi.stubEnv("BILLING_ENFORCE", "");
+    readBillingStanding.mockReset();
+    expect(await requireAccountAccess(OWN)).toMatchObject({ isAgency: false, role: "owner" });
+    expect(readBillingStanding).not.toHaveBeenCalled();
   });
 });

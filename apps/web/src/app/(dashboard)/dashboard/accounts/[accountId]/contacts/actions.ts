@@ -521,7 +521,8 @@ export async function bulkDeleteContactsAction(
 export async function countContactDocumentsAction(
   accountId: string, contactIds: string[],
 ): Promise<{ ok: true; count: number } | { ok: false }> {
-  await requireAccountOwner(accountId);
+  // M7a PR-4 (plan G11): a count, so it stays usable while the account is paused (the delete is refused).
+  await requireAccountOwner(accountId, { duringPause: "allow" });
   if (!Array.isArray(contactIds) || !contactIds.every((id) => isUuid(id))) return { ok: false };
   if (contactIds.length === 0) return { ok: true, count: 0 };
   try {
