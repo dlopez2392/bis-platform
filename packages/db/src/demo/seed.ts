@@ -135,19 +135,20 @@ async function backdate(
 }
 
 /**
- * The demo company's own mark: three strokes of moving air on a rounded
- * square, in the brand blue. Invented for this tenant and nobody's trademark.
+ * The demo company's logo: a snowflake, a sun and the air between them around
+ * an R, on black. Invented for this tenant and nobody's trademark; the owner
+ * chose it on 2026-10-26 by saving it on the demo account's Branding page,
+ * and it is committed here because this seeder rebuilds the account every
+ * morning and would otherwise put the old mark back.
  *
- * Committed as PNG bytes rather than rendered at seed time, because
- * `uploadBrandLogo` takes png/jpeg/webp only — no SVG — and adding an image
- * pipeline to `@bis/db` to produce one file would be a dependency the library
- * carries forever for a script nobody runs in CI. The SVG sits beside it as
- * the editable source.
+ * Committed as JPEG bytes (512px square, downscaled from the saved upload)
+ * because `uploadBrandLogo` takes png/jpeg/webp only, and the seeder reads it
+ * as it is rather than carrying an image pipeline in `@bis/db`.
  *
  * `import.meta.url`, not `__dirname`: this package is `"type": "module"`, so
  * under tsx there is no `__dirname` to read.
  */
-const LOGO_PATH = fileURLToPath(new URL("./assets/resaca-air-mark.png", import.meta.url));
+const LOGO_PATH = fileURLToPath(new URL("./assets/resaca-air-logo.jpg", import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Re-seed
@@ -315,7 +316,7 @@ export async function seedDemoTenant(
   // colour and name. That pair is the one worth screenshotting — our
   // aesthetic, their brand.
   const brandLogoPath = await uploadBrandLogo(
-    db, accountId, new Uint8Array(fs.readFileSync(LOGO_PATH)), "image/png");
+    db, accountId, new Uint8Array(fs.readFileSync(LOGO_PATH)), "image/jpeg");
   await setBranding(db, accountId,
     { brandName: DEMO_ACCOUNT_NAME, brandColor: DEMO_BRAND_COLOR, brandLogoPath }, ACTOR);
 

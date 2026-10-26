@@ -180,8 +180,7 @@ async function shoot(page: Page, file: string, opts: { fullPage?: boolean } = {}
 // the wrong box.
 const WIDE = { width: 1280, height: 800 };
 /**
- * The dashboard alone is taller: 1280x880 -> 2560x1760, which the website
- * declares as `heroShot`. At 800 the calls chart's day labels fell below the
+ * The dashboard alone is taller: 1280x1000 -> 2560x2000 (see below). At 800 the calls chart's day labels fell below the
  * bottom edge once a "LAST 7 DAYS" caption joined the page above the KPIs
  * (2026-10-09 capture). 880 rather than 900: at 900 the chart's legend fits
  * with room to spare, but the top 5px of the next element down showed as a
@@ -190,8 +189,13 @@ const WIDE = { width: 1280, height: 800 };
  * `shoot` is preceded by a check that the axis is inside the frame, so the
  * next layout change that pushes it out fails the capture instead of cropping
  * it silently.
+ * 1000 since 2026-10-26: the business status card ("Open / Closed today /
+ * Running late / Storm", #286) joined the page above the chart and moved its
+ * day labels down to 999.5, so the 880 capture failed this check. The
+ * website's `heroShot` (2560x1760) changes to 2560x2000 the day it takes a
+ * capture made at this size.
  */
-const DASHBOARD = { width: 1280, height: 880 };
+const DASHBOARD = { width: 1280, height: 1000 };
 /**
  * The booking page and the email, at the size of the phone they are read on
  * (2026-10-12). A customer opens the booking link from a text message; the
@@ -247,9 +251,15 @@ test.describe("demo captures", () => {
     await shoot(page, "pipeline.png");
     await wide.close();
 
-    // 5. The booking page, LIGHT and signed out — this is what a customer
+    // 5. The booking page, DARK and signed out — this is what a customer
     //    sees, and a customer is not logged into anything. A fresh context
     //    rather than the authenticated one, so no dashboard chrome leaks in.
+    //    Dark since 2026-10-26 (owner's call): the demo company's logo is
+    //    drawn on black and sat as a black square on the light page, and the
+    //    site that shows this image is dark. It is asked for with `?theme=`,
+    //    the hint `embed.js` forwards from a host page — the hint stands in
+    //    for a mode nobody fixed — so the account keeps no brand mode and its
+    //    dashboard keeps BIS's own ground in the captures above.
     // `timezoneId` matters: the booking page renders slot times in the
     // VISITOR's zone and says so under the day strip. A runner with no zone
     // set is UTC, so the first capture read "Times shown in UTC" on a page
@@ -262,8 +272,8 @@ test.describe("demo captures", () => {
     });
     const pub = await phone.newPage();
     await pinClock(pub, demo);
-    await useTheme(pub, "light");
-    await pub.goto(`/b/${demo.calendarPublicId}`);
+    await useTheme(pub, "dark");
+    await pub.goto(`/b/${demo.calendarPublicId}?theme=dark`);
     await settled(pub);
     // Today is pre-selected, and after about midday its last slot has passed:
     // the 2026-10-06 run, started at lunchtime, photographed "No times
