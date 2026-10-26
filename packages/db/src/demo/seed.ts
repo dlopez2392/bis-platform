@@ -11,7 +11,7 @@ import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus,
          updateCalendarSettings } from "../booking";
 import { setChecklistItem } from "../checklist";
-import { planDemoCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT } from "./call-times";
+import { planDemoCalls, planTodayCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT } from "./call-times";
 import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
@@ -561,7 +561,7 @@ async function seedConversations(
 }
 
 /**
- * Thirty-four calls across two weeks, cycling the eight transcripts so
+ * The planned calls (call-times.ts), cycling the eight transcripts so
  * every outcome — including `abandoned` and `spam` — appears more than once.
  * A call log that is five green rows out of five is the first thing a
  * sceptical buyer stops believing.
@@ -592,8 +592,12 @@ async function seedCalls(
   const TOTAL = DEMO_CALL_COUNT;
   const scripts = Array.from({ length: TOTAL }, (_, i) => DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!);
   const spanishBooking = scripts.findIndex((s) => s.lang === "es" && s.outcome === "booked");
+  // Today's calls first, so their after-hours count is known to the plan:
+  // they are in the after-hours tile's current window, and the tile's
+  // planned reading has to hold with them in it.
+  const todayPlan = planTodayCalls(now, DEMO_TIMEZONE);
   const plan = planDemoCalls(now, DEMO_TIMEZONE, scripts.map((s) => s.outcome),
-    spanishBooking >= 0 ? [spanishBooking] : []);
+    spanishBooking >= 0 ? [spanishBooking] : [], todayPlan.filter((c) => c.afterHours).length);
   // The calls older than the dashboard's 14 days (call-times.ts, k=14..20)
   // came later and draw from their own stream. Drawn from `r`, their stranger
   // numbers and discarded timing draws would have shifted every value the
@@ -624,32 +628,62 @@ async function seedCalls(
     // activity) is the same as before and nothing else on the account moves.
     between(draw, 8, 17); between(draw, 0, 59);
 
-    const { id: callId } = await startCallRow(db, accountId,
-      { phoneNumberId: phone.id, callerE164 });
-
-    // Turn timestamps are stamped from the call's own start, so a re-seed
-    // moves the whole conversation together instead of leaving a transcript
-    // dated to whenever transcripts.ts was written.
-    const step = Math.max(1, Math.floor(script.durationSecs / script.turns.length));
-    const transcript = script.turns.map((turn, n) => ({
-      role: turn.role, text: turn.text,
-      at: new Date(startedAt + n * step * 1000).toISOString(),
-    }));
-
-    await finishCallRow(db, accountId, callId, {
-      outcome: script.outcome,
-      endedAt: new Date(startedAt + script.durationSecs * 1000),
-      durationSecs: script.durationSecs,
-      turnCount: script.turns.length,
-      transcript,
-      summary: script.summary,
-      language: script.lang,
-      contactId: contact?.id,
-      conversationId: convos.find((c) => c.contact.id === contact?.id)?.id,
-    });
-    await backdate(db, "calls", callId, { started_at: new Date(startedAt).toISOString() });
+    await writeDemoCall(db, accountId, phone.id, script, startedAt, callerE164, contact, convos);
   }
-  return TOTAL;
+
+  // Today's calls (call-times.ts `planTodayCalls`): their own stream and
+  // their own scripts, after everything above, so no other call moves. The
+  // script follows the clock, because a call is either one Sofía takes with
+  // the office closed or one she takes in the working day, and the two read
+  // differently: the 5 AM rebuild's calls are the after-hours pair (water at
+  // the indoor unit, a billing question for the office), a capture run by
+  // hand in the afternoon gets the two quote requests.
+  const todayDraw = rng(0x70da7);
+  const byKey = (key: string) => DEMO_TRANSCRIPTS.find((t) => t.key === key)!;
+  const TODAY_SCRIPTS = {
+    closed: [byKey("en-message-afterhours"), byKey("es-message-recado")],
+    open: [byKey("en-lead-quote"), byKey("es-lead-mantenimiento")],
+  };
+  for (const [n, call] of todayPlan.entries()) {
+    const script = TODAY_SCRIPTS[call.afterHours ? "closed" : "open"][n]!;
+    const pool = byLang[script.lang];
+    const contact = pool[between(todayDraw, 0, pool.length - 1)]!;
+    const callerE164 = demoPhone(contact.person.line);
+    assertFiction(undefined, callerE164, `caller on today's call ${n}`);
+    await writeDemoCall(db, accountId, phone.id, script, call.startedAt, callerE164, contact, convos);
+  }
+  return TOTAL + todayPlan.length;
+}
+
+/** One finished call row, its transcript and its start time. */
+async function writeDemoCall(
+  db: SupabaseClient, accountId: string, phoneNumberId: string,
+  script: (typeof DEMO_TRANSCRIPTS)[number], startedAt: number, callerE164: string,
+  contact: Seeded | null, convos: Convo[],
+): Promise<void> {
+  const { id: callId } = await startCallRow(db, accountId, { phoneNumberId, callerE164 });
+
+  // Turn timestamps are stamped from the call's own start, so a re-seed
+  // moves the whole conversation together instead of leaving a transcript
+  // dated to whenever transcripts.ts was written.
+  const step = Math.max(1, Math.floor(script.durationSecs / script.turns.length));
+  const transcript = script.turns.map((turn, n) => ({
+    role: turn.role, text: turn.text,
+    at: new Date(startedAt + n * step * 1000).toISOString(),
+  }));
+
+  await finishCallRow(db, accountId, callId, {
+    outcome: script.outcome,
+    endedAt: new Date(startedAt + script.durationSecs * 1000),
+    durationSecs: script.durationSecs,
+    turnCount: script.turns.length,
+    transcript,
+    summary: script.summary,
+    language: script.lang,
+    contactId: contact?.id,
+    conversationId: convos.find((c) => c.contact.id === contact?.id)?.id,
+  });
+  await backdate(db, "calls", callId, { started_at: new Date(startedAt).toISOString() });
 }
 
 /**
