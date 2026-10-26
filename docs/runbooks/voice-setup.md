@@ -490,35 +490,52 @@ Run once after the identity-checks release, on BIS's OWN account: its number +19
 testing) is the only one that takes a real call. danlo places the calls from his mobile; the orchestrator
 does every dashboard step and writes each time in the ledger. No client account is touched.
 
+The five calls below (8.2 to 8.6) are the WHOLE per-caller daily cap: `PHONE_MAX_CALLS_PER_NUMBER_PER_DAY`
+(5 by default) counts every call from danlo's mobile to the account per UTC day, and a sixth hears the
+carrier's robotic cap message and never reaches Sofía. So run Step 8 on a fresh UTC day (after 00:00 UTC:
+7 PM Central while daylight time lasts, 6 PM after it ends), all five calls on that same UTC day, and make
+no retries. A call that has to be redone waits for the next UTC day.
+
+Test names: Ana Garcia, Beto Garcia and Carla Garcia. Speech-to-text mishears "Prueba", so do not use it.
+
 8.1 Setup (orchestrator). On BIS's account, Contacts: note every contact whose phone is danlo's mobile
     (normally "Dan Lopez"). Make no new contacts by hand: the calls below make them.
+    Calendar → Settings → Meeting type: switch it to **Phone** for the test, and write down what it was
+    (Video). A video calendar refuses a booking without an email, and 8.2 declines the email. (The other
+    way is to give an email for each booking in 8.2.) 8.8 switches it back.
 
-8.2 Call 1, bookings on a shared number (danlo). Ask to book "for Ana Prueba", decline the email; then, on
-    the same call, ask to book one "for Beto Prueba", decline the email. Hang up.
-    Check (orchestrator): Contacts shows Ana Prueba and Beto Prueba, each with danlo's mobile and her or his
-    own booking; Dan Lopez gained no booking and no changed field.
+8.2 Call 1, bookings on a shared number (danlo). Ask to book "for Ana Garcia", decline the email; then, on
+    the same call, ask to book one "for Beto Garcia", decline the email. Hang up.
+    If she asks "is this for you or for someone else?", answer "someone else". She may skip the question
+    when you already said "for <name>".
+    Check (orchestrator): Contacts shows Ana Garcia and Beto Garcia, each with danlo's mobile and her or his
+    own booking; Dan Lopez gained no booking and no changed field. The call booked two people, so the call
+    names no customer and its summary is on nobody's thread (neither Ana's nor Beto's); each booking is on
+    its own person's record.
     Logs: no "contact dedupe" error.
 
 8.3 Call 2, whose appointment (danlo). Ask "when is my appointment?". She asks whose name it is under and
-    says no name herself. Say "Beto Prueba": she gives Beto's time, and only Beto's. Then ask about
-    "Ana Prueba's": Ana's time.
+    says no name herself. Say "Beto Garcia": she gives Beto's time, and only Beto's. Then ask about
+    "Ana Garcia's": Ana's time.
     Logs: voice identity <call>: confirmed rung 1 by name (twice).
 
-8.4 Call 3, two misses (danlo). Ask about an appointment and give "Carla Prueba" twice. Both times she says
-    she couldn't find it under those details; after the second she offers to take a message. Decline the
-    name when she asks for it, leave the message, hang up.
+8.4 Call 3, two misses (danlo). Ask about an appointment and give "Carla Garcia" twice. Both times she says
+    she couldn't find it under those details; after the second she offers to take a message. Leave the
+    message and hang up. She does not ask for a name for it: once the check has failed, the message files
+    on no customer, so a name would decide nothing.
     Check (orchestrator): To do shows "Someone asked about an appointment and couldn't confirm who they
-    are", marked "Sofía · AI"; opening it opens the call; the call's card has the message. No customer's
-    thread got the message.
+    are", marked "Sofía · AI"; opening it opens the call; the call's card has the message. The call names
+    no customer, no customer's thread got the message, and NO new contact was made: Contacts has no
+    Carla Garcia. Staff can still make the person from the call page.
     Logs: miss 1, locked (misses).
 
 8.5 Call 4, the insurance check (owner decision E6).
-    a. Orchestrator: on Ana Prueba's record, set her email to ana.prueba@example.com (an edit sends nothing).
+    a. Orchestrator: on Ana Garcia's record, set her email to ana.garcia@example.com (an edit sends nothing).
     b. Orchestrator, just before the call: Voice page, Trade rules: Insurance (property & casualty), Save.
        Write the time. Do NOT open or save the Services & prices card while insurance is on.
     c. danlo: ask about "my appointment". She asks for the full name and the email on file. Give
-       "Ana Prueba" and spell ana.prueba@example.com: she reads it back, then gives Ana's time.
-       Then ask about "Beto Prueba's" with any email: she couldn't find it under those details.
+       "Ana Garcia" and spell ana.garcia@example.com: she reads it back, then gives Ana's time.
+       Then ask about "Beto Garcia's" with any email: she couldn't find it under those details.
        Logs: confirmed rung 2 by name-email, then miss 1.
     d. Orchestrator, straight after the call: Trade rules: None, Save. Write the time. Every call between
        the two times ran under the insurance rules.
@@ -527,13 +544,13 @@ does every dashboard step and writes each time in the ledger. No client account 
     a. danlo: call, say "hello?" once after the greeting, and hang up (a caller who spoke and was not
        served is a missed call; total silence reads as spam and gets no text).
     b. Check (orchestrator): Conversations shows a thread named "Shared number" and danlo's number, holding
-       the missed-call text. Contacts does not list it. Dan Lopez, Ana Prueba and Beto Prueba got nothing.
+       the missed-call text. Contacts does not list it. Dan Lopez, Ana Garcia and Beto Garcia got nothing.
        If BIS's text-back is off, or its texts are held, the held text is what sits in that thread: the
        check is WHERE it was filed.
     c. danlo: reply "test" to the text. Check: the reply joins the same thread.
        ASSUMPTION (R15, not verified): a text sent to +19565061545 reaches /api/sms/inbound (the number's
        messaging profile points there). If the reply never appears, check that before calling it a failure.
-    d. Orchestrator: in that thread, Move to... Beto Prueba. The toast says "Moved to Beto Prueba." and
+    d. Orchestrator: in that thread, Move to... Beto Garcia. The toast says "Moved to Beto Garcia." and
        Beto's thread holds both texts and the call. Press Undo: "Moved back." Move to Beto again.
     Logs: no "contact dedupe" error; one contact.created with holding true.
 
@@ -543,12 +560,16 @@ does every dashboard step and writes each time in the ledger. No client account 
     - the "texml form fields:" line's attestation: part.
     "none" on every call is a result too: write it down.
 
-8.8 Clean up (orchestrator). Cancel the two test bookings on the Calendar page, delete Ana Prueba and Beto
-    Prueba through Contacts, and mark the test To-dos done. The empty holding record stays: it is not
-    listed, and the number's next missed call reuses it.
+8.8 Clean up (orchestrator). Calendar → Settings → Meeting type: back to what 8.1 wrote down (Video). Mark
+    the test To-dos done. The app's contact delete refuses a contact that has bookings or message threads,
+    so Ana Garcia and Beto Garcia cannot be deleted through Contacts. Either leave them, or cancel the two
+    test bookings on the Calendar page and then remove the test contacts, which the orchestrator does in
+    one database transaction on BIS's account only. The empty holding record stays: it is not listed, and
+    the number's next missed call reuses it.
 
 If it fails: a booking or a time for the wrong person, a name said by Sofía before the caller said one, a
-To-do missing after 8.4, or a text filed on Dan Lopez, Ana or Beto in 8.6 is a failed release. Roll back
+To-do missing after 8.4, a contact made for the name given in 8.4, call 1's summary on Ana's or Beto's
+thread, or a text filed on Dan Lopez, Ana or Beto in 8.6 is a failed release. Roll back
 by reverting the release (the app only; migration 0098 stays). A holding record then reads to the old build
 as an ordinary "Caller" contact on that number, with its thread.
 
