@@ -7,7 +7,9 @@ import {
   getAccountBilling, mirrorSubscription, readBillingStanding, pauseBilling, clearBillingPause, undoLiftBillingPause,
   listPauseCandidates, listBillingAlerts, listReconcilableAccounts, healPermissions,
 } from "../account-billing";
-import { saveReconciliation, latestReconciliations, reconciledSince, type ReconciliationWrite } from "../billing-reconciliations";
+import {
+  saveReconciliation, latestReconciliations, reconciledSince, reconcileNightStart, type ReconciliationWrite,
+} from "../billing-reconciliations";
 
 /**
  * M7a PR-4's data layer (Task 2) against a real PostgREST over 0099: the
@@ -159,6 +161,17 @@ describe("M7a PR-4 data layer, live (0099)", () => {
       expect(paid.pastDueSince).toBeNull();
     })));
 
+  it("pauseBilling refuses a paying or never-paid row on its current version: active, trialing and incomplete stay unpaused (review m1) (mutation: drop the status guard → FAILS)", () =>
+    withPlan((planId) => withAccounts(3, async (db, ids) => {
+      const statuses = ["active", "trialing", "incomplete"];
+      for (const [i, id] of ids.entries()) await bill(db, id, planId, { subscription_status: statuses[i] });
+      for (const id of ids) {
+        const row = (await getAccountBilling(db, id))!;
+        expect(await pauseBilling(db, { accountId: id, expectedUpdatedAt: row.updatedAt, now: new Date() }), row.subscriptionStatus!).toBe("conflict");
+        expect((await getAccountBilling(db, id))!.billingPausedAt, row.subscriptionStatus!).toBeNull();
+      }
+    })));
+
   it("listPauseCandidates returns paused, past_due, unpaid and canceled rows and never a complimentary, subscription-less or healthy one (mutation: drop `.not('stripe_subscription_id', 'is', null)` → FAILS; dropping `.eq('complimentary', false)` cannot fail here, 0051's CHECKs keep a complimentary row unpaused and subscription-less, so the unit test pins that filter)", () =>
     withPlan((planId) => withAccounts(7, async (db, [active, pastDue, unpaid, canceled, pausedActive, noSub, comp]) => {
       await bill(db, active!, planId);
@@ -202,15 +215,40 @@ describe("M7a PR-4 data layer, live (0099)", () => {
         accountId: mismatched!, meter: "sms", windowStart: iso(windowStart), windowEnd: iso(windowStart + 30 * DAY),
         bisSettled: 5, bisInFlight: 0, bisHeld: 0, stripeTotal: verdict === "match" ? 5 : 6, verdict, checkedAt: iso(checkedAt),
       });
-      await saveReconciliation(db, w(now - 40 * DAY, "stripe_over", now - 1.5 * HOUR));
-      await saveReconciliation(db, w(now - 10 * DAY, "match", now - HOUR));
+      // Both checks inside TONIGHT's 08:00 UTC window, whatever the hour this runs.
+      const night = reconcileNightStart(new Date(now)).getTime();
+      const closedAt = night + Math.floor((now - night) / 3);
+      const currentAt = night + Math.floor((2 * (now - night)) / 3);
+      await saveReconciliation(db, w(now - 40 * DAY, "stripe_over", closedAt));
+      await saveReconciliation(db, w(now - 10 * DAY, "match", currentAt));
       const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true }))
         .filter((a) => a.accountId === failing || a.accountId === mismatched);
       expect(alerts.map((a) => ({ ...a, since: Date.parse(a.since) }))).toEqual([
         { accountId: failing, accountName: "Fixture Co", kind: "payment_failed", since: Date.parse(since) },
-        { accountId: mismatched, accountName: "Fixture Co", kind: "usage_mismatch", since: now - 1.5 * HOUR },
+        { accountId: mismatched, accountName: "Fixture Co", kind: "usage_mismatch", since: closedAt },
       ]);
     })));
+
+  it("listBillingAlerts still alerts when the alerting reconciliation is past PostgREST's max_rows: 1,200 fresh rows, the one stripe_under checked oldest (review I) (mutation: one unpaged read → FAILS)", () =>
+    withAccounts(2, async (db, [busy, oldest]) => {
+      const now = Date.now();
+      // 1,199 matching periods on one account, all checked an hour ago: newer
+      // than the alerting row, so they fill the first 1,000-row page.
+      const rows = Array.from({ length: 1199 }, (_, i) => ({
+        account_id: busy, meter: "sms", window_start: iso(now - (i + 1) * HOUR), window_end: iso(now - i * HOUR),
+        bis_settled: 1, bis_in_flight: 0, bis_held: 0, stripe_total: 1, verdict: "match", checked_at: iso(now - HOUR),
+      }));
+      const { error } = await db.from("billing_reconciliations").insert(rows);
+      expect(error).toBeNull();
+      await saveReconciliation(db, {
+        accountId: oldest!, meter: "sms", windowStart: iso(now - 10 * DAY), windowEnd: iso(now - HOUR),
+        bisSettled: 5, bisInFlight: 0, bisHeld: 0, stripeTotal: 4, verdict: "stripe_under", checkedAt: iso(now - 2 * HOUR),
+      });
+      const alerts = (await listBillingAlerts(db, new Date(now), { enforced: true })).filter((a) => a.accountId === oldest);
+      expect(alerts.map((a) => ({ ...a, since: Date.parse(a.since) }))).toEqual([
+        { accountId: oldest, accountName: "Fixture Co", kind: "usage_mismatch", since: now - 2 * HOUR },
+      ]);
+    }));
 
   it("saveReconciliation keeps two periods of one meter apart and replaces a period's own row; latestReconciliations and reconciledSince read them back (mutation: onConflict without window_start → FAILS: the closed period's row is overwritten)", () =>
     withTestAccount(async (db, acct) => {

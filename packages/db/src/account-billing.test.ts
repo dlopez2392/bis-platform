@@ -666,6 +666,14 @@ describe("pauseBilling and clearBillingPause: compare-and-set on updated_at (pla
     expect(q).toContainEqual(["is", "billing_paused_at", null]);
   });
 
+  it("pauseBilling only stamps a row with a subscription that is past_due, unpaid or canceled, so a pause-decision bug can never pause a paying row (review m1) (mutation: drop the status guard → FAILS; drop the subscription guard → FAILS)", async () => {
+    const { db, log } = pgFake(() => ({ data: [{ account_id: ACCOUNT }], error: null }));
+    await pauseBilling(db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW });
+    const q = log[0]!.calls;
+    expect(q).toContainEqual(["not", "stripe_subscription_id", "is", null]);
+    expect(q).toContainEqual(["in", "subscription_status", ["past_due", "unpaid", "canceled"]]);
+  });
+
   it("pauseBilling answers conflict when no row matched (mutation: return 'paused' on an empty result → FAILS)", async () => {
     expect(await pauseBilling(pgFake(() => ({ data: [], error: null })).db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW }))
       .toBe("conflict");
@@ -696,7 +704,11 @@ describe("undoLiftBillingPause: the Undo of a Lift re-pauses only the row it lif
   const LIFT_DB = "2026-10-01T11:00:00.123+00:00";
   const LIFT_JS = "2026-10-01T11:00:00.123Z";
   const PAUSED_AT = "2026-09-20T08:00:00.000Z";
-  const STORED_V = "2026-10-01T11:00:00.124+00:00";
+  // AHEAD of NOW (12:00:00.000Z), as a version bumped by nextVersion or
+  // written by another instance's faster clock can be: only nextVersion moves
+  // past it, so a write of `now` shows (review m2).
+  const STORED_V = "2026-10-01T12:30:00.000456+00:00";
+  const NEXT_V = "2026-10-01T12:30:00.001Z";
 
   /** The stored row (read through getAccountBilling's maybeSingle), and an
    *  update that lands only while updated_at is still the stored one. */
@@ -748,12 +760,12 @@ describe("undoLiftBillingPause: the Undo of a Lift re-pauses only the row it lif
     expect(await undo(db)).toBe("stale");
   });
 
-  it("undoLiftBillingPause restores the pre-lift billing_paused_at, not now, clears the lift and moves updated_at on the row it read (mutation: write now → FAILS: the 30-day forward clock restarts); a pausedAt after the lift, or unparseable, is stale (mutation: accept it → FAILS)", async () => {
+  it("undoLiftBillingPause restores the pre-lift billing_paused_at, not now, clears the lift and moves updated_at past the stored version of the row it read (mutation: write now → FAILS: the 30-day forward clock restarts; mutation: updated_at = now → FAILS: the stored version is ahead of the clock); a pausedAt after the lift, or unparseable, is stale (mutation: accept it → FAILS)", async () => {
     const w = undoWorld();
     expect(await undo(w.db, { pausedAt: "2026-09-20T08:00:00+00:00" })).toBe("repaused");
     expect(w.updates).toHaveLength(1);
     const q = w.updates[0]!;
-    expect(q).toContainEqual(["update", { billing_paused_at: PAUSED_AT, pause_lifted_at: null, updated_at: NOW.toISOString() }]);
+    expect(q).toContainEqual(["update", { billing_paused_at: PAUSED_AT, pause_lifted_at: null, updated_at: NEXT_V }]);
     expect(q).toContainEqual(["eq", "account_id", ACCOUNT]);
     expect(q).toContainEqual(["eq", "updated_at", STORED_V]);
     for (const pausedAt of ["2026-10-01T11:00:00.124Z", "not a date", ""]) {
@@ -821,12 +833,18 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
   const ago = (ms: number) => new Date(T - ms).toISOString();
 
   /** account_billing answers `rows` on its first page and [] after; the
-   *  reconciliation read answers `recs` (already newest-first, as the query orders it). */
-  function alertsWorld(rows: Record<string, unknown>[], recs: Record<string, unknown>[]) {
+   *  reconciliation read answers `recs` (already newest-first, as the query
+   *  orders it) as PostgREST would: the `range` asked for, never more than the
+   *  server's `maxRows`, and a read with no `range` gets only the first
+   *  `maxRows` rows (review I: that is what silently dropped an alert). */
+  function alertsWorld(rows: Record<string, unknown>[], recs: Record<string, unknown>[], maxRows = Infinity) {
     let billingPages = 0;
-    return pgFake((table) => {
+    return pgFake((table, calls) => {
       if (table === "account_billing") { billingPages += 1; return { data: billingPages === 1 ? rows : [], error: null }; }
-      return { data: recs, error: null };
+      const r = calls.find((c) => c[0] === "range") as [string, number, number] | undefined;
+      const from = r ? r[1] : 0;
+      const size = r ? Math.min(r[2] - r[1] + 1, maxRows) : maxRows;
+      return { data: recs.slice(from, from + size), error: null };
     });
   }
   const acct = (name: string, past: string | null, paused: string | null) =>
@@ -893,5 +911,47 @@ describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (
     const r = log.find((l) => l.table === "billing_reconciliations")!.calls;
     expect(r).toContainEqual(["gte", "checked_at", ago(48 * HOUR)]);
     expect(r).toContainEqual(["order", "checked_at", { ascending: false }]);
+  });
+
+  it("listBillingAlerts pages the reconciliation read until an EMPTY page in a stable order, so an alerting row past the server's max_rows still alerts (review I) (mutation: one unpaged read → FAILS; stop on a short page → FAILS; drop the tie-break orders → FAILS)", async () => {
+    const HOUR = 60 * 60 * 1000;
+    const rec = (account: string, verdict: string, checkedAgo: number) => ({
+      account_id: `id_${account}`, meter: "sms", window_start: "2026-09-21T14:13:00+00:00",
+      checked_at: ago(checkedAgo), verdict, accounts: { name: account },
+    });
+    // max_rows 2: the one alerting row is the 5th, on the third page.
+    const recs = [rec("A", "match", 1 * HOUR), rec("B", "match", 1.1 * HOUR), rec("C", "match", 1.2 * HOUR),
+      rec("D", "match", 1.3 * HOUR), rec("Oldest", "stripe_under", 1.4 * HOUR)];
+    const { db, log } = alertsWorld([], recs, 2);
+    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+      { accountId: "id_Oldest", accountName: "Oldest", kind: "usage_mismatch", since: ago(1.4 * HOUR) },
+    ]);
+    const reads = log.filter((l) => l.table === "billing_reconciliations").map((l) => l.calls);
+    expect(reads.map((q) => q.find((c) => c[0] === "range")?.slice(1))).toEqual([[0, 499], [2, 501], [4, 503], [5, 504]]);
+    for (const q of reads) {
+      expect(q.filter((c) => c[0] === "order")).toEqual([
+        ["order", "checked_at", { ascending: false }], ["order", "account_id", { ascending: true }],
+        ["order", "meter", { ascending: true }], ["order", "window_start", { ascending: true }],
+      ]);
+    }
+  });
+
+  it("listBillingAlerts: one night is the 08:00 UTC window holding a key's newest check, exactly: a row checked at 07:59 belongs to the night before one checked at 08:01, and a run the budget resumed eight hours later in the same window is the same night (review m3) (mutation: a 6-hour span between checks → FAILS; nights from midnight UTC → FAILS)", async () => {
+    // NOW is 2026-10-01T12:00Z, so tonight's window opened at 2026-10-01T08:00Z.
+    const rec = (account: string, windowStart: string, verdict: string, checkedAt: string) => ({
+      account_id: `id_${account}`, meter: "sms", window_start: windowStart, checked_at: checkedAt, verdict, accounts: { name: account },
+    });
+    const CURRENT = "2026-09-21T14:13:00+00:00";
+    const CLOSED = "2026-08-21T14:13:00+00:00";
+    const recs = [
+      rec("Split", CURRENT, "match", "2026-10-01T08:01:00+00:00"),        // this window
+      rec("Split", CLOSED, "stripe_over", "2026-10-01T07:59:00+00:00"),   // the window before: last night
+      rec("Resumed", CURRENT, "match", "2026-09-30T17:30:00+00:00"),      // the 09-30 window, resumed later
+      rec("Resumed", CLOSED, "stripe_under", "2026-09-30T09:00:00+00:00"), // the 09-30 window, first tick
+    ];
+    const { db } = alertsWorld([], recs);
+    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+      { accountId: "id_Resumed", accountName: "Resumed", kind: "usage_mismatch", since: "2026-09-30T09:00:00+00:00" },
+    ]);
   });
 });

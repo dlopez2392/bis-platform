@@ -15,6 +15,18 @@ export type ReconciliationVerdict = (typeof RECONCILIATION_VERDICTS)[number];
 /** The three a person must look at (G13). */
 export const ALERTING_VERDICTS: readonly ReconciliationVerdict[] = ["stripe_over", "stripe_under", "ambiguous"];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const NIGHT_OPENS_MS = 8 * 60 * 60 * 1000;
+
+/** The start of the nightly reconciliation window holding `at`: the most
+ *  recent 08:00 UTC at or before it (plan G14: one run per 24-hour window
+ *  starting 08:00 UTC, resumed by later ticks while the budget lasts). The
+ *  agency's alert keys "one night's run" by it (review m3); the nightly step
+ *  should use this same function for its own window, so the two agree. */
+export function reconcileNightStart(at: Date): Date {
+  return new Date(Math.floor((at.getTime() - NIGHT_OPENS_MS) / DAY_MS) * DAY_MS + NIGHT_OPENS_MS);
+}
+
 export type ReconciliationWrite = {
   accountId: string; meter: MeterKey; windowStart: string; windowEnd: string;
   bisSettled: number; bisInFlight: number; bisHeld: number; stripeTotal: number;

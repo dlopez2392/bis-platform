@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PlanFeatures, PlanPriceKey } from "./billing";
-import { ALERTING_VERDICTS } from "./billing-reconciliations";
+import { ALERTING_VERDICTS, reconcileNightStart } from "./billing-reconciliations";
 
 /**
  * The billed-account state (0051 account_billing, 0052 billing_links) and
@@ -620,7 +620,9 @@ export async function listPauseCandidates(db: SupabaseClient): Promise<AccountBi
 /** Stamps the pause (the cron pass, G1). Compare-and-set on updated_at
  *  (PR-3 B5): a row the mirror or the agency changed since the pass read it
  *  is a conflict, re-decided next tick. Never on a complimentary row, never
- *  over an existing pause. */
+ *  over an existing pause, and only on a row with a subscription that is
+ *  unpaid or ended (review m1): the row itself refuses, so a bug in the pause
+ *  decision can never pause a paying (active, trialing) or never-paid row. */
 export async function pauseBilling(
   db: SupabaseClient, input: { accountId: string; expectedUpdatedAt: string; now: Date },
 ): Promise<"paused" | "conflict"> {
@@ -628,6 +630,7 @@ export async function pauseBilling(
     .update({ billing_paused_at: input.now.toISOString(), updated_at: nextVersion(input.now, input.expectedUpdatedAt) })
     .eq("account_id", input.accountId).eq("updated_at", input.expectedUpdatedAt)
     .eq("complimentary", false).is("billing_paused_at", null)
+    .not("stripe_subscription_id", "is", null).in("subscription_status", ["past_due", "unpaid", "canceled"])
     .select("account_id");
   if (error) throw new Error(`pauseBilling failed: ${error.message}`);
   return (data ?? []).length === 1 ? "paused" : "conflict";
@@ -694,10 +697,6 @@ export const PAUSE_ALERT_FORWARD_MS = 30 * DAY;
 export const PAUSE_ALERT_END_MS = 44 * DAY;
 /** A reconciliation alert is shown while its newest check is this recent. */
 export const RECONCILE_ALERT_FRESH_MS = 48 * 60 * 60 * 1000;
-/** One night's run spans at most this (the window opens at 08:00 UTC and the
- *  budget resumes it on later ticks): rows of one key checked within it are
- *  one run. */
-const RUN_SPAN_MS = 6 * 60 * 60 * 1000;
 
 export type BillingAlert = {
   accountId: string;
@@ -742,29 +741,44 @@ export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { e
     }
     from += rows.length;
   }
-  // Reconciliation: per (account, meter), the rows of its NEWEST night's run
-  // (checked within RUN_SPAN_MS of its newest check: the closed-period and
-  // the current-period comparisons of one night both count, so a closed
+  // Reconciliation: per (account, meter), the rows of its NEWEST night's run,
+  // alerting, and fresh. "Its newest night" is the 08:00 UTC window
+  // (reconcileNightStart) holding the key's newest check, exactly (review m3):
+  // the closed-period and current-period comparisons of one night both count,
+  // however late in the window the budget resumed the run, so a closed
   // period's mismatch found tonight is not hidden by tonight's matching
-  // current period), alerting, and fresh. Ordered by checked_at, newest first.
-  const { data, error } = await db.from("billing_reconciliations")
-    .select("account_id, meter, checked_at, verdict, accounts(name)")
-    .gte("checked_at", new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString())
-    .order("checked_at", { ascending: false });
-  if (error) throw new Error(`listBillingAlerts reconciliation read failed: ${error.message}`);
-  const newestCheck = new Map<string, number>();
+  // current period; a row from an earlier window is last night's news.
+  // PAGED until an EMPTY page (review I: one read stops at PostgREST's
+  // max_rows and silently dropped the oldest-checked alert), in a stable
+  // total order: newest check first (the night logic relies on it), then the
+  // key, so a page boundary between equal checked_at values is deterministic.
+  const nightOf = new Map<string, number>();
   const flagged = new Set<string>();
-  for (const r of (data ?? []) as unknown as {
-    account_id: string; meter: string; checked_at: string; verdict: string; accounts: { name: string } | null;
-  }[]) {
-    const key = `${r.account_id}:${r.meter}`;
-    const checked = Date.parse(r.checked_at);
-    const newest = newestCheck.get(key) ?? checked;
-    newestCheck.set(key, newest);
-    if (newest - checked > RUN_SPAN_MS) continue; // an older night's row for this key
-    if (!(ALERTING_VERDICTS as readonly string[]).includes(r.verdict) || flagged.has(r.account_id)) continue;
-    flagged.add(r.account_id);
-    alerts.push({ accountId: r.account_id, accountName: r.accounts?.name ?? r.account_id, kind: "usage_mismatch", since: r.checked_at });
+  const freshSince = new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString();
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("billing_reconciliations")
+      .select("account_id, meter, checked_at, verdict, accounts(name)")
+      .gte("checked_at", freshSince)
+      .order("checked_at", { ascending: false }).order("account_id", { ascending: true })
+      .order("meter", { ascending: true }).order("window_start", { ascending: true })
+      .range(from, from + PAUSE_PAGE - 1);
+    if (error) throw new Error(`listBillingAlerts reconciliation read failed: ${error.message}`);
+    const rows = (data ?? []) as unknown as {
+      account_id: string; meter: string; checked_at: string; verdict: string; accounts: { name: string } | null;
+    }[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const key = `${r.account_id}:${r.meter}`;
+      const checked = Date.parse(r.checked_at);
+      // The first row of a key is its newest check (checked_at descending).
+      const night = nightOf.get(key) ?? reconcileNightStart(new Date(checked)).getTime();
+      nightOf.set(key, night);
+      if (checked < night) continue; // an earlier night's row for this key
+      if (!(ALERTING_VERDICTS as readonly string[]).includes(r.verdict) || flagged.has(r.account_id)) continue;
+      flagged.add(r.account_id);
+      alerts.push({ accountId: r.account_id, accountName: r.accounts?.name ?? r.account_id, kind: "usage_mismatch", since: r.checked_at });
+    }
+    from += rows.length;
   }
   return alerts;
 }

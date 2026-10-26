@@ -417,7 +417,7 @@ notify pgrst, 'reload schema';
   - `healPermissions(db, accountId): Promise<void>`.
   - `PAUSE_ALERT_FORWARD_MS` (30 days), `PAUSE_ALERT_END_MS` (44 days), `RECONCILE_ALERT_FRESH_MS` (48 h); `type BillingAlert = { accountId: string; accountName: string; kind: "payment_failed" | "paused" | "paused_no_forward" | "usage_mismatch"; since: string }`; `listBillingAlerts(db, now, opts: { enforced: boolean }): Promise<BillingAlert[]>` (with the switch off a long pause stays `paused` and never claims calls stopped forwarding, re-review m3).
   - `listReconcilableAccounts(db): Promise<AccountBilling[]>`.
-  - From `billing-reconciliations.ts`: `RECONCILIATION_VERDICTS`, `ALERTING_VERDICTS`, `type ReconciliationVerdict`, `type ReconciliationWrite`, `type Reconciliation`, `saveReconciliation(db, w)`, `listReconciliations(db, accountId, now)` (the latest row per meter), `latestReconciliations(db, accountIds, now): Promise<Map<string, Reconciliation>>` (key `"<accountId>:<meter>"`, newest `window_start`; bounded: periods starting in the last `RECONCILE_LOOKBACK_MS` (70 days), accounts in groups of 50, pages of 1,000 until an empty page, re-review m6), `reconciledSince(db, sinceIso): Promise<Set<string>>` (key `"<accountId>:<meter>:<windowStartMs>"`).
+  - From `billing-reconciliations.ts`: `RECONCILIATION_VERDICTS`, `ALERTING_VERDICTS`, `type ReconciliationVerdict`, `type ReconciliationWrite`, `type Reconciliation`, `saveReconciliation(db, w)`, `listReconciliations(db, accountId, now)` (the latest row per meter), `latestReconciliations(db, accountIds, now): Promise<Map<string, Reconciliation>>` (key `"<accountId>:<meter>"`, newest `window_start`; bounded: periods starting in the last `RECONCILE_LOOKBACK_MS` (70 days), accounts in groups of 50, pages of 1,000 until an empty page, re-review m6), `reconciledSince(db, sinceIso): Promise<Set<string>>` (key `"<accountId>:<meter>:<windowStartMs>"`), `reconcileNightStart(at: Date): Date` (the most recent 08:00 UTC at or before `at`; Task 2 review m3).
   - From `usage.ts`: `USAGE_HOLD_AFTER_MS` (20 h); `listReportableUsage(db, accounts, now, limit, opts?: { holdAfterMs?: number | null })`; `type UsageBands = { settled: number; inFlight: number; held: number; heldRows: UsageRow[] }`; `readUsageBands(db, { accountId, meter, startIso, endIso, now, settleMs }): Promise<UsageBands>`.
 
 - [ ] **Step 1: Write the failing unit tests** in `packages/db/src/account-billing.test.ts` (extend `stored()` with the two new fields):
@@ -556,7 +556,9 @@ The writers:
 /** Stamps the pause (the cron pass, G1). Compare-and-set on updated_at
  *  (PR-3 B5): a row the mirror or the agency changed since the pass read it
  *  is a conflict, re-decided next tick. Never on a complimentary row, never
- *  over an existing pause. */
+ *  over an existing pause, and only on a row with a subscription that is
+ *  unpaid or ended (Task 2 review m1): the row itself refuses, so a bug in
+ *  the pause decision can never pause a paying or never-paid row. */
 export async function pauseBilling(
   db: SupabaseClient, input: { accountId: string; expectedUpdatedAt: string; now: Date },
 ): Promise<"paused" | "conflict"> {
@@ -564,6 +566,7 @@ export async function pauseBilling(
     .update({ billing_paused_at: input.now.toISOString(), updated_at: nextVersion(input.now, input.expectedUpdatedAt) })
     .eq("account_id", input.accountId).eq("updated_at", input.expectedUpdatedAt)
     .eq("complimentary", false).is("billing_paused_at", null)
+    .not("stripe_subscription_id", "is", null).in("subscription_status", ["past_due", "unpaid", "canceled"])
     .select("account_id");
   if (error) throw new Error(`pauseBilling failed: ${error.message}`);
   return (data ?? []).length === 1 ? "paused" : "conflict";
@@ -669,40 +672,49 @@ export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { e
     }
     from += rows.length;
   }
-  // Reconciliation: per (account, meter), the rows of its NEWEST night's run
-  // (checked within RUN_SPAN_MS of its newest check: the closed-period and
-  // the current-period comparisons of one night both count, so a closed
-  // period's mismatch found tonight is not hidden by tonight's matching
-  // current period), alerting, and fresh. Ordered by checked_at, newest first.
-  const { data, error } = await db.from("billing_reconciliations")
-    .select("account_id, meter, checked_at, verdict, accounts(name)")
-    .gte("checked_at", new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString())
-    .order("checked_at", { ascending: false });
-  if (error) throw new Error(`listBillingAlerts reconciliation read failed: ${error.message}`);
-  const newestCheck = new Map<string, number>();
+  // Reconciliation: per (account, meter), the rows of its NEWEST night's run,
+  // alerting, and fresh. "Its newest night" is the 08:00 UTC window
+  // (reconcileNightStart) holding the key's newest check, exactly (Task 2
+  // review m3; it replaced a 6-hour RUN_SPAN_MS, which split a run the budget
+  // resumed later in the same window and joined 07:59 to 08:01). PAGED until
+  // an EMPTY page (Task 2 review I: one read stops at PostgREST's max_rows and
+  // silently dropped the oldest-checked alert, proved live with 1,200 rows),
+  // in a stable total order: newest check first (the night logic relies on
+  // it), then the key.
+  const nightOf = new Map<string, number>();
   const flagged = new Set<string>();
-  for (const r of (data ?? []) as unknown as {
-    account_id: string; meter: string; checked_at: string; verdict: string; accounts: { name: string } | null;
-  }[]) {
-    const key = `${r.account_id}:${r.meter}`;
-    const checked = Date.parse(r.checked_at);
-    const newest = newestCheck.get(key) ?? checked;
-    newestCheck.set(key, newest);
-    if (newest - checked > RUN_SPAN_MS) continue; // an older night's row for this key
-    if (!(ALERTING_VERDICTS as readonly string[]).includes(r.verdict) || flagged.has(r.account_id)) continue;
-    flagged.add(r.account_id);
-    alerts.push({ accountId: r.account_id, accountName: r.accounts?.name ?? r.account_id, kind: "usage_mismatch", since: r.checked_at });
+  const freshSince = new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString();
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("billing_reconciliations")
+      .select("account_id, meter, checked_at, verdict, accounts(name)")
+      .gte("checked_at", freshSince)
+      .order("checked_at", { ascending: false }).order("account_id", { ascending: true })
+      .order("meter", { ascending: true }).order("window_start", { ascending: true })
+      .range(from, from + PAUSE_PAGE - 1);
+    if (error) throw new Error(`listBillingAlerts reconciliation read failed: ${error.message}`);
+    const rows = (data ?? []) as unknown as {
+      account_id: string; meter: string; checked_at: string; verdict: string; accounts: { name: string } | null;
+    }[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const key = `${r.account_id}:${r.meter}`;
+      const checked = Date.parse(r.checked_at);
+      const night = nightOf.get(key) ?? reconcileNightStart(new Date(checked)).getTime();
+      nightOf.set(key, night);
+      if (checked < night) continue; // an earlier night's row for this key
+      if (!(ALERTING_VERDICTS as readonly string[]).includes(r.verdict) || flagged.has(r.account_id)) continue;
+      flagged.add(r.account_id);
+      alerts.push({ accountId: r.account_id, accountName: r.accounts?.name ?? r.account_id, kind: "usage_mismatch", since: r.checked_at });
+    }
+    from += rows.length;
   }
   return alerts;
 }
-
-/** One night's run spans at most this (the window opens at 08:00 UTC and the
- *  budget resumes it on later ticks): rows of one key checked within it are
- *  one run. */
-const RUN_SPAN_MS = 6 * 60 * 60 * 1000;
 ```
 
-Test 12 covers both shapes: a current-period mismatch (alerts every night it persists), and a closed-period mismatch found tonight beside a matching current period (alerts until the next night's run, then drops).
+`reconcileNightStart(at)` lives in `billing-reconciliations.ts` (the most recent 08:00 UTC at or before `at`), so Task 8's `nightlyRunStart` can be it rather than a second definition that could drift.
+
+Test 12 covers both shapes: a current-period mismatch (alerts every night it persists), and a closed-period mismatch found tonight beside a matching current period (alerts until the next night's run, then drops). Two more (review): "listBillingAlerts pages the reconciliation read until an EMPTY page in a stable order, so an alerting row past the server's max_rows still alerts (mutation: one unpaged read → FAILS; stop on a short page → FAILS; drop the tie-break orders → FAILS)", with a live twin of 1,200 rows; and "one night is the 08:00 UTC window holding a key's newest check, exactly (mutation: a 6-hour span between checks → FAILS; nights from midnight UTC → FAILS)".
 
 ```ts
 /** Live subscriptions BIS bills usage for (G14): a subscription and a

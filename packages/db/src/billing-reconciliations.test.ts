@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  saveReconciliation, listReconciliations, latestReconciliations, reconciledSince,
+  saveReconciliation, listReconciliations, latestReconciliations, reconciledSince, reconcileNightStart,
   RECONCILIATION_VERDICTS, ALERTING_VERDICTS, RECONCILE_LOOKBACK_MS,
   type ReconciliationWrite,
 } from "./billing-reconciliations";
@@ -83,6 +83,17 @@ describe("the verdicts", () => {
   it("names the six verdicts 0099's CHECK allows and the three a person must look at (mutation: add held_missing to the alerting set → FAILS)", () => {
     expect([...RECONCILIATION_VERDICTS]).toEqual(["match", "held_at_stripe", "held_missing", "stripe_over", "stripe_under", "ambiguous"]);
     expect([...ALERTING_VERDICTS]).toEqual(["stripe_over", "stripe_under", "ambiguous"]);
+  });
+});
+
+describe("reconcileNightStart", () => {
+  it("is the most recent 08:00 UTC at or before the instant: 08:00 itself opens a night, 07:59:59.999 is still the night before (mutation: nights from midnight UTC → FAILS; `>` at the boundary → FAILS)", () => {
+    const at = (s: string) => reconcileNightStart(new Date(s)).toISOString();
+    expect(at("2026-10-01T08:00:00.000Z")).toBe("2026-10-01T08:00:00.000Z");
+    expect(at("2026-10-01T07:59:59.999Z")).toBe("2026-09-30T08:00:00.000Z");
+    expect(at("2026-10-01T23:59:59.999Z")).toBe("2026-10-01T08:00:00.000Z");
+    expect(at("2026-10-02T00:00:00.000Z")).toBe("2026-10-01T08:00:00.000Z");
+    expect(at("1970-01-01T03:00:00.000Z")).toBe("1969-12-31T08:00:00.000Z");
   });
 });
 
