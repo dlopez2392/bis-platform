@@ -8,12 +8,14 @@
 // read must never even be ISSUED on a client's behalf, boundary test first
 // (apps/web/e2e/work-queue.spec.ts, Task 6 Step 1).
 import {
-  countLinesTurningCallersAway, listAccountsWithStaleUsage, listAgencyWork, listPendingProposalsForAgency, serviceDb,
-  type Proposal,
+  countLinesTurningCallersAway, listAccountsWithStaleUsage, listAgencyWork, listBillingAlerts, listPendingProposalsForAgency,
+  serviceDb, type Proposal,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { BillingAlertBanner } from "@/components/billing-alert-banner";
 import { LineDownBanner } from "@/components/line-down-banner";
 import { UsageStaleBanner } from "@/components/usage-stale-banner";
+import { billingEnforced } from "@/lib/billing/enforce";
 import { requireAgency } from "@/lib/auth";
 import { bucketAgencyWork } from "@/lib/work/agency-buckets";
 import { contactDisplayName } from "@/lib/format";
@@ -74,7 +76,7 @@ export default async function AgencyWorkPage() {
   // The stale-usage read (client billing) joins the same Promise.all, and is
   // swallowed the same way as the lines-down read: a banner is cosmetic, the
   // queue is the page. `now` is the page's one clock reference.
-  const [rows, linesDown, proposalsRead, staleUsage, prefs] = await Promise.all([
+  const [rows, linesDown, proposalsRead, staleUsage, billingAlerts, prefs] = await Promise.all([
     listAgencyWork(db),
     countLinesTurningCallersAway(db, since).catch((e: unknown) => {
       console.error(`work queue: lines-down read failed, rendering no banner: ${String(e)}`);
@@ -91,6 +93,21 @@ export default async function AgencyWorkPage() {
     listAccountsWithStaleUsage(db, now).catch((e: unknown) => {
       console.error(`work queue: stale-usage read failed, rendering no banner: ${String(e)}`);
       return [] as string[];
+    }),
+    // Task 11 (plan G13): the agency's billing banner (paused, paused 30+
+    // days, payment failed, usage mismatch). A banner is cosmetic, the queue
+    // is the page — same swallow as every other banner's read above. NOTE
+    // (G13 review): listBillingAlerts reads the paused/payment rows THEN the
+    // reconciliation rows, in one function, and throws on either read
+    // failing — so a reconciliation-read outage here loses the already-
+    // computed paused/payment-failed lines too, not just the mismatch line.
+    // Fixing that needs listBillingAlerts itself (packages/db, Task 2's
+    // file) to catch its second read internally and still return the first
+    // read's rows; out of this task's file ownership, so flagged rather than
+    // fixed here.
+    listBillingAlerts(db, now, { enforced: billingEnforced() }).catch((e: unknown) => {
+      console.error(`work queue: billing-alerts read failed, rendering no banner: ${String(e)}`);
+      return [] as Awaited<ReturnType<typeof listBillingAlerts>>;
     }),
     // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
     getPersonPrefs(),
@@ -199,6 +216,7 @@ export default async function AgencyWorkPage() {
       <div className="space-y-4 p-6">
         <LineDownBanner count={linesDown} />
         <UsageStaleBanner count={staleUsage.length} />
+        <BillingAlertBanner alerts={billingAlerts} />
         <AgencyWorkList
           buckets={buckets}
           contactNames={contactNames}

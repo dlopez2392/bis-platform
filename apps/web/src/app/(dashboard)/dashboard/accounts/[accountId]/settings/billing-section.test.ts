@@ -7,13 +7,14 @@ import type { AccountBilling, Plan } from "@bis/db";
 import type { BillingCardView } from "@/lib/billing/billing-view";
 
 const dbm = vi.hoisted(() => ({
-  getAccountBilling: vi.fn(), getBillingLink: vi.fn(), listPlans: vi.fn(), sumUsageSince: vi.fn(),
+  getAccountBilling: vi.fn(), getBillingLink: vi.fn(), listPlans: vi.fn(), sumUsageSince: vi.fn(), listReconciliations: vi.fn(),
   account: { timezone: "America/Chicago", reply_to_email: null as string | null, report_emails: ["boss@example.com"] },
   requestDb: { tag: "request" },
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getAccountBilling: dbm.getAccountBilling, getBillingLink: dbm.getBillingLink, listPlans: dbm.listPlans, sumUsageSince: dbm.sumUsageSince,
+  listReconciliations: dbm.listReconciliations,
   serviceDb: () => ({
     tag: "service",
     from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: dbm.account, error: null }) }; return c; },
@@ -22,9 +23,14 @@ vi.mock("@bis/db", async (importOriginal) => ({
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => dbm.requestDb }));
 const guard = vi.hoisted(() => ({ requireAgency: vi.fn(async () => ({ userId: "u" })) }));
 vi.mock("@/lib/auth", () => guard);
+const actionsm = vi.hoisted(() => ({
+  liftPauseAction: vi.fn(async () => ({ ok: true as const, liftedAt: "2026-10-20T00:00:00.000Z", pausedAt: "2026-10-13T00:00:00.000Z" })),
+  undoLiftPauseAction: vi.fn(async () => ({ ok: true as const })),
+}));
 vi.mock("./billing-actions", () => ({
   sendBillingLinkAction: async () => ({ ok: true }), markComplimentaryAction: async () => ({ ok: true }),
   removeComplimentaryAction: async () => ({ ok: true }), changePlanAction: async () => ({ ok: true }),
+  liftPauseAction: actionsm.liftPauseAction, undoLiftPauseAction: actionsm.undoLiftPauseAction,
 }));
 
 const { BillingSection, BillingCardError } = await import("./billing-section");
@@ -43,11 +49,15 @@ const BILLED = { accountId: "a", planId: "p1", complimentary: false, stripeCusto
   pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "", createdAt: "", updatedAt: "" } as AccountBilling;
 
 beforeEach(() => {
-  for (const f of [dbm.getAccountBilling, dbm.getBillingLink, dbm.listPlans, dbm.sumUsageSince]) f.mockReset();
+  for (const f of [dbm.getAccountBilling, dbm.getBillingLink, dbm.listPlans, dbm.sumUsageSince, dbm.listReconciliations]) f.mockReset();
   dbm.getBillingLink.mockResolvedValue(null);
   dbm.listPlans.mockResolvedValue([PLAN]);
   dbm.sumUsageSince.mockResolvedValue({ voice_minutes: 312, sms: 0, ai_chats: 0 });
+  dbm.listReconciliations.mockResolvedValue([]);
   dbm.account = { timezone: "America/Chicago", reply_to_email: null, report_emails: ["boss@example.com"] };
+  actionsm.liftPauseAction.mockClear();
+  actionsm.undoLiftPauseAction.mockClear();
+  vi.unstubAllEnvs();
 });
 
 describe("BillingSection", () => {
@@ -150,5 +160,48 @@ describe("BillingSection: what the card may offer is read from THIS deployment's
     vi.stubEnv("STRIPE_SECRET_KEY", undefined);
     const view = await viewOf();
     expect({ stripeReady: view.stripeReady, send: view.can.send }).toEqual({ stripeReady: false, send: false });
+  });
+});
+
+describe("BillingSection: Lift pause, reconciliation and the enforced switch (Task 11)", () => {
+  it("binds Lift pause and its Undo to THIS account's id, server-side — the id never travels as a form field (mutation: call the actions without accountId → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(BILLED);
+    const el = (await BillingSection({ accountId: "acct-x" })) as ReactElement<{ liftPause: () => Promise<unknown>; undoLiftPause: (l: string, p: string) => Promise<unknown> }>;
+    await el.props.liftPause();
+    expect(actionsm.liftPauseAction).toHaveBeenCalledWith("acct-x");
+    await el.props.undoLiftPause("2026-10-20T00:00:00.000Z", "2026-10-13T00:00:00.000Z");
+    expect(actionsm.undoLiftPauseAction).toHaveBeenCalledWith("acct-x", "2026-10-20T00:00:00.000Z", "2026-10-13T00:00:00.000Z");
+  });
+
+  it("reads this account's reconciliation rows (listReconciliations) and feeds them into the card's reconciliation lines (mutation: pass [] always → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(BILLED);
+    dbm.listReconciliations.mockResolvedValue([{
+      accountId: "a", meter: "voice_minutes", windowStart: "2026-10-01T00:00:00.000Z", windowEnd: "2026-10-20T00:00:00.000Z",
+      bisSettled: 480, bisInFlight: 0, bisHeld: 0, stripeTotal: 500, verdict: "stripe_over", checkedAt: "2026-10-20T08:00:00.000Z",
+    }]);
+    const el = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: { reconciliation: string[] } }>;
+    expect(dbm.listReconciliations.mock.calls[0]!.slice(1)).toEqual(["a", expect.anything()]);
+    expect(el.props.view.reconciliation).toHaveLength(1);
+    expect(el.props.view.reconciliation[0]).toContain("Stripe counts 500");
+    expect(el.props.view.reconciliation[0]).toContain("BIS counts 480");
+  });
+
+  it("the card's `enforced` comes from billingEnforced() — never hard-coded (mutation: hard-code enforced: true → FAILS; mutation: hard-code enforced: false → FAILS)", async () => {
+    // 35 days ago (not a fixed date): past PAUSE_FORWARD_MS's 30-day line
+    // regardless of which day this runs, the same reasoning as the work
+    // page's own clock-derived tests.
+    const thirtyFiveDaysAgo = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString();
+    const pausedRow = { ...BILLED, subscriptionStatus: "past_due" as const, billingPausedAt: thirtyFiveDaysAgo, pastDueSince: thirtyFiveDaysAgo };
+    dbm.getAccountBilling.mockResolvedValue(pausedRow);
+
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    const enforcedEl = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: { pause: { noForward: string | null } | null; pauseOff: boolean } }>;
+    expect(enforcedEl.props.view.pause?.noForward).not.toBeNull();
+    expect(enforcedEl.props.view.pauseOff).toBe(false);
+
+    vi.stubEnv("BILLING_ENFORCE", undefined);
+    const offEl = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: { pause: { noForward: string | null } | null; pauseOff: boolean } }>;
+    expect(offEl.props.view.pause?.noForward ?? null).toBeNull();
+    expect(offEl.props.view.pauseOff).toBe(true);
   });
 });

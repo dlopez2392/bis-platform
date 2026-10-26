@@ -16,6 +16,7 @@ import { billingCardView } from "@/lib/billing/billing-view";
  * and their toasts fire, but nothing is written).
  */
 const demoOk = async () => ({ ok: true as const });
+const demoLift = async () => ({ ok: true as const, liftedAt: NOW.toISOString(), pausedAt: "2026-10-13T17:00:00Z" });
 const NOW = new Date("2026-10-20T15:00:00Z");
 const ZONE = "America/Chicago";
 
@@ -43,14 +44,24 @@ const LINK: BillingLink = {
 };
 const USED: MeterAmounts = { voice_minutes: 312, sms: 1043, ai_chats: 3 };
 
-function view(billing: AccountBilling | null, opts: { link?: BillingLink; plans?: Plan[]; stripeReady?: boolean; webhookReady?: boolean } = {}) {
+function view(billing: AccountBilling | null, opts: {
+  link?: BillingLink; plans?: Plan[]; stripeReady?: boolean; webhookReady?: boolean;
+  reconciliations?: Parameters<typeof billingCardView>[0]["reconciliations"]; enforced?: boolean;
+} = {}) {
   const plans = opts.plans ?? PLANS;
   return billingCardView({
     billing, link: opts.link ?? null, plan: billing ? plans.find((p) => p.id === billing.planId) ?? null : null,
     activePlans: plans, used: billing ? USED : null, zone: ZONE, now: NOW,
     defaultEmail: "owner@rioroofing.test", stripeReady: opts.stripeReady ?? true, webhookReady: opts.webhookReady ?? true,
+    reconciliations: opts.reconciliations, enforced: opts.enforced,
   });
 }
+// 35 days ago from the fixture clock (NOW): past the 30-day forward line.
+const THIRTY_FIVE_DAYS_AGO = new Date(NOW.getTime() - 35 * 24 * 60 * 60 * 1000).toISOString();
+const MISMATCH = [{
+  accountId: "demo", meter: "voice_minutes" as const, windowStart: "2026-10-01T00:00:00Z", windowEnd: "2026-10-20T00:00:00Z",
+  bisSettled: 480, bisInFlight: 0, bisHeld: 0, stripeTotal: 500, verdict: "stripe_over" as const, checkedAt: "2026-10-20T08:00:00Z",
+}];
 
 const DEMOS: { label: string; view: ReturnType<typeof view> }[] = [
   { label: "Unbilled — the empty state sells the action", view: view(null) },
@@ -59,6 +70,36 @@ const DEMOS: { label: string; view: ReturnType<typeof view> }[] = [
   { label: "Payment failed", view: view(row({ subscriptionStatus: "past_due", pastDueSince: "2026-10-13T17:00:00Z" })) },
   { label: "Paused", view: view(row({ subscriptionStatus: "paused" })) },
   { label: "Canceled", view: view(row({ subscriptionStatus: "canceled" })) },
+  // Task 11: the pause's own lines (G19), Lift pause, the 30-day line, a
+  // lift that still stands, the switch-off note, and a usage mismatch.
+  {
+    label: "Paused (payment) — Lift pause offered",
+    view: view(row({ subscriptionStatus: "past_due", pastDueSince: "2026-10-13T17:00:00Z", billingPausedAt: "2026-10-20T17:00:00Z" }), { enforced: true }),
+  },
+  {
+    label: "Paused (plan ended)",
+    view: view(row({ subscriptionStatus: "canceled", billingPausedAt: "2026-10-20T17:00:00Z" }), { enforced: true }),
+  },
+  {
+    label: "Paused 30+ days — calls are no longer forwarded",
+    view: view(row({ subscriptionStatus: "past_due", pastDueSince: THIRTY_FIVE_DAYS_AGO, billingPausedAt: THIRTY_FIVE_DAYS_AGO }), { enforced: true }),
+  },
+  {
+    label: "Lifted (still unpaid)",
+    view: view(row({ subscriptionStatus: "past_due", pastDueSince: "2026-10-13T17:00:00Z", billingPausedAt: null, pauseLiftedAt: "2026-10-26T15:00:00Z" }), { enforced: true }),
+  },
+  {
+    label: "Lifted (plan ended)",
+    view: view(row({ subscriptionStatus: "canceled", billingPausedAt: null, pauseLiftedAt: "2026-10-26T15:00:00Z" }), { enforced: true }),
+  },
+  {
+    label: "Paused, but pausing is switched off here",
+    view: view(row({ subscriptionStatus: "past_due", pastDueSince: "2026-10-13T17:00:00Z", billingPausedAt: "2026-10-20T17:00:00Z" }), { enforced: false }),
+  },
+  {
+    label: "Usage doesn't match Stripe",
+    view: view(row({}), { reconciliations: MISMATCH }),
+  },
   {
     label: "Complimentary, with a live link out (Copy link stays)",
     view: view(row({ complimentary: true, stripeCustomerId: null, stripeSubscriptionId: null, subscriptionStatus: null, currentPeriodStart: null, currentPeriodEnd: null }), { link: LINK }),
@@ -82,7 +123,10 @@ export function BillingCardStates() {
     <div className="flex w-full flex-wrap items-start gap-6">
       {DEMOS.map((d) => (
         <Demo key={d.label} label={d.label}>
-          <BillingCard view={d.view} send={demoOk} markComplimentary={demoOk} stopComplimentary={demoOk} changePlan={demoOk} />
+          <BillingCard
+            view={d.view} send={demoOk} markComplimentary={demoOk} stopComplimentary={demoOk} changePlan={demoOk}
+            liftPause={demoLift} undoLiftPause={demoOk}
+          />
         </Demo>
       ))}
       <Demo label="Loading — shaped like the card">

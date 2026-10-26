@@ -9,6 +9,8 @@ import { EmptyState } from "@/components/empty-state";
 import { ZoneNote } from "@/components/zone-note";
 import { LineDownBanner } from "@/components/line-down-banner";
 import { UsageStaleBanner } from "@/components/usage-stale-banner";
+import { BillingAlertBanner } from "@/components/billing-alert-banner";
+import type { BillingAlert } from "@bis/db";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -814,6 +816,41 @@ export default async function StyleguidePage({
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">Several — billed clients whose usage has waited over a day</p>
               <UsageStaleBanner count={3} />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Billing alert banner (agency work queue)" file="components/billing-alert-banner.tsx">
+          {/* Task 11, plan G13: derived, never stored, same design as the
+              line-down and stale-usage banners above. Zero renders nothing;
+              a fixed order (paused, paused 30+ days, payment failed, usage
+              mismatch) regardless of the array's own order; a cap of five
+              names per line, "and N more" past it. */}
+          <div className="w-full space-y-5">
+            <p className="text-xs text-muted-foreground">
+              No alerts renders nothing at all. The line below mounts
+              <code className="font-mono">{"<BillingAlertBanner alerts={[]} />"}</code>
+              and nothing appears between this line and the next one.
+            </p>
+            <BillingAlertBanner alerts={[]} />
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">One of each kind, in the fixed order — crit while any line names a real service loss</p>
+              <BillingAlertBanner
+                alerts={[
+                  { accountId: "acct-a", accountName: "Rio Roofing", kind: "paused", since: "2026-10-20T00:00:00Z" },
+                  { accountId: "acct-b", accountName: "Acme HVAC", kind: "paused_no_forward", since: "2026-09-10T00:00:00Z" },
+                  { accountId: "acct-c", accountName: "Gulf Fencing", kind: "payment_failed", since: "2026-10-24T00:00:00Z" },
+                  { accountId: "acct-d", accountName: "Shoreline Pools", kind: "usage_mismatch", since: "2026-10-20T08:00:00Z" },
+                ]}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Seven paused accounts — five named, &quot;and 2 more&quot;</p>
+              <BillingAlertBanner
+                alerts={Array.from({ length: 7 }, (_, i): BillingAlert => ({
+                  accountId: `acct-${i}`, accountName: `Client ${i + 1}`, kind: "paused", since: "2026-10-20T00:00:00Z",
+                }))}
+              />
             </div>
           </div>
         </Section>

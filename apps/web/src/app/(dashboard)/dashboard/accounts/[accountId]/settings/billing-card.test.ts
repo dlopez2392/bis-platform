@@ -19,17 +19,25 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const cardSource = readFileSync(path.join(here, "billing-card.tsx"), "utf8");
 
 const ok = async () => ({ ok: true as const });
+// A default successful Lift pause: a fixed liftedAt/pausedAt pair so any
+// test not specifically about Lift pause's Undo gets a stable, inspectable
+// answer rather than a real Date.now() value.
+const okLift = async () => ({ ok: true as const, liftedAt: "2026-10-20T12:00:00.000Z", pausedAt: "2026-10-13T00:00:00.000Z" });
 const base: BillingCardView = {
   status: "unbilled", plan: null, usage: [], since: null, nextInvoice: null, link: null,
   planOptions: [{ id: "p1", name: "Growth", price: "$149.00/month" }, { id: "p2", name: "Pro", price: "$299.00/month" }],
   defaultEmail: "owner@example.com",
-  can: { send: true, changePlan: false, markComplimentary: true, stopComplimentary: false, copyLink: false },
+  can: { send: true, changePlan: false, markComplimentary: true, stopComplimentary: false, copyLink: false, liftPause: false },
   stripeReady: true,
   webhookReady: true,
+  pause: null,
+  lifted: null,
+  pauseOff: false,
+  reconciliation: [],
 };
-type Actions = Pick<Parameters<typeof BillingCard>[0], "send" | "markComplimentary" | "stopComplimentary" | "changePlan">;
+type Actions = Pick<Parameters<typeof BillingCard>[0], "send" | "markComplimentary" | "stopComplimentary" | "changePlan" | "liftPause" | "undoLiftPause">;
 const props = (view: BillingCardView, actions: Partial<Actions> = {}) => ({
-  view, send: ok, markComplimentary: ok, stopComplimentary: ok, changePlan: ok, ...actions,
+  view, send: ok, markComplimentary: ok, stopComplimentary: ok, changePlan: ok, liftPause: okLift, undoLiftPause: ok, ...actions,
 });
 const render = (view: BillingCardView) => renderToStaticMarkup(createElement(BillingCard, props(view)));
 const active: BillingCardView = {
@@ -40,15 +48,22 @@ const active: BillingCardView = {
     { meter: "ai_chats", used: 3, included: 200, over: false, text: "3 of 200 website chats" },
   ],
   since: "Since Oct 12", nextInvoice: "Next invoice Nov 12",
-  can: { send: false, changePlan: true, markComplimentary: false, stopComplimentary: false, copyLink: false },
+  can: { send: false, changePlan: true, markComplimentary: false, stopComplimentary: false, copyLink: false, liftPause: false },
 };
 // On p2, NOT planOptions[0]: "the SAME plan" must be tellable from "the
 // first plan in the list" (review I-3).
 const complimentary: BillingCardView = {
   ...active, status: "complimentary", nextInvoice: null, plan: { id: "p2", name: "Pro", price: "$299.00/month" },
-  can: { send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: false },
+  can: { send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: false, liftPause: false },
 };
 const LIVE_LINK = { sentTo: "owner@example.com", expires: "Oct 16, 3:30 PM", url: "https://checkout.stripe.com/x" };
+// A paused account the agency can lift (G19): the payment line, no
+// noForward yet (under 30 days), Lift pause offered.
+const paused: BillingCardView = {
+  ...base, status: "paused", plan: { id: "p1", name: "Growth", price: "$149.00/month" },
+  can: { ...base.can, send: false, markComplimentary: false, liftPause: true },
+  pause: { line: "Paused since Oct 13: the payment failed on Oct 6.", noForward: null },
+};
 
 /** Copied from lib/history-state.test.ts (itself from packages/db's
  *  cascade-export-boundary test): a source pin must not be satisfiable by a
@@ -149,7 +164,7 @@ describe("BillingCard", () => {
   it("renders exactly the actions the view allows, and the link line + Copy link only while a link is out (mutation: always render Mark complimentary → FAILS)", () => {
     const linkView: BillingCardView = {
       ...base, status: "link_sent", link: { sentTo: "owner@example.com", expires: "Oct 16, 3:30 PM", url: "https://checkout.stripe.com/x" },
-      can: { send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true },
+      can: { send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true, liftPause: false },
     };
     const text = renderedText(render(linkView));
     expect(text).toContain(m["billing.link.sentTo"].replace("{email}", "owner@example.com").replace("{date}", "Oct 16, 3:30 PM"));
@@ -351,7 +366,7 @@ describe("BillingCard", () => {
   describe("Copy link (review M-3)", () => {
     const linkView: BillingCardView = {
       ...base, status: "link_sent", link: LIVE_LINK,
-      can: { send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true },
+      can: { send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true, liftPause: false },
     };
     const click = async () => {
       const button = byProp(BillingCard(props(linkView)), "children", m["billing.link.copy"]);
@@ -376,6 +391,81 @@ describe("BillingCard", () => {
       await click();
       expect(toasts.error).toHaveBeenLastCalledWith(m["billing.link.copyFailed"], expect.objectContaining({ description: LIVE_LINK.url }));
       expect(toasts.error).not.toHaveBeenCalledWith(m["common.actionCrashed"]);
+    });
+  });
+
+  describe("Lift pause and its lines (plan G3, G19; Task 11)", () => {
+    it("shows the pause line, and from day 30 while the switch enforces it, the no-forward line too — straight from the view, nothing computed here (mutation: drop either line → FAILS)", () => {
+      expect(renderedText(render(paused))).toContain("Paused since Oct 13: the payment failed on Oct 6.");
+      const withForward: BillingCardView = { ...paused, pause: { ...paused.pause!, noForward: m["billing.card.noForward"] } };
+      expect(renderedText(render(withForward))).toContain(m["billing.card.noForward"]);
+      expect(renderedText(render(paused))).not.toContain(m["billing.card.noForward"]);
+    });
+
+    it("shows the lifted line when the view carries one, and the pause-off line when the switch does not enforce a stored pause (mutation: drop either line → FAILS)", () => {
+      const lifted: BillingCardView = { ...base, status: "payment_failed", lifted: m["billing.card.lifted"].replace("{date}", "Oct 26") };
+      expect(renderedText(render(lifted))).toContain("Pause lifted Oct 26.");
+      const pauseOff: BillingCardView = { ...paused, pauseOff: true };
+      expect(renderedText(render(pauseOff))).toContain(m["billing.card.pauseOff"]);
+      expect(renderedText(render(paused))).not.toContain(m["billing.card.pauseOff"]);
+    });
+
+    it("shows the reconciliation block (title, every line, and the runbook help) only when the view carries any (mutation: render it unconditionally → FAILS; mutation: drop the help line → FAILS)", () => {
+      expect(renderedText(render(base))).not.toContain(m["billing.card.reconcile.title"]);
+      const withMismatch: BillingCardView = {
+        ...base, reconciliation: ["Call minutes: Stripe counts 500, BIS counts 480. Checked Oct 20, 3:00 PM."],
+      };
+      const text = renderedText(render(withMismatch));
+      expect(text).toContain(m["billing.card.reconcile.title"]);
+      expect(text).toContain("Call minutes: Stripe counts 500, BIS counts 480. Checked Oct 20, 3:00 PM.");
+      expect(text).toContain(m["billing.card.reconcile.help"]);
+    });
+
+    it("Lift pause is a ghost button, never a second primary — even beside Send (DESIGN rule 8) (mutation: give it the default/primary variant → FAILS)", () => {
+      const withSendToo: BillingCardView = { ...paused, can: { ...paused.can, send: true } };
+      expect(render(withSendToo).match(/btn-primary/g)?.length ?? 0).toBe(1);
+      const button = byProp(BillingCard(props(paused)), "children", m["billing.card.liftPause"]);
+      expect(button.props.variant).toBe("ghost");
+      expect(renderedText(render(paused))).toContain(m["billing.card.liftPauseHelp"]);
+    });
+
+    it("renders no Lift pause button when the view does not offer it (mutation: show it unconditionally → FAILS)", () => {
+      expect(renderedText(render(base))).not.toContain(m["billing.card.liftPause"]);
+    });
+
+    it("Lift pause runs immediately and toasts 'Pause lifted.' with an Undo that re-pauses using the EXACT liftedAt/pausedAt the Lift itself returned, then toasts 'Paused again.' (mutation: pass Date.now() instead of the returned liftedAt → FAILS; mutation: swap liftedAt and pausedAt → FAILS)", async () => {
+      const lift = vi.fn(okLift);
+      const undo = vi.fn(ok);
+      const button = byProp(BillingCard(props(paused, { liftPause: lift, undoLiftPause: undo })), "children", m["billing.card.liftPause"]);
+      (button.props.onClick as () => void)();
+      await flush();
+      expect(lift).toHaveBeenCalledOnce();
+      expect(toasts.success.mock.calls[0]![0]).toBe(m["billing.card.liftedToast"]);
+      const opts = toasts.success.mock.calls[0]![1] as { action: { label: string; onClick: () => void } };
+      expect(opts.action.label).toBe(m["common.undo"]);
+
+      opts.action.onClick();
+      await flush();
+      expect(undo).toHaveBeenCalledWith("2026-10-20T12:00:00.000Z", "2026-10-13T00:00:00.000Z");
+      expect(toasts.success.mock.calls.at(-1)![0]).toBe(m["billing.card.repausedToast"]);
+    });
+
+    it("a crashed Lift pause shows the generic crash toast and never claims the pause was lifted (mutation: swallow the throw and toast liftedToast anyway → FAILS)", async () => {
+      const boom = async () => { throw new Error("network"); };
+      const button = byProp(BillingCard(props(paused, { liftPause: boom })), "children", m["billing.card.liftPause"]);
+      (button.props.onClick as () => void)();
+      await flush();
+      expect(toasts.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
+      expect(toasts.success).not.toHaveBeenCalled();
+    });
+
+    it("a refused Lift pause toasts the server's reason, not the success copy (mutation: toast success regardless of r.ok → FAILS)", async () => {
+      const refused = vi.fn(async () => ({ ok: false as const, error: m["billing.error.notPaused"] }));
+      const button = byProp(BillingCard(props(paused, { liftPause: refused })), "children", m["billing.card.liftPause"]);
+      (button.props.onClick as () => void)();
+      await flush();
+      expect(toasts.error).toHaveBeenCalledWith(m["billing.error.notPaused"]);
+      expect(toasts.success).not.toHaveBeenCalled();
     });
   });
 });
