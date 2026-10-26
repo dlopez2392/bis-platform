@@ -144,6 +144,24 @@ export function isEmailKind(kind: string): kind is EmailKind {
   return Object.prototype.hasOwnProperty.call(EMAIL_KINDS, kind);
 }
 
+/**
+ * The non-payment pause (M7a PR-4, plan G7; owner answer Q1): every text to
+ * the business's CUSTOMERS stops; the owner's own alerts (operator) and the
+ * STOP/START/HELP answers (consent_reply) still go. Read only by the send
+ * gate, after the switch.
+ */
+export function smsStopsWhilePaused(kind: SmsKind): boolean {
+  const c = SMS_KINDS[kind].class;
+  return c !== "operator" && c !== "consent_reply";
+}
+
+/** G8: only the automation kinds (which holdOrSend then HOLDS, G7a). Every
+ *  other email keeps going (owner answer Q6), staff.document_request_email
+ *  included: it is an email to the customer; its SMS twin stops above. */
+export function emailStopsWhilePaused(kind: EmailKind): boolean {
+  return kind.startsWith("automation.");
+}
+
 /** Decision 7: an unsubscribe stops the automated classes, and only those. */
 export function emailReadsLedger(kind: EmailKind): boolean {
   const cls = EMAIL_KINDS[kind].class;

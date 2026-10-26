@@ -248,6 +248,9 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
       // dropping the attempt, and nothing was written: `prepare` runs only
       // after the gate clears.
       case "suppressed_account": rejectSend(t(m, "automations.reason.accountSuppressed", locale));
+      // M7a PR-4 (plan G7): a paused account's customer texts stop, the
+      // composer's included; it says why rather than the generic failure.
+      case "billing_paused": rejectSend(t(m, "compose.smsBlockedPaused", locale));
       default: rejectSend(composerBlockedLine(result.reason, locale));
     }
   }

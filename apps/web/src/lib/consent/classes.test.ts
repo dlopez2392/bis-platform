@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { SMS_KINDS, isSmsKind, EMAIL_KINDS, isEmailKind, emailReadsLedger, FOOTER_ADDRESS_KINDS, type EmailKind } from "./classes";
+import {
+  SMS_KINDS, isSmsKind, EMAIL_KINDS, isEmailKind, emailReadsLedger, FOOTER_ADDRESS_KINDS, smsStopsWhilePaused, emailStopsWhilePaused,
+  type EmailKind, type SmsKind,
+} from "./classes";
 
 /**
  * The registry IS the spec's §4.1 item 2 table, row for row: a kind moved to
@@ -150,5 +153,74 @@ describe("FOOTER_ADDRESS_KINDS — decision P1 (spec §4.3, §10)", () => {
       expect(EMAIL_KINDS[kind].class, kind).toBe("marketing");
       expect(EMAIL_KINDS[kind].footer, kind).toBe("unsubscribe");
     }
+  });
+});
+
+/**
+ * M7a PR-4 (plan G7, G8; owner answers Q1, Q6, M11): what the non-payment
+ * pause stops. Literal tables, every kind by name, so a kind added to either
+ * registry fails here until someone decides whether a pause stops it.
+ */
+const SMS_STOPS_WHILE_PAUSED: Record<SmsKind, boolean> = {
+  "automation.instant_reply": true,
+  "automation.appointment_confirm": true,
+  "automation.sms_reminder": true,
+  "automation.no_show_nudge": true,
+  "automation.referral_ask": true,
+  "automation.review_request": true,
+  "automation.quote_followup": true,
+  "voice.textback": true,
+  "staff.composer_sms": true,
+  "staff.document_request_sms": true,
+  "operator.alert_sms": false,
+  "operator.alert_phone_code": false,
+  "consent.stop_confirmation": false,
+  "consent.start_confirmation": false,
+  "consent.help": false,
+};
+
+const EMAIL_STOPS_WHILE_PAUSED: Record<EmailKind, boolean> = {
+  "booking.confirmation": false,
+  "forms.receipt": false,
+  "voice.booked": false,
+  "voice.moved": false,
+  "voice.cancelled": false,
+  "booking.moved": false,
+  "automation.reminder": true,
+  "automation.followup": true,
+  "automation.review_request": true,
+  "automation.referral_ask": true,
+  "automation.reactivation": true,
+  "automation.quote_followup": true,
+  "automation.no_show_nudge": true,
+  "staff.composer_email": false,
+  "staff.booking_cancel_notice": false,
+  "staff.document_request_email": false,
+  "operator.booking_alert": false,
+  "operator.cancel_notice": false,
+  "operator.move_notice": false,
+  "operator.lead_alert": false,
+  "operator.call_alert": false,
+  "operator.phone_change_alert": false,
+  "operator.weekly_report": false,
+  "operator.agency_report": false,
+  "operator.billing_link": false,
+  "operator.sender_check": false,
+  "operator.ops_alert": false,
+  "operator.reply_forward": false,
+  "booking.undo_notice": false,
+};
+
+describe("what the non-payment pause stops (M7a PR-4, plan G7/G8)", () => {
+  it("smsStopsWhilePaused: all 15 kinds, by name: every text to a customer stops, the owner's alerts and STOP/START/HELP go (mutation: let staff.composer_sms through → FAILS)", () => {
+    expect(Object.keys(SMS_STOPS_WHILE_PAUSED).sort()).toEqual(Object.keys(SMS_KINDS).sort());
+    const actual = Object.fromEntries((Object.keys(SMS_KINDS) as SmsKind[]).map((k) => [k, smsStopsWhilePaused(k)]));
+    expect(actual).toEqual(SMS_STOPS_WHILE_PAUSED);
+  });
+
+  it("emailStopsWhilePaused: exactly the automation.* kinds; booking and form receipts, staff mail and staff.document_request_email keep going (mutation: stop booking.confirmation or staff.document_request_email → FAILS)", () => {
+    expect(Object.keys(EMAIL_STOPS_WHILE_PAUSED).sort()).toEqual(Object.keys(EMAIL_KINDS).sort());
+    const actual = Object.fromEntries((Object.keys(EMAIL_KINDS) as EmailKind[]).map((k) => [k, emailStopsWhilePaused(k)]));
+    expect(actual).toEqual(EMAIL_STOPS_WHILE_PAUSED);
   });
 });

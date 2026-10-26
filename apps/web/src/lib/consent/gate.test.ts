@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const db = vi.hoisted(() => ({
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
-  isAccountOutboundSuppressed: vi.fn(),
+  isAccountOutboundSuppressed: vi.fn(), readBillingStanding: vi.fn(), serviceDb: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sender = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -16,6 +16,8 @@ import { SmsProviderError } from "@/lib/sms/types";
 import { m } from "@/lib/messages";
 
 const DB = {} as never;
+/** The service client: the billing read must reach THIS one, never the caller's (plan M9). */
+const SVC = { service: true } as never;
 const FROM = "+19565550000";
 // Tue 2026-10-06 15:00 in Chicago (CDT): inside every window.
 const DAY = new Date("2026-10-06T20:00:00Z");
@@ -30,6 +32,8 @@ beforeEach(() => {
   for (const fn of [...Object.values(db), ...Object.values(sender), ...Object.values(factory), send]) fn.mockReset();
   sender.resolveSmsSender.mockResolvedValue({ ok: true, from: FROM, ownedNumbers: [FROM] });
   db.isAccountOutboundSuppressed.mockResolvedValue(false);
+  db.readBillingStanding.mockResolvedValue(null);
+  db.serviceDb.mockReturnValue(SVC);
   db.readConsentState.mockResolvedValue({ state: "allowed" });
   db.readPhoneCountryFlag.mockResolvedValue(false);
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
@@ -89,6 +93,83 @@ describe("decideSms: the account-level send switch (D-061, accounts.outbound_sup
     expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
     expect(await sendSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe("decideSms: step 3b, the non-payment pause (M7a PR-4, plan G7)", () => {
+  const PAUSED = { complimentary: false, pausedAt: "2026-10-20T08:00:00.000Z", subscriptionStatus: "past_due", features: { voice_receptionist: true, web_concierge: true } };
+  const PAYING = { ...PAUSED, pausedAt: null, subscriptionStatus: "active" };
+  const on = () => vi.stubEnv("BILLING_ENFORCE", "1");
+
+  it("switch on and paused: an automation text is blocked billing_paused BEFORE the A2P read (mutation: put the check after resolveSmsSender → FAILS: the sender mock is called)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "billing_paused" });
+    expect(sender.resolveSmsSender).not.toHaveBeenCalled();
+    expect(db.readConsentState).not.toHaveBeenCalled();
+    expect(await sendSms(DB, base())).toEqual({ kind: "blocked", reason: "billing_paused" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the billing read uses serviceDb(), not the caller's client, for THIS account (mutation: pass `db` → FAILS: called with the caller's client)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    await decideSms(DB, base({ kind: "staff.composer_sms" }));
+    expect(db.readBillingStanding).toHaveBeenCalledWith(SVC, "acct_1");
+    expect(db.readBillingStanding).not.toHaveBeenCalledWith(DB, expect.anything());
+  });
+
+  it("every customer kind stops: the composer, the text-back and the document request too (mutation: stop only automation.* → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    for (const kind of ["staff.composer_sms", "voice.textback", "staff.document_request_sms", "automation.instant_reply"] as SmsKind[]) {
+      expect(await decideSms(DB, base({ kind })), kind).toEqual({ kind: "blocked", reason: "billing_paused" });
+    }
+  });
+
+  it("switch on and paused: operator.alert_sms and consent.help still clear, and the billing row is never read for them (mutation: block every kind → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    expect((await decideSms(DB, base({ kind: "operator.alert_sms", contactId: null }))).kind).toBe("clear");
+    expect((await decideSms(DB, base({ kind: "consent.help", contactId: null }))).kind).toBe("clear");
+    expect(db.readBillingStanding).not.toHaveBeenCalled();
+  });
+
+  it("switch on, not paused, or unbilled (null) → clears (mutation: block on a null standing → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAYING);
+    expect((await decideSms(DB, base())).kind).toBe("clear");
+    db.readBillingStanding.mockResolvedValue(null);
+    expect((await decideSms(DB, base())).kind).toBe("clear");
+    expect(db.readBillingStanding).toHaveBeenCalledTimes(2);
+  });
+
+  it("switch OFF and paused → clears, and readBillingStanding is never called (mutation: read regardless of the switch → FAILS)", async () => {
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    for (const v of [undefined, "0", "true", " 1"]) {
+      if (v === undefined) vi.unstubAllEnvs(); else vi.stubEnv("BILLING_ENFORCE", v);
+      expect((await decideSms(DB, base())).kind, String(v)).toBe("clear");
+    }
+    expect(db.readBillingStanding).not.toHaveBeenCalled();
+    expect(db.serviceDb).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable billing row blocks ledger_unavailable and logs it (mutation: fail open → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockRejectedValue(new Error("billing: standing read failed: timeout"));
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(sender.resolveSmsSender).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toMatch(/automation.sms_reminder for account acct_1 blocked, billing state unreadable/);
+  });
+
+  it("a suppressed account still answers suppressed_account first: the pause is read after it (mutation: read billing before the suppression flag → FAILS)", async () => {
+    on();
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "suppressed_account" });
+    expect(db.readBillingStanding).not.toHaveBeenCalled();
   });
 });
 

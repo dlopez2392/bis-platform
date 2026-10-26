@@ -1,6 +1,6 @@
 import {
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
-  getDueReviewRequestById, chooseBody, type DueReviewRequest, type ReviewRequestConfig, type RecipientLanguage,
+  getDueReviewRequestById, chooseBody, REVIEW_REQUEST_MAX_AGE_MS, type DueReviewRequest, type ReviewRequestConfig, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -86,6 +86,9 @@ export async function processReviewRequests(
       continue;
     }
 
+    // THE CLOCK (0026): the later of the meeting end and "Mark completed".
+    const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
+
     // Built only once the channel is known: the log subject's channel field
     // is the CONFIGURED one, never a guess.
     const subject: SmsHoldSubject = {
@@ -93,6 +96,8 @@ export async function processReviewRequests(
       channel: config.channel, smsKind: "automation.review_request", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
+      // M7a PR-4 (plan G7a, re-review I2): a pause hold never runs past the list's own age window.
+      pauseDeadline: new Date(anchor.getTime() + REVIEW_REQUEST_MAX_AGE_MS),
     };
 
     // RULE 0, before the gate, same as the follow-up pass: no resolvable
@@ -109,8 +114,6 @@ export async function processReviewRequests(
     }
 
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
-    // THE CLOCK (0026): the later of the meeting end and "Mark completed".
-    const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
     // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
     // nothing else (`skipBand`, the release contract in part B's spec at line
     // 16 and amendment B16): the band already said yes once, when this row was

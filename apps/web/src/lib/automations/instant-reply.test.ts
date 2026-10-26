@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(),
@@ -9,6 +9,8 @@ const dbMocks = vi.hoisted(() => ({
   // through the REAL gate, so the ledger and the number's country are mocked
   // here, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), recordCarrierBlock: vi.fn(),
+  // M7a PR-4: the gate's pause read (BILLING_ENFORCE on only), on the service client.
+  readBillingStanding: vi.fn(), serviceDb: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -69,6 +71,8 @@ beforeEach(() => {
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
+  dbMocks.readBillingStanding.mockResolvedValue(null);
+  dbMocks.serviceDb.mockReturnValue({ service: true });
   // Re-spying an already-spied method keeps the same spy and its call list;
   // cleared here so a line logged by an earlier test cannot fail a later one.
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
@@ -275,6 +279,26 @@ describe("sendInstantReply — the send", () => {
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "sent",
       { providerMessageId: "s1" }, "automation", "system");
     expect(errors().join("\n")).toContain("not stamped");
+  });
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe("instant reply — the non-payment pause (M7a PR-4, owner answer I6)", () => {
+  it("a paused account's instant reply is HELD to the next whole UTC hour with the pause reason, through the real gate: not texted, not stamped (mutation: let billing_paused fall to BLOCK_REASONS → blocked, FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.readBillingStanding.mockResolvedValue({
+      complimentary: false, pausedAt: "2026-09-01T08:00:00.000Z", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    });
+    expect(await sendInstantReply(input())).toEqual({ kind: "held" });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "instant_reply", subjectKey: "submission:sub_1", status: "held",
+      heldUntil: "2026-09-10T16:00:00.000Z", reason: "Held: the account is paused until a payment goes through",
+    }));
   });
 });
 

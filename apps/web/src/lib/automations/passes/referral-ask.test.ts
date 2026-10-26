@@ -664,3 +664,40 @@ describe("owner ruling D13a: the referral ask follows the staff's mark, not the 
     expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, sent: 1 });
   });
 });
+
+describe("the non-payment pause: the referral ask's own deadline (M7a PR-4, plan G7a, re-review I2)", () => {
+  // The pass's own gate re-applies the max age on every release, so past anchor + 85 h it is already skipped
+  // "No longer due" and never sent. What pauseDeadline adds: a pause hold never runs past anchor + 85 h, and a
+  // release AT that instant (the last one the gate admits) is skipped as no longer timely, not held again.
+  const DEADLINE = "2027-09-25T15:30:00.000Z";
+  let paused = true;
+  const pausedCtx = (now: Date): PassContext => ({
+    ...ctx(now),
+    sms: fakeSmsGate({ decide: () => (paused ? { kind: "blocked", reason: "billing_paused" } : null), send: (msg) => smsSend(msg) }),
+  });
+  const writes = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1] as { status: string; heldUntil?: string; reason?: string });
+  beforeEach(() => {
+    paused = true;
+    dbMocks.getDueReferralAskById.mockResolvedValue({ due: row({ completedAt: "2027-09-22T02:30:00.000Z" }) });
+  });
+
+  it("held by the pause 20 minutes before anchor + 85 h: held until that instant, not the next whole hour (mutation: REVIEW_REQUEST_MAX_AGE_MS instead → FAILS: skipped at once, 70 h past; no pauseDeadline → FAILS: held to 16:00Z)", async () => {
+    expect(await releaseReferralAsk(pausedCtx(new Date("2027-09-25T15:10:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-09-25T15:00:00.000Z" }))).toBe("held");
+    expect(writes()).toEqual([expect.objectContaining({ status: "held", heldUntil: DEADLINE, reason: "Held: the account is paused until a payment goes through" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("released at anchor + 85 h while still paused: skipped as no longer timely, never sent (mutation: no pauseDeadline on the subject → FAILS: held again to 16:00Z)", async () => {
+    expect(await releaseReferralAsk(pausedCtx(new Date(DEADLINE)), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-09-25T15:00:00.000Z" }))).toBe("skipped");
+    expect(writes()).toEqual([expect.objectContaining({ status: "skipped", reason: "Not sent: too late, the account was paused" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("inside its deadline it is held, then sent after the lift (mutation: pauseDeadline = now → FAILS: skipped at once)", async () => {
+    expect(await releaseReferralAsk(pausedCtx(new Date("2027-09-25T15:10:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-09-25T15:00:00.000Z" }))).toBe("held");
+    paused = false;
+    expect(await releaseReferralAsk(pausedCtx(new Date("2027-09-25T15:20:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-09-25T15:00:00.000Z" }))).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(writes().map((w) => w.status)).toEqual(["held", "sent"]);
+  });
+});

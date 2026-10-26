@@ -1,6 +1,6 @@
 import {
   readConsentState, recordCarrierBlock, readPhoneCountryFlag, readAccountTimezone,
-  isAccountOutboundSuppressed, type SupabaseClient,
+  isAccountOutboundSuppressed, readBillingStanding, serviceDb, type SupabaseClient,
 } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import { getSmsProvider } from "@/lib/sms";
@@ -10,7 +10,9 @@ import { withOptOut } from "@/lib/sms/opt-out";
 import { segmentsFor } from "@/lib/sms/segments";
 import { smsBillable } from "@/lib/billing/usage";
 import { loggableError } from "@/lib/loggable-error";
-import { SMS_KINDS, isSmsKind, type SmsKind } from "./classes";
+import { billingEnforced } from "@/lib/billing/enforce";
+import { billingVerdict } from "@/lib/billing/standing";
+import { SMS_KINDS, isSmsKind, smsStopsWhilePaused, type SmsKind } from "./classes";
 import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
 
 /**
@@ -31,6 +33,13 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  *      what covers every send path through this gate, present and future,
  *      not only the scheduled passes `loadSendableRows` already filters
  *      before a row is even returned;
+ *   3b. the non-payment pause (M7a PR-4, plan G7), only with BILLING_ENFORCE
+ *      on: a kind that texts a CUSTOMER (`smsStopsWhilePaused`: every kind
+ *      but the owner's alerts and the STOP/START/HELP answers) on a paused
+ *      account → blocked `billing_paused`, before the A2P read. The billing
+ *      row is read on the SERVICE client (a Staff caller's RLS client reads
+ *      none, so it would look unbilled); an automation refused here is HELD
+ *      by holdOrSend (G7a), not dropped;
  *   4. `resolveSmsSender`: A2P approved and a live number, else blocked
  *      with its reason (its own read error THROWS, as it always has, into
  *      each caller's existing catch);
@@ -54,7 +63,7 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  * `ledger_unavailable`, logged through `loggableError`, never a send. (A
  * zone that was read but cannot be resolved still takes the fallback zone:
  * that is the account's data, not an outage.) The suppression read at step 3
- * fails closed the same way.
+ * and the billing read at step 3b fail closed the same way.
  */
 export type SmsRequest = {
   accountId: string;
@@ -94,7 +103,9 @@ export type SmsBlockReason =
   | "stop_confirmation_stale"
   /** D-061: `accounts.outbound_suppressed` is true. Distinct from `stopped`/
    *  `held`, which are about ONE address; this is about the whole account. */
-  | "suppressed_account";
+  | "suppressed_account"
+  /** M7a PR-4: the account is paused for non-payment (BILLING_ENFORCE on). */
+  | "billing_paused";
 
 /** Spec §4.2: the one stop confirmation goes within five minutes of the stop
  *  (today's 47 CFR 64.1200(a)(12) presumes a confirmation sent within five
@@ -194,6 +205,20 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
   } catch (e) {
     console.error(`consent gate: ${req.kind} for account ${req.accountId} blocked, suppression flag unreadable: ${loggableError(e)}`);
     return { kind: "blocked", reason: "ledger_unavailable" };
+  }
+
+  // 3b. The non-payment pause (M7a PR-4, plan G7). Only with the switch on,
+  // so with it off nothing here is read. On the SERVICE client (a Staff
+  // caller's RLS client reads no billing row). FAILS CLOSED like step 3; an
+  // automation refused here is HELD by holdOrSend (G7a), not dropped.
+  if (billingEnforced() && smsStopsWhilePaused(req.kind)) {
+    try {
+      const standing = await readBillingStanding(serviceDb(), req.accountId);
+      if (billingVerdict(standing, true, req.now ?? new Date()).paused) return { kind: "blocked", reason: "billing_paused" };
+    } catch (e) {
+      console.error(`consent gate: ${req.kind} for account ${req.accountId} blocked, billing state unreadable: ${loggableError(e)}`);
+      return { kind: "blocked", reason: "ledger_unavailable" };
+    }
   }
 
   const sender = await resolveSmsSender(db, req.accountId);

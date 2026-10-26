@@ -1,6 +1,7 @@
 import {
   readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb,
-  EMAIL_SUPPRESSION_METHODS, isAccountOutboundSuppressed, getInboundSettings, ensureReplyToken, type SupabaseClient,
+  EMAIL_SUPPRESSION_METHODS, isAccountOutboundSuppressed, getInboundSettings, ensureReplyToken, readBillingStanding,
+  type SupabaseClient,
 } from "@bis/db";
 import { replyAddressFor } from "@/lib/email/inbound/address";
 import { emailLedgerAddress } from "@bis/db/email-address";
@@ -11,7 +12,11 @@ import { configuredOrigin } from "@/lib/email/origin";
 import { escapeHtml, UNSUBSCRIBE_MARKER } from "@/lib/email/templates/shell";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
-import { EMAIL_KINDS, isEmailKind, emailReadsLedger, FOOTER_ADDRESS_KINDS, type EmailKind, type OperatorEmailKind } from "./classes";
+import { billingEnforced } from "@/lib/billing/enforce";
+import { billingVerdict } from "@/lib/billing/standing";
+import {
+  EMAIL_KINDS, isEmailKind, emailReadsLedger, emailStopsWhilePaused, FOOTER_ADDRESS_KINDS, type EmailKind, type OperatorEmailKind,
+} from "./classes";
 import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
 import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
 
@@ -35,6 +40,12 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *      including operator mail, since a suppressed account's own owner
  *      alerts go to a demo address too; the two kinds with no account at all
  *      (the agency roll-up) have nothing to check;
+ *   2c. the non-payment pause (M7a PR-4, plan G8), only with BILLING_ENFORCE
+ *      on: an `automation.*` kind on a paused account → blocked
+ *      `billing_paused` (holdOrSend HOLDS it, G7a). Every other kind keeps
+ *      going: booking and form receipts (owner answer Q6), operator mail,
+ *      staff-typed mail and the document request email. The billing row is
+ *      read on the SERVICE client, never the caller's;
  *   3. an informational or marketing kind — automated mail, what an
  *      unsubscribe stops (decision 7) — reads the ledger: stopped → blocked
  *      `stopped`, held → blocked `held`. Customer-initiated, staff-typed and
@@ -59,7 +70,7 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *      staff-typed mail have the marker removed and carry no headers;
  *   7. the send, with the send fields ONLY.
  *
- * FAILS CLOSED: a ledger, zone or suppression-flag read error is blocked
+ * FAILS CLOSED: a ledger, zone, suppression-flag or billing read error is blocked
  * `ledger_unavailable`, logged through `loggableError`, never a send. Never
  * logs a token or an address.
  */
@@ -89,7 +100,9 @@ export type EmailBlockReason =
   /** D-061: `accounts.outbound_suppressed` is true. Distinct from `suppressed`
    *  (D-016's address-level bounce/complaint fact): this is about the whole
    *  account, not one address. */
-  | "suppressed_account";
+  | "suppressed_account"
+  /** M7a PR-4: the account is paused for non-payment (BILLING_ENFORCE on). */
+  | "billing_paused";
 
 export type EmailSendResult =
   | { kind: "sent"; providerMessageId: string }
@@ -257,6 +270,19 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     } catch (e) {
       console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, suppression flag unreadable: ${loggableError(e)}`);
       return { kind: "blocked", reason: "ledger_unavailable" };
+    }
+
+    // 2c. The non-payment pause (M7a PR-4, plan G8): only with the switch on,
+    // only the automation kinds, on the SERVICE client (a Staff caller's RLS
+    // client reads no billing row). Fails closed like the check above.
+    if (billingEnforced() && emailStopsWhilePaused(req.kind)) {
+      try {
+        const standing = await readBillingStanding(serviceDb(), req.accountId);
+        if (billingVerdict(standing, true, now).paused) return { kind: "blocked", reason: "billing_paused" };
+      } catch (e) {
+        console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, billing state unreadable: ${loggableError(e)}`);
+        return { kind: "blocked", reason: "ledger_unavailable" };
+      }
     }
   }
 

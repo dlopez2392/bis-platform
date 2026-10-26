@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   updateMessageStatus: vi.fn(), recordUsage: vi.fn(), createContact: vi.fn(), fillContactBlanksReport: vi.fn(), insertAiActs: vi.fn(),
@@ -18,6 +18,8 @@ const dbMocks = vi.hoisted(() => ({
   isAccountOutboundSuppressed: vi.fn(),
   // S-47e (plan Task 8): who is on the caller ID, and the shared number's one holding record.
   listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),
+  // M7a PR-4: the gate's pause read (BILLING_ENFORCE on only), on the service client. Unbilled by default.
+  readBillingStanding: vi.fn(), serviceDb: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -74,11 +76,15 @@ beforeEach(() => {
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.callerInTouchSince.mockResolvedValue(false);
   dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
+  dbMocks.readBillingStanding.mockResolvedValue(null);
+  dbMocks.serviceDb.mockReturnValue(DB);
   sms.isFake = false;
   sms.redirectTo = undefined;
   sms.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 async function prepared(over: Partial<TextbackRequest> = {}) {
   const outcome = await prepareTextback(DB, "a1", request(over));
@@ -179,6 +185,36 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(logWrites()).toEqual([expect.objectContaining({
       source: "textback", subjectKey: "call:call1", status: "skipped", reason: "This account isn't sending yet",
     })]);
+  });
+
+  it("a paused account's text-back is HELD to the next whole UTC hour with the pause reason, never dropped (M7a PR-4, owner answer I6, through the real gate; mutation: let billing_paused fall to recordBlocked → skipped, FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.readBillingStanding.mockResolvedValue({
+      complimentary: false, pausedAt: "2026-10-01T08:00:00.000Z", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    });
+    const at = new Date(NOON.getTime() + 20 * 60_000);   // 12:20 CDT; the next whole UTC hour is 18:00Z
+    const outcome = await prepareTextback(DB, "a1", request({ now: at }));
+    expect(outcome).toMatchObject({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "held" });
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "held",
+      heldUntil: "2026-10-06T18:00:00.000Z", reason: m["automations.reason.heldBillingPaused"],
+      payload: expect.objectContaining({ missedAt: at.toISOString() }),
+    })]);
+  });
+
+  it("a paused account's text-back for a call with no row cannot be held: nothing written, the console says so", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.readBillingStanding.mockResolvedValue({
+      complimentary: false, pausedAt: "2026-10-01T08:00:00.000Z", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    });
+    const outcome = await prepareTextback(DB, "a1", request({ callId: null }));
+    expect(outcome.notSent).toBe("unheld");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toMatch(/the account is paused, and a call with no row cannot be held/);
   });
 
   it("S-09 PR 2: a Spanish caller with our default gets our Spanish; the gate is told es", async () => {

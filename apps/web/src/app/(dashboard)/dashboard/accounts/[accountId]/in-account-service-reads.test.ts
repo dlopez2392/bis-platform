@@ -185,6 +185,9 @@ const ALLOWED: Record<string, Reason> = {
   "lib/branding/tenant-theme-reader.ts": "configuration",
   "lib/consent/email-context.ts": "proven-target",
   "lib/consent/email-gate.ts": "proven-target",
+  // M7a PR-4 (plan G7, M9): the account's billing pause flag, read on the service client so a Staff composer
+  // cannot read it as unbilled (0066's account_billing_owner_read); one row, keyed by the send's own account.
+  "lib/consent/gate.ts": "configuration",
   "lib/consent/ledger-db.ts": "proven-target",
   "lib/consent/texts-context.ts": "proven-target",
   // addContactByHand (moved from createContactAction; also the Relationships dialog's "New person",

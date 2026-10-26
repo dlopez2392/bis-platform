@@ -10,6 +10,8 @@ import { SmsDeferred, SmsBlocked, LEDGER_RETRY_MS, type AutomationBlockReason } 
 import { EmailNotSent, type EmailBlockReason } from "@/lib/consent/email-gate";
 import type { PassContext } from "./context";
 import { closureVerdict, CLOSURE_REASONS, type ClosureState } from "./closures";
+import { pauseHold, pauseHoldInForce } from "./pause-hold";
+import { billingEnforced } from "@/lib/billing/enforce";
 import { m } from "@/lib/messages";
 
 /**
@@ -22,6 +24,11 @@ import { m } from "@/lib/messages";
  *                         the closure's window ends or the deadline, skipped once
  *                         the deadline has passed, held LEDGER_RETRY_MS when the
  *                         status cannot be read (closures.ts closureVerdict).
+ *     a pause hold in  → M7a PR-4 (owner answer I6, plan G7a), switch on only:
+ *     force               the subject's own log row is `held` with the pause
+ *                         reason and its held_until is still ahead → "held",
+ *                         on that one read, without asking the gate. Runs
+ *                         after the closure and the hours, before send().
  *     outside the hours → write (or re-write) the held row, held_until = the
  *                         instant they open, return "held". The pass does NOT
  *                         stamp; the release pass brings the subject back.
@@ -33,6 +40,12 @@ import { m } from "@/lib/messages";
  *                         the window" exemption is gone (decision 4).
  *     otherwise         → send(); write `sent`; return "sent".
  *                         send() throwing SmsDeferred → held, as above;
+ *                         SmsBlocked or EmailNotSent `billing_paused` (the
+ *                         account is paused, either gate) → HELD, never
+ *                         dropped: until the next whole UTC hour or the
+ *                         subject's pause deadline, whichever is first;
+ *                         skipped ("too late, the account was paused") once
+ *                         that deadline has passed (pause-hold.ts);
  *                         SmsBlocked → skipped with the gate's reason;
  *                         EmailNotSent → held, skipped or failed by the email
  *                         gate's answer (consent PR-3);
@@ -94,6 +107,10 @@ export type HoldSubject = LogSubject & {
    *  nudge follow a staff mark that is proof of what happened, and an ended closure lets them send (SD6), as it
    *  does the before-appointment recipes. Read only with `appointmentAt`. */
   skipIfWasClosed?: true;
+  /** I6 (M7a PR-4, plan G7a): when a pause-held subject is no longer timely; a pause hold never runs past it,
+   *  and once it has passed the send is skipped, not held again. Falls back to `deadline`. Set by the recipes
+   *  whose list carries a max age (review request, referral ask, no-show nudge, quote follow-up). */
+  pauseDeadline?: Date | null;
 };
 
 /** A subject that texts. Its `smsKind` is the ONE literal that decides both
@@ -121,6 +138,11 @@ export const REASONS = {
   /** The re-hold age cap (orchestrator, 2026-09-26; RETRY_MAX_AGE_MS). */
   tooLongAfterCall: m["automations.reason.tooLongAfterCall"],
   tooLongAfterWriteIn: m["automations.reason.tooLongAfterWriteIn"],
+  /** M7a PR-4 (owner answer I6): the account is paused for non-payment, so the
+   *  send waits (pause-hold.ts); and the one it becomes once the subject's
+   *  pause deadline has passed. */
+  heldBillingPaused: m["automations.reason.heldBillingPaused"],
+  skippedBillingPaused: m["automations.reason.skippedBillingPaused"],
   /** The consent gate's refusals (lib/consent/gate.ts), in the words the
    *  client reads on the Activity page. */
   textsStopped: m["automations.reason.textsStopped"],
@@ -261,6 +283,9 @@ export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
   unconfirmed_number: REASONS.numberUnconfirmed,
   window_after_deadline: REASONS.windowAfterDeadline,
   suppressed_account: REASONS.accountSuppressed,
+  // holdOrSend HOLDS this one before it could be read here (G7a); the words are
+  // for a path that logs a refusal itself (the document request).
+  billing_paused: REASONS.skippedBillingPaused,
 };
 
 /** Every refusal the EMAIL gate can hand an automation, as the Activity page
@@ -272,6 +297,8 @@ export const EMAIL_BLOCK_REASONS: Record<Exclude<EmailBlockReason, "ledger_unava
   suppressed: REASONS.suppressedEmail,
   window_after_deadline: REASONS.windowAfterDeadline,
   suppressed_account: REASONS.accountSuppressed,
+  // As BLOCK_REASONS: holdOrSend holds it first (G7a).
+  billing_paused: REASONS.skippedBillingPaused,
 };
 
 function hoursRuleOf(s: HoldSubject): HoursRule {
@@ -341,9 +368,27 @@ export async function holdOrSend(
     return "held";
   }
 
+  // G7a (re-review I1): a pause hold still in force answers on its own log
+  // row, so a held subject seen on every tick costs one log read and no gate
+  // read. Only the pause reason short-circuits; any other hold goes on as
+  // today. Switch off: no read at all.
+  if (billingEnforced()) {
+    const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+    if (pauseHoldInForce(existing, ctx.now)) return "held";
+  }
+
   try {
     await send();
   } catch (e) {
+    // I6 / G7a: a paused account's automation is held, not dropped.
+    const pausedRefusal = (e instanceof SmsBlocked && e.reason === "billing_paused")
+      || (e instanceof EmailNotSent && e.result.kind === "blocked" && e.result.reason === "billing_paused");
+    if (pausedRefusal) {
+      const v = pauseHold(s.pauseDeadline ?? s.deadline, ctx.now);
+      if (v.kind === "skipped") { await logSkipped(ctx, s, REASONS.skippedBillingPaused); return "skipped"; }
+      await writeHeld(ctx, s, v.until, zone, REASONS.heldBillingPaused);
+      return "held";
+    }
     if (e instanceof SmsDeferred) {
       await writeHeld(ctx, s, e.until, zone, e.why === "ledger_unavailable" ? REASONS.ledgerRetry : undefined);
       return "held";
