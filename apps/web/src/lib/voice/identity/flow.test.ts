@@ -233,6 +233,11 @@ describe("messageNeedsNameCheck (take_message, spec 5.10.5, plan P6)", () => {
   it("otherwise -> true", () => {
     expect(messageNeedsNameCheck(emptyCallState(), "+19562921696", {})).toBe(true);
   });
+  // Owner decision 2026-10-26: a message on a locked call files on no customer, so a name would pick nothing.
+  it("a locked call, by misses or by cannot -> false: the name would decide nothing (mutation: drop the lock check -> FAILS)", () => {
+    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "misses"), "+19562921696", {})).toBe(false);
+    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "cannot"), "+19562921696", {})).toBe(false);
+  });
 });
 
 describe("messageNameStep", () => {

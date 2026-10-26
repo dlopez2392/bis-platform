@@ -688,7 +688,8 @@ export async function runTool(
       }
 
       const next = withBooking({ ...state, contactId }, {
-        id: bookingId, contactName: name,
+        id: bookingId, contactName: name, contactId,
+        ...(typeof args?.forSomeoneElse === "boolean" ? { forSomeoneElse: args.forSomeoneElse } : {}),
         startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString(),
       });
       return { state: next, result: withDroppedNote({
@@ -820,7 +821,7 @@ export async function runTool(
       // not silently depend on that unrelated mechanism holding.
       const next = withServed(withBooking(
         { ...state, bookings: state.bookings.filter((b) => b.id !== bookingId) },
-        { id: newId, contactName: "", startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
+        { id: newId, contactName: "", contactId: old.contact_id, startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
       ), "rescheduled");
       return { state: next, result: {
         ok: true, bookingId: newId,

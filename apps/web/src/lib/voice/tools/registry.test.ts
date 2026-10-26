@@ -767,7 +767,8 @@ describe("reschedule / cancel", () => {
     // The AI did this, not a signed-in user.
     expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
-    expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
+    // The replacement is the old booking's contact's (call 42ed4822 follow-up; mutation: drop contactId -> FAILS).
+    expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked", contactId: "ct1" });
     expect(state.served).toEqual(["rescheduled"]);
   });
   // D-035: the new row names the one it replaces, so the dashboard, the
@@ -2184,6 +2185,16 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
   });
 
+  // Production call 42ed4822 (Ana and Beto on one call): finishCall can only tell a two-person call from a
+  // one-person call if each mirrored booking remembers whose it is.
+  it("each mirrored booking carries the contact it landed on, so a call for two people is two contacts (mutation: drop contactId from the mirror -> FAILS)", async () => {
+    on(ANA, BETO);
+    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" }).mockResolvedValueOnce({ id: "bk2", cancelToken: "t2" });
+    const first = await book(emptyCallState(), { name: "Ana Prueba" });
+    const second = await book(first.state, { name: "Beto Prueba" });
+    expect(second.state.bookings.map((b) => [b.id, b.contactId])).toEqual([["bk1", "ct1"], ["bk2", "ct2"]]);
+  });
+
   it("the same with an email: still that record, and its blanks are filled once (decision 19, on the caller ID)", async () => {
     on(ANA, BETO);
     await runTool(emptyCallState(), ctx, "book_appointment", { startsAt: AT, name: "Beto Prueba", email: "beto@example.com" });
@@ -2229,6 +2240,9 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     const mine = await book(emptyCallState(), { name: "Daniel Lopez", forSomeoneElse: false });
     expect(mine.result).toMatchObject({ ok: true });
     expect(bookedOn()).toEqual(["ct1"]);
+    // The mirror keeps the caller's answer and the name as said, so finishCall knows a later "Daniel Lopez"
+    // message is Dan's (review of 1406a5b1, item 1; mutation: drop forSomeoneElse from the mirror -> FAILS).
+    expect(mine.state.bookings[0]).toMatchObject({ contactId: "ct1", contactName: "Daniel Lopez", forSomeoneElse: false });
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     dbMocks.createContact.mockResolvedValue({ id: "ct6", existing: false });
     await book(emptyCallState(), { name: "Ana Prueba", forSomeoneElse: true });
@@ -2434,6 +2448,21 @@ describe("S-47e: capture_lead asks whose it is, once (plan Task 7)", () => {
     expect(again.state.leads[0]).not.toHaveProperty("forSomeoneElse");
   });
 
+  // Owner ruling 2026-10-26 (b): a lead on a locked call files on no customer (finish-call.ts), so the
+  // whose-is-it question would decide nothing.
+  it("a locked call: the lead is recorded at once, with no read and no whose-is-it ask (mutation: drop the lock check in leadNeedsWhoseCheck -> FAILS)", async () => {
+    on(DAN);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla García" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla García" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    dbMocks.listContactsOnNumber.mockClear();
+    const r = await runTool(locked, ctx, "capture_lead", { fields: LEAD });
+    expect(r.result).toMatchObject({ ok: true });
+    expect(r.state.leads).toHaveLength(1);
+    expect(r.state.identity.leadWhoseAsked).toBe(false);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+
   it("an answered forSomeoneElse is recorded with the lead, with no read", async () => {
     on(DAN);
     const r = await runTool(emptyCallState(), ctx, "capture_lead", { fields: LEAD, forSomeoneElse: true });
@@ -2501,5 +2530,20 @@ describe("S-47e: take_message asks for a name on a shared number (plan Task 7)",
     err.mockRestore();
     expect(failed.state.messages).toHaveLength(1);
     expect(lines.some((l) => l.startsWith("voice take_message call-9: number read failed"))).toBe(true);
+  });
+
+  // Owner decision 2026-10-26: on a locked call the message files on no customer (finish-call.ts), so the
+  // name ask would pick nothing; the caller who just failed the check twice is not asked for a name again.
+  it("a locked call on a shared number records the message at once, with no read and no name ask (mutation: drop the lock check in messageNeedsNameCheck -> FAILS)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla García" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla García" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    dbMocks.listContactsOnNumber.mockClear();
+    const msg = await runTool(locked, ctx, "take_message", { body: "Please call me about my appointment" });
+    expect(msg.result).toEqual({ ok: true });
+    expect(msg.state.messages).toHaveLength(1);
+    expect(msg.state.identity.messageNameAsked).toBe(false);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
   });
 });

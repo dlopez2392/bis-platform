@@ -7,6 +7,13 @@ import type { CallOutcome, TranscriptEvent } from "@bis/db";
 export type MirroredBooking = {
   id: string; contactName: string; startsAt: string; endsAt: string;
   status?: "booked" | "cancelled";
+  /** The contact the booking landed on. finishCall files a call whose bookings landed on two or more people on
+   *  none of them (call 42ed4822). Absent on a mirror that did not know it (the corpus stub). */
+  contactId?: string;
+  /** book_appointment's own forSomeoneElse answer (plan P27); absent when not asked or not answered. false
+   *  ("for me") is NOT a waiver for later names (finish-call.ts): it only makes a later lead the caller said is
+   *  for someone else a second person, whatever its name. */
+  forSomeoneElse?: boolean;
 };
 export type CapturedLead = {
   fields: Record<string, string>;

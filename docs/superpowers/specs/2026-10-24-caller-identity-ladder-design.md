@@ -151,8 +151,12 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   (decision 19's purpose); a name that does not agree never makes a record silently: `book_appointment` and
   `capture_lead` carry a structured `forSomeoneElse`, and Sofía asks "Is this appointment for you or for
   someone else?". `false` is that contact, whatever the name (nicknames); `true` is a new contact (S21).
+  `false` lands THAT write on the contact and nothing more (owner ruling 2026-10-26): a later lead or message
+  on the call must still agree with the name booked under or the stored name, or the call files on no
+  customer (5.10.3 step 1).
   A booking writes nothing until it is answered; a lead asks once, and a lead still unanswered after the call
-  is filed on no customer (5.10.3).
+  is filed on no customer (5.10.3). Exception (owner ruling 2026-10-26): on a LOCKED call (5.4.1) a lead
+  never asks, because it files on no customer whatever the answer (5.10.3 step 0); a booking still asks.
 - **S21 A name that matches nobody on a shared number makes a new contact,** named and on that number.
   That is not ambiguous: it is a new person in the household. It is made through `createContact` with
   `matchBy: "email_only"` (5.10.1), so an email on file elsewhere on the account still wins, as today, and
@@ -160,7 +164,9 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
 - **S22 `take_message` asks for a name on a shared number.** With nobody confirmed and no name, it refuses
   once and asks for the first and last name, or `nameDeclined: true` (the `emailDeclined` pattern that the
   2026-08-28 calls proved works, `registry.ts:390-404`). A declined or ambiguous name leaves the message on
-  the call (its card, the alert and the To-do) and in no customer's thread.
+  the call (its card, the alert and the To-do) and in no customer's thread. Exception (owner decision
+  2026-10-26): on a LOCKED call it never asks; the message files on no customer whatever name it carries
+  (5.10.3 step 0).
 - **S23 A second booking in one call is picked again.** Today `book_appointment` reuses `state.contactId`
   from the call's first booking (`registry.ts:442`), so "and one for my husband" lands on the wife. Every
   booking with a number runs the picker (one indexed read, after the first booking's own insert, so the
@@ -804,11 +810,36 @@ their own comments) run only where their record was picked by this rule.
 
 The new order:
 
-1. `state.contactId` (308): an in-call booking, already picked by 5.10.1. Amended (Task 8 review M1, orchestrator
-   ruling): that id is also set by a booking that lost its slot (`SlotTakenError`), so it YIELDS when the lead's
-   `fullName` (or, with no lead, the last message's `name`, unless declined) does not agree with that record's
-   stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule); resolution then continues at
-   step 3. No name given keeps it. "Booked Beto, then 'this is Ana, take a message'" files on Ana, never Beto.
+0. (Added, owner rulings 2026-10-26, after the production test calls 956c8f8a and 42ed4822.) Two checks run
+   first, on the call state alone, and each answers null (step 5: no customer, nothing made, matched or
+   filled):
+   - A call whose identity check LOCKED (5.4.1), by misses OR by "cannot" (an insurance account with no email
+     on file, or too many contacts on the number), and that took a message or a lead, whatever name it
+     carries and whoever is on the number. The "cannot" lock is kept on purpose (owner ruling 2026-10-26): a
+     caller nobody could verify must not have a message land on a real customer's record either. The identity To-do (5.6) is the team's hand-off; staff can make the person
+     from the call page. In the call, `take_message` no longer asks for a name (5.10.5) and `capture_lead` no
+     longer asks "for you or someone else?" on a locked call, because the answer would decide nothing. A
+     locked call that only booked follows step 1 (S18).
+   - A call that touched two or more DIFFERENT people, by bookings, a lead or a message in any mix: two
+     booked contacts (every mirrored booking's `contactId`, any status, plus `state.contactId`, so a booking
+     that lost its slot counts), two names given to leads or messages that do not agree (`namesAgree`,
+     `identity/record.ts`), or a name that is not the booked contact's (step 1).
+     Each person's own booking is already on their own record.
+1. `state.contactId` (308), or with none the one contact a mirrored booking landed on (a reschedule mirrors
+   its contact without setting `state.contactId`): an in-call booking, already picked by 5.10.1. No name given
+   keeps it. A name is the booked person's, and keeps it, ONLY when (review of 1406a5b1, item 1, S20) it agrees
+   (`namesAgree`) with the name one of that person's bookings on this call was made under
+   (`MirroredBooking.contactName`: "Daniel Lopez" booked onto the stored "Dan Lopez", or the same
+   speech-to-text drift twice), or with the stored name by `sameNameAsRecord` (`identity/record.ts`, the
+   booking's own rule). A booking answered "for me" (`forSomeoneElse: false`) is NOT a waiver (orchestrator
+   ruling 2026-10-26, fix-review of 7245d21e): it only lands that booking on the record, and a later name must
+   still agree, so "Danny Lopez" after a "Daniel Lopez" booking files on no customer. And after a "for me"
+   booking, a lead the caller explicitly said is for someone else (`forSomeoneElse: true`) is a second person
+   whatever its name, so the call files on no customer (orchestrator ruling 2026-10-26). Amended (owner ruling 2026-10-26, replacing the Task 8 review M1 ruling's yield to
+   the named person): a name that does NOT agree is a second person, so the call files on no customer.
+   "Booked Beto, then 'this is Ana, take a message'" files on no customer, neither Ana nor Beto; so does a
+   booking that lost its slot (`SlotTakenError`, which also sets `state.contactId`) followed by another
+   person's name.
 2. (Amended, R2 finding 9: no confirmed-first step. The confirmation counts inside the picker, only on the
    caller-ID number, exactly as for a booking.)
 3. A lead (313-350): the number is `e164Of(spokenPhone(fields.callbackNumber, callerNumber))`; the picker
@@ -858,7 +889,9 @@ E8 decides which:
 - `registry.ts:339-347`: when there is a caller ID, nothing is confirmed, no `name` and no `nameDeclined`,
   it reads `listContactsOnNumber(callerNumber)`; two or more real contacts → `{ ok: false, error: "Before you
   take the message, ask for their first and last name, then call take_message again with name. If they
-  would rather not say, call it again with nameDeclined: true." }`. One or none → recorded as today. A read
+  would rather not say, call it again with nameDeclined: true." }`. One or none → recorded as today. A
+  LOCKED call (owner decision 2026-10-26, `messageNeedsNameCheck` in `identity/flow.ts`) → recorded at once,
+  with no read and no ask: its message files on no customer (5.10.3 step 0), so a name would pick nothing. A read
   failure → recorded as today (a message is never lost on our outage; `finishCall` decides its record later,
   and fails closed there). Known limit (P6): a message refused with MESSAGE ASK NAME whose `take_message` is
   never called again is not recorded; the call row, transcript and staff alert remain.
@@ -1114,7 +1147,14 @@ Unit, route and db; no e2e (phone calls are tested by real calls, section 8).
 - **`take_message` (5.10.5):** on a shared number with nothing confirmed, no name and no `nameDeclined`, it
   refuses once with the literal sentence and records nothing; with `name` or `nameDeclined` it records the
   message with them; a single-contact number records it as today, with no refusal; a confirmed caller is
-  never asked (no read); a read failure records the message.
+  never asked (no read); a read failure records the message; a LOCKED call is never asked (no read), and
+  `capture_lead` on a locked call never asks "for you or someone else?" (owner rulings 2026-10-26; mutation:
+  drop the lock check in `messageNeedsNameCheck` / `leadNeedsWhoseCheck` → FAILS).
+- **The locked and two-people rules (owner rulings 2026-10-26, `finish-call.test.ts`):** two misses then a
+  message or a lead in the failed name make no contact and file on no customer, the identity To-do filed
+  once; a "cannot" lock the same; two booked contacts, a lead and a message for two names that do not agree,
+  or a booking then another person's name file on no customer, a booking answered "for me" included; a name
+  matching the booking's stored name or the name it was booked under stays on the booked person.
 - **The text-back (E8):** on a shared unconfirmed number, from `finishCall` and from `contactForCallerId`
   both, the text threads on the holding record, never a household member (red first: today's phone pick
   lands on one); the second missed call reuses it (mutation: create every time → FAILS); the call row gets

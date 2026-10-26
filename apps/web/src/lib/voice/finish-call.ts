@@ -11,7 +11,7 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { readCandidates, isShared } from "./identity/candidates";
-import { pickRecordOnNumber, sameNameAsRecord } from "./identity/record";
+import { pickRecordOnNumber, sameNameAsRecord, namesAgree } from "./identity/record";
 import { identityTodoTitle } from "./identity/todo";
 import type { ResolvedTextbackContact } from "./textback";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
@@ -293,13 +293,22 @@ async function resolveOpenOpportunity(
   }
 }
 
-/** S-47e (Task 8 review M1): the name the record below is chosen by: the lead's, or with no lead the last
- *  message's when the caller did not decline it. Undefined when none was given. */
-function nameSaidAfter(state: CallState): string | undefined {
-  const lead = state.leads[0];
-  if (lead) return lead.fields?.fullName;
-  const msg = state.messages[state.messages.length - 1];
-  return msg && !msg.nameDeclined ? msg.name : undefined;
+/** Owner ruling 2026-10-26 (a): the contacts this call touched by booking: every mirrored booking's contact,
+ *  whatever its status, and the call's own record (`state.contactId`, set by a booking, a booking that lost its
+ *  slot included). */
+function contactsBooked(state: CallState): Set<string> {
+  const ids = new Set(state.bookings.flatMap((b) => (b.contactId ? [b.contactId] : [])));
+  if (state.contactId) ids.add(state.contactId);
+  return ids;
+}
+
+/** Every name the caller gave this call's leads, and its messages when not declined. */
+function namesSaid(state: CallState): string[] {
+  const said = [
+    ...state.leads.map((l) => l.fields?.fullName),
+    ...state.messages.map((m) => (m.nameDeclined ? undefined : m.name)),
+  ];
+  return said.filter((n): n is string => typeof n === "string" && n.trim().length > 0);
 }
 
 /**
@@ -322,18 +331,46 @@ function nameSaidAfter(state: CallState): string | undefined {
  * message's name picks, a new person the name makes, or NOBODY: never whichever record the phone dedupe finds.
  * A read failure throws to the lead-treatment leg's catch, which writes nothing.
  *
- * S-47e (spec 5.10.3 step 1; Task 8 review M1): `state.contactId` is also set by a booking that lost its slot
- * (SlotTakenError), so "this is Ana, take a message" after booking Beto would land on Beto. The call's record
- * therefore yields when the lead's name (or, with no lead, the last message's name) does not agree with its
- * stored name (sameNameAsRecord, the booking's own rule), and the resolution below runs. No name keeps it.
+ * Owner rulings 2026-10-26, checked first and decided on the state, never on what Sofía was told to say. Each
+ * returns NO customer: the call row keeps no contact and the summary goes on no customer's thread; nothing is
+ * made, matched or filled. The call card, the alert and the To do still go.
+ * (b) Production call 956c8f8a: a call whose identity check LOCKED, by misses or by "cannot" (kept on purpose:
+ *     an unverifiable caller's words never land on a real customer), and that took a message or a lead,
+ *     whatever name it carries and whoever is on the number. The identity To do (filed below, contactId null) is the
+ *     team's hand-off, and staff can make the person from the call page. A locked call that only booked
+ *     follows today's rules (S18).
+ * (a) Call 42ed4822 and its follow-ups: a call that touched two or more DIFFERENT people, by bookings, a lead or
+ *     a message in any mix. Two booked contacts (any status, the call's record included, so a booking that lost
+ *     its slot counts); two names given that do not agree (namesAgree); or a name that is not the booked
+ *     person's: neither the name one of their bookings was made under nor their stored name (sameNameAsRecord,
+ *     the booking's own rule); a booking answered "for me" is not a waiver. This replaces spec 5.10.3 step 1's
+ *     yield ("Booked Beto, then 'this is Ana, take a message'" filed on Ana): it now files on no customer. Each
+ *     person's own booking is already on their own record. No name given keeps the booked contact.
  */
 async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
-  if (state.contactId) {
-    const said = nameSaidAfter(state);
-    if (!said?.trim()) return state.contactId;
-    const record = (await getContact(ctx.db, ctx.accountId, state.contactId)) as
+  if (state.identity.locked !== null && (state.messages.length > 0 || state.leads.length > 0)) return null;
+  const booked = contactsBooked(state);
+  if (booked.size >= 2) return null;
+  const said = namesSaid(state);
+  if (said.some((a, i) => said.slice(i + 1).some((b) => !namesAgree(a, b)))) return null;
+  const own = [...booked][0];
+  if (own) {
+    // A name is the booked person's ONLY when it agrees with the name one of their bookings on this call was made
+    // under (review of 1406a5b1, item 1: "Daniel Lopez" booked onto the stored "Dan Lopez", or a speech-to-text
+    // drift both times) or, failing that, with their stored name. Anything else is a second person.
+    // Orchestrator ruling 2026-10-26 (fix-review of 7245d21e): a booking answered "for me" is NOT a waiver. It
+    // lands that booking on the record and nothing more; a later name must still agree.
+    const ownBookings = state.bookings.filter((b) => b.contactId === own);
+    // Orchestrator ruling 2026-10-26: after a "for me" booking, a lead the caller explicitly said is for someone
+    // else is a second person, whatever its name.
+    if (ownBookings.some((b) => b.forSomeoneElse === false) && state.leads.some((l) => l.forSomeoneElse === true)) {
+      return null;
+    }
+    const unmatched = said.filter((n) => !ownBookings.some((b) => namesAgree(n, b.contactName)));
+    if (unmatched.length === 0) return own;
+    const record = (await getContact(ctx.db, ctx.accountId, own)) as
       { first_name: string | null; last_name: string | null } | null;
-    if (sameNameAsRecord(said, record)) return state.contactId;
+    return unmatched.every((n) => sameNameAsRecord(n, record)) ? own : null;
   }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];
