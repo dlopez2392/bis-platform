@@ -147,12 +147,47 @@ describe("the client Billing page", () => {
   });
 
   it("an ended-plan pause shows its own words, never the payment ones (mutation: default cause to 'payment' → FAILS)", async () => {
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", "");
     dbm.getAccountBilling.mockResolvedValue(PAID);
     verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
     const tree = await page();
     const words = text(tree);
-    expect(words).toContain(m["billing.page.paused.ended"]);
+    expect(words).toContain(m["billing.page.paused.endedNoContact"]);
     expect(words).not.toContain(m["billing.page.paused.payment"]);
+    vi.unstubAllEnvs();
+  });
+
+  it("an ended-plan pause's Manage billing help asks for no card: it is the canceled help (design review I4) (mutation: pick the help from view.status alone → FAILS: 'Update your card' under 'your plan has ended')", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "canceled", billingPausedAt: "2026-10-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
+    const [button] = find(await page(), ManageBillingButton);
+    expect((button!.props as { help: string }).help).toBe(m["billing.page.manageHelp.canceled"]);
+    // A payment pause keeps the card help: updating the card IS the way back.
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "past_due", billingPausedAt: "2026-10-01T00:00:00Z" });
+    const [card] = find(await page(), ManageBillingButton);
+    expect((card!.props as { help: string }).help).toBe(m["billing.page.manageHelp"]);
+  });
+
+  it("\"contact us\" has a target: AGENCY_SUPPORT_EMAIL as a mailto link, read on the server; unset, the line names the team that set up the account — in English and Spanish (design review I4) (mutation: drop the link → FAILS; ignore the env → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", "  help@agency.example ");
+    const tree = await page();
+    const [link] = find(tree, "a");
+    expect((link!.props as { href: string }).href).toBe("mailto:help@agency.example");
+    const [before] = m["billing.page.paused.ended"].split("{email}");
+    expect(text(tree)).toContain(before!.trim());
+    expect(text(tree)).toContain("help@agency.example");
+    prefs.language = "es";
+    const es = await page();
+    expect(text(es)).toContain(m["billing.page.paused.ended.es"].split("{email}")[0]!.trim());
+    vi.stubEnv("AGENCY_SUPPORT_EMAIL", "");
+    const none = await page();
+    expect(find(none, "a")).toHaveLength(0);
+    expect(text(none)).toContain(m["billing.page.paused.endedNoContact.es"]);
+    prefs.language = null;
+    vi.unstubAllEnvs();
   });
 
   it("no paused line at all when the account isn't paused (mutation: render the line unconditionally → FAILS)", async () => {

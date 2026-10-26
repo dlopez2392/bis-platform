@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BillingPageLink } from "@/components/billing-page-link";
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
@@ -12,9 +13,10 @@ import type { Locale } from "@/lib/i18n/locale";
  * pause (M3, pinned at the copy level in messages.test.ts). Three audiences:
  * the client Owner (link to Billing), Staff and Technicians (Billing is
  * Owner-only: a line instead), the agency (link to the Settings card).
- * `lang` sits on the client sentence's own span (the root html stays en);
- * the agency's line is always English, by design, like the work queue's
- * billing banner — so it carries no lang override.
+ * `lang` sits on each sentence's own span (the root html stays en). The
+ * agency's line is bilingual too (design review M1), the payment-failed
+ * banner's rule: an operator's own chosen locale reaches it through the
+ * layout. The owner's "Go to Billing" hides on the Billing page itself (M2).
  */
 export function BillingPausedBanner({ audience, accountId, cause, locale }: {
   audience: "owner" | "member" | "agency"; accountId: string; cause: "payment" | "ended"; locale: Locale;
@@ -22,10 +24,12 @@ export function BillingPausedBanner({ audience, accountId, cause, locale }: {
   if (audience === "agency") {
     return (
       <Notice tone="crit" role="note" className="text-foreground">
-        {m["billing.paused.agency"]}{" "}
-        <Link href={`/dashboard/accounts/${accountId}/settings#billing`} className="underline underline-offset-2">
-          {m["billing.paused.agencyAction"]}
-        </Link>
+        <span lang={locale}>
+          {t(m, "billing.paused.agency", locale)}{" "}
+          <Link href={`/dashboard/accounts/${accountId}/settings#billing`} className="underline underline-offset-2">
+            {t(m, "billing.paused.agencyAction", locale)}
+          </Link>
+        </span>
       </Notice>
     );
   }
@@ -35,9 +39,9 @@ export function BillingPausedBanner({ audience, accountId, cause, locale }: {
       <span lang={locale}>
         {sentence}{" "}
         {audience === "owner" ? (
-          <Link href={`/dashboard/accounts/${accountId}/billing`} className="underline underline-offset-2">
+          <BillingPageLink href={`/dashboard/accounts/${accountId}/billing`}>
             {t(m, "billing.paused.client.action", locale)}
-          </Link>
+          </BillingPageLink>
         ) : t(m, "billing.paused.client.staff", locale)}
       </span>
     </Notice>

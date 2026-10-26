@@ -166,7 +166,7 @@ export type BillingCardView = {
    *  plan (M10) — never once paid, and never alongside `pause`. */
   lifted: string | null;
   /** True while a pause stamp is stored but the switch does not enforce it
-   *  (G19): "Pausing is switched off here, so this pause changes nothing." */
+   *  (G19): "Pausing is switched off for this app, so this pause changes nothing." */
   pauseOff: boolean;
   /** One line per (account, meter) whose newest check is an alerting verdict
    *  (G13, G14). */

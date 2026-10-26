@@ -9,8 +9,10 @@ import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { BILLING_STATUS_TREATMENTS, billingCardView, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { dbForRequest } from "@/lib/db";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { t as tFn } from "@/lib/i18n/t";
 import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { openBillingPortalAction } from "./actions";
@@ -81,6 +83,12 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   // client-status.ts says why.
   const processing = billing.subscriptionStatus === "incomplete";
   const t = processing ? PAYMENT_PROCESSING : BILLING_STATUS_TREATMENTS[view.status];
+  // An ended plan (design review I4): the help never asks for a card, whether the plan reads canceled
+  // or its pause says so; and "contact us" has a target — the agency's support address, read here on
+  // the server, else the line names who to ask.
+  const ended = view.status === "canceled" || (verdict.paused && verdict.cause === "ended");
+  const support = normalizeReplyTo(process.env.AGENCY_SUPPORT_EMAIL) ?? null;
+  const pausedLine = verdict.paused ? pausedSentence(verdict.cause === "ended" ? "ended" : "payment", support, locale) : null;
 
   return (
     <>
@@ -107,20 +115,31 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
             </div>
             {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{view.nextInvoice}</p> : null}
             {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{m["billing.page.canceled"]}</p> : null}
-            {verdict.paused ? (
-              <p className="text-sm text-foreground" lang={locale}>
-                {tFn(m, verdict.cause === "ended" ? "billing.page.paused.ended" : "billing.page.paused.payment", locale)}
-              </p>
-            ) : null}
+            {pausedLine ? <p className="text-sm text-foreground" lang={locale}>{pausedLine}</p> : null}
             {!billing.complimentary && billing.stripeCustomerId ? (
               <ManageBillingButton
                 open={openBillingPortalAction.bind(null, accountId)}
-                help={view.status === "canceled" ? m["billing.page.manageHelp.canceled"] : m["billing.page.manageHelp"]}
+                help={ended ? m["billing.page.manageHelp.canceled"] : m["billing.page.manageHelp"]}
               />
             ) : null}
           </CardContent>
         </Card>
       </div>
+    </>
+  );
+}
+
+/** The paused line (plan G12; design review I4): an ended plan's "contact us" is a mailto link to the
+ *  agency's support address when one is set, else names the team that set up the account. */
+function pausedSentence(cause: "payment" | "ended", support: string | null, locale: Locale): React.ReactNode {
+  if (cause === "payment") return tFn(m, "billing.page.paused.payment", locale);
+  if (!support) return tFn(m, "billing.page.paused.endedNoContact", locale);
+  const [before, after] = tFn(m, "billing.page.paused.ended", locale).split("{email}");
+  return (
+    <>
+      {before}
+      <a href={`mailto:${support}`} className="underline underline-offset-2">{support}</a>
+      {after}
     </>
   );
 }

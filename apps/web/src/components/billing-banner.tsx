@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BillingPageLink } from "@/components/billing-page-link";
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
@@ -25,9 +26,12 @@ export function BillingBanner({ audience, accountId, locale }: { audience: "clie
     <Notice tone="crit" role="note" className="text-foreground">
       <span lang={locale}>
         {client ? t(m, "billing.banner.client", locale) : t(m, "billing.banner.agency", locale)}{" "}
-        <Link href={href} className="underline underline-offset-2">
-          {client ? t(m, "billing.banner.clientAction", locale) : t(m, "billing.banner.agencyAction", locale)}
-        </Link>
+        {client ? (
+          // Hidden on the Billing page itself (design review M2).
+          <BillingPageLink href={href}>{t(m, "billing.banner.clientAction", locale)}</BillingPageLink>
+        ) : (
+          <Link href={href} className="underline underline-offset-2">{t(m, "billing.banner.agencyAction", locale)}</Link>
+        )}
       </span>
     </Notice>
   );

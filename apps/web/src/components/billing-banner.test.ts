@@ -9,6 +9,8 @@ vi.mock("next/link", () => ({
   default: ({ href, children, className }: { href: string; children: unknown; className?: string }) =>
     createElement("a", { href, className }, children as never),
 }));
+const nav = vi.hoisted(() => ({ pathname: "/dashboard/accounts/acct_1/dashboard" as string | null }));
+vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
 const { BillingBanner } = await import("./billing-banner");
 const render = (audience: "client" | "agency", locale: Locale = "en") =>
   renderToStaticMarkup(createElement(BillingBanner, { audience, accountId: "acct_1", locale }));
@@ -22,6 +24,17 @@ describe("BillingBanner", () => {
     // sentence and the link would still read as one space in the plain-text
     // assertion above. Assert the RAW markup too: a real gap, not a tag.
     expect(html).toMatch(/running\. <a /);
+  });
+
+  it("on the Billing page itself the client's banner carries no \"Go to Billing\" link (design review M2) (mutation: always render the link → FAILS)", () => {
+    nav.pathname = "/dashboard/accounts/acct_1/billing";
+    try {
+      const html = render("client");
+      expect(html).not.toContain("<a ");
+      expect(renderedText(html)).toContain(m["billing.banner.client"]);
+    } finally {
+      nav.pathname = "/dashboard/accounts/acct_1/dashboard";
+    }
   });
 
   it("tells the AGENCY, inside that account, and links to the Billing card (mutation: show the client sentence to the agency → FAILS)", () => {
