@@ -77,7 +77,7 @@ describe("demo tenant seeder", () => {
       // The logo really made it into storage, and under this account's own
       // prefix — the path is content-addressed and account-scoped, which is
       // also why the teardown has to remove it explicitly.
-      expect(account!.brand_logo_path).toMatch(new RegExp(`^${accountId}/logo-[0-9a-f]{16}\\.png$`));
+      expect(account!.brand_logo_path).toMatch(new RegExp(`^${accountId}/logo-[0-9a-f]{16}\\.jpg$`));
       // No recipients: the weekly report's own switch, on top of the flag.
       expect(account!.report_emails).toEqual([]);
 
