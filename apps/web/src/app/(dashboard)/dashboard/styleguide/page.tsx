@@ -853,6 +853,14 @@ export default async function StyleguidePage({
                 }))}
               />
             </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The nightly&apos;s results could not be read — the lines it has, then &quot;couldn&apos;t check&quot;; alone, warn</p>
+              <BillingAlertBanner
+                alerts={[{ accountId: "acct-a", accountName: "Rio Roofing", kind: "paused", since: "2026-10-20T00:00:00Z" }]}
+                reconciliationUnchecked
+              />
+              <BillingAlertBanner alerts={[]} reconciliationUnchecked />
+            </div>
           </div>
         </Section>
 
@@ -870,10 +878,12 @@ export default async function StyleguidePage({
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The client, on every page of their account</p>
               <BillingBanner audience="client" accountId="styleguide" locale="en" />
+              <BillingBanner audience="client" accountId="styleguide" locale="es" />
             </div>
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The agency, inside that account</p>
               <BillingBanner audience="agency" accountId="styleguide" locale="en" />
+              <BillingBanner audience="agency" accountId="styleguide" locale="es" />
             </div>
           </div>
         </Section>
@@ -883,8 +893,8 @@ export default async function StyleguidePage({
               audience, in the resolved locale (English shown beside its
               Spanish twin so a reviewer can compare them). role="note": a
               standing fact, not an event (DESIGN rule 3: the sentence is the
-              marker). The agency's own line stays English always — the same
-              rule the work queue's billing banner above follows. */}
+              marker). The agency's line follows the operator's own locale, as
+              the payment-failed banner does (design review M1). */}
           <div className="w-full space-y-5">
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The client Owner — a link to their own Billing page</p>
@@ -899,6 +909,7 @@ export default async function StyleguidePage({
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">The agency, inside that account — a link to the Settings card</p>
               <BillingPausedBanner audience="agency" accountId="styleguide" cause="payment" locale="en" />
+              <BillingPausedBanner audience="agency" accountId="styleguide" cause="payment" locale="es" />
             </div>
           </div>
         </Section>
