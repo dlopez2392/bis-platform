@@ -279,10 +279,22 @@ test.describe("demo captures", () => {
     // the 2026-10-06 run, started at lunchtime, photographed "No times
     // available this day" for the website. Walk forward to the first day that
     // has open times, so the capture never depends on what time it was run.
+    // And prefer a day with a few open times (2026-10-26): a capture run in
+    // the afternoon caught today with one slot left, which reads as a
+    // business with nothing free. The first day with FULL_DAY open times
+    // wins; failing that, the first with any.
+    const FULL_DAY = 3;
     const slots = pub.locator(".bis-booking-slot");
     const days = pub.locator(".bis-booking-day:not(:disabled)");
-    for (let i = 0; (await slots.count()) === 0 && i < (await days.count()); i++) {
+    // Day 0 is today, the pre-selected day, so clicking it records it too.
+    let firstWithAny: number | null = null;
+    for (let i = 0; (await slots.count()) < FULL_DAY && i < (await days.count()); i++) {
       await days.nth(i).click();
+      await settled(pub);
+      if (firstWithAny === null && (await slots.count()) > 0) firstWithAny = i;
+    }
+    if ((await slots.count()) < FULL_DAY && firstWithAny !== null) {
+      await days.nth(firstWithAny).click();
       await settled(pub);
     }
     await expect(slots.first(), "no day this week has an open time — re-seed or check the demo calendar").toBeVisible();

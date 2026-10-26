@@ -1,7 +1,7 @@
 // apps/web/src/lib/voice/presence.ts
 import { hasActiveCallSince, serviceDb } from "@bis/db";
 import { listAnsweredCallStartsBetween } from "@/lib/reports/weekly-metrics";
-import { lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
+import { localDayWindow } from "@/lib/dashboard/metrics";
 
 export type VoicePresence = { onCall: boolean; weekCount: number };
 
@@ -9,7 +9,7 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 
 /**
  * The topbar Sofía presence indicator's data (DESIGN.md "AI presence" key
- * pattern: "● Sofía · on a call" / "✓ N calls handled this week"). Read
+ * pattern: "● Sofía · on a call" / "✓ N calls handled in the last 7 days"). Read
  * through the guarded `"use server"` action in the [accountId] segment
  * (dashboard/accounts/[accountId]/shell-actions.ts's getShellSnapshot) —
  * never from a layout, and never from this module directly: Task 5's
@@ -23,11 +23,8 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * registry.test.ts uses (mock the specific @bis/db reads this function
  * calls, not a chainable fake supabase client). See presence.test.ts.
  *
- * `zone` (D-075): the ACCOUNT's own IANA zone, not UTC. Until 2026-10-08
- * "this week" rolled over at UTC midnight Monday regardless of the account's
- * own clock, so a Chicago client's week could already have turned over
- * locally — or not yet have, five hours either side of UTC's own boundary —
- * while the topbar disagreed. The caller resolves the zone (same fallback
+ * `zone` (D-075): the ACCOUNT's own IANA zone, not UTC, so "the last 7 days"
+ * are the account's own calendar days, as on its dashboard. The caller resolves the zone (same fallback
  * discipline `resolveAccountZone`/`renderZone` use elsewhere); this function
  * only consumes it.
  */
@@ -41,22 +38,20 @@ export async function getVoicePresence(
   // unfinished row must age out, not pin the indicator on forever).
   const oneHourAgo = new Date(now.getTime() - ONE_HOUR_MS).toISOString();
 
-  // weekCount: calls ANSWERED since the start of the current week, in the
-  // ACCOUNT's own zone (D-075) — through the Monday report's own
-  // answered-calls read, so "handled" means what the report's "calls
-  // answered" means. Until 2026-10-06 this was `countCallsSince` (every
-  // row), which counted robocalls and the agency's test calls as handled.
+  // weekCount: calls ANSWERED over the last 7 LOCAL days, today included —
+  // the same window the dashboard's "Calls answered" KPI counts
+  // (`localDayWindow(now, zone, 7)`, dashboard page.tsx's `window7`), so the
+  // topbar and the tile under it can never disagree. Read through the Monday
+  // report's own answered-calls helper, so "handled" means what "calls
+  // answered" means there: robocalls and the agency's test calls never count.
   // `countCallsSince` stays what the call CAPS read — those must count every
   // call that cost money, which is a different question.
   //
-  // The boundary itself is `weekly-window.ts`'s own Monday-start convention,
-  // re-derived rather than re-implemented: `lastWeekMonday(now, zone)` is the
-  // Monday of the week that has just ENDED (last week's, if `now` sits
-  // inside the current week), and `weekWindow(...).toIso` is local midnight
-  // of the Monday SEVEN DAYS after that — i.e. the start of `now`'s own
-  // current week. Sharing this with the Monday report's own window math is
-  // what keeps the two from drifting into two different week-boundary rules.
-  const weekStart = weekWindow(lastWeekMonday(now, zone), zone).toIso;
+  // Until 2026-10-26 this counted from Monday 00:00 local (the calendar
+  // week), which read "✓ 0 calls handled this week" on every Monday morning
+  // beside a tile showing a week of answered calls. The owner chose the
+  // rolling window that day. The name `weekCount` stays: it is a week's worth.
+  const weekStart = localDayWindow(now, zone, 7).fromIso;
 
   const [onCall, answered] = await Promise.all([
     hasActiveCallSince(db, accountId, oneHourAgo),

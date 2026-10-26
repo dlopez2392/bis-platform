@@ -34,7 +34,7 @@ const src = readFileSync(path.join(here, "topbar-presence.tsx"), "utf8");
 // (rule 3: never a bare dot). Source pin, same convention as
 // app-sidebar.test.ts: this component has no render harness.
 describe("TopbarPresence — F-107 r4: dot + short word below `sm`, the full phrase at sm+", () => {
-  it("both states wrap their two variants in one data-testid, not a bare Fragment (mutation: drop either `data-testid=\"topbar-presence\"` → FAILS) — the e2e sweep's own wait needs ONE unambiguous target, since both variants' text overlaps ('this week' in both idle phrases)", () => {
+  it("both states wrap their two variants in one data-testid, not a bare Fragment (mutation: drop either `data-testid=\"topbar-presence\"` → FAILS) — the e2e sweep's own wait needs ONE unambiguous target, since both variants' text overlaps ('last 7 days' in both idle phrases)", () => {
     expect(src.match(/data-testid="topbar-presence"/g)?.length).toBe(2);
   });
 
@@ -127,7 +127,7 @@ describe("TopbarPresence carries lang={locale} on its translated wrapper (decisi
 });
 
 /**
- * F-085 part 1 (spec §7.2): "N calls handled this week" is the ACCOUNT's
+ * F-085 part 1 (spec §7.2): "N calls handled in the last 7 days" is the ACCOUNT's
  * total. A Technician (showCount false) keeps the on-a-call pulse, which says
  * nothing about anyone's customers, and gets nothing at all when idle.
  */
@@ -145,7 +145,7 @@ describe("TopbarPresence and showCount", () => {
     const html = render({ onCall: true, personaName: "Sofía", showCount: false });
     expect(html).toContain('data-testid="topbar-presence"');
     expect(html).toContain("animate-pulse");
-    expect(html).not.toMatch(/this week/);
+    expect(html).not.toMatch(/last 7 days/);
   });
 
   it("idle with showCount true still says the week's count", () => {
@@ -273,7 +273,7 @@ describe("TopbarPresence — Open (spec §5.6.1)", () => {
   it("with an enabled voice profile and canChange \"all\", the idle count IS the menu's trigger, its words unchanged (mutation: render the idle count bare -> FAILS)", () => {
     const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, bstatus(OPEN, "all"));
     expect(html).toContain("bsm-wrapped");
-    expect(html).toContain("this week");
+    expect(html).toContain("last 7 days");
     expect(html).toMatch(/<i data-testid="bsm-wrapped"><span data-testid="topbar-presence"/);
   });
 
@@ -285,14 +285,14 @@ describe("TopbarPresence — Open (spec §5.6.1)", () => {
   it("the idle count with NO canChange (a Technician never has showCount, but the read failing does): plain words, no menu", () => {
     const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, null);
     expect(html).not.toContain("bsm-wrapped");
-    expect(html).toContain("this week");
+    expect(html).toContain("last 7 days");
   });
 
   it("a profile with no count (showCount false) and canChange set: \"● Open\" as the trigger, never nothing (mutation: return null when presence has no count -> FAILS)", () => {
     const html = renderWith({ onCall: false, personaName: "Sofía", showCount: false }, bstatus(OPEN, "all"));
     expect(html).toContain("bsm-wrapped");
     expect(html).toContain(">Open<");
-    expect(html).not.toContain("this week");
+    expect(html).not.toContain("last 7 days");
   });
 
   it("a profile with no count and no canChange: nothing, as before", () => {

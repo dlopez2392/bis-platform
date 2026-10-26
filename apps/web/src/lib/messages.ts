@@ -127,12 +127,16 @@ export const m = {
   // clients rename theirs. The caller falls back to "Sofía" only when the
   // persona name is missing or blank.
   "shell.presence.onCall": "{name} · on a call",
-  "shell.presence.idle": "✓ {count} calls handled this week",
+  // "the last 7 days", not "this week" (2026-10-26): the count is the
+  // dashboard tile's own rolling window (lib/voice/presence.ts).
+  "shell.presence.idle": "✓ {count} calls handled in the last 7 days",
+  "shell.presence.idle.es": "✓ {count} llamadas atendidas en los últimos 7 días",
   // Singular pair: "✓ 1 calls" is a real state for exactly the young voice
   // accounts that get demoed. "handled" restores DESIGN.md's own wording.
-  "shell.presence.idleOne": "✓ 1 call handled this week",
+  "shell.presence.idleOne": "✓ 1 call handled in the last 7 days",
+  "shell.presence.idleOne.es": "✓ 1 llamada atendida en los últimos 7 días",
   // F-107 r4 review (item 1): below `sm` the full phrases ("{name} · on a
-  // call", "✓ {count} calls handled this week") are too wide for the
+  // call", "✓ {count} calls handled in the last 7 days") are too wide for the
   // topbar next to the icon-only search trigger, ThemeToggle,
   // OrganizationSwitcher (avatar-only there, same review round) and
   // UserButton — collapsed to "dot + short word" (rule 3: never a bare
