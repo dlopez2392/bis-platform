@@ -40,7 +40,12 @@ async function loadBillingCardView(accountId: string, now: Date): Promise<Billin
       }),
     // Task 11: this account's newest reconciliation row per meter (plan
     // G13/G14), fed into the card's "usage doesn't match Stripe" lines.
-    listReconciliations(db, accountId, now),
+    // Caught ALONE (design review I2): its failure must not blank the card
+    // (and Lift pause with it); null makes the card say it couldn't check.
+    listReconciliations(db, accountId, now).catch((e: unknown) => {
+      console.error(`settings: reconciliation read failed for account ${accountId}: ${loggableError(e)}`);
+      return null;
+    }),
   ]);
   const zone = safeZone(account.timezone);
   const plan = billing ? plans.find((p) => p.id === billing.planId) ?? null : null;

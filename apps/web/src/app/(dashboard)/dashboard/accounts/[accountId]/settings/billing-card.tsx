@@ -162,13 +162,16 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
             switch enforces it, a lift's line, the switch-off note, the
             reconciliation block, then Lift pause itself — in that order,
             above everything else the card says. */}
-        {view.pause || view.lifted || view.pauseOff || view.reconciliation.length > 0 || view.can.liftPause ? (
+        {view.pause || view.lifted || view.pauseOff || view.reconciliation.length > 0 || view.reconciliationUnchecked
+          || view.can.liftPause ? (
           <div className="flex flex-col gap-2">
             {view.pause ? <p className="text-sm text-foreground">{view.pause.line}</p> : null}
             {view.pause?.noForward ? <p className="text-sm text-foreground">{view.pause.noForward}</p> : null}
             {view.lifted ? <p className="text-sm text-foreground">{view.lifted}</p> : null}
             {view.pauseOff ? <p className="text-sm text-muted-foreground">{m["billing.card.pauseOff"]}</p> : null}
-            {view.reconciliation.length > 0 ? (
+            {view.reconciliationUnchecked ? (
+              <p className="text-sm text-muted-foreground">{m["billing.card.reconcile.unavailable"]}</p>
+            ) : view.reconciliation.length > 0 ? (
               <Notice tone="warn" className="text-foreground">
                 <p className="font-medium">{m["billing.card.reconcile.title"]}</p>
                 <ul className="mt-1 space-y-0.5">

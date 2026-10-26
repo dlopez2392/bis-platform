@@ -34,6 +34,7 @@ const base: BillingCardView = {
   lifted: null,
   pauseOff: false,
   reconciliation: [],
+  reconciliationUnchecked: false,
 };
 type Actions = Pick<Parameters<typeof BillingCard>[0], "send" | "markComplimentary" | "stopComplimentary" | "changePlan" | "liftPause" | "undoLiftPause">;
 const props = (view: BillingCardView, actions: Partial<Actions> = {}) => ({
@@ -419,6 +420,13 @@ describe("BillingCard", () => {
       expect(text).toContain(m["billing.card.reconcile.title"]);
       expect(text).toContain("Call minutes: Stripe counts 500, BIS counts 480. Checked Oct 20, 3:00 PM.");
       expect(text).toContain(m["billing.card.reconcile.help"]);
+    });
+
+    it("an unchecked reconciliation shows one line in place of the mismatch block (design review I2) (mutation: drop the line → FAILS; show the mismatch title too → FAILS)", () => {
+      expect(renderedText(render(base))).not.toContain(m["billing.card.reconcile.unavailable"]);
+      const text = renderedText(render({ ...base, reconciliationUnchecked: true }));
+      expect(text).toContain(m["billing.card.reconcile.unavailable"]);
+      expect(text).not.toContain(m["billing.card.reconcile.title"]);
     });
 
     it("Lift pause is a ghost button, never a second primary — even beside Send (DESIGN rule 8) (mutation: give it the default/primary variant → FAILS)", () => {

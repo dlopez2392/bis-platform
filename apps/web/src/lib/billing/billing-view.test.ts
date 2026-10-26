@@ -233,6 +233,13 @@ describe("billingCardView: pause, lift and reconciliation (G3, G13, G19; M7a PR-
     expect(view(row(), null, { enforced: false }).pauseOff).toBe(false);
   });
 
+  it("reconciliations: null (the read failed) → no lines and reconciliationUnchecked; a list or none → checked (design review I2) (mutation: treat null as [] → FAILS)", () => {
+    const failed = view(row(), null, { reconciliations: null });
+    expect({ lines: failed.reconciliation, unchecked: failed.reconciliationUnchecked }).toEqual({ lines: [], unchecked: true });
+    expect(view(row(), null, { reconciliations: [] }).reconciliationUnchecked).toBe(false);
+    expect(view(row(), null).reconciliationUnchecked).toBe(false);
+  });
+
   it("reconciliation lines only for the alerting verdicts, with the meter's words and the check time in the account's zone (mutation: show held_missing → FAILS)", () => {
     const recs: Reconciliation[] = [
       reconciliation({ meter: "sms", verdict: "stripe_over", stripeTotal: 1200, bisSettled: 1000, bisInFlight: 0, bisHeld: 0, checkedAt: "2026-10-15T20:30:00+00:00" }),

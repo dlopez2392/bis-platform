@@ -166,6 +166,9 @@ export type BillingCardView = {
   /** One line per (account, meter) whose newest check is an alerting verdict
    *  (G13, G14). */
   reconciliation: string[];
+  /** The reconciliation read failed (design review I2): the card says it
+   *  couldn't check, in place of the mismatch block, and keeps the rest. */
+  reconciliationUnchecked: boolean;
 };
 
 export function billingCardView(input: {
@@ -186,14 +189,16 @@ export function billingCardView(input: {
    *  ONLY: without it a client could pay and stay Unbilled (final review I1). */
   webhookReady: boolean;
   /** The account's newest reconciliation rows (Task 2's listReconciliations).
-   *  Optional, defaulting to none, until the caller (Task 11) wires it. */
-  reconciliations?: Reconciliation[];
+   *  Optional, defaulting to none; null means the read FAILED (design review
+   *  I2), which the card states instead of claiming nothing is wrong. */
+  reconciliations?: Reconciliation[] | null;
   /** billingEnforced() (Task 4). Optional, defaulting to false, until the
    *  caller (Task 11) wires it — unenforced, the card makes no claim about
    *  calls or automations the switch is not actually acting on. */
   enforced?: boolean;
 }): BillingCardView {
   const { billing, link, plan, activePlans, used, zone, now, stripeReady, webhookReady } = input;
+  const reconciliationUnchecked = input.reconciliations === null;
   const reconciliations = input.reconciliations ?? [];
   const enforced = input.enforced ?? false;
   const status = billingStatusOf(billing, link, now);
@@ -258,5 +263,6 @@ export function billingCardView(input: {
     lifted,
     pauseOff: pausedAt !== null && !enforced,
     reconciliation,
+    reconciliationUnchecked,
   };
 }

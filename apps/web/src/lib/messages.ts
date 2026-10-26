@@ -4050,6 +4050,11 @@ export const m = {
   "billing.card.reconcile.meter.sms.es": "Mensajes de texto",
   "billing.card.reconcile.meter.ai_chats": "Website chats",
   "billing.card.reconcile.meter.ai_chats.es": "Chats del sitio web",
+  // The reconciliation read failed (design review I2): said in place of the
+  // mismatch block. An agency surface, but billing.* is not an agency-only
+  // prefix, so the catalogue parity gate needs its twin.
+  "billing.card.reconcile.unavailable": "Couldn't check usage against Stripe just now.",
+  "billing.card.reconcile.unavailable.es": "No se pudo comparar el uso con Stripe en este momento.",
   "billing.error.notPaused": "This account isn't paused any more. Refresh to see its billing.",
   "billing.error.notPaused.es": "Esta cuenta ya no está en pausa. Actualice la página para ver su facturación.",
   "billing.error.cannotRepause": "This account's billing changed, so it can't be paused again from here. Refresh to see it.",
@@ -4062,6 +4067,7 @@ export const m = {
   "work.agency.billing.pausedNoForward": "Paused 30+ days, calls are no longer forwarded:",
   "work.agency.billing.mismatch": "Usage doesn't match Stripe:",
   "work.agency.billing.more": "and {n} more",
+  "work.agency.billing.unchecked": "Couldn't check usage against Stripe just now.",
   "billing.done.success.title": "You're all set",
   "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
   "billing.done.cancelled.title": "Checkout wasn't finished",

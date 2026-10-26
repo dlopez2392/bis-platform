@@ -173,6 +173,33 @@ describe("BillingSection: Lift pause, reconciliation and the enforced switch (Ta
     expect(actionsm.undoLiftPauseAction).toHaveBeenCalledWith("acct-x", "2026-10-20T00:00:00.000Z", "2026-10-13T00:00:00.000Z");
   });
 
+  it("every function prop the card gets is a BOUND server action (Function.prototype.bind), never a closure — a closure is not serializable to the client card and blanked Settings (30f77d01, otherwise caught only by e2e) (mutation: undoLiftPause={(l, p) => undoLiftPauseAction(accountId, l, p)} → FAILS by its name)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(BILLED);
+    const el = (await BillingSection({ accountId: "a" })) as ReactElement<Record<string, unknown>>;
+    const fns = Object.entries(el.props).filter(([, v]) => typeof v === "function");
+    expect(fns.map(([k]) => k).sort()).toEqual(
+      ["changePlan", "liftPause", "markComplimentary", "send", "stopComplimentary", "undoLiftPause"],
+    );
+    for (const [k, fn] of fns) expect((fn as () => unknown).name, k).toMatch(/^bound /);
+  });
+
+  it("a failed reconciliation read alone does not blank the card: Lift pause stays, and the card says it couldn't check (design review I2) (mutation: leave listReconciliations in the all-or-nothing Promise.all → FAILS: the error card renders)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbm.getAccountBilling.mockResolvedValue({ ...BILLED, subscriptionStatus: "past_due", billingPausedAt: "2026-10-13T00:00:00+00:00", pastDueSince: "2026-10-01T00:00:00+00:00" });
+    dbm.listReconciliations.mockRejectedValue(new Error("listReconciliations failed: timeout"));
+    const el = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: BillingCardView }>;
+    expect(isValidElement(el) && el.type).toBe(BillingCard);
+    expect(el.props.view.can.liftPause).toBe(true);
+    expect(el.props.view.reconciliation).toEqual([]);
+    expect(el.props.view.reconciliationUnchecked).toBe(true);
+    expect(log.mock.calls.flat().join(" ")).toContain("timeout");
+    log.mockRestore();
+    // A good read says nothing of the kind.
+    dbm.listReconciliations.mockResolvedValue([]);
+    const ok = (await BillingSection({ accountId: "a" })) as ReactElement<{ view: BillingCardView }>;
+    expect(ok.props.view.reconciliationUnchecked).toBe(false);
+  });
+
   it("reads this account's reconciliation rows (listReconciliations) and feeds them into the card's reconciliation lines (mutation: pass [] always → FAILS)", async () => {
     dbm.getAccountBilling.mockResolvedValue(BILLED);
     dbm.listReconciliations.mockResolvedValue([{
