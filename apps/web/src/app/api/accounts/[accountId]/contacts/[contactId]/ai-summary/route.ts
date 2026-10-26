@@ -79,10 +79,13 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
       // so this gate and the gateway's own read the same day (never the UTC day).
       // M7a PR-4 (plan G21, M2): no model call for a paused account, on GET or POST, for any caller: the gate
       // answers "account AI off", which serveRecordSummary turns into { state: "none" } before its cache read.
-      // Fails open (billingVerdictFor never throws; switch off, it reads nothing).
+      // Fails open (billingVerdictFor never throws; switch off, it reads nothing). The two reads run together.
       gate: async () => {
-        const g = await aiGateCheck(svc, { accountId, ...periodKeys(now, safeZone(zone)), signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
-        return (await billingVerdictFor(accountId)).paused ? { ...g, accountEnabled: false } : g;
+        const [g, billing] = await Promise.all([
+          aiGateCheck(svc, { accountId, ...periodKeys(now, safeZone(zone)), signal: AbortSignal.timeout(GATE_TIMEOUT_MS) }),
+          billingVerdictFor(accountId),
+        ]);
+        return billing.paused ? { ...g, accountEnabled: false } : g;
       },
       cached: () => getRecordSummary(db, key),
       claim: (digest, f) => claimRecordSummary(svc, { ...key, digest, force: f }),

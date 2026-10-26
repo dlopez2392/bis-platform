@@ -45,10 +45,12 @@ export type AccessOptions = {
  * CLIENT's server action on a paused account is refused here, after every
  * check above has passed, by sending the browser back to the page it came
  * from (or the caller's home), where the paused banner says why; nothing is
- * written. Pages, layouts and GET handlers carry no `next-action` header and
- * are never refused, and the agency never is. An action that only reads, or
- * Manage billing, opts out with `{ duringPause: "allow" }`; the allow-list is
- * pinned by lib/billing/read-only.test.ts. A failed billing read allows.
+ * written. Pages, layouts and GET handlers are not actions (isActionRequest:
+ * the `next-action` header or a form post) and are never refused, and the
+ * agency never is. An action that only reads, read state, or Manage billing
+ * opts out with the `duringPause` option set to "allow"; the allow-list is
+ * pinned by lib/billing/read-only.test.ts, which scans this file too. A
+ * failed billing read allows.
  */
 export async function requireAccountAccess(
   accountId: string, opts: AccessOptions = {},

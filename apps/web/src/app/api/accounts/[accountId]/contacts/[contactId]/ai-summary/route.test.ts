@@ -246,6 +246,24 @@ describe("the AI summary while the account is paused (plan G21)", () => {
     expect(aiCompleteMock).not.toHaveBeenCalled();
   });
 
+  it("paused because the plan ended (canceled) is off too (review m5; mutation: gate on `.cause === \"payment\"` → FAILS)", async () => {
+    readBillingStandingMock.mockResolvedValue({ ...PAUSED, subscriptionStatus: "canceled" });
+    expect(await (await call(GET)).json()).toEqual({ state: "none" });
+    expect(await (await call(POST)).json()).toEqual({ state: "none" });
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(aiCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it("the billing read and the gate read start together, not one after the other (review m7; mutation: await aiGateCheck before billingVerdictFor → FAILS)", async () => {
+    let releaseGate!: (g: object) => void;
+    aiGateCheckMock.mockImplementationOnce(() => new Promise((res) => { releaseGate = res; }));
+    const pending = call(GET);
+    await vi.waitFor(() => expect(aiGateCheckMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(readBillingStandingMock).toHaveBeenCalledWith(SERVICE, A));
+    releaseGate(OPEN_GATE);
+    expect(await (await pending).json()).toEqual({ state: "none" });
+  });
+
   it("paused, for the agency too (mutation: skip the billing check for an agency reader → FAILS)", async () => {
     fx.access = { userId: "u1", isAgency: true };
     expect(await (await call(GET)).json()).toEqual({ state: "none" });

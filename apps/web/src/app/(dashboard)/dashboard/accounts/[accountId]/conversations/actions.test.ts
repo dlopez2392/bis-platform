@@ -620,8 +620,17 @@ describe("0053 — conversations and messages are written by server code", () =>
 
   it("mark read: calls requireAccountAccess for the account, and clears the unread count with the service client (mutation: dbForRequest() -> FAILS)", async () => {
     await markConversationReadAction("acct_1", "convo_9");
-    expect(requireAccountAccessMock).toHaveBeenCalledWith("acct_1");
+    // M7a PR-4 (review I2): read state stays usable while the account is paused (read-only.test.ts's allow-list).
+    expect(requireAccountAccessMock).toHaveBeenCalledWith("acct_1", { duringPause: "allow" });
     expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+  });
+
+  it("mark read revalidates nothing: an allowed action must not re-render inside its own request; MarkRead refreshes the page itself (M7a PR-4 review I2; mutation: keep revalidatePath -> FAILS)", async () => {
+    const { revalidatePath } = await import("next/cache");
+    vi.mocked(revalidatePath).mockClear();
+    await markConversationReadAction("acct_1", "convo_9");
+    expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+    expect(vi.mocked(revalidatePath)).not.toHaveBeenCalled();
   });
 });
 

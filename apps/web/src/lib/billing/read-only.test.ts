@@ -87,6 +87,24 @@ describe("refuseActionWhilePaused (plan G11)", () => {
     expect(fx.verdictCalls).toEqual([]);
   });
 
+  it("a no-JS form post (multipart or url-encoded, no next-action) is an action too: refused (review I1; mutation: count only next-action → FAILS)", async () => {
+    delete fx.headers[ACTION_HEADER];
+    fx.headers["content-type"] = "multipart/form-data; boundary=----x";
+    expect(await redirectedTo(refuseActionWhilePaused(A, HOME))).toBe(`/dashboard/accounts/${A}/contacts?q=ana`);
+    fx.headers["content-type"] = "application/x-www-form-urlencoded";
+    expect(await redirectedTo(refuseActionWhilePaused(A, HOME))).toBe(`/dashboard/accounts/${A}/contacts?q=ana`);
+  });
+
+  it("the render Next forwards after an action's redirect (rsc: 1, the form's content-type, no next-action) is not refused (review I1; mutation: drop the rsc exclusion → FAILS)", async () => {
+    delete fx.headers[ACTION_HEADER];
+    fx.headers.rsc = "1";
+    fx.headers["content-type"] = "multipart/form-data; boundary=----x";
+    expect(await redirectedTo(refuseActionWhilePaused(A, HOME))).toBeNull();
+    fx.headers["content-type"] = "application/x-www-form-urlencoded";
+    expect(await redirectedTo(refuseActionWhilePaused(A, HOME))).toBeNull();
+    expect(fx.verdictCalls).toEqual([]);
+  });
+
   it("a server action on a paused account → redirect to the referer's path (mutation: always redirect home → FAILS)", async () => {
     expect(await redirectedTo(refuseActionWhilePaused(A, HOME))).toBe(`/dashboard/accounts/${A}/contacts?q=ana`);
     expect(fx.verdictCalls).toEqual([A]);
@@ -119,8 +137,11 @@ const ACCOUNT_ROOTS = ["app/(dashboard)/dashboard/accounts/[accountId]", "lib"];
  * `file#function`, each with its reason. The audit read every exported action
  * in the 38 account-scoped "use server" files (36 under accounts/[accountId],
  * lib/ai-acts/actions.ts, lib/proposals/actions.ts): these are the ones that
- * write nothing and call no model or provider, plus Manage billing, which is
- * how a paused client pays. A getter that lazily creates a row is a write:
+ * write nothing and call no model or provider, plus two named exceptions:
+ * Manage billing, which is how a paused client pays, and READ STATE, a write
+ * to the reader's unread counter that changes nothing in the business
+ * (markConversationReadAction; it does not revalidate: MarkRead refreshes the
+ * page itself, so the refresh is a plain render, never inside the action). A getter that lazily creates a row is a write:
  * getForwardingAddressAction is NOT here (M6). Agency-only actions need no
  * entry (a client is refused by their own guard first).
  */
@@ -139,6 +160,8 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
     "the relationship and holding-move pickers' search: one read on the request client",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requests-actions.ts#documentRequestLinkAction":
     "Copy link on an open request: reads the request and builds its URL, writes nothing",
+  "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts#markConversationReadAction":
+    "read state: writes only the unread counter (opening a thread fires it; refusing it would redirect every open)",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts#cancelNoticeOptionAction":
     "Cancel's notice check: reads the booking's email and suppression state (the cancel itself is refused)",
 };
@@ -166,14 +189,21 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 const rel = (p: string) => relative(SRC, p).split(sep).join("/");
-const source = (r: string) => readFileSync(join(SRC, r), "utf8");
+/** Computed once per run (review m4): the walk and the reads are the slow part under load. */
+const once = <T>(f: () => T): (() => T) => { let v: { value: T } | null = null; return () => (v ??= { value: f() }).value; };
+const sources = new Map<string, string>();
+function source(r: string): string {
+  let src = sources.get(r);
+  if (src === undefined) { src = readFileSync(join(SRC, r), "utf8"); sources.set(r, src); }
+  return src;
+}
+/** Every non-test source file under apps/web/src, SRC-relative. */
+const allFiles = once(() => walk(SRC).map(rel).sort());
 
 /** The account-scoped "use server" files: the directive is the file's first line. */
-function actionFiles(): string[] {
-  return ACCOUNT_ROOTS.flatMap((r) => walk(join(SRC, r)))
-    .filter((p) => /^\s*["']use server["']/.test(readFileSync(p, "utf8")))
-    .map(rel).sort();
-}
+const actionFiles = once((): string[] => allFiles()
+  .filter((r) => ACCOUNT_ROOTS.some((root) => r.startsWith(`${root}/`)))
+  .filter((r) => /^\s*["']use server["']/.test(source(r))));
 
 /**
  * The body of the function declared at `start`: past the balanced parameter
@@ -198,27 +228,31 @@ function bodyRange(src: string, start: number): [number, number] {
 }
 
 type Fn = { key: string; name: string; body: string; from: number; to: number };
+const actionsByFile = new Map<string, Fn[]>();
 function exportedActions(r: string): Fn[] {
+  const hit = actionsByFile.get(r);
+  if (hit) return hit;
   const src = source(r);
-  return [...src.matchAll(/export async function (\w+)\(/g)].map((m) => {
+  const fns = [...src.matchAll(/export async function (\w+)\(/g)].map((m) => {
     const [from, to] = bodyRange(src, m.index!);
     return { key: `${r}#${m[1]}`, name: m[1]!, body: src.slice(from, to), from, to };
   });
+  actionsByFile.set(r, fns);
+  return fns;
 }
 
 /** Any mention of the option as a value, comments included (a mention in a comment of a write action
- *  fails the scan rather than slipping past it). The definition (`duringPause?:`) never matches. */
+ *  fails the scan rather than slipping past it). The one exemption is the type declaration in lib/auth.ts,
+ *  `duringPause?: "allow"`, which the `?` keeps out; every other line of lib/auth.ts IS scanned (review m6). */
 const OPTION = /\bduringPause\s*:/g;
 
 /** Every `file#function` whose body passes the option, and every mention of it OUTSIDE such a body. */
-function optOuts(): { inside: string[]; stray: string[] } {
+const optOuts = once((): { inside: string[]; stray: string[] } => {
   const inside = new Set<string>();
   const stray: string[] = [];
   const files = new Set(actionFiles());
-  for (const p of walk(SRC)) {
-    const r = rel(p);
-    if (r === "lib/auth.ts") continue; // the definition; auth.test.ts pins how it is passed through
-    const src = readFileSync(p, "utf8");
+  for (const r of allFiles()) {
+    const src = source(r);
     const fns = files.has(r) ? exportedActions(r) : [];
     for (const m of src.matchAll(OPTION)) {
       const fn = fns.find((f) => m.index! >= f.from && m.index! < f.to);
@@ -226,7 +260,7 @@ function optOuts(): { inside: string[]; stray: string[] } {
     }
   }
   return { inside: [...inside].sort(), stray };
-}
+});
 
 describe("the allow-list (plan G11, Task 7 Step 1)", () => {
   it("the scan sees every account-scoped action file (a scan of nothing proves nothing)", () => {
@@ -256,6 +290,11 @@ describe("the allow-list (plan G11, Task 7 Step 1)", () => {
     }
   });
 
+  it("lib/auth.ts is scanned too: its only mention is the type declaration (review m6; mutation: pass the option inside requireAgencyOnlyAccountAccess → FAILS by name)", () => {
+    expect(source("lib/auth.ts").match(/\bduringPause\?:\s*"allow"/g)?.length).toBe(1);
+    expect(optOuts().stray.filter((x) => x.startsWith("lib/auth.ts"))).toEqual([]);
+  });
+
   it("getForwardingAddressAction is NOT allowed: it creates the forwarding address on first use (M6) (mutation: add it → FAILS by name)", () => {
     const key = "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/forwarding-actions.ts#getForwardingAddressAction";
     expect(exportedActions(key.split("#")[0]!).map((f) => f.key)).toContain(key);
@@ -274,7 +313,7 @@ describe("the allow-list (plan G11, Task 7 Step 1)", () => {
 
 describe("one decision, read in few places (plan Global Constraints)", () => {
   it("only the five named non-test files import readBillingStanding, standing-read.ts among them (mutation: import it from a pass → FAILS by name)", () => {
-    const readers = walk(SRC).filter((p) => /\breadBillingStanding\b/.test(readFileSync(p, "utf8"))).map(rel).sort();
+    const readers = allFiles().filter((r) => /\breadBillingStanding\b/.test(source(r)));
     // Exact since Task 6 (the TeXML and concierge turn routes) landed beside Task 5's two gates.
     expect(readers).toEqual([...STANDING_READERS].sort());
   });
@@ -283,15 +322,15 @@ describe("one decision, read in few places (plan Global Constraints)", () => {
 describe("the client API's writes (plan G11, G21)", () => {
   it("every non-GET handler under app/api/accounts is listed with its reason (mutation: add a POST without a reason → FAILS)", () => {
     const found: string[] = [];
-    for (const p of walk(join(SRC, "app/api/accounts"))) {
-      const src = readFileSync(p, "utf8");
+    for (const r of allFiles().filter((f) => f.startsWith("app/api/accounts/"))) {
+      const src = source(r);
       const verbs = /\b(POST|PUT|PATCH|DELETE)\b/;
       for (const m of src.matchAll(/export\s+(?:async\s+)?(?:function|const|let)\s+(\w+)/g)) {
-        if (verbs.test(m[1]!) && m[1] === m[1]!.toUpperCase()) found.push(`${rel(p)}#${m[1]}`);
+        if (verbs.test(m[1]!) && m[1] === m[1]!.toUpperCase()) found.push(`${r}#${m[1]}`);
       }
       for (const m of src.matchAll(/export\s*\{([^}]*)\}/g)) {
         for (const name of m[1]!.split(",").map((s) => s.trim().split(/\s+as\s+/).pop()!)) {
-          if (/^(POST|PUT|PATCH|DELETE)$/.test(name)) found.push(`${rel(p)}#${name}`);
+          if (/^(POST|PUT|PATCH|DELETE)$/.test(name)) found.push(`${r}#${name}`);
         }
       }
     }
