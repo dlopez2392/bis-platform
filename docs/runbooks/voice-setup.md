@@ -491,15 +491,21 @@ testing) is the only one that takes a real call. danlo places the calls from his
 does every dashboard step and writes each time in the ledger. No client account is touched.
 
 The five calls below (8.2 to 8.6) are the WHOLE per-caller daily cap: `PHONE_MAX_CALLS_PER_NUMBER_PER_DAY`
-(5 by default) counts every call from danlo's mobile to the account per UTC day, and a sixth hears the
-carrier's robotic cap message and never reaches Sofía. So run Step 8 on a fresh UTC day (after 00:00 UTC:
-7 PM Central while daylight time lasts, 6 PM after it ends), all five calls on that same UTC day, and make
-no retries. A call that has to be redone waits for the next UTC day.
+(5 by default) counts every call from danlo's mobile to the account per UTC day. A sixth never reaches
+Sofía: it hears our own cap refusal, the TeXML route's "cap" answer
+(`apps/web/src/app/api/voice/texml/route.ts`), read aloud by the carrier's text-to-speech, so it sounds
+robotic but is not a carrier message. So run Step 8 on a fresh UTC day (after 00:00 UTC: 7 PM Central while
+daylight time lasts, 6 PM after it ends), all five calls on that same UTC day, and make no retries. A call
+that has to be redone waits for the next UTC day.
 
 Test names: Ana Garcia, Beto Garcia and Carla Garcia. Speech-to-text mishears "Prueba", so do not use it.
 
 8.1 Setup (orchestrator). On BIS's account, Contacts: note every contact whose phone is danlo's mobile
     (normally "Dan Lopez"). Make no new contacts by hand: the calls below make them.
+    Before a re-run, confirm that NO Ana Garcia, Beto Garcia or Carla Garcia is left on danlo's number from
+    an earlier run (search Contacts for each). A leftover Carla Garcia would be confirmed by name in 8.4
+    instead of missing twice, and a leftover Ana or Beto changes what 8.2 and 8.3 test. Clean them up as in
+    8.8 first.
     Calendar → Settings → Meeting type: switch it to **Phone** for the test, and write down what it was
     (Video). A video calendar refuses a booking without an email, and 8.2 declines the email. (The other
     way is to give an email for each booking in 8.2.) 8.8 switches it back.
@@ -521,8 +527,8 @@ Test names: Ana Garcia, Beto Garcia and Carla Garcia. Speech-to-text mishears "P
 
 8.4 Call 3, two misses (danlo). Ask about an appointment and give "Carla Garcia" twice. Both times she says
     she couldn't find it under those details; after the second she offers to take a message. Leave the
-    message and hang up. She does not ask for a name for it: once the check has failed, the message files
-    on no customer, so a name would decide nothing.
+    message and hang up. She may or may not ask for a name for it; either way is right. Once the check has
+    failed the message files on no customer, so a name decides nothing.
     Check (orchestrator): To do shows "Someone asked about an appointment and couldn't confirm who they
     are", marked "Sofía · AI"; opening it opens the call; the call's card has the message. The call names
     no customer, no customer's thread got the message, and NO new contact was made: Contacts has no
