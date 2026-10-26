@@ -96,11 +96,12 @@ export function messageName(args: { name?: unknown }): string | null {
   const n = typeof args.name === "string" ? args.name.replace(/\s+/g, " ").trim() : "";
   return n.length > 0 ? n : null;
 }
-/** Whether take_message must read the number before recording (spec 5.10.5; plan P6: asks once per call). */
+/** Whether take_message must read the number before recording (spec 5.10.5; plan P6: asks once per call). Never
+ *  on a locked call (owner decision 2026-10-26): its message files on no customer, so a name would pick nothing. */
 export function messageNeedsNameCheck(
   state: CallState, callerNumber: string | null, args: { name?: unknown; nameDeclined?: unknown },
 ): boolean {
-  return callerNumber !== null && state.identity.confirmed === null && !state.identity.messageNameAsked
+  return callerNumber !== null && !isLocked(state) && state.identity.confirmed === null && !state.identity.messageNameAsked
     && messageName(args) === null && args.nameDeclined !== true;
 }
 /** The refusal on a shared number, or null to record the message (a failed read records it: a message is

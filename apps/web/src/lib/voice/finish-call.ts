@@ -326,8 +326,15 @@ function nameSaidAfter(state: CallState): string | undefined {
  * (SlotTakenError), so "this is Ana, take a message" after booking Beto would land on Beto. The call's record
  * therefore yields when the lead's name (or, with no lead, the last message's name) does not agree with its
  * stored name (sameNameAsRecord, the booking's own rule), and the resolution below runs. No name keeps it.
+ *
+ * Owner decision 2026-10-26 (production call 956c8f8a): a call whose identity check LOCKED and that took a
+ * message files on NO customer, whatever name the message carries and whoever is on the number. The call row
+ * keeps the message, the identity To do (filed below, contactId null) is the team's hand-off, and staff can
+ * make the person from the call page. Decided on the state, never on what Sofía was told to say. A locked
+ * call with no message (a booking, S18; a lead) resolves as before.
  */
 async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
+  if (state.identity.locked !== null && state.messages.length > 0) return null;
   if (state.contactId) {
     const said = nameSaidAfter(state);
     if (!said?.trim()) return state.contactId;

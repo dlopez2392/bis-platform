@@ -101,6 +101,8 @@ import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { HoldingContactUnavailable } from "@bis/db";
 import { withConfirmed, withLocked } from "./identity/state";
+import { confirmStep } from "./identity/flow";
+import { candidateOf } from "./identity/match";
 
 /**
  * The two raw-table reads `resolveOpenOpportunity` (finish-call.ts) makes —
@@ -2402,6 +2404,65 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       await finishCall(afterBetosBooking(withMessage(caller(), msg)), ctx, meta);
       expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
       expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+    });
+  });
+
+  // Owner decision 2026-10-26 (production call 956c8f8a): once the identity check has LOCKED, a message left on
+  // that call files on no customer. The call row keeps it and the identity To do is the hand-off; no contact is
+  // made or matched from a name given on that call. A booking on a locked call follows today's rules (S18).
+  describe("a message on a locked call files on no customer (owner decision 2026-10-26)", () => {
+    const GARCIAS = [person("ct1", "Ana", "García"), person("ct2", "Beto", "García")] as const;
+    /** The production sequence: "Carla García" twice -> two misses -> locked (misses), through the real step. */
+    const lockedByCarla = () => {
+      const read = { ok: true as const, candidates: GARCIAS.map(candidateOf), truncated: false };
+      const m1 = confirmStep(caller(), 1, read, { fullName: "Carla García" }, "NEXT");
+      const m2 = confirmStep(m1.state, 1, read, { fullName: "Carla García" }, "NEXT");
+      expect([m1.event, m2.event]).toEqual(["miss 1", "locked (misses)"]);
+      return m2.state;
+    };
+    const carlasMessage = { body: "Please call me about my appointment", at: "t", name: "Carla García" };
+
+    it("two misses, the lock, then take_message with the failed name: NO contact made, no thread, the call row keeps no contact, the identity To do filed once (mutation: drop the locked-message guard in resolveContactId → createContact \"Carla García\", FAILS)", async () => {
+      onCallerId(...GARCIAS);
+      await finishCall(withMessage(lockedByCarla(), carlasMessage), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
+      expect(patch().contactId).toBeUndefined();
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+      expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        callId: "call1", contactId: null, title: "Someone asked about an appointment and couldn't confirm who they are",
+      }), "voice", "ai");
+      expect(emailRefs.send).toHaveBeenCalledTimes(1);
+      expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ contactId: null }));
+    });
+
+    it("a locked call on a number with ONE contact: the message is not filed on that contact by phone either (mutation: guard only the shared-number branch → the \"Caller\" dedupe, FAILS)", async () => {
+      onCallerId(person("ct1", "Dan", "Lopez"));
+      await finishCall(withMessage(withLocked(caller(), "misses"), { body: "Call me", at: "t" }), ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(patch().contactId).toBeUndefined();
+    });
+
+    it("regression: the same message on an UNLOCKED call still makes the new person, as today (S21)", async () => {
+      onCallerId(...GARCIAS);
+      await finishCall(withMessage(caller(), carlasMessage), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+      expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ firstName: "Carla", lastName: "García", phone: "+19562921696", source: "voice", matchBy: "email_only" }), "voice", "ai");
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+    });
+
+    it("regression: a booking on a locked call, with no message, still files on the booked contact (S18 unchanged)", async () => {
+      onCallerId(...GARCIAS);
+      const booked = withBooking({ ...lockedByCarla(), contactId: "ct2" },
+        { id: "bk1", contactName: "Beto García", startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" });
+      await finishCall(booked, ctx, meta);
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(patch().contactId).toBe("ct2");
     });
   });
 

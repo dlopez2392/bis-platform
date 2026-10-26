@@ -2502,4 +2502,19 @@ describe("S-47e: take_message asks for a name on a shared number (plan Task 7)",
     expect(failed.state.messages).toHaveLength(1);
     expect(lines.some((l) => l.startsWith("voice take_message call-9: number read failed"))).toBe(true);
   });
+
+  // Owner decision 2026-10-26: on a locked call the message files on no customer (finish-call.ts), so the
+  // name ask would pick nothing; the caller who just failed the check twice is not asked for a name again.
+  it("a locked call on a shared number records the message at once, with no read and no name ask (mutation: drop the lock check in messageNeedsNameCheck -> FAILS)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla García" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla García" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    dbMocks.listContactsOnNumber.mockClear();
+    const msg = await runTool(locked, ctx, "take_message", { body: "Please call me about my appointment" });
+    expect(msg.result).toEqual({ ok: true });
+    expect(msg.state.messages).toHaveLength(1);
+    expect(msg.state.identity.messageNameAsked).toBe(false);
+    expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
 });
