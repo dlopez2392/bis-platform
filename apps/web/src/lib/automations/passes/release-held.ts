@@ -15,8 +15,9 @@ import { releaseTextback } from "@/lib/voice/textback";
 import { releaseDocumentRequest } from "@/lib/document-requests/deliver";
 
 /**
- * The queue's consumer (spec §1, amendment 1). FIRST in the registry on
- * every tick: every held row whose `held_until` has passed is handed back
+ * The queue's consumer (spec §1, amendment 1). The release pass: it runs on
+ * every tick ahead of every recipe (only the billing pause, which touches no
+ * automation state, runs before it): every held row whose `held_until` has passed is handed back
  * to its source, which re-reads the subject, re-checks it, and sends
  * through the same per-row path the normal tick uses — so the held row
  * flips to `sent`, `skipped` or `failed` by the same write the pass would
@@ -59,8 +60,8 @@ export const RELEASE_BATCH = 200;
  * own instant every pass reads its "now" from). A shared window end (say,
  * quiet hours ending 08:00 for a whole account list) can make every held
  * row releasable in the same tick; each row costs a re-read, a settings
- * read, a provider send and two writes, and this pass is FIRST in the
- * registry, so an unbounded drain here would starve reminders, follow-ups,
+ * read, a provider send and two writes, and this pass runs ahead of every
+ * recipe in the registry, so an unbounded drain here would starve reminders, follow-ups,
  * review requests and the weekly reports that run after it. The queue is
  * ordered by `held_until` ascending (`listReleasableHolds`), so stopping
  * partway through is safe: the untouched rows keep their past `held_until`

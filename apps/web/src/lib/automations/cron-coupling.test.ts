@@ -297,7 +297,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
   });
 
-  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the FIRST pass, and the rest of the tick belongs to the passes after it (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
+  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the release pass, and the rest of the tick belongs to the passes after it (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
     // Anchored to a whole line (^…$, multiline) so a COMMENTED-OUT export
     // ("// export const maxDuration = 300;") cannot match — the regex used
     // to be bare `export const maxDuration = (\d+);`, which `.exec` finds
