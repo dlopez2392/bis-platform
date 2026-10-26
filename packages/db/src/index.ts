@@ -223,7 +223,8 @@ export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts,
          markUsageReported, staleUsageAccountIds, countExpiredUsage, listAccountsWithStaleUsage,
          USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
          USAGE_ACCOUNTS_PER_BOUNDED_READ, USAGE_FUTURE_GRACE_MS, STALE_PROBE_ROWS,
-         type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";
+         USAGE_HOLD_AFTER_MS, readUsageBands,
+         type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount, type UsageBands } from "./usage";
 
 // Client billing state (0051 account_billing + stripe_webhook_events, 0052
 // billing_links): the webhook mirror, complimentary, links, the event ledger.
@@ -231,10 +232,18 @@ export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptio
          getAccountBilling, getBillingLink, saveBillingLink, markBillingLinkExpired,
          decideMirror, mirrorSubscription, MIRROR_ATTEMPTS, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
          claimWebhookEvent, markWebhookEventProcessed,
+         PAID_STATUSES, nextVersion, readBillingStanding, listPauseCandidates, pauseBilling, clearBillingPause,
+         undoLiftBillingPause, healPermissions, listBillingAlerts, listReconcilableAccounts,
+         PAUSE_ALERT_FORWARD_MS, PAUSE_ALERT_END_MS, RECONCILE_ALERT_FRESH_MS,
+         type BillingStanding, type BillingAlert,
          type SubscriptionStatus, type AccountBilling, type BillingLink, type BillingLinkWrite,
          type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
          type MirrorOutcome, type MirrorPlan } from "./account-billing";
 export { sumUsageSince } from "./usage";
+
+// The nightly comparison of usage with Stripe (0099 billing_reconciliations),
+// M7a PR-4. See ./billing-reconciliations.ts.
+export * from "./billing-reconciliations";
 
 // Heartbeats (0057 ops_heartbeats): written by the cron harness and the
 // webhook routes, read by the alert pass and the health route. See ./ops.ts.

@@ -3,7 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   decideMirror, mirrorSubscription, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
   claimWebhookEvent, saveBillingLink,
-  type AccountBilling, type SubscriptionSnapshot,
+  pauseBilling, clearBillingPause, undoLiftBillingPause, readBillingStanding, listPauseCandidates, listBillingAlerts,
+  PAID_STATUSES, PAUSE_ALERT_FORWARD_MS, PAUSE_ALERT_END_MS, RECONCILE_ALERT_FRESH_MS,
+  type AccountBilling, type SubscriptionSnapshot, type SubscriptionStatus,
 } from "./account-billing";
 
 /**
@@ -26,7 +28,7 @@ const snap = (over: Partial<SubscriptionSnapshot> = {}): SubscriptionSnapshot =>
 const stored = (over: Partial<AccountBilling> = {}): AccountBilling => ({
   accountId: ACCOUNT, planId: PLAN, complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
   subscriptionStatus: "active", currentPeriodStart: null, currentPeriodEnd: null, pastDueSince: null,
-  billingPausedAt: null, billingStartedAt: "2026-09-01T00:00:00.123456+00:00",
+  billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "2026-09-01T00:00:00.123456+00:00",
   createdAt: "2026-09-01T00:00:00+00:00", updatedAt: "2026-09-01T00:00:00+00:00", ...over,
 });
 const base = {
@@ -48,6 +50,8 @@ describe("decideMirror: a subscription BIS made becomes the billed row", () => {
         stripe_subscription_id: "sub_1", subscription_status: "active",
         current_period_start: iso(START), current_period_end: iso(START + 2_592_000),
         past_due_since: null, billing_started_at: iso(START), updated_at: NOW.toISOString(),
+        // 0099: every write stamps the freshness; a PAID status clears the pause.
+        stripe_checked_at: NOW.toISOString(), billing_paused_at: null,
       },
     });
   });
@@ -572,5 +576,322 @@ describe("23505: only the primary key is a race; another unique key throws, nami
       .toEqual({ ok: false, reason: "already_billed" });
     await expect(markComplimentary(insertRefusedOn("account_billing_stripe_customer_id_key"), { accountId: ACCOUNT, planId: PLAN, now: NOW }))
       .rejects.toThrow(/account_billing_stripe_customer_id_key/);
+  });
+});
+
+/* ------------------------------------------------------------------------ */
+/* M7a PR-4 (0099): the pause, Lift pause, the standing read, the alerts.   */
+/* ------------------------------------------------------------------------ */
+
+type Call = [string, ...unknown[]];
+
+/**
+ * A fake PostgREST for the PR-4 functions: every builder call is recorded per
+ * query (one `from()` is one query), and the query's answer comes from
+ * `answer(table, calls)` when it is awaited or `.maybeSingle()` is called, so
+ * an answer can depend on the filters the code actually sent.
+ */
+function pgFake(answer: (table: string, calls: Call[]) => { data: unknown; error: unknown }) {
+  const log: { table: string; calls: Call[] }[] = [];
+  const db = {
+    from: (table: string) => {
+      const calls: Call[] = [];
+      log.push({ table, calls });
+      const chain: Record<string, unknown> = {};
+      for (const op of ["select", "eq", "neq", "is", "not", "or", "in", "gt", "gte", "lt", "lte", "order", "range", "limit", "update", "insert", "upsert", "delete"]) {
+        chain[op] = (...args: unknown[]) => { calls.push([op, ...args]); return chain; };
+      }
+      chain.maybeSingle = () => { calls.push(["maybeSingle"]); return Promise.resolve(answer(table, calls)); };
+      chain.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => Promise.resolve(answer(table, calls)).then(ok, bad);
+      return chain;
+    },
+  } as unknown as SupabaseClient;
+  return { db, log };
+}
+
+/** An account_billing row as PostgREST returns it, with 0099's two columns. */
+const billingDbRow = (over: Record<string, unknown> = {}) => ({
+  account_id: ACCOUNT, plan_id: PLAN, complimentary: false, stripe_customer_id: "cus_1", stripe_subscription_id: "sub_1",
+  subscription_status: "past_due", current_period_start: null, current_period_end: null,
+  past_due_since: "2026-09-10T00:00:00+00:00", billing_paused_at: null, pause_lifted_at: null, stripe_checked_at: null,
+  billing_started_at: "2026-09-01T00:00:00+00:00", created_at: "2026-09-01T00:00:00+00:00",
+  updated_at: "2026-10-01T11:00:00.124+00:00", ...over,
+});
+
+describe("decideMirror (0099): stripe_checked_at, and payment clears the pause (plan G2, G6)", () => {
+  const ALL: SubscriptionStatus[] = ["incomplete", "incomplete_expired", "trialing", "active", "past_due", "unpaid", "canceled", "paused"];
+
+  it("decideMirror stamps stripe_checked_at with now on every write, whatever the status (mutation: drop the field → FAILS)", () => {
+    for (const status of ALL) {
+      const d = decideMirror({ ...base, existing: stored({ billingPausedAt: "2026-09-20T00:00:00+00:00" }), snapshot: snap({ status }) });
+      expect(d.kind === "write" && d.row.stripe_checked_at, status).toBe(NOW.toISOString());
+    }
+  });
+
+  it("decideMirror clears billing_paused_at when Stripe says active or trialing (mutation: drop the clear → FAILS)", () => {
+    expect(PAID_STATUSES).toEqual(["active", "trialing"]);
+    for (const status of ["active", "trialing"] as const) {
+      const d = decideMirror({ ...base, existing: stored({ billingPausedAt: "2026-09-20T00:00:00+00:00" }), snapshot: snap({ status }) });
+      if (d.kind !== "write") throw new Error(`expected a write for ${status}`);
+      expect(Object.prototype.hasOwnProperty.call(d.row, "billing_paused_at"), status).toBe(true);
+      expect(d.row.billing_paused_at, status).toBeNull();
+    }
+  });
+
+  it("decideMirror leaves billing_paused_at out of the row for past_due, unpaid, canceled, incomplete (and every other unpaid status), so a re-read never un-pauses and never pauses (mutation: always write null → FAILS)", () => {
+    for (const status of ["past_due", "unpaid", "canceled", "incomplete", "incomplete_expired", "paused"] as const) {
+      const d = decideMirror({ ...base, existing: stored({ billingPausedAt: "2026-09-20T00:00:00+00:00" }), snapshot: snap({ status }) });
+      if (d.kind !== "write") throw new Error(`expected a write for ${status}`);
+      expect(Object.keys(d.row), status).not.toContain("billing_paused_at");
+    }
+  });
+});
+
+describe("pauseBilling and clearBillingPause: compare-and-set on updated_at (plan G1, G3; PR-3 B5)", () => {
+  // The stored version is in NOW's own millisecond (microseconds past it), so
+  // writing `now` would leave the version where it was: nextVersion moves it.
+  const STORED_V = "2026-10-01T12:00:00.000456+00:00";
+  const NEXT_V = "2026-10-01T12:00:00.001Z";
+
+  it("pauseBilling is compare-and-set on updated_at and moves it with nextVersion, never on a complimentary row or over a pause (mutation: drop `.eq('updated_at', …)` → FAILS; write updated_at = now → FAILS)", async () => {
+    const { db, log } = pgFake(() => ({ data: [{ account_id: ACCOUNT }], error: null }));
+    expect(await pauseBilling(db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW })).toBe("paused");
+    expect(log).toHaveLength(1);
+    expect(log[0]!.table).toBe("account_billing");
+    const q = log[0]!.calls;
+    expect(q).toContainEqual(["update", { billing_paused_at: NOW.toISOString(), updated_at: NEXT_V }]);
+    expect(q).toContainEqual(["eq", "account_id", ACCOUNT]);
+    expect(q).toContainEqual(["eq", "updated_at", STORED_V]);
+    expect(q).toContainEqual(["eq", "complimentary", false]);
+    expect(q).toContainEqual(["is", "billing_paused_at", null]);
+  });
+
+  it("pauseBilling answers conflict when no row matched (mutation: return 'paused' on an empty result → FAILS)", async () => {
+    expect(await pauseBilling(pgFake(() => ({ data: [], error: null })).db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW }))
+      .toBe("conflict");
+    expect(await pauseBilling(pgFake(() => ({ data: null, error: null })).db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW }))
+      .toBe("conflict");
+    await expect(pauseBilling(pgFake(() => ({ data: null, error: { message: "boom" } })).db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW }))
+      .rejects.toThrow(/pauseBilling failed: boom/);
+  });
+
+  it("clearBillingPause with lift stamps pause_lifted_at; without lift it does not; both are compare-and-set on a PAUSED row (mutation: always stamp → FAILS; drop the updated_at filter → FAILS)", async () => {
+    const lifted = pgFake(() => ({ data: [{ account_id: ACCOUNT }], error: null }));
+    expect(await clearBillingPause(lifted.db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW, lift: true })).toBe("cleared");
+    expect(lifted.log[0]!.calls).toContainEqual(["update", { billing_paused_at: null, updated_at: NEXT_V, pause_lifted_at: NOW.toISOString() }]);
+    const healed = pgFake(() => ({ data: [{ account_id: ACCOUNT }], error: null }));
+    expect(await clearBillingPause(healed.db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW, lift: false })).toBe("cleared");
+    const q = healed.log[0]!.calls;
+    expect(q).toContainEqual(["update", { billing_paused_at: null, updated_at: NEXT_V }]);
+    expect(q).toContainEqual(["eq", "account_id", ACCOUNT]);
+    expect(q).toContainEqual(["eq", "updated_at", STORED_V]);
+    expect(q).toContainEqual(["not", "billing_paused_at", "is", null]);
+    expect(await clearBillingPause(pgFake(() => ({ data: [], error: null })).db, { accountId: ACCOUNT, expectedUpdatedAt: STORED_V, now: NOW, lift: true }))
+      .toBe("conflict");
+  });
+});
+
+describe("undoLiftBillingPause: the Undo of a Lift re-pauses only the row it lifted (plan G3, re-review m1)", () => {
+  /** PostgREST's text for the lift stamp, and the same instant as the action holds it. */
+  const LIFT_DB = "2026-10-01T11:00:00.123+00:00";
+  const LIFT_JS = "2026-10-01T11:00:00.123Z";
+  const PAUSED_AT = "2026-09-20T08:00:00.000Z";
+  const STORED_V = "2026-10-01T11:00:00.124+00:00";
+
+  /** The stored row (read through getAccountBilling's maybeSingle), and an
+   *  update that lands only while updated_at is still the stored one. */
+  function undoWorld(over: Record<string, unknown> = {}) {
+    const row = billingDbRow({ pause_lifted_at: LIFT_DB, updated_at: STORED_V, ...over });
+    const updates: Call[][] = [];
+    const { db } = pgFake((_table, calls) => {
+      if (calls.some((c) => c[0] === "maybeSingle")) return { data: row, error: null };
+      updates.push(calls);
+      const v = calls.find((c) => c[0] === "eq" && c[1] === "updated_at")?.[2];
+      return { data: v === row.updated_at ? [{ account_id: ACCOUNT }] : [], error: null };
+    });
+    return { db, updates };
+  }
+  const undo = (db: SupabaseClient, over: Partial<{ liftedAt: string; pausedAt: string }> = {}) =>
+    undoLiftBillingPause(db, { accountId: ACCOUNT, liftedAt: LIFT_JS, pausedAt: PAUSED_AT, now: NOW, ...over });
+
+  it("undoLiftBillingPause refuses when the stored lift is not the one passed, comparing instants: `…123Z` and `…123+00:00` are the same lift (mutation: compare the strings → FAILS on `…123Z` vs `…123+00:00`)", async () => {
+    const same = undoWorld();
+    expect(await undo(same.db)).toBe("repaused");
+    const other = undoWorld({ pause_lifted_at: "2026-10-01T11:00:00.124+00:00" });
+    expect(await undo(other.db)).toBe("stale");
+    expect(other.updates).toEqual([]);
+    const never = undoWorld({ pause_lifted_at: null });
+    expect(await undo(never.db)).toBe("stale");
+  });
+
+  it("undoLiftBillingPause refuses a row that is now active, complimentary, or has no subscription, or is already paused again; it re-pauses a past_due, unpaid or canceled one (mutation: drop the status check → FAILS)", async () => {
+    const refusedRows: Record<string, unknown>[] = [
+      { subscription_status: "active", past_due_since: null },
+      { subscription_status: "trialing", past_due_since: null },
+      { subscription_status: "incomplete" },
+      { complimentary: true },
+      { stripe_subscription_id: null, subscription_status: null },
+      { billing_paused_at: "2026-10-01T11:30:00+00:00" },
+    ];
+    for (const over of refusedRows) {
+      const w = undoWorld(over);
+      expect(await undo(w.db), JSON.stringify(over)).toBe("stale");
+      expect(w.updates, JSON.stringify(over)).toEqual([]);
+    }
+    for (const status of ["past_due", "unpaid", "canceled"]) {
+      expect(await undo(undoWorld({ subscription_status: status }).db), status).toBe("repaused");
+    }
+    // The billing moved between the read and the write: the update matches nothing.
+    const { db } = pgFake((_t, calls) => calls.some((c) => c[0] === "maybeSingle")
+      ? { data: billingDbRow({ pause_lifted_at: LIFT_DB, updated_at: STORED_V }), error: null }
+      : { data: [], error: null });
+    expect(await undo(db)).toBe("stale");
+  });
+
+  it("undoLiftBillingPause restores the pre-lift billing_paused_at, not now, clears the lift and moves updated_at on the row it read (mutation: write now → FAILS: the 30-day forward clock restarts); a pausedAt after the lift, or unparseable, is stale (mutation: accept it → FAILS)", async () => {
+    const w = undoWorld();
+    expect(await undo(w.db, { pausedAt: "2026-09-20T08:00:00+00:00" })).toBe("repaused");
+    expect(w.updates).toHaveLength(1);
+    const q = w.updates[0]!;
+    expect(q).toContainEqual(["update", { billing_paused_at: PAUSED_AT, pause_lifted_at: null, updated_at: NOW.toISOString() }]);
+    expect(q).toContainEqual(["eq", "account_id", ACCOUNT]);
+    expect(q).toContainEqual(["eq", "updated_at", STORED_V]);
+    for (const pausedAt of ["2026-10-01T11:00:00.124Z", "not a date", ""]) {
+      const bad = undoWorld();
+      expect(await undo(bad.db, { pausedAt }), pausedAt).toBe("stale");
+      expect(bad.updates, pausedAt).toEqual([]);
+    }
+  });
+});
+
+describe("readBillingStanding: what enforcement reads (plan G4, G5)", () => {
+  it("readBillingStanding returns null with no row, the status and the plan's features from the embed, and throws on an error or a missing embed (mutation: default features to true when the embed is missing → FAILS)", async () => {
+    const none = pgFake(() => ({ data: null, error: null }));
+    expect(await readBillingStanding(none.db, ACCOUNT)).toBeNull();
+    const sel = none.log[0]!.calls.find((c) => c[0] === "select")?.[1] as string;
+    expect(sel.replace(/\s+/g, "")).toContain("plans(features)");
+    expect(none.log[0]!.calls).toContainEqual(["eq", "account_id", ACCOUNT]);
+
+    const row = pgFake(() => ({
+      data: {
+        complimentary: false, billing_paused_at: "2026-09-20T08:00:00+00:00", subscription_status: "past_due",
+        plans: { features: { voice_receptionist: true, web_concierge: false } },
+      },
+      error: null,
+    }));
+    expect(await readBillingStanding(row.db, ACCOUNT)).toEqual({
+      complimentary: false, pausedAt: "2026-09-20T08:00:00+00:00", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: false },
+    });
+
+    await expect(readBillingStanding(pgFake(() => ({ data: null, error: { message: "down" } })).db, ACCOUNT))
+      .rejects.toThrow(/standing read failed: down/);
+    await expect(readBillingStanding(pgFake(() => ({
+      data: { complimentary: true, billing_paused_at: null, subscription_status: null, plans: null }, error: null,
+    })).db, ACCOUNT)).rejects.toThrow(/no plan/);
+  });
+});
+
+describe("listPauseCandidates: every row the pause pass may act on (plan G1)", () => {
+  it("listPauseCandidates pages until an EMPTY page, filtering out complimentary and subscription-less rows (mutation: stop on a short page → FAILS; drop the complimentary filter → FAILS)", async () => {
+    const page = (n: number, offset: number) =>
+      Array.from({ length: n }, (_, i) => billingDbRow({ account_id: `acct_${offset + i}` }));
+    const pages = [page(500, 0), page(2, 500), []];
+    const ranges: unknown[][] = [];
+    const { db, log } = pgFake((_t, calls) => {
+      const r = calls.find((c) => c[0] === "range")!;
+      ranges.push(r.slice(1));
+      return { data: pages[ranges.length - 1] ?? [], error: null };
+    });
+    const got = await listPauseCandidates(db);
+    expect(got).toHaveLength(502);
+    expect(got[501]).toMatchObject({ accountId: "acct_501", pauseLiftedAt: null, stripeCheckedAt: null });
+    expect(ranges).toEqual([[0, 499], [500, 999], [502, 1001]]);
+    const q = log[0]!.calls;
+    expect(q).toContainEqual(["eq", "complimentary", false]);
+    expect(q).toContainEqual(["not", "stripe_subscription_id", "is", null]);
+    expect(q).toContainEqual(["or", "billing_paused_at.not.is.null,subscription_status.in.(past_due,unpaid,canceled)"]);
+    expect(q).toContainEqual(["order", "account_id", { ascending: true }]);
+  });
+});
+
+describe("listBillingAlerts: the agency's work-queue lines, each of which ENDS (plan G13, M8, re-review m3)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const T = NOW.getTime();
+  const ago = (ms: number) => new Date(T - ms).toISOString();
+
+  /** account_billing answers `rows` on its first page and [] after; the
+   *  reconciliation read answers `recs` (already newest-first, as the query orders it). */
+  function alertsWorld(rows: Record<string, unknown>[], recs: Record<string, unknown>[]) {
+    let billingPages = 0;
+    return pgFake((table) => {
+      if (table === "account_billing") { billingPages += 1; return { data: billingPages === 1 ? rows : [], error: null }; }
+      return { data: recs, error: null };
+    });
+  }
+  const acct = (name: string, past: string | null, paused: string | null) =>
+    ({ account_id: `id_${name}`, past_due_since: past, billing_paused_at: paused, accounts: { name } });
+
+  const ROWS = [
+    acct("Failing", ago(3 * DAY), null),
+    acct("Paused10", ago(17 * DAY), ago(10 * DAY)),
+    acct("Paused30", ago(37 * DAY), ago(30 * DAY)),
+    acct("Paused35", ago(42 * DAY), ago(35 * DAY)),
+    acct("Paused44", ago(51 * DAY), ago(44 * DAY)),
+    acct("Paused50", ago(57 * DAY), ago(50 * DAY)),
+  ];
+
+  it("listBillingAlerts: payment_failed for past_due/unpaid not paused; paused under 30 days; paused_no_forward from day 30 to day 44, nothing after (mutation: drop the 44-day end → FAILS)", async () => {
+    expect(PAUSE_ALERT_FORWARD_MS).toBe(30 * DAY);
+    expect(PAUSE_ALERT_END_MS).toBe(44 * DAY);
+    const { db, log } = alertsWorld(ROWS, []);
+    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+      { accountId: "id_Failing", accountName: "Failing", kind: "payment_failed", since: ago(3 * DAY) },
+      { accountId: "id_Paused10", accountName: "Paused10", kind: "paused", since: ago(10 * DAY) },
+      { accountId: "id_Paused30", accountName: "Paused30", kind: "paused_no_forward", since: ago(30 * DAY) },
+      { accountId: "id_Paused35", accountName: "Paused35", kind: "paused_no_forward", since: ago(35 * DAY) },
+    ]);
+    const q = log[0]!.calls;
+    expect(q).toContainEqual(["eq", "complimentary", false]);
+    expect(q).toContainEqual(["or", "billing_paused_at.not.is.null,subscription_status.in.(past_due,unpaid)"]);
+    expect((q.find((c) => c[0] === "select")?.[1] as string).replace(/\s+/g, "")).toContain("accounts(name)");
+  });
+
+  it("listBillingAlerts, switch off: a 30- or 35-day pause is `paused`, never `paused_no_forward`, and still leaves at day 44 (mutation: ignore opts.enforced → FAILS)", async () => {
+    const { db } = alertsWorld(ROWS, []);
+    expect(await listBillingAlerts(db, NOW, { enforced: false })).toEqual([
+      { accountId: "id_Failing", accountName: "Failing", kind: "payment_failed", since: ago(3 * DAY) },
+      { accountId: "id_Paused10", accountName: "Paused10", kind: "paused", since: ago(10 * DAY) },
+      { accountId: "id_Paused30", accountName: "Paused30", kind: "paused", since: ago(30 * DAY) },
+      { accountId: "id_Paused35", accountName: "Paused35", kind: "paused", since: ago(35 * DAY) },
+    ]);
+  });
+
+  it("listBillingAlerts: usage_mismatch only from each (account, meter)'s newest night's rows, alerting verdict, checked within 48 h; a closed-period mismatch found tonight beside a matching current period alerts, and drops after the next night (mutation: newest window_start only → FAILS: tonight's closed-period mismatch is hidden; mutation: any alerting row → FAILS: it stays for ever)", async () => {
+    const HOUR = 60 * 60 * 1000;
+    expect(RECONCILE_ALERT_FRESH_MS).toBe(48 * HOUR);
+    const rec = (account: string, meter: string, windowStart: string, verdict: string, checkedAgo: number) => ({
+      account_id: `id_${account}`, meter, window_start: windowStart, checked_at: ago(checkedAgo), verdict, accounts: { name: account },
+    });
+    const CURRENT = "2026-09-21T14:13:00+00:00";
+    const CLOSED = "2026-08-21T14:13:00+00:00";
+    // Newest check first, as `.order("checked_at", { ascending: false })` returns them.
+    const recs = [
+      rec("Tonight", "sms", CURRENT, "match", 1 * HOUR),               // tonight, current period: fine
+      rec("Lingering", "sms", CURRENT, "match", 1 * HOUR),             // tonight, current period: fine
+      rec("HeldOnly", "sms", CURRENT, "held_missing", 1.2 * HOUR),     // resolved by the nightly: no alert
+      rec("Tonight", "sms", CLOSED, "stripe_over", 1.5 * HOUR),        // tonight, the period that just closed
+      rec("Persisting", "voice_minutes", CURRENT, "stripe_under", 2 * HOUR),
+      rec("Persisting", "ai_chats", CURRENT, "ambiguous", 2.5 * HOUR), // a second meter: still one line
+      rec("Lingering", "sms", CLOSED, "stripe_under", 25 * HOUR),      // LAST night's closed-period find
+    ];
+    const { db, log } = alertsWorld([], recs);
+    expect(await listBillingAlerts(db, NOW, { enforced: true })).toEqual([
+      { accountId: "id_Tonight", accountName: "Tonight", kind: "usage_mismatch", since: ago(1.5 * HOUR) },
+      { accountId: "id_Persisting", accountName: "Persisting", kind: "usage_mismatch", since: ago(2 * HOUR) },
+    ]);
+    const r = log.find((l) => l.table === "billing_reconciliations")!.calls;
+    expect(r).toContainEqual(["gte", "checked_at", ago(48 * HOUR)]);
+    expect(r).toContainEqual(["order", "checked_at", { ascending: false }]);
   });
 });

@@ -12,7 +12,7 @@ const ZONE = "America/Chicago";
 const row = (over: Partial<AccountBilling> = {}): AccountBilling => ({
   accountId: "a", planId: "p1", complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
   subscriptionStatus: "active", currentPeriodStart: "2026-10-12T17:00:00+00:00", currentPeriodEnd: "2026-11-12T17:00:00+00:00",
-  pastDueSince: null, billingPausedAt: null, billingStartedAt: "2026-09-12T17:00:00+00:00",
+  pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "2026-09-12T17:00:00+00:00",
   createdAt: "2026-09-12T17:00:00+00:00", updatedAt: "2026-09-12T17:00:00+00:00", ...over,
 });
 const link = (expiresAt: string): BillingLink => ({

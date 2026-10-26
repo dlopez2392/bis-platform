@@ -69,7 +69,7 @@ const plan = (id: string, over: Partial<Plan> = {}): Plan => ({
 });
 const billing = (over: Partial<AccountBilling> = {}): AccountBilling => ({
   accountId: ACCOUNT, planId: P1, complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
-  subscriptionStatus: "active", currentPeriodStart: null, currentPeriodEnd: null, pastDueSince: null, billingPausedAt: null,
+  subscriptionStatus: "active", currentPeriodStart: null, currentPeriodEnd: null, pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null,
   billingStartedAt: "2026-09-01T00:00:00+00:00", createdAt: "2026-09-01T00:00:00+00:00", updatedAt: "2026-09-01T00:00:00+00:00", ...over,
 });
 /** A stored link whose OWN expiry has passed: the card shows no link and

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PlanFeatures, PlanPriceKey } from "./billing";
+import { ALERTING_VERDICTS } from "./billing-reconciliations";
 
 /**
  * The billed-account state (0051 account_billing, 0052 billing_links) and
@@ -18,6 +19,8 @@ export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 export const ENDED_STATUSES: readonly SubscriptionStatus[] = ["incomplete_expired", "canceled"];
 /** Unpaid: past_due_since is stamped while the subscription sits in one of these (G8). */
 export const PAST_DUE_STATUSES: readonly SubscriptionStatus[] = ["past_due", "unpaid"];
+/** Paid: a mirror write in one of these clears the non-payment pause (M7a PR-4, plan G2). */
+export const PAID_STATUSES: readonly SubscriptionStatus[] = ["active", "trialing"];
 
 export function isSubscriptionStatus(s: string): s is SubscriptionStatus {
   return (SUBSCRIPTION_STATUSES as readonly string[]).includes(s);
@@ -65,6 +68,10 @@ export type AccountBilling = {
   currentPeriodEnd: string | null;
   pastDueSince: string | null;
   billingPausedAt: string | null;
+  /** When the agency last lifted the pause (0099). */
+  pauseLiftedAt: string | null;
+  /** When the mirror last wrote what Stripe said (0099). */
+  stripeCheckedAt: string | null;
   /** As PostgREST returns it (microseconds). Never re-serialise it. */
   billingStartedAt: string;
   createdAt: string;
@@ -76,6 +83,7 @@ type AccountBillingDbRow = {
   stripe_customer_id: string | null; stripe_subscription_id: string | null;
   subscription_status: SubscriptionStatus | null; current_period_start: string | null;
   current_period_end: string | null; past_due_since: string | null; billing_paused_at: string | null;
+  pause_lifted_at: string | null; stripe_checked_at: string | null;
   billing_started_at: string; created_at: string; updated_at: string;
 };
 
@@ -83,7 +91,7 @@ type AccountBillingDbRow = {
 // select text at the type level, and a widened `string` types the row as a
 // GenericStringError (caught typechecking this plan, 2026-09-25).
 const BILLING_COLUMNS =
-  "account_id, plan_id, complimentary, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_start, current_period_end, past_due_since, billing_paused_at, billing_started_at, created_at, updated_at";
+  "account_id, plan_id, complimentary, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_start, current_period_end, past_due_since, billing_paused_at, pause_lifted_at, stripe_checked_at, billing_started_at, created_at, updated_at";
 
 function toBilling(r: AccountBillingDbRow): AccountBilling {
   return {
@@ -91,6 +99,7 @@ function toBilling(r: AccountBillingDbRow): AccountBilling {
     stripeCustomerId: r.stripe_customer_id, stripeSubscriptionId: r.stripe_subscription_id,
     subscriptionStatus: r.subscription_status, currentPeriodStart: r.current_period_start,
     currentPeriodEnd: r.current_period_end, pastDueSince: r.past_due_since, billingPausedAt: r.billing_paused_at,
+    pauseLiftedAt: r.pause_lifted_at, stripeCheckedAt: r.stripe_checked_at,
     billingStartedAt: r.billing_started_at, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -206,6 +215,10 @@ type MirrorRow = {
   stripe_subscription_id: string; subscription_status: SubscriptionStatus;
   current_period_start: string | null; current_period_end: string | null; past_due_since: string | null;
   billing_started_at: string; updated_at: string;
+  /** 0099: when Stripe last confirmed this row (every write sets it). */
+  stripe_checked_at: string;
+  /** 0099: present (as null) only on a PAID status: payment clears the pause. */
+  billing_paused_at?: null;
 };
 
 export type MirrorDecision =
@@ -220,7 +233,7 @@ const seconds = (s: number): string => new Date(s * 1000).toISOString();
  *  never leave it where it was: at least 1 ms past the stored value, even
  *  when two writes share a millisecond or this instance's clock runs behind.
  *  (Date.parse keeps the milliseconds of PostgREST's microsecond text.) */
-function nextVersion(now: Date, stored: string | undefined): string {
+export function nextVersion(now: Date, stored: string | undefined): string {
   const floor = stored ? Date.parse(stored) + 1 : Number.NEGATIVE_INFINITY;
   return new Date(Math.max(now.getTime(), floor)).toISOString();
 }
@@ -273,6 +286,7 @@ export function decideMirror(input: {
     }
   }
   const unpaid = PAST_DUE_STATUSES.includes(s.status);
+  const paid = PAID_STATUSES.includes(s.status);
   return {
     kind: "write",
     // Passed through: writePermissions keeps exactly the two flags, the one
@@ -285,6 +299,11 @@ export function decideMirror(input: {
       current_period_end: s.currentPeriodEnd === null ? null : seconds(s.currentPeriodEnd),
       past_due_since: unpaid ? (sameSubscription && existing?.pastDueSince ? existing.pastDueSince : now.toISOString()) : null,
       billing_started_at: sameSubscription ? existing.billingStartedAt : seconds(s.startedAt),
+      stripe_checked_at: now.toISOString(),
+      // Payment clears the pause (spec flow 5; plan G2). Only a PAID status
+      // clears it: the key is absent otherwise, so a past_due re-read never
+      // un-pauses and an insert takes the column default (NULL).
+      ...(paid ? { billing_paused_at: null } : {}),
       updated_at: nextVersion(now, existing?.updatedAt),
     },
   };
@@ -327,7 +346,7 @@ export const MIRROR_ATTEMPTS = 3;
 
 /**
  * Stores what Stripe says NOW about one subscription as the account's billed
- * row (spec flow 4): the row (billing_paused_at is never touched here), the
+ * row (spec flow 4): the row (billing_paused_at is cleared on a paid status and never set here), the
  * permissions, and the link that led to it consumed (linkLedTo). `read` asks Stripe (the
  * gateway's retrieveSubscription); nothing from a webhook payload reaches
  * here. Idempotent: the same Stripe state twice writes the same row.
@@ -347,7 +366,9 @@ export const MIRROR_ATTEMPTS = 3;
  * What is guaranteed is the ROW. The permissions write and the link cleanup
  * follow it outside the compare-and-set, so two racing deliveries can leave
  * `accounts.permissions` from the older one. Harmless in PR-3 (nothing reads
- * permissions yet, G9); PR-4 closes it before it enforces them (Next plans).
+ * permissions yet, G9). PR-4 (plan G4) keeps it out of enforcement: every
+ * gate reads the PLAN's features through readBillingStanding, never
+ * accounts.permissions, and the nightly step rewrites it (healPermissions).
  */
 export async function mirrorSubscription(
   db: SupabaseClient, read: () => Promise<SubscriptionSnapshot>, now: () => Date,
@@ -529,4 +550,238 @@ export async function markWebhookEventProcessed(db: SupabaseClient, eventId: str
   const { error } = await db.from("stripe_webhook_events")
     .update({ processed_at: at.toISOString() }).eq("event_id", eventId).is("processed_at", null);
   if (error) throw new Error(`markWebhookEventProcessed failed: ${error.message}`);
+}
+
+/* ------------------------------------------------------------------------ */
+/* M7a PR-4 (0099): the non-payment pause, Lift pause, the standing read,   */
+/* the agency's alerts. docs/superpowers/plans/2026-10-26-m7a-pr4-pause-    */
+/* and-reconciliation.md, Task 2.                                            */
+/* ------------------------------------------------------------------------ */
+
+export type BillingStanding = {
+  complimentary: boolean;
+  pausedAt: string | null;
+  subscriptionStatus: SubscriptionStatus | null;
+  features: PlanFeatures;
+};
+
+/**
+ * What enforcement reads (plan G4, G5): the pause stamp, the status (for WHY
+ * a pause is on) and the PLAN's features, in one embed read through
+ * account_billing.plan_id. Never accounts.permissions, which the mirror
+ * writes outside its compare-and-set (PR-3 B5). null = no row = unbilled.
+ * A row always has a plan (plan_id not null, restrict), so a missing embed is
+ * a read fault and throws; each caller decides what a throw means. Needs
+ * serviceDb(): plans is agency-read only, and a client Staff session reads no
+ * account_billing row at all (0066).
+ */
+export async function readBillingStanding(db: SupabaseClient, accountId: string): Promise<BillingStanding | null> {
+  const { data, error } = await db.from("account_billing")
+    .select("complimentary, billing_paused_at, subscription_status, plans(features)")
+    .eq("account_id", accountId).maybeSingle();
+  if (error) throw new Error(`billing: standing read failed: ${error.message}`);
+  if (!data) return null;
+  const r = data as unknown as {
+    complimentary: boolean; billing_paused_at: string | null; subscription_status: SubscriptionStatus | null;
+    plans: { features: PlanFeatures } | null;
+  };
+  if (!r.plans) throw new Error(`billing: standing read found no plan for account ${accountId}`);
+  return {
+    complimentary: r.complimentary, pausedAt: r.billing_paused_at,
+    subscriptionStatus: r.subscription_status, features: r.plans.features,
+  };
+}
+
+const PAUSE_PAGE = 500;
+
+/**
+ * Every row the pause pass (and the nightly re-read) may act on: not
+ * complimentary, with a subscription, and paused or in a status the pass
+ * reads (G1). Paged by account id until an actually EMPTY page (PR-1 rule:
+ * a short page is not the end when PostgREST's max_rows is below the page).
+ * The complimentary filter is defence in depth: 0051's CHECKs already keep a
+ * complimentary row subscription-less and unpaused.
+ */
+export async function listPauseCandidates(db: SupabaseClient): Promise<AccountBilling[]> {
+  const out: AccountBilling[] = [];
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("account_billing").select(BILLING_COLUMNS)
+      .eq("complimentary", false).not("stripe_subscription_id", "is", null)
+      .or("billing_paused_at.not.is.null,subscription_status.in.(past_due,unpaid,canceled)")
+      .order("account_id", { ascending: true }).range(from, from + PAUSE_PAGE - 1);
+    if (error) throw new Error(`listPauseCandidates failed: ${error.message}`);
+    const rows = (data ?? []) as AccountBillingDbRow[];
+    if (rows.length === 0) return out;
+    out.push(...rows.map(toBilling));
+    from += rows.length;
+  }
+}
+
+/** Stamps the pause (the cron pass, G1). Compare-and-set on updated_at
+ *  (PR-3 B5): a row the mirror or the agency changed since the pass read it
+ *  is a conflict, re-decided next tick. Never on a complimentary row, never
+ *  over an existing pause. */
+export async function pauseBilling(
+  db: SupabaseClient, input: { accountId: string; expectedUpdatedAt: string; now: Date },
+): Promise<"paused" | "conflict"> {
+  const { data, error } = await db.from("account_billing")
+    .update({ billing_paused_at: input.now.toISOString(), updated_at: nextVersion(input.now, input.expectedUpdatedAt) })
+    .eq("account_id", input.accountId).eq("updated_at", input.expectedUpdatedAt)
+    .eq("complimentary", false).is("billing_paused_at", null)
+    .select("account_id");
+  if (error) throw new Error(`pauseBilling failed: ${error.message}`);
+  return (data ?? []).length === 1 ? "paused" : "conflict";
+}
+
+/** Clears the pause: `lift` = the agency's Lift pause (stamps
+ *  pause_lifted_at, G3); otherwise the pass healing a paid row (G1/G2).
+ *  Compare-and-set on updated_at, on a row that is still paused. */
+export async function clearBillingPause(
+  db: SupabaseClient, input: { accountId: string; expectedUpdatedAt: string; now: Date; lift: boolean },
+): Promise<"cleared" | "conflict"> {
+  const at = input.now.toISOString();
+  const { data, error } = await db.from("account_billing")
+    .update({
+      billing_paused_at: null, updated_at: nextVersion(input.now, input.expectedUpdatedAt),
+      ...(input.lift ? { pause_lifted_at: at } : {}),
+    })
+    .eq("account_id", input.accountId).eq("updated_at", input.expectedUpdatedAt)
+    .not("billing_paused_at", "is", null)
+    .select("account_id");
+  if (error) throw new Error(`clearBillingPause failed: ${error.message}`);
+  return (data ?? []).length === 1 ? "cleared" : "conflict";
+}
+
+/** Undo of a Lift (G3): re-pauses only while the row still carries THAT lift
+ *  (compared as instants: PostgREST returns microseconds and +00:00), is not
+ *  paused, is not complimentary, has a subscription and is still unpaid or
+ *  ended. Anything else is "stale": the billing changed under the toast. It
+ *  RESTORES the pause's own start (`pausedAt`, returned by the Lift), so the
+ *  30-day forward clock (I7) does not restart (re-review m1). */
+export async function undoLiftBillingPause(
+  db: SupabaseClient, input: { accountId: string; liftedAt: string; pausedAt: string; now: Date },
+): Promise<"repaused" | "stale"> {
+  const pausedAtMs = Date.parse(input.pausedAt);
+  if (Number.isNaN(pausedAtMs) || pausedAtMs > Date.parse(input.liftedAt)) return "stale";
+  const row = await getAccountBilling(db, input.accountId);
+  const sameLift = row?.pauseLiftedAt != null && Date.parse(row.pauseLiftedAt) === Date.parse(input.liftedAt);
+  const status = row?.subscriptionStatus ?? null;
+  const pausable = status !== null && (PAST_DUE_STATUSES.includes(status) || status === "canceled");
+  if (!row || !sameLift || row.billingPausedAt || row.complimentary || !row.stripeSubscriptionId || !pausable) return "stale";
+  const { data, error } = await db.from("account_billing")
+    .update({ billing_paused_at: new Date(pausedAtMs).toISOString(), pause_lifted_at: null, updated_at: nextVersion(input.now, row.updatedAt) })
+    .eq("account_id", input.accountId).eq("updated_at", row.updatedAt)
+    .select("account_id");
+  if (error) throw new Error(`undoLiftBillingPause failed: ${error.message}`);
+  return (data ?? []).length === 1 ? "repaused" : "stale";
+}
+
+/** The nightly heal (G4): accounts.permissions rewritten from the row's
+ *  CURRENT plan. No row = {} (unbilled). */
+export async function healPermissions(db: SupabaseClient, accountId: string): Promise<void> {
+  const row = await getAccountBilling(db, accountId);
+  if (!row) return writePermissions(db, accountId, null);
+  const plan = await readPlan(db, row.planId);
+  if (!plan) throw new Error(`healPermissions: plan ${row.planId} of account ${accountId} not found`);
+  await writePermissions(db, accountId, plan.features);
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+/** I7: from here a paused account's calls are no longer forwarded (mirrors
+ *  standing.ts's PAUSE_FORWARD_MS; a test pins the two equal). */
+export const PAUSE_ALERT_FORWARD_MS = 30 * DAY;
+/** The 30-day item leaves the work queue two weeks later (M8). */
+export const PAUSE_ALERT_END_MS = 44 * DAY;
+/** A reconciliation alert is shown while its newest check is this recent. */
+export const RECONCILE_ALERT_FRESH_MS = 48 * 60 * 60 * 1000;
+/** One night's run spans at most this (the window opens at 08:00 UTC and the
+ *  budget resumes it on later ticks): rows of one key checked within it are
+ *  one run. */
+const RUN_SPAN_MS = 6 * 60 * 60 * 1000;
+
+export type BillingAlert = {
+  accountId: string;
+  accountName: string;
+  kind: "payment_failed" | "paused" | "paused_no_forward" | "usage_mismatch";
+  since: string;
+};
+
+/** The agency's work-queue banner (G13). Agency only: the caller has run
+ *  requireAgency() and passes serviceDb(). Names come from accounts.name,
+ *  the agency's own label (agency eyes only, never a client's). Every line
+ *  ENDS (M8): payment_failed when the mirror clears past_due_since or the
+ *  pass pauses; paused / paused_no_forward at PAUSE_ALERT_END_MS; a
+ *  usage_mismatch after the next night's run or RECONCILE_ALERT_FRESH_MS. */
+export async function listBillingAlerts(db: SupabaseClient, now: Date, opts: { enforced: boolean }): Promise<BillingAlert[]> {
+  const t = now.getTime();
+  const alerts: BillingAlert[] = [];
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("account_billing")
+      .select("account_id, past_due_since, billing_paused_at, accounts(name)")
+      .eq("complimentary", false)
+      .or("billing_paused_at.not.is.null,subscription_status.in.(past_due,unpaid)")
+      .order("account_id", { ascending: true }).range(from, from + PAUSE_PAGE - 1);
+    if (error) throw new Error(`listBillingAlerts failed: ${error.message}`);
+    const rows = (data ?? []) as unknown as {
+      account_id: string; past_due_since: string | null; billing_paused_at: string | null; accounts: { name: string } | null;
+    }[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const accountName = r.accounts?.name ?? r.account_id;
+      if (r.billing_paused_at) {
+        const age = t - Date.parse(r.billing_paused_at);
+        // m3: "calls are no longer forwarded" is true only while the switch enforces it.
+        if (age < PAUSE_ALERT_FORWARD_MS || (!opts.enforced && age < PAUSE_ALERT_END_MS)) {
+          alerts.push({ accountId: r.account_id, accountName, kind: "paused", since: r.billing_paused_at });
+        } else if (age < PAUSE_ALERT_END_MS) {
+          alerts.push({ accountId: r.account_id, accountName, kind: "paused_no_forward", since: r.billing_paused_at });
+        }
+      } else if (r.past_due_since) {
+        alerts.push({ accountId: r.account_id, accountName, kind: "payment_failed", since: r.past_due_since });
+      }
+    }
+    from += rows.length;
+  }
+  // Reconciliation: per (account, meter), the rows of its NEWEST night's run
+  // (checked within RUN_SPAN_MS of its newest check: the closed-period and
+  // the current-period comparisons of one night both count, so a closed
+  // period's mismatch found tonight is not hidden by tonight's matching
+  // current period), alerting, and fresh. Ordered by checked_at, newest first.
+  const { data, error } = await db.from("billing_reconciliations")
+    .select("account_id, meter, checked_at, verdict, accounts(name)")
+    .gte("checked_at", new Date(t - RECONCILE_ALERT_FRESH_MS).toISOString())
+    .order("checked_at", { ascending: false });
+  if (error) throw new Error(`listBillingAlerts reconciliation read failed: ${error.message}`);
+  const newestCheck = new Map<string, number>();
+  const flagged = new Set<string>();
+  for (const r of (data ?? []) as unknown as {
+    account_id: string; meter: string; checked_at: string; verdict: string; accounts: { name: string } | null;
+  }[]) {
+    const key = `${r.account_id}:${r.meter}`;
+    const checked = Date.parse(r.checked_at);
+    const newest = newestCheck.get(key) ?? checked;
+    newestCheck.set(key, newest);
+    if (newest - checked > RUN_SPAN_MS) continue; // an older night's row for this key
+    if (!(ALERTING_VERDICTS as readonly string[]).includes(r.verdict) || flagged.has(r.account_id)) continue;
+    flagged.add(r.account_id);
+    alerts.push({ accountId: r.account_id, accountName: r.accounts?.name ?? r.account_id, kind: "usage_mismatch", since: r.checked_at });
+  }
+  return alerts;
+}
+
+/** Live subscriptions BIS bills usage for (G14): a subscription and a
+ *  customer, not ended, not complimentary. Paged until an empty page. */
+export async function listReconcilableAccounts(db: SupabaseClient): Promise<AccountBilling[]> {
+  const out: AccountBilling[] = [];
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("account_billing").select(BILLING_COLUMNS)
+      .eq("complimentary", false).not("stripe_subscription_id", "is", null).not("stripe_customer_id", "is", null)
+      .not("subscription_status", "in", "(canceled,incomplete_expired)")
+      .order("account_id", { ascending: true }).range(from, from + PAUSE_PAGE - 1);
+    if (error) throw new Error(`listReconcilableAccounts failed: ${error.message}`);
+    const rows = (data ?? []) as AccountBillingDbRow[];
+    if (rows.length === 0) return out;
+    out.push(...rows.map(toBilling));
+    from += rows.length;
+  }
 }

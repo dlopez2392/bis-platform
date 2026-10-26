@@ -33,7 +33,7 @@ const PLANS = [GROWTH, PRO];
 const row = (over: Partial<AccountBilling>): AccountBilling => ({
   accountId: "demo", planId: GROWTH.id, complimentary: false, stripeCustomerId: "cus_demo", stripeSubscriptionId: "sub_demo",
   subscriptionStatus: "active", currentPeriodStart: "2026-10-12T17:00:00Z", currentPeriodEnd: "2026-11-12T17:00:00Z",
-  pastDueSince: null, billingPausedAt: null, billingStartedAt: "2026-09-12T17:00:00Z", createdAt: "", updatedAt: "",
+  pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "2026-09-12T17:00:00Z", createdAt: "", updatedAt: "",
   ...over,
 });
 const LINK: BillingLink = {

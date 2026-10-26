@@ -44,7 +44,7 @@ const PLAN = { id: "p1", agencyId: "ag", name: "Growth", monthlyPriceCents: 1490
   archivedAt: null, createdAt: "", updatedAt: "" } as Plan;
 const PAID = { accountId: "a", planId: "p1", complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
   subscriptionStatus: "active", currentPeriodStart: "2026-10-12T17:00:00+00:00", currentPeriodEnd: "2026-11-12T17:00:00+00:00",
-  pastDueSince: null, billingPausedAt: null, billingStartedAt: "", createdAt: "", updatedAt: "" } as AccountBilling;
+  pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "", createdAt: "", updatedAt: "" } as AccountBilling;
 const page = () => BillingPage({ params: Promise.resolve({ accountId: "a" }) });
 
 beforeEach(() => {
