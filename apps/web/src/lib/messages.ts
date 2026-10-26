@@ -3783,6 +3783,8 @@ export const m = {
   "screened.reason.profile-disabled": "Receptionist turned off",
   "screened.reason.over-cap": "Over the daily cap",
   "screened.reason.repeat-spam": "Repeat spam",
+  "screened.reason.billing-paused": "Account paused (billing)",
+  "screened.reason.plan-no-voice": "Plan has no receptionist",
   "screened.unknownCaller": "Withheld",
   "screened.noAccount": "—",
   // DESIGN.md rule 1 — the total never ships alone. `misconfigured` is the

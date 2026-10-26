@@ -16,12 +16,16 @@ export type ScreenedReason =
   | "no-profile"
   | "profile-disabled"
   | "over-cap"
-  | "repeat-spam";
+  | "repeat-spam"
+  // 0099: the account is paused for billing, or its plan has no receptionist.
+  | "billing-paused"
+  | "plan-no-voice";
 
-/** Mirrors `screened_calls_reason_check` in 0039. Keep the two in step. */
+/** Mirrors `screened_calls_reason_check` (0039, widened by 0099). Keep the two in step. */
 export const SCREENED_REASONS: readonly ScreenedReason[] = [
   "unknown-number", "not-live", "no-profile",
   "profile-disabled", "over-cap", "repeat-spam",
+  "billing-paused", "plan-no-voice",
 ] as const;
 
 export type ScreenedClass = "misconfigured" | "screened" | "unattributed";
@@ -45,6 +49,11 @@ export function screenedClass(reason: ScreenedReason): ScreenedClass {
       return "misconfigured";
     case "over-cap":
     case "repeat-spam":
+    // A billing pause or a plan without a receptionist is a decision, not
+    // our fault: it has its own work-queue line (M7a PR-4), and counting it
+    // as `misconfigured` would raise the line-down banner beside it.
+    case "billing-paused":
+    case "plan-no-voice":
       return "screened";
     case "unknown-number":
       return "unattributed";
