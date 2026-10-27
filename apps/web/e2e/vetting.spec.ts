@@ -83,8 +83,14 @@ test("Add company refuses a held trade with its reason, and creates nothing", as
     // Refused BEFORE Clerk (Task 4): no organization under this name either.
     expect(await clerkOrgsNamed(name), "a held trade must mint no Clerk org").toEqual([]);
     // A refusal about a trade no longer chosen is stale: picking another trade clears it (design check M2).
+    // Counted by CSS, not by role: while the Select's list is open or closing Radix marks everything outside
+    // it aria-hidden, so a role query finds no alert on its first poll whether or not the refusal is still
+    // there (the first version of this check passed with the clear removed). The dialog must still be open
+    // with what was typed, or "no refusal" would also be true of a closed dialog.
     await pickTrade(page, tradeEntry("plumbing")!.label.en);
-    await expect(dialog.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: m["vetting.trade.label"] })).toHaveText(tradeEntry("plumbing")!.label.en);
+    await expect(page.getByLabel("Business name")).toHaveValue(name);
+    await expect(page.locator('[role="dialog"] [data-slot="notice"]')).toHaveCount(0);
   } finally {
     await cleanup(name);
   }
