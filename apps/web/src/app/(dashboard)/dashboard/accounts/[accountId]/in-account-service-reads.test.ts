@@ -149,6 +149,8 @@ const ALLOWED: Record<string, Reason> = {
   // The required-documents list (S-07 2c): an Owner or the agency only (canManage), one account column.
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/document-requirements-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx": "agency-only",
+  // S-53: the Settings Trade card's write; requireAgencyOnlyAccountAccess first.
+  "app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts": "technician-filtered",
   // completeWorkTask's hold check: ledgerDb, beside a task write on the request client.
@@ -205,6 +207,9 @@ const ALLOWED: Record<string, Reason> = {
   "lib/record/group-loaders.ts": "proven-target",
   "lib/setup/setup-inputs.ts": "agency-only",
   "lib/team/ensure-role.ts": "before-trust",
+  // S-53: reads accounts.trade before a Sofía/web-chat switch-on; every caller is an agency-only action
+  // (isAgency / requireAgency* first), and it reads the company's trade, never customer data.
+  "lib/vetting/sofia-guard.ts": "agency-only",
   "lib/voice/presence.ts": "technician-filtered",
   "lib/voice/tools/registry.ts": "public-or-cron",
   "lib/zone.ts": "configuration",
