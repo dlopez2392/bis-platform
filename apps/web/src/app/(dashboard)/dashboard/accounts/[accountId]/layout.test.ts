@@ -6,8 +6,10 @@ import { LocaleProvider } from "@/components/locale-provider";
 // exercise the agency branch, so `audience={isAgency ? "agency" : "client"}`
 // could be replaced by a hard-coded "client" and every test here would still
 // pass (Opus review of 2223893).
-const auth = vi.hoisted(() => ({ isAgency: false }));
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: auth.isAgency }) }));
+// `role` (M7a PR-4 Task 10): also switchable, so the paused banner's own
+// audience split (owner / member) can't be hard-coded either.
+const auth = vi.hoisted(() => ({ isAgency: false, role: "owner" as string | null }));
+vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: auth.isAgency, role: auth.role }) }));
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND"); } }));
 // Task 6 (Spanish-runtime lane): `language` is a mutable hoisted field, same
 // shape as `auth.isAgency` above, so a test can set an account's own stored
@@ -21,9 +23,17 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 // Mis preferencias: the person's own language, from the one per-request read.
 const prefs = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: prefs.language, theme: null }) }));
+// The paused verdict (M7a PR-4 Task 10, plan G12): mocked at this boundary,
+// not @bis/db — standing-read.test.ts already proves billingVerdictFor's own
+// fail-soft/switch contract; this file's job is the LAYOUT's wiring (which
+// audience, which cause, mutual exclusivity with the payment-failed banner),
+// so it trusts that contract rather than re-proving it with a double mock.
+const verdict = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("@/lib/billing/standing-read", () => ({ billingVerdictFor: (...a: unknown[]) => verdict.fn(...a) }));
 
 const { default: Layout } = await import("./layout");
 const { BillingBanner } = await import("@/components/billing-banner");
+const { BillingPausedBanner } = await import("@/components/billing-paused-banner");
 
 function find(node: ReactNode, type: unknown): ReactElement[] {
   if (!isValidElement(node)) return Array.isArray(node) ? node.flatMap((n) => find(n, type)) : [];
@@ -51,10 +61,15 @@ function withLang(node: ReactNode): ReactElement[] {
 // function returned from beforeEach as that test's teardown, and mockReset
 // returns the mock itself, which would then be CALLED after the test (the
 // plan review saw exactly that: `Error: getAccountBilling failed: timeout`).
+const NOT_PAUSED = { paused: false, voice: true, concierge: true, forward: true, cause: null as "payment" | "ended" | null, pausedAt: null as string | null };
+
 beforeEach(() => {
   billing.read.mockReset();
   billing.read.mockResolvedValue({ complimentary: true, subscriptionStatus: "active", billingPausedAt: null });
+  verdict.fn.mockReset();
+  verdict.fn.mockResolvedValue(NOT_PAUSED);
   auth.isAgency = false;
+  auth.role = "owner";
   dbRow.language = null;
   prefs.language = null;
 });
@@ -75,8 +90,20 @@ describe("account layout: the payment-failed banner (G21)", () => {
     expect(find(await render(), BillingBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["agency"]);
   });
 
-  it("shows no banner once billing is paused, even on a past-due subscription (mutation: swap showsPaymentFailedBanner for a bare subscriptionStatus === \"past_due\" check → FAILS)", async () => {
+  it("shows no payment-failed banner while the VERDICT says paused, even on a past-due subscription (mutation: swap showsPaymentFailedBanner for a bare subscriptionStatus === \"past_due\" check → FAILS)", async () => {
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-09-01T00:00:00Z" });
+    expect(find(await render(), BillingBanner)).toHaveLength(0);
+  });
+
+  it("a past-due row with a pause stamp but NO live verdict (switch off, or the verdict read failed open) shows the payment-failed banner, never neither (design review I1) (mutation: decide from billingPausedAt again → FAILS: no banner at all)", async () => {
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue(NOT_PAUSED);
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner)).toHaveLength(0);
+    expect(find(tree, BillingBanner)).toHaveLength(1);
+    // Complimentary still never shows it.
+    billing.read.mockResolvedValue({ complimentary: true, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
     expect(find(await render(), BillingBanner)).toHaveLength(0);
   });
 
@@ -107,6 +134,71 @@ describe("account layout: the payment-failed banner (G21)", () => {
     expect(log).not.toHaveBeenCalled();
     expect((tree as ReactElement<{ children: ReactNode[] }>).props.children).toContain("page");
     log.mockRestore();
+  });
+
+  it("passes the request's resolved locale to the payment-failed banner too (PR-4 Task 10; mutation: drop the locale prop from the layout's BillingBanner call → FAILS)", async () => {
+    dbRow.language = "es";
+    auth.isAgency = false;
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: null });
+    const tree = await render();
+    expect(find(tree, BillingBanner).map((b) => (b.props as { locale: string }).locale)).toEqual(["es"]);
+  });
+});
+
+describe("account layout: the paused banner (PR-4 Task 10, plan G12)", () => {
+  it("an owner in a payment-caused pause sees the owner banner, with its cause and the resolved locale (mutation: drop the cause/locale props, or default cause to \"ended\" → FAILS)", async () => {
+    auth.isAgency = false;
+    auth.role = "owner";
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner).map((b) => b.props)).toMatchObject([
+      { audience: "owner", accountId: "a", cause: "payment", locale: "en" },
+    ]);
+  });
+
+  it("an owner in an ended-plan pause sees the ended cause, never defaulted to payment (mutation: hard-code cause to \"payment\" → FAILS)", async () => {
+    auth.isAgency = false;
+    auth.role = "owner";
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner).map((b) => (b.props as { cause: string }).cause)).toEqual(["ended"]);
+  });
+
+  it("Staff and Technicians (any non-owner client role) get the MEMBER banner, not the owner's (mutation: treat every client role as owner → FAILS)", async () => {
+    auth.isAgency = false;
+    auth.role = "staff";
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["member"]);
+  });
+
+  it("the agency sees the AGENCY banner inside this account (mutation: hard-code audience to \"owner\" regardless of isAgency → FAILS)", async () => {
+    auth.isAgency = true;
+    auth.role = null;
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "ended", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["agency"]);
+  });
+
+  it("never renders the paused banner beside the payment-failed one, even when the billing row is itself past_due (mutation: render both → FAILS)", async () => {
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-10-01T00:00:00Z" });
+    verdict.fn.mockResolvedValue({ ...NOT_PAUSED, paused: true, cause: "payment", pausedAt: "2026-10-01T00:00:00Z" });
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner)).toHaveLength(1);
+    expect(find(tree, BillingBanner)).toHaveLength(0);
+  });
+
+  // Covers both "the switch is off" and "the underlying read failed": Task 7's
+  // own contract (standing-read.test.ts) guarantees billingVerdictFor decays
+  // to this exact NOT_PAUSED shape in both cases, so from the layout's side
+  // they are indistinguishable — one assertion on the resolved shape is the
+  // real behavior, not a second copy of the same mock dressed up as a new case.
+  it("verdict.paused false (switch off, or a failed read decayed to it) → no paused banner, and the payment-failed banner still works normally (mutation: gate the payment-failed banner on verdict.paused too → FAILS)", async () => {
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: null });
+    verdict.fn.mockResolvedValue(NOT_PAUSED);
+    const tree = await render();
+    expect(find(tree, BillingPausedBanner)).toHaveLength(0);
+    expect(find(tree, BillingBanner)).toHaveLength(1);
   });
 });
 

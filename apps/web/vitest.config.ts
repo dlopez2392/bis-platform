@@ -30,8 +30,10 @@ export default defineConfig({
     // not-configured counters into a live scan; `scannerConfig` trims and
     // nulls a blank. AI_PROVIDER / AI_GATEWAY_OFF: a developer's shell or
     // .env.local must not switch every caller test to the fake or to off
-    // (item 8a-1).
-    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "" },
+    // (item 8a-1). BILLING_ENFORCE (M7a PR-4): a shell holding Production's
+    // "1" would pause-gate every suite (route.reads.test.ts's read fence goes
+    // red); the tests that exercise the switch set it with `vi.stubEnv`.
+    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "" },
   },
   resolve: {
     alias: {

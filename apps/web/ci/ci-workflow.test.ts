@@ -284,6 +284,14 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciLines.filter((l) => l.includes("STRIPE_WEBHOOK_SECRET") && !l.trim().startsWith("#"))).toHaveLength(1);
   });
 
+  it("the e2e job turns BILLING_ENFORCE on and verify does not (mutation: remove it, or add it to verify → FAILS)", () => {
+    // jobEnv returns the line's raw text after the colon, quotes included
+    // (as written in ci.yml, matching BIS_I18N_QA's own quoted "1" below).
+    expect(jobEnv(job("e2e")).BILLING_ENFORCE).toBe("\"1\"");
+    expect(jobEnv(job("verify")).BILLING_ENFORCE).toBeUndefined();
+    expect(ciEnv.BILLING_ENFORCE).toBeUndefined();
+  });
+
   it("the migration check names the same CI project as the setup workflow that builds it, as a literal ref", () => {
     // The project ci-project-setup.yml bootstraps and pushes is the one whose
     // history the branch is checked against. A rebuilt project changes both

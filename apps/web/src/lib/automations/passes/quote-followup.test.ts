@@ -509,3 +509,40 @@ describe("consent PR-3: the email goes through the gate", () => {
     expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
   });
 });
+
+describe("the non-payment pause: the quote follow-up's own deadline (M7a PR-4, plan G7a, re-review I2)", () => {
+  // The pass's own gate re-applies the max age on every release, so past stage_changed_at + 30 days it is already skipped
+  // "No longer due" and never sent. What pauseDeadline adds: a pause hold never runs past stage_changed_at + 30 days, and a
+  // release AT that instant (the last one the gate admits) is skipped as no longer timely, not held again.
+  const DEADLINE = "2027-10-20T15:30:00.000Z";
+  let paused = true;
+  const pausedCtx = (now: Date): PassContext => ({
+    ...ctx(now),
+    sms: fakeSmsGate({ decide: () => (paused ? { kind: "blocked", reason: "billing_paused" } : null), send: (msg) => smsSend(msg) }),
+  });
+  const writes = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1] as { status: string; heldUntil?: string; reason?: string });
+  beforeEach(() => {
+    paused = true;
+    dbMocks.getDueQuoteFollowupById.mockResolvedValue({ due: row({ stageChangedAt: "2027-09-20T15:30:00.000Z" }) });
+  });
+
+  it("held by the pause 20 minutes before stage_changed_at + 30 days: held until that instant, not the next whole hour (mutation: anchor on the hold's own start → FAILS: held to 16:00Z)", async () => {
+    expect(await releaseQuoteFollowup(pausedCtx(new Date("2027-10-20T15:10:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-10-20T15:00:00.000Z" }))).toBe("held");
+    expect(writes()).toEqual([expect.objectContaining({ status: "held", heldUntil: DEADLINE, reason: "Held: the account is paused until a payment goes through" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("released at stage_changed_at + 30 days while still paused: skipped as no longer timely, never sent (mutation: no pauseDeadline on the subject → FAILS: held again to 16:00Z)", async () => {
+    expect(await releaseQuoteFollowup(pausedCtx(new Date(DEADLINE)), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-10-20T15:00:00.000Z" }))).toBe("skipped");
+    expect(writes()).toEqual([expect.objectContaining({ status: "skipped", reason: "Not sent: too late, the account was paused" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("inside its deadline it is held, then sent after the lift (mutation: pauseDeadline = now → FAILS: skipped at once)", async () => {
+    expect(await releaseQuoteFollowup(pausedCtx(new Date("2027-10-20T15:10:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-10-20T15:00:00.000Z" }))).toBe("held");
+    paused = false;
+    expect(await releaseQuoteFollowup(pausedCtx(new Date("2027-10-20T15:20:00.000Z")), heldRow({ reason: "Held: the account is paused until a payment goes through", held_until: "2027-10-20T15:00:00.000Z" }))).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(writes().map((w) => w.status)).toEqual(["held", "sent"]);
+  });
+});

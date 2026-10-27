@@ -331,6 +331,11 @@ jobs:
       # verifies nothing anywhere else: production's signing secret is set
       # on Vercel Production only (M7a PR-3 plan, Task 13).
       STRIPE_WEBHOOK_SECRET: whsec_bis_ci_e2e_fixture_only
+      # NOT a secret: turns the non-payment pause on for this job only (M7a
+      # PR-4), so e2e/billing-pause.spec.ts sees it enforced. The spec pauses
+      # the fixture account only, by its own row, and restores it. Production's
+      # value is set on Vercel Production only, by the owner.
+      BILLING_ENFORCE: "1"
       # NOT a secret: the PUBLIC half of a fixed test key whose private half
       # lives in e2e/consent-texts.spec.ts, so the e2e server accepts that
       # spec's signed SMS webhooks. Production's TELNYX_PUBLIC_KEY is set on

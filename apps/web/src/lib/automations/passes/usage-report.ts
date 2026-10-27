@@ -1,21 +1,17 @@
 import {
   listBilledUsageAccounts, listReportableUsage, markUsageReported, countExpiredUsage, staleUsageAccountIds,
+  USAGE_HOLD_AFTER_MS,
 } from "@bis/db";
-import { billingGatewayFromEnv, meterEventFailureKind } from "@/lib/billing/stripe-gateway";
+import { billingGatewayFromEnv, meterEventFailureKind, usageIdempotencyKey } from "@/lib/billing/stripe-gateway";
 import { METERS } from "@/lib/billing/stripe-catalog";
+import { billingEnforced } from "@/lib/billing/enforce";
+import { runBillingNightly } from "@/lib/billing/nightly";
 import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP, METER_EVENT_WORST_CASE_MS } from "../caps";
 import type { Pass } from "../context";
 
-/**
- * The Stripe idempotency key for one usage row's meter event. It covers
- * every parameter the request sends: event name, value and timestamp are
- * functions of the row, which never changes after it is recorded
- * (recordUsage never updates), and the customer is the only thing that can
- * differ between two sends of the same row.
- */
-export function usageIdempotencyKey(rowId: string, customerId: string): string {
-  return `bis-usage-${rowId}-${customerId}`;
-}
+// Moved to stripe-gateway.ts (M7a PR-4) so the nightly step and this pass
+// share it without importing each other; re-exported for existing callers.
+export { usageIdempotencyKey };
 
 /**
  * Client billing: usage rows → Stripe Billing Meter events (spec section 3
@@ -46,6 +42,17 @@ export function usageIdempotencyKey(rowId: string, customerId: string): string {
  *      that grows while Stripe is down never grows the read — and expired
  *      rows (too old for Stripe to accept), one head-only count per 25
  *      accounts billed before the window's floor.
+ *   5. The nightly billing step (M7a PR-4 plan G14, lib/billing/nightly.ts),
+ *      on the Stripe-usable path only, AFTER the bookkeeping, on THIS pass's
+ *      clock and budget (no new budget: cron-coupling.test.ts's sum is
+ *      unchanged). It returns at once with BILLING_ENFORCE off; a throw is
+ *      logged and never costs the report its counters.
+ *
+ * THE HOLD (plan G15, I8). With BILLING_ENFORCE on, step 3's read leaves
+ * out a row RECORDED USAGE_HOLD_AFTER_MS (20 h) ago or more: past Stripe's
+ * dedupe window (assumption S7) a resend could bill twice, so only step 5's
+ * reconciliation, which first asks Stripe for its total, sends or stamps
+ * it. With the switch off the read is PR-3's (no option passed at all).
  *
  * A stamp that fails after Stripe accepted is `unstamped`: the next tick
  * resends the same row under the same identifier AND the same key, and
@@ -73,7 +80,11 @@ export const usageReportPass: Pass = {
     const c = {
       reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
       skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
+      // Step 5's (plan G17).
+      remirrored: 0, reconciled: 0, mismatched: 0, heldStamped: 0, heldSent: 0, reconcileFailed: 0, reconcileSkippedBudget: 0,
     };
+    // The hold travels only with the switch on: off, the read gets no option at all (PR-3's call).
+    const hold: [] | [{ holdAfterMs: number }] = billingEnforced() ? [{ holdAfterMs: USAGE_HOLD_AFTER_MS }] : [];
     const accounts = await listBilledUsageAccounts(ctx.db);
     if (accounts.length === 0) return c;
 
@@ -114,7 +125,7 @@ export const usageReportPass: Pass = {
     let stop = false;
     while (!stop && attempts < USAGE_REPORT_TICK_CAP) {
       const want = USAGE_REPORT_TICK_CAP - attempts;
-      const rows = await listReportableUsage(ctx.db, accounts.filter((a) => !refused.has(a.accountId)), ctx.now, want);
+      const rows = await listReportableUsage(ctx.db, accounts.filter((a) => !refused.has(a.accountId)), ctx.now, want, ...hold);
       let refusedHere = false;
       for (const row of rows) {
         if (refused.has(row.accountId)) continue;
@@ -192,6 +203,12 @@ export const usageReportPass: Pass = {
     }
     if (!stop && attempts >= USAGE_REPORT_TICK_CAP) c.stoppedOnCap = 1;
     await bookkeeping();
+    // Step 5, on THIS pass's clock and budget.
+    try {
+      Object.assign(c, await runBillingNightly(ctx, gateway, { startedAt, nowMs: () => Date.now() }));
+    } catch (e) {
+      console.error(`usage report: the nightly billing step failed outright: ${String(e)}`);
+    }
     return c;
   },
 };

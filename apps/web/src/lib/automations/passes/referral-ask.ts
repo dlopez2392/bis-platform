@@ -1,6 +1,6 @@
 import {
   listDueReferralAsks, stampReferralAsked, stampReferralAskSmsFailed, countReferralAsksSince,
-  getDueReferralAskById, missingForMarketingEmail, chooseBody, type DueReferralAsk, type RecipientLanguage,
+  getDueReferralAskById, missingForMarketingEmail, chooseBody, REFERRAL_ASK_MAX_AGE_MS, type DueReferralAsk, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -97,11 +97,14 @@ export async function processReferralAsks(
       continue;
     }
 
+    const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
     const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "referral_ask",
       channel: config.channel, smsKind: "automation.referral_ask", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
+      // M7a PR-4 (plan G7a, re-review I2): a pause hold never runs past the list's own age window.
+      pauseDeadline: new Date(anchor.getTime() + REFERRAL_ASK_MAX_AGE_MS),
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {
@@ -114,7 +117,6 @@ export async function processReferralAsks(
       continue;
     }
 
-    const anchor = laterOf(new Date(row.endsAt), row.completedAt ? new Date(row.completedAt) : null);
     const followupSentAt = row.followupSentAt ? new Date(row.followupSentAt) : null;
     const reviewRequestedAt = row.reviewRequestedAt ? new Date(row.reviewRequestedAt) : null;
 

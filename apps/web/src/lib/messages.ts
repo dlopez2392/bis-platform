@@ -1281,6 +1281,11 @@ export const m = {
   "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de esta empresa",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
   "compose.smsBlockedNoNumber.es": "Para mandar textos, esta empresa necesita un número de teléfono activo",
+  // M7a PR-4: the staff composer's own refusal while an account is paused
+  // for billing (G7a's last line — non-automation sends are refused with a
+  // sentence, not held).
+  "compose.smsBlockedPaused": "Texts are stopped while this account is paused.",
+  "compose.smsBlockedPaused.es": "Los mensajes están detenidos mientras la cuenta está en pausa.",
   // The consent gate (lib/consent/composer-state.ts): the one line the text
   // composer shows in place of its form, and the toast a refused send gives.
   "compose.smsStopped": "They stopped texts on {date}. You can't text this number until they text START.",
@@ -2551,6 +2556,17 @@ export const m = {
   "automations.reason.heldClosureUnknown.es": "En espera: no se pudo comprobar si el negocio está abierto",
   "automations.reason.skippedClosed": "Not sent: the business was closed for this appointment",
   "automations.reason.skippedClosed.es": "No se envió: el negocio estaba cerrado para esta cita",
+  // M7a PR-4 (G7a): a due automation held, not dropped, while the account is
+  // paused for billing; if it is still stale once the pause lifts, it is
+  // skipped instead of sent (held-or-send's closure-hold shape).
+  "automations.reason.heldBillingPaused": "Held: the account is paused until a payment goes through",
+  "automations.reason.heldBillingPaused.es": "En espera: la cuenta está en pausa hasta que se reciba un pago",
+  "automations.reason.skippedBillingPaused": "Not sent: too late, the account was paused",
+  "automations.reason.skippedBillingPaused.es": "No se envió: demasiado tarde, la cuenta estaba en pausa",
+  // M7a PR-4 (review item 2): a send a person asked for (the document request) refused while paused; an
+  // automation never reads it, holdOrSend holds those first.
+  "automations.reason.billingPaused": "Not sent: the account is paused",
+  "automations.reason.billingPaused.es": "No se envió: la cuenta está en pausa",
   "calls.detail.businessStatus": "Status at the start",
   "calls.detail.businessStatus.es": "Estado al empezar",
   "calls.detail.businessStatus.open": "Open",
@@ -3787,6 +3803,8 @@ export const m = {
   "screened.reason.profile-disabled": "Receptionist turned off",
   "screened.reason.over-cap": "Over the daily cap",
   "screened.reason.repeat-spam": "Repeat spam",
+  "screened.reason.billing-paused": "Account paused (billing)",
+  "screened.reason.plan-no-voice": "Plan has no receptionist",
   "screened.unknownCaller": "Withheld",
   "screened.noAccount": "—",
   // DESIGN.md rule 1 — the total never ships alone. `misconfigured` is the
@@ -3976,9 +3994,86 @@ export const m = {
   "billing.page.canceled": "Your subscription has ended.",
   "billing.page.portalFailed": "Billing couldn't open just now. Try again in a minute.",
   "billing.banner.client": "Your payment didn't go through. Update your card to keep automations running.",
+  "billing.banner.client.es": "Su pago no se completó. Actualice su tarjeta para que las automatizaciones sigan funcionando.",
   "billing.banner.clientAction": "Go to Billing",
+  "billing.banner.clientAction.es": "Ir a Facturación",
   "billing.banner.agency": "This client's last payment didn't go through.",
+  "billing.banner.agency.es": "El último pago de este cliente no se completó.",
   "billing.banner.agencyAction": "See billing",
+  "billing.banner.agencyAction.es": "Ver facturación",
+  // M7a PR-4: the non-payment pause. The client banner (every page, Owner/
+  // Staff/Technician), the client Billing page's own line, the agency's
+  // Billing card (pause state + Lift pause + the nightly reconciliation
+  // result) and the agency's own work-queue banner lines. The banner's
+  // sentence never names a phone or promises a forward (M3): it stays true
+  // whether or not the account has a transfer number, and on every day of
+  // the pause, because forwarding itself stops after 30 days (I7).
+  "billing.paused.client.payment": "Your account is paused because a payment didn't go through. Your receptionist isn't answering calls, texts to your customers are stopped, automations are waiting, and nothing here can be changed until it's paid.",
+  "billing.paused.client.payment.es": "Su cuenta está en pausa porque un pago no se completó. Su recepcionista no está contestando llamadas, los mensajes a sus clientes están detenidos, las automatizaciones están en espera y aquí no se puede cambiar nada hasta que se pague.",
+  "billing.paused.client.ended": "Your plan has ended, so your account is paused. Your receptionist isn't answering calls, texts to your customers are stopped, automations are waiting, and nothing here can be changed.",
+  "billing.paused.client.ended.es": "Su plan terminó, así que su cuenta está en pausa. Su recepcionista no está contestando llamadas, los mensajes a sus clientes están detenidos, las automatizaciones están en espera y aquí no se puede cambiar nada.",
+  "billing.paused.client.action": "Go to Billing",
+  "billing.paused.client.action.es": "Ir a Facturación",
+  "billing.paused.client.staff": "The account owner can turn everything back on from the Billing page.",
+  "billing.paused.client.staff.es": "El dueño de la cuenta puede volver a activar todo desde la página de Facturación.",
+  "billing.paused.agency": "This client is paused: the receptionist isn't answering, texts to their customers are stopped, automations are waiting, and their dashboard is read-only.",
+  "billing.paused.agency.es": "Este cliente está en pausa: la recepcionista no está contestando, los mensajes a sus clientes están detenidos, las automatizaciones están en espera y su panel es de solo lectura.",
+  "billing.paused.agencyAction": "See billing",
+  "billing.paused.agencyAction.es": "Ver facturación",
+  "billing.page.paused.payment": "Your account is paused until the payment goes through. Update your card with the button below to turn everything back on.",
+  "billing.page.paused.payment.es": "Su cuenta está en pausa hasta que se complete el pago. Actualice su tarjeta con el botón de abajo para volver a activar todo.",
+  "billing.page.paused.ended": "Your plan has ended, so your account is paused. To start again, email {email}.",
+  "billing.page.paused.ended.es": "Su plan terminó, así que su cuenta está en pausa. Para volver a empezar, escriba a {email}.",
+  "billing.page.paused.endedNoContact": "Your plan has ended, so your account is paused. To start again, contact the team that set up your account.",
+  "billing.page.paused.endedNoContact.es": "Su plan terminó, así que su cuenta está en pausa. Para volver a empezar, comuníquese con el equipo que configuró su cuenta.",
+  "billing.card.pausedPayment": "Paused since {date}: the payment failed on {failed}.",
+  "billing.card.pausedPayment.es": "En pausa desde el {date}: el pago falló el {failed}.",
+  "billing.card.pausedEnded": "Paused since {date}: the plan ended.",
+  "billing.card.pausedEnded.es": "En pausa desde el {date}: el plan terminó.",
+  "billing.card.noForward": "Calls are no longer forwarded: the account has been paused for over 30 days.",
+  "billing.card.noForward.es": "Las llamadas ya no se desvían: la cuenta lleva más de 30 días en pausa.",
+  "billing.card.pauseOff": "Pausing is switched off for this app, so this pause changes nothing.",
+  "billing.card.pauseOff.es": "La pausa está desactivada en esta aplicación, así que esta pausa no cambia nada.",
+  "billing.card.lifted": "Pause lifted {date}.",
+  "billing.card.lifted.es": "Pausa quitada el {date}.",
+  "billing.card.liftPause": "Lift pause",
+  "billing.card.liftPause.es": "Quitar la pausa",
+  "billing.card.liftPauseHelp": "Turns calls, texts and automations back on now. It stays lifted until they pay or another payment fails.",
+  "billing.card.liftPauseHelp.es": "Vuelve a activar llamadas, mensajes y automatizaciones ahora. Sigue así hasta que paguen o falle otro pago.",
+  "billing.card.liftedToast": "Pause lifted.",
+  "billing.card.liftedToast.es": "Pausa quitada.",
+  "billing.card.repausedToast": "Paused again.",
+  "billing.card.repausedToast.es": "En pausa de nuevo.",
+  "billing.card.reconcile.title": "Usage doesn't match Stripe",
+  "billing.card.reconcile.title.es": "El uso no coincide con Stripe",
+  "billing.card.reconcile.line": "{meter}: Stripe counts {stripe}, BIS counts {bis}. Checked {when}.",
+  "billing.card.reconcile.line.es": "{meter}: Stripe cuenta {stripe}, BIS cuenta {bis}. Revisado el {when}.",
+  "billing.card.reconcile.help": "Check this client's invoice in Stripe before it's finalized. The billing runbook says how.",
+  "billing.card.reconcile.help.es": "Revise la factura de este cliente en Stripe antes de que se cierre. La guía de facturación explica cómo.",
+  "billing.card.reconcile.meter.voice_minutes": "Call minutes",
+  "billing.card.reconcile.meter.voice_minutes.es": "Minutos de llamadas",
+  "billing.card.reconcile.meter.sms": "Texts",
+  "billing.card.reconcile.meter.sms.es": "Mensajes de texto",
+  "billing.card.reconcile.meter.ai_chats": "Website chats",
+  "billing.card.reconcile.meter.ai_chats.es": "Chats del sitio web",
+  // The reconciliation read failed (design review I2): said in place of the
+  // mismatch block. An agency surface, but billing.* is not an agency-only
+  // prefix, so the catalogue parity gate needs its twin.
+  "billing.card.reconcile.unavailable": "Couldn't check usage against Stripe just now.",
+  "billing.card.reconcile.unavailable.es": "No se pudo comparar el uso con Stripe en este momento.",
+  "billing.error.notPaused": "This account isn't paused any more. Refresh to see its billing.",
+  "billing.error.notPaused.es": "Esta cuenta ya no está en pausa. Actualice la página para ver su facturación.",
+  "billing.error.cannotRepause": "This account's billing changed, so it can't be paused again from here. Refresh to see it.",
+  "billing.error.cannotRepause.es": "La facturación de esta cuenta cambió, así que no se puede volver a pausar desde aquí. Actualice la página para verla.",
+  // Agency-only (work.agency. prefix): the work-queue billing banner lines
+  // (G13). English only — no Spanish twin required (ratchet-scan.ts's
+  // AGENCY_ONLY_KEY_PREFIXES).
+  "work.agency.billing.paymentFailed": "Payment failed:",
+  "work.agency.billing.paused": "Paused:",
+  "work.agency.billing.pausedNoForward": "Paused 30+ days, calls are no longer forwarded:",
+  "work.agency.billing.mismatch": "Usage doesn't match Stripe:",
+  "work.agency.billing.more": "and {n} more",
+  "work.agency.billing.unchecked": "Couldn't check usage against Stripe just now.",
   "billing.done.success.title": "You're all set",
   "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
   "billing.done.cancelled.title": "Checkout wasn't finished",
@@ -4659,6 +4754,8 @@ export const m = {
   "documents.request.reason.bounced.es": "este correo rebotó",
   "documents.request.reason.failed": "it couldn't be delivered",
   "documents.request.reason.failed.es": "no se pudo entregar",
+  "documents.request.reason.accountPaused": "texts to customers are stopped while this account is paused",
+  "documents.request.reason.accountPaused.es": "los mensajes de texto a clientes están detenidos mientras esta cuenta está en pausa",
   "documents.request.task.received": "{name} sent documents · Review",
   "documents.request.task.received.es": "{name} mandó documentos · Revisar",
   "documents.request.task.receivedNoName": "A customer sent documents · Review",

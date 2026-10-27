@@ -85,7 +85,8 @@ async function provenMembership(accountId: string, memberId: string) {
 export type GroupSearchResult = { ok: true; hits: GroupSearchHit[] } | { ok: false };
 
 export async function searchGroupsAction(accountId: string, term: string): Promise<GroupSearchResult> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): a search, so it stays usable while the account is paused.
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   if (typeof term !== "string" || term.length > GROUP_NAME_MAX) return { ok: true, hits: [] };
   try {
     return { ok: true, hits: await searchGroups(await dbForRequest(), accountId, term) };

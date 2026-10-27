@@ -48,3 +48,16 @@ export async function clearStoredTheme(clerkUserId: string): Promise<void> {
     .from("users").update({ theme: null }).eq("clerk_user_id", clerkUserId);
   if (error) throw new Error(`users.theme clear failed: ${error.message}`);
 }
+
+/**
+ * Puts back exactly the saved theme a spec read before it clicked the toggle
+ * (null = no choice). For a spec that is NOT about theming but clicks the
+ * toggle for another reason, so it hands the identity on as it found it.
+ * stored-theme-guard.test.ts requires this or clearStoredTheme in any spec
+ * that clicks the toggle.
+ */
+export async function restoreStoredTheme(clerkUserId: string, theme: string | null): Promise<void> {
+  const { error } = await serviceDb()
+    .from("users").update({ theme }).eq("clerk_user_id", clerkUserId);
+  if (error) throw new Error(`users.theme restore failed: ${error.message}`);
+}

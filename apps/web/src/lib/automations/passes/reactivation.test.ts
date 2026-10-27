@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { DueReactivation, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
@@ -467,6 +467,38 @@ describe("consent PR-3: the email goes through the gate", () => {
     dbMocks.listDueReactivations.mockResolvedValue([row()]);
     emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
     expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+  });
+});
+
+describe("the non-payment pause: held check-ins give back what they reserved (M7a PR-4, plan G7a)", () => {
+  // A paused account's candidates are held every morning tick and never stamp, so they stay at the head of
+  // listDueReactivations for the whole pause. A held row sends nothing this tick: it must not keep the
+  // tick slot (ONE counter across every account) nor this tick's in-memory day count.
+  const pausedFor = (accounts: string[]) => async (req: { accountId: string }) => {
+    if (accounts.includes(req.accountId)) throw new EmailNotSent({ kind: "blocked", reason: "billing_paused" });
+    return { providerMessageId: "e1" };
+  };
+  beforeEach(() => vi.stubEnv("BILLING_ENFORCE", "1"));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("two paused accounts' held candidates at the head do not starve a third account (mutation: keep the tick slot on held → FAILS: the third account is skippedCap)", async () => {
+    const of = (account: string, n: number) => row({ accountId: account, contactId: `${account}_ct_${n}` });
+    dbMocks.listDueReactivations.mockResolvedValue([
+      ...[1, 2, 3, 4, 5].map((n) => of("acct_A", n)),
+      ...[1, 2, 3, 4, 5].map((n) => of("acct_B", n)),
+      of("acct_C", 1), of("acct_C", 2),
+    ]);
+    emailSend.mockImplementation(pausedFor(["acct_A", "acct_B"]));
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, held: 10, sent: 2 });
+    expect(dbMocks.stampReactivationSent.mock.calls.map((c) => c[1])).toEqual(["acct_C_ct_1", "acct_C_ct_2"]);
+  });
+
+  it("a paused account's sixth candidate is held too, never logged 'Daily limit reached' when nothing went out today (mutation: keep today's count on held → FAILS)", async () => {
+    dbMocks.listDueReactivations.mockResolvedValue([1, 2, 3, 4, 5, 6].map((n) => row({ contactId: `ct_${n}` })));
+    emailSend.mockImplementation(pausedFor(["acct_1"]));
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, held: 6 });
+    expect(skippedReasons()).toEqual([]);
     expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
   });
 });

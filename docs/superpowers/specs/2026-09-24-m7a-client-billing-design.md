@@ -69,10 +69,11 @@ accounts have a plan but no Stripe subscription and are never paused.
 ## 4. Safety, failures, rollout
 
 - **Test vs live**: CI, the CI Supabase project and previews use Stripe **test-mode** keys; only production holds
-  live keys. The CI target guard refuses an `sk_live_` Stripe key as it refuses Clerk's `sk_live_`. A preview's
-  test key is only usable once that preview has its own (non-production) database — while Preview shares
-  production's database, the app itself refuses a test key there (`stripeKeyVerdict`,
-  `test_key_on_production_data`), so no key belongs on Vercel Preview until then.
+  live keys. The CI target guard refuses an `sk_live_` Stripe key as it refuses Clerk's `sk_live_`. The app
+  refuses a test key wherever the database is production's (`stripeKeyVerdict`, `test_key_on_production_data`).
+  Since 2026-10-07 Vercel Preview holds no production credential and runs on the CI project (CLAUDE.md), so a
+  test key would be accepted there; whether one is set is a Vercel setting, not a repo fact. (Amended
+  2026-10-26: this line used to say Preview shares production's database, which stopped being true.)
 - **Webhooks**: signature-checked, processed once, retried by Stripe on failure.
 - **Usage reporting failure**: rows stay unreported and are retried each pass; Stripe dedupes by identifier; a row
   unreported for > 24 h raises an agency alert.
@@ -117,3 +118,52 @@ Self-serve sign-up (#2), multi-agency / Stripe Connect (#3), non-USD currencies,
 - Stripe Checkout supports a subscription mixing one licensed price and three metered prices.
 - Stripe test-mode keys are available to CI as repository secrets and live keys only in Vercel production — **this
   needs a Stripe account and danlo to add the keys** (see the plan's prerequisites).
+
+## 9. Amendments for rollout step 4 (2026-10-26, PR-4 plan, revision 2)
+
+Forced by code that shipped after this spec was approved, or decided by the owner on 2026-10-26; each is
+restated, with its reason, in `docs/superpowers/plans/2026-10-26-m7a-pr4-pause-and-reconciliation.md`
+(G-items and "Owner decisions").
+
+- **Section 2, "voice/concierge gating reads [accounts.permissions]"** → the gates read the plan's `features`
+  at READ time through `account_billing.plan_id` (one embed read, `readBillingStanding`). PR-3's mirror writes
+  `accounts.permissions` outside its compare-and-set (PR-3 plan B5), so two racing webhook deliveries can
+  leave it from the older one; a value derived from the row the compare-and-set guarantees cannot drift.
+  `accounts.permissions` is still written (the Setup wizard reads it) and the nightly step rewrites it from
+  the plan.
+- **Section 2, account_billing** gains `pause_lifted_at` (the agency's Lift pause: the pass does not pause
+  the same unpaid stretch again) and `stripe_checked_at` (the last time the mirror wrote what Stripe said).
+  New table `billing_reconciliations` (the nightly comparison per account, meter and billing period;
+  agency-read, service-written). `forwarded_calls.kind` and `screened_calls.reason` each gain
+  `billing-paused` and `plan-no-voice`. Migration 0099.
+- **Section 3 flow 5, when the pause lands.** The 7-day pass runs every cron tick. It pauses a past-due
+  account only once Stripe has confirmed the unpaid status AFTER the 7 days ended, within the last 26 hours
+  (the nightly step re-reads every unpaid subscription), so the pause lands between day 7 and day 8. The
+  bound that holds: a client who pays after Stripe's last confirming read, and whose payment webhook fails,
+  can be paused until Stripe's webhook retry is processed or the next nightly re-read clears it, whichever
+  is first (about a day at most). Payment clears the pause in the webhook mirror itself.
+  `incomplete_expired` (a first checkout never paid) is not paused.
+- **Section 3 flow 5, what stops** (owner, 2026-10-26): texts to the business's customers stop; the owner's
+  own alerts and the STOP/START/HELP replies still go. Automations are HELD, not stopped: they go out once
+  the pause lifts (paid or Lift), and ones that no longer make sense (the appointment has passed) drop, as
+  the S-47d closure hold does. The public booking page and forms keep working, with their emails. The
+  website chat and the AI record summary stop. The dashboard is read-only for the client (server actions
+  refused at `requireAccountAccess`; reads and Manage billing stay). No email is sent when a pause starts.
+- **Section 3 flow 5, calls** (owner, 2026-10-26): forwarded to the transfer number for the first 30 days
+  of a pause; from day 30, or with no transfer number, the caller hears a short call-back message, logged
+  on the agency's Screened calls list, and the agency's work queue shows the account. The number is never
+  released automatically. A plan without the receptionist or the website chat behaves like a pause for that
+  feature.
+- **Section 3 flow 5, Lift pause** (owner, 2026-10-26): a lift lasts until the client pays, or until a new
+  payment failure starts a new 7 days.
+- **Section 4, "behind its own switch"**: the switch is the env var `BILLING_ENFORCE=1`, off by default. It
+  covers the pause, the plan gates, the automation hold, the usage report's 20-hour hold and the nightly
+  step, so turning it off is the whole rollback. Two harmless writes stay on without it: the mirror stamps
+  `stripe_checked_at`, and clears a pause when Stripe says paid.
+- **Section 4, nightly reconciliation** runs inside the existing usage-report pass, under that pass's own
+  wall-clock budget (the cron tick's budgets already sum to its `maxDuration`, and `docs/crm-features.md`
+  §3.2 rule 9 caps new passes), and only while the switch is on. Once per 24-hour window starting 08:00
+  UTC it compares each live subscription's current period, and the just-closed period once after it
+  closes (report-only: that invoice is final). It resolves PR-3's held >24 h usage rows (PR-3 plan B10).
+- **Section 4, the Preview line** is corrected in place (Preview has not shared production's database since
+  2026-10-07).

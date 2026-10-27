@@ -30,6 +30,8 @@ const dbFns = vi.hoisted(() => ({
   getBusinessStatusRow: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
   listClosedDaysFrom: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
   getCalendarForAccount: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
+  // M7a PR-4 (plan G10): read only while BILLING_ENFORCE is "1".
+  readBillingStanding: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -299,6 +301,8 @@ beforeEach(() => {
   dbFns.getBusinessStatusRow.mockResolvedValue(null);
   dbFns.listClosedDaysFrom.mockResolvedValue([]);
   dbFns.getCalendarForAccount.mockResolvedValue(null);
+  // M7a PR-4: unbilled (no row) — and the switch is off unless a test stubs it.
+  dbFns.readBillingStanding.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -1747,5 +1751,59 @@ describe("POST /api/concierge/[publicId]/turn — today's status and the closed 
       await firstTurn();
       expect(sentToModel().messages[0]!.content).toContain("TODAY: The business is closed because of a storm, until further notice.");
     });
+  });
+});
+
+// M7a PR-4 (plan G10; owner answer Q5): a paused account, or a plan without
+// the website chat, answers exactly as a switched-off chat does, before
+// anything is spent. A billing read error lets the chat answer (fail open).
+describe("POST /api/concierge/[publicId]/turn — billing (BILLING_ENFORCE)", () => {
+  const STANDING = {
+    complimentary: false, pausedAt: null as string | null, subscriptionStatus: "active",
+    features: { voice_receptionist: true, web_concierge: true },
+  };
+  const PAUSED = { ...STANDING, pausedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), subscriptionStatus: "past_due" };
+  beforeEach(() => { vi.stubEnv("BILLING_ENFORCE", "1"); });
+
+  it("switch on, paused → 404 not_found before any counter is spent (mutation: check after createConciergeConversation → FAILS)", async () => {
+    dbFns.readBillingStanding.mockResolvedValue(PAUSED);
+    const res = await firstTurn();
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not_found" });
+    expect(dbFns.readBillingStanding).toHaveBeenCalledWith(expect.anything(), PROFILE.account_id);
+    expect(dbFns.countConciergeConversationsByIp).not.toHaveBeenCalled();
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const later = await laterTurn();
+    expect(later.status).toBe(404);
+    expect(dbFns.claimConciergeTurn).not.toHaveBeenCalled();
+  });
+
+  it("plan without the website chat → 404 (mutation: read voice instead of concierge → FAILS)", async () => {
+    dbFns.readBillingStanding.mockResolvedValue({ ...STANDING, features: { voice_receptionist: true, web_concierge: false } });
+    const res = await firstTurn();
+    expect(res.status).toBe(404);
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+  });
+
+  it("a plan without Sofía's phone line keeps the chat (the gate reads the chat's own feature)", async () => {
+    dbFns.readBillingStanding.mockResolvedValue({ ...STANDING, features: { voice_receptionist: false, web_concierge: true } });
+    expect((await firstTurn()).status).toBe(200);
+  });
+
+  it("a billing read error → the chat answers (mutation: return 404 on a read error → FAILS)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    dbFns.readBillingStanding.mockRejectedValue(new Error("billing: standing read failed: boom"));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ conversationId: "c1", reply: "Yes, we do." });
+    vi.restoreAllMocks();
+  });
+
+  it("switch OFF and paused: the chat answers and billing is never read (mutation: read regardless → FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "");
+    dbFns.readBillingStanding.mockResolvedValue(PAUSED);
+    expect((await firstTurn()).status).toBe(200);
+    expect(dbFns.readBillingStanding).not.toHaveBeenCalled();
   });
 });

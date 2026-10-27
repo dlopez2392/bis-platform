@@ -301,7 +301,7 @@ are built, but nothing is charged.
 | Usage recording (call minutes, text segments, website chats) for every company | **Live** | `apps/web/src/lib/billing/usage.ts:1-39` |
 | Usage reported to Stripe every 15 minutes | **Built, dormant** (no Stripe key and no billed company; since #146 a row Stripe already holds is marked reported) | `apps/web/src/lib/automations/passes/usage-report.ts:126-170` |
 | Stale-usage banner on the agency work queue | **Built, dormant** (nothing is billed, so nothing can go stale) | `apps/web/src/components/usage-stale-banner.tsx:23-38` |
-| Assign a plan, Stripe Checkout, webhooks, client Billing page, Customer Portal | **Planned only** (M7a PR-3; non-payment pause and reconciliation are PR-4) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:52-54` |
+| Assign a plan, Stripe Checkout, webhooks, client Billing page, Customer Portal | **Built, dormant** (M7a PR-3; waits on the live Stripe key and webhook secret on Production); the pause and reconciliation are **Behind a flag** (`BILLING_ENFORCE`, M7a PR-4) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:52-54` |
 | Plans switching Sofía and the web chat on or off | **Planned only** (the flag is stored on a plan; no call or chat path reads it) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:39-40` |
 | Self-serve sign-up; other agencies reselling BIS | **Planned only** (M7 #2 and #3) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:3-5` |
 
@@ -594,7 +594,7 @@ recipients gets four numbers with the changes stated in words.
 | Editable message per recipe, with a text preview and segment count | **Live** (agency only) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/automations-settings.tsx:75-76` |
 | Per-contact "No marketing emails" switch | See §2.2.2 | — |
 | Usage report to Stripe meters | See §2.2.1 | — |
-| Pause sends when a client stops paying | **Planned only** (M7a PR-4; the column exists and nothing reads it) | `packages/db/supabase/migrations/0051_billing_core.sql:164` |
+| Pause sends when a client stops paying | **Behind a flag** (M7a PR-4: `BILLING_ENFORCE`, off by default; it also needs the live Stripe key, since only a billed account can pause) | `apps/web/src/lib/billing/standing.ts:38` |
 | Rule builder and multi-step sequences | **Planned only** (deferred by decision) | `docs/superpowers/specs/2026-09-06-automations-design.md:12-21` |
 | "This month" card: texts, emails, website chats and calls, each with its cap | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/activity/usage-card.tsx:17-53` |
 | History of every send, hold, skip and failure, with its reason | **Partial** (no filter, search, export, total or link to the contact) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/activity/activity-table.tsx:18-58` |
@@ -606,7 +606,7 @@ recipients gets four numbers with the changes stated in words.
 | Each sent report shown in the client's own history | **Live** | `apps/web/src/lib/automations/passes/weekly-report.ts:144-154` |
 | Agency roll-up across every account, flagging accounts nobody receives | **Behind a flag** (sends once an address is set by hand in the database) | `apps/web/src/lib/automations/passes/weekly-agency-report.ts:44-139` |
 | The palette words "activity", "held" and "quiet hours" open the page | **Live** | `apps/web/src/lib/palette/registry.ts:55` |
-| Owner's plan and usage view ("312 of 500 minutes") | **Planned only** (M7a PR-3 Billing page) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:94` |
+| Owner's plan and usage view ("312 of 500 minutes") | **Built, dormant** (M7a PR-3 Billing page; it fills once an account is billed, which waits on the live Stripe key) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/billing/page.tsx` |
 
 **Gaps an owner would feel:** no automated text reaches any customer, so the three recipes that most
 cut no-shows do nothing; every scheduled message is English; the owner cannot see or change
@@ -659,7 +659,7 @@ toggle; the Northern Lights tokens are pinned by parity tests.
 | Loading skeletons | **Partial** (5 of 28 dashboard pages) | `apps/web/src/app/(dashboard)/dashboard/work/loading.tsx` |
 | Phone layout for the signed-in app | **Planned only** (study proposal: an installable web app first, decision 10) | `docs/research/2026-09-25-crm-feature-research.md:1373-1375` |
 | Spanish dashboard and a language per user | **Planned only** (the catalogue is single-locale today, keyed so that Spanish is a translation file later) | `docs/superpowers/specs/2026-07-26-bis-platform-ui-overhaul-design.md:184-189` |
-| Screens that adapt to the client's plan | **Planned only** (M7a) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:39-40` |
+| Screens that adapt to the client's plan | **Behind a flag** (M7a PR-4: with `BILLING_ENFORCE` on, a plan without the receptionist or the website chat turns that off; it waits on billed accounts too) | `apps/web/src/lib/billing/standing.ts:75` |
 
 **Gaps an owner would feel:** no phone layout, so a 236 px sidebar sits on a 375 px screen; every
 screen is English; the dashboard centres on the phone, so a CRM-only plan's headline number would
@@ -730,7 +730,7 @@ Vercel. The gates are strong; operations are thin.
 | Five owner runbooks: CI database, Clerk, voice, website, A2P | **Live** (several statements stale) | `docs/runbooks/voice-setup.md` |
 | Environment variable contract | **Partial** (the cron secret and two others undocumented) | `.env.example` |
 | Demo seeder and screenshot workflows | **Live** (manual; they write the production database) | `.github/workflows/seed-demo.yml:10-20` |
-| Stripe webhook sync | **Planned only** (M7a PR-3) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:58` |
+| Stripe webhook sync | **Built, dormant** (M7a PR-3; answers 503 until `STRIPE_WEBHOOK_SECRET` is set on Production) | `apps/web/src/app/api/webhooks/stripe/route.ts:33` |
 
 **Gaps an owner would feel:** if reminders or the phone line break at 2 a.m., nobody at BIS is told
 and the client finds out first; there is no documented backup or restore; a business that leaves can
@@ -758,7 +758,7 @@ gate its first release, and decision 5 is half-made.
 | M4 AI: Sofía, call proposals, web concierge | **Partial** (knowledge base deferred; concierge off by default) | `docs/superpowers/specs/2026-07-25-bis-platform-design.md:168` |
 | M5 Reviews | **Partial** (a review-request recipe only; no Google Business Profile monitoring or AI replies) | `docs/superpowers/specs/2026-07-25-bis-platform-design.md:169` |
 | M6 Hosted landing pages | **Planned only** (not started) | `docs/superpowers/specs/2026-07-25-bis-platform-design.md:170` |
-| M7a Client billing | **Partial** (Plans page and usage recording shipped, #146 included; checkout, webhooks, Billing pages and the non-payment pause not started) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:82-84` |
+| M7a Client billing | **Partial** (Plans page and usage recording shipped, #146 included; checkout, webhooks and the Billing pages built, dormant until the live Stripe key and webhook secret are on Production; the non-payment pause and nightly Stripe reconciliation behind `BILLING_ENFORCE`, M7a PR-4) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:82-84` |
 | Plan features switched on per account | **Planned only** (`accounts.permissions` is never read or written) | `packages/db/supabase/migrations/0001_tenancy.sql:28` |
 | Self-serve sign-up; other agencies reselling BIS | **Planned only** (no spec) | `docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:3-5` |
 | Meeting transcripts and AI notes | **Planned only** (blocked on the owner's "meetings inside BIS?" decision) | `docs/superpowers/specs/2026-09-15-meeting-notes-design.md:4` |
@@ -945,7 +945,7 @@ this public repository.
 | 6 | **One interim per-person store** (`user_prefs`, created with staff and roles) for language and theme now, and text size, collapsed cards and "last seen" as their features and amendments arrive | Per-person settings scattered across Clerk metadata, cookies and feature tables drift |
 | 7 | **Effort bands follow the number.** Above 6 ew is L, whatever the label; a judge's higher re-estimate is used and marked | Labels that understate effort break the capacity check |
 | 8 | **Split to ship.** Any feature over 6 ew ships in slices of 4 ew or less, each to a real client before the next; each study item ships to a real client before the next on its track | The study's own rule (§11.3), and the only protection against a year of unshipped work |
-| 9 | **One of each shared service:** one short-link service (F-091), one background job runner (F-196; until it lands, today's tick takes at most six new passes, each named here: the vault's two, the operational floor's alert pass, the consent ledger's reconciliation pass with its ten-business-day clock, and M7a's non-payment pause pass and nightly Stripe reconciliation (S-62)), one model gateway (F-020, one provider until decision 2), one agency-scoping design for F-118, F-137 and F-138 | Duplicated plumbing is where cost and incidents hide |
+| 9 | **One of each shared service:** one short-link service (F-091), one background job runner (F-196; until it lands, today's tick takes at most six new passes, each named here: the vault's three, the operational floor's alert pass, the consent ledger's reconciliation pass with its ten-business-day clock, and M7a's non-payment pause pass (its nightly Stripe reconciliation runs inside the usage report) (S-62)), one model gateway (F-020, one provider until decision 2), one agency-scoping design for F-118, F-137 and F-138 | Duplicated plumbing is where cost and incidents hide |
 | 10 | **Plans differ by Sofía, the web chat and allowances.** No other feature becomes a plan gate unless the owner decides otherwise (decision 25) | Binding constraint 3 |
 | 11 | **Revisits are listed, never silent.** A feature that changes a recorded study decision or spec position waits for its decision | Recorded decisions are the project's memory |
 | 12 | **Validate before building on a hypothesis.** The cheapest measurement ships first (§10) | Every demand signal so far comes from vendors, not buyers |

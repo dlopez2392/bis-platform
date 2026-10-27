@@ -379,24 +379,40 @@ goes away. If it is still there after a few minutes:
 ### 5.6 A usage row resent more than 24 hours later may be counted twice
 
 Stripe keeps a meter event's identifier unique only "within a rolling period
-of at least 24 hours" **(assumption, B10: Stripe's docs, not re-read)**. So if
-a send landed at Stripe but was never stamped, and the row is sent again more
-than 24 hours later, Stripe may count it twice. PR-4's nightly reconciliation
-is the backstop, and it does not exist yet.
+of at least 24 hours" **(assumption, B10: Stripe's docs, not re-read)**. Before
+M7a PR-4's reconciliation, the usage report resent any unreported row no
+matter its age, so a send that landed at Stripe but was never stamped could be
+counted twice if it was resent after that window.
 
-The tripwire is the Work page's banner: "Usage for N client(s) hasn't reached
-Stripe in over a day …". The usage report logs the account ids:
-`usage report: usage unreported for over 24 hours on N billed account(s):
-<ids>`. **While that banner shows (DECISION 6):** before each affected
-client's Stripe invoice finalises, open the upcoming invoice by hand. Compare
-its usage quantities with the client's Billing card for the same period. If
-Stripe's number is higher, the difference was counted twice, so correct the
-invoice in Stripe before it finalises **(how Stripe lets a draft invoice be
-corrected was not re-read)**.
+**With `BILLING_ENFORCE` on (PR-4, section 9):** the usage report no longer
+blindly resends an old row. It only STOPS handing a row to the reporter once
+it is 20 hours old (`USAGE_HOLD_AFTER_MS`) — the nightly reconciliation
+(section 9.9) is what resolves it from there, by comparing BIS's held usage
+against Stripe's own meter total for the period: it stamps a held row Stripe
+already counts (`held_at_stripe`), or sends it with the SAME identifier and
+then stamps it (`held_missing`), never a blind resend. So with the switch on,
+the double-count this section used to guard against cannot happen from an
+ordinary day's delay. The one case reconciliation only REPORTS and does not
+resolve on its own — a held row from a period that has already closed — is
+section 9.11.
+
+**With `BILLING_ENFORCE` off** (before rollout, or after a rollback, section
+9.12): the usage report is PR-3's behaviour, and the tripwire below is the
+only protection.
+
+The tripwire (switch off only) is the Work page's banner: "Usage for N
+client(s) hasn't reached Stripe in over a day …". The usage report logs the
+account ids: `usage report: usage unreported for over 24 hours on N billed
+account(s): <ids>`. **While that banner shows, with the switch off:** before
+each affected client's Stripe invoice finalises, open the upcoming invoice by
+hand. Compare its usage quantities with the client's Billing card for the same
+period. If Stripe's number is higher, the difference was counted twice, so
+correct the invoice in Stripe before it finalises **(how Stripe lets a draft
+invoice be corrected was not re-read)**.
 
 A separate line, `usage report: N unreported usage row(s) of billed accounts
 are older than Stripe accepts (34 days); they will never be billed`, is lost
-revenue, not a double charge.
+revenue, not a double charge, whichever way the switch is set.
 
 ### 5.7 The portal configuration: do not edit or deactivate it
 
@@ -509,3 +525,419 @@ live mid-month Change plan. Record the result:
 | Date | By | Base price | Metered usage priced at | B4 holds? |
 |---|---|---|---|---|
 | | | | | |
+
+## 9. The pause and the nightly reconciliation (M7a PR-4)
+
+Plan: `docs/superpowers/plans/2026-10-26-m7a-pr4-pause-and-reconciliation.md`
+(sections "Owner decisions", "Spec gaps resolved here" G1-G22, Task 13). Spec:
+`docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md`, sections 3
+flows 5-6, 4, 5, 9.
+
+Everything in this section is read, written and enforced through ONE switch,
+`BILLING_ENFORCE` (`apps/web/src/lib/billing/enforce.ts`), exactly `"1"` to
+turn on, `.env.example`. **Vercel Production only. Needs a redeploy** — an env
+change reaches new deployments only, same as every other var in this file.
+
+**Turning it off is the whole rollback**, with two deliberate exceptions that
+stay on either way: the webhook mirror keeps stamping `stripe_checked_at` on
+every write, and keeps clearing `billing_paused_at` the moment Stripe reports
+`active` or `trialing` (both harmless — a correct clear, and a stamp nothing
+reads with the switch off). With the switch off: nothing is paused, held,
+stopped, forwarded, closed or made read-only because of billing; the usage
+report does not hold old rows (section 5.6); the nightly step (this section)
+does not run at all; the pause pass (below) writes nothing, only counts what
+it would do.
+
+### 9.1 What pauses, and when
+
+A billed, non-complimentary account pauses when:
+- it has been `past_due` or `unpaid` for **7 days** (`past_due_since`), it has
+  not been Lifted for this stretch, **and** Stripe has CONFIRMED the unpaid
+  status both AFTER the 7 days ended and within the last **26 hours**
+  (`stripe_checked_at`); or
+- its subscription is `canceled` and the paid period it already covers has
+  ended (`current_period_end`, or no end at all).
+
+**The freshness rule's bound, stated precisely (G6): not "never a wrong
+pause", but this bound.** A client who pays after Stripe's LAST confirming
+read, whose `invoice.paid` webhook delivery then fails, can stay paused until
+Stripe's own webhook retry succeeds or the next nightly re-read confirms it —
+whichever comes first, at most about 24 hours plus one tick. See 9.8 for what
+to do about it right now instead of waiting.
+
+A row with no subscription, a complimentary row, and `incomplete` /
+`incomplete_expired` never pause — they stay as an unbilled account would
+(0051's own CHECK forbids a complimentary row carrying a pause). Nothing here
+touches Stripe's dunning (section 1, step 6) or releases a phone number,
+ever — not on pause, not on day 30, not on cancellation.
+
+### 9.2 What stops while paused, and what does not
+
+**Stops:** Sofía answering (9.4); texts to the business's CUSTOMERS (every SMS
+kind except the owner's own alerts and the STOP/START/HELP replies, which
+still send); automations due during the pause (held, not dropped — 9.3); the
+website chat (every entry point answers as a switched-off chat does, 404); AI
+record summaries (the route answers "none" to every caller, cached or not);
+every CLIENT server action under `/dashboard/accounts/<id>/` except a short,
+pinned allow-list that writes nothing (Manage billing — the way to pay — the
+shell's read-only snapshot poll, and marking a conversation read).
+
+**Keeps going:** the public booking page and its forms, and their email
+receipts; inbound email and SMS (recorded, not answered by Sofía); the
+STOP/HELP/START replies; the agency's own alerts; the weekly report; the
+production demo on `bis-rgv.com` (never billed); every action the agency
+itself takes. A plan with no receptionist or no website chat is enforced the
+same way, with no payment pause involved.
+
+**A plan without Sofía or the website chat** is enforced through the exact
+same read, whether or not the account has ever been paused: `voice_receptionist:
+false` or `web_concierge: false` on the account's CURRENT plan switches that
+feature off the moment the switch goes on (9.5 step 3 below — check transfer
+numbers FIRST).
+
+**Two known limitations, carried as written, not bugs to chase:**
+- **No timeout on the TeXML billing read.** The call-answering route's own
+  `account_billing` read (`readBillingStanding`) starts in parallel with the
+  spam-cap counts and is awaited before the dial document is built, but it
+  carries no timeout of its own (unlike the AI summary gate's 3-second
+  `GATE_TIMEOUT_MS`). A slow database read — not a slow Stripe call, there is
+  none here — delays answering the call by however long that read takes, with
+  no cap, though a read that THROWS still answers at once (fail open, G9). If
+  call pickup ever gets slow, check this read before anything else.
+- **A paused account in "Closed today" or "Storm" still forwards** to its
+  transfer number in the first 30 days of the pause, exactly like any other
+  cleared call: the TeXML route never reads S-47d's business-status (plan
+  M13, accepted on purpose).
+
+### 9.3 Automations: held, not dropped
+
+A send due during a pause is HELD (the closure hold's own shape), not
+dropped, and not refused with a sentence:
+- **The hold sits on a fixed grid.** `held_until` is the earlier of the
+  subject's own deadline and the next WHOLE HOUR (UTC). A pause already in
+  force short-circuits before either send gate is asked.
+- **A stale one still drops**, with "Not sent: it was no longer timely when
+  the account's pause ended" — each automation recipe's own existing max-age
+  window (review request, referral ask, no-show nudge, quote follow-up each
+  have one; reactivation has none and relies on its own release re-check).
+- **Release:** still paused → held again; the pause lifts (paid, or Lift
+  pause) → every held row of the account goes within the hour (Lift bumps
+  them immediately); switch off → sent as normal.
+- The one SEND that is refused outright, never held, is the staff document
+  request by text (`automations.reason.billingPaused` on the Activity page) —
+  it is a person's own action in the moment, not a scheduled automation.
+
+### 9.4 The 30-day rule and the work-queue item
+
+**`PAUSE_FORWARD_MS` = 30 days (I7).** For the first 30 days of a pause, a
+CLEARED call that cannot reach Sofía still rings the business at its own
+transfer number, recorded on `forwarded_calls` with kind `billing-paused` (or
+`plan-no-voice` for a plan with no receptionist, which forwards with no time
+limit — only a PAUSE ever stops forwarding). From day 30 on, or with no usable
+transfer number at any point, the caller hears a short message instead
+("Thanks for calling. No one can take your call right now. Please call back
+later." / its Spanish twin) and the call is recorded on Screened calls with
+the same reason. **The phone number itself is never released, automatically or
+otherwise — not on day 30, not ever.**
+
+The agency sees this coming on the work queue (`/dashboard/work`), a line
+"Paused 30+ days, calls are no longer forwarded:" naming the account, from day
+30 through day 44 (switch off: the account stays under the plain "Paused:"
+line to day 44 instead, since nothing is or is not forwarding with the switch
+off); after day 44 the account leaves the banner on its own — its Billing card
+still says Paused, and still carries its own "Calls are no longer forwarded…"
+line, for as long as it stays unpaid.
+
+**Owner note: a first-time caller still hears the press-1 spam screen
+FIRST**, ahead of either the forward or the call-back message, on every
+account, paused or not (`lib/voice/call-screen.ts`). Only once a caller has
+pressed 1 (or is calling a SECOND time, so their number has history) does the
+route ever reach the billing block. Testing a paused account's call behaviour
+from a number that has never called it before will show the "press 1" prompt
+first, every time — that is correct, not a sign the pause is not working; call
+again from the same number (or set `VOICE_SCREEN_ALWAYS_FROM` /
+`VOICE_SCREEN_NUMBERS`, `.env.example`'s own voice-screening vars, for a
+repeatable test) to reach the forward or the message.
+
+### 9.5 Turning it on (the owner, after the merge, in this order)
+
+**Prerequisite, the owner's own step, done once, well before this:** the LIVE
+`STRIPE_SECRET_KEY` and the live endpoint's `STRIPE_WEBHOOK_SECRET` are set on
+Vercel Production (section 1) and the failed-payment settings there (Smart
+Retries, mark unpaid, never cancel) are the ones recorded in section 1 step 6.
+Nothing below substitutes for that — `BILLING_ENFORCE` turns on what BIS does
+with a row Stripe already reports; it does not make Stripe report anything.
+
+1. **Leave `BILLING_ENFORCE` unset for at least one night.** Read the cron
+   log: `billingPause: would pause account <id>` / `billing pause (switch
+   off): would unpause account <id>` and the `unconfirmed` line name only
+   accounts you expect. With the switch off nothing re-reads Stripe nightly,
+   so a past-due account mostly logs as `unconfirmed` (its stamp is only as
+   fresh as the last webhook) — that is expected, not a fault. The work
+   queue's "Payment failed:" line already shows these accounts today.
+2. **Run the TEST-mode probe below (9.13) once**, in TEST mode, before
+   trusting day counts and invoice timing against a real client.
+3. **Check every billed account's plan features and transfer numbers BEFORE
+   step 4.** The moment the switch goes on, a plan with `voice_receptionist:
+   false` sends that account's calls to its OWN transfer number at once (not
+   a pause — a plan gate, 9.2). Set each such account's transfer number first,
+   or its calls get the "please call back" message instead (9.4) the instant
+   the switch flips.
+4. **Set `BILLING_ENFORCE=1` on Vercel Production only; redeploy.** Confirm
+   the deployment's meta names the merge SHA before relying on it (the
+   platform agent's usual deploy check).
+5. **The real test call — do this once, immediately after step 4, before
+   trusting the switch with a real paying client's calls.** The switch gates
+   the WHOLE read (9.2): with it unset, a call never consults
+   `billing_paused_at` at all, so none of this can be rehearsed before step 4
+   — only right after it, on an account you control.
+   1. Pick ONE account with its OWN working phone number that you can afford
+      to have paused for a few minutes — never `Test Client One`, never a live
+      paying client. Record its current row so it can be put back exactly:
+      ```sql
+      select billing_paused_at, pause_lifted_at, past_due_since, updated_at
+      from account_billing where account_id = '<account id>';
+      ```
+   2. Stamp it paused by hand, moving `updated_at` forward with it (every
+      writer does; a hand edit follows the same rule, section 5.1):
+      ```sql
+      update account_billing set billing_paused_at = now(), updated_at = now()
+      where account_id = '<account id>';
+      ```
+   3. With that account's Settings transfer number SET, call its number TWICE
+      from the same caller number (the first call answers the press-1 screen,
+      9.4's owner note). Expect the SECOND call to ring the transfer number,
+      and a new `forwarded_calls` row, kind `billing-paused`.
+   4. Clear the transfer number, call again from the same number: expect the
+      short "please call back" message and a new `screened_calls` row, reason
+      `billing-paused`.
+   5. Push the pause back past 30 days and put the transfer number back:
+      ```sql
+      update account_billing set billing_paused_at = now() - interval '31 days', updated_at = now()
+      where account_id = '<account id>';
+      ```
+      Call again: expect the "please call back" message EVEN THOUGH a
+      transfer number is set (I7 — only the first 30 days forward), and a
+      `screened_calls` row.
+   6. Put the row back exactly as recorded in step 1 above, moving
+      `updated_at` forward again:
+      ```sql
+      update account_billing set billing_paused_at = <original value or null>, updated_at = now()
+      where account_id = '<account id>';
+      ```
+6. **Read the next night's cron log** (9.6): `usageReport.reconciled` should
+   be greater than 0 for every billed account, and `usageReport.mismatched`
+   should be 0. Anything else, read 9.9 before doing anything by hand.
+7. **Rollback (required steps, M4) — first, the held usage; then unset
+   `BILLING_ENFORCE` and redeploy.** With the switch off the usage report
+   stops HOLDING: every usage row still held is resent on the next tick. A
+   row Stripe already has, resent more than 24 hours after its first send, is
+   past Stripe's identifier dedupe (assumption S7, section 5.6) and is BILLED
+   TWICE. So BEFORE you unset it, list every account, meter and window whose
+   newest check is ambiguous or held:
+   ```sql
+   select distinct on (account_id, meter) account_id, meter, window_start, window_end,
+          bis_held, stripe_total, verdict, checked_at
+   from billing_reconciliations
+   where verdict in ('ambiguous', 'held_at_stripe', 'held_missing')
+   order by account_id, meter, checked_at desc;
+   ```
+   For each, open that customer's invoice in Stripe and decide its held rows
+   by 9.11's method: stamp the ones Stripe already counts (so they are never
+   resent), and leave unstamped only the ones it genuinely lacks. Only then
+   unset the switch. Every reader ignores the stamps at once; held automations
+   go out within the hour; the usage report stops holding; the nightly step
+   stops running. Then
+   run 9.12's ONE SQL statement, so no card still says Paused and no stale
+   stamp re-enforces the moment the switch comes back on. **Do not use Lift
+   pause for this** — a Lift stamp would stop those accounts re-pausing for
+   the SAME unpaid stretch, which is not what a rollback means.
+
+### 9.6 Reading the cron log
+
+**The pause pass (`billingPause`), every tick, switch either way:**
+- `billing pause: paused account <id>` / `billing pause: cleared the pause of
+  paid account <id>` — a real write, switch on only.
+- `billing pause (switch off): would pause account <id>` / `would unpause
+  account <id>` — switch off; counted as `wouldPause` / `wouldUnpause`.
+- `billing pause: account <id> is past the grace but Stripe has not confirmed
+  it since; not paused this tick` — counted `unconfirmed`, logged with
+  `console.log` (an everyday line, not an error) every tick until the nightly
+  re-read or the next webhook confirms it.
+
+**The nightly step (runs inside `usageReport`, switch on only):**
+`remirrored`, `reconciled`, `mismatched`, `heldStamped`, `heldSent`,
+`reconcileFailed`, `reconcileSkippedBudget`. An alerting verdict is always
+logged with `console.error`:
+```
+billing nightly: <meter> for account <id>[ (closed period)] is <verdict>:
+Stripe <n>, BIS settled <n>, in flight <n>, held <n> (window <start> to <end>)
+```
+`reconcileSkippedBudget` above 0 most nights means the 60-second budget ran
+out before every account was reached — not a fault by itself (the next tick
+resumes whatever a tick's budget did not reach, section 9's own `nightlyRunStart`
+rule), but rising night over night is worth a look.
+
+### 9.7 Lift pause and its Undo
+
+**Lift pause** (the Billing card, agency only) clears the pause at once and
+stamps `pause_lifted_at = now()`; it bumps every held automation of the
+account so they go on the NEXT tick, not the next release window. **Undo**
+restores the EXACT pause the Lift cleared (its own start, so the 30-day
+forward clock does not restart) — but only while the row still carries that
+same lift stamp and is still unpaid or ended; otherwise Undo says the billing
+changed underneath it and does nothing. Neither writes directly against
+`account_billing` by hand; always use the card.
+
+### 9.8 "A client paid but is still paused"
+
+**The ordinary case.** The webhook's own re-read clears the pause the instant
+Stripe reports `active` or `trialing`. If that one delivery is lost, the
+nightly re-read (9.1's bound) catches up within about a day. **To clear it AT
+ONCE instead of waiting**, Lift pause from the card (9.7) — this is the
+intended way to short-circuit the wait, not a workaround.
+
+**A narrower case the nightly re-read does NOT catch (G6 note).** The nightly
+step re-reads only the subscription id ALREADY stored on the row
+(`account_billing.stripe_subscription_id`) — it never discovers a DIFFERENT
+one on the same customer. If the client's old subscription ended and they
+started a brand NEW one (a new `sub_…` id), and the webhook for THAT new
+subscription is lost, the nightly re-read keeps confirming the OLD (now
+ended) subscription forever, and the pause sits. Tell this case apart by
+checking the client's Stripe customer directly: if it holds a LIVE
+subscription with a DIFFERENT id than the one `account_billing` has, use
+section 3's remedy (resend the event, or the metadata-edit trick) on THAT
+new subscription's events, not the old one's. Lift pause clears the ACCESS
+either way, but the row will not reflect the new subscription until BIS reads
+it.
+
+### 9.9 Each reconciliation verdict, and what to do
+
+Find the newest mismatches:
+```sql
+select account_id, meter, window_start, window_end, bis_settled, bis_in_flight,
+       bis_held, stripe_total, verdict, checked_at
+from billing_reconciliations
+where verdict <> 'match'
+order by checked_at desc;
+```
+
+| Verdict | What it means | What to do |
+|---|---|---|
+| `match` | Stripe's total is inside what BIS settled (plus what is still in flight). | Nothing. |
+| `held_at_stripe` | BIS had held this usage past 20 hours, but Stripe's total already counts it. | Nothing — the nightly step stamps it `reported_at` itself. |
+| `held_missing` | BIS had held this usage past 20 hours, and Stripe's total does NOT count it. | Nothing — the nightly step sends it with the ORIGINAL identifier (so a later "duplicate" answer still only stamps it, never double-counts) and stamps it. |
+| `stripe_over` | Stripe's total is HIGHER than everything BIS can account for, held rows included. | Check the account's draft invoice BEFORE it finalises (S8, 9.10) and credit the difference if it is real. |
+| `stripe_under` | Stripe's total is LOWER than BIS settled alone. Stripe dropped an event it accepted (assumption A12: a 200 from `meterEvents.create` means RECEIVED, not that it will bill). | A manual invoice item for the difference, or accept the loss — an owner decision, not automatic. |
+| `ambiguous` | The held and non-held ranges overlap, or Stripe's total is a non-integer, or it falls strictly between the two ranges. | Compare `usage_events` for the account, meter and window against Stripe's own `listEventSummaries` for the same window, by hand. |
+
+**A false `ambiguous` from a held send split across ticks.** The nightly
+step sends a `held_missing` window's held rows one at a time, each only while
+its worst case still fits the budget; when the budget runs out midway, the
+rest wait for the next tick. Until the next NIGHT re-checks that window,
+Stripe counts some of its held rows and not others — exactly the partial set
+the comparison refuses to decide — so a check in between reads `ambiguous`.
+Before working an `ambiguous` row by hand, wait for the next night's check of
+the same window: if the remaining rows went out, it reads `match` (or
+`held_at_stripe`) on its own.
+
+### 9.10 A closed-period mismatch (S8)
+
+Stripe finalises a period's invoice about an hour after the period ends
+**(assumption, Stripe's docs, not re-read)**. The nightly step compares a
+just-closed period once, on the first night after it closes — usually AFTER
+that invoice is already final, so this comparison REPORTS a mismatch, it
+cannot prevent one. If it shows `stripe_over` or `stripe_under` on a closed
+period (the row's `window_end` is before the account's current period
+started), credit or adjust the FINAL invoice directly, the same as any other
+mismatch (9.9) — there is no draft left to fix.
+
+### 9.11 A held row from a closed period (G15)
+
+The nightly step only ever REPORTS a held row from a period that has already
+closed — it never sends or stamps one, because that period's invoice is
+already final (9.10) and a late send could land on the wrong bill. A person
+decides. Find them:
+```sql
+select r.account_id, r.meter, r.window_start, r.window_end, r.verdict, r.bis_held
+from billing_reconciliations r
+where r.verdict in ('held_missing', 'held_at_stripe')
+order by r.checked_at desc;
+```
+Then the rows themselves, for one account and meter and window:
+```sql
+select id, quantity, occurred_at, created_at
+from usage_events
+where account_id = '<account id>' and meter = '<meter>'
+  and reported_at is null
+  and occurred_at >= '<window_start>' and occurred_at < '<window_end>';
+```
+Decide by comparing them with the closed invoice (already final, 9.10): if
+the usage is already billed (`held_at_stripe`-shaped), stamp it so it stops
+showing as held and is never resent by mistake; if it genuinely never reached
+Stripe and belongs on a later, manual invoice item instead, stamp it anyway
+once that is settled (stamping only means "do not try to send this again"):
+```sql
+update usage_events set reported_at = now(), updated_at = now()
+where id = '<id>' and reported_at is null;
+```
+
+### 9.12 Rollback: clearing every pause stamp
+
+First the held usage (9.5 step 7's list, BEFORE the switch goes off: with it
+off, every held row is resent, and one Stripe already has bills twice past its
+24-hour dedupe). After unsetting `BILLING_ENFORCE` and redeploying, run this ONCE
+through MCP, against production, to clear every stamp the pause left behind —
+otherwise no card can be trusted ("Paused" may be stale) and turning the
+switch back ON would re-pause every account still genuinely past due, with no
+record of when:
+```sql
+update public.account_billing
+set billing_paused_at = null,
+    updated_at = greatest(clock_timestamp(), updated_at + interval '1 millisecond')
+where billing_paused_at is not null;
+```
+`updated_at` moves strictly forward even when a stored value is somehow ahead
+of the clock (the same `nextVersion` rule every other billing writer follows,
+section 5.1), so no delivery in flight can silently overwrite this clear. This
+statement deliberately writes NO `pause_lifted_at` — it is a rollback, not a
+Lift, so the same accounts pause again, correctly, the first night after the
+switch goes back on.
+
+### 9.13 The TEST-mode probe (S2, S3, S4, S8) — run once before 9.5 step 4
+
+On a Stripe TEST clock (same approach as section 8's B4 probe), never the
+live key:
+1. **S2 — Smart Retries past day 7.** A subscription with a card that fails
+   every charge. Advance the clock a day at a time through day 7 and past the
+   last scheduled retry. Record the subscription's `status` each day: expect
+   `past_due` through the retries, then `unpaid` once they are exhausted
+   (never an automatic `canceled`, section 1 step 6).
+2. **S3 — a canceled subscription's period end.** Cancel a live test
+   subscription immediately (not "at period end"). Read
+   `items.data[].current_period_end` right after: expect it to still be the
+   END of the period already paid for, in the future — not now.
+3. **S4 — usage with no live subscription.** On that now-canceled customer,
+   send one metered event (`meterEvents.create`). Expect Stripe to accept it
+   (200) and the upcoming invoice preview for that customer to show no charge
+   for it (nothing to bill without a live subscription).
+4. **S8 — when a period's invoice finalises.** Advance the clock past a
+   period's end on a live test subscription. Read the resulting invoice's
+   `finalized_at` and compare it with the period's own end. Record how long
+   after.
+
+Record the results here:
+
+| Probe | Date | By | Result |
+|---|---|---|---|
+| S2, past_due then unpaid | | | |
+| S3, canceled period end | | | |
+| S4, usage with no subscription | | | |
+| S8, invoice finalized_at vs period end | | | |
+
+If S2 or S3 contradicts what is written above, stop before turning
+`BILLING_ENFORCE` on and tell the orchestrator: `decidePause` (Task 4,
+`apps/web/src/lib/billing/standing.ts`) is written against exactly these two
+behaviours. If S4 contradicts it, the usage report's own DECISION 7-era
+assumption (A17 in the PR-2 plan) needs the same re-check. S8 cannot fail —
+it only tells you how early 9.10 starts mattering for a given account.

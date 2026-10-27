@@ -8,10 +8,11 @@ const requireAccountAccess = vi.fn<(accountId: string) => Promise<Access>>(async
 // Staff caller (the owner guard redirecting) can be exercised without
 // touching the other actions in this file, which still use
 // requireAccountAccess unchanged.
-const requireAccountOwner = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
+const requireAccountOwner = vi.fn<(accountId: string, opts?: { duringPause?: "allow" }) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
-  requireAccountOwner: (accountId: string) => requireAccountOwner(accountId),
+  // Both arguments forwarded (M7a PR-4): a read-only action passes { duringPause: "allow" }.
+  requireAccountOwner: (...a: [string, { duringPause?: "allow" }?]) => requireAccountOwner(...a),
 }));
 const dbForRequest = vi.fn(async () => ({}));
 vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
@@ -235,7 +236,8 @@ describe("countContactDocumentsAction", () => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.countContactDocuments.mockResolvedValue(4);
     expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: true, count: 4 });
-    expect(requireAccountOwner).toHaveBeenCalledWith("a1");
+    // M7a PR-4 (plan G11): a read, so it stays usable while the account is paused (read-only.test.ts's allow-list).
+    expect(requireAccountOwner).toHaveBeenCalledWith("a1", { duringPause: "allow" });
     expect(dbMocks.countContactDocuments.mock.calls[0]![0]).toBe(REQUEST);   // the request client, by identity
     expect(dbMocks.countContactDocuments.mock.calls[0]!.slice(1)).toEqual(["a1", [C]]);
     dbMocks.countContactDocuments.mockRejectedValue(new Error("countContactDocuments: the count came back null"));

@@ -71,6 +71,7 @@ import { BLOCK_REASONS, EMAIL_BLOCK_REASONS, REASONS } from "@/lib/automations/h
 import { withTrailingLink } from "@/lib/automations/sms-link";
 import { documentRequestEmail } from "@/lib/email/templates/document-request";
 import { emailBrand } from "@/lib/email/templates/shell";
+import { m } from "@/lib/messages";
 
 const db = { tag: "service-db" } as unknown as SupabaseClient;
 const ledger = { tag: "ledger-db" } as unknown as SupabaseClient;
@@ -164,6 +165,12 @@ afterEach(() => {
   errSpy.mockRestore();
 });
 
+it("M7a PR-4: a paused account's refused request reads as paused, in both places, never the deadline skip's 'too late' (mutation: map billing_paused to skippedBillingPaused → FAILS)", () => {
+  expect(BLOCK_REASONS.billing_paused).toBe("Not sent: the account is paused");
+  expect(m["documents.request.reason.accountPaused"]).toBe("texts to customers are stopped while this account is paused");
+  expect(m["documents.request.reason.accountPaused.es"]).toBe("los mensajes de texto a clientes están detenidos mientras esta cuenta está en pausa");
+});
+
 describe("deliverDocumentRequest by text", () => {
   it("1. hands the gate the informational kind, the target's phone, the REQUEST's language (not the contact's), the account's zone and the Spanish body with the link on the end (mutations: the contact's language -> FAILS; a staff_typed kind -> FAILS)", async () => {
     await deliver();
@@ -229,6 +236,8 @@ describe("deliverDocumentRequest by text", () => {
     ["no_number", BLOCK_REASONS.no_number, "documents.request.reason.noPhone"],
     ["unconfirmed_number", BLOCK_REASONS.unconfirmed_number, "documents.request.reason.noPhone"],
     ["suppressed_account", BLOCK_REASONS.suppressed_account, "documents.request.reason.failed"],
+    // M7a PR-4 (review item 2): a paused account's request text is refused with its own sentence, not "failed".
+    ["billing_paused", BLOCK_REASONS.billing_paused, "documents.request.reason.accountPaused"],
   ] as const)("4. blocked %s: skipped in What went out with the Activity page's words, and the dialog's reason (mutation: swap any one mapping -> FAILS)", async (reason, logReason, key) => {
     h.smsAnswer.value = { kind: "blocked", reason };
     const out = await deliver();

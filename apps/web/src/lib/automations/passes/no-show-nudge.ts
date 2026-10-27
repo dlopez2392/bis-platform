@@ -1,6 +1,6 @@
 import {
   listDueNoShowNudges, stampNoShowNudged, stampNoShowNudgeSmsFailed, countNoShowNudgesSince,
-  getDueNoShowNudgeById, chooseBody, type DueNoShowNudge, type RecipientLanguage,
+  getDueNoShowNudgeById, chooseBody, NO_SHOW_NUDGE_MAX_AGE_MS, type DueNoShowNudge, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -82,6 +82,9 @@ export async function processNoShowNudges(
       continue;
     }
 
+    // THE CLOCK (0026): the later of the meeting end and "Mark no-show".
+    const anchor = laterOf(new Date(row.endsAt), row.noShowAt ? new Date(row.noShowAt) : null);
+
     // Built only once the channel is known: the log subject's channel field
     // is the CONFIGURED one, never a guess.
     const subject: SmsHoldSubject = {
@@ -89,6 +92,8 @@ export async function processNoShowNudges(
       channel: config.channel, smsKind: "automation.no_show_nudge", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
+      // M7a PR-4 (plan G7a, re-review I2): a pause hold never runs past the list's own age window.
+      pauseDeadline: new Date(anchor.getTime() + NO_SHOW_NUDGE_MAX_AGE_MS),
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {
@@ -101,8 +106,6 @@ export async function processNoShowNudges(
       continue;
     }
 
-    // THE CLOCK (0026): the later of the meeting end and "Mark no-show".
-    const anchor = laterOf(new Date(row.endsAt), row.noShowAt ? new Date(row.noShowAt) : null);
     // THE GATE RUNS ON BOTH PATHS. A release skips the morning BAND and
     // nothing else (`skipBand`, the release contract in part B's spec at line
     // 16 and amendment B16): the band already said yes once, when this row

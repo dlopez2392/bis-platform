@@ -12,10 +12,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * `VOICE_FORWARD_TO` is deliberately never recorded: it runs before any
  * lookup, has no account, and bypasses the caps on purpose.
  */
-export type ForwardKind = "account-forward" | "model-down";
+export type ForwardKind = "account-forward" | "model-down" | "billing-paused" | "plan-no-voice";
 
-/** Mirrors `forwarded_calls_kind_check` in 0059. Keep the two in step. */
-export const FORWARD_KINDS: readonly ForwardKind[] = ["account-forward", "model-down"] as const;
+/** Mirrors `forwarded_calls_kind_check` (0059, widened by 0099). Keep the two in step. */
+export const FORWARD_KINDS: readonly ForwardKind[] = [
+  "account-forward", "model-down", "billing-paused", "plan-no-voice",
+] as const;
 
 export interface ForwardedCallInput {
   accountId: string;

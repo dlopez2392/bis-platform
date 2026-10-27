@@ -64,19 +64,30 @@ export type PortalFeature = (typeof PORTAL_FEATURES)[number];
  *  it, and ensurePortalConfiguration (portal.ts) refuses one that drifted. */
 export type PortalConfiguration = { id: string; metadata: Record<string, string>; features: Record<PortalFeature, boolean> };
 
+/** `bounded`: the nightly step's per-request transport (BOUNDED below; M7a
+ *  PR-4 plan I2). Absent or false: the client's defaults, so the webhook and
+ *  the Plans page are unchanged. */
+export type ReadTransport = { bounded?: boolean };
+
+/** One meter's total for one customer over [startSeconds, endSeconds), both
+ *  whole minutes (M7a PR-4 plan G14). */
+export type MeterTotalInput = { meterId: string; customerId: string; startSeconds: number; endSeconds: number };
+
 export interface BillingGateway {
-  listActiveMeters(): Promise<StripeMeter[]>;
+  listActiveMeters(opts?: ReadTransport): Promise<StripeMeter[]>;
   createMeter(input: { eventName: string; displayName: string }, idempotencyKey: string): Promise<StripeMeter>;
   createProduct(input: { planId: string; name: string }, idempotencyKey: string): Promise<{ id: string }>;
   renameProduct(productId: string, name: string): Promise<void>;
   createPrice(spec: PriceSpec, idempotencyKey: string): Promise<{ id: string }>;
   reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>;
+  /** Always bounded: only the nightly step asks it. */
+  meterTotal(input: MeterTotalInput): Promise<number>;
   createCustomer(input: { accountId: string; name: string | null; email: string }, idempotencyKey: string): Promise<{ id: string }>;
   updateCustomerEmail(customerId: string, email: string, idempotencyKey: string): Promise<void>;
   createCheckoutSession(input: CheckoutInput, idempotencyKey: string): Promise<CheckoutSession>;
   getCheckoutSessionStatus(sessionId: string): Promise<CheckoutStatus>;
   expireCheckoutSession(sessionId: string): Promise<void>;
-  retrieveSubscription(subscriptionId: string): Promise<SubscriptionSnapshot>;
+  retrieveSubscription(subscriptionId: string, opts?: ReadTransport): Promise<SubscriptionSnapshot>;
   updateSubscriptionPrices(change: SubscriptionPriceChange, idempotencyKey: string): Promise<void>;
   listPortalConfigurations(): Promise<PortalConfiguration[]>;
   createPortalConfiguration(idempotencyKey: string): Promise<{ id: string }>;
@@ -158,6 +169,24 @@ const MAX_TIMESTAMP_SECONDS = 100_000_000_000;
  * is sized against that worst case, not against this constant alone.
  */
 export const METER_EVENT_TIMEOUT_MS = 10_000;
+
+/** The nightly step's per-request transport (M7a PR-4 plan I2): one
+ *  attempt, the meter event's socket timeout, so each call's worst case is
+ *  METER_EVENT_WORST_CASE_MS (caps.ts) like a meter event's. The webhook
+ *  and the Plans page keep the client's defaults. */
+const BOUNDED: Stripe.RequestOptions = { maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS };
+
+/**
+ * The Stripe idempotency key for one usage row's meter event. It covers
+ * every parameter the request sends: event name, value and timestamp are
+ * functions of the row, which never changes after it is recorded
+ * (recordUsage never updates), and the customer is the only thing that can
+ * differ between two sends of the same row. Shared by the usage report and
+ * the nightly step's held sends (moved here so neither imports the other).
+ */
+export function usageIdempotencyKey(rowId: string, customerId: string): string {
+  return `bis-usage-${rowId}-${customerId}`;
+}
 
 /**
  * The usage mapping: one usage row → one v1 meter event. The payload keys
@@ -408,8 +437,9 @@ export function isSignatureError(e: unknown): boolean {
 
 export function stripeGateway(stripe: Stripe): BillingGateway {
   return {
-    async listActiveMeters() {
-      const page = await stripe.billing.meters.list({ status: "active", limit: 100 });
+    async listActiveMeters(opts) {
+      const params: Stripe.Billing.MeterListParams = { status: "active", limit: 100 };
+      const page = opts?.bounded ? await stripe.billing.meters.list(params, BOUNDED) : await stripe.billing.meters.list(params);
       if (page.has_more) throw new Error("listActiveMeters: more than 100 active meters; refusing to guess which are ours");
       return page.data.map((m) => ({ id: m.id, eventName: m.event_name }));
     },
@@ -444,6 +474,17 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
         idempotencyKey, maxNetworkRetries: 0, timeout: METER_EVENT_TIMEOUT_MS,
       });
     },
+    async meterTotal({ meterId, customerId, startSeconds, endSeconds }) {
+      // One summary for the whole range: no value_grouping_window (which
+      // would answer per hour or day); both times minute-aligned
+      // (stripe@22.6.2 Meters.d.ts:216-236). That the summary is the exact
+      // sum of the ACCEPTED events in [start_time, end_time), settled within
+      // RECONCILE_SETTLE_MS, is assumption S1, not a documented fact.
+      const page = await stripe.billing.meters.listEventSummaries(meterId, {
+        customer: customerId, start_time: startSeconds, end_time: endSeconds,
+      }, BOUNDED);
+      return page.data.reduce((sum, s) => sum + s.aggregated_value, 0);
+    },
     async createCustomer({ accountId, name, email }, idempotencyKey) {
       const c = await stripe.customers.create(
         { email, metadata: { bis_account_id: accountId }, ...(name ? { name } : {}) },
@@ -471,8 +512,10 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
     async expireCheckoutSession(sessionId) {
       await stripe.checkout.sessions.expire(sessionId);
     },
-    async retrieveSubscription(subscriptionId) {
-      return subscriptionSnapshot(await stripe.subscriptions.retrieve(subscriptionId));
+    async retrieveSubscription(subscriptionId, opts) {
+      return subscriptionSnapshot(opts?.bounded
+        ? await stripe.subscriptions.retrieve(subscriptionId, {}, BOUNDED)
+        : await stripe.subscriptions.retrieve(subscriptionId));
     },
     async updateSubscriptionPrices(change, idempotencyKey) {
       // Change plan NOW, with proration (DECISION 2, danlo 2026-09-25).

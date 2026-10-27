@@ -33,7 +33,8 @@ const failed = { ok: false as const, error: m["billing.page.portalFailed"] };
  * click proves it.
  */
 export async function openBillingPortalAction(accountId: string): Promise<{ ok: false; error: string }> {
-  const { isAgency } = await requireAccountOwner(accountId);
+  // M7a PR-4 (plan G11): the way to pay, so it stays usable while the account is paused.
+  const { isAgency } = await requireAccountOwner(accountId, { duringPause: "allow" });
   if (!UUID.test(accountId)) return failed;
   // Inside a try: a rejected action would swap the whole page for the error
   // boundary, and this is a button whose failure is one sentence.

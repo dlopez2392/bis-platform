@@ -223,6 +223,8 @@ const getCallMock = vi.hoisted(() => vi.fn());
 const recordScreenedCallMock = vi.hoisted(() => vi.fn());
 const afterMock = vi.hoisted(() => vi.fn());
 const countForwardedMock = vi.hoisted(() => vi.fn());
+// M7a PR-4: read only while BILLING_ENFORCE is "1".
+const readBillingStandingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -244,6 +246,7 @@ vi.mock("@bis/db", () => ({
   // validator doesn't throw on the destructure; this file's own tests never
   // reach that branch with a status this suite exercises against it.
   recordAutomationLog: async () => undefined,
+  readBillingStanding: (...a: unknown[]) => readBillingStandingMock(...a),
 }));
 vi.mock("next/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("next/server")>();
@@ -286,6 +289,8 @@ beforeEach(() => {
   ]);
   recordScreenedCallMock.mockReset().mockResolvedValue(undefined);
   afterMock.mockReset();
+  delete process.env.BILLING_ENFORCE;
+  readBillingStandingMock.mockReset().mockResolvedValue(null);
 });
 
 async function texml(params: Record<string, string>): Promise<string> {
@@ -339,6 +344,29 @@ describe("every emitted TeXML document parses", () => {
     const xml = await texml({ To: LIVE_TO, From: CALLER });
     expect(xml).toContain("es-MX");
     parseXmlStrict(xml);
+  });
+
+  it("the unavailable document is well-formed XML in en, es and both (mutation: drop the Hangup → FAILS)", async () => {
+    // M7a PR-4 (plan G9): a paused account with no transfer number.
+    process.env.BILLING_ENFORCE = "1";
+    readBillingStandingMock.mockResolvedValue({
+      complimentary: false, pausedAt: new Date().toISOString(), subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    });
+    getTransferPhoneMock.mockResolvedValue(null);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      for (const languages of ["en", "es", "both"] as const) {
+        profileMock.mockResolvedValue({ ...PROFILE, languages });
+        const xml = await texml({ To: LIVE_TO, From: CALLER });
+        expect(xml, languages).toContain(languages === "en" ? "No one can take your call" : "nadie puede atender su llamada");
+        expect(xml, languages).toMatch(/<\/Say><Hangup\/><\/Response>$/);
+        parseXmlStrict(xml);
+      }
+    } finally {
+      delete process.env.BILLING_ENFORCE;
+      vi.restoreAllMocks();
+    }
   });
 
   it("the cap refusal, in both languages", async () => {

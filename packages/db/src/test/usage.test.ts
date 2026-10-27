@@ -5,7 +5,7 @@ import { withTestAccount } from "./fixtures";
 import { insertPlan, type PlanWrite } from "../billing";
 import {
   recordUsage, listBilledUsageAccounts, listReportableUsage, markUsageReported,
-  countExpiredUsage, listAccountsWithStaleUsage,
+  countExpiredUsage, listAccountsWithStaleUsage, readUsageBands, USAGE_HOLD_AFTER_MS,
 } from "../usage";
 
 /**
@@ -197,4 +197,40 @@ describe("usage.ts, live", () => {
       expect(ids).not.toContain(preBilling);
       expect(ids).not.toContain(lateRecorded);
     })))));
+
+  it("listReportableUsage with the hold skips a row recorded 21 hours ago and returns one recorded 19 hours ago; without it, both (M7a PR-4, plan G15) (mutation: hold at 24 h → FAILS)", () =>
+    withPlan((planId) => withTestAccount(async (db, a) => {
+      const now = Date.now();
+      await bill(a, planId, now - 5 * DAY);
+      const held = await usageRow(a, { occurredAt: now - 21 * HOUR, createdAt: now - 21 * HOUR });
+      const fresh = await usageRow(a, { occurredAt: now - 19 * HOUR, createdAt: now - 19 * HOUR });
+      const account = (await listBilledUsageAccounts(db)).find((x) => x.accountId === a)!;
+      const withHold = await listReportableUsage(db, [account], new Date(now), 10, { holdAfterMs: USAGE_HOLD_AFTER_MS });
+      expect(withHold.map((r) => r.id)).toEqual([fresh]);
+      const off = await listReportableUsage(db, [account], new Date(now), 10);
+      expect(off.map((r) => r.id)).toEqual([held, fresh]);
+    })));
+
+  it("readUsageBands sorts one account's rows of one meter in [start, end) into settled, in flight and held, through PostgREST's own timestamps (M7a PR-4, plan G14) (mutation: drop the end bound → the row after the window counts, FAILS)", () =>
+    withTestAccount((db, a) => withTestAccount(async (_d, other) => {
+      const now = Date.now();
+      const start = now - 2 * DAY;
+      const end = now - 30 * 60 * 1000;
+      await usageRow(a, { occurredAt: now - 4 * HOUR, createdAt: now - 4 * HOUR, reportedAt: now - 3 * HOUR }); // settled
+      await usageRow(a, { occurredAt: now - 2 * HOUR, createdAt: now - 2 * HOUR, reportedAt: now - HOUR });     // in flight
+      await usageRow(a, { occurredAt: now - HOUR, createdAt: now - HOUR });                                     // in flight
+      const heldId = await usageRow(a, { occurredAt: now - 21 * HOUR, createdAt: now - 21 * HOUR });           // held
+      await usageRow(a, { occurredAt: now - 3 * DAY, createdAt: now - 3 * DAY });                               // before the window
+      await usageRow(a, { occurredAt: now - 10 * 60 * 1000, createdAt: now - 10 * 60 * 1000 });                // after the window
+      await usageRow(other, { occurredAt: now - HOUR, createdAt: now - HOUR });                                 // another account
+      const bands = await readUsageBands(db, {
+        accountId: a, meter: "sms", startIso: iso(start), endIso: iso(end), now: new Date(now), settleMs: 2 * HOUR,
+      });
+      expect({ settled: bands.settled, inFlight: bands.inFlight, held: bands.held }).toEqual({ settled: 1, inFlight: 2, held: 1 });
+      expect(bands.heldRows.map((r) => r.id)).toEqual([heldId]);
+      const none = await readUsageBands(db, {
+        accountId: a, meter: "voice_minutes", startIso: iso(start), endIso: iso(end), now: new Date(now), settleMs: 2 * HOUR,
+      });
+      expect(none).toEqual({ settled: 0, inFlight: 0, held: 0, heldRows: [] });
+    })));
 });

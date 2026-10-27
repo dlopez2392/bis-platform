@@ -661,3 +661,40 @@ describe("owner ruling D13a: the review request follows the staff's mark, not th
     expect(await reviewRequestPass.run(c)).toEqual({ ...EMPTY, sent: 1 });
   });
 });
+
+describe("the non-payment pause: the review request's own deadline (M7a PR-4, plan G7a, re-review I2)", () => {
+  // The pass's own gate re-applies the max age on every release, so past anchor + 61 h it is already skipped
+  // "No longer due" and never sent. What pauseDeadline adds: a pause hold never runs past anchor + 61 h, and a
+  // release AT that instant (the last one the gate admits) is skipped as no longer timely, not held again.
+  const DEADLINE = "2026-09-11T14:30:00.000Z";
+  let paused = true;
+  const pausedCtx = (now: Date): PassContext => ({
+    ...ctx(now),
+    sms: fakeSmsGate({ decide: () => (paused ? { kind: "blocked", reason: "billing_paused" } : null), send: (msg) => smsSend(msg) }),
+  });
+  const writes = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1] as { status: string; heldUntil?: string; reason?: string });
+  beforeEach(() => {
+    paused = true;
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL }, completedAt: "2026-09-09T01:30:00.000Z" }) });
+  });
+
+  it("held by the pause 20 minutes before anchor + 61 h: held until that instant, not the next whole hour (mutation: no pauseDeadline on the subject → FAILS: held to 15:00Z)", async () => {
+    expect(await releaseReviewRequest(pausedCtx(new Date("2026-09-11T14:10:00.000Z")), { id: "log_r", account_id: "acct_1", source: "review_request", channel: "sms", contact_id: "ct_1", subject_key: "booking:bk_r1", status: "held", reason: "Held: the account is paused until a payment goes through", held_until: "2026-09-11T14:00:00.000Z", payload: {}, occurred_at: TICK.toISOString() } as AutomationLogRow)).toBe("held");
+    expect(writes()).toEqual([expect.objectContaining({ status: "held", heldUntil: DEADLINE, reason: "Held: the account is paused until a payment goes through" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("released at anchor + 61 h while still paused: skipped as no longer timely, never sent (mutation: no pauseDeadline on the subject → FAILS: held again to 15:00Z)", async () => {
+    expect(await releaseReviewRequest(pausedCtx(new Date(DEADLINE)), { id: "log_r", account_id: "acct_1", source: "review_request", channel: "sms", contact_id: "ct_1", subject_key: "booking:bk_r1", status: "held", reason: "Held: the account is paused until a payment goes through", held_until: "2026-09-11T14:00:00.000Z", payload: {}, occurred_at: TICK.toISOString() } as AutomationLogRow)).toBe("skipped");
+    expect(writes()).toEqual([expect.objectContaining({ status: "skipped", reason: "Not sent: too late, the account was paused" })]);
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("inside its deadline it is held, then sent after the lift (mutation: pauseDeadline = now → FAILS: skipped at once)", async () => {
+    expect(await releaseReviewRequest(pausedCtx(new Date("2026-09-11T14:10:00.000Z")), { id: "log_r", account_id: "acct_1", source: "review_request", channel: "sms", contact_id: "ct_1", subject_key: "booking:bk_r1", status: "held", reason: "Held: the account is paused until a payment goes through", held_until: "2026-09-11T14:00:00.000Z", payload: {}, occurred_at: TICK.toISOString() } as AutomationLogRow)).toBe("held");
+    paused = false;
+    expect(await releaseReviewRequest(pausedCtx(new Date("2026-09-11T14:20:00.000Z")), { id: "log_r", account_id: "acct_1", source: "review_request", channel: "sms", contact_id: "ct_1", subject_key: "booking:bk_r1", status: "held", reason: "Held: the account is paused until a payment goes through", held_until: "2026-09-11T14:00:00.000Z", payload: {}, occurred_at: TICK.toISOString() } as AutomationLogRow)).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(writes().map((w) => w.status)).toEqual(["held", "sent"]);
+  });
+});

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter, sumUsageSince,
+  readUsageBands, USAGE_HOLD_AFTER_MS,
   USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS,
   USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ, STALE_PROBE_ROWS,
   type BilledUsageAccount, type UsageInput,
@@ -272,5 +273,76 @@ describe("sumUsageSince", () => {
     expect(eqs).toContainEqual(["account_id", "acct_1"]);
     expect(eqs).toContainEqual(["occurred_at", "2026-10-01T00:00:00.000Z"]);
     expect(ranges).toEqual([[0, 999], [2, 1001], [4, 1003]]);
+  });
+});
+
+describe("the usage hold (M7a PR-4, plan G15)", () => {
+  /** listReportableUsage's chain, recording every `gt` it is sent. */
+  function holdChain() {
+    const gts: unknown[][] = [];
+    const chain = {
+      select: () => chain, is: () => chain, order: () => chain, or: () => chain,
+      gt: (...args: unknown[]) => { gts.push(args); return chain; },
+      limit: async () => ({ data: [], error: null }),
+    };
+    return { db: { from: () => chain } as unknown as SupabaseClient, gts };
+  }
+
+  it("listReportableUsage with holdAfterMs leaves out a row recorded that long ago or more: created_at must be AFTER now − holdAfterMs (mutation: drop the created_at filter → FAILS; gte instead of gt → FAILS)", async () => {
+    expect(USAGE_HOLD_AFTER_MS).toBe(20 * 60 * 60 * 1000);
+    const { db, gts } = holdChain();
+    await listReportableUsage(db, [billed(uuidFor(1))], NOW, 10, { holdAfterMs: USAGE_HOLD_AFTER_MS });
+    expect(gts).toEqual([["created_at", new Date(NOW.getTime() - USAGE_HOLD_AFTER_MS).toISOString()]]);
+  });
+
+  it("without it (switch off) it does not filter, and null means off too (mutation: always filter → FAILS)", async () => {
+    const off = holdChain();
+    await listReportableUsage(off.db, [billed(uuidFor(1))], NOW, 10);
+    await listReportableUsage(off.db, [billed(uuidFor(1))], NOW, 10, {});
+    await listReportableUsage(off.db, [billed(uuidFor(1))], NOW, 10, { holdAfterMs: null });
+    expect(off.gts).toEqual([]);
+  });
+});
+
+describe("readUsageBands (M7a PR-4, plan G14)", () => {
+  it("readUsageBands sorts each row into settled, in flight or held by reported_at and created_at, over every page of the account's meter in the window (mutation: count a row reported 1 h ago as settled → FAILS; drop the meter filter → FAILS; stop on the first page → FAILS)", async () => {
+    const HOUR = 60 * 60 * 1000;
+    const at = (ago: number) => new Date(NOW.getTime() - ago).toISOString();
+    const row = (id: string, quantity: number, reportedAgo: number | null, createdAgo: number) => ({
+      id, account_id: uuidFor(1), meter: "sms", quantity, occurred_at: at(createdAgo),
+      source_ref: `message:${id}`, reported_at: reportedAgo === null ? null : at(reportedAgo), created_at: at(createdAgo),
+    });
+    const pages = [
+      [
+        row("r1", 1, 3 * HOUR, 4 * HOUR),          // reported 3 h ago: settled
+        row("r2", 2, 2 * HOUR, 3 * HOUR),          // reported exactly settleMs ago: settled
+        row("r3", 4, 1 * HOUR, 2 * HOUR),          // reported 1 h ago: in flight
+        row("r4", 8, null, 1 * HOUR),              // unreported, recorded 1 h ago: in flight
+        row("r5", 16, null, USAGE_HOLD_AFTER_MS),  // unreported, recorded exactly 20 h ago: held
+      ],
+      [row("r6", 32, null, 21 * HOUR)],            // a second page: held
+      [],
+    ];
+    const filters: unknown[][] = [];
+    const ranges: [number, number][] = [];
+    const chain = {
+      select: () => chain, order: () => chain,
+      eq: (...a: unknown[]) => { filters.push(["eq", ...a]); return chain; },
+      gte: (...a: unknown[]) => { filters.push(["gte", ...a]); return chain; },
+      lt: (...a: unknown[]) => { filters.push(["lt", ...a]); return chain; },
+      range: async (a: number, b: number) => { ranges.push([a, b]); return { data: pages[ranges.length - 1] ?? [], error: null }; },
+    };
+    const bands = await readUsageBands({ from: () => chain } as unknown as SupabaseClient, {
+      accountId: uuidFor(1), meter: "sms", startIso: "2026-09-25T00:00:00.000Z", endIso: "2026-09-25T15:00:00.000Z",
+      now: NOW, settleMs: 2 * HOUR,
+    });
+    expect({ settled: bands.settled, inFlight: bands.inFlight, held: bands.held }).toEqual({ settled: 3, inFlight: 12, held: 48 });
+    expect(bands.heldRows.map((r) => r.id)).toEqual(["r5", "r6"]);
+    expect(bands.heldRows[0]).toMatchObject({ accountId: uuidFor(1), meter: "sms", quantity: 16, reportedAt: null });
+    expect(filters).toContainEqual(["eq", "account_id", uuidFor(1)]);
+    expect(filters).toContainEqual(["eq", "meter", "sms"]);
+    expect(filters).toContainEqual(["gte", "occurred_at", "2026-09-25T00:00:00.000Z"]);
+    expect(filters).toContainEqual(["lt", "occurred_at", "2026-09-25T15:00:00.000Z"]);
+    expect(ranges).toEqual([[0, 999], [5, 1004], [6, 1005]]);
   });
 });

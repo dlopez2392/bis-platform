@@ -248,6 +248,9 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
       // dropping the attempt, and nothing was written: `prepare` runs only
       // after the gate clears.
       case "suppressed_account": rejectSend(t(m, "automations.reason.accountSuppressed", locale));
+      // M7a PR-4 (plan G7): a paused account's customer texts stop, the
+      // composer's included; it says why rather than the generic failure.
+      case "billing_paused": rejectSend(t(m, "compose.smsBlockedPaused", locale));
       default: rejectSend(composerBlockedLine(result.reason, locale));
     }
   }
@@ -293,7 +296,10 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
 export async function markConversationReadAction(
   accountId: string, conversationId: string,
 ): Promise<void> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (review I2): read state, so it stays usable while the account is paused. It revalidates
+  // nothing: a revalidation re-renders the page inside this action's request, where the read-only guard
+  // would refuse the render; MarkRead refreshes the page itself once this has landed.
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   // F-085 (spec §7.3): the service client below is not bound by RLS, so the
   // conversation is proven through the CALLER's own client first. Under 0068
   // a Technician cannot see another person's conversation, so the proof fails
@@ -306,7 +312,6 @@ export async function markConversationReadAction(
   // authorised, so another account's conversation id matches no row
   // (messaging.test.ts pins that with two real accounts).
   await clearUnreadCount(serviceDb(), accountId, conversationId);
-  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
 }
 
 // S-47e (E8, spec 5.12.5): staff move a shared number's holding thread to the right person, with Undo.

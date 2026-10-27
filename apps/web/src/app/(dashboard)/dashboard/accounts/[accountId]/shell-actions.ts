@@ -147,7 +147,8 @@ const ON_CALL_FLOOR_MS = 60 * 60 * 1000;
  * fold above exists to avoid.
  */
 export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot> {
-  const { isAgency, role } = await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): reads only, so it stays usable while the account is paused.
+  const { isAgency, role } = await requireAccountAccess(accountId, { duringPause: "allow" });
   const db = serviceDb();
   // The narrow shell, failing closed like requireNotTechnician (fix round 1):
   // a Technician, or a client whose role could not be settled (null). Only

@@ -50,6 +50,8 @@ const SMS_REASON: Record<string, MessageKey> = {
   stopped: "documents.request.reason.textsStopped", held: "documents.request.reason.textsHeld",
   a2p_not_approved: "documents.request.reason.textSetup", no_live_number: "documents.request.reason.textSetup",
   no_number: "documents.request.reason.noPhone", unconfirmed_number: "documents.request.reason.noPhone",
+  // M7a PR-4 (review item 2): the account is paused for billing; the request email still goes (owner answer Q6).
+  billing_paused: "documents.request.reason.accountPaused",
 };
 const EMAIL_REASON: Record<string, MessageKey> = {
   stopped: "documents.request.reason.emailStopped", held: "documents.request.reason.emailHeld",

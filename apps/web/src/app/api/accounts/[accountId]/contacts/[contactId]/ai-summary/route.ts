@@ -14,6 +14,7 @@ import { makeTr } from "@/lib/record/copy";
 import { aiComplete, GATE_TIMEOUT_MS } from "@/lib/ai/gateway";
 import { periodKeys } from "@/lib/ai/period";
 import { safeZone } from "@/lib/billing/billing-view";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { buildSummaryInputs, hasSomethingToSay, type SummaryContact } from "@/lib/record/ai-summary-inputs";
 import { SUMMARY_MAX_TOKENS, SUMMARY_MODEL, SUMMARY_TIMEOUT_MS } from "@/lib/record/ai-summary-prompt";
 import { serveRecordSummary } from "@/lib/record/ai-summary-service";
@@ -76,7 +77,16 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
     const body = await serveRecordSummary({
       // The cap's day and the budget's month in the ACCOUNT's zone, through the same safeZone aiComplete uses,
       // so this gate and the gateway's own read the same day (never the UTC day).
-      gate: () => aiGateCheck(svc, { accountId, ...periodKeys(now, safeZone(zone)), signal: AbortSignal.timeout(GATE_TIMEOUT_MS) }),
+      // M7a PR-4 (plan G21, M2): no model call for a paused account, on GET or POST, for any caller: the gate
+      // answers "account AI off", which serveRecordSummary turns into { state: "none" } before its cache read.
+      // Fails open (billingVerdictFor never throws; switch off, it reads nothing). The two reads run together.
+      gate: async () => {
+        const [g, billing] = await Promise.all([
+          aiGateCheck(svc, { accountId, ...periodKeys(now, safeZone(zone)), signal: AbortSignal.timeout(GATE_TIMEOUT_MS) }),
+          billingVerdictFor(accountId),
+        ]);
+        return billing.paused ? { ...g, accountEnabled: false } : g;
+      },
       cached: () => getRecordSummary(db, key),
       claim: (digest, f) => claimRecordSummary(svc, { ...key, digest, force: f }),
       complete: (messages) => aiComplete(svc, {

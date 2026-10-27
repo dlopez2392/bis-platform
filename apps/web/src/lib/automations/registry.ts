@@ -1,4 +1,5 @@
 import type { Pass } from "./context";
+import { billingPausePass } from "./passes/billing-pause";
 import { releaseHeldPass } from "./passes/release-held";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
@@ -19,8 +20,12 @@ import { usageReportPass } from "./passes/usage-report";
 import { opsWatchPass } from "./passes/ops-watch";
 
 /**
- * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
- * the release pass runs first: a held subject is sent (and stamped) before
+ * Every pass the cron tick runs, IN ORDER. Order is part of the contract.
+ * The billing pause runs FIRST: a pause it stamps this tick is read by every
+ * send gate below in the same tick. It touches no automation state, so the
+ * release-first contract below is unchanged between the release pass and the
+ * recipes.
+ * The release pass runs next, ahead of every recipe: a held subject is sent (and stamped) before
  * its own pass's due-list runs, so the same tick cannot send it twice. The
  * follow-up pass stamps `followup_sent_at` and the review-request pass
  * reads it in the same tick, which is what guarantees "how did it go?" on
@@ -60,4 +65,4 @@ import { opsWatchPass } from "./passes/ops-watch";
  * a pass failing for the second time is reported in the same tick.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];

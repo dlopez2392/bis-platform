@@ -47,10 +47,12 @@ const dbMocks = vi.hoisted(() => ({
   // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
   readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), recordCarrierBlock: vi.fn(),
-  // The release pass's own queue read — first in the registry, every tick.
+  // The release pass's own queue read — every tick, right after the billing pause.
   listReleasableHolds: vi.fn(),
   // The usage report, last in the registry: no account is billed here.
   listBilledUsageAccounts: vi.fn(), recordUsage: vi.fn(),
+  // M7a PR-4: the billing pause, FIRST in the registry: no account is billed here.
+  listPauseCandidates: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -235,6 +237,7 @@ beforeEach(() => {
   dbMocks.listReleasableHolds.mockResolvedValue([]);
   dbMocks.listBilledUsageAccounts.mockResolvedValue([]);
   dbMocks.recordUsage.mockResolvedValue("recorded");
+  dbMocks.listPauseCandidates.mockResolvedValue([]);
   // Same treatment for the weekly report: TICK is a Wednesday in every zone
   // (no IANA offset shifts a calendar day back two full days), so it can
   // never be in the Monday band here regardless of account timezone. Empty
@@ -283,6 +286,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.weeklyAgencyReport).not.toHaveProperty("errored");
     expect(results.usageReport).toEqual(expect.objectContaining({ reported: 0, failed: 0 }));
     expect(results.usageReport).not.toHaveProperty("errored");
+    expect(results.billingPause).toEqual(expect.objectContaining({ paused: 0, failed: 0 }));
+    expect(results.billingPause).not.toHaveProperty("errored");
     expect(results.releaseHeld).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
@@ -292,8 +297,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+  it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
   });
 
   /**

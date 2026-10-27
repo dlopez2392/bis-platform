@@ -7,7 +7,7 @@ const SERVICE_CLIENT = { service: true } as never;
 const db = vi.hoisted(() => ({
   readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn(),
   readEmailSuppression: vi.fn(), serviceDb: vi.fn(), isAccountOutboundSuppressed: vi.fn(),
-  getInboundSettings: vi.fn(), ensureReplyToken: vi.fn(),
+  getInboundSettings: vi.fn(), ensureReplyToken: vi.fn(), readBillingStanding: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
@@ -46,6 +46,7 @@ beforeEach(() => {
   db.readEmailSuppression.mockResolvedValue(null);
   db.serviceDb.mockReturnValue(SERVICE_CLIENT);
   db.isAccountOutboundSuppressed.mockResolvedValue(false);
+  db.readBillingStanding.mockResolvedValue(null);
   db.getInboundSettings.mockResolvedValue({ mode: "off", domain: null });
   db.ensureReplyToken.mockResolvedValue({ conversationId: "conv_1", token: "0123456789abcdef01234567" });
   factory.getEmailProvider.mockReturnValue(provider());
@@ -107,6 +108,64 @@ describe("sendEmail: the account-level send switch (D-061, accounts.outbound_sup
   it("operator mail WITH an account is covered too — a suppressed account's own owner alerts go to a demo address (mutation: skip the check for operator kinds → sent, FAILS)", async () => {
     db.isAccountOutboundSuppressed.mockResolvedValue(true);
     expect(await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
+  });
+});
+
+describe("sendEmail: the non-payment pause (M7a PR-4, plan G8)", () => {
+  const PAUSED = { complimentary: false, pausedAt: "2026-10-20T08:00:00.000Z", subscriptionStatus: "past_due", features: { voice_receptionist: true, web_concierge: true } };
+  const PAYING = { ...PAUSED, pausedAt: null, subscriptionStatus: "active" };
+  const on = () => vi.stubEnv("BILLING_ENFORCE", "1");
+
+  it("switch on and paused: an automation email is blocked billing_paused before the ledger and the provider (mutation: put the check after the ledger read → FAILS: readConsentState is called)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    expect(await sendEmail(base(), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "billing_paused" });
+    expect(db.readConsentState).not.toHaveBeenCalled();
+    expect(factory.getEmailProvider).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the billing read uses serviceDb(), not the caller's client, for THIS account (mutation: pass deps.db → FAILS: called with the caller's client)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    await sendEmail(base(), { db: CLIENT, env: ENV });
+    expect(db.readBillingStanding).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT);
+    expect(db.readBillingStanding).not.toHaveBeenCalledWith(CLIENT, expect.anything());
+  });
+
+  it("switch on and paused: booking.confirmation, staff.document_request_email and operator.lead_alert still send, and the billing row is never read for them (mutation: block every kind → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    for (const kind of ["booking.confirmation", "staff.document_request_email", "operator.lead_alert"] as EmailKind[]) {
+      expect((await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).kind, kind).toBe("sent");
+    }
+    expect(db.readBillingStanding).not.toHaveBeenCalled();
+  });
+
+  it("switch on, not paused, or unbilled (null) → sends (mutation: block on a null standing → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockResolvedValue(PAYING);
+    expect((await sendEmail(base(), { db: CLIENT, env: ENV })).kind).toBe("sent");
+    db.readBillingStanding.mockResolvedValue(null);
+    expect((await sendEmail(base(), { db: CLIENT, env: ENV })).kind).toBe("sent");
+    expect(db.readBillingStanding).toHaveBeenCalledTimes(2);
+  });
+
+  it("switch OFF and paused → sends, and readBillingStanding is never called (mutation: read regardless of the switch → FAILS)", async () => {
+    db.readBillingStanding.mockResolvedValue(PAUSED);
+    for (const v of [undefined, "0", "true", " 1"]) {
+      if (v === undefined) vi.unstubAllEnvs(); else vi.stubEnv("BILLING_ENFORCE", v);
+      expect((await sendEmail(base(), { db: CLIENT, env: ENV })).kind, String(v)).toBe("sent");
+    }
+    expect(db.readBillingStanding).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable billing row blocks ledger_unavailable and logs it (mutation: fail open → FAILS)", async () => {
+    on();
+    db.readBillingStanding.mockRejectedValue(new Error("billing: standing read failed: timeout"));
+    expect(await sendEmail(base(), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(send).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toMatch(/automation.reminder for account .+ blocked, billing state unreadable/);
   });
 });
 

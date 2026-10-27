@@ -18,7 +18,7 @@ import { BILLING_STATUS_TREATMENTS, type BillingCardView, type PlanOption } from
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../submit-button";
-import type { BillingActionResult } from "./billing-actions";
+import type { BillingActionResult, LiftResult } from "./billing-actions";
 
 type Action = (formData: FormData) => Promise<BillingActionResult>;
 
@@ -93,21 +93,32 @@ async function copyLink(url: string): Promise<void> {
  * Holds no React state of its own (the dialogs do), so a test can call it
  * and reach its handlers without a DOM.
  */
-export function BillingCard({ view, send, markComplimentary, stopComplimentary, changePlan }: {
+export function BillingCard({ view, send, markComplimentary, stopComplimentary, changePlan, liftPause, undoLiftPause }: {
   view: BillingCardView;
   send: Action;
   markComplimentary: Action;
   stopComplimentary: () => Promise<BillingActionResult>;
   changePlan: Action;
+  /** Lift pause (plan G3), immediate with Undo (rule 6): `go()`'s own
+   *  answer, not a fixed object, carries the liftedAt/pausedAt the Undo
+   *  needs — neither is known before `go()` resolves. */
+  liftPause: () => Promise<LiftResult>;
+  undoLiftPause: (liftedAt: string, pausedAt: string) => Promise<BillingActionResult>;
 }) {
   const router = useRouter();
   const t = BILLING_STATUS_TREATMENTS[view.status];
 
   type Undo = { go: () => Promise<BillingActionResult>; success: string };
-  const run = async (
-    go: () => Promise<BillingActionResult>, success: string, undo?: Undo, crashed: string = m["common.actionCrashed"],
+  // Generic in the action's OWN result type `T` (never just BillingActionResult):
+  // Lift pause answers a few fields beyond `{ok}` (liftedAt, pausedAt) that its
+  // Undo needs, and those are only known once `go()` resolves — so `undo` may
+  // be a factory of the resolved OK result, not only a fixed object built
+  // before `go()` runs. Every other call site keeps passing a plain object,
+  // unaffected.
+  const run = async <T extends BillingActionResult>(
+    go: () => Promise<T>, success: string, undo?: Undo | ((r: Extract<T, { ok: true }>) => Undo), crashed: string = m["common.actionCrashed"],
   ): Promise<Outcome> => {
-    let r: BillingActionResult;
+    let r: T;
     try {
       r = await go();
     } catch {
@@ -120,8 +131,9 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
       if (r.error !== EMAIL_ERROR) toast.error(r.error);
       return { kind: "refused", error: r.error };
     }
-    toast.success(success, undo
-      ? { action: { label: m["common.undo"], onClick: () => void run(undo.go, undo.success) } }
+    const resolvedUndo = typeof undo === "function" ? undo(r as Extract<T, { ok: true }>) : undo;
+    toast.success(success, resolvedUndo
+      ? { action: { label: m["common.undo"], onClick: () => void run(resolvedUndo.go, resolvedUndo.success) } }
       : undefined);
     return { kind: "ok" };
   };
@@ -145,6 +157,47 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {/* Under the status chip (plan G19, Task 11): the pause's own line
+            (payment or ended cause), the 30-day no-forward line once the
+            switch enforces it, a lift's line, the switch-off note, the
+            reconciliation block, then Lift pause itself — in that order,
+            above everything else the card says. */}
+        {view.pause || view.lifted || view.pauseOff || view.reconciliation.length > 0 || view.reconciliationUnchecked
+          || view.can.liftPause ? (
+          <div className="flex flex-col gap-2">
+            {view.pause ? <p className="text-sm text-foreground">{view.pause.line}</p> : null}
+            {view.pause?.noForward ? <p className="text-sm text-foreground">{view.pause.noForward}</p> : null}
+            {view.lifted ? <p className="text-sm text-foreground">{view.lifted}</p> : null}
+            {view.pauseOff ? <p className="text-sm text-muted-foreground">{m["billing.card.pauseOff"]}</p> : null}
+            {view.reconciliationUnchecked ? (
+              <p className="text-sm text-muted-foreground">{m["billing.card.reconcile.unavailable"]}</p>
+            ) : view.reconciliation.length > 0 ? (
+              <Notice tone="warn" className="text-foreground">
+                <p className="font-medium">{m["billing.card.reconcile.title"]}</p>
+                <ul className="mt-1 space-y-0.5">
+                  {view.reconciliation.map((line) => <li key={line}>{line}</li>)}
+                </ul>
+                <p className="mt-1 text-xs">{m["billing.card.reconcile.help"]}</p>
+              </Notice>
+            ) : null}
+            {view.can.liftPause ? (
+              <div className="flex flex-col items-start gap-1">
+                <Button
+                  variant="ghost" type="button"
+                  onClick={() => void run(
+                    () => liftPause(),
+                    m["billing.card.liftedToast"],
+                    (r) => ({ go: () => undoLiftPause(r.liftedAt, r.pausedAt), success: m["billing.card.repausedToast"] }),
+                  )}
+                >
+                  {m["billing.card.liftPause"]}
+                </Button>
+                <p className="text-xs text-muted-foreground">{m["billing.card.liftPauseHelp"]}</p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {view.plan ? (
           <p className="text-sm font-medium text-foreground">
             {view.plan.name} <span className="font-normal text-muted-foreground">· {view.plan.price}</span>

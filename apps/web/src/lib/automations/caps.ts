@@ -115,17 +115,19 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
  *     Past that, Stripe's v2 meter event stream is the next step.
  *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
  *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
- *     last send still ends inside it even in that worst case. FOUR passes
+ *     last send still ends inside it even in that worst case. FIVE passes
  *     carry a wall-clock budget today — release-held.ts's own
- *     RELEASE_BUDGET_MS (first in the registry), this one, D-067's
- *     WEEKLY_REPORT_BUDGET_MS below (fourteenth), and, since S-07 2a, the
- *     document scan pass's 45 s one (passes/documents-scan.ts, thirteenth) —
- *     summing to 225 s against the route's 300 s `maxDuration`, leaving 75 s of
- *     headroom for the other thirteen
- *     registered passes (cron-coupling.test.ts pins the sum against the
- *     ceiling, so a fifth budgeted pass added without raising `maxDuration`
- *     reds there rather than only showing up as a timed-out tick in
- *     production).
+ *     RELEASE_BUDGET_MS (60 s; second in the registry, after M7a PR-4's
+ *     unbudgeted billingPause), this one (60 s), D-067's
+ *     WEEKLY_REPORT_BUDGET_MS below (60 s), since S-07 2a the document scan
+ *     pass's DOCUMENT_SCAN_BUDGET_MS (45 s), and since S-07 3a the documents
+ *     expiry pass's EXPIRY_BUDGET_MS (15 s) — summing to 240 s against the
+ *     route's 300 s `maxDuration`, leaving 60 s for every other registered
+ *     pass. cron-coupling.test.ts pins the sum against the ceiling, so a
+ *     sixth budgeted pass added without raising `maxDuration` reds there
+ *     rather than only showing up as a timed-out tick in production. The
+ *     nightly billing step (lib/billing/nightly.ts) runs INSIDE this pass's
+ *     budget, on its clock, so it adds no term.
  *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
  *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
  *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request

@@ -55,6 +55,7 @@ import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-s
 import { renderZone } from "@/lib/zone";
 import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 import { loadForwardingView } from "@/lib/email/inbound/forwarding-view";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 
 export const dynamic = "force-dynamic";
 
@@ -193,6 +194,9 @@ export default async function ContactDetailPage({
 
   // 1b: the composer's consent line in the page's language (Task 3's locale parameter).
   const smsBlockedLine = composerStateLine(smsRecipient, zone.zone, locale);
+  // M7a PR-4 (design review I5): the account layout's own cached verdict read, so no second query;
+  // a paused account's Text tab says texts are stopped instead of refusing only at Send.
+  const accountPaused = (await billingVerdictFor(accountId)).paused;
   const name = contactDisplayName(contact);
   // Task 8 fix round: the Documents card's "Ask the customer" dialog wants the RAW joined name, not
   // contactDisplayName's "(no name)" placeholder — a non-empty placeholder would stop requestTitle's
@@ -304,6 +308,7 @@ export default async function ContactDetailPage({
             // The same e164Of notion of "usable" sendSmsAction gates on, so SMS fails up front.
             contactHasPhone={Boolean(e164Of(contact.phone))}
             smsGate={smsGate}
+            accountPaused={accountPaused}
             smsBlockedLine={smsBlockedLine}
             emailNoticeLine={composerEmailNotice(emailRecipient, zone.zone, locale)}
             emailAction={sendEmailAction.bind(null, accountId)}

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { serviceDb, getAccountByOrgId, type AccountRole } from "@bis/db";
 import { ensureAccountRole, readStoredRole } from "./team/ensure-role";
 import { seesWholeAccount } from "./auth-role";
+import { refuseActionWhilePaused } from "./billing/read-only";
 
 export { seesWholeAccount };
 
@@ -15,6 +16,13 @@ export async function requireAgency(): Promise<{ userId: string }> {
   if (claims.app_role !== "agency_admin") redirect("/");
   return { userId };
 }
+
+export type AccessOptions = {
+  /** "allow": this server action stays usable while the account is paused
+   *  for billing (it only reads, or it is how the client pays). Every use is
+   *  pinned, with its reason, by lib/billing/read-only.test.ts. */
+  duringPause?: "allow";
+};
 
 /**
  * Allows the agency admin into any account, and a client into exactly one —
@@ -32,9 +40,20 @@ export async function requireAgency(): Promise<{ userId: string }> {
  * round-trip, not two), but nothing is written and Clerk is never asked until
  * the redirects have confirmed this is the caller's own account; a read for
  * an account the caller cannot enter is discarded.
+ *
+ * Read-only while paused (M7a PR-4, plan G11): with BILLING_ENFORCE on, a
+ * CLIENT's server action on a paused account is refused here, after every
+ * check above has passed, by sending the browser back to the page it came
+ * from (or the caller's home), where the paused banner says why; nothing is
+ * written. Pages, layouts and GET handlers are not actions (isActionRequest:
+ * the `next-action` header or a form post) and are never refused, and the
+ * agency never is. An action that only reads, read state, or Manage billing
+ * opts out with the `duringPause` option set to "allow"; the allow-list is
+ * pinned by lib/billing/read-only.test.ts, which scans this file too. A
+ * failed billing read allows.
  */
 export async function requireAccountAccess(
-  accountId: string,
+  accountId: string, opts: AccessOptions = {},
 ): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
   const { userId, sessionClaims } = await auth();
   if (!userId) redirect("/sign-in");
@@ -56,6 +75,8 @@ export async function requireAccountAccess(
   if (account.id !== accountId) redirect(`/dashboard/accounts/${account.id}/dashboard`);
 
   const role = await ensureAccountRole(account.id, claims.org_id, userId, storedRole);
+  // M7a PR-4 (plan G11): a client's server action on a paused account.
+  if (opts.duringPause !== "allow") await refuseActionWhilePaused(account.id, accountHome(account.id, role));
   return { userId, isAgency: false, role, canManage: role === "owner" };
 }
 
@@ -68,9 +89,9 @@ export async function requireAccountAccess(
  * app's half.
  */
 export async function requireAccountOwner(
-  accountId: string,
+  accountId: string, opts: AccessOptions = {},
 ): Promise<{ userId: string; isAgency: boolean }> {
-  const { userId, isAgency, canManage, role } = await requireAccountAccess(accountId);
+  const { userId, isAgency, canManage, role } = await requireAccountAccess(accountId, opts);
   // accountHome, not the literal dashboard: a Technician refused here would
   // otherwise land on a dashboard that refuses them too (spec §7.1).
   if (!canManage) redirect(accountHome(accountId, role));
@@ -123,9 +144,9 @@ export function accountHome(accountId: string, role: AccountRole | null): string
  * redirect can loop (technician-guards.test.ts pins that).
  */
 export async function requireNotTechnician(
-  accountId: string,
+  accountId: string, opts: AccessOptions = {},
 ): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
-  const access = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId, opts);
   // accountHome(…, "technician") is To do: the least-privileged home.
   if (!seesWholeAccount(access)) redirect(accountHome(accountId, "technician"));
   return access;

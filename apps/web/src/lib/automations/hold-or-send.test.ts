@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // readConsentState: review item 1's integration test runs the REAL gate
 // (sendEmailOrThrow), not a mocked EmailNotSent, so the bug it caught (the
@@ -10,10 +10,12 @@ const dbMocks = vi.hoisted(() => ({
   // D-061: the REAL email gate's own account-level send switch, exercised
   // below against `{} as never`. Unmocked, it would throw. Allowed by default.
   isAccountOutboundSuppressed: vi.fn(async () => false),
+  // M7a PR-4: the REAL email gate's pause read (switch on only), on the service client.
+  readBillingStanding: vi.fn(async () => null), serviceDb: vi.fn(() => ({ service: true })),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
-import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
+import { holdOrSend, writeHeld, logSkipped, REASONS, BLOCK_REASONS, EMAIL_BLOCK_REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
 import { SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
 import { EmailNotSent, sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { CLOSURE_REASONS, type ClosureLoader, type ClosureState } from "./closures";
@@ -40,8 +42,10 @@ beforeEach(() => {
   dbMocks.getAutomationLogEntry.mockReset().mockResolvedValue(null);
   dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
   dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
+  dbMocks.readBillingStanding.mockReset().mockResolvedValue(null);
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe("holdOrSend: the fixed hours", () => {
   it("inside the hours: sends, then writes ONE sent row (mutation: skip the record → FAILS)", async () => {
@@ -394,5 +398,117 @@ describe("closures (S-47d, spec 5.5.2)", () => {
       "En espera: no se pudo comprobar si el negocio está abierto",
       "No se envió: el negocio estaba cerrado para esta cita",
     ]);
+  });
+});
+
+describe("holdOrSend: the non-payment pause HOLDS, never drops (owner answer I6, plan G7a)", () => {
+  // 12:20 CDT Mon: inside every window, and off the hour, so the next whole UTC hour is 18:00Z.
+  const AT = new Date("2026-09-21T17:20:00Z");
+  const HOUR_ON = "2026-09-21T18:00:00.000Z";
+  const email = () => ({ ...subject(), channel: "email" as const, smsKind: undefined });
+  const pausedSms = async () => { throw new SmsBlocked("billing_paused"); };
+  const pausedEmail = async () => { throw new EmailNotSent({ kind: "blocked", reason: "billing_paused" }); };
+
+  it("SMS billing_paused → a held row until the next whole UTC hour with the held reason, never skipped (mutation: map it to BLOCK_REASONS → FAILS)", async () => {
+    expect(await holdOrSend(ctx(AT), subject(), pausedSms)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: HOUR_ON, reason: REASONS.heldBillingPaused })]);
+    expect(REASONS.heldBillingPaused).toBe(m["automations.reason.heldBillingPaused"]);
+  });
+
+  it("email billing_paused → the same held row (mutation: skip it → FAILS)", async () => {
+    expect(await holdOrSend(ctx(AT), email(), pausedEmail)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: HOUR_ON, reason: REASONS.heldBillingPaused })]);
+  });
+
+  it("the REAL email gate's billing_paused lands as the same hold, end to end (mutation: drop the email half of pausedRefusal → FAILS: skipped)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.readBillingStanding.mockResolvedValue({
+      complimentary: false, pausedAt: "2026-09-20T08:00:00.000Z", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    } as never);
+    const send = async () => {
+      await sendEmailOrThrow({
+        accountId: "acct_1", kind: "automation.reminder", contactId: "ct_1", now: AT, accountZone: "America/Chicago",
+        to: "ana@example.com", fromName: "Rio Roofing", subject: "Reminder", body: "See you at 3",
+      }, { db: {} as never });
+    };
+    expect(await holdOrSend(ctx(AT), email(), send)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: HOUR_ON, reason: REASONS.heldBillingPaused })]);
+  });
+
+  it("billing_paused with a pause deadline already passed → skipped with skippedBillingPaused (mutation: hold it → FAILS)", async () => {
+    expect(await holdOrSend(ctx(AT), subject({ pauseDeadline: AT }), pausedSms)).toBe("skipped");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: REASONS.skippedBillingPaused })]);
+    expect(REASONS.skippedBillingPaused).toBe(m["automations.reason.skippedBillingPaused"]);
+  });
+
+  it("a subject with a deadline but no pauseDeadline uses its deadline (mutation: ignore deadline → FAILS)", async () => {
+    const appointment = new Date("2026-09-21T17:40:00.000Z");
+    expect(await holdOrSend(ctx(AT), subject({ deadline: appointment }), pausedSms)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: appointment.toISOString() })]);
+    dbMocks.recordAutomationLog.mockClear();
+    expect(await holdOrSend(ctx(AT), subject({ deadline: new Date("2026-09-21T17:10:00.000Z") }), pausedSms)).toBe("skipped");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: REASONS.skippedBillingPaused })]);
+  });
+
+  it("pauseDeadline wins over deadline when both are set", async () => {
+    const pauseDeadline = new Date("2026-09-21T17:30:00.000Z");
+    expect(await holdOrSend(ctx(AT), subject({ deadline: new Date("2026-09-22T17:30:00.000Z"), pauseDeadline }), pausedSms)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ heldUntil: pauseDeadline.toISOString() })]);
+  });
+
+  it("a pause hold in force returns held without calling send() (mutation: drop the short-circuit → FAILS: the gate stub is called)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", reason: REASONS.heldBillingPaused, held_until: HOUR_ON });
+    const send = vi.fn(pausedSms);
+    expect(await holdOrSend(ctx(AT), subject(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+    expect(dbMocks.getAutomationLogEntry).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder", "booking:bk_1");
+  });
+
+  it("another hold in force (quiet hours) does NOT short-circuit: the gate is asked (mutation: ignore the reason → FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: HOUR_ON });
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(AT), subject(), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("switch OFF: no log read before the send, so an unenforced tick costs nothing new (mutation: short-circuit regardless of the switch → FAILS)", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", reason: REASONS.heldBillingPaused, held_until: HOUR_ON });
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(AT), subject(), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(dbMocks.getAutomationLogEntry).not.toHaveBeenCalled();
+  });
+
+  it("a held row released while still paused is held again; released after the lift is sent (mutation: stamp it skipped on the second refusal → FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    // A recording log: the next read answers with the last row written.
+    dbMocks.getAutomationLogEntry.mockImplementation(async () => {
+      const w = dbMocks.recordAutomationLog.mock.calls.at(-1)?.[1] as { status: string; reason: string; heldUntil?: string } | undefined;
+      return w ? { status: w.status, reason: w.reason, held_until: w.heldUntil ?? null } : null;
+    });
+    let paused = true;
+    const send = vi.fn(async () => { if (paused) throw new SmsBlocked("billing_paused"); });
+    expect(await holdOrSend(ctx(AT), subject(), send)).toBe("held");
+    // The release pass brings it back at held_until (18:00Z): still paused, so held to 19:00Z.
+    expect(await holdOrSend(ctx(new Date(HOUR_ON)), subject(), send)).toBe("held");
+    paused = false;   // the Lift (bumpHeldForAccount sets held_until = now) or the payment
+    expect(await holdOrSend(ctx(new Date("2026-09-21T19:00:00.000Z")), subject(), send)).toBe("sent");
+    expect(logWrites().map((w) => [w.status, w.heldUntil ?? null, w.reason])).toEqual([
+      ["held", HOUR_ON, REASONS.heldBillingPaused],
+      ["held", "2026-09-21T19:00:00.000Z", REASONS.heldBillingPaused],
+      ["sent", null, ""],
+    ]);
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it("BLOCK_REASONS and EMAIL_BLOCK_REASONS name billing_paused in their own words, not the deadline skip's 'too late' (the exhaustive Records; holdOrSend intercepts it first; review item 2; mutation: map it to skippedBillingPaused → FAILS)", () => {
+    expect(BLOCK_REASONS.billing_paused).toBe("Not sent: the account is paused");
+    expect(EMAIL_BLOCK_REASONS.billing_paused).toBe(REASONS.billingPaused);
+    expect(REASONS.billingPaused).toBe(m["automations.reason.billingPaused"]);
+    expect(m["automations.reason.billingPaused.es"]).toBe("No se envió: la cuenta está en pausa");
   });
 });

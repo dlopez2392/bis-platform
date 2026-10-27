@@ -33,6 +33,7 @@ import { resolveSmsSender } from "@/lib/sms/sender";
 import { decideSms, deliverSms, type ClearedSms } from "@/lib/consent/gate";
 import { writeHeld, logSkipped, subjectOf, REASONS, BLOCK_REASONS, type LogSubject, type Releaser } from "@/lib/automations/hold-or-send";
 import { LEDGER_RETRY_MS, pastRetryAge, type AutomationBlockReason } from "@/lib/automations/send-sms";
+import { pauseHoldUntil } from "@/lib/automations/pause-hold";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { defaultTextbackBody } from "./textback-body";
 import { recordUsageSafely } from "@/lib/billing/usage";
@@ -287,15 +288,21 @@ export async function prepareTextback(
   // it LEDGER_RETRY_MS and let the release try again (review R2-I4). A
   // failed row would leave the queue, and a text-back has no pass to retry.
   const retry = decision.kind === "blocked" && decision.reason === "ledger_unavailable";
-  if (decision.kind === "deferred" || retry) {
+  // M7a PR-4 (owner answer I6, plan G7a): a paused account's text-back is HELD, as an automation is, never
+  // dropped: until the next whole UTC hour. The release re-prepares it (still paused: held again, and no
+  // write within the hour), and its age cap (RETRY_MAX_AGE_MS, releaseTextback) ends it after a day.
+  const paused = decision.kind === "blocked" && decision.reason === "billing_paused";
+  if (decision.kind === "deferred" || retry || paused) {
     if (!subject) {
-      console.error(`${r.label}: text-back NOT sent — ${retry ? "consent state unreadable" : "outside the sending hours"}, and a call with no row cannot be held`);
+      const why = paused ? "the account is paused" : retry ? "consent state unreadable" : "outside the sending hours";
+      console.error(`${r.label}: text-back NOT sent — ${why}, and a call with no row cannot be held`);
       return { contactId, conversationId, pending: null, notSent: "unheld", holding };
     }
     // The call row still gets its contact and conversation if the hold write
     // fails: logged, and this call's text-back is lost (review R2 minor).
     try {
       if (decision.kind === "deferred") await writeHeld({ db }, subject, decision.until, decision.zone);
+      else if (paused) await writeHeld({ db }, subject, pauseHoldUntil(r.now), "UTC", REASONS.heldBillingPaused);
       else await writeHeld({ db }, subject, new Date(r.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
     } catch (e) {
       console.error(`${r.label}: text-back NOT held, the hold write failed: ${String(e)}`);

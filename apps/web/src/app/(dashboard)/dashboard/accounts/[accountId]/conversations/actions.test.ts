@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -168,6 +168,8 @@ vi.mock("@bis/db", () => ({
   // D-061: the gate's own account-level send switch, for both composer
   // sends. Allowed by default.
   isAccountOutboundSuppressed: vi.fn(async () => false),
+  // M7a PR-4: the gate's pause read (BILLING_ENFORCE on only), on the service client. Unbilled by default.
+  readBillingStanding: vi.fn(async () => null),
   // S-47e (E8): the inbox Move's own write, on the service client.
   moveHoldingThread: vi.fn(),
 }));
@@ -178,7 +180,7 @@ import {
 } from "./actions";
 import {
   createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
-  readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed, moveHoldingThread,
+  readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed, moveHoldingThread, readBillingStanding,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 import { sendRejectedReason } from "./send-errors";
@@ -220,7 +222,9 @@ beforeEach(() => {
   recordUsageMock.mockReset().mockResolvedValue("recorded");
   vi.mocked(sendEmailOrThrow).mockClear();
   vi.mocked(moveHoldingThread).mockReset();
+  vi.mocked(readBillingStanding).mockClear();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 /**
  * Without a reply-to, the customer's reply follows the From address — the
@@ -616,8 +620,17 @@ describe("0053 — conversations and messages are written by server code", () =>
 
   it("mark read: calls requireAccountAccess for the account, and clears the unread count with the service client (mutation: dbForRequest() -> FAILS)", async () => {
     await markConversationReadAction("acct_1", "convo_9");
-    expect(requireAccountAccessMock).toHaveBeenCalledWith("acct_1");
+    // M7a PR-4 (review I2): read state stays usable while the account is paused (read-only.test.ts's allow-list).
+    expect(requireAccountAccessMock).toHaveBeenCalledWith("acct_1", { duringPause: "allow" });
     expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+  });
+
+  it("mark read revalidates nothing: an allowed action must not re-render inside its own request; MarkRead refreshes the page itself (M7a PR-4 review I2; mutation: keep revalidatePath -> FAILS)", async () => {
+    const { revalidatePath } = await import("next/cache");
+    vi.mocked(revalidatePath).mockClear();
+    await markConversationReadAction("acct_1", "convo_9");
+    expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+    expect(vi.mocked(revalidatePath)).not.toHaveBeenCalled();
   });
 });
 
@@ -725,6 +738,18 @@ describe("sendSmsAction — the consent gate's refusals", () => {
     contactRow.phone = "(956) 292-1696";
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
     expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
+  });
+
+  it("a paused account's composer text says why, nothing written, nothing sent, the billing row read on the service client (M7a PR-4; mutation: fall through to composerBlockedLine → FAILS)", async () => {
+    vi.stubEnv("BILLING_ENFORCE", "1");
+    vi.mocked(readBillingStanding).mockResolvedValueOnce({
+      complimentary: false, pausedAt: "2026-10-20T08:00:00.000Z", subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    } as never);
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsBlockedPaused"]);
+    expect(vi.mocked(readBillingStanding)).toHaveBeenCalledWith(svc.db, "acct_1");
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
   });
 
   it("a suppressed account: refused with the plain sentence, nothing written, nothing sent (D-061; mutation: drop the chokepoint check → sent, FAILS)", async () => {

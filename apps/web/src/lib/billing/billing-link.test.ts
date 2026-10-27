@@ -26,7 +26,7 @@ const NOW = new Date("2026-10-15T15:00:00.000Z");
 const INPUT = { accountId: ACCOUNT, plan: PLAN, email: "owner@example.com", businessName: "Rio Roofing", zone: "America/Chicago" };
 const stored = (over: Partial<AccountBilling>): AccountBilling => ({
   accountId: ACCOUNT, planId: PLAN.id, complimentary: false, stripeCustomerId: "cus_stored", stripeSubscriptionId: "sub_1",
-  subscriptionStatus: "active", currentPeriodStart: null, currentPeriodEnd: null, pastDueSince: null, billingPausedAt: null,
+  subscriptionStatus: "active", currentPeriodStart: null, currentPeriodEnd: null, pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null,
   billingStartedAt: "2026-09-01T00:00:00+00:00", createdAt: "2026-09-01T00:00:00+00:00", updatedAt: "2026-09-01T00:00:00+00:00", ...over,
 });
 const prevLink = (sessionId: string): BillingLink => ({

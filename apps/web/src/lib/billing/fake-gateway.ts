@@ -1,13 +1,13 @@
 import type { SubscriptionSnapshot } from "@bis/db";
 import {
   priceCreateParams, meterEventParams, checkoutSessionParams, PORTAL_VERSION, portalFeatureFlags,
-  type BillingGateway, type MeterEventInput, type PriceSpec, type StripeMeter,
+  type BillingGateway, type MeterEventInput, type MeterTotalInput, type PriceSpec, type ReadTransport, type StripeMeter,
   type CheckoutInput, type CheckoutSession, type CheckoutStatus, type SubscriptionPriceChange,
   type PortalSessionInput, type PortalConfiguration,
 } from "./stripe-gateway";
 
 export type GatewayOp =
-  | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent"
+  | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent" | "meterTotal"
   | "createCustomer" | "updateCustomerEmail" | "createCheckoutSession" | "getCheckoutSessionStatus" | "expireCheckoutSession"
   | "retrieveSubscription" | "updateSubscriptionPrices" | "listPortalConfigurations" | "createPortalConfiguration"
   | "createPortalSession";
@@ -90,9 +90,36 @@ export class FakeGateway implements BillingGateway {
     return value;
   }
 
-  async listActiveMeters(): Promise<StripeMeter[]> {
+  /** Whether each read asked for the nightly step's bounded transport
+   *  (M7a PR-4 plan I2), in call order. `calls` keeps its inputs unchanged. */
+  readonly transport: Array<{ op: GatewayOp; bounded: boolean }> = [];
+  private readonly seededTotals = new Map<string, number>();
+
+  async listActiveMeters(opts?: ReadTransport): Promise<StripeMeter[]> {
+    this.transport.push({ op: "listActiveMeters", bounded: opts?.bounded === true });
     this.step("listActiveMeters");
     return [...this.meters];
+  }
+
+  /** Usage Stripe holds that this fake never received as events (a test's
+   *  "Stripe already counts it"), added to every meterTotal for that pair. */
+  seedMeterTotal(meterId: string, customerId: string, value: number): void {
+    const key = `${meterId}:${customerId}`;
+    this.seededTotals.set(key, (this.seededTotals.get(key) ?? 0) + value);
+  }
+
+  /** The events reportMeterEvent recorded for this meter's event name and
+   *  customer with timestampSeconds in [start, end), plus the seeded value.
+   *  Always bounded, as the real one is. */
+  async meterTotal(input: MeterTotalInput): Promise<number> {
+    this.transport.push({ op: "meterTotal", bounded: true });
+    this.step("meterTotal", input);
+    const eventName = this.meters.find((m) => m.id === input.meterId)?.eventName;
+    const counted = this.meterEvents
+      .filter((e) => e.eventName === eventName && e.customerId === input.customerId
+        && e.timestampSeconds >= input.startSeconds && e.timestampSeconds < input.endSeconds)
+      .reduce((sum, e) => sum + e.value, 0);
+    return counted + (this.seededTotals.get(`${input.meterId}:${input.customerId}`) ?? 0);
   }
 
   async createMeter(input: { eventName: string; displayName: string }, key: string): Promise<StripeMeter> {
@@ -228,7 +255,8 @@ export class FakeGateway implements BillingGateway {
     s.status = "expired";
   }
 
-  async retrieveSubscription(subscriptionId: string): Promise<SubscriptionSnapshot> {
+  async retrieveSubscription(subscriptionId: string, opts?: ReadTransport): Promise<SubscriptionSnapshot> {
+    this.transport.push({ op: "retrieveSubscription", bounded: opts?.bounded === true });
     this.step("retrieveSubscription", { subscriptionId });
     const s = this.subscriptions.get(subscriptionId);
     if (!s) throw new Error(`fake Stripe: no such subscription ${subscriptionId}`);

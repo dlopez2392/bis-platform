@@ -112,7 +112,8 @@ async function visibleRequest(accountId: string, requestId: string): Promise<Doc
 }
 
 export async function documentRequestLinkAction(accountId: string, requestId: string): Promise<{ ok: true; url: string } | DocFail> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): Copy link writes nothing, so it stays usable while the account is paused.
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   try {
     const request = await visibleRequest(accountId, requestId);
     if (!request) return fail(REFUSED);

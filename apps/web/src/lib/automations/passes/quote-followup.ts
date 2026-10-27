@@ -1,7 +1,7 @@
 import {
   listDueQuoteFollowups, getDueQuoteFollowupById, latestInboundByContact,
   stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
-  chooseBody, type DueQuoteFollowup, type RecipientLanguage,
+  chooseBody, QUOTE_FOLLOWUP_MAX_AGE_MS, type DueQuoteFollowup, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -87,6 +87,8 @@ export async function processQuoteFollowups(
     const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "quote_followup",
       channel: config.channel, smsKind: "automation.quote_followup", subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
+      // M7a PR-4 (plan G7a, re-review I2): a pause hold never runs past the list's own age window.
+      pauseDeadline: new Date(new Date(row.stageChangedAt).getTime() + QUOTE_FOLLOWUP_MAX_AGE_MS),
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {

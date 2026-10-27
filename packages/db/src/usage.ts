@@ -48,6 +48,13 @@ export const USAGE_STALE_AFTER_MS = DAY_MS;
  */
 export const USAGE_FUTURE_GRACE_MS = 5 * 60 * 1000;
 
+/** PR-3 B10 / M7a PR-4 plan G15: Stripe dedupes a meter event's identifier
+ *  for "at least 24 hours" (assumption S7). With BILLING_ENFORCE on, a row
+ *  still unreported this long after it was RECORDED is never resent by the
+ *  report: only the nightly reconciliation, which first asks Stripe whether
+ *  it already holds it, sends or stamps it. Four hours of margin under 24. */
+export const USAGE_HOLD_AFTER_MS = 20 * 60 * 60 * 1000;
+
 export type UsageInput = {
   accountId: string;
   meter: MeterKey;
@@ -275,17 +282,29 @@ const oldestFirst = (x: UsageRow, y: UsageRow): number =>
  * behind another's place in a list, and a backlog drains in the order it
  * grew. The merge compares milliseconds; within one millisecond the order is
  * by id, which no caller relies on.
+ *
+ * THE HOLD (M7a PR-4, plan G15). With `opts.holdAfterMs` a number (the
+ * caller passes USAGE_HOLD_AFTER_MS while BILLING_ENFORCE is on), a row
+ * RECORDED that long ago or more is left out (`created_at` must be after
+ * now − holdAfterMs): past Stripe's dedupe window a resend could bill twice,
+ * so only the nightly reconciliation sends or stamps it. Absent or null (the
+ * switch off), the read is PR-3's, unfiltered.
  */
 export async function listReportableUsage(
   db: SupabaseClient, accounts: readonly BilledUsageAccount[], now: Date, limit: number,
+  opts: { holdAfterMs?: number | null } = {},
 ): Promise<UsageRow[]> {
   if (!Number.isSafeInteger(limit) || limit <= 0 || accounts.length === 0) return [];
   const untilIso = new Date(now.getTime() + USAGE_FUTURE_GRACE_MS).toISOString();
+  const holdAfterMs = opts.holdAfterMs;
+  const recordedAfterIso = typeof holdAfterMs === "number" ? new Date(now.getTime() - holdAfterMs).toISOString() : null;
   const rows: UsageRow[] = [];
   for (const group of inGroups(accounts, USAGE_ACCOUNTS_PER_BOUNDED_READ)) {
     const ranges = reportableRanges(group, now).map((r) => ({ ...r, beforeIso: untilIso }));
-    const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
-      .is("reported_at", null)
+    let query = db.from("usage_events").select(USAGE_COLUMNS)
+      .is("reported_at", null);
+    if (recordedAfterIso !== null) query = query.gt("created_at", recordedAfterIso);
+    const { data, error } = await query
       .or(usageRangeFilter(ranges))
       .order("occurred_at", { ascending: true }).order("id", { ascending: true })
       .limit(limit);
@@ -414,6 +433,45 @@ export async function sumUsageSince(db: SupabaseClient, accountId: string, since
     const rows = (data ?? []) as { meter: MeterKey; quantity: number }[];
     for (const r of rows) out[r.meter] += r.quantity;
     if (rows.length === 0) return out;
+    from += rows.length;
+  }
+}
+
+export type UsageBands = { settled: number; inFlight: number; held: number; heldRows: UsageRow[] };
+
+/**
+ * BIS's side of one (account, meter, window) reconciliation (M7a PR-4, plan
+ * G14), over rows whose occurred_at is in [startIso, endIso): settled =
+ * reported at least `settleMs` ago (Stripe has aggregated it, assumption S1);
+ * in flight = reported more recently, or unreported and recorded under
+ * USAGE_HOLD_AFTER_MS ago; held = unreported and recorded USAGE_HOLD_AFTER_MS
+ * ago or more (G15), returned whole so reconciliation can stamp or send them.
+ * Paged by id until an empty page.
+ */
+export async function readUsageBands(
+  db: SupabaseClient,
+  input: { accountId: string; meter: MeterKey; startIso: string; endIso: string; now: Date; settleMs: number },
+): Promise<UsageBands> {
+  const settledBefore = input.now.getTime() - input.settleMs;
+  const holdBefore = input.now.getTime() - USAGE_HOLD_AFTER_MS;
+  const bands: UsageBands = { settled: 0, inFlight: 0, held: 0, heldRows: [] };
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("usage_events").select(USAGE_COLUMNS)
+      .eq("account_id", input.accountId).eq("meter", input.meter)
+      .gte("occurred_at", input.startIso).lt("occurred_at", input.endIso)
+      .order("id", { ascending: true }).range(from, from + USAGE_SUM_PAGE - 1);
+    if (error) throw new Error(`readUsageBands failed: ${error.message}`);
+    const rows = ((data ?? []) as UsageDbRow[]).map(toUsageRow);
+    if (rows.length === 0) return bands;
+    for (const r of rows) {
+      if (r.reportedAt !== null) {
+        if (Date.parse(r.reportedAt) <= settledBefore) bands.settled += r.quantity; else bands.inFlight += r.quantity;
+      } else if (Date.parse(r.createdAt) <= holdBefore) {
+        bands.held += r.quantity; bands.heldRows.push(r);
+      } else {
+        bands.inFlight += r.quantity;
+      }
+    }
     from += rows.length;
   }
 }

@@ -227,7 +227,8 @@ export type RelatableHit = { id: string; firstName: string | null; lastName: str
 export async function searchRelatableContactsAction(
   accountId: string, subjectId: string, term: string,
 ): Promise<{ ok: true; hits: RelatableHit[] } | { ok: false }> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): a search, so it stays usable while the account is paused.
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   if (!isUuid(subjectId) || typeof term !== "string") return { ok: true, hits: [] };
   const subject = subjectId.toLowerCase();
   const q = term.replace(/\s+/g, " ").trim();

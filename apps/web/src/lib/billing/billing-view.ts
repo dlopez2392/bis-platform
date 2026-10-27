@@ -1,10 +1,11 @@
 import {
-  ENDED_STATUSES, METER_KEYS, PAST_DUE_STATUSES, isUsableZone,
-  type AccountBilling, type BillingLink, type MeterAmounts, type MeterKey, type Plan,
+  ALERTING_VERDICTS, ENDED_STATUSES, METER_KEYS, PAST_DUE_STATUSES, isUsableZone,
+  type AccountBilling, type BillingLink, type MeterAmounts, type MeterKey, type Plan, type Reconciliation,
 } from "@bis/db";
 import { localMidnightInstant } from "@/lib/reports/weekly-window";
 import { m, type MessageKey } from "@/lib/messages";
 import { formatCents } from "./plan-form";
+import { PAUSE_FORWARD_MS, pauseCause } from "./standing";
 
 /**
  * What the billing screens SAY, computed from stored rows (never from
@@ -37,9 +38,14 @@ export function billingStatusOf(billing: AccountBilling | null, link: Pick<Billi
 
 /** The payment-failed banner (G21): only a subscription whose payment
  *  FAILED (past_due, unpaid). Not `incomplete`: a first payment still in
- *  progress has not failed, and the card already shows that state. */
-export function showsPaymentFailedBanner(billing: AccountBilling | null): boolean {
-  return billing !== null && !billing.complimentary && !billing.billingPausedAt
+ *  progress has not failed, and the card already shows that state.
+ *  Decided from the live VERDICT (design review I1), never from the stored
+ *  pause stamp: with the switch off, or a verdict read that failed open, a
+ *  stamped past-due row has no paused banner, so it must get this one —
+ *  otherwise it got neither. While the verdict is paused the paused banner
+ *  stands instead (never both). */
+export function showsPaymentFailedBanner(billing: AccountBilling | null, verdict: { paused: boolean }): boolean {
+  return !verdict.paused && billing !== null && !billing.complimentary
     && billing.subscriptionStatus !== null && PAST_DUE_STATUSES.includes(billing.subscriptionStatus);
 }
 
@@ -150,9 +156,24 @@ export type BillingCardView = {
   link: { sentTo: string; expires: string; url: string } | null;
   planOptions: PlanOption[];
   defaultEmail: string;
-  can: { send: boolean; changePlan: boolean; markComplimentary: boolean; stopComplimentary: boolean; copyLink: boolean };
+  can: { send: boolean; changePlan: boolean; markComplimentary: boolean; stopComplimentary: boolean; copyLink: boolean; liftPause: boolean };
   stripeReady: boolean;
   webhookReady: boolean;
+  /** The pause line (payment or ended cause) and, from day 30 while the
+   *  switch enforces it, the "calls are no longer forwarded" line (G19, m3). */
+  pause: { line: string; noForward: string | null } | null;
+  /** "Pause lifted {date}" while a lift stands over a still-unpaid or ended
+   *  plan (M10) — never once paid, and never alongside `pause`. */
+  lifted: string | null;
+  /** True while a pause stamp is stored but the switch does not enforce it
+   *  (G19): "Pausing is switched off for this app, so this pause changes nothing." */
+  pauseOff: boolean;
+  /** One line per (account, meter) whose newest check is an alerting verdict
+   *  (G13, G14). */
+  reconciliation: string[];
+  /** The reconciliation read failed (design review I2): the card says it
+   *  couldn't check, in place of the mismatch block, and keeps the rest. */
+  reconciliationUnchecked: boolean;
 };
 
 export function billingCardView(input: {
@@ -172,8 +193,19 @@ export function billingCardView(input: {
   /** STRIPE_WEBHOOK_SECRET is set here (webhookSecretFromEnv). Gates Send
    *  ONLY: without it a client could pay and stay Unbilled (final review I1). */
   webhookReady: boolean;
+  /** The account's newest reconciliation rows (Task 2's listReconciliations).
+   *  Optional, defaulting to none; null means the read FAILED (design review
+   *  I2), which the card states instead of claiming nothing is wrong. */
+  reconciliations?: Reconciliation[] | null;
+  /** billingEnforced() (Task 4). Optional, defaulting to false, until the
+   *  caller (Task 11) wires it — unenforced, the card makes no claim about
+   *  calls or automations the switch is not actually acting on. */
+  enforced?: boolean;
 }): BillingCardView {
   const { billing, link, plan, activePlans, used, zone, now, stripeReady, webhookReady } = input;
+  const reconciliationUnchecked = input.reconciliations === null;
+  const reconciliations = input.reconciliations ?? [];
+  const enforced = input.enforced ?? false;
   const status = billingStatusOf(billing, link, now);
   const option = (p: Plan): PlanOption => ({ id: p.id, name: p.name, price: priceLine(p.monthlyPriceCents) });
   const live = billing !== null && liveSubscription(billing);
@@ -185,6 +217,26 @@ export function billingCardView(input: {
   const linkLive = link !== null && Date.parse(link.expiresAt) > now.getTime();
   const period = billing ? usagePeriodStart(billing, zone, now) : null;
   const otherPlan = activePlans.some((p) => p.id !== billing?.planId);
+  const pausedAt = billing?.billingPausedAt ?? null;
+  const pause = pausedAt && billing
+    ? {
+        line: pauseCause(billing) === "ended"
+          ? m["billing.card.pausedEnded"].replace("{date}", formatDay(new Date(pausedAt), zone))
+          : m["billing.card.pausedPayment"].replace("{date}", formatDay(new Date(pausedAt), zone))
+              .replace("{failed}", formatDay(new Date(billing.pastDueSince ?? pausedAt), zone)),
+        // m3: a claim about calls, so only while the switch enforces it.
+        noForward: enforced && now.getTime() - Date.parse(pausedAt) >= PAUSE_FORWARD_MS ? m["billing.card.noForward"] : null,
+      }
+    : null;
+  // M10: on a still-unpaid OR an ended plan.
+  const lifted = !pausedAt && billing?.pauseLiftedAt && (status === "payment_failed" || status === "canceled")
+    ? m["billing.card.lifted"].replace("{date}", formatDay(new Date(billing.pauseLiftedAt), zone)) : null;
+  const reconciliation = reconciliations
+    .filter((r) => ALERTING_VERDICTS.includes(r.verdict))
+    .map((r) => m["billing.card.reconcile.line"]
+      .replace("{meter}", m[`billing.card.reconcile.meter.${r.meter}` as MessageKey])
+      .replace("{stripe}", count(r.stripeTotal)).replace("{bis}", count(r.bisSettled + r.bisInFlight + r.bisHeld))
+      .replace("{when}", formatMoment(new Date(r.checkedAt), zone)));
   return {
     status,
     plan: plan ? option(plan) : null,
@@ -208,8 +260,14 @@ export function billingCardView(input: {
       markComplimentary: status === "unbilled" && activePlans.length > 0,
       stopComplimentary: status === "complimentary",
       copyLink: linkLive && !live,
+      liftPause: pausedAt !== null && billing !== null && !billing.complimentary,
     },
     stripeReady,
     webhookReady,
+    pause,
+    lifted,
+    pauseOff: pausedAt !== null && !enforced,
+    reconciliation,
+    reconciliationUnchecked,
   };
 }

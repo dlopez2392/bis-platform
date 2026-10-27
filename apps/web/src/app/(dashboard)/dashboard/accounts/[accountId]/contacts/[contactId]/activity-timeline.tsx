@@ -32,6 +32,8 @@ export type ActivityTimelineProps = {
   contactHasPhone: boolean;
   /** THE send gate, resolved on the server (resolveSmsSender); null = could not be read. */
   smsGate: SmsGate | null;
+  /** M7a PR-4 (I5): the account's billing verdict says paused; the composer's Text tab says so. */
+  accountPaused?: boolean;
   /** The recipient's consent line (lib/consent/composer-state.ts), in the page's language; null when it may text. */
   smsBlockedLine: string | null;
   emailNoticeLine: string | null;
@@ -86,7 +88,7 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
       <div className="border-b border-[var(--row-line)] pb-4" data-timeline-composer>
         <MessageComposer contactId={p.contactId} contactHasEmail={p.contactHasEmail} contactHasPhone={p.contactHasPhone}
           smsGate={p.smsGate} smsBlockedLine={p.smsBlockedLine} emailNoticeLine={p.emailNoticeLine}
-          noteAction={boundAddNote} emailAction={p.emailAction} smsAction={p.smsAction} />
+          noteAction={boundAddNote} emailAction={p.emailAction} smsAction={p.smsAction} accountPaused={p.accountPaused} />
       </div>
       <form action={boundAddTask} aria-label={tr.text("contact.tasks")}
         className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2">

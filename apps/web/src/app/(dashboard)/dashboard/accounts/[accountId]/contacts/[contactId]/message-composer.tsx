@@ -56,10 +56,14 @@ export function hashTargetFor(hash: string, modes: readonly ComposeMode[]): "ema
 }
 
 /** The line the Text tab shows in place of its form, in today's order; null when the form shows.
- *  `consent` marks the recipient's own line (the one `data-testid="composer-sms-blocked"` names). */
+ *  `consent` marks the recipient's own line (the one `data-testid="composer-sms-blocked"` names).
+ *  `paused` (M7a PR-4, design review I5): the account's billing verdict, checked FIRST — the send
+ *  gate refuses a paused account before its A2P read (consent/gate.ts), so the form never opens
+ *  only to be refused at Send. */
 export function smsFormBlock(
-  gate: SmsGate | null, contactHasPhone: boolean, blockedLine: string | null, locale: Locale = "en",
+  gate: SmsGate | null, contactHasPhone: boolean, blockedLine: string | null, locale: Locale = "en", paused = false,
 ): { text: string; consent: boolean } | null {
+  if (paused) return { text: t(m, "compose.smsBlockedPaused", locale), consent: false };
   if (gate === null) return { text: t(m, "compose.smsStateUnknown", locale), consent: false };
   if (!gate.ok) return { text: gate.reason === "a2p_not_approved" ? t(m, "compose.smsBlockedA2p", locale) : t(m, "compose.smsBlockedNoNumber", locale), consent: false };
   if (!contactHasPhone) return { text: t(m, "compose.noPhoneOnContact", locale), consent: false };
@@ -78,6 +82,7 @@ export function MessageComposer({
   smsAction,
   modes = DEFAULT_MODES,
   initialMode,
+  accountPaused = false,
 }: {
   contactId: string;
   contactHasEmail: boolean;
@@ -109,6 +114,8 @@ export function MessageComposer({
   modes?: readonly ComposeMode[];
   /** S-06 part 3 (spec §6): the channel the server decided; absent = Note (or the first of modes). */
   initialMode?: ComposeMode;
+  /** M7a PR-4 (I5): the account is paused (billingVerdictFor, cached per request): the Text tab says so. */
+  accountPaused?: boolean;
 }) {
   const locale = useLocale();
   const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
@@ -154,7 +161,7 @@ export function MessageComposer({
   useEffect(() => { if (focusNonce > 0) bodyRef.current?.focus(); }, [focusNonce]);
   const isEmail = mode === "email";
   const isSms = mode === "sms";
-  const smsBlock = isSms ? smsFormBlock(smsGate, contactHasPhone, smsBlockedLine, locale) : null;
+  const smsBlock = isSms ? smsFormBlock(smsGate, contactHasPhone, smsBlockedLine, locale, accountPaused) : null;
 
   const { pending, onSubmit } = useFormSubmit(async (formData, form) => {
     try {

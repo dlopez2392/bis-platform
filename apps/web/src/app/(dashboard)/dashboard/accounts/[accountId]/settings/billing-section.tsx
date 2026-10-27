@@ -1,10 +1,14 @@
-import { getBillingLink, listPlans, serviceDb, sumUsageSince } from "@bis/db";
+import { getBillingLink, listPlans, listReconciliations, serviceDb, sumUsageSince } from "@bis/db";
 import { requireAgency } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { loggableError } from "@/lib/billing/billing-link";
 import { billingCardView, safeZone, usagePeriodStart, type BillingCardView } from "@/lib/billing/billing-view";
+import { billingEnforced } from "@/lib/billing/enforce";
 import { stripeKeyVerdict, webhookSecretFromEnv, type StripeEnv } from "@/lib/billing/stripe-gateway";
-import { changePlanAction, markComplimentaryAction, removeComplimentaryAction, sendBillingLinkAction } from "./billing-actions";
+import {
+  changePlanAction, liftPauseAction, markComplimentaryAction, removeComplimentaryAction, sendBillingLinkAction,
+  undoLiftPauseAction,
+} from "./billing-actions";
 import { BillingCard, BillingCardError } from "./billing-card";
 
 export { BillingCardError, BillingCardSkeleton } from "./billing-card";
@@ -24,7 +28,7 @@ export { BillingCardError, BillingCardSkeleton } from "./billing-card";
  */
 async function loadBillingCardView(accountId: string, now: Date): Promise<BillingCardView> {
   const db = serviceDb();
-  const [billing, link, plans, account] = await Promise.all([
+  const [billing, link, plans, account, reconciliations] = await Promise.all([
     readAccountBilling(accountId),
     getBillingLink(db, accountId),
     listPlans(db),
@@ -34,6 +38,14 @@ async function loadBillingCardView(accountId: string, now: Date): Promise<Billin
         if (!data) throw new Error("billing card: account not found");
         return data as { timezone: string | null; reply_to_email: string | null; report_emails: string[] | null };
       }),
+    // Task 11: this account's newest reconciliation row per meter (plan
+    // G13/G14), fed into the card's "usage doesn't match Stripe" lines.
+    // Caught ALONE (design review I2): its failure must not blank the card
+    // (and Lift pause with it); null makes the card say it couldn't check.
+    listReconciliations(db, accountId, now).catch((e: unknown) => {
+      console.error(`settings: reconciliation read failed for account ${accountId}: ${loggableError(e)}`);
+      return null;
+    }),
   ]);
   const zone = safeZone(account.timezone);
   const plan = billing ? plans.find((p) => p.id === billing.planId) ?? null : null;
@@ -45,6 +57,10 @@ async function loadBillingCardView(accountId: string, now: Date): Promise<Billin
     stripeReady: stripeKeyVerdict(process.env as StripeEnv).ok,
     // Send only with the webhook's signing secret set too (final review I1).
     webhookReady: webhookSecretFromEnv() !== null,
+    reconciliations,
+    // Task 11 (m3): read fresh, never hard-coded — the card's noForward/
+    // pauseOff lines must track the SAME switch every other reader does.
+    enforced: billingEnforced(),
   });
 }
 
@@ -68,6 +84,8 @@ export async function BillingSection({ accountId }: { accountId: string }) {
       markComplimentary={markComplimentaryAction.bind(null, accountId)}
       stopComplimentary={removeComplimentaryAction.bind(null, accountId)}
       changePlan={changePlanAction.bind(null, accountId)}
+      liftPause={liftPauseAction.bind(null, accountId)}
+      undoLiftPause={undoLiftPauseAction.bind(null, accountId)}
     />
   );
 }

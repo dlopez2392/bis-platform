@@ -226,6 +226,17 @@ export async function processReactivations(
         continue;
       }
       if (outcome === "held") {
+        // Nothing went this tick, so the tick slot and this tick's day count
+        // taken above go back (M7a PR-4 review, item 1). A paused account's
+        // check-ins are held every morning tick and never stamp, so they stay
+        // at the head of listDueReactivations for the whole pause: keeping
+        // the slot would let two paused accounts spend AUTOMATION_TICK_CAP
+        // (ONE counter across every account) and starve everyone behind
+        // them, and keeping the count would log "Daily limit reached" on a
+        // day nothing went out. The next tick re-reads the real count from
+        // the stamps either way.
+        attemptsThisTick--;
+        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
         c.held++;
         continue;
       }

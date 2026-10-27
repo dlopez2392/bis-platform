@@ -228,7 +228,8 @@ export async function abandonDocumentUploadAction(accountId: string, documentId:
 export async function getDocumentUrlAction(
   accountId: string, versionId: string, mode: "view" | "download",
 ): Promise<{ ok: true; url: string; contentType: DocumentContentType } | DocFail> {
-  await requireAccountAccess(accountId);
+  // M7a PR-4 (plan G11): opening a file writes nothing, so it stays usable while the account is paused.
+  await requireAccountAccess(accountId, { duringPause: "allow" });
   if (!isUuid(versionId) || (mode !== "view" && mode !== "download")) return fail(REFUSED);
   try {
     const db = await dbForRequest();
