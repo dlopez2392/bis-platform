@@ -2237,3 +2237,18 @@ describe("M7a PR-4 copy (billing pause, English and Spanish)", () => {
     }
   });
 });
+
+describe("tenant vetting copy (S-53)", () => {
+  it("is the plan's wording in both languages (mutation: any word changed, or a tu form such as 'Elige' -> FAILS)", () => {
+    expect([m["vetting.trade.label"], m["vetting.trade.label.es"]]).toEqual(["Trade", "Giro"]);
+    expect([m["vetting.sofia.noTrade"], m["vetting.sofia.noTrade.es"]])
+      .toEqual(["Set this company's trade first.", "Primero indique el giro de esta empresa."]);
+    expect([m["vetting.turnOffFirst"], m["vetting.turnOffFirst.es"]])
+      .toEqual(["Turn off Sofía and the web chat first.", "Primero apague a Sofía y el chat del sitio web."]);
+    expect([m["vetting.crmOnlyCreated"], m["vetting.crmOnlyCreated.es"]])
+      .toEqual(["Sofía and the web chat aren't available for this trade yet.", "Sofía y el chat del sitio web aún no están disponibles para este giro."]);
+    for (const [k, v] of Object.entries(m)) {
+      if (k.startsWith("vetting.") && k.endsWith(".es")) expect(v, k).not.toMatch(/\b(elige|indica|apaga|escribe|di)\b/i);
+    }
+  });
+});
