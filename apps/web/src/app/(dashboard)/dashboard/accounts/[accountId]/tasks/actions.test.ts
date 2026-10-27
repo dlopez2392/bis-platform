@@ -111,6 +111,14 @@ describe("completeWorkTask", () => {
     expect(r.ok).toBe(false);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
+
+  // F-085 follow-ups (final M4): the failure is named by key, so the To do's client renders it in
+  // the reader's language (useLocale) beside its success toasts; `error` stays English for any
+  // caller that reads only that.
+  it("the failure carries its key, work.actionFailed (mutation: return only the English error -> FAILS)", async () => {
+    dbMocks.completeTask.mockRejectedValue(new Error("db exploded"));
+    expect(await completeWorkTask("acct_1", "task_1")).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
+  });
 });
 
 describe("reopenWorkTask", () => {
@@ -123,10 +131,10 @@ describe("reopenWorkTask", () => {
     );
   });
 
-  it("returns an honest error instead of throwing when the write fails", async () => {
+  it("returns an honest error instead of throwing when the write fails, named by its key (F-085 follow-ups; mutation: drop errorKey -> FAILS)", async () => {
     dbMocks.reopenTask.mockRejectedValue(new Error("db exploded"));
     const r = await reopenWorkTask("acct_1", "task_1");
-    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
   });
 });
 
@@ -164,17 +172,17 @@ describe("dismissToTask", () => {
     );
   });
 
-  it("fails honestly, without creating anything, when the account lookup itself fails", async () => {
+  it("fails honestly, without creating anything, when the account lookup itself fails, named by its key (F-085 follow-ups; mutation: drop errorKey -> FAILS)", async () => {
     dbForRequestMock.mockResolvedValue(fakeDb({ data: null, error: { message: "boom" } }));
     const r = await dismissToTask("acct_1", { source: "conversation", contactId: "c1", title: "Reply to X" });
-    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
     expect(dbMocks.addTask).not.toHaveBeenCalled();
   });
 
-  it("returns an honest error instead of throwing when the write fails", async () => {
+  it("returns an honest error instead of throwing when the write fails, named by its key (F-085 follow-ups; mutation: drop errorKey -> FAILS)", async () => {
     dbMocks.addTask.mockRejectedValue(new Error("db exploded"));
     const r = await dismissToTask("acct_1", { source: "conversation", contactId: "c1", title: "Reply to X" });
-    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
   });
 });
 
@@ -283,7 +291,7 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
 
   it("a Done on a hold's To-do while the hold is undecided (a stale tab) is refused with the decide-first line (review R3-I1; mutation: fall through to the generic failure → FAILS)", async () => {
     vi.mocked(completeTask).mockRejectedValueOnce(new HoldUndecidedError());
-    expect(await completeWorkTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decideFirst"] });
+    expect(await completeWorkTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decideFirst"], errorKey: "todo.consent.decideFirst" });
   });
 
   it("a contact whose number was cleared closes the hold's To-do exactly like a number no longer on hold, rather than leaving it stuck open forever (review fix round 1, item 1; mutation: return the no-number failure without closing → FAILS)", async () => {

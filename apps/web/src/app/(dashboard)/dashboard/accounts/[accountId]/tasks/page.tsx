@@ -229,6 +229,7 @@ export default async function TasksPage({
         <ZoneNote
           zone={zone}
           isAgency={isAgency}
+          locale={locale}
           className="mb-4"
         />
         <WorkList

@@ -39,7 +39,18 @@ import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
-import type { ActionResult, DismissResult } from "./actions";
+import type { Locale } from "@/lib/i18n/locale";
+import type { ActionResult, DismissResult, WorkActionErrorKey } from "./actions";
+
+/**
+ * A failed action's toast, in the reader's language (F-085 follow-ups): a failure this screen
+ * words itself arrives as a key (actions.ts's WorkActionErrorKey) and is rendered with the same
+ * locale the success toasts use; one forwarded from elsewhere (the calendar's close-out error)
+ * carries no key and is shown exactly as it came.
+ */
+export function failureText(r: { error: string; errorKey?: WorkActionErrorKey }, locale: Locale): string {
+  return r.errorKey ? t(m, r.errorKey, locale) : r.error;
+}
 
 /** A 44px touch target below md, the compact 32px row button from md up —
  *  the same breakpoint and heights as the assignee picker beside it
@@ -80,7 +91,7 @@ export function WorkRowActions({
   function runComplete() {
     startTransition(async () => {
       const result = await completeWorkTask(rawId);
-      if (!result.ok) { toast.error(result.error); return; }
+      if (!result.ok) { toast.error(failureText(result, locale)); return; }
       toast.success(t(m, "work.done.toast", locale), {
         action: {
           label: t(m, "common.undo", locale),
@@ -89,7 +100,7 @@ export function WorkRowActions({
           // duration of the undo too, not just the original action.
           onClick: () => startTransition(async () => {
             const r = await reopenWorkTask(rawId);
-            if (!r.ok) toast.error(r.error);
+            if (!r.ok) toast.error(failureText(r, locale));
           }),
         },
       });
@@ -99,7 +110,7 @@ export function WorkRowActions({
   function runDismiss() {
     startTransition(async () => {
       const result = await dismissToTask({ source, contactId, title: label });
-      if (!result.ok) { toast.error(result.error); return; }
+      if (!result.ok) { toast.error(failureText(result, locale)); return; }
       const newTaskId = result.taskId;
       // The action reports whether a due date actually got set (the zone
       // could be unresolvable) — "Moved to tomorrow." is a lie on that
@@ -109,7 +120,7 @@ export function WorkRowActions({
           label: t(m, "common.undo", locale),
           onClick: () => startTransition(async () => {
             const r = await completeWorkTask(newTaskId);
-            if (!r.ok) toast.error(r.error);
+            if (!r.ok) toast.error(failureText(r, locale));
           }),
         },
       });
@@ -119,7 +130,7 @@ export function WorkRowActions({
   function runBooking(status: "completed" | "no_show") {
     startTransition(async () => {
       const result = await closeOutBooking(rawId, status);
-      if (!result.ok) { toast.error(result.error); return; }
+      if (!result.ok) { toast.error(failureText(result, locale)); return; }
       // Names the outcome that was actually recorded — these two buttons
       // each arm a different outbound customer message and look nearly
       // identical, so a wrong click must be visible immediately rather than

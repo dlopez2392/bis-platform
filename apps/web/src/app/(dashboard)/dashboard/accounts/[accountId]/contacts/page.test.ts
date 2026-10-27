@@ -626,6 +626,8 @@ describe("the reader's own language (requestLocale; F-085 follow-up, Task B)", (
     expect(html).toMatch(/<div lang="es"/);
     expect(html).toContain(">Contactos<");
     expect(html).toContain(m["contacts.export.es"]);
+    // F-085 follow-ups (design m3): the longer Spanish placeholder truncated at 390px.
+    expect(html).toContain('placeholder="Buscar contactos"');
   });
 
   it("an agency operator on that same Spanish account reads English (requestLocale's role split; mutation: pass isOperator false -> Spanish, FAILS)", async () => {

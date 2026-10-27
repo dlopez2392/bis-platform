@@ -192,3 +192,28 @@ describe("ZoneNote — `accountless` screens (review of #225)", () => {
     expect(plain(html)).toContain(m["zone.guessed.agency"]);
   });
 });
+
+// F-085 follow-ups (design I3): the To do page reads Spanish, so its zone
+// line does too. Only the line itself: the guessed-zone warning has no
+// Spanish twins yet, so it says it is English (lang="en") rather than sit
+// unmarked inside a lang="es" page. Every other screen passes no locale and
+// is unchanged.
+describe("ZoneNote — the reader's language (F-085 follow-ups)", () => {
+  const renderLocale = (zone: ResolvedZone, locale?: "en" | "es") =>
+    renderToStaticMarkup(createElement(ZoneNote, { zone, isAgency: true, locale }));
+
+  it("names the zone in Spanish when asked (mutation: keep m[\"zone.note\"] regardless of locale -> FAILS)", () => {
+    expect(plain(renderLocale(CONFIGURED, "es"))).toContain("Las horas se muestran en America/Chicago");
+  });
+
+  it("with no locale, the line is the English one, exactly as before (mutation: default locale to \"es\" -> FAILS)", () => {
+    const html = plain(renderLocale(CONFIGURED));
+    expect(html).toContain("Times shown in America/Chicago");
+    expect(html).not.toContain("Las horas");
+  });
+
+  it("the guessed-zone warning, still English, is marked lang=\"en\" (mutation: drop lang from the Notice -> FAILS)", () => {
+    const html = renderLocale(FROM_AGENCY, "es");
+    expect(html).toMatch(/<div[^>]*lang="en"[^>]*>[^<]*This company has no timezone of its own/);
+  });
+});

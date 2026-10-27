@@ -137,9 +137,14 @@ export default async function ConversationsPage({
   // T17 design review M-6: ?locale= (the QA override, off on every Vercel deployment) as the call page reads it.
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
   const pseudo = requestPseudoMode({ locale: localeParam });
-  // F-085 follow-up (Task B): the page's own chrome (title, empty states) goes through `tr`, which
-  // survives the QA pseudo-locale sweep (DESIGN.md DoD) — the pre-existing direct `t(m, key, locale)`
-  // calls below it (the held-queue filter pill, the composer's consent line) are untouched.
+  // F-085 follow-up (Task B): `tr` carries this page's own server-rendered words (the title, the empty
+  // states, the pick-a-thread prompt), and only those take the QA pseudo-locale (DESIGN.md DoD). The
+  // rest of the screen reads `t(m, key, locale)`, which has no pseudo path: the held-queue filter pill
+  // and the composer's consent line here, and every component below that is handed a bare `locale`
+  // (the conversation list's rows, WhoFilter, the thread pane apart from its holding notice and Move,
+  // which take `pseudo` themselves) or reads one from the LocaleProvider.
+  // Under `?locale=pseudo` those render in the reader's own language, untransformed, so the +35%
+  // sweep does not cover them yet (a pseudo path for client t() is deferred).
   const tr = makeTr(locale, pseudo);
   const base = `/dashboard/accounts/${accountId}/conversations`;
 

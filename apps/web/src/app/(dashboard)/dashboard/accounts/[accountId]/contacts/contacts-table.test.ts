@@ -136,6 +136,22 @@ describe("ContactsTable reads the LocaleProvider's locale (F-085 follow-up, Task
     expect(html).toContain("31 ago 2026");
   });
 
+  // F-085 follow-ups (design I5): "Nombre del contacto" / "Nombre del negocio" pushed the Spanish
+  // table 9px past its panel at 1280. The two sortable headers are the short words; English is unchanged.
+  it("the two sortable headers are \"Nombre\" and \"Negocio\" in Spanish, unchanged in English (mutation: restore \"Nombre del contacto\" -> FAILS)", () => {
+    const html = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(ContactsTable, {
+        rows: [row(0)], accountId: "acct1", existingTags: [], sort: "created", dir: "desc", timezone: "America/Chicago", canDelete: true,
+      })),
+    );
+    expect(html).toMatch(/>Nombre</);
+    expect(html).toMatch(/>Negocio</);
+    expect(html).not.toContain("Nombre del contacto");
+    expect(html).not.toContain("Nombre del negocio");
+    expect(m["contacts.col.name"]).toBe("Contact name");
+    expect(m["contacts.col.company"]).toBe("Business name");
+  });
+
   it("defaults to English with no LocaleProvider ancestor (same default useLocale() falls back to, pinned at the module level)", () => {
     const html = render([row(0)]);
     expect(html).toContain(m["contacts.col.name"]);

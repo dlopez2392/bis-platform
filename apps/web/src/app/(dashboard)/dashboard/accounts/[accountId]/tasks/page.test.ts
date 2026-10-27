@@ -1102,6 +1102,12 @@ describe("TasksPage in Spanish (requestLocale; F-085 follow-up, Task B)", () => 
     expect(html).toContain(">Atrasado<");
   });
 
+  it("the zone line names the zone in Spanish (F-085 follow-ups, design I3; mutation: drop locale from the page's <ZoneNote> -> FAILS)", async () => {
+    const html = await renderEs([taskRow({ id: "task:1", contactId: null, dueAt: "2020-01-01T12:00:00Z" })]);
+    expect(html).toContain("Las horas se muestran en America/Chicago");
+    expect(html).not.toContain("Times shown in");
+  });
+
   it("the Mine-filter empty state reads Spanish too (mutation: pass EmptyState an English title regardless of locale -> FAILS)", async () => {
     role = "staff";
     const html = await renderEs([], { who: "mine" });

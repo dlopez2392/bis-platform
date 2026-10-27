@@ -312,7 +312,10 @@ export const m = {
   "common.none.es": "—",
   "common.saving": "Saving…",
   "common.saving.es": "Guardando…",
-  "common.actionCrashed": "That didn't go through — this page may be out of date. Reload it and try again.",
+  // A dialog's X button, for screen readers (DialogContent's closeLabel).
+  "common.close": "Close",
+  "common.close.es": "Cerrar",
+  "common.actionCrashed":"That didn't go through — this page may be out of date. Reload it and try again.",
   // Twin added by mis preferencias (F-096, Task 6): the Preferences page
   // speaks the person's own locale, including this house sentence.
   "common.actionCrashed.es": "Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.",
@@ -535,6 +538,7 @@ export const m = {
   "contacts.title": "Contacts",
   "contacts.title.es": "Contactos",
   "contacts.add": "Add contact",
+  "contacts.add.es": "Agregar contacto",
   // The header badge (Task 3): a whole-phrase pick by count, never a plural
   // template reused for one — see setup.progress below for the {placeholder}
   // convention this departs from on purpose. The platform already shipped a
@@ -604,15 +608,18 @@ export const m = {
   // a business date).
   "contacts.export.filename": "contacts-{date}.csv",
   "contacts.search": "Search name, email, phone…",
-  "contacts.search.es": "Buscar nombre, correo o teléfono…",
+  // Short in Spanish: the longer line truncated in the box at phone width.
+  "contacts.search.es": "Buscar contactos",
   "contacts.col.name": "Contact name",
-  "contacts.col.name.es": "Nombre del contacto",
+  // "Nombre" and "Negocio", not "Nombre del contacto" / "Nombre del negocio":
+  // the long pair pushed the Spanish table past its panel at 1280px.
+  "contacts.col.name.es": "Nombre",
   "contacts.col.phone": "Phone",
   "contacts.col.phone.es": "Teléfono",
   "contacts.col.email": "Email",
   "contacts.col.email.es": "Correo",
   "contacts.col.company": "Business name",
-  "contacts.col.company.es": "Nombre del negocio",
+  "contacts.col.company.es": "Negocio",
   "contacts.col.created": "Created",
   "contacts.col.created.es": "Creado",
   "contacts.empty.title": "No contacts yet",
@@ -634,9 +641,12 @@ export const m = {
   "contacts.phone": "Phone",
   "contacts.phone.es": "Teléfono",
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
+  "contacts.createFailed.es": "No se pudo agregar ese contacto. Revise los datos e intente de nuevo.",
   "contacts.add.blank": "Add a name, email, or phone number.",
   "contacts.add.existing": "This person is already in your contacts.",
+  "contacts.add.existing.es": "Esta persona ya está en sus contactos.",
   "contacts.add.viewContact": "View contact",
+  "contacts.add.viewContact.es": "Ver contacto",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
@@ -645,6 +655,9 @@ export const m = {
   "bulk.selectPage.es": "Seleccionar todo en esta página",
   "bulk.selected": "{count} selected",
   "bulk.selected.es": "{count} seleccionados",
+  // The singular, picked by plural() like contacts.countOne: never "1 seleccionados".
+  "bulk.selectedOne": "1 selected",
+  "bulk.selectedOne.es": "1 seleccionado",
   "bulk.addTag": "Add tag",
   "bulk.addTag.es": "Agregar etiqueta",
   "bulk.delete": "Delete…",
@@ -673,7 +686,9 @@ export const m = {
   "bulk.deletedOne": "Deleted 1 contact",
   "bulk.deletedOne.es": "Se borró 1 contacto",
   "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
-  "bulk.deletedSkipped.es": "Se borraron {count} · se conservaron {skipped} por estar vinculados a citas, oportunidades o conversaciones",
+  // Each count follows a colon, so the words agree at any count, one included
+  // ("Se borraron 1 · se conservaron 1" did not).
+  "bulk.deletedSkipped.es": "Contactos borrados: {count} · conservados por estar vinculados a citas, oportunidades o conversaciones: {skipped}",
 
   "pipeline.title": "Opportunities",
   // The header badge used to read "N · $X" — the same shape the per-column
@@ -972,6 +987,8 @@ export const m = {
   "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
   "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
   "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
+  // Names the two buttons by their own Spanish words (contact.texts.confirmStop.es / notAStop.es).
+  "todo.consent.decideFirst.es": "Decídalo con “Confirmar que pidió parar” o “No pidió parar”.",
   // The contact timeline's line in place of Done for an open To-do whose
   // number is still on hold (review R3-N1). It points at the To do page, the
   // one place that can always close it: after a phone correction the Texts
@@ -3684,7 +3701,10 @@ export const m = {
   "work.booking.completed": "It happened",
   "work.booking.completed.es": "Se realizó",
   "work.booking.noShow": "They didn't show",
-  "work.booking.noShow.es": "No se presentaron",
+  // The Calendar's own status word for the same write (calendar.bookings.status.no_show.es),
+  // so the two screens never word one outcome two ways. "Se realizó" above stays: it answers
+  // the row's own question, "¿Se realizó este trabajo?".
+  "work.booking.noShow.es": "No llegó",
   // Task 4's toasts for the four buttons above. One shared failure string —
   // every action here fails the same honest way (try again in a moment) —
   // and the booking close-out's OWN failure copy is never used: it passes
@@ -3694,7 +3714,7 @@ export const m = {
   "work.done.toast": "Marked done.",
   "work.done.toast.es": "Marcado como hecho.",
   "work.notNow.toast": "Moved to tomorrow.",
-  "work.notNow.toast.es": "Pasado a mañana.",
+  "work.notNow.toast.es": "Lo pasamos a mañana.",
   // "Not now" on the zone-degrade path creates the task with no due date —
   // nothing actually moved to tomorrow, so that toast would be a lie here.
   "work.notNow.toastNoDate": "Added to your to-do list.",
@@ -3712,10 +3732,13 @@ export const m = {
   // daily cap — see no-show-nudge.ts's own per-row refusal list), so
   // "will" would overclaim for a row the pass is about to skip.
   "work.booking.completed.toast": "Marked as completed. A review request may go out.",
-  "work.booking.completed.toast.es": "Marcado como realizado. Es posible que se envíe una solicitud de reseña.",
+  // Each names the status the Calendar then shows (calendar.bookings.status.*.es), in its own words.
+  "work.booking.completed.toast.es": "La cita quedó como “Terminada”. Es posible que se envíe una solicitud de reseña.",
   "work.booking.noShow.toast": "Marked as a no-show. A follow-up message may go out.",
-  "work.booking.noShow.toast.es": "Marcado como inasistencia. Es posible que se envíe un mensaje de seguimiento.",
+  "work.booking.noShow.toast.es": "La cita quedó como “No llegó”. Es posible que se envíe un mensaje de seguimiento.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
+  // The To do's actions return this by key (errorKey); the client renders it in the reader's language.
+  "work.actionFailed.es": "No se pudo actualizar ahora. Vuelva a intentarlo en un momento.",
   // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
   // (Task 3) already carries the zero-queue sentence, reused rather than
   // duplicated. The two below compose the non-empty count: "{count} things
@@ -3786,6 +3809,9 @@ export const m = {
   // top of `Intl`, which is exactly how the five readers diverged to begin
   // with (see zone-resolution.ts).
   "zone.note": "Times shown in {zone}",
+  // Only the To do page passes a locale today (F-085 follow-ups); the
+  // zone.guessed.* sentences below have no twins yet and render lang="en".
+  "zone.note.es": "Las horas se muestran en {zone}",
 
   // Shown ONLY when `guessed` — i.e. the zone printed is not the account's
   // own. DESIGN.md rule 3: this marker is a WORD, a whole sentence of them,

@@ -146,9 +146,11 @@ type DeleteResult =Awaited<ReturnType<typeof bulkDeleteContactsAction>>;
 /**
  * What a bulk delete says afterwards. A failure after the files were already removed says exactly
  * that (contacts.delete.filesGoneKept), in the reader's language; customers kept because their files
- * could not all be removed are named after the success line (owner ruling 2026-10-13). F-085 follow-up
- * (Task B): the success line now reads in the reader's language too, through plural()/t() like every
- * other toast this bar fires — it is no longer pinned to the bar's own English regardless of locale.
+ * could not all be removed are named after the success line. Those two file lines exist because of
+ * the owner ruling of 2026-10-13 (a customer's files go with them, and the screen says how many); that
+ * ruling said nothing about the success line's language. S-07 left the success line in the bar's
+ * English only because translating the bar was outside its scope; the F-085 follow-up translated it
+ * with the rest of the bar, through plural()/t() like every other toast this bar fires.
  */
 export function announceDeleteResult(r: DeleteResult, locale: Locale): void {
   if (!r.ok) {
@@ -194,6 +196,8 @@ export function BulkActionBar({
   const count = selectedIds.length;
   if (count === 0) return null;
   const copy = deleteDialogCopy(count, locale);
+  // plural() picks bulk.selectedOne at one: "1 seleccionado", never "1 seleccionados".
+  const selectedText = plural(m, "bulk.selected", count, locale, { count });
 
   async function applyTag(name: string) {
     const ids = [...selectedIds];
@@ -241,12 +245,15 @@ export function BulkActionBar({
   return (
     <div
       role="toolbar"
-      aria-label={t(m, "bulk.selected", locale, { count })}
-      className="flex items-center gap-3 border-b border-[var(--row-line)] bg-[var(--surface-2)] px-4 py-2"
+      aria-label={selectedText}
+      // Wraps (F-085 follow-ups, design I6): at phone width the actions were wider than the panel,
+      // which clips, so the ones past its edge could not be reached. Each control now takes the next
+      // line when it must; at desktop widths everything still fits on one.
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--row-line)] bg-[var(--surface-2)] px-4 py-2"
       data-testid="bulk-action-bar"
     >
       <span className="text-sm font-medium">
-        {t(m, "bulk.selected", locale, { count })}
+        {selectedText}
       </span>
 
       <DropdownMenu>
@@ -256,7 +263,7 @@ export function BulkActionBar({
             {t(m, "bulk.addTag", locale)}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" lang={locale}>
           {existingTags.length > 0 && (
             <>
               {existingTags.map((tag) => (
@@ -292,7 +299,7 @@ export function BulkActionBar({
               {t(m, "assign.bulk", locale)}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="start" lang={locale}>
             {bulkAssignChoices(members, locale).map((c) => (
               <DropdownMenuItem key={c.assignee ?? "none"}
                 onSelect={() => void assignSelected(accountId, [...selectedIds], c.assignee, c.label, onDone, locale)}>
@@ -317,7 +324,8 @@ export function BulkActionBar({
 
       {canDelete ? (
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-          <DialogContent>
+          {/* The menus above and this dialog are portaled to the body, outside the list's lang wrapper. */}
+          <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
             <DialogHeader>
               <DialogTitle>{copy.title}</DialogTitle>
               <DialogDescription>

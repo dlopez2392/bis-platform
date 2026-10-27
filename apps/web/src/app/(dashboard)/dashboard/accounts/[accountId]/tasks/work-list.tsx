@@ -153,12 +153,15 @@ const EPOCH_MS = 0;
  * remaining case, an unparseable `iso`, where `formatDateInZone` throws on
  * the INSTANT rather than on the zone. A row with a corrupt timestamp still
  * degrades to no date rather than taking the whole queue down with it.
+ *
+ * Printed in the reader's own language (`locale`, the page's `tr.locale`;
+ * F-085 follow-ups): "9 oct 2026" on a Spanish To do, never "Oct 9, 2026".
  */
-function rowDateText(row: WorkRow, timezone: string): string | null {
+function rowDateText(row: WorkRow, timezone: string, locale: Locale): string | null {
   const iso = row.dueAt ?? row.occurredAt;
   if (new Date(iso).getTime() === EPOCH_MS) return null;
   try {
-    return formatDateInZone(iso, timezone);
+    return formatDateInZone(iso, timezone, locale);
   } catch (err) {
     // A bad INSTANT only — the zone is guaranteed usable by `renderZone`.
     if (!(err instanceof RangeError)) throw err;
@@ -220,7 +223,7 @@ function WorkRowItem({
   // the receptionist's, and says so beside the person it is about, as its
   // own mark. A To do a person typed carries no mark here, as before.
   const fromCall = row.source === "task" && Boolean(row.callId);
-  const dateText = rowDateText(row, timezone);
+  const dateText = rowDateText(row, timezone, tr.locale);
 
   const body = (
     <>
@@ -234,7 +237,7 @@ function WorkRowItem({
         {secondary || fromCall ? (
           <span className="flex min-w-0 items-center gap-2">
             {secondary ? <span className="min-w-0 break-words text-xs text-muted-foreground md:truncate">{secondary}</span> : null}
-            {fromCall ? <AiAuthorMark /> : null}
+            {fromCall ? <AiAuthorMark locale={tr.locale} /> : null}
           </span>
         ) : null}
       </span>
