@@ -32,7 +32,7 @@ const fx = vi.hoisted(() => ({
           maybeSingle: () => Promise.resolve({
             data: {
               clerk_org_id: null, client_access_enabled: false, report_emails: [], alert_phone: null,
-              required_document_categories: ["insurance"],
+              required_document_categories: ["insurance"], trade: null, trade_other: null,
             },
             error: null,
           }),
@@ -87,8 +87,12 @@ vi.mock("@/lib/sms/sender", () => ({
   resolveSmsSender: async () => ({ ok: false, reason: "a2p_not_approved" }),
 }));
 
+// S-53: the trade field's locale read is stubbed the same way every other page's is.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
+
 // "use server" modules — stubbed, never imported into a vitest run.
 const noop = async () => ({ ok: true });
+vi.mock("./trade-actions", () => ({ setTradeAction: noop }));
 vi.mock("./actions", () => ({
   createFieldAction: noop, upsertValueAction: noop, setClientAccessAction: noop,
   setFromEmailAction: noop, setReportEmailsAction: noop,
@@ -352,6 +356,16 @@ describe("settings page — the Replies row (S-06 part 1, Task 10)", () => {
 
   it("passes the same inbound settings to BrandingPanel as replyRoute (mutation: omit replyRoute → FAILS)", async () => {
     expect((await panelProps()).replyRoute).toEqual({ mode: "bis", domain: null });
+  });
+});
+
+describe("settings page — the Trade card (S-53)", () => {
+  it("mounts the Trade card with the stored trade and the empty-state line when there is none (S-53)", async () => {
+    const { TradeCard } = await import("./trade-card");
+    const card = (await pageElements()).find((el) => el.type === TradeCard);
+    expect(card, "TradeCard mounted").toBeTruthy();
+    expect(card?.props.current).toEqual({ trade: null, tradeOther: null });
+    expect((card?.props.copy as { status: string | null } | undefined)?.status).toBe(m["vetting.card.empty"]);
   });
 });
 

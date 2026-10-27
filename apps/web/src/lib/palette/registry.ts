@@ -50,6 +50,8 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
   { anchor: "required-documents", label: m["palette.settings.requiredDocuments"], keywords: ["documents", "checklist", "required", "missing", "vault", "documentos", "requeridos"] },
   // Item 8a-1: the agency's AI card (settings/ai-card.tsx, #ai).
   { anchor: "ai", label: m["palette.settings.ai"], keywords: ["ai", "budget", "spend", "switch", "summaries", "suggestions", "ia", "presupuesto"] },
+  // S-53: the company's trade (settings/trade-card.tsx, #trade).
+  { anchor: "trade", label: m["palette.settings.trade"], keywords: ["trade", "industry", "business type", "vetting", "giro", "restaurant", "sofia", "web chat"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this

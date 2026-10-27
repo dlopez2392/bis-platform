@@ -126,6 +126,15 @@ describe("buildPaletteEntries", () => {
     expect(filterEntries(entries, "documentos").some((e) => e.id === "settings:required-documents")).toBe(true);
   });
 
+  // S-53: the company's trade (settings/trade-card.tsx, #trade). Agency only, like every SETTINGS_SECTIONS entry.
+  it("registers the trade settings section, agency only, found by 'giro' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+    const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
+    const entry = settings.find((e) => e.id === "settings:trade");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#trade`);
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:trade")).toBe(false);
+    expect(filterEntries(settings, "giro").some((e) => e.id === "settings:trade")).toBe(true);
+  });
+
   it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const entry = entries.find((e) => e.id === "settings:ai");
@@ -268,6 +277,8 @@ describe("buildPaletteEntries", () => {
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/required-documents-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx",
+      // S-53: the Trade card (settings:trade).
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card.tsx",
       "../../components/alert-phone-card.tsx",
       "../../components/branding-panel.tsx",

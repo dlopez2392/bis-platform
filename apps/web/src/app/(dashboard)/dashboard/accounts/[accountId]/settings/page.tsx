@@ -46,6 +46,13 @@ import {
 import { dbForRequest } from "@/lib/db";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { makeTr } from "@/lib/record/copy";
+import { tradeOptionGroups } from "@/lib/vetting/copy";
+import { sofiaGate } from "@/lib/vetting/trades";
+import { TradeCard } from "./trade-card";
+import { setTradeAction } from "./trade-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -62,15 +69,15 @@ export default async function CrmSettingsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string }>;
+  searchParams: Promise<{ from?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
   // below appears only for someone who arrived mid-flow.
-  const { from } = await searchParams;
+  const { from, locale: localeParam } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate, replies, neverLog] = await Promise.all([
+  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate, replies, neverLog, prefs] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -86,7 +93,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("client_access_enabled, report_emails, alert_phone, language, required_document_categories").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("client_access_enabled, report_emails, alert_phone, language, required_document_categories, trade, trade_other").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -112,6 +119,8 @@ export default async function CrmSettingsPage({
       (rows) => rows.map((e) => ({ id: e.id, pattern: e.pattern, kind: e.kind })),
       (e: unknown) => { console.error(`settings: account ${accountId} never-record list read failed: ${loggableError(e)}`); return null; },
     ),
+    // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
+    getPersonPrefs(),
   ]);
 
   const boundCreateField = createFieldAction.bind(null, accountId);
@@ -129,6 +138,15 @@ export default async function CrmSettingsPage({
   const boundSetInboundMode = setInboundModeAction.bind(null, accountId);
   const boundCheckInboundDns = checkInboundDnsAction.bind(null, accountId);
   const boundSetRequiredDocumentCategories = setRequiredDocumentCategoriesAction.bind(null, accountId);
+  // S-53: the Trade card reads in the operator's own language; the rest of Settings stays as it is.
+  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
+  const currentTrade = { trade: account.trade ?? null, tradeOther: account.trade_other ?? null };
+  const tradeGate = sofiaGate(currentTrade.trade);
+  const tradeStatus = currentTrade.trade === null ? tr.text("vetting.card.empty")
+    : !tradeGate.ok ? tr.text("vetting.crmOnlyCreated") : null;
+  const boundSetTrade = setTradeAction.bind(null, accountId);
   const requiredDocumentCategories = cleanRequiredCategories(account.required_document_categories);
   if (requiredDocumentCategories === null) {
     console.error(`settings: account ${accountId} has an invalid required_document_categories value`);
@@ -153,6 +171,25 @@ export default async function CrmSettingsPage({
         }
       />
       <div className="space-y-6 p-6">
+        {/* S-53: the company's trade. Its own card, own action, own toast (rule 8's settings-card
+            amendment); reads in the operator's own language like the Language field below. */}
+        <TradeCard
+          setup={{
+            groups: tradeOptionGroups(locale, pseudo), locale,
+            copy: {
+              label: tr.text("vetting.trade.label"), placeholder: tr.text("vetting.trade.placeholder"),
+              hint: tr.text("vetting.trade.hint"), otherLabel: tr.text("vetting.other.label"), otherHint: tr.text("vetting.other.hint"),
+            },
+          }}
+          copy={{
+            label: tr.text("vetting.trade.label"), placeholder: tr.text("vetting.trade.placeholder"),
+            hint: tr.text("vetting.trade.hint"), otherLabel: tr.text("vetting.other.label"), otherHint: tr.text("vetting.other.hint"),
+            title: tr.text("vetting.trade.label"), description: tr.text("vetting.card.description"), status: tradeStatus,
+            save: tr.text("common.save"), saved: tr.text("vetting.saved"), crashed: tr.text("common.actionCrashed"),
+          }}
+          current={currentTrade}
+          action={boundSetTrade}
+        />
         {/* Spanish-runtime Task 5 (owner decision 4, 2026-10-10): the one
             Language field, its own self-contained card so the parallel
             staff-and-roles lane's edits to the Suspense block below (swapping
