@@ -106,7 +106,7 @@ const captured = vi.hoisted(() => ({
     timezone?: string | null; storedHours?: unknown; calendar?: { ok: true; hours: unknown } | { ok: false };
     insurance?: boolean; services?: { ok: true; rows: unknown[] } | { ok: false };
     hasHours?: boolean; hasPriceList?: boolean;
-    vettingLock?: { text: string; link: { href: string; label: string } | null } | null;
+    vettingLock?: { text: string; link: { href: string; label: string } | null; locale: "en" | "es" } | null;
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -392,16 +392,26 @@ describe("voice settings page — the trade gate (S-53)", () => {
     expect(captured.props!.vettingLock).toBeNull();
     serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
     await render();
-    expect(captured.props!.vettingLock).toEqual({ text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null });
+    expect(captured.props!.vettingLock).toEqual({ text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null, locale: "en" });
     serviceDbMock.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
     await render();
     expect(captured.props!.vettingLock).toEqual({
       text: m["vetting.sofia.noTrade"], link: { href: "/dashboard/accounts/a1/settings#trade", label: m["vetting.sofia.noTradeLink"] },
+      locale: "en",
     });
     serviceDbMock.getAccountTrade.mockRejectedValue(new Error("down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await render();
     errSpy.mockRestore();
-    expect(captured.props!.vettingLock).toEqual({ text: m["vetting.readFailed"], link: null });
+    expect(captured.props!.vettingLock).toEqual({ text: m["vetting.readFailed"], link: null, locale: "en" });
+  });
+
+  it("the lock says which language it is in: the operator's own (design check I3; mutation: hard-code en -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    await render();
+    expect(captured.props!.vettingLock).toEqual({
+      text: "Sofía y el chat del sitio web aún no están disponibles para el giro restaurante.", link: null, locale: "es",
+    });
   });
 });

@@ -27,6 +27,7 @@ import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import { switchesSofiaOn } from "@/lib/vetting/sofia-state";
+import { t } from "@/lib/i18n/t";
 import type { ActionResult, EnableConciergeResult } from "./actions";
 import { BusinessHoursCard, type CalendarRead } from "./business-hours-card";
 import { ServicesPricesCard } from "./services-prices-card";
@@ -76,12 +77,13 @@ export type TradeRulesCopy = {
   options: Array<{ value: "none" | "insurance_pc" | "events"; label: string; hint: string }>;
 };
 
-/** S-53: why an on-switch is locked; `link` only when the fix is on Settings (no trade). */
-export type VettingLock = { text: string; link: { href: string; label: string } | null };
+/** S-53: why an on-switch is locked; `link` only when the fix is on Settings (no trade). `locale` is the
+ *  language `text` and the link are written in (the operator's own), which the page around them may not be. */
+export type VettingLock = { text: string; link: { href: string; label: string } | null; locale: "en" | "es" };
 
 function VettingLockReason({ id, lock }: { id: string; lock: VettingLock }) {
   return (
-    <p id={id} className="text-xs text-muted-foreground">
+    <p id={id} lang={lock.locale} className="text-xs text-muted-foreground">
       {lock.text}
       {lock.link ? <>{" "}<Link className="underline" href={lock.link.href}>{lock.link.label}</Link></> : null}
     </p>
@@ -701,6 +703,17 @@ export function conciergeSnippetPublicId(
  * Ghost actions throughout (DESIGN.md rule 8) — `VoiceProfileForm`'s Save
  * button above is this page's one primary button.
  */
+/**
+ * The toast options after the web chat is turned OFF. Its Undo is a re-enable, which the trade gate refuses
+ * whenever the page carries a vetting lock, so under a lock there is no Undo to offer (final review M6):
+ * an Undo that can only fail is worse than none. Without a lock it is the usual Undo.
+ */
+export function conciergeDisabledToast(
+  vettingLock: VettingLock | null, undo: () => void,
+): { action?: { label: string; onClick: () => void } } {
+  return vettingLock === null ? { action: { label: m["common.undo"], onClick: undo } } : {};
+}
+
 export function ConciergeCard({
   accountId, profile, publishedForms, origin,
   enableAction, disableAction,
@@ -763,18 +776,13 @@ export function ConciergeCard({
       const result = await disableAction();
       if (!result.ok) { toast.error(result.error); return; }
       setOptimisticPublicId(null);
-      toast.success(m["voice.assistant.disabledToast"], {
-        action: {
-          label: m["common.undo"],
-          onClick: () => startTransition(async () => {
-            // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
-            // Undo is "re-enable", not a bypass of the same rule.
-            const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
-            if (!r.ok) { toast.error(r.error); return; }
-            setOptimisticPublicId(r.publicId);
-          }),
-        },
-      });
+      toast.success(m["voice.assistant.disabledToast"], conciergeDisabledToast(vettingLock, () => startTransition(async () => {
+        // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
+        // Undo is "re-enable", not a bypass of the same rule.
+        const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
+        if (!r.ok) { toast.error(r.error); return; }
+        setOptimisticPublicId(r.publicId);
+      })));
     });
   }
 
@@ -1086,14 +1094,21 @@ function NumberStatusSelect({
     });
   }
 
+  // S-53 (design check M1): a locked status is said in words, not opacity alone - the option carries
+  // "not available" in the lock's language, and the trigger points at the reason under the list.
+  const locked = new Set(STATUS_VALUES.filter((v) => numberStatusLocked(vettingLock, profile, numbers, phoneNumber.id, v)));
   return (
     <Select value={phoneNumber.status} onValueChange={run} disabled={pending}>
-      <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+      <SelectTrigger className="w-36" aria-describedby={locked.size > 0 ? "number-vetting-reason" : undefined}>
+        <SelectValue />
+      </SelectTrigger>
       <SelectContent>
         {STATUS_VALUES.map((v) => (
-          <SelectItem key={v} value={v}
-            disabled={numberStatusLocked(vettingLock, profile, numbers, phoneNumber.id, v)}>
+          <SelectItem key={v} value={v} disabled={locked.has(v)}>
             {NUMBER_STATUS_LABEL[v]}
+            {locked.has(v) && vettingLock
+              ? <span lang={vettingLock.locale}>{" — "}{t(m, "vetting.numberStatusLocked", vettingLock.locale)}</span>
+              : null}
           </SelectItem>
         ))}
       </SelectContent>

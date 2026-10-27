@@ -194,14 +194,16 @@ export default async function VoicePage({
   // allows Sofía. "No trade" links to the Settings Trade card (spec 5.3, plan review M6). A failed read
   // locks too (the actions fail closed the same way); switches already on stay usable as off switches.
   const tradeGate = storedTrade === undefined ? null : sofiaGate(storedTrade);
+  // `locale`: the sentence is the operator's language, which VettingLockReason states as `lang` (design check I3).
   const vettingLock: VettingLock | null = storedTrade === undefined
-    ? { text: tr.text("vetting.readFailed"), link: null }
+    ? { text: tr.text("vetting.readFailed"), link: null, locale }
     : tradeGate && !tradeGate.ok
       ? {
         text: sofiaGateText(tradeGate, locale, pseudo),
         link: tradeGate.reason === "no_trade"
           ? { href: `/dashboard/accounts/${accountId}/settings#trade`, label: tr.text("vetting.sofia.noTradeLink") }
           : null,
+        locale,
       }
       : null;
   const persona = profile?.persona_name?.trim() || "Sofía";
