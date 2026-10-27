@@ -19,7 +19,7 @@ The UI shows the same reasons: a grouped Trade picker, a Trade card on Settings,
 
 - V1 (verbatim): "**Enforced.** Add company requires a trade; turned-away and held trades cannot be created; CRM-only trades are created but Sofía and the web chat cannot be switched on."
 - V2: "**Other, with a required one-line description**, kept on the company." The description is at most 120 characters (spec §5.1).
-- V3: "**None.**" (no in-app override). "A verdict changes only by a dated decision plus a code change and migration."
+- V3: "**None.**" (no in-app override). "A verdict changes only by a dated decision plus a code change and migration." When that happens, the migration parity tests (`apps/web/src/lib/vetting/trades.test.ts`, `packages/db/src/test/account-trade-schema.test.ts`) move to read whichever migration most recently defines `accounts_trade_check`, not 0101 by name, since 0101 stays as applied and a later migration supersedes it.
 - V4: "a `trade` on each company; verdicts in one code module; the database accepts only creatable trades."
 - Creatable trades = every `allowed` and `crm_only` key, including `other`. That is exactly 21 keys. The other 9 keys are held (7) or turned away (2).
 - Spec §5.3: "Anything already on stays on; turning off is never blocked."

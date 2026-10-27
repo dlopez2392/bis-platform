@@ -1343,8 +1343,8 @@ module exist (decision 15, as this plan reads it, and decision 34; §5.14).
 | ↳ F-084 | the switch, closures in the slot engine, the prompt line, the owner grant | | (in S-47) 2 |
 | ↳ F-116 (part) | the verification ladder by pack risk | | (in S-47) 1 |
 | ↳ F-174 (part) | insurance property-and-casualty (P&C) and events modules, 20–30 corpus items each, run by hand until F-021's harness exists | | (in S-47) 3–4 |
-| S-53 | Tenant vetting | 0.5–1 | 1–1.5 |
-| ↳ F-173 (part) | the vetting slice (it is S-53, re-costed) | | (is S-53) |
+| S-53 | Tenant vetting — **shipped** (#<n>, migration 0101) | 0.5–1 | 1–1.5 |
+| ↳ F-173 (part) | the vetting slice (it is S-53, re-costed) — shipped with S-53 (#<n>) | | (is S-53) |
 | S-27 | Verification preparation (Google branding, Microsoft publisher) | 1 | 1 |
 | S-28 | Google and Microsoft sign-in | 0.5–1 | 0.5–1 |
 | F-124 (part) | the Opinion 680/705 sheet and the subprocessor list | — | 1 |
@@ -2361,7 +2361,7 @@ English "Sales" pipeline for everyone and blueprints that apply only at creation
 |---|---|---|---|---|
 | F-171 | Pack manifest: the blueprint grows into a bilingual industry pack | A blueprint that carries bilingual labels, statutory text and guardrails for one trade | M (4–5 beyond S-38)* | later |
 | F-172 | Starter packs first, plus the five blueprint fixes | Home services, insurance and events starters in the trade's own words, and four of the five blueprint fixes (the archived-form fix ships now, §2.3) | M (2–3)* | later |
-| F-173 | Onboarding picks the pack and vets the tenant | Onboarding records the trade, turns away out-of-scope trades and checks licences | M (4–5, with S-53) | now → later |
+| F-173 | Onboarding picks the pack and vets the tenant | Onboarding records the trade, turns away out-of-scope trades and checks licences. The vetting slice shipped as S-53 (#<n>): a trade on every company, held and turned-away trades refused, CRM-only trades kept off Sofía and the web chat. Pack picking and licence checks remain. | M (4–5, with S-53) | now → later |
 | F-174 | Sofía industry modules | Sofía knows each trade's rules: no binding coverage, no legal advice, no final diagnosis for a trade; the child-care lines ship inside F-185 and the allergen rule inside F-199 | M (5–6)* | now → next |
 | F-175 | Intake schemas: a pack-shaped intake that opens a deal through one proposal | A trade-shaped intake that opens a deal through one proposal | M (3–4) | next → later |
 | F-176 | Packs with versions and approved updates | Pack updates that reach live clients with approval | L (8–10) | future |
@@ -2422,11 +2422,14 @@ its businesses may buy the core CRM, and Sofía on a higher plan, as any small b
   "stores no tax documents"; the owner may instead pull S-61's switch forward and admit them
   CRM-only sooner.
 
-Voice is agency-only and only the agency adds companies today, so these holds need no code until
-S-53's vetting enforces them. A centre keeps the child's file in its own system; BIS stores no date
-of birth, allergy or health field until F-004 enforces restriction, and what a parent says on a call
-stays only in that call's transcript (§3.2 rules 3 and 14). Freight is a pilot after the vault;
-studios are a pilot in 2029–2030, later than the study's months 9–12 (decision 34).
+S-53's vetting enforces these holds (#<n>, migration 0101): Add company requires a trade, refuses
+held and turned-away trades with their reason, and a CRM-only trade cannot switch Sofía or the web
+chat on. The verdicts live in apps/web/src/lib/vetting/trades.ts, and one changes only by a dated
+owner decision plus a code change and a migration. A centre keeps the child's file in its own
+system; BIS stores no date of birth, allergy or health field until F-004 enforces restriction, and
+what a parent says on a call stays only in that call's transcript (§3.2 rules 3 and 14). Freight is
+a pilot after the vault; studios are a pilot in 2029–2030, later than the study's months 9–12
+(decision 34).
 
 **Design notes.**
 - Packs choose the record's cards, nouns and default views through the card registry and the
@@ -3709,7 +3712,7 @@ exactly once.
 | F-170 | Is this reviewer a customer? Review authenticity | Agentic | S–M (1.5–2) | future | 2 | 3 | 3 |  | Future |
 | F-171 | Pack manifest: the blueprint grows into a bilingual industry pack | Packs | M (4–5 beyond S-38)* | later | 4 | 3 · med | 4 |  | Later |
 | F-172 | Starter packs first, plus the five blueprint fixes | Packs | M (2–3)* | later | 4 | 5 | 3 | **major** | Later (home services, insurance and events starters first; no restricted fields; the archived-form fix ships now in §2.3) |
-| F-173 | Onboarding picks the pack and vets the tenant | Packs | M (4–5, with S-53) | now → later | 4 | 4 | 3 | minor | Parallel work (S-53); split: pack picking Later |
+| F-173 | Onboarding picks the pack and vets the tenant | Packs | M (4–5, with S-53) | now → later | 4 | 4 | 3 | minor | Parallel work (S-53, shipped #<n>); split: pack picking Later |
 | F-174 | Sofía industry modules | Packs | M (5–6)* | now → next | 5 | 4 · med | **5** |  | Parallel work (S-47); split: law and home-services modules Next; the child-care module inside F-185 and the catering lines inside F-199, both Later |
 | F-175 | Intake schemas: a pack-shaped intake that opens a deal through one proposal | Packs | M (3–4) | next → later | 4 | 4 · low | 3 | **major** | Next; split: law and child-care schemas Later |
 | F-176 | Packs with versions and approved updates | Packs | L (8–10) | future | 2 | 3 | 3 |  | Future |
@@ -3801,7 +3804,7 @@ item. In this appendix, § references are to the study.
 | S-50 | Multi-payer schedules with cash | New segments | 2–3 | No | F-059, F-061 |
 | S-51 | Contract template library | New segments | 1–2 | No | F-057, F-187 |
 | S-52 | Consent-ledger additions | New segments | 1 | No (the Spanish opt-out keywords are configuration, due this week) | F-065, F-066, F-133 |
-| S-53 | Tenant vetting | New segments | 0.5–1 | No (§11.3 step 1; this plan runs it with the parallel work) | F-039, F-088, F-099, F-131, F-139, F-173 |
+| S-53 | Tenant vetting | New segments | 0.5–1 | No (§11.3 step 1; this plan runs it with the parallel work) Shipped #<n>. | F-039, F-088, F-099, F-131, F-139, F-173 |
 | S-54 | Events pack | New segments | 2–3 | No | F-166, F-183, F-184 |
 | S-55 | Law pack | New segments | 2–3 | No | F-124, F-181, F-189 |
 | S-56 | Insurance pack | New segments | 2–3 | No | F-182, F-189 |

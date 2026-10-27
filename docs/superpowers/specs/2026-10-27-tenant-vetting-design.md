@@ -75,9 +75,12 @@ owner flips it to `allowed` (CRM) when that sheet is done (V3: a code change and
 - `accounts.trade_other text` — the description for `other`.
 - `check (trade is null or trade in (<creatable keys>))` — held and turned-away keys are rejected by the
   database itself.
-- `check (trade is distinct from 'other' or length(btrim(trade_other)) between 1 and 120)` — Other needs
-  a description;
-- `check (trade_other is null or trade = 'other')` — a description exists only for Other.
+- `check (trade is distinct from 'other' or (trade_other is not null and btrim(trade_other) <> '' and
+  length(trade_other) <= 120))` — Other needs a description; written with an explicit "is not null"
+  because a CHECK that evaluates to NULL passes, so the shorter form would admit `('other', NULL)`.
+- `check (trade_other is null or trade is not distinct from 'other')` — a description exists only for
+  Other; written with "is not distinct from", not "=", because with `trade` NULL the shorter form
+  would admit `(NULL, 'desc')`.
 - Writes stay server-only: the agency's actions write through the service client; a client session's
   grants on `accounts` must not gain `trade` / `trade_other` (pin in the grants suite; digest unchanged
   if accounts' client UPDATE is already column-limited, otherwise state the exact grant).
@@ -85,7 +88,9 @@ owner flips it to `allowed` (CRM) when that sheet is done (V3: a code change and
   safe under the running build.
 
 A unit test reads the migration's check list and asserts it equals the module's creatable keys, so the
-code list and the database cannot drift.
+code list and the database cannot drift. When a verdict changes (§2 V3), that test and its database
+counterpart both move to read whichever migration most recently defines `accounts_trade_check`, not
+0101 by name, because a migration already applied is never edited, only superseded by a new one.
 
 ## 5. Behaviour
 
