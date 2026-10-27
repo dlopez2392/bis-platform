@@ -11,6 +11,8 @@ import { renderedText } from "@/lib/rendered-text";
  * screen and simply never used to render the row's own date.
  */
 vi.mock("@/lib/auth", () => ({ requireAgency: async () => ({ userId: "user_agency" }) }));
+// S-53: see page.test.ts's comment — the trade field's locale read is stubbed here too.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 // A mutable mock (`vi.hoisted`, not a bare async literal) so the unusable-
 // zone test below can swap in its own row without disturbing the first
 // test's fixture — same reason contacts/page.test.ts's own `accountRead`

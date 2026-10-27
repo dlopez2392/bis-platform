@@ -14,6 +14,11 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
 import { orphanedOrgs, type ClerkOrgSummary } from "@/lib/accounts/orphans";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { makeTr } from "@/lib/record/copy";
+import { tradeOptionGroups } from "@/lib/vetting/copy";
+import type { TradeSetup } from "@/components/vetting/trade-fields";
 
 /**
  * Clerk organizations, or `null` when Clerk cannot be reached.
@@ -41,26 +46,45 @@ async function fetchClerkOrgs(): Promise<ClerkOrgSummary[] | null> {
 
 export const dynamic = "force-dynamic";
 
-export default async function AccountsPage() {
+export default async function AccountsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ locale?: string }>;
+} = {}) {
   // Agency-only: every client company's name, status, and creation date. The
   // parent layout admits clients into the /dashboard tree, so this leaf must
   // guard itself rather than rely solely on that shared choke point.
   await requireAgency();
-  const [accounts, blueprints, clerkOrgs] = await Promise.all([
+  const [accounts, blueprints, clerkOrgs, prefs] = await Promise.all([
     listAccounts(serviceDb()),
     listBlueprints(serviceDb()),
     fetchClerkOrgs(),
+    getPersonPrefs(),
   ]);
   // A company exists in two places. When only the Clerk half was made — from
   // the Clerk dashboard rather than through Add company — invitations send and
   // sign-in fails, and the client finds out before the agency does.
   const orphans = clerkOrgs === null ? [] : orphanedOrgs(clerkOrgs, accounts);
+  // S-53: the trade field reads in the operator's own language (decision 1: their users.language wins;
+  // operators default to English); ?locale= is the QA override only.
+  const { locale: localeParam } = (await searchParams) ?? {};
+  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
+  const trade: TradeSetup = {
+    groups: tradeOptionGroups(locale, pseudo),
+    copy: {
+      label: tr.text("vetting.trade.label"), placeholder: tr.text("vetting.trade.placeholder"),
+      hint: tr.text("vetting.trade.hint"), otherLabel: tr.text("vetting.other.label"), otherHint: tr.text("vetting.other.hint"),
+    },
+    locale,
+  };
   return (
     <>
       <PageHeader
         title={m["accounts.title"]}
         count={`${accounts.length}`}
-        actions={<CreateAccountDialog action={createClientAccount} blueprints={blueprints} />}
+        actions={<CreateAccountDialog action={createClientAccount} blueprints={blueprints} trade={trade} />}
       />
       <div className="p-6">
         {clerkOrgs === null && (
@@ -131,7 +155,7 @@ export default async function AccountsPage() {
                       </Badge>
                       {/* D-087: adopt THIS organisation. The old remedy sent
                           the agency to Add company, which made a second one. */}
-                      <AdoptOrgDialog orgName={o.name} action={adoptOrphanOrgAction.bind(null, o.id)} />
+                      <AdoptOrgDialog orgName={o.name} action={adoptOrphanOrgAction.bind(null, o.id)} trade={trade} />
                     </li>
                   ))}
                 </ul>

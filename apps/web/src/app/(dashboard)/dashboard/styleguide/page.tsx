@@ -83,6 +83,7 @@ import { EmbedSnippet } from "@/components/embed-snippet";
 import "@/app/c/[publicId]/concierge.css";
 import { m, type MessageKey } from "@/lib/messages";
 import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
+import { TradePickerDemo } from "./trade-picker-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -293,6 +294,12 @@ export default async function StyleguidePage({
 
         <Section title={t(m, "styleguide.choiceTiles", "en")} file="components/choice-tiles.tsx">
           <ChoiceTilesDemo />
+        </Section>
+
+        {/* S-53 tenant vetting: the grouped Trade Select, shared by Add company,
+            Add as a company and the Settings Trade card. */}
+        <Section title={t(m, "vetting.trade.label", "en")} file="components/vetting/{trade-picker,trade-fields}.tsx">
+          <TradePickerDemo />
         </Section>
 
         {/* F-085 part 1 (spec §9): the "Assigned to" inline pick, editable and
