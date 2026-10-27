@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { headers } from "next/headers";
 import {
   serviceDb, getVoiceProfile, getBranding, getTransferPhone, listForms,
-  readAccountTimezone, listVoiceServices, getCalendarForAccount,
+  readAccountTimezone, listVoiceServices, getCalendarForAccount, getAccountTrade,
   type PhoneNumberRow, type DisclosureSetting, type VoiceServiceRow,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
@@ -16,7 +16,9 @@ import { m, type MessageKey } from "@/lib/messages";
 import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
 import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
 import { hasOpenDay } from "@/lib/voice/knowledge/hours";
-import { VoiceSettings, type DisclosureCopy, type TradeRulesCopy } from "./voice-settings";
+import { sofiaGate } from "@/lib/vetting/trades";
+import { sofiaGateText } from "@/lib/vetting/copy";
+import { VoiceSettings, type DisclosureCopy, type TradeRulesCopy, type VettingLock } from "./voice-settings";
 import { DisclosureResultsCard, DisclosureResultsSkeleton } from "./disclosure-results-card";
 import type { CalendarRead } from "./business-hours-card";
 import {
@@ -81,7 +83,7 @@ export default async function VoicePage({
   const db = serviceDb();
   const [
     profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h, prefs,
-    timezone, servicesRead, calendar,
+    timezone, servicesRead, calendar, storedTrade,
   ] =
     await Promise.all([
       getVoiceProfile(db, accountId),
@@ -156,6 +158,16 @@ export default async function VoicePage({
           return { ok: false };
         },
       ),
+      // S-53 (spec 5.3): the trade gate every Sofía/web-chat on-switch below is locked by. `undefined`
+      // (never a guessed trade) on a failed read, so the page locks closed rather than painting a switch
+      // that looks live while the trade read is actually down.
+      getAccountTrade(db, accountId).then(
+        (r) => r.trade,
+        (e: unknown) => {
+          console.error(`voice: trade read failed for account ${accountId}: ${String(e)}`);
+          return undefined;
+        },
+      ),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
@@ -178,6 +190,20 @@ export default async function VoicePage({
   const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
   const pseudo = requestPseudoMode({ locale: localeParam });
   const tr = makeTr(locale, pseudo);
+  // S-53 (spec 5.3): the on-switches below are locked, with this sentence beside them, unless the trade
+  // allows Sofía. "No trade" links to the Settings Trade card (spec 5.3, plan review M6). A failed read
+  // locks too (the actions fail closed the same way); switches already on stay usable as off switches.
+  const tradeGate = storedTrade === undefined ? null : sofiaGate(storedTrade);
+  const vettingLock: VettingLock | null = storedTrade === undefined
+    ? { text: tr.text("vetting.readFailed"), link: null }
+    : tradeGate && !tradeGate.ok
+      ? {
+        text: sofiaGateText(tradeGate, locale, pseudo),
+        link: tradeGate.reason === "no_trade"
+          ? { href: `/dashboard/accounts/${accountId}/settings#trade`, label: tr.text("vetting.sofia.noTradeLink") }
+          : null,
+      }
+      : null;
   const persona = profile?.persona_name?.trim() || "Sofía";
   // S-47c (Task 8, spec 5.7): the Business hours / Services & prices cards and the Facts flags all
   // read the SAME `locale`/`pseudo`/`persona` as the disclosure/trade-rules copy above — one voice
@@ -263,6 +289,7 @@ export default async function VoicePage({
           hasPriceList={hasPriceList}
           saveBusinessHoursAction={boundSaveBusinessHours}
           saveServicesAction={boundSaveServices}
+          vettingLock={vettingLock}
         />
       </div>
     </>

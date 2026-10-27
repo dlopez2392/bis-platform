@@ -101,11 +101,12 @@ export async function gatherSetupInputs(
     // degrades `brandName`/`fromEmail`, and `deriveSetupStatus` treats that
     // `null` identically to an unbilled account's own `{}` (full plan,
     // never a silently shortened one) — see that function's own comment.
-    db.from("accounts").select("brand_name, from_email, permissions").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("brand_name, from_email, permissions, trade").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`gatherSetupInputs: account lookup failed: ${error.message}`);
         return data as {
           brand_name: string | null; from_email: string | null; permissions: SetupPermissions | null;
+          trade: string | null;
         } | null;
       }),
     getCalendarForAccount(db, accountId),
@@ -189,6 +190,7 @@ export async function gatherSetupInputs(
     publishedFormCount,
     conciergeSiteConversation: conversationsR.status === "fulfilled" ? conversationsR.value : false,
     permissions: account?.permissions ?? null,
+    trade: account?.trade ?? null,
   };
 
   return { inputs, numbers, failed };

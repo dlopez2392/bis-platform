@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { VoiceProfileRow } from "@bis/db";
+import type { VoiceProfileRow, PhoneNumberRow } from "@bis/db";
 import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
   conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
-  type DisclosureCopy, type TradeRulesCopy,
+  numberStatusLocked,
+  type DisclosureCopy, type TradeRulesCopy, type VettingLock,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { isVoiceProfileDone } from "@/lib/setup/setup-status";
@@ -427,6 +428,8 @@ describe("ConciergeCard — the render proof", () => {
     publicId?: string | null;
     facts?: string;
     languages?: VoiceProfileRow["languages"];
+    /** S-53: null (the default) means no other lock in this file's own faces. */
+    vettingLock?: VettingLock | null;
   }) {
     const profile: VoiceProfileRow = {
       ...BASE_PROFILE, concierge_enabled: opts.enabled, concierge_form_id: opts.storedFormId,
@@ -441,6 +444,7 @@ describe("ConciergeCard — the render proof", () => {
       createElement(ConciergeCard, {
         accountId: "a1", profile, publishedForms: opts.publishedForms,
         origin: "https://app.example.com", enableAction, disableAction,
+        vettingLock: opts.vettingLock ?? null,
       }),
     );
     expect(enableAction).not.toHaveBeenCalled();
@@ -594,6 +598,23 @@ describe("ConciergeCard — the render proof", () => {
       publishedForms: [{ id: "A", name: "Contact us" }, { id: "B", name: "Other" }],
     });
     expect(renderedText(html)).not.toContain("data-concierge=");
+  });
+
+  it("S-53: with a ready profile and a published selected form, the vetting lock alone disables the off toggle and its sentence describes it (mutation: ignore vettingLock -> FAILS)", () => {
+    const ready = { enabled: false, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }] };
+    const unlocked = renderCard(ready);
+    expect(unlocked).not.toMatch(DISABLED_CHECKBOX);      // positive control: nothing else locks it
+    const LOCK = { text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null };
+    const locked = renderCard({ ...ready, vettingLock: LOCK });
+    expect(locked).toMatch(DISABLED_CHECKBOX);
+    expect(locked).toContain('id="concierge-toggle-reason"');
+    expect(renderedText(locked)).toContain(LOCK.text);
+  });
+
+  it("S-53: an ON chat keeps its toggle (it is the off switch) whatever the lock says", () => {
+    const html = renderCard({ enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }],
+      vettingLock: { text: "x", link: null } });
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
   });
 });
 
@@ -996,5 +1017,21 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
     // The Spanish phrase, not the English placeholder's brand mention —
     // `defaultTextbackBody(brandName, "es")`'s own wording.
     expect(html).toContain("somos Rio Roofing");
+  });
+});
+
+describe("numberStatusLocked (S-53: the server's switch-on rule, same function)", () => {
+  const LOCK: VettingLock = { text: "x", link: null };
+  const n = (id: string, status: PhoneNumberRow["status"]) => ({ id, status });
+  it("hole A in the UI: live -> testing is locked while the profile is disabled", () => {
+    expect(numberStatusLocked(LOCK, { enabled: false, concierge_enabled: false }, [n("p", "live")], "p", "testing")).toBe(true);
+  });
+  it("provisioned -> testing/live with a profile is locked; testing -> live is not; nothing is locked with no lock", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(true);
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "testing")], "p", "live")).toBe(false);
+    expect(numberStatusLocked(null, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(false);
+  });
+  it("provisioned and released are never locked", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "live")], "p", "provisioned")).toBe(false);
   });
 });
