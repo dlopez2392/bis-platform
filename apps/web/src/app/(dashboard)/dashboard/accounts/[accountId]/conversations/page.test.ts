@@ -192,3 +192,32 @@ describe("ConversationsPage's mobile layout (D-021)", () => {
     expect(markup.replace(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/, "")).not.toContain('href="/dashboard/accounts/acct1/conversations"');
   });
 });
+
+// F-085 follow-up (Task B): the title, the pickThread empty state and
+// (on a zero-row account) the "no conversations yet" empty state all read
+// the reader's own language, with `lang` on the wrapper — the QA override
+// is the same mechanism tasks/page.test.ts's own Spanish test already proves.
+describe("ConversationsPage in Spanish (requestLocale; F-085 follow-up, Task B)", () => {
+  async function renderEs(searchParams: Record<string, string> = {}) {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const html = (await ConversationsPage({
+        params: Promise.resolve({ accountId: "acct1" }),
+        searchParams: Promise.resolve({ locale: "es", ...searchParams }),
+      })) as React.ReactElement;
+      return renderToStaticMarkup(html);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it("the title and the pickThread pane read Spanish, with lang set (mutation: wrap the page in no LocaleProvider, or leave conversation-list.tsx reading a bare m[...] -> FAILS)", async () => {
+    const { m } = await import("@/lib/messages");
+    const markup = await renderEs();
+    expect(markup).toMatch(/<div lang="es"/);
+    expect(markup).toContain(`>${m["nav.conversations.es"]}<`);
+    expect(markup).toContain(m["conversations.pickThread.es"]);
+  });
+});

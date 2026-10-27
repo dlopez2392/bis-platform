@@ -38,19 +38,20 @@ export async function applyBulkTag(
   accountId: string,
   ids: string[],
   name: string,
+  locale: Locale = "en",
 ): Promise<
   | { ok: true; applied: number; undo: () => Promise<{ ok: true } | { ok: false; error: string }> }
   | { ok: false; error: string }
 > {
   const r = await bulkAddTagAction(accountId, ids, name).catch(
-    () => ({ ok: false as const, error: m["inline.crashed"] }));
+    () => ({ ok: false as const, error: t(m, "inline.crashed", locale) }));
   if (!r.ok) return r;
   return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId) };
 }
 
 /** The "Assign to…" menu (F-085, spec §9): Unassigned first, then each person by name, the field's own order. */
-export function bulkAssignChoices(members: { userId: string; label: string }[]): { assignee: string | null; label: string }[] {
-  return [{ assignee: null, label: m["assign.unassigned"] }, ...members.map((p) => ({ assignee: p.userId, label: p.label }))];
+export function bulkAssignChoices(members: { userId: string; label: string }[], locale: Locale = "en"): { assignee: string | null; label: string }[] {
+  return [{ assignee: null, label: t(m, "assign.unassigned", locale) }, ...members.map((p) => ({ assignee: p.userId, label: p.label }))];
 }
 
 /**
@@ -64,30 +65,33 @@ export function bulkAssignChoices(members: { userId: string; label: string }[]):
  */
 export async function assignSelected(
   accountId: string, ids: string[], assignee: string | null, name: string, onDone: () => void,
+  // F-085 follow-up (Task B): the reader's own language, now that the
+  // contacts list resolves one (requestLocale) — defaults to "en" so a
+  // caller that hasn't been updated yet keeps today's behaviour.
+  locale: Locale = "en",
 ): Promise<void> {
   let r: Awaited<ReturnType<typeof assignContactsAction>>;
   try {
     r = await assignContactsAction(accountId, ids, assignee);
   } catch {
-    toast.error(m["assign.failed"]);
+    toast.error(t(m, "assign.failed", locale));
     return;
   }
-  if (!r.ok) { toast.error(m[r.error]); return; }
+  if (!r.ok) { toast.error(t(m, r.error, locale)); return; }
   onDone();
-  // plural() picks the One twin by the locale's own rule. These screens
-  // speak English today (m, not the request locale); the .es twins are in.
+  // plural() picks the One twin by the locale's own rule.
   const message = assignee === null
-    ? plural(m, "assign.bulkUnassigned", ids.length, "en", { count: ids.length })
-    : plural(m, "assign.bulkDone", ids.length, "en", { count: ids.length, name });
+    ? plural(m, "assign.bulkUnassigned", ids.length, locale, { count: ids.length })
+    : plural(m, "assign.bulkDone", ids.length, locale, { count: ids.length, name });
   const previous = r.previous;
   if (previous.length === 0) { toast.success(message); return; }
   toast.success(message, {
     duration: ASSIGN_TOAST_MS,
     action: {
-      label: m["assign.undo"],
+      label: t(m, "assign.undo", locale),
       onClick: () => void undoAssignContactsAction(accountId, previous)
-        .then((u) => { if (!u.ok) toast.error(m[u.error]); })
-        .catch(() => toast.error(m["assign.failed"])),
+        .then((u) => { if (!u.ok) toast.error(t(m, u.error, locale)); })
+        .catch(() => toast.error(t(m, "assign.failed", locale))),
     },
   });
 }
@@ -142,8 +146,11 @@ type DeleteResult =Awaited<ReturnType<typeof bulkDeleteContactsAction>>;
 /**
  * What a bulk delete says afterwards. A failure after the files were already removed says exactly
  * that (contacts.delete.filesGoneKept), in the reader's language; customers kept because their files
- * could not all be removed are named after the success line (owner ruling 2026-10-13). The success
- * line itself is the bar's existing English copy, unchanged.
+ * could not all be removed are named after the success line. Those two file lines exist because of
+ * the owner ruling of 2026-10-13 (a customer's files go with them, and the screen says how many); that
+ * ruling said nothing about the success line's language. S-07 left the success line in the bar's
+ * English only because translating the bar was outside its scope; the F-085 follow-up translated it
+ * with the rest of the bar, through plural()/t() like every other toast this bar fires.
  */
 export function announceDeleteResult(r: DeleteResult, locale: Locale): void {
   if (!r.ok) {
@@ -152,14 +159,10 @@ export function announceDeleteResult(r: DeleteResult, locale: Locale): void {
   }
   toast.success(
     r.skippedBlocked === 0
-      ? r.deleted === 1
-        ? m["bulk.deletedOne"]
-        : m["bulk.deleted"].replace("{count}", String(r.deleted))
+      ? plural(m, "bulk.deleted", r.deleted, locale, { count: r.deleted })
       // No plural noun in this string ("Deleted N · skipped N linked to
       // ..."), so it reads fine at any count — no singular form needed.
-      : m["bulk.deletedSkipped"]
-          .replace("{count}", String(r.deleted))
-          .replace("{skipped}", String(r.skippedBlocked)),
+      : t(m, "bulk.deletedSkipped", locale, { count: r.deleted, skipped: r.skippedBlocked }),
   );
   if (r.skippedFiles > 0) {
     toast.error(t(m, "contacts.delete.keptFiles", locale, { count: r.deleted, kept: r.skippedFiles }));
@@ -193,22 +196,22 @@ export function BulkActionBar({
   const count = selectedIds.length;
   if (count === 0) return null;
   const copy = deleteDialogCopy(count, locale);
+  // plural() picks bulk.selectedOne at one: "1 seleccionado", never "1 seleccionados".
+  const selectedText = plural(m, "bulk.selected", count, locale, { count });
 
   async function applyTag(name: string) {
     const ids = [...selectedIds];
-    const r = await applyBulkTag(accountId, ids, name);
+    const r = await applyBulkTag(accountId, ids, name, locale);
     if (!r.ok) { toast.error(r.error); return; }
     onDone();
     toast.success(
-      r.applied === 1
-        ? m["bulk.taggedOne"].replace("{tag}", name)
-        : m["bulk.tagged"].replace("{count}", String(r.applied)).replace("{tag}", name),
+      plural(m, "bulk.tagged", r.applied, locale, { count: r.applied, tag: name }),
       {
         action: {
-          label: m["common.undo"],
+          label: t(m, "common.undo", locale),
           onClick: () => void r.undo()
             .then((u) => { if (!u.ok) toast.error(u.error); })
-            .catch(() => toast.error(m["inline.crashed"])),
+            .catch(() => toast.error(t(m, "inline.crashed", locale))),
         },
       },
     );
@@ -229,7 +232,7 @@ export function BulkActionBar({
     setConfirmOpen(false);
     setTyped("");
     const r = await bulkDeleteContactsAction(accountId, ids).catch(
-      () => ({ ok: false as const, error: m["inline.crashed"] }));
+      () => ({ ok: false as const, error: t(m, "inline.crashed", locale) }));
     if (r.ok) onDone();
     announceDeleteResult(r, locale);
   }
@@ -242,27 +245,30 @@ export function BulkActionBar({
   return (
     <div
       role="toolbar"
-      aria-label={m["bulk.selected"].replace("{count}", String(count))}
-      className="flex items-center gap-3 border-b border-[var(--row-line)] bg-[var(--surface-2)] px-4 py-2"
+      aria-label={selectedText}
+      // Wraps (F-085 follow-ups, design I6): at phone width the actions were wider than the panel,
+      // which clips, so the ones past its edge could not be reached. Each control now takes the next
+      // line when it must; at desktop widths everything still fits on one.
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--row-line)] bg-[var(--surface-2)] px-4 py-2"
       data-testid="bulk-action-bar"
     >
       <span className="text-sm font-medium">
-        {m["bulk.selected"].replace("{count}", String(count))}
+        {selectedText}
       </span>
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline">
             <Tag className="size-3.5" aria-hidden />
-            {m["bulk.addTag"]}
+            {t(m, "bulk.addTag", locale)}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" lang={locale}>
           {existingTags.length > 0 && (
             <>
-              {existingTags.map((t) => (
-                <DropdownMenuItem key={t.id} onSelect={() => void applyTag(t.name)}>
-                  {t.name}
+              {existingTags.map((tag) => (
+                <DropdownMenuItem key={tag.id} onSelect={() => void applyTag(tag.name)}>
+                  {tag.name}
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
@@ -278,7 +284,7 @@ export function BulkActionBar({
             <Input
               value={tagDraft}
               onChange={(e) => setTagDraft(e.target.value)}
-              placeholder={m["contact.addTag"]}
+              placeholder={t(m, "contact.addTag", locale)}
               className="h-7 w-36 text-xs"
             />
           </form>
@@ -290,13 +296,13 @@ export function BulkActionBar({
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="outline">
               <UserRound className="size-3.5" aria-hidden />
-              {m["assign.bulk"]}
+              {t(m, "assign.bulk", locale)}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {bulkAssignChoices(members).map((c) => (
+          <DropdownMenuContent align="start" lang={locale}>
+            {bulkAssignChoices(members, locale).map((c) => (
               <DropdownMenuItem key={c.assignee ?? "none"}
-                onSelect={() => void assignSelected(accountId, [...selectedIds], c.assignee, c.label, onDone)}>
+                onSelect={() => void assignSelected(accountId, [...selectedIds], c.assignee, c.label, onDone, locale)}>
                 {c.label}
               </DropdownMenuItem>
             ))}
@@ -307,18 +313,19 @@ export function BulkActionBar({
       {canDelete ? (
         <Button size="sm" variant="outline" onClick={openConfirm}>
           <Trash2 className="size-3.5" aria-hidden />
-          {m["bulk.delete"]}
+          {t(m, "bulk.delete", locale)}
         </Button>
       ) : null}
 
       <Button size="icon-xs" variant="ghost" className="ml-auto" onClick={onDone}
-        aria-label={m["bulk.clear"]}>
+        aria-label={t(m, "bulk.clear", locale)}>
         <X className="size-3.5" aria-hidden />
       </Button>
 
       {canDelete ? (
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-          <DialogContent>
+          {/* The menus above and this dialog are portaled to the body, outside the list's lang wrapper. */}
+          <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
             <DialogHeader>
               <DialogTitle>{copy.title}</DialogTitle>
               <DialogDescription>

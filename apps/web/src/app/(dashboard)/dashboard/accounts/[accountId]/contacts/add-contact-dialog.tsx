@@ -16,14 +16,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
+import { useLocale } from "@/components/locale-provider";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { CreateContactResult } from "./actions";
 
-function Submit({ pending }: { pending: boolean }) {
+function Submit({ pending, locale }: { pending: boolean; locale: Locale }) {
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? m["common.saving"] : m["common.save"]}
+      {t(m, pending ? "common.saving" : "common.save", locale)}
     </Button>
   );
 }
@@ -40,12 +43,15 @@ export function AddContactDialog({
   // stays open with a plain sentence and a link to the record that already
   // exists, instead of closing silently as if a new contact had been made.
   const [existingContactId, setExistingContactId] = useState<string | null>(null);
+  // F-085 follow-ups: the contacts list's LocaleProvider (requestLocale), the
+  // same context its table and bulk bar read.
+  const locale = useLocale();
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     let result: CreateContactResult;
     try {
       result = await action(formData);
     } catch {
-      toast.error(m["contacts.createFailed"]);
+      toast.error(t(m, "contacts.createFailed", locale));
       return;
     }
     if (result.kind === "invalid") {
@@ -71,12 +77,13 @@ export function AddContactDialog({
       <DialogTrigger asChild>
         <Button>
           <Plus className="size-4" aria-hidden />
-          {m["contacts.add"]}
+          {t(m, "contacts.add", locale)}
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      {/* Portaled to the body, outside the list's own lang wrapper, so it carries lang itself. */}
+      <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
         <DialogHeader>
-          <DialogTitle>{m["contacts.add"]}</DialogTitle>
+          <DialogTitle>{t(m, "contacts.add", locale)}</DialogTitle>
         </DialogHeader>
         <form
           // onSubmit, NOT the `action` prop: on the catch path the dialog
@@ -88,35 +95,35 @@ export function AddContactDialog({
         >
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="firstName">{m["contacts.firstName"]}</Label>
+              <Label htmlFor="firstName">{t(m, "contacts.firstName", locale)}</Label>
               <Input id="firstName" name="firstName" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="lastName">{m["contacts.lastName"]}</Label>
+              <Label htmlFor="lastName">{t(m, "contacts.lastName", locale)}</Label>
               <Input id="lastName" name="lastName" />
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">{m["contacts.email"]}</Label>
+            <Label htmlFor="email">{t(m, "contacts.email", locale)}</Label>
             <Input id="email" name="email" type="email" />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">{m["contacts.phone"]}</Label>
+            <Label htmlFor="phone">{t(m, "contacts.phone", locale)}</Label>
             <Input id="phone" name="phone" />
           </div>
           {existingContactId ? (
             <Notice tone="warn">
-              {m["contacts.add.existing"]}{" "}
+              {t(m, "contacts.add.existing", locale)}{" "}
               <Link
                 href={`/dashboard/accounts/${accountId}/contacts/${existingContactId}`}
                 className="underline underline-offset-2"
               >
-                {m["contacts.add.viewContact"]}
+                {t(m, "contacts.add.viewContact", locale)}
               </Link>
             </Notice>
           ) : null}
           <DialogFooter>
-            <Submit pending={pending} />
+            <Submit pending={pending} locale={locale} />
           </DialogFooter>
         </form>
       </DialogContent>

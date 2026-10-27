@@ -108,9 +108,9 @@ describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
     expect(m["todo.consent.cancel.es"]).toBe("{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.");
   });
 
-  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 80 keys, read off messages.ts — the 2026-10-05 carrier-compliance rewrite added the help reply's 2 contact-fallback keys, S-03 1b the timeline hint's Spanish twin, and S-03 part 3 §10.3 the Texts row's 25 Spanish twins; mutation: add a line naming 'carrier_block' → FAILS)", () => {
+  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 82 keys, read off messages.ts — the 2026-10-05 carrier-compliance rewrite added the help reply's 2 contact-fallback keys, S-03 1b the timeline hint's Spanish twin, S-03 part 3 §10.3 the Texts row's 25 Spanish twins, and the F-085 follow-up (Task B) the To do list's own consent-hold toast's Spanish twin (`todo.consent.failed.es`), and the F-085 follow-ups fix round the stale-tab decide-first line's (`todo.consent.decideFirst.es`); mutation: add a line naming 'carrier_block' → FAILS)", () => {
     const keys = Object.keys(m).filter((k) => /^(sms\.consentReply|contact\.texts|todo\.consent)\./.test(k));
-    expect(keys.length).toBe(80);
+    expect(keys.length).toBe(82);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       // "{Contact}" is a single-brace placeholder, same shape as

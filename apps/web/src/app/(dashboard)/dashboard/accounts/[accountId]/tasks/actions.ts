@@ -37,7 +37,16 @@ import { ledgerDb } from "@/lib/consent/ledger-db";
 import { confirmStop, notAStop, undoHoldDecision, type TextsActionResult } from "@/lib/consent/staff-actions";
 import { setBookingStatusAction } from "../calendar/actions";
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+/** The failures this screen words itself, named by key (F-085 follow-ups): the client renders the key
+ *  in the reader's language (work-row-actions.tsx's failureText, the same useLocale() its success toasts
+ *  read), so a server action never has to resolve a locale. `error` stays the English line for any
+ *  caller that reads only that. A failure forwarded from elsewhere (closeOutBooking's calendar action)
+ *  carries no key and is shown as it came. */
+export type WorkActionErrorKey = "work.actionFailed" | "todo.consent.decideFirst";
+export type ActionResult = { ok: true } | { ok: false; error: string; errorKey?: WorkActionErrorKey };
+
+/** The one failure every action below reports on its own (each fails the same honest way). */
+const ACTION_FAILED = { ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" } as const;
 /** `dueAt` is the ISO instant actually written (or `null` on the zone-degrade
  *  path) — carried on the result, not just the write, so the CLIENT can tell
  *  the two cases apart. "Moved to tomorrow." is a lie on the degrade path,
@@ -46,7 +55,7 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
  *  case. */
 export type DismissResult =
   | { ok: true; taskId: string; dueAt: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; errorKey?: WorkActionErrorKey };
 
 function tasksPath(accountId: string): string {
   return `/dashboard/accounts/${accountId}/tasks`;
@@ -64,9 +73,11 @@ export async function completeWorkTask(accountId: string, taskId: string): Promi
   } catch (e) {
     // Review R3-I1: a hold's To-do closes by deciding the hold (a stale tab
     // can still show its old Done).
-    if (e instanceof HoldUndecidedError) return { ok: false, error: m["todo.consent.decideFirst"] };
+    if (e instanceof HoldUndecidedError) {
+      return { ok: false, error: m["todo.consent.decideFirst"], errorKey: "todo.consent.decideFirst" };
+    }
     console.error(`completeWorkTask: failed for task ${taskId} (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["work.actionFailed"] };
+    return { ...ACTION_FAILED };
   }
   revalidatePath(tasksPath(accountId));
   return { ok: true };
@@ -83,7 +94,7 @@ export async function reopenWorkTask(accountId: string, taskId: string): Promise
     await reopenTask(await dbForRequest(), accountId, taskId, userId);
   } catch (e) {
     console.error(`reopenWorkTask: failed for task ${taskId} (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["work.actionFailed"] };
+    return { ...ACTION_FAILED };
   }
   revalidatePath(tasksPath(accountId));
   return { ok: true };
@@ -123,7 +134,7 @@ export async function dismissToTask(
     .from("accounts").select("timezone").eq("id", accountId).maybeSingle();
   if (error || !data) {
     console.error(`dismissToTask: account lookup failed for ${accountId}: ${error?.message ?? "not found"}`);
-    return { ok: false, error: m["work.actionFailed"] };
+    return { ...ACTION_FAILED };
   }
   const account = data as { timezone: string };
   const resolvedDueAt = tomorrowAt9(new Date(), account.timezone);
@@ -143,7 +154,7 @@ export async function dismissToTask(
     return { ok: true, taskId: id, dueAt: resolvedDueAt };
   } catch (e) {
     console.error(`dismissToTask: create failed for a "${row.source}" row (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["work.actionFailed"] };
+    return { ...ACTION_FAILED };
   }
 }
 

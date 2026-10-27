@@ -2,6 +2,8 @@ import type { ResolvedZone } from "@bis/db";
 
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { cn } from "@/lib/utils";
 
 /**
@@ -51,6 +53,7 @@ export function ZoneNote({
   zone,
   isAgency,
   accountless,
+  locale = "en",
   className,
 }: {
   /** Straight from `renderZone` (lib/zone.ts) — never a bare zone string, so
@@ -84,6 +87,14 @@ export function ZoneNote({
    * `false`: every existing in-account caller is unchanged.
    */
   accountless?: boolean;
+  /**
+   * The reader's language for the zone line (F-085 follow-ups: the To do
+   * page reads Spanish). Defaults to English, so every screen that passes
+   * none is unchanged. The guessed-zone warning below has no Spanish twins
+   * yet, so it stays English and says so with its own `lang="en"` rather
+   * than sit unmarked inside a Spanish page.
+   */
+  locale?: Locale;
   className?: string;
 }) {
   const warn = accountless
@@ -92,7 +103,7 @@ export function ZoneNote({
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <p className={SENTENCE_CAPTION}>{m["zone.note"].replace("{zone}", zone.label)}</p>
+      <p className={SENTENCE_CAPTION}>{t(m, "zone.note", locale, { zone: zone.label })}</p>
 
       {warn ? (
         // `role="note"` overrides Notice's own `role="alert"` (the spread
@@ -104,7 +115,7 @@ export function ZoneNote({
         // `text-foreground`, per the repo's standing rule (setup-shell.tsx):
         // a full SENTENCE keeps the foreground colour and lets the ground
         // carry the hue, because a sentence in `--warn` sits at the AA floor.
-        <Notice tone="warn" role="note" className="text-foreground">
+        <Notice tone="warn" role="note" lang="en" className="text-foreground">
           {accountless ? (
             // The agency's own zone was unusable too — the one case left
             // that is still worth a warning on a screen with no company.

@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { LocaleProvider } from "@/components/locale-provider";
 
 const bulkAddTagAction = vi.fn();
 const bulkRemoveTagAction = vi.fn();
@@ -85,6 +86,77 @@ describe("BulkActionBar's Delete control is Owner-only (staff and roles)", () =>
   });
 });
 
+// F-085 follow-up (Task B): the bar's own labels — "N selected", Add tag,
+// Assign to…, Delete…, Clear selection — read the LocaleProvider the
+// contacts list seeds (same context AssigneeField already reads).
+describe("BulkActionBar reads the LocaleProvider's locale (F-085 follow-up, Task B)", () => {
+  const renderEs = (canAssign = true) => renderToStaticMarkup(
+    createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
+      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], canDelete: true, onDone: () => {},
+      canAssign, members: [],
+    })),
+  );
+
+  it("renders every bar label in Spanish (mutation: hard-code useLocale()'s default -> FAILS)", () => {
+    const html = renderEs();
+    expect(html).toContain(">2 seleccionados<");
+    expect(html).toContain(">Agregar etiqueta<");
+    expect(html).toContain(">Asignar a…<");
+    expect(html).toContain(">Borrar…<");
+    expect(html).toContain('aria-label="Quitar selección"');
+  });
+});
+
+// F-085 follow-ups (design I4 / final M1): one selected is singular in both
+// languages, through plural() like contacts.count — never "1 seleccionados".
+describe("BulkActionBar counts one selected in the singular (F-085 follow-ups)", () => {
+  const renderOne = (locale: "en" | "es") => renderToStaticMarkup(
+    createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
+      accountId: "a1", selectedIds: ["c1"], existingTags: [], canDelete: true, onDone: () => {},
+    })),
+  );
+
+  it("\"1 seleccionado\" and \"1 selected\", in the label and the toolbar's name (mutation: t(m, \"bulk.selected\") for every count -> FAILS)", () => {
+    const es = renderOne("es");
+    expect(es).toContain(">1 seleccionado<");
+    expect(es).toContain('aria-label="1 seleccionado"');
+    expect(es).not.toContain("1 seleccionados");
+    const en = renderOne("en");
+    expect(en).toContain(">1 selected<");
+    expect(en).toContain('aria-label="1 selected"');
+  });
+});
+
+// F-085 follow-ups (design I6, also English): at 390px the bar's own content
+// was wider than the panel and the panel clips, so actions past the edge were
+// unreachable. The bar wraps instead: every action keeps its own line if it
+// must. No DOM layout in this vitest, so the class is pinned.
+describe("BulkActionBar wraps at phone width (F-085 follow-ups)", () => {
+  it("the toolbar is a wrapping flex row with a row gap (mutation: drop flex-wrap -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(BulkActionBar, {
+      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], canDelete: true, onDone: () => {}, canAssign: true, members: [],
+    }));
+    const cls = html.match(/<div role="toolbar"[^>]*class="([^"]*)"/)?.[1]?.split(/\s+/) ?? [];
+    expect(cls).toContain("flex");
+    expect(cls).toContain("flex-wrap");
+    expect(cls).toContain("gap-y-2");
+    expect(cls).not.toContain("flex-nowrap");
+  });
+});
+
+// F-085 follow-ups (design m1): the Tag and Assign menus and the typed-delete
+// dialog are portaled to the body, outside the list's lang wrapper, so each
+// carries lang itself, and the dialog's X is named in the reader's language.
+// Radix portals render nothing under a static render, so the wiring is pinned.
+describe("BulkActionBar's portaled overlays carry lang (F-085 follow-ups)", () => {
+  it("both menus and the delete dialog set lang={locale}; the dialog's close label is t(common.close) (mutation: drop lang from any one -> FAILS)", () => {
+    expect(BAR_SRC.match(/<DropdownMenuContent align="start" lang=\{locale\}>/g)).toHaveLength(2);
+    expect(BAR_SRC).toContain('<DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>');
+    expect(BAR_SRC).not.toMatch(/<DropdownMenuContent align="start">/);
+    expect((m as Record<string, string>)["common.close.es"]).toBe("Cerrar");
+  });
+});
+
 // F-085 part 1 (spec §9, A2): "Assign to…" in the bulk bar for Owner, Staff
 // and the agency. A Technician keeps the bar (bulk tagging, so the
 // checkboxes stay: rule 4) but never the Assign control.
@@ -123,7 +195,8 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
       { assignee: ANA.userId, label: ANA.label },
       { assignee: TOM.userId, label: TOM.label },
     ]);
-    expect(BAR_SRC).toMatch(/bulkAssignChoices\(members\)\.map\(\(c\) => \([\s\S]{0,200}?assignSelected\(accountId, \[\.\.\.selectedIds\], c\.assignee, c\.label, onDone\)/);
+    // F-085 follow-up (Task B): both the choices and the assign call now carry the bar's own locale.
+    expect(BAR_SRC).toMatch(/bulkAssignChoices\(members, locale\)\.map\(\(c\) => \([\s\S]{0,200}?assignSelected\(accountId, \[\.\.\.selectedIds\], c\.assignee, c\.label, onDone, locale\)/);
   });
 
   it("choosing a member assigns the selected ids, clears the selection, and toasts the one-customer sentence with an Undo that hands back the returned array (mutation: Undo calls assignContactsAction -> FAILS)", async () => {
@@ -174,12 +247,18 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     expect(toasts.success.mock.calls[0]![0]).toBe("1 customer is now unassigned.");
   });
 
-  it("the sentences are chosen by plural() over the One twins, both with Spanish (fix round 1, M6; mutation: hand-pick by ids.length === 1 -> FAILS)", () => {
-    expect(BAR_SRC).toContain('plural(m, "assign.bulkDone", ids.length, "en", { count: ids.length, name })');
-    expect(BAR_SRC).toContain('plural(m, "assign.bulkUnassigned", ids.length, "en", { count: ids.length })');
+  it("the sentences are chosen by plural() over the One twins, now in the reader's own language (F-085 follow-up, Task B; mutation: hand-pick by ids.length === 1 -> FAILS)", () => {
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkDone", ids.length, locale, { count: ids.length, name })');
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkUnassigned", ids.length, locale, { count: ids.length })');
     const cat = m as Record<string, string>;
     expect(cat["assign.bulkUnassigned.es"]).toBe("{count} clientes ahora están sin asignar.");
     expect(cat["assign.bulkUnassignedOne.es"]).toBe("1 cliente ahora está sin asignar.");
+  });
+
+  it("a Spanish-locale caller gets the Spanish sentence, not the English one (mutation: drop locale from assignSelected's plural() calls -> FAILS)", async () => {
+    assignContactsAction.mockResolvedValue({ ok: true, previous: [] });
+    await assignSelected("a1", ["c1"], ANA.userId, ANA.label, () => {}, "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe("1 cliente asignado a Ana Ruiz.");
   });
 
   it("nothing changed (previous = []) still confirms, but offers no Undo (mutation: offer Undo on an empty array -> FAILS)", async () => {
@@ -267,13 +346,38 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
     announceDeleteResult({ ok: false, error: "Delete failed — please try again." }, "en");
     expect(toasts.error).toHaveBeenCalledWith("Delete failed — please try again.");
   });
-  it("customers kept because their files could not go are named after the success line (mutation: drop the skippedFiles toast -> FAILS)", () => {
+  // F-085 follow-up (Task B): this success line used to stay in the bar's own English. That was S-07's
+  // scope (translating the bar was not part of it), not the owner ruling of 2026-10-13, which is about
+  // a customer's files going with them and says nothing about this line's language. Task B's brief is
+  // that every toast fired from this list reads in the reader's language, so this line now does too
+  // (plural() over bulk.deleted/.deletedOne, both with Spanish twins).
+  it("customers kept because their files could not go are named after the success line, now in the reader's language (mutation: drop the skippedFiles toast -> FAILS)", () => {
     announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 2 }, "es");
-    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne"]);
+    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne.es"]);
     expect(toasts.error).toHaveBeenCalledWith("Se borraron 1 · se conservaron 2 cuyos archivos no se pudieron borrar. Intente de nuevo.");
     toasts.error.mockReset();
     announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0 }, "en");
     expect(toasts.error).not.toHaveBeenCalled();
+    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deleted"].replace("{count}", "3"));
+  });
+
+  it("the plain English case still reads English, and the skipped-bookings line is localized too (mutation: ignore locale -> FAILS)", () => {
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "en");
+    expect(toasts.success).toHaveBeenCalledWith("Deleted 2 · skipped 1 linked to bookings, deals, or conversations");
+    toasts.success.mockReset();
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "es");
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Contactos borrados: 2 · conservados por estar vinculados a citas, oportunidades o conversaciones: 1",
+    );
+  });
+
+  // F-085 follow-ups (final M2): "Se borraron 1 · se conservaron 1 ..." disagreed in number at a count
+  // of one. Each count now follows a colon, so the words agree at any count, one included.
+  it("the Spanish skipped line agrees at a count of one (mutation: restore \"Se borraron {count} · se conservaron {skipped}\" -> FAILS)", () => {
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0 }, "es");
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Contactos borrados: 1 · conservados por estar vinculados a citas, oportunidades o conversaciones: 1",
+    );
   });
 });
 

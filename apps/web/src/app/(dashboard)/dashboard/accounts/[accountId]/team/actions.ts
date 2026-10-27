@@ -16,6 +16,7 @@ import {
   isTeamUserId, isInvitationId, isAccountRole, isPersonLanguage,
 } from "@/lib/team/team-view";
 import { recordRemoval, latestRemoval } from "@/lib/team/removal-log";
+import { recordTechnicianRelease, latestTechnicianRelease, type TechnicianRelease } from "@/lib/team/technician-release-log";
 import { isValidEmail } from "@/lib/forms/guards";
 import { loggableError } from "@/lib/loggable-error";
 
@@ -127,8 +128,29 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
  * writes. A move to Technician then releases the person's open tasks on
  * customers that are not theirs to Unassigned (releaseTasksOffCustomers,
  * final review: A4 for a demotion), since RLS now hides them from that
- * person; a failure there is logged and never fails the role change. An
- * Undo of the role change does not give those tasks back.
+ * person; a failure there is logged and never fails the role change, and
+ * what it released is recorded (technician-release-log.ts) so a later move
+ * away from Technician can give it back.
+ *
+ * Landing on Staff or Owner (F-085 follow-up, Task A), in EITHER branch
+ * below: there is no separate "undo role change" action — the Team card's
+ * Undo just calls this same function again with the previous role
+ * (team-handlers.ts's changeRole) — so giveBackTechnicianTasks runs
+ * unconditionally on every SUCCESSFUL landing on Staff or Owner, not only
+ * on an explicit Undo click and not gated on what the role was a moment
+ * ago: gating on "was Technician a moment ago" would stop a SECOND Undo
+ * click (or any later move) from healing a give-back the first one missed,
+ * because by then BIS already shows the new role. It reads back what THIS
+ * person's most recent move INTO Technician recorded, never anything the
+ * browser sends, and only while that record is within UNDO_WINDOW_MS; only
+ * task ids still Unassigned move (reassignReleased's own guard, the same
+ * one the removal's give-back relies on), so one someone has since claimed
+ * or reassigned stays where it is, and someone who was never a Technician,
+ * or whose record has aged out, costs one no-op read. It never fails the
+ * role change, which has already landed: a failure is logged by id, and a
+ * later landing on Staff or Owner inside the same window (another Undo
+ * click included) tries again, since giving back an already-held task is a
+ * no-op.
  *
  * Promotion to Owner: BIS first (no last-Owner risk), then Clerk to
  * org:admin. Only a DEFINITIVE Clerk refusal (a 4xx, `clerkRefused`) rolls
@@ -146,7 +168,7 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
 export async function setTeamRoleAction(
   accountId: string, userId: string, role: AccountRole,
 ): Promise<TeamResult & { previous?: AccountRole }> {
-  await requireAccountOwner(accountId);
+  const { userId: callerId } = await requireAccountOwner(accountId);
   if (!isTeamUserId(userId) || !isAccountRole(role)) return { ok: false, error: "team.changed" };
   const db = serviceDb();
   const member = await findMember(db, accountId, userId);
@@ -180,10 +202,23 @@ export async function setTeamRoleAction(
       // so what they held on anyone else's goes back to Unassigned rather than out of sight.
       // Never fails the role change, which has landed; logged by id, and idempotent to re-run.
       try {
-        await releaseTasksOffCustomers(db, accountId, userId);
+        const released = await releaseTasksOffCustomers(db, accountId, userId);
+        if (released.length > 0) {
+          try {
+            await recordTechnicianRelease(db, accountId, callerId, userId, released);
+          } catch (e) {
+            console.error(`team: made a Technician, but their released tasks were not recorded, so a later move away from Technician cannot give them back (${ids}): ${loggableError(e)}`);
+          }
+        }
       } catch (e) {
         console.error(`team: made a Technician, but their open tasks on customers not theirs were not released (${ids}): ${loggableError(e)}`);
       }
+    } else {
+      // F-085 follow-up, Task A: `role` is "staff" here (the only other
+      // option in this branch). Unconditional, not gated on `previous`
+      // (giveBackTechnicianTasks below explains why): it is what makes a
+      // second Undo click heal a give-back the first one missed.
+      await giveBackTechnicianTasks(db, accountId, userId);
     }
     revalidateTeam(accountId);
     return { ok: true, previous };
@@ -225,8 +260,46 @@ export async function setTeamRoleAction(
     revalidateTeam(accountId);
     return { ok: false, error: now === "unread" ? "team.role.failed" : "team.changed" };
   }
+  // F-085 follow-up, Task A: unconditional, same as the demotion branch's
+  // (giveBackTechnicianTasks below explains why `previous` is not checked).
+  await giveBackTechnicianTasks(db, accountId, userId);
   revalidateTeam(accountId);
   return { ok: true, previous };
+}
+
+/**
+ * The reverse of the release inside setTeamRoleAction's move-into-Technician
+ * branch (F-085 follow-up, Task A), called unconditionally on every
+ * successful landing on Staff or Owner (never gated on what the role was a
+ * moment ago — the comment above setTeamRoleAction says why). Reads back
+ * what THIS person's most recent move into Technician recorded
+ * (technician-release-log.ts) — never ids from the browser — and only
+ * while that record is within UNDO_WINDOW_MS, the same bound the removal's
+ * give-back uses. Delegates the actual write to reassignReleased, whose
+ * own guards (still Unassigned, scoped to this account) are what the
+ * removal's give-back already relies on: nothing here re-implements them,
+ * so there is nothing here to get out of step with those tests.
+ *
+ * Never fails the role change, which has already landed: a read or write
+ * failure is logged with the account, the person and the task ids, and a
+ * later landing on Staff or Owner within the same window (another Undo
+ * click included) retries it, since giving back an already-held task is a
+ * no-op.
+ */
+async function giveBackTechnicianTasks(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
+  let release: TechnicianRelease | null;
+  try {
+    release = await latestTechnicianRelease(db, accountId, userId);
+  } catch (e) {
+    console.error(`team: could not read the technician release record for account ${accountId}, user ${userId}: ${loggableError(e)}`);
+    return;
+  }
+  if (!release || release.taskIds.length === 0 || !undoStillOpen(release.releasedAt, Date.now())) return;
+  try {
+    await reassignReleased(db, accountId, userId, { contacts: [], tasks: release.taskIds });
+  } catch (e) {
+    console.error(`team: a role change took ${userId} out of Technician, but their released tasks were not given back (account ${accountId}; tasks ${release.taskIds.join(",") || "none"}): ${loggableError(e)}`);
+  }
 }
 
 export async function setTeamLanguageAction(

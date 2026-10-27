@@ -184,6 +184,35 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
   });
 });
 
+/**
+ * F-085 follow-up, Task A: the role change's give-back (actions.ts's
+ * giveBackTechnicianTasks) reuses this same function for its task ids, so
+ * its safety against a forged or stale id rests entirely on these two
+ * guards. Pinned here on the fake client (fast, no database) because
+ * assignment.test.ts:307 already pins the still-Unassigned guard against a
+ * real database — this closes the account-scope half, which had no pin at
+ * all until now.
+ */
+describe("reassignReleased never writes outside the account it is given, contacts or tasks (mutation: drop .eq('account_id', accountId) -> FAILS)", () => {
+  it("every write is scoped by account_id, so an id from another account could never match", async () => {
+    const { db, calls } = recordingDb();
+    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] });
+    for (const c of [...updates(calls, "contacts"), ...updates(calls, "tasks")]) {
+      expect(arg(c, "eq", "account_id")).toBe("acct");
+    }
+  });
+});
+
+describe("reassignReleased only ever writes a row still Unassigned (mutation: drop .is('assigned_to', null) -> FAILS)", () => {
+  it("every write guards on IS NULL assigned_to, contacts and tasks alike", async () => {
+    const { db, calls } = recordingDb();
+    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] });
+    for (const c of [...updates(calls, "contacts"), ...updates(calls, "tasks")]) {
+      expect(arg(c, "is", "assigned_to")).toBeNull();
+    }
+  });
+});
+
 describe("setTaskAssignee's optional expected holder, which the task Undo passes (final review M7)", () => {
   const task = (assigned_to: string | null) => recordingDb((c) => {
     if (c.table === "tasks" && !has(c, "update")) return { assigned_to };

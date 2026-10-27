@@ -48,6 +48,22 @@ describe("ConversationList's pager (D-019)", () => {
     expect(html).toContain(m["conversations.newer"]);
   });
 
+  // F-085 follow-up (Task B): the pager, its aria-label and the unread
+  // badge's own aria-label all read the `locale` prop the page already
+  // threads through, instead of a bare English m[...] lookup.
+  it("in Spanish: the pager and the unread badge read Spanish (mutation: hard-code m[key] instead of t(m, key, locale) → FAILS)", () => {
+    const html = render({
+      olderHref: "/dashboard/accounts/a1/conversations?before=xyz",
+      newerHref: "/dashboard/accounts/a1/conversations",
+      conversations: [{ ...ROW, unreadCount: 2 }],
+      locale: "es",
+    });
+    expect(html).toContain(m["conversations.older.es"]);
+    expect(html).toContain(m["conversations.newer.es"]);
+    expect(html).toContain(`aria-label="${m["conversations.pagesLabel.es"]}"`);
+    expect(html).toContain(`aria-label="2 ${m["conversations.unread.es"]}"`);
+  });
+
   // DESIGN.md "Paged lists": "Selection survives a page change." A row's
   // link carried only `?c=<id>` — opening a thread from page 2 of the
   // inbox and then going Back (ConversationBack's own href) landed on

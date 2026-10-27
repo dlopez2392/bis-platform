@@ -464,7 +464,10 @@ describe("wave 2 — conversations", () => {
     // regex below still requires EmptyState with BOTH the same icon and the
     // same title, in either prop order, so a future edit dropping either
     // still fails this test.
-    expect(page).toMatch(/<EmptyState\s+icon=\{MessagesSquare\}\s+title=\{m\["conversations\.pickThread"\]\}/);
+    // F-085 follow-up (Task B): the title now reads the reader's own language, through the page's
+    // own `tr` (never a bare m[...] lookup) — the regex follows that rename, still requiring the
+    // same icon and the same key.
+    expect(page).toMatch(/<EmptyState\s+icon=\{MessagesSquare\}\s+title=\{tr\.text\("conversations\.pickThread"\)\}/);
     expect(page).not.toContain("rounded-lg border border-dashed border-border p-6");
   });
 });

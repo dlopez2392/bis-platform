@@ -93,16 +93,16 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
  * The row's own primary sentence. A task's title is already human-written
  * (`WorkRow.title`'s own doc comment in packages/db/src/work-queue.ts) — shown
  * verbatim, never re-templated. A derived row has no author, so its sentence
- * comes from the copy catalogue: a replacer FUNCTION for the conversation
- * case, not a plain string second argument to `.replace` — matching
- * dashboard/page.tsx's own greeting, because `String.replace` treats a
- * string pattern specially (`$&`, `$1`…) and a contact's own name is
- * untrusted input that could contain one.
+ * comes from the copy catalogue, in the reader's own language (`tr`, F-085
+ * follow-up Task B) — `tr.text`'s own interpolate() already uses a replacer
+ * FUNCTION, never a plain string second argument to `.replace`, for the
+ * conversation case: a contact's own name is untrusted input that could
+ * contain a `$&`/`$1` pattern `String.replace` would treat specially.
  */
-function primaryLabel(row: WorkRow, contactName: string): string {
+function primaryLabel(row: WorkRow, contactName: string, tr: Tr): string {
   if (row.source === "task") return row.title;
-  if (row.source === "conversation") return m["work.conversation"].replace("{name}", () => contactName);
-  return m["work.booking"];
+  if (row.source === "conversation") return tr.text("work.conversation", { name: contactName });
+  return tr.text("work.booking");
 }
 
 /**
@@ -153,12 +153,15 @@ const EPOCH_MS = 0;
  * remaining case, an unparseable `iso`, where `formatDateInZone` throws on
  * the INSTANT rather than on the zone. A row with a corrupt timestamp still
  * degrades to no date rather than taking the whole queue down with it.
+ *
+ * Printed in the reader's own language (`locale`, the page's `tr.locale`;
+ * F-085 follow-ups): "9 oct 2026" on a Spanish To do, never "Oct 9, 2026".
  */
-function rowDateText(row: WorkRow, timezone: string): string | null {
+function rowDateText(row: WorkRow, timezone: string, locale: Locale): string | null {
   const iso = row.dueAt ?? row.occurredAt;
   if (new Date(iso).getTime() === EPOCH_MS) return null;
   try {
-    return formatDateInZone(iso, timezone);
+    return formatDateInZone(iso, timezone, locale);
   } catch (err) {
     // A bad INSTANT only — the zone is guaranteed usable by `renderZone`.
     if (!(err instanceof RangeError)) throw err;
@@ -186,12 +189,13 @@ function WorkRowItem({
   timezone,
   actions,
   assign,
+  tr,
 }: {
   row: WorkRow;
   bucket: Bucket;
   accountId: string;
   /** Never a raw id and never "undefined" — WorkList resolves this to
-   *  `m["contact.noName"]` for a contactId with no matching (or no) row. */
+   *  `tr.text("contact.noName")` for a contactId with no matching (or no) row. */
   contactName: string;
   /** The account's RESOLVED zone (`renderZone`), exactly as page.tsx
    *  resolved it. Every date on this row is the company's own wall-clock day
@@ -208,15 +212,18 @@ function WorkRowItem({
   actions: WorkActionProps;
   /** F-085 part 1: present only for someone who may hand tasks on. */
   assign: { members: AssignMember[] } | null;
+  /** The section's words in the reader's language (F-085 follow-up, Task B) — the SAME `tr` WorkList
+   *  already carries for the suggestions tray, now reused for the row's own copy instead of a bare `m[...]`. */
+  tr: Tr;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
-  const primary = primaryLabel(row, contactName);
+  const primary = primaryLabel(row, contactName, tr);
   const secondary = secondaryLine(row, contactName);
   // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
   // the receptionist's, and says so beside the person it is about, as its
   // own mark. A To do a person typed carries no mark here, as before.
   const fromCall = row.source === "task" && Boolean(row.callId);
-  const dateText = rowDateText(row, timezone);
+  const dateText = rowDateText(row, timezone, tr.locale);
 
   const body = (
     <>
@@ -230,13 +237,13 @@ function WorkRowItem({
         {secondary || fromCall ? (
           <span className="flex min-w-0 items-center gap-2">
             {secondary ? <span className="min-w-0 break-words text-xs text-muted-foreground md:truncate">{secondary}</span> : null}
-            {fromCall ? <AiAuthorMark /> : null}
+            {fromCall ? <AiAuthorMark locale={tr.locale} /> : null}
           </span>
         ) : null}
       </span>
       <Badge data-work-row-chip variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
         <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
-        {m[treatment.labelKey]}
+        {tr.text(treatment.labelKey)}
       </Badge>
       {dateText ? (
         <span data-work-row-date className="shrink-0 text-xs text-muted-foreground">{dateText}</span>
@@ -360,7 +367,7 @@ export function WorkList({
    *  bucket AND every pending proposal — ONE batch read (page.tsx), never
    *  one per row and never one per account. A contactId absent from this map
    *  (a deleted, or otherwise missing, contact) falls back to
-   *  `m["contact.noName"]` below — never a raw id, never "undefined". */
+   *  `tr.text("contact.noName")` below — never a raw id, never "undefined". */
   contactNames: Record<string, string>;
   /** The account's RESOLVED zone (`renderZone`) — the SAME contract
    *  `calls-table.tsx`'s identically-named prop now carries. This screen
@@ -417,9 +424,9 @@ export function WorkList({
   // not make.
   if (shown.length === 0 && suggestions.groups.length === 0 && !suggestions.error) {
     // F-085 part 1: an empty filter is not an empty queue, so it says which.
-    if (who === "mine") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.mine"]} /></>;
-    if (who === "unassigned") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.unassignedWork"]} /></>;
-    return <>{heldRow}<EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} /></>;
+    if (who === "mine") return <>{heldRow}<EmptyState icon={ListTodo} title={tr.text("assign.empty.mine")} lang={tr.locale} /></>;
+    if (who === "unassigned") return <>{heldRow}<EmptyState icon={ListTodo} title={tr.text("assign.empty.unassignedWork")} lang={tr.locale} /></>;
+    return <>{heldRow}<EmptyState icon={ListTodo} title={tr.text("work.empty")} body={tr.text("work.empty.body")} lang={tr.locale} /></>;
   }
   const assign = canAssign ? { members } : null;
 
@@ -447,7 +454,7 @@ export function WorkList({
         // no-contamination proof that screen's binding constraint exists for.
         <section key={bucket} data-bucket={bucket} className="flex flex-col gap-2">
           <h2 className="px-1 font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-            {m[BUCKET_TREATMENT[bucket].labelKey]}
+            {tr.text(BUCKET_TREATMENT[bucket].labelKey)}
           </h2>
           <ListPanel as="ul">
             {buckets[bucket].map((row) => (
@@ -456,10 +463,11 @@ export function WorkList({
                 row={row}
                 bucket={bucket}
                 accountId={accountId}
-                contactName={contactNames[row.contactId ?? ""] ?? m["contact.noName"]}
+                contactName={contactNames[row.contactId ?? ""] ?? tr.text("contact.noName")}
                 timezone={timezone}
                 actions={actions}
                 assign={assign}
+                tr={tr}
               />
             ))}
           </ListPanel>

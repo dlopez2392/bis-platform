@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { withWho, type Who } from "@/lib/assign/who";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +17,7 @@ import { cn } from "@/lib/utils";
  * current one, `--surface-3` on hover. It wraps rather than overflow at
  * phone width, the pseudo-locale's +35% included.
  */
-export function WhoFilter({ base, current, showMine, params }: {
+export function WhoFilter({ base, current, showMine, params, locale = "en" }: {
   base: string;
   /** `null` (Task 12 review, coordinator round 1): the page this filter sits
    *  on is showing something ELSE entirely (the "Needs a look" held-email
@@ -24,14 +26,18 @@ export function WhoFilter({ base, current, showMine, params }: {
   current: Who | null;
   showMine: boolean;
   params: Record<string, string>;
+  /** F-085 follow-up (Task B): the reader's own language — this filter sits
+   *  on the contacts, To do and conversations lists, each of which resolves
+   *  its own render locale (requestLocale) and passes it straight through. */
+  locale?: Locale;
 }) {
   const items: { who: Who; label: string }[] = [
-    { who: "all", label: m["assign.filter.all"] },
-    ...(showMine ? [{ who: "mine" as const, label: m["assign.filter.mine"] }] : []),
-    { who: "unassigned", label: m["assign.unassigned"] },
+    { who: "all", label: t(m, "assign.filter.all", locale) },
+    ...(showMine ? [{ who: "mine" as const, label: t(m, "assign.filter.mine", locale) }] : []),
+    { who: "unassigned", label: t(m, "assign.unassigned", locale) },
   ];
   return (
-    <nav aria-label={m["assign.filter.label"]} className="flex min-w-0 flex-wrap items-center gap-1">
+    <nav aria-label={t(m, "assign.filter.label", locale)} className="flex min-w-0 flex-wrap items-center gap-1">
       {items.map((i) => {
         const qs = new URLSearchParams(withWho(params, i.who)).toString();
         const active = current === i.who;
