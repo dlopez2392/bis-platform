@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
 import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId } from "@bis/db";
 import { m } from "@/lib/messages";
+import { checkTradeChoice } from "@/lib/vetting/trades";
+import { tradeChoiceRefusal } from "@/lib/vetting/copy";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 /**
@@ -52,6 +54,13 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
     return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
   }
 
+  // S-53 (spec 5.1, V1): the trade, checked BEFORE the Clerk org for the same reason as the zone above -
+  // a held or turned-away business must not create and destroy a tenant in an external system. The
+  // refusal is the entry's own reason (or "choose a trade"), in the dialog's language, shown in the form.
+  const locale = formData.get("locale") === "es" ? "es" : "en";
+  const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale) };
+
   const clerk = await clerkClient();
   const org = await clerk.organizations.createOrganization({ name: brandName, createdBy: userId });
   // compensating rollback: never leave a Clerk org without a tenant row.
@@ -86,7 +95,10 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, brandName, timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), {
+      clerkOrgId: org.id, name, brandName, timezone, actorId: userId,
+      trade: tradeCheck.choice.trade, tradeOther: tradeCheck.choice.tradeOther,
+    }));
   } catch (err) {
     await rollback();
     throw err;
@@ -161,6 +173,13 @@ export async function adoptOrphanOrgAction(
     return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
   }
 
+  // S-53: an adopted organisation becomes a company BIS serves, so it is vetted exactly like Add company -
+  // otherwise a held or turned-away business could enter through this door. Checked before Clerk is read;
+  // nothing is created on a refusal and the organisation is left alone (this action never deletes it).
+  const locale = formData.get("locale") === "es" ? "es" : "en";
+  const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale) };
+
   let org: { id: string; name: string };
   try {
     const clerk = await clerkClient();
@@ -185,7 +204,10 @@ export async function adoptOrphanOrgAction(
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), {
+      clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId,
+      trade: tradeCheck.choice.trade, tradeOther: tradeCheck.choice.tradeOther,
+    }));
   } catch (e) {
     console.error(`adoptOrphanOrgAction: account write failed for org ${org.id}: ${String(e)}`);
     return { ok: false, error: m["accounts.orphan.adoptFailed"] };
