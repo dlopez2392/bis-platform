@@ -11,6 +11,8 @@ const db = vi.hoisted(() => ({
   isAccountOutboundSuppressed: vi.fn(),
   readEmailSuppression: vi.fn(),
   discardQueuedNotice: vi.fn(),
+  readBookingStatus: vi.fn(),
+  deletePendingCancelNotice: vi.fn(),
   rows: { booking: null as unknown, calendar: null as unknown },
 }));
 vi.mock("@bis/db", () => ({
@@ -24,14 +26,16 @@ vi.mock("@bis/db", () => ({
   isAccountOutboundSuppressed: db.isAccountOutboundSuppressed,
   readEmailSuppression: db.readEmailSuppression,
   discardQueuedNotice: db.discardQueuedNotice,
+  readBookingStatus: db.readBookingStatus,
+  deletePendingCancelNotice: db.deletePendingCancelNotice,
   serviceDb: () => { throw new Error("tests pass their own db"); },
 }));
 vi.mock("@/lib/consent/email-gate", () => ({ sendEmailOrThrow: vi.fn() }));
 
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import {
-  cancelNoticeAvailability, queueCancelNotice, sendQueuedCancelNotice,
-  type QueueCancelNoticeRequest, type QueuedCancelNotice,
+  cancelNoticeAvailability, queueCancelNotice, sendQueuedCancelNotice, deliverCancelNotice, expireCancelNotice,
+  CANCEL_NOTICE_EXPIRED, type QueueCancelNoticeRequest, type QueuedCancelNotice, type CancelNotice,
 } from "./cancel-notice";
 import { UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
 
@@ -84,6 +88,8 @@ beforeEach(() => {
   db.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
   db.readEmailSuppression.mockReset().mockResolvedValue(null);
   db.discardQueuedNotice.mockReset().mockImplementation(async () => { order.push("discard"); return true; });
+  db.readBookingStatus.mockReset().mockImplementation(async () => { order.push("read status"); return "cancelled"; });
+  db.deletePendingCancelNotice.mockReset().mockImplementation(async () => { order.push("drop pending"); return true; });
   vi.mocked(sendEmailOrThrow).mockReset().mockImplementation(async () => { order.push("send"); return { providerMessageId: "re_1" }; });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -168,17 +174,31 @@ const QUEUED: QueuedCancelNotice = {
   },
 };
 const VERSION = "2026-10-09T18:00:00.123Z";
+const WAIT = `sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`;
 const send = () => sendQueuedCancelNotice(
   { accountId: "acct_1", bookingId: "bk_1", version: VERSION, userId: "user_1", queued: QUEUED },
   { db: fakeDb as never, sleep },
 );
+const NOTICE: CancelNotice = {
+  accountId: "acct_1", bookingId: "bk_1", version: VERSION, userId: "user_1",
+  messageId: QUEUED.messageId, email: QUEUED.email,
+};
+const claimLost = () => db.claimCancelNotice.mockImplementation(async () => { order.push("claim"); return false; });
+const bookingIs = (status: string | null) =>
+  db.readBookingStatus.mockImplementation(async () => { order.push("read status"); return status; });
 
 describe("sendQueuedCancelNotice — the customer hears only once the Undo has closed (F-048)", () => {
-  it("waits out the window and its grace BEFORE claiming, then sends, then marks the row sent (mutation: claim before the sleep → FAILS)", async () => {
+  it("waits out the window and its grace BEFORE claiming, then sends, marks the row sent and settles its pending row (mutation: claim before the sleep → FAILS)", async () => {
     expect(await send()).toBe("sent");
-    expect(order).toEqual([`sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`, "claim", "send", "mark sent"]);
+    expect(order).toEqual([WAIT, "claim", "send", "mark sent", "drop pending"]);
     expect(db.claimCancelNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "bk_1", VERSION);
     expect(db.updateMessageStatus).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "sent", { providerMessageId: "re_1" }, "user_1");
+  });
+
+  it("settles ONLY this cancel's pending row: by account, booking and this cancel's version (mutation: no delete after the send → the sweep finds a sent notice's row every tick, FAILS)", async () => {
+    await send();
+    expect(db.deletePendingCancelNotice).toHaveBeenCalledTimes(1);
+    expect(db.deletePendingCancelNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "bk_1", VERSION);
   });
 
   it("sends as the staff-typed cancel notice, to this contact, from the business (mutation: send as staff.composer_email → FAILS)", async () => {
@@ -192,25 +212,56 @@ describe("sendQueuedCancelNotice — the customer hears only once the Undo has c
     expect(vi.mocked(sendEmailOrThrow).mock.calls[0]![1]).toEqual({ db: fakeDb });
   });
 
-  it("an Undo that won: nothing is sent and the queued row is removed (mutation: ignore the claim's answer → FAILS)", async () => {
-    db.claimCancelNotice.mockImplementation(async () => { order.push("claim"); return false; });
+  it("an Undo that won (the claim is lost and the booking is no longer cancelled): nothing is sent and the queued row is removed (mutation: never discard on a lost claim → FAILS)", async () => {
+    claimLost();
+    bookingIs("booked");
     expect(await send()).toBe("undone");
     expect(sendEmailOrThrow).not.toHaveBeenCalled();
-    expect(order).toEqual([`sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`, "claim", "discard"]);
+    expect(order).toEqual([WAIT, "claim", "read status", "discard", "drop pending"]);
     expect(db.discardQueuedNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1");
   });
 
-  it("a claimed notice whose send is refused or fails marks the row failed, so the thread shows it (mutation: no mark on failure → the row stays queued, FAILS)", async () => {
+  it("HAZARD (rule 4): the SWEEP won (the claim is lost and the booking is STILL cancelled): nothing is sent and the queued row is NOT discarded, because an email that went may sit behind it; only this cancel's pending row is settled (mutation: discard on every lost claim, as before the sweep → the sent email's record is deleted, FAILS)", async () => {
+    claimLost();
+    bookingIs("cancelled");
+    expect(await send()).toBe("elsewhere");
+    expect(sendEmailOrThrow).not.toHaveBeenCalled();
+    expect(db.discardQueuedNotice).not.toHaveBeenCalled();
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+    expect(order).toEqual([WAIT, "claim", "read status", "drop pending"]);
+    expect(db.deletePendingCancelNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "bk_1", VERSION);
+  });
+
+  it("a lost claim on a booking that is gone discards nothing: only an Undo PROVEN by the row's status removes the queued row (mutation: discard unless the status reads `cancelled` → FAILS)", async () => {
+    claimLost();
+    bookingIs(null);
+    expect(await send()).toBe("elsewhere");
+    expect(db.discardQueuedNotice).not.toHaveBeenCalled();
+  });
+
+  it("a lost claim whose status read fails touches NOTHING, the pending row included, so the sweep can settle it later (mutation: treat the read error as an Undo → the queued row is discarded, FAILS; drop the pending row anyway → nobody ever settles it, FAILS)", async () => {
+    claimLost();
+    db.readBookingStatus.mockRejectedValue(new Error("db down"));
+    expect(await send()).toBe("unsettled");
+    expect(sendEmailOrThrow).not.toHaveBeenCalled();
+    expect(db.discardQueuedNotice).not.toHaveBeenCalled();
+    expect(db.deletePendingCancelNotice).not.toHaveBeenCalled();
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+  });
+
+  it("a claimed notice whose send is refused or fails marks the row failed and settles its pending row: the claim is spent, nobody can send it now (mutation: no mark on failure → the row stays queued, FAILS)", async () => {
     vi.mocked(sendEmailOrThrow).mockRejectedValue(new Error("email not sent: suppressed"));
     expect(await send()).toBe("failed");
     expect(db.updateMessageStatus).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", { error: "email not sent: suppressed" }, "user_1");
+    expect(db.deletePendingCancelNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "bk_1", VERSION);
   });
 
-  it("a claim that throws also marks the row failed rather than leave it silent, and nothing is sent", async () => {
+  it("a claim that throws marks the row failed, sends nothing, and KEEPS the pending row: the claim may never have landed, and the sweep retries it under the same claim (mutation: settle the pending row on a claim error → FAILS)", async () => {
     db.claimCancelNotice.mockRejectedValue(new Error("db down"));
     expect(await send()).toBe("failed");
     expect(sendEmailOrThrow).not.toHaveBeenCalled();
     expect(db.updateMessageStatus).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", { error: "db down" }, "user_1");
+    expect(db.deletePendingCancelNotice).not.toHaveBeenCalled();
   });
 
   it("M-c: an email that SENT stays sent: a failure marking the row sent is logged, never turned into failed (mutation: one try around send and mark → the row is marked failed, FAILS)", async () => {
@@ -219,9 +270,16 @@ describe("sendQueuedCancelNotice — the customer hears only once the Undo has c
       if (status === "sent") throw new Error("db down");
     });
     expect(await send()).toBe("sent");
-    expect(order).toEqual([`sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`, "claim", "send", "mark sent"]);
+    expect(order).toEqual([WAIT, "claim", "send", "mark sent", "drop pending"]);
     expect(db.updateMessageStatus).not.toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", expect.anything(), "user_1");
     expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toContain("sent, but");
+  });
+
+  it("an email that SENT stays sent when settling its pending row fails: logged, and the sweep's lost claim cleans it up later (mutation: settle inside the send's try → the row is marked failed, FAILS)", async () => {
+    db.deletePendingCancelNotice.mockRejectedValue(new Error("db down"));
+    expect(await send()).toBe("sent");
+    expect(db.updateMessageStatus).not.toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", expect.anything(), "user_1");
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toContain("pending row not removed");
   });
 
   it("never throws, even when marking the row fails too, and logs no address", async () => {
@@ -231,6 +289,73 @@ describe("sendQueuedCancelNotice — the customer hears only once the Undo has c
     const logged = vi.mocked(console.error).mock.calls.flat().join(" ");
     expect(logged).toContain("bk_1");
     expect(logged).not.toContain("maria@example.com");
+  });
+});
+
+describe("deliverCancelNotice — the ONE delivery, shared by after() and the sweep", () => {
+  it("sends through the sender it is handed (the cron tick's gate), never around it (mutation: always call sendEmailOrThrow → FAILS)", async () => {
+    const tickSend = vi.fn(async () => ({ providerMessageId: "re_tick" }));
+    expect(await deliverCancelNotice(NOTICE, { db: fakeDb as never, send: tickSend })).toBe("sent");
+    expect(sendEmailOrThrow).not.toHaveBeenCalled();
+    expect(tickSend).toHaveBeenCalledTimes(1);
+    expect(tickSend.mock.calls[0]).toEqual([expect.objectContaining({ kind: "staff.booking_cancel_notice", to: "maria@example.com" })]);
+    expect(db.updateMessageStatus).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "sent", { providerMessageId: "re_tick" }, "user_1");
+  });
+
+  it("does not wait: the sweep calls it long after the window closed", async () => {
+    await deliverCancelNotice(NOTICE, { db: fakeDb as never });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(order).toEqual(["claim", "send", "mark sent", "drop pending"]);
+  });
+});
+
+describe("expireCancelNotice — too late to tell the customer: never sent, said so on the thread", () => {
+  const expire = (why: "started" | "too_old" = "started") => expireCancelNotice(NOTICE, { db: fakeDb as never }, why);
+
+  it("claims first, sends nothing, marks the row failed in plain words and settles the pending row (mutation: send anyway → FAILS)", async () => {
+    expect(await expire()).toBe("expired");
+    expect(sendEmailOrThrow).not.toHaveBeenCalled();
+    expect(order).toEqual(["claim", "mark failed", "drop pending"]);
+    const [, , id, status, patch, actor] = db.updateMessageStatus.mock.calls[0]!;
+    expect([id, status, actor]).toEqual(["msg_1", "failed", "user_1"]);
+    expect((patch as { error: string }).error).toBe(CANCEL_NOTICE_EXPIRED.started);
+    expect(CANCEL_NOTICE_EXPIRED.started).toMatch(/^Not sent: /);
+    expect(CANCEL_NOTICE_EXPIRED.too_old).toMatch(/^Not sent: /);
+  });
+
+  it("names why: an appointment already started, or a notice a day old", async () => {
+    await expire("too_old");
+    expect((db.updateMessageStatus.mock.calls[0]![4] as { error: string }).error).toBe(CANCEL_NOTICE_EXPIRED.too_old);
+  });
+
+  it("an Undo that won: the queued row is discarded, never marked failed (mutation: mark failed without claiming first → an undone cancel's thread says the email failed, FAILS)", async () => {
+    claimLost();
+    bookingIs("booked");
+    expect(await expire()).toBe("undone");
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+    expect(order).toEqual(["claim", "read status", "discard", "drop pending"]);
+  });
+
+  it("HAZARD (rule 4): someone else claimed it and the booking is still cancelled: the message is untouched, only the pending row goes (mutation: mark it failed anyway → a sent email reads failed, FAILS)", async () => {
+    claimLost();
+    bookingIs("cancelled");
+    expect(await expire()).toBe("elsewhere");
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+    expect(db.discardQueuedNotice).not.toHaveBeenCalled();
+    expect(order).toEqual(["claim", "read status", "drop pending"]);
+  });
+
+  it("a claim that throws leaves everything for the next tick (mutation: mark failed on a claim error → FAILS)", async () => {
+    db.claimCancelNotice.mockRejectedValue(new Error("db down"));
+    expect(await expire()).toBe("unsettled");
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+    expect(db.deletePendingCancelNotice).not.toHaveBeenCalled();
+  });
+
+  it("a failed mark is logged and the pending row still settles: the claim is spent, a retry could only lose it", async () => {
+    db.updateMessageStatus.mockRejectedValue(new Error("db down"));
+    expect(await expire()).toBe("expired");
+    expect(db.deletePendingCancelNotice).toHaveBeenCalledWith(fakeDb, "acct_1", "bk_1", VERSION);
   });
 });
 

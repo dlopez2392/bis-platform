@@ -1,10 +1,11 @@
 import {
   claimCancelNotice, getContact, ensureConversation, createMessage, updateMessageStatus,
   loadAccountBrandInfo, bookingContactEmail, isAccountOutboundSuppressed, readEmailSuppression,
-  discardQueuedNotice, serviceDb, type SupabaseClient,
+  discardQueuedNotice, readBookingStatus, deletePendingCancelNotice, serviceDb, type SupabaseClient,
 } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
-import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+import { sendEmailOrThrow, type EmailRequest } from "@/lib/consent/email-gate";
+import type { SendEmailResult } from "@/lib/email/types";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import {
@@ -27,20 +28,30 @@ import type { NoticeAvailability } from "./cancel-flow";
  *   2. `queueCancelNotice`, in the cancel's own request: compose the email
  *      and write the outbound row on the customer's thread, QUEUED, as the
  *      person who cancelled. Written before the wait, so a notice the server
- *      never got to send stays visible as a stuck queued row.
+ *      never got to send stays visible as a stuck queued row. The cancel
+ *      action then writes the notice's durable copy
+ *      (`booking_cancel_notices`, 0100), due when the window and its grace
+ *      close.
  *   3. `sendQueuedCancelNotice`, after the response (`after()`): wait out the
- *      window and its grace, CLAIM the cancel by its version, send through
- *      the email gate as `staff.booking_cancel_notice`, mark the row. An Undo
- *      that landed first means no claim: nothing is sent and the queued row
- *      is removed. A claimed notice that then fails marks the row failed.
+ *      window and its grace, then `deliverCancelNotice`: CLAIM the cancel by
+ *      its version, send through the email gate as
+ *      `staff.booking_cancel_notice`, mark the row, remove the durable copy.
+ *      A claimed notice that then fails marks the row failed.
  *
- * Durable follow-up (not built): a pending-notice column on bookings, swept
- * by the reminders cron, so a notice survives the process that queued it.
- * That sweep must CLAIM the booking's pending-notice column (or the cancel's
- * version, as `claimCancelNotice` does) before it sends, and must NEVER find
- * work by scanning `messages.status = 'queued'`: a queued row can belong to
- * an email that already went (a failed "sent" mark leaves it queued, M-c),
- * so such a sweep would email the customer twice.
+ * Durable (built, F-048 follow-up): when the process dies inside the wait,
+ * the cron's `cancelNotices` pass (lib/automations/passes/cancel-notices.ts)
+ * finds the durable copy two minutes after it fell due and runs the SAME
+ * `deliverCancelNotice`, through the tick's own email gate; past the
+ * appointment's start or a day after the cancel it sends nothing and marks
+ * the row failed instead (`expireCancelNotice`). Exactly one of `after()`,
+ * the sweep and the Undo wins the claim. The loser of the claim discards the
+ * queued row ONLY when the booking is no longer cancelled (the Undo won): a
+ * booking still cancelled means the other sender holds the claim and may
+ * already have sent, its row still queued after a failed "sent" mark (M-c),
+ * so it touches nothing but its own durable copy (`onLostClaim`). The sweep
+ * finds work ONLY in `booking_cancel_notices`, never by scanning
+ * `messages.status = 'queued'`, for the same reason: such a scan would email
+ * the customer twice.
  */
 export type { NoticeAvailability };
 
@@ -147,59 +158,191 @@ export type SendQueuedCancelNoticeRequest = {
   queued: QueuedCancelNotice;
 };
 
-export type CancelNoticeOutcome = "sent" | "undone" | "failed";
+/**
+ * What became of one notice. `sent`: this caller claimed it and the email
+ * went. `undone`: the Undo won, nothing was sent and the queued row is gone.
+ * `elsewhere`: someone else holds the claim (the other of `after()` and the
+ * sweep, or a newer cancel), so this caller touched nothing but its own
+ * pending row. `unsettled`: who won could not be read, so this caller
+ * touched nothing at all and the sweep settles it later. `failed`: the send
+ * (or the claim) failed and the row says so. `expired` (the sweep only): too
+ * late to tell the customer, never sent, and the row says so.
+ */
+export type CancelNoticeOutcome = "sent" | "undone" | "elsewhere" | "unsettled" | "failed";
+export type ExpiredNoticeOutcome = "expired" | "undone" | "elsewhere" | "unsettled";
 
-type Deps = { db?: SupabaseClient; sleep?: (ms: number) => Promise<void> };
+/** One notice, everything its delivery needs: what `queueCancelNotice`
+ *  answered, the cancel's version, and the person who cancelled. The cron
+ *  sweep rebuilds it from `booking_cancel_notices` (0100). */
+export type CancelNotice = {
+  accountId: string; bookingId: string; version: string; userId: string;
+  messageId: string; email: ComposedCancelNotice;
+};
 
-const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** `send` is the cron tick's own gate (`ctx.email.send`) when the sweep
+ *  delivers; `after()` leaves it out and sends through `sendEmailOrThrow` on
+ *  the same client. The two are the same gate. */
+type DeliverDeps = { db: SupabaseClient; send?: (req: EmailRequest) => Promise<SendEmailResult> };
 
-/** Never throws: it runs after the response, and nobody is left to catch it.
- *  Logs by booking id, never by address. */
-export async function sendQueuedCancelNotice(
-  req: SendQueuedCancelNoticeRequest, deps: Deps = {},
-): Promise<CancelNoticeOutcome> {
-  const sleep = deps.sleep ?? realSleep;
-  await sleep(UNDO_WINDOW_MS + NOTICE_GRACE_MS);
+/** Why a notice is too late to send. The text is the thread row's `error`;
+ *  the thread itself shows the generic failed line (failure-reason.ts never
+ *  prints `error`), so these are for the log and the record. */
+export const CANCEL_NOTICE_EXPIRED = {
+  started: "Not sent: the appointment time had already passed when the email could go out.",
+  too_old: "Not sent: the email could not go out within a day of the cancel.",
+} as const;
+export type ExpiredReason = keyof typeof CANCEL_NOTICE_EXPIRED;
 
-  const db = deps.db ?? serviceDb();
-  const tag = `cancel notice for booking ${req.bookingId} (account ${req.accountId})`;
-  const { messageId, email } = req.queued;
+const tagOf = (n: CancelNotice) => `cancel notice for booking ${n.bookingId} (account ${n.accountId})`;
+
+/** Settles this cancel's pending row only (by its version). Best effort:
+ *  a row left behind is found by the sweep, which loses the claim and
+ *  removes it. */
+async function dropPending(db: SupabaseClient, n: CancelNotice): Promise<void> {
   try {
-    if (!(await claimCancelNotice(db, req.accountId, req.bookingId, req.version))) {
-      // The Undo won (the Undo action removes the row too; this covers an
-      // Undo whose own removal failed). Nothing was sent.
-      try {
-        await discardQueuedNotice(db, req.accountId, messageId);
-      } catch (e) {
-        console.error(`${tag}: undone, but removing its queued row failed: ${String(e)}`);
-      }
-      return "undone";
-    }
+    await deletePendingCancelNotice(db, n.accountId, n.bookingId, n.version);
+  } catch (e) {
+    console.error(`${tagOf(n)}: its pending row not removed: ${String(e)}`);
+  }
+}
 
-    const { providerMessageId } = await sendEmailOrThrow({
-      accountId: req.accountId, kind: "staff.booking_cancel_notice", contactId: email.contactId,
+/**
+ * The claim was lost. Before the sweep, that could only mean the Undo won.
+ * Now the other sender (the `after()` job or the sweep) may hold the claim
+ * and may already have SENT, with its thread row still queued (a failed
+ * "sent" mark, M-c), so discarding the queued row could delete the record
+ * of an email that went. Rule: discard ONLY when the booking is provably no
+ * longer cancelled (the Undo won). Still cancelled, or no such booking:
+ * someone else owns the notice, and this caller removes only its own
+ * pending row. Status unreadable: touch nothing; the sweep asks again.
+ */
+async function onLostClaim(db: SupabaseClient, n: CancelNotice): Promise<"undone" | "elsewhere" | "unsettled"> {
+  let status: string | null;
+  try {
+    status = await readBookingStatus(db, n.accountId, n.bookingId);
+  } catch (e) {
+    console.error(`${tagOf(n)}: claim lost and the booking unreadable, left for the sweep: ${String(e)}`);
+    return "unsettled";
+  }
+  if (status === "cancelled" || status === null) {
+    await dropPending(db, n);
+    return "elsewhere";
+  }
+  // The Undo won (the Undo action removes the row too; this covers an Undo
+  // whose own removal failed). Nothing was sent. The discard carries the
+  // pending row with it (0100's cascade); the explicit drop covers a queued
+  // row that is already gone.
+  try {
+    await discardQueuedNotice(db, n.accountId, n.messageId);
+  } catch (e) {
+    console.error(`${tagOf(n)}: undone, but removing its queued row failed: ${String(e)}`);
+  }
+  await dropPending(db, n);
+  return "undone";
+}
+
+/**
+ * THE delivery, shared by the `after()` job and the cron sweep: CLAIM the
+ * cancel by its version, send through the email gate as
+ * `staff.booking_cancel_notice`, mark the thread row, settle the pending row.
+ * Exactly one caller can win the claim (`claimCancelNotice`), so the
+ * customer is emailed at most once whoever runs first.
+ *
+ * A claimed notice whose send fails marks the row failed and settles the
+ * pending row: the claim is spent, so nobody could send it now. A claim that
+ * THROWS marks the row failed but KEEPS the pending row: the claim may never
+ * have landed, and the sweep retries it under the same claim (if it did
+ * land, the sweep loses it and only removes the pending row).
+ *
+ * Never throws: `after()` runs it after the response, and nobody is left to
+ * catch it. Logs by booking id, never by address.
+ */
+export async function deliverCancelNotice(n: CancelNotice, deps: DeliverDeps): Promise<CancelNoticeOutcome> {
+  const { db } = deps;
+  const send = deps.send ?? ((req: EmailRequest) => sendEmailOrThrow(req, { db }));
+  const tag = tagOf(n);
+  const { messageId, email } = n;
+  let claimed = false;
+  try {
+    claimed = await claimCancelNotice(db, n.accountId, n.bookingId, n.version);
+    if (!claimed) return await onLostClaim(db, n);
+
+    const { providerMessageId } = await send({
+      accountId: n.accountId, kind: "staff.booking_cancel_notice", contactId: email.contactId,
       language: email.locale, origin: email.origin,
       to: email.to, fromName: email.fromName, fromAddress: email.fromAddress,
       replyTo: email.replyTo, subject: email.subject, body: email.text, html: email.html,
-    }, { db });
+    });
     // Its own try (fix round 2, M-c): the email has gone. A failure to RECORD
     // that must never turn the row into "failed", or a late Undo would tell
     // the owner it didn't go through when it did. The row stays queued (the
     // honest "not known yet"), and the failure is logged.
     try {
-      await updateMessageStatus(db, req.accountId, messageId, "sent", { providerMessageId }, req.userId);
+      await updateMessageStatus(db, n.accountId, messageId, "sent", { providerMessageId }, n.userId);
     } catch (e) {
       console.error(`${tag}: sent, but marking the thread row sent failed: ${String(e)}`);
     }
+    await dropPending(db, n);
     return "sent";
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     console.error(`${tag} failed: ${reason}`);
     try {
-      await updateMessageStatus(db, req.accountId, messageId, "failed", { error: reason }, req.userId);
+      await updateMessageStatus(db, n.accountId, messageId, "failed", { error: reason }, n.userId);
     } catch (e2) {
       console.error(`${tag}: marking the thread row failed also failed: ${String(e2)}`);
     }
+    if (claimed) await dropPending(db, n);
     return "failed";
   }
 }
+
+/**
+ * The sweep's answer to a notice it is too late to send (the appointment
+ * has started, or the cancel is a day old): CLAIM first, exactly as a send
+ * would, so an Undo that won is never told "failed" and a notice someone
+ * else sent is never relabelled. Claimed: the thread row is marked failed in
+ * plain words (the owner sees "This didn't go through" on the thread) and
+ * the pending row is settled. Lost: rule 4, as `deliverCancelNotice`. A
+ * claim that throws touches nothing: the next tick tries again.
+ *
+ * Never throws.
+ */
+export async function expireCancelNotice(
+  n: CancelNotice, deps: { db: SupabaseClient }, why: ExpiredReason,
+): Promise<ExpiredNoticeOutcome> {
+  const { db } = deps;
+  let claimed: boolean;
+  try {
+    claimed = await claimCancelNotice(db, n.accountId, n.bookingId, n.version);
+  } catch (e) {
+    console.error(`${tagOf(n)}: too late to send, and its claim failed; left for the next tick: ${String(e)}`);
+    return "unsettled";
+  }
+  if (!claimed) return onLostClaim(db, n);
+  try {
+    await updateMessageStatus(db, n.accountId, n.messageId, "failed", { error: CANCEL_NOTICE_EXPIRED[why] }, n.userId);
+  } catch (e) {
+    console.error(`${tagOf(n)}: too late to send, and marking the thread row failed failed: ${String(e)}`);
+  }
+  await dropPending(db, n);
+  return "expired";
+}
+
+type Deps = { db?: SupabaseClient; sleep?: (ms: number) => Promise<void> };
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** The `after()` job: waits out the Undo window and its grace, then delivers.
+ *  Never throws. */
+export async function sendQueuedCancelNotice(
+  req: SendQueuedCancelNoticeRequest, deps: Deps = {},
+): Promise<CancelNoticeOutcome> {
+  const sleep = deps.sleep ?? realSleep;
+  await sleep(UNDO_WINDOW_MS + NOTICE_GRACE_MS);
+  return deliverCancelNotice({
+    accountId: req.accountId, bookingId: req.bookingId, version: req.version, userId: req.userId,
+    messageId: req.queued.messageId, email: req.queued.email,
+  }, { db: deps.db ?? serviceDb() });
+}
+

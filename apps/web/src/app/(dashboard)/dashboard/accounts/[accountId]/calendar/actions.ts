@@ -6,7 +6,7 @@ import { after } from "next/server";
 import {
   serviceDb, updateCalendarSettings, getOrCreateCalendar, nextSpanishBox,
   setBookingStatus, undoOperatorCancel,
-  discardQueuedNotice, noticeMessageStatus,
+  discardQueuedNotice, noticeMessageStatus, savePendingCancelNotice, deletePendingCancelNotice,
   setBookingClosureKept, bumpHeldForAccount, emit,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
@@ -27,7 +27,7 @@ import { parseNotifyEmails } from "./notify-emails";
 import {
   cancelNoticeAvailability, queueCancelNotice, sendQueuedCancelNotice, type NoticeAvailability,
 } from "./cancel-notice";
-import { NOTICE_MESSAGE_MAX } from "./undo-window";
+import { NOTICE_MESSAGE_MAX, UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -287,7 +287,10 @@ export async function cancelNoticeOptionAction(
  * composed and its thread row written QUEUED in this request, then the send
  * is scheduled with `after()` to run once the Undo window has closed
  * (`cancel-notice.ts`), never inside this response, which is what keeps the
- * cancel reversible (DESIGN.md rule 6). A notice that cannot be queued after
+ * cancel reversible (DESIGN.md rule 6). Beside it goes the notice's durable
+ * copy (`savePendingCancelNotice`, 0100), which the cron sweep sends from if
+ * this process dies first; a copy that cannot be written is logged and the
+ * notice goes on through `after()` alone. A notice that cannot be queued after
  * the cancel committed is not promised: the toast says the customer was not
  * told.
  *
@@ -338,6 +341,18 @@ export async function cancelBookingAction(
     try {
       const origin = originFrom(await headers());
       const queued = await queueCancelNotice(serviceDb(), { accountId, bookingId, userId, locale, message, origin });
+      // The notice's durable copy (0100): the cron sweep sends it if this
+      // process dies before after() does. Its own try: a copy that cannot be
+      // written leaves the notice exactly as it was before the sweep existed,
+      // promised and sent by after().
+      try {
+        await savePendingCancelNotice(serviceDb(), {
+          accountId, bookingId, version, messageId: queued.messageId, userId, email: queued.email,
+          dueAt: new Date(Date.now() + UNDO_WINDOW_MS + NOTICE_GRACE_MS).toISOString(),
+        });
+      } catch (e) {
+        console.error(`cancelBookingAction: notice for booking ${bookingId} (account ${accountId}) queued but not durable: ${String(e)}`);
+      }
       after(async () => {
         const outcome = await sendQueuedCancelNotice({ accountId, bookingId, version, userId, queued });
         if (outcome === "failed") {
@@ -458,6 +473,15 @@ export async function undoCancelBookingAction(
     }
     console.error(`undoCancelBookingAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+
+  // Best effort, by THIS cancel's version: a pending row left behind is found
+  // by the sweep, which loses the claim, reads the booking booked, and removes
+  // it with the queued row.
+  try {
+    await deletePendingCancelNotice(serviceDb(), accountId, bookingId, version);
+  } catch (e) {
+    console.error(`undoCancelBookingAction: booking ${bookingId} restored, its pending notice not removed: ${String(e)}`);
   }
 
   if (messageId) {

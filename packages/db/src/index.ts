@@ -104,6 +104,10 @@ export { LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMIND
 export { BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel } from "./booking";
 export { claimCancelNotice, rescheduleChain, bookingContactEmail, loadAccountBrandInfo, type AccountBrandInfo } from "./booking";
 export { discardQueuedNotice, noticeMessageStatus } from "./booking";
+export {
+  savePendingCancelNotice, listDueCancelNotices, deletePendingCancelNotice, readBookingStatus,
+  type PendingCancelNotice, type PendingCancelNoticeWrite,
+} from "./booking";
 export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
 export { countContactBookingsMade, listContactUpcomingBookings, countBookingsMadeFor, type UpcomingBooking } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,

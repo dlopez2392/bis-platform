@@ -53,6 +53,8 @@ const dbMocks = vi.hoisted(() => ({
   listBilledUsageAccounts: vi.fn(), recordUsage: vi.fn(),
   // M7a PR-4: the billing pause, FIRST in the registry: no account is billed here.
   listPauseCandidates: vi.fn(),
+  // F-048: the cancel-notice sweep, right after the release pass: nothing is waiting here.
+  listDueCancelNotices: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -235,6 +237,7 @@ beforeEach(() => {
   dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.listReleasableHolds.mockResolvedValue([]);
+  dbMocks.listDueCancelNotices.mockResolvedValue([]);
   dbMocks.listBilledUsageAccounts.mockResolvedValue([]);
   dbMocks.recordUsage.mockResolvedValue("recorded");
   dbMocks.listPauseCandidates.mockResolvedValue([]);
@@ -289,6 +292,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.billingPause).toEqual(expect.objectContaining({ paused: 0, failed: 0 }));
     expect(results.billingPause).not.toHaveProperty("errored");
     expect(results.releaseHeld).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
+    expect(results.cancelNotices).toEqual({ sent: 0, failed: 0, expired: 0, undone: 0, elsewhere: 0, unsettled: 0 });
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");
@@ -297,8 +301,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+  it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then the cancel-notice sweep (F-048), then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "cancelNotices", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
   });
 
   /**
