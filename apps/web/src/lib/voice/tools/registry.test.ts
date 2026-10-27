@@ -808,9 +808,39 @@ describe("reschedule / cancel", () => {
     const pre = { ...emptyCallState(), bookings: [{ id: "b1", contactName: "A", startsAt: "x", endsAt: "y", status: "booked" as const }] };
     const { state, result } = await runTool(pre, ctx, "cancel_appointment", { bookingId: "b1" });
     expect(result).toEqual({ ok: true });
-    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai", { onlyFrom: "booked" });
     expect(state.bookings[0]!.status).toBe("cancelled");
     expect(state.served).toEqual(["cancelled"]);
+  });
+  /**
+   * F-048 follow-up: the read above and the write are two statements, and a
+   * dashboard Cancel can land between them. An unguarded write would cancel
+   * the cancelled row again and move its version on, so the owner's customer
+   * notice would lose its claim and never be sent. The write is conditional
+   * on "booked" (`onlyFrom`), and a refused write is told apart by one
+   * re-read: no longer booked answers exactly as a non-booked booking does.
+   */
+  it("F-048: a cancel whose write finds the booking no longer booked answers like a non-booked booking, and nothing follows (mutation: drop onlyFrom → FAILS; rethrow the refusal → FAILS)", async () => {
+    dbMocks.getBookingById
+      .mockResolvedValueOnce({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "booked" })
+      .mockResolvedValueOnce({ id: "b1", contact_id: "ct1", calendar_id: "cal1", starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "cancelled" });
+    dbMocks.setBookingStatus.mockImplementation(async (_db, _a, _b, _s, _actor, _type, opts?: { onlyFrom?: string }) => {
+      if (opts?.onlyFrom !== "booked") return { updatedAt: "2027-05-31T09:00:00.000Z" };
+      throw new Error("setBookingStatus: no booking b1 for account a1");
+    });
+    dbMocks.insertAiActs.mockClear();
+    dbMocks.createMessage.mockClear();
+    const { state, result } = await runTool(owns(), ctx, "cancel_appointment", { bookingId: "b1" });
+    expect(result).toEqual({ ok: false, error: "no such booking — use find_my_booking first" });
+    expect(state.served).toEqual([]);
+    expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+  it("F-048: a cancel write that fails on a booking still booked is not dressed up as 'no such booking' (mutation: swallow every write error → FAILS)", async () => {
+    dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "booked" });
+    dbMocks.setBookingStatus.mockRejectedValue(new Error("setBookingStatus failed: connection reset"));
+    await expect(runTool(owns(), ctx, "cancel_appointment", { bookingId: "b1" })).rejects.toThrow("connection reset");
   });
   /**
    * THE case behind the served flag: the booking was made on an earlier call,
@@ -1108,7 +1138,7 @@ describe("reschedule / cancel", () => {
       dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: "(956) 292-1696" });
       const { result } = await runTool(owns("ct2"), ctx, "cancel_appointment", { bookingId: "b1" });
       expect(result).toEqual({ ok: true });
-      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai", { onlyFrom: "booked" });
     });
 
     it("the stored phone is compared as E.164: \"(956) 292-1696\" on file matches caller ID +19562921696 — reschedule", async () => {
@@ -1152,7 +1182,7 @@ describe("reschedule / cancel", () => {
         endsAt: ROW.ends_at, status: "booked" as const }] };
       const { state, result } = await runTool(pre, withheld, "cancel_appointment", { bookingId: "b1" });
       expect(result).toEqual({ ok: true });
-      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai", { onlyFrom: "booked" });
       expect(state.bookings[0]!.status).toBe("cancelled");
     });
 

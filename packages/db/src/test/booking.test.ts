@@ -12,6 +12,7 @@ import {
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
+  savePendingCancelNotice, listDueCancelNotices, deletePendingCancelNotice, readBookingStatus,
   moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
   moveStamp, sameMicroInstant,
   countContactBookingsMade, listContactUpcomingBookings, listContactBookings, countBookingsMadeFor,
@@ -1374,6 +1375,76 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
         const a = await createBooking(db, accountId, range(cal, contactId, "14"), "user_test");
         await expect(rescheduleChain(db, otherAccountId, a.id)).rejects.toThrow(/no booking/);
       });
+    });
+  });
+});
+
+/**
+ * F-048 follow-up (0100): the notice's durable copy, through PostgREST and the
+ * service client, end to end: the upsert, the sweep's read with the booking's
+ * start embedded through the composite FK, the version-scoped delete, and the
+ * cascade from the Undo's discard of the queued thread row.
+ */
+describe("F-048: the pending notice (0100)", () => {
+  const range = (cal: { id: string }, contactId: string, day: string) => ({
+    calendarId: cal.id, contactId,
+    startsAt: new Date(`2029-10-${day}T15:00:00Z`), endsAt: new Date(`2029-10-${day}T16:00:00Z`),
+  });
+  const pendingOf = async (db: SupabaseClient, accountId: string) => {
+    const rows = await listDueCancelNotices(db, "2100-01-01T00:00:00Z", 1000);
+    return rows.filter((r) => r.accountId === accountId);
+  };
+
+  it("saves, reads back with the appointment's start, replaces on a second cancel of the same booking, and deletes only by its own version (mutation: drop the version predicate from the delete → the stale version removes the newer row, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Durable", email: "durable@example.com" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "01"), "user_test");
+      const first = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      const m1 = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "1" }, "user_test");
+      await savePendingCancelNotice(db, {
+        accountId, bookingId: b.id, version: first.updatedAt, messageId: m1.id, userId: "user_test",
+        email: { to: "durable@example.com", subject: "s" }, dueAt: "2029-01-01T00:00:15.000Z",
+      });
+      const [row] = await pendingOf(db, accountId);
+      expect(row).toMatchObject({
+        bookingId: b.id, accountId, messageId: m1.id, userId: "user_test", email: { to: "durable@example.com", subject: "s" },
+      });
+      expect(new Date(row!.version).getTime()).toBe(new Date(first.updatedAt).getTime());
+      expect(new Date(row!.startsAt!).getTime()).toBe(new Date("2029-10-01T15:00:00Z").getTime());
+      expect(await readBookingStatus(db, accountId, b.id)).toBe("cancelled");
+
+      // Undo, then cancel again: the newer cancel's notice replaces the row.
+      await setBookingStatus(db, accountId, b.id, "booked", "user_test", "user", { onlyFrom: "cancelled", version: first.updatedAt });
+      const second = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      const m2 = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "2" }, "user_test");
+      await savePendingCancelNotice(db, {
+        accountId, bookingId: b.id, version: second.updatedAt, messageId: m2.id, userId: "user_test",
+        email: { to: "durable@example.com", subject: "s2" }, dueAt: "2029-01-01T00:01:00.000Z",
+      });
+      expect((await pendingOf(db, accountId)).map((r) => r.messageId)).toEqual([m2.id]);
+
+      expect(await deletePendingCancelNotice(db, accountId, b.id, first.updatedAt)).toBe(false);
+      expect(await pendingOf(db, accountId)).toHaveLength(1);
+      expect(await deletePendingCancelNotice(db, accountId, b.id, second.updatedAt)).toBe(true);
+      expect(await pendingOf(db, accountId)).toEqual([]);
+    });
+  });
+
+  it("the Undo's discard of the queued thread row carries the pending row away (mutation: `on delete restrict` on message_id → discardQueuedNotice throws, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Undone" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "02"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      const m = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+      await savePendingCancelNotice(db, {
+        accountId, bookingId: b.id, version: updatedAt, messageId: m.id, userId: "user_test", email: {}, dueAt: "2029-01-01T00:00:15.000Z",
+      });
+      expect(await discardQueuedNotice(db, accountId, m.id)).toBe(true);
+      expect(await pendingOf(db, accountId)).toEqual([]);
     });
   });
 });

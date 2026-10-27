@@ -114,6 +114,11 @@ export const ACCOUNT_OWNED_TABLES = [
  * `business_status` and `closed_days` (0097, S-47d) are off this list: service_role holds no DELETE on
  * `business_status`, and both carry `account_id … on delete cascade`, so the account row delete carries them
  * away (`one-switch-schema.test.ts` proves it).
+ *
+ * `booking_cancel_notices` (0100, F-048 follow-up) is off this list: a row is scratch state about one
+ * customer notice waiting for its Undo window, not a lead-bearing row, and every FK it has cascades
+ * (booking, account, message). `bookings` is on the list, so each row leaves with its booking
+ * (`booking-cancel-notices-schema.test.ts` proves the cascades).
  */
 
 /**

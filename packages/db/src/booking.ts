@@ -623,6 +623,86 @@ export async function noticeMessageStatus(
   return (data as { status: string } | null)?.status ?? null;
 }
 
+/**
+ * F-048 follow-up (0100): the cancel notice's durable copy, so the notice
+ * outlives the process that queued it. Written by the Calendar page's cancel
+ * in its own request, once the queued thread row exists; deleted by whoever
+ * settles the notice (its `after()` job, its Undo, or the cron sweep). All
+ * four accessors below are SERVICE-client only: 0100 grants anon and
+ * authenticated nothing on the table.
+ *
+ * `email` is the composed email, fixed at queue time, opaque here (the app's
+ * `ComposedCancelNotice`).
+ */
+export type PendingCancelNoticeWrite = {
+  accountId: string; bookingId: string;
+  /** The cancel's own `updatedAt` (`setBookingStatus`'s answer): what the notice claims. */
+  version: string;
+  messageId: string; userId: string; email: unknown;
+  /** When the Undo window and its grace close. */
+  dueAt: string;
+};
+
+export type PendingCancelNotice = Omit<PendingCancelNoticeWrite, "dueAt"> & {
+  dueAt: string; createdAt: string;
+  /** The appointment's start; null only when the embed found no booking. */
+  startsAt: string | null;
+};
+
+/** UPSERTS on the booking: one live notice per booking, and a booking cancelled,
+ *  undone and cancelled again belongs to its newest cancel (the older notice
+ *  lost its claim either way). THROWS on a write error. */
+export async function savePendingCancelNotice(db: SupabaseClient, row: PendingCancelNoticeWrite): Promise<void> {
+  const { error } = await db.from("booking_cancel_notices").upsert({
+    booking_id: row.bookingId, account_id: row.accountId, version: row.version, message_id: row.messageId,
+    user_id: row.userId, email: row.email, due_at: row.dueAt,
+  }, { onConflict: "booking_id" });
+  if (error) throw new Error(`savePendingCancelNotice failed: ${error.message}`);
+}
+
+/** The cron sweep's read: rows due at or before `dueBy`, oldest due first,
+ *  at most `limit`, every account's. THROWS on a read error. */
+export async function listDueCancelNotices(
+  db: SupabaseClient, dueBy: string, limit: number,
+): Promise<PendingCancelNotice[]> {
+  const { data, error } = await db.from("booking_cancel_notices")
+    .select("booking_id, account_id, version, message_id, user_id, email, due_at, created_at, bookings(starts_at)")
+    .lte("due_at", dueBy).order("due_at", { ascending: true }).limit(limit);
+  if (error) throw new Error(`listDueCancelNotices failed: ${error.message}`);
+  return ((data ?? []) as unknown as {
+    booking_id: string; account_id: string; version: string; message_id: string; user_id: string; email: unknown;
+    due_at: string; created_at: string; bookings: { starts_at: string } | null;
+  }[]).map((r) => ({
+    bookingId: r.booking_id, accountId: r.account_id, version: r.version, messageId: r.message_id,
+    userId: r.user_id, email: r.email, dueAt: r.due_at, createdAt: r.created_at, startsAt: r.bookings?.starts_at ?? null,
+  }));
+}
+
+/** Settles ONE cancel's notice: only the row of this account, this booking
+ *  and this cancel's version, so a newer cancel's row is never removed.
+ *  `true` when a row went. THROWS on a delete error. */
+export async function deletePendingCancelNotice(
+  db: SupabaseClient, accountId: string, bookingId: string, version: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("booking_cancel_notices").delete()
+    .eq("account_id", accountId).eq("booking_id", bookingId).eq("version", version)
+    .select("booking_id");
+  if (error) throw new Error(`deletePendingCancelNotice failed: ${error.message}`);
+  return ((data ?? []) as unknown[]).length > 0;
+}
+
+/** A booking's status, or null when this account has no such booking. What a
+ *  cancel notice that lost its claim reads to tell an Undo (no longer
+ *  cancelled) from another sender (still cancelled). THROWS on a read error. */
+export async function readBookingStatus(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<BookingStatus | null> {
+  const { data, error } = await db.from("bookings").select("status")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`readBookingStatus failed: ${error.message}`);
+  return (data as { status: BookingStatus } | null)?.status ?? null;
+}
+
 /** How far `rescheduleChain` walks. A chain only grows by one row per move,
  *  so no real appointment comes near this; it bounds a corrupted one. */
 const RESCHEDULE_CHAIN_MAX = 50;

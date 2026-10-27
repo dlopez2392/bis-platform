@@ -1421,6 +1421,12 @@ export const m = {
   // already bounced or was marked as spam on an earlier message.
   "conversations.failureReason.suppressed": "Already bounced or marked as spam — nothing was sent.",
   "conversations.failureReason.suppressed.es": "Ya rebotó o lo marcaron como spam; no se envió nada.",
+  // F-048 follow-up: a Calendar-page cancel's customer notice that the cron
+  // reached too late (its own process died in the Undo window). Never sent.
+  "conversations.failureReason.noticeTooLateStarted": "Not sent: the appointment time had passed, so it was too late to tell the customer. Let them know yourself.",
+  "conversations.failureReason.noticeTooLateStarted.es": "No se envió: la hora de la cita ya había pasado y era tarde para avisarle al cliente. Avísele usted.",
+  "conversations.failureReason.noticeTooLateDayOld": "Not sent: a day had passed since the cancel, so it was too late to tell the customer. Let them know yourself.",
+  "conversations.failureReason.noticeTooLateDayOld.es": "No se envió: había pasado un día desde la cancelación y era tarde para avisarle al cliente. Avísele usted.",
 
   "forms.title": "Forms",
   "forms.add": "New form",
