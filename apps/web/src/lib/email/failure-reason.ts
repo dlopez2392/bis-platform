@@ -1,6 +1,7 @@
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
+import { CANCEL_NOTICE_EXPIRED } from "@/lib/booking/cancel-notice-expired";
 
 /**
  * The ONE marker the Resend webhook (`api/webhooks/resend/route.ts`, D-016)
@@ -72,6 +73,9 @@ export function messageFailureReason(
     if (message.error === SUPPRESSED_BLOCK_MESSAGE) return t(m, "conversations.failureReason.suppressed", locale);
     if (message.error === SUPPRESSED_ACCOUNT_BLOCK_MESSAGE) return t(m, "automations.reason.accountSuppressed", locale);
     if (message.error === BILLING_PAUSED_BLOCK_MESSAGE) return t(m, "automations.reason.billingPaused", locale);
+    // F-048 follow-up: the cron sweep's two too-late markers, matched exactly as the three above.
+    if (message.error === CANCEL_NOTICE_EXPIRED.started) return t(m, "conversations.failureReason.noticeTooLateStarted", locale);
+    if (message.error === CANCEL_NOTICE_EXPIRED.too_old) return t(m, "conversations.failureReason.noticeTooLateDayOld", locale);
     return t(m, "conversations.failureReason.failed", locale);
   }
   return null;

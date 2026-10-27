@@ -47,6 +47,8 @@ vi.mock("./cancel-notice", () => ({
 const dbMocks = vi.hoisted(() => ({
   updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), undoOperatorCancel: vi.fn(),
   discardQueuedNotice: vi.fn(), noticeMessageStatus: vi.fn(),
+  // F-048 follow-up (0100): the notice's durable copy, written by the cancel and removed by the Undo.
+  savePendingCancelNotice: vi.fn(), deletePendingCancelNotice: vi.fn(),
   serviceDb: vi.fn(() => ({})),
   // Task 17: resolves the stored Spanish follow-up box so `nextSpanishBox`
   // has something to compare against. Read through the SAME request client
@@ -67,6 +69,7 @@ import { BookingNotStartedError, BookingNotRestorableError, SlotTakenError } fro
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
+import { UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
 
 /** The minimum a submission needs beyond `followupBody` for the action to
  *  get past its own validation and reach the patch under test. */
@@ -383,6 +386,7 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
     dbMocks.undoOperatorCancel.mockResolvedValue(undefined);
     dbMocks.discardQueuedNotice.mockReset().mockResolvedValue(true);
     dbMocks.noticeMessageStatus.mockReset().mockResolvedValue(null);
+    dbMocks.deletePendingCancelNotice.mockReset().mockResolvedValue(true);
   });
 
   const V = "2026-10-09T18:00:00.123Z";
@@ -413,6 +417,21 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
     dbMocks.noticeMessageStatus.mockResolvedValue("sent");
     await undoCancelBookingAction("acct_1", "bk_1", V, "msg_1");
     expect(dbMocks.discardQueuedNotice).not.toHaveBeenCalled();
+    expect(dbMocks.deletePendingCancelNotice).not.toHaveBeenCalled();
+  });
+
+  it("F-048 follow-up: a winning Undo removes the notice's pending row, THIS cancel's only (by its version), even with no notice id from the browser (mutation: leave it → the sweep has to lose a claim to clean it up, FAILS)", async () => {
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V)).toEqual({ ok: true });
+    expect(dbMocks.deletePendingCancelNotice).toHaveBeenCalledTimes(1);
+    expect(dbMocks.deletePendingCancelNotice).toHaveBeenCalledWith({}, "acct_1", "bk_1", V);
+  });
+
+  it("F-048 follow-up: a pending row the Undo cannot remove is logged and the Undo still succeeds (the sweep loses the claim, sees the booking booked, and removes it)", async () => {
+    dbMocks.deletePendingCancelNotice.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")).toEqual({ ok: true });
+    expect(dbMocks.discardQueuedNotice).toHaveBeenCalledWith({}, "acct_1", "msg_1");
+    expect(err.mock.calls.some(([line]) => String(line).includes("pending notice not removed"))).toBe(true);
   });
 
   it("says plainly when the time was booked by someone else in between", async () => {
@@ -523,6 +542,7 @@ describe("cancelBookingAction — cancel now, tell the customer when the Undo cl
     notice.availability.mockReset().mockResolvedValue("available");
     notice.queue.mockReset().mockResolvedValue(QUEUED);
     notice.send.mockReset().mockResolvedValue("sent");
+    dbMocks.savePendingCancelNotice.mockReset().mockResolvedValue(undefined);
     nextMocks.after.mockReset();
     nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
   });
@@ -545,6 +565,44 @@ describe("cancelBookingAction — cancel now, tell the customer when the Undo cl
       accountId: "acct_1", bookingId: "bk_1", userId: "user_1",
       locale: "es", message: "Lo sentimos.\nHasta pronto.", origin: "https://app.example.com",
     });
+  });
+
+  it("F-048 follow-up: writes the notice's durable copy in THIS request, after the queued row and before after() is scheduled, due when the Undo window and its grace close (mutation: no pending row → a process that dies in the wait loses the notice, FAILS)", async () => {
+    const order: string[] = [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-27T15:00:00.000Z"));
+    try {
+      notice.queue.mockImplementation(async () => { order.push("queue"); return QUEUED; });
+      dbMocks.savePendingCancelNotice.mockImplementation(async () => { order.push("pending"); });
+      nextMocks.after.mockImplementation(() => { order.push("after"); });
+      await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(order).toEqual(["queue", "pending", "after"]);
+    expect(dbMocks.savePendingCancelNotice).toHaveBeenCalledWith({}, {
+      accountId: "acct_1", bookingId: "bk_1", version: VERSION, messageId: "msg_1", userId: "user_1",
+      email: QUEUED.email, dueAt: new Date(Date.parse("2026-10-27T15:00:00.000Z") + UNDO_WINDOW_MS + NOTICE_GRACE_MS).toISOString(),
+    });
+  });
+
+  it("F-048 follow-up: a pending row that cannot be written is logged, and the cancel, its promise and its after() send go on exactly as before (mutation: let the error escape → the owner is told nothing was sent, FAILS)", async () => {
+    dbMocks.savePendingCancelNotice.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await cancelBookingAction("acct_1", "bk_1", NOTICE)).toEqual({ ok: true, version: VERSION, notice: "scheduled", noticeMessageId: "msg_1" });
+    await runScheduled();
+    expect(notice.send).toHaveBeenCalledWith({ accountId: "acct_1", bookingId: "bk_1", version: VERSION, userId: "user_1", queued: QUEUED });
+    expect(err.mock.calls.some(([line]) => String(line).includes("not durable"))).toBe(true);
+  });
+
+  it("a notice that is not scheduled writes no pending row", async () => {
+    notice.availability.mockResolvedValue("no_email");
+    await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    notice.queue.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    notice.availability.mockResolvedValue("available");
+    await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    expect(dbMocks.savePendingCancelNotice).not.toHaveBeenCalled();
   });
 
   it("sends only after the response, with the cancel's version and the queued row (mutation: send inline instead of after() → FAILS)", async () => {

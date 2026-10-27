@@ -36,6 +36,24 @@ const PREDICATE_GATED: Record<string, readonly string[]> = {
 };
 
 /**
+ * Due-lists that deliberately read a suppressed account's rows, each with its
+ * reason. NOT a third way to skip the flag: an entry here must name a read
+ * whose rows are settled by sending through a gate that refuses a suppressed
+ * account itself, so filtering the read would leave the row unsettled forever.
+ */
+const SETTLED_BY_THE_GATE: Record<string, Record<string, string>> = {
+  "booking.ts": {
+    // F-048 follow-up (0100). Each row is a notice the owner already asked for on a cancel; it leaves the
+    // table only when it is settled. The email gate's step 2b (apps/web lib/consent/email-gate.ts,
+    // isAccountOutboundSuppressed) refuses a suppressed account for EVERY kind, so deliverCancelNotice
+    // marks the thread row failed and deletes the pending row (pinned in passes/cancel-notices.test.ts).
+    // Filtered out of this read instead, a suppressed account's row would sit at the head of the
+    // oldest-first batch for good.
+    listDueCancelNotices: "the email gate refuses a suppressed account and the delivery then settles the row",
+  },
+};
+
+/**
  * A COMMENT CANNOT VOUCH FOR A FUNCTION (hardened 2026-09-22).
  *
  * This walk used to ask `body.includes("loadSendableRows")` over the RAW
@@ -149,10 +167,24 @@ describe("outbound suppression", () => {
         // the cron now reaches through, so it is inside the same guard.
         if (!/^(listDue|getDue)/.test(name)) continue;
         if (PREDICATE_GATED[file]?.includes(name)) continue;
+        if (SETTLED_BY_THE_GATE[file]?.[name]) continue;
         // CALL SITES, in code with comments already stripped. `includes` over
         // the raw source was satisfied by a comment naming the loader; see
         // stripComments' note and the regression case above.
         if (callSitesOf("loadSendableRows", body) === 0) offenders.push(`${file}: ${name}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("every gate-settled exemption names a due-list that exists in its file, with a stated reason (mutation: rename the function and leave the entry → FAILS)", () => {
+    const offenders: string[] = [];
+    for (const [file, entries] of Object.entries(SETTLED_BY_THE_GATE)) {
+      const names = bodies(file).map((f) => f.name);
+      for (const [name, reason] of Object.entries(entries)) {
+        if (!/^(listDue|getDue)/.test(name)) offenders.push(`${file}: ${name} — not a due-list, needs no exemption`);
+        if (!names.includes(name)) offenders.push(`${file}: ${name} — function not found`);
+        if (reason.trim().length < 20) offenders.push(`${file}: ${name} — no reason stated`);
       }
     }
     expect(offenders).toEqual([]);

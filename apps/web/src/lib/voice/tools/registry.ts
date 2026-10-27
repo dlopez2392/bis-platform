@@ -840,7 +840,24 @@ export async function runTool(
       const owner = await checkCallerOwnsBooking(state, ctx, "cancel", bookingId, row.contact_id);
       if (!owner.owned) return { state, result: owner.result };
 
-      const { updatedAt: cancelledAt } = await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+      // F-048 follow-up: conditional on "booked". A dashboard Cancel landing
+      // between the read above and this write would otherwise be cancelled
+      // again, its version moved on, and the owner's customer notice would
+      // lose its claim and never go. A refused write is told apart by one
+      // re-read: no longer booked answers as a non-booked booking does above;
+      // anything else is a real failure and throws as it always did.
+      let cancelledAt: string;
+      try {
+        ({ updatedAt: cancelledAt } = await setBookingStatus(
+          ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai", { onlyFrom: "booked" },
+        ));
+      } catch (e) {
+        const now = await getBookingById(ctx.db, ctx.accountId, bookingId);
+        if (!now || now.status !== "booked") {
+          return { state, result: { ok: false, error: "no such booking — use find_my_booking first" } };
+        }
+        throw e;
+      }
       await recordAct(ctx.db, ctx.accountId, {
         ...voiceSource(ctx.callRowId), kind: "booking_cancelled", contactId: row.contact_id,
         target: { bookingId }, before: { startsAt: row.starts_at, endsAt: row.ends_at },
