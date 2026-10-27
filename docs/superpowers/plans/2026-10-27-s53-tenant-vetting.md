@@ -1262,6 +1262,10 @@ Each guarded action computes `sofiaIsOn(profile, numbers)` for the state before 
 | Business status / the one switch (`packages/db/src/business-status.ts`) | no (it reads voice hours only) | none |
 | API routes (`app/api/**`) | no writer of `phone_numbers.status`, `voice_profiles.enabled` or `concierge_enabled` (grep) | none |
 | Seeds (`packages/db/src/demo/seed.ts:399-416`, `ci-seed/seed.ts:236`) | demo/CI only, `org_demo_`/`org_test_` | born `hvac` (Task 3) |
+| `api/voice/web/session` (the website's voice demo) | no: it serves only a `testing`/`live` number whose profile is ENABLED, which is narrower than `callAnswerable` (a `testing` number answers whatever `enabled` says). Whenever it serves, answering is already true, so the guarded writes above already decided it | none needed (recorded in the fix round) |
+| The web chat's published-form condition | no: a published form is an extra condition on the chat, narrower than the rule. Publishing or unpublishing a form never sets `concierge_enabled`; only `enableConciergeAction` does | none needed (recorded in the fix round) |
+| **Race, accepted:** the Trade card (`setTradeAction`) against any switch-on guard | check-then-write on both sides: a move to a CRM-only trade and a switch-on sent in the same instant can both pass, leaving a CRM-only company with Sofía on | none; accepted (agency-only, two actions within milliseconds; closing it needs the check inside the database). Stated in `trade-actions.ts` and `sofia-guard.ts` |
+| **Race, accepted:** two individually-allowed writes racing INTO answering | tab A saves the first profile while the number is `provisioned` (not a switch-on); tab B moves it `provisioned` → `testing` having read "no profile" (not a switch-on either). Together a `testing` number answers | none; accepted for the same reason. Stated in `sofia-guard.ts` |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2360,12 +2364,17 @@ git commit -m "S-53: the agency's Settings has a Trade card, found from the pale
 **Interfaces:**
 - Consumes: `getAccountTrade` (Task 3); `sofiaGate`, `sofiaGateText` (Task 2); `switchesSofiaOn` (Task 5).
 - Produces:
-  - `type VettingLock = { text: string; link: { href: string; label: string } | null }` (exported from `voice-settings.tsx`). The link is present only for "no trade", pointing at Settings (spec 5.3: "links to Settings"; plan review M6).
+  - `type VettingLock = { text: string; link: { href: string; label: string } | null; locale: "en" | "es" }` (exported from `voice-settings.tsx`; `locale` added in the fix round so the reason sets `lang`). The link is present only for "no trade", pointing at Settings (spec 5.3: "links to Settings"; plan review M6).
   - `VoiceSettings`, `VoiceProfileForm`, `ConciergeCard` and `PhoneNumbersPanel` take an optional `vettingLock?: VettingLock | null`.
   - `SetupInputs.trade?: string | null`.
   - `SetupVettingNotice({ accountId, trade })`.
 
 **UI rule.** The concierge toggle locks, with the reason, whenever the chat is off and the trade forbids it. `NumberStatusSelect` disables `testing` / `live` exactly when Task 5's `switchesSofiaOn` says that choice would switch Sofía on: the server's rule, same function. The Receptionist enabled checkbox locks, with the reason, whenever it is off and the trade forbids Sofía. That is stricter than the server, which allows enabling with no answering number. The difference is on purpose: a ticked box with no number is a promise that switches her on later. The two server-only cases (hole B, a first profile beside a testing number) surface as the Save's own refusal toast.
+
+**Recorded in the fix round (2026-10-27), after the final and design reviews:**
+- **Setup with NO trade keeps its switch-ons clickable (final review M8).** Setup shows the notice ("Set this company's trade first." with a link to Settings) above the panel and keeps every step; it does not disable Setup's own buttons. A press reaches the guarded server action and is refused with the same sentence. Chosen because Setup's steps are shared with companies whose trade is allowed, the server is the authority either way, and the notice already names the fix. A CRM-only trade is different: its Sofía steps are dropped, so there is nothing to press.
+- **How the number status lock is proved.** Radix renders nothing of a closed Select on the server, so `phone-numbers-panel.test.ts` stands in plain elements for the Select's parts and asserts what `PhoneNumbersPanel` hands them: `testing`/`live` disabled with "not available" in the lock's language when they would switch Sofía on, the trigger's `aria-describedby="number-vetting-reason"`, and nothing locked without a lock or for a number already answering. The server's `setNumberStatusAction` guard (Task 5) remains the authority; the UI lock is the same `switchesSofiaOn` rule.
+- **The web chat's Undo is hidden under a lock (final review M6).** Its Undo is a re-enable, which the trade gate refuses, so `conciergeDisabledToast` offers none while the page carries a vetting lock.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2880,8 +2889,8 @@ git commit -m "S-53 e2e: Add company refuses a held trade; a CRM-only company's 
 
      Verify read-only: `select name, trade, trade_other from accounts order by name`.
 
-     Until this step, these companies' already-on Sofía and web chat keep working: nothing is gated at call time. But every switch-on is refused with "Set this company's trade first." That includes the web chat's Undo after turning it off, a number moved back to testing, and go-live from a provisioned number. So ask the owner for the OK BEFORE merging, and set the three trades the moment the deploy is live.
-  7. **MANDATORY, bis-ci** (plan review M4): set `Test Client One`'s trade to `hvac` through Vercel Preview's Settings → Trade card, signed in as the agency, right after 0101 reaches bis-ci (step 2). `ci:seed` never updates an existing account (`packages/db/src/ci-seed/seed.ts:196-200` creates only when none is found), so Task 3's `trade: "hvac"` reaches only CI's throwaway stacks. Without this step, bis-ci's Test Client One has no trade: every switch-on on Preview, local e2e runs against bis-ci and the dispatched screenshot capture is refused, and its Voice page shows the lock. Verify read-only on bis-ci: `select name, trade from accounts where name = 'Test Client One'` → `hvac`.
+     Until this step, these companies' already-on Sofía and web chat keep working: nothing is gated at call time. But every switch-on is refused with "Set this company's trade first." That includes a number moved back to testing and go-live from a provisioned number; turning the web chat off offers no Undo at all until the trade is set (the fix round hides an Undo that could only fail). So ask the owner for the OK BEFORE merging, and set the three trades the moment the deploy is live.
+  7. **MANDATORY, bis-ci** (plan review M4; DONE 2026-10-27 by MCP update, per the ledger): set `Test Client One`'s trade to `hvac` through Vercel Preview's Settings → Trade card, signed in as the agency, right after 0101 reaches bis-ci (step 2). When this plan was written `ci:seed` never updated an existing account, so Task 3's `trade: "hvac"` reached only CI's throwaway stacks. Since the fix round, `ensureCiBaseline` sets `hvac` on an existing seeded account that has NO trade (never over a recorded one) and `baselineGaps` reports a seeded account with none, so a re-seed repairs this too. Without this step, bis-ci's Test Client One has no trade: every switch-on on Preview, local e2e runs against bis-ci and the dispatched screenshot capture is refused, and its Voice page shows the lock. Verify read-only on bis-ci: `select name, trade from accounts where name = 'Test Client One'` → `hvac`.
   8. Update the execution ledger (`.superpowers/sdd/progress.md`), the roadmap tracker's S-53 / F-173 rows (memory `bis-roadmap-tracker`) and memory `bis-next-work`.
 
 ---
