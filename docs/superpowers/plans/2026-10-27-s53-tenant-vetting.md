@@ -7,7 +7,7 @@
 **Architecture:** Migration 0101 adds `accounts.trade` / `accounts.trade_other`. Its CHECK lists only the creatable keys. One pure module, `apps/web/src/lib/vetting/trades.ts`, holds all 30 trades with their en/es labels, verdicts and reasons. A unit test parses 0101's CHECK list and compares it with the module. The rules are enforced in the server actions:
 - Add company and Add as a company refuse a missing, held or turned-away trade before any Clerk call.
 - A new Settings action sets the trade. It refuses a change to `crm_only` while Sofía is answering or the web chat is on.
-- One server guard (`sofiaSwitchOnRefusal`) runs in every action that switches Sofía or the web chat on.
+- One server guard (`sofiaSwitchOnRefusal`) runs in every action that switches Sofía or the web chat on. "Switching on" means taking the company from not answering to answering (`switchesSofiaOn`, built on the call path's own `callAnswerable`), or the chat from off to on; everything else only subtracts at call time.
 
 The UI shows the same reasons: a grouped Trade picker, a Trade card on Settings, disabled switches with the reason beside them, and a Setup notice. On a CRM-only trade, Setup also drops the Sofía steps.
 
@@ -206,18 +206,24 @@ describe("0101 accounts.trade / accounts.trade_other", () => {
         .rejects.toMatchObject({ code: "42501" });
     }));
 
-  it("an agency session cannot UPDATE trade either, and its INSERT of a held trade is refused by the CHECK", () =>
+  // Two tests, not one (plan review I1): after the first refusal the transaction is aborted, so a second
+  // statement in the same withRollback would fail with "current transaction is aborted", not by its own check.
+  it("an agency session cannot UPDATE trade either (column grant, mutation: grant update (trade_other) to authenticated -> FAILS)", () =>
     withRollback(async (c) => {
-      const { accountId } = await seed(c, "agency");
-      const { rows: [agency] } = await c.query<{ id: string }>("select agency_id as id from public.accounts where id = $1", [accountId]);
+      const { accountId } = await seed(c, "agency_upd");
       await actAs(c, { app_role: "agency_admin", sub: `user_agency_${RUN}` });
       await expect(c.query("update public.accounts set trade_other = 'x' where id = $1", [accountId]))
         .rejects.toMatchObject({ code: "42501" });
-      await c.query("savepoint s");
+    }));
+
+  it("an agency session's INSERT of a held trade is refused by the CHECK (its table-level INSERT is not a way round it)", () =>
+    withRollback(async (c) => {
+      const { accountId } = await seed(c, "agency_ins");
+      const { rows: [agency] } = await c.query<{ id: string }>("select agency_id as id from public.accounts where id = $1", [accountId]);
+      await actAs(c, { app_role: "agency_admin", sub: `user_agency_${RUN}` });
       await expect(c.query(
         "insert into public.accounts (agency_id, clerk_org_id, name, trade) values ($1, $2, 'Held', 'tax')",
         [agency!.id, `org_trade_ins_${RUN}`])).rejects.toMatchObject({ code: "23514", constraint: "accounts_trade_check" });
-      await c.query("rollback to savepoint s");
     }));
 });
 ```
@@ -358,7 +364,7 @@ for DB in pre post; do SUPABASE_DB_URL=postgresql://postgres@localhost:55481/$DB
 SUPABASE_DB_URL=postgresql://postgres@localhost:55481/post pnpm exec vitest run src/test/account-trade-schema.test.ts
 ```
 Expected:
-- The seven grant suites PASS on both databases.
+- The seven grant suites give IDENTICAL results on `pre` and `post` (plan review M2). Only their `withRollback` cases prove anything on the replica; any case that needs PostgREST or service credentials (`withTestAccount` / `serviceDb`) is skipped or fails the same way on both, and runs on CI.
 - `account-trade-schema.test.ts` PASSES on `post`: all cases, including the 12 + 4 + 2 `it.each` rows.
 
 Then run these mutation probes on `post` (apply each with `psql -d post`, then rebuild `post` with `create database post template pre` plus 0101 between probes). Each must turn its named case red:
@@ -922,7 +928,7 @@ git commit -m "S-53: one module holds every trade and its verdict, bound to migr
   - `createAccount(db, { …, trade?: string; tradeOther?: string | null })`
   - `type AccountTrade = { trade: string | null; tradeOther: string | null }`
   - `getAccountTrade(db, accountId): Promise<AccountTrade>`: throws on a failed read or a missing account
-  - `setAccountTrade(db, accountId, { trade: string; tradeOther: string | null }, actorId): Promise<void>`: emits `account.trade_set` with `{ trade, tradeOther }`, and throws on a zero-row update
+  - `setAccountTrade(db, accountId, { trade: string; tradeOther: string | null }, actorId): Promise<void>`: emits `account.trade_updated` with `{ trade, tradeOther }`, and throws on a zero-row update
 
 Why this task comes before the guards: once Task 5's guards exist, the e2e fixture account must already have an `allowed` trade. Otherwise every fixture spec that switches Sofía or the web chat on would be refused: concierge, setup, forward-calls, trade-modules, ai-disclosure, structured-facts, calls.
 
@@ -942,13 +948,13 @@ describe("account trade (S-53, 0101)", () => {
     }
   });
 
-  it("getAccountTrade reads null on a fresh account; setAccountTrade writes, emits account.trade_set, and the database refuses a held trade", async () => {
+  it("getAccountTrade reads null on a fresh account; setAccountTrade writes, emits account.trade_updated, and the database refuses a held trade", async () => {
     await withTestAccount(async (db, accountId) => {
       expect(await getAccountTrade(db, accountId)).toEqual({ trade: null, tradeOther: null });
       await setAccountTrade(db, accountId, { trade: "restaurant", tradeOther: null }, "user_test");
       expect(await getAccountTrade(db, accountId)).toEqual({ trade: "restaurant", tradeOther: null });
       const { data: ev } = await db.from("events").select("type, actor_type, actor_id, payload")
-        .eq("account_id", accountId).eq("type", "account.trade_set").single();
+        .eq("account_id", accountId).eq("type", "account.trade_updated").single();
       expect(ev).toMatchObject({ actor_type: "user", actor_id: "user_test", payload: { trade: "restaurant", tradeOther: null } });
       await expect(setAccountTrade(db, accountId, { trade: "tax", tradeOther: null }, "user_test"))
         .rejects.toThrow(/setAccountTrade failed: .*accounts_trade_check/);
@@ -960,7 +966,7 @@ describe("account trade (S-53, 0101)", () => {
     const ghost = randomUUID();
     await expect(getAccountTrade(db, ghost)).rejects.toThrow(/no account/);
     await expect(setAccountTrade(db, ghost, { trade: "hvac", tradeOther: null }, "user_test")).rejects.toThrow(/no account/);
-    const { data } = await db.from("events").select("id").eq("account_id", ghost).eq("type", "account.trade_set");
+    const { data } = await db.from("events").select("id").eq("account_id", ghost).eq("type", "account.trade_updated");
     expect(data ?? []).toEqual([]);
   });
 });
@@ -1023,7 +1029,7 @@ export async function setAccountTrade(
     .update({ trade: input.trade, trade_other: input.tradeOther }).eq("id", accountId).select("id");
   if (error) throw new Error(`setAccountTrade failed: ${error.message}`);
   if (!data?.length) throw new Error(`setAccountTrade: no account ${accountId}`);
-  await emit(db, accountId, "account.trade_set", actorId, { trade: input.trade, tradeOther: input.tradeOther });
+  await emit(db, accountId, "account.trade_updated", actorId, { trade: input.trade, tradeOther: input.tradeOther });
 }
 ```
 
@@ -1144,7 +1150,7 @@ describe("S-53 vetting: the trade is checked before Clerk is touched", () => {
 });
 ```
 
-Existing adopt tests that build their own `FormData` without `trade` must add `f.set("trade", "hvac")`. Read the file's adopt describe and add it wherever a case expects success or a later refusal.
+The existing adopt tests share one helper, `tz()`, at `actions.test.ts:211`: `const tz = (zone = "America/Chicago") => { const f = new FormData(); f.set("timezone", zone); return f; };`. Change it to also `f.set("trade", "hvac");`, so every existing adopt case stays valid. The adopt test at :213 asserts `createAccount`'s exact input with `toEqual({ clerkOrgId, name, timezone, actorId })`. Widen that expected object with `trade: "hvac", tradeOther: null`. The same applies to any create-path `toEqual` on `createAccount.mock.calls[0][1]` in this file: add the two keys.
 
 - [ ] **Step 2: Run to see them fail**
 
@@ -1223,29 +1229,35 @@ git commit -m "S-53: Add company and Add as a company refuse a missing, held or 
 - Create: `apps/web/src/lib/vetting/sofia-state.ts`, `apps/web/src/lib/vetting/sofia-state.test.ts`
 - Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts` (`saveVoiceProfileAction` :70-187, `setNumberStatusAction` :378-420, `enableConciergeAction` :523-559)
 - Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts` (`goLiveAction` :120-176)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts` (`ALLOWED` gains `"lib/vetting/sofia-guard.ts": "agency-only"`, with a one-line reason comment: it reads `accounts.trade` on `serviceDb()`, and is called only from agency-only actions after `isAgency` / `requireAgency*`)
 - Modify tests: `.../voice/actions.test.ts` (dbMocks :9-24 gains `getAccountTrade`; beforeEach :75-91 sets its default), `.../setup/actions.test.ts` (dbMocks gains `getAccountTrade`, default `hvac`)
-- Affected tests: both action test files, `src/lib/vetting/*`, `src/app/api/voice/texml/route.test.ts` (unchanged: no call-path gate; run it)
+- Affected tests: both action test files; `src/lib/vetting/*`; `.../[accountId]/in-account-service-reads.test.ts` (plan review I3: it fails by name on any new `lib/` or in-account file that mentions `serviceDb`); `src/app/api/voice/texml/route.test.ts` (unchanged, because there is no call-path gate; run it)
 
 **Interfaces:**
 - Consumes: `sofiaGate` (Task 2), `sofiaGateText` (Task 2), `getAccountTrade` (Task 3), `callAnswerable` (`apps/web/src/lib/voice/accept-gate.ts:26-32`).
 - Produces:
+  - `type SofiaProfileState = { enabled?: boolean | null; concierge_enabled?: boolean | null } | null`
+  - `sofiaIsOn(profile: SofiaProfileState, numbers: readonly { status: PhoneNumberStatus }[]): { answering: boolean; chat: boolean }`. Used by Task 6 and Task 9.
+  - `switchesSofiaOn(before: SofiaSnapshot, after: SofiaSnapshot): boolean`, where `type SofiaSnapshot = { profile: SofiaProfileState; numbers: readonly { status: PhoneNumberStatus }[] }`. Used by Task 9's `NumberStatusSelect`.
   - `sofiaSwitchOnRefusal(accountId: string, locale?: Locale): Promise<string | null>`: `null` means it may switch on; a string is the refusal. A failed read fails closed with `vetting.readFailed`.
-  - `sofiaIsOn(profile: { enabled: boolean; concierge_enabled: boolean } | null, numbers: readonly { status: PhoneNumberStatus }[]): { answering: boolean; chat: boolean }` (used by Task 6).
 
-**Every path that makes Sofía answer or turns the web chat on.**
+**THE RULE (plan review C1).** "Switching Sofía on" means the company goes from not answering to answering. "Answering" is the call path's own predicate, `callAnswerable` (`accept-gate.ts:26-32`, read by `api/voice/texml/route.ts:237-272`): the number is `testing` or `live`, a profile exists, and the number is `testing` or `profile.enabled` is true. A `testing` number answers whatever `enabled` says. "Switching the web chat on" means `concierge_enabled` goes from false to true.
 
-Sofía answers a call when the number is `testing` or `live`, a profile exists, and (`testing`, or `live` with `profile.enabled`). Sources: `api/voice/texml/route.ts:237-272` and `accept-gate.ts:26-32`. The web chat answers when `voice_profiles.concierge_enabled` is set.
+Each guarded action computes `sofiaIsOn(profile, numbers)` for the state before and the state it would write. It calls `sofiaSwitchOnRefusal` only on false → true. Both reads fail closed. **Everything else only subtracts at call time.** A write that does not take answering or the chat from false to true never needs a trade. Turning off is never blocked.
 
-| Path (file:line) | Turns on? | Guard |
+**Every path that makes Sofía answer or turns the web chat on:**
+
+| Path (file:line) | Can take answering/chat false → true? | Guard |
 |---|---|---|
-| `voice/actions.ts` `setNumberStatusAction` → `testing`/`live` (:378-420); also Setup's "Enable test calls" (`setup/page.tsx:174` binds it) | yes, when the number is not already testing/live | `sofiaSwitchOnRefusal` unless this number is already testing/live ("anything already on stays on") |
-| `setup/actions.ts` `goLiveAction` → `goLive` RPC (enables the profile and sets the number live, :120-176) | yes | `sofiaSwitchOnRefusal`, first, after the agency check |
-| `voice/actions.ts` `saveVoiceProfileAction` with `enabled=on` (:155) | yes, when the stored profile is not enabled | `sofiaSwitchOnRefusal` only on off→on |
-| `voice/actions.ts` `enableConciergeAction` (:523) | yes (web chat) | `sofiaSwitchOnRefusal` |
-| `voice/actions.ts` `assignNumberAction` (:272): inserts `provisioned` (`packages/db/src/voice.ts:137`) | no (a provisioned number never answers) | none |
-| `voice/actions.ts` `moveNumberAction` (:342) and `numbers/actions.ts` `moveNumberToAccountAction` (:56): `reassignPhoneNumber` resets to `provisioned` (`voice.ts:1140`) | no | none |
-| `numbers/actions.ts` `releaseNumberAction`, `repairNumberRoutingAction`; `disableConciergeAction`; `setNumberStatusAction` → `provisioned`/`released`; profile `enabled` on→off | turning off / no change | none (never blocked) |
-| `voice/actions.ts` `setForwardCallsAction(false)` (:597) | resumes an answering line; it cannot make a provisioned number answer | none (see gaps) |
+| `voice/actions.ts` `setNumberStatusAction` → `testing`/`live` (:378-420); also Setup's "Enable test calls" (`setup/page.tsx:174` binds it) | yes: provisioned/released → testing or live with a profile; **and live → testing while the profile is disabled** (hole A) | `switchesSofiaOn` over (profile, numbers) before and after this status; reads the profile and the numbers, both fail closed |
+| `voice/actions.ts` `saveVoiceProfileAction` (:70-187) | yes: Receptionist enabled off → on with a live number; **and saving the FIRST profile, Receptionist off, while a number is `testing`** (hole B: `callAnswerable` answers `testing` once a profile exists) | `switchesSofiaOn` over (stored profile, numbers) before and (profile as saved, numbers) after; reads the numbers beside the profile, fails closed |
+| `setup/actions.ts` `goLiveAction` → `goLive` RPC (enables the profile and sets the number live, :120-176) | yes when no number answered yet (e.g. a `provisioned` number that already had its test call; `LIVE_NUMBER_STATUSES` includes `provisioned`, `setup-status.ts:84-86`) | `switchesSofiaOn` over `gatherSetupInputs`' profile and numbers before, and (enabled, target live) after |
+| `voice/actions.ts` `enableConciergeAction` (:523) | yes (web chat; the card calls it only while off) | `sofiaSwitchOnRefusal` |
+| `voice/actions.ts` `assignNumberAction` (:272): inserts `provisioned` (`packages/db/src/voice.ts:137`) | no (provisioned never answers) | none |
+| `voice/actions.ts` `moveNumberAction` (:342), `numbers/actions.ts` `moveNumberToAccountAction` (:56): `reassignPhoneNumber` resets to `provisioned` (`voice.ts:1140`) | no | none |
+| `numbers/actions.ts` `releaseNumberAction`, `repairNumberRoutingAction`; `disableConciergeAction`; `setNumberStatusAction` → `provisioned`/`released`; Receptionist enabled on → off | no (subtracts) | none (never blocked) |
+| `voice/actions.ts` `setForwardCallsAction(false)` (:597) | no: forwarding is applied after the answer decision; it never makes a non-answering number answer | none |
+| `voice/actions.ts` `saveBusinessHoursAction`, `saveServicesAction`, `setTransferPhoneAction` | no (knowledge and handoff only; the profile must already exist) | none |
 | `blueprints/actions.ts` `applyBlueprintAction`, `captureBlueprintAction` | no (grep: no `voice_profiles`/`phone_numbers` write in blueprints) | none |
 | Business status / the one switch (`packages/db/src/business-status.ts`) | no (it reads voice hours only) | none |
 | API routes (`app/api/**`) | no writer of `phone_numbers.status`, `voice_profiles.enabled` or `concierge_enabled` (grep) | none |
@@ -1257,7 +1269,7 @@ Sofía answers a call when the number is `testing` or `live`, a profile exists, 
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { sofiaIsOn } from "./sofia-state";
+import { sofiaIsOn, switchesSofiaOn } from "./sofia-state";
 
 const P = (enabled: boolean, concierge = false) => ({ enabled, concierge_enabled: concierge });
 
@@ -1278,6 +1290,23 @@ describe("sofiaIsOn (callAnswerable over every active number)", () => {
     expect(sofiaIsOn(null, []).chat).toBe(false);
   });
 });
+
+describe("switchesSofiaOn (false -> true only; everything else only subtracts)", () => {
+  it("hole A: live -> testing with a disabled profile switches her on (mutation: compare number status only -> FAILS)", () => {
+    expect(switchesSofiaOn({ profile: P(false), numbers: [{ status: "live" }] }, { profile: P(false), numbers: [{ status: "testing" }] })).toBe(true);
+  });
+  it("hole B: a first profile beside a testing number switches her on, Receptionist off or not", () => {
+    expect(switchesSofiaOn({ profile: null, numbers: [{ status: "testing" }] }, { profile: P(false), numbers: [{ status: "testing" }] })).toBe(true);
+  });
+  it("testing -> live with a disabled profile, enabled on with no number, and anything already answering are not switch-ons", () => {
+    expect(switchesSofiaOn({ profile: P(false), numbers: [{ status: "testing" }] }, { profile: P(false), numbers: [{ status: "live" }] })).toBe(false);
+    expect(switchesSofiaOn({ profile: P(false), numbers: [] }, { profile: P(true), numbers: [] })).toBe(false);
+    expect(switchesSofiaOn({ profile: P(true), numbers: [{ status: "live" }] }, { profile: P(true), numbers: [{ status: "testing" }] })).toBe(false);
+  });
+  it("the chat going false -> true is a switch-on too", () => {
+    expect(switchesSofiaOn({ profile: P(false), numbers: [] }, { profile: P(false, true), numbers: [] })).toBe(true);
+  });
+});
 ```
 
 `apps/web/src/lib/vetting/sofia-guard.test.ts`:
@@ -1291,7 +1320,9 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 import { m } from "@/lib/messages";
 import { sofiaSwitchOnRefusal } from "./sofia-guard";
 
-beforeEach(() => dbMocks.getAccountTrade.mockReset());
+// Braced (plan review I2): a bare arrow would RETURN the mock, and vitest runs a function returned from
+// beforeEach as a teardown.
+beforeEach(() => { dbMocks.getAccountTrade.mockReset(); });
 
 describe("sofiaSwitchOnRefusal", () => {
   it("lets an allowed trade switch on", async () => {
@@ -1319,12 +1350,15 @@ describe("sofiaSwitchOnRefusal", () => {
 In `voice/actions.test.ts`:
 - Add `getAccountTrade: vi.fn(),` to `dbMocks` (:9-24).
 - In `beforeEach`, after the resets, add `dbMocks.getAccountTrade.mockResolvedValue({ trade: "hvac", tradeOther: null });`.
-- Append:
+
+The file's existing defaults stay valid. `listPhoneNumbersForAccount` resolves `[]`, so no existing case switches anything on: no number answers, before or after. That keeps every pre-existing D-042, go-live-profile and concierge case unchanged.
+
+Append:
 
 ```ts
-describe("S-53 vetting: switching Sofía or the web chat on (spec 5.3)", () => {
+describe("S-53 vetting: switching Sofía or the web chat on (spec 5.3; plan review C1)", () => {
   const CRM = "Sofía and the web chat aren't available for restaurant businesses yet.";
-  const row = (id: string, status: string) => ({ id, account_id: "a1", e164: `+1956555${id.length}`, telnyx_id: null, status });
+  const row = (id: string, status: string) => ({ id, account_id: "a1", e164: `+1956555010${id.slice(-1)}`, telnyx_id: null, status });
 
   it("enableConciergeAction refuses a crm_only trade and no trade, writing nothing (mutation: delete the guard -> FAILS)", async () => {
     dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
@@ -1343,16 +1377,36 @@ describe("S-53 vetting: switching Sofía or the web chat on (spec 5.3)", () => {
 
   it.each(["testing", "live"])("setNumberStatusAction refuses provisioned -> %s on a crm_only trade (mutation: delete the guard -> FAILS)", async (status) => {
     dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
     dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "provisioned")]);
     expect(await setNumberStatusAction("a1", "pn1", status)).toEqual({ ok: false, error: CRM });
     expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
   });
 
-  it("setNumberStatusAction lets an already-answering number move testing -> live with no trade (anything on stays on; mutation: drop the wasAnswering exemption -> FAILS)", async () => {
+  it("hole A: setNumberStatusAction refuses live -> testing while the profile is disabled (mutation: compute 'was answering' from the number's status alone -> FAILS)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    expect(await setNumberStatusAction("a1", "pn1", "testing")).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+
+  it("setNumberStatusAction lets an answering number move testing -> live with no trade (already on stays on)", async () => {
     dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
     dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing")]);
     dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
     expect(await setNumberStatusAction("a1", "pn1", "live")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+  });
+
+  it("setNumberStatusAction fails closed when the profile cannot be read for a testing/live change", async () => {
+    dbMocks.getVoiceProfile.mockRejectedValue(new Error("down"));
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "provisioned")]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await setNumberStatusAction("a1", "pn1", "testing")).toEqual({ ok: false, error: m["voice.numbers.statusUpdateFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
   });
 
   it.each(["provisioned", "released"])("setNumberStatusAction -> %s is never gated", async (status) => {
@@ -1363,55 +1417,85 @@ describe("S-53 vetting: switching Sofía or the web chat on (spec 5.3)", () => {
     expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
   });
 
-  it("saveVoiceProfileAction refuses Receptionist enabled off -> on on a crm_only trade, saving nothing (mutation: delete the guard -> FAILS)", async () => {
+  it("saveVoiceProfileAction refuses Receptionist enabled off -> on beside a live number on a crm_only trade, saving nothing (mutation: delete the guard -> FAILS)", async () => {
     dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
     dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
     const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }));
     expect(r).toEqual({ ok: false, error: CRM });
     expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
     expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
   });
 
-  it("saveVoiceProfileAction keeps an already-enabled profile saving with no trade, and turning it off is never gated", async () => {
-    dbMocks.upsertVoiceProfile.mockResolvedValue({});
-    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
-    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
-    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }))).toEqual({ ok: true });
+  it("hole B: saveVoiceProfileAction refuses the FIRST profile beside a testing number, Receptionist off (mutation: guard only on enabled=on -> FAILS)", async () => {
     dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing")]);
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" }));
+    expect(r).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("saveVoiceProfileAction fails closed when the numbers cannot be read", async () => {
+    dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" })))
+      .toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("saveVoiceProfileAction: enabling with no number, an already-answering profile, and turning off are never gated", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }))).toEqual({ ok: true });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }))).toEqual({ ok: true });
     expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" }))).toEqual({ ok: true });
-    expect(dbMocks.getAccountTrade).toHaveBeenCalledTimes(0);
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
   });
 });
 ```
 
 In `setup/actions.test.ts`:
-- Add `getAccountTrade: vi.fn(),` to `dbMocks`.
-- In its `beforeEach`, add `dbMocks.getAccountTrade.mockReset().mockResolvedValue({ trade: "hvac", tradeOther: null });`. If `beforeEach` resets all mocks generically, set it after the reset.
-- Append inside the `goLiveAction` area:
+- Add `getAccountTrade: vi.fn(),` to `dbMocks`. The `allMocks()` loop (:106-108) resets it.
+- In `beforeEach` (:166-179), after the reset loop, add `dbMocks.getAccountTrade.mockResolvedValue({ trade: "hvac", tradeOther: null });`.
+- Append, using the file's own fixture builders `readyGathered` (:130) and `readyNumbers` (:118):
 
 ```ts
-describe("goLiveAction - S-53 vetting", () => {
-  it("refuses a crm_only trade before any read or write (mutation: delete the guard -> FAILS)", async () => {
+describe("goLiveAction - S-53 vetting (plan review C1)", () => {
+  const provisioned = () => readyNumbers().map((n) => ({ ...n, status: "provisioned" as const }));
+
+  it("refuses a crm_only trade when going live switches Sofía on (a provisioned number), writing nothing (mutation: delete the guard -> FAILS)", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ numbers: provisioned() }));
     dbMocks.getAccountTrade.mockResolvedValue({ trade: "child_care", tradeOther: null });
-    const r = await goLiveAction("acct_1");
+    const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: false, error: "Sofía and the web chat aren't available for child care businesses yet." });
-    expect(setupInputsMocks.gatherSetupInputs).not.toHaveBeenCalled();
     expect(dbMocks.goLive).not.toHaveBeenCalled();
   });
-  it("refuses no trade", async () => {
+
+  it("refuses no trade on the same switch-on", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ numbers: provisioned() }));
     dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
-    expect(await goLiveAction("acct_1")).toEqual({ ok: false, error: m["vetting.sofia.noTrade"] });
+    expect(await goLiveAction("a1")).toEqual({ ok: false, error: m["vetting.sofia.noTrade"] });
     expect(dbMocks.goLive).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for a trade when the testing number already answers (already on stays on)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    expect(await goLiveAction("a1")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+    expect(dbMocks.goLive).toHaveBeenCalledOnce();
   });
 });
 ```
 
-(Use whatever account id the file's other goLive cases use. Make sure `m` is imported there; it is already imported if the file refers to `m["setup.goLive.denied"]`.)
-
 - [ ] **Step 2: Run to see them fail**
 
-Run: `pnpm --filter web exec vitest run src/lib/vetting "src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.test.ts"`
-Expected: FAIL. The modules are missing, and the guard cases succeed when they should not.
+Run: `pnpm --filter web exec vitest run src/lib/vetting "src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`
+Expected: FAIL. The modules are missing, and the guard cases succeed when they should not. (`in-account-service-reads` goes red only after Step 3 creates `sofia-guard.ts`. It goes green again once the `ALLOWED` entry is added in Step 4.)
 
 - [ ] **Step 3: Write the two modules**
 
@@ -1421,19 +1505,31 @@ Expected: FAIL. The modules are missing, and the guard cases succeed when they s
 import type { PhoneNumberStatus } from "@bis/db";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 
+/** A voice profile as far as answering and the chat care; null = no profile row. */
+export type SofiaProfileState = { enabled?: boolean | null; concierge_enabled?: boolean | null } | null;
+export type SofiaSnapshot = { profile: SofiaProfileState; numbers: readonly { status: PhoneNumberStatus }[] };
+
 /**
- * Whether Sofía is answering, and whether the web chat is on, for one company - the state the Settings
- * Trade card must find OFF before a CRM-only trade is saved (spec 5.2). "Answering" is the call path's own
- * rule (callAnswerable: a testing number answers whatever profile.enabled says, a live one only when
- * enabled), over every number that can take a call. Pure.
+ * Whether Sofía is answering, and whether the web chat is on, for one company. "Answering" is the call
+ * path's own rule (callAnswerable, accept-gate.ts: a testing number answers whatever profile.enabled says,
+ * a live one only when enabled, nothing without a profile), over every number that can take a call. Pure.
  */
-export function sofiaIsOn(
-  profile: { enabled: boolean; concierge_enabled: boolean } | null,
-  numbers: readonly { status: PhoneNumberStatus }[],
-): { answering: boolean; chat: boolean } {
+export function sofiaIsOn(profile: SofiaProfileState, numbers: SofiaSnapshot["numbers"]): { answering: boolean; chat: boolean } {
+  const p = profile ? { enabled: profile.enabled === true } : null;
   const answering = numbers.some((n) =>
-    (n.status === "testing" || n.status === "live") && callAnswerable({ status: n.status, profile }).answerable);
+    (n.status === "testing" || n.status === "live") && callAnswerable({ status: n.status, profile: p }).answerable);
   return { answering, chat: profile?.concierge_enabled === true };
+}
+
+/**
+ * THE switch-on rule (S-53; plan review C1): a write switches Sofía or the web chat on exactly when it
+ * takes answering, or the chat, from false to true. Every guarded action computes the state before and
+ * the state it would write; everything else only subtracts at call time and never needs a trade.
+ */
+export function switchesSofiaOn(before: SofiaSnapshot, after: SofiaSnapshot): boolean {
+  const b = sofiaIsOn(before.profile, before.numbers);
+  const a = sofiaIsOn(after.profile, after.numbers);
+  return (!b.answering && a.answering) || (!b.chat && a.chat);
 }
 ```
 
@@ -1448,10 +1544,10 @@ import { sofiaGate } from "./trades";
 import { sofiaGateText } from "./copy";
 
 /**
- * The ONE server check every action that SWITCHES Sofía or the web chat ON calls (spec 5.3): go-live, a
- * number to testing/live, Receptionist enabled off->on, the web chat's on switch. Returns null when the
- * company's trade allows it, else the sentence to refuse with. Fails CLOSED: an unreadable trade refuses
- * (the operator presses again). Never called on a path that turns anything off.
+ * The ONE trade check every action that SWITCHES Sofía or the web chat ON calls, once switchesSofiaOn
+ * (sofia-state.ts) says the write would (spec 5.3). Returns null when the company's trade allows it, else
+ * the sentence to refuse with. Fails CLOSED: an unreadable trade refuses (the operator presses again).
+ * Agency-only callers (every one checks isAgency / requireAgency first), hence serviceDb.
  */
 export async function sofiaSwitchOnRefusal(accountId: string, locale: Locale = "en"): Promise<string | null> {
   let trade: string | null;
@@ -1468,22 +1564,53 @@ export async function sofiaSwitchOnRefusal(accountId: string, locale: Locale = "
 
 - [ ] **Step 4: Guard the actions**
 
-`voice/actions.ts`: add `import { sofiaSwitchOnRefusal } from "@/lib/vetting/sofia-guard";`.
-
-`saveVoiceProfileAction`:
-- Widen `current`'s type at :123 to `Pick<VoiceProfileRow, "facts" | "services" | "textback_body_es" | "textback_body_es_basis" | "enabled"> | null`.
-- After the branding/profile try/catch (:124-132) and before `nextSpanishBox`, insert:
+`in-account-service-reads.test.ts` `ALLOWED`, in its alphabetical place among the `lib/` entries:
 
 ```ts
-  // S-53 (spec 5.3): "Receptionist enabled" going from off to on is switching Sofía on. A profile already
-  // enabled keeps saving (anything already on stays on); turning it off is never gated. Before any write.
-  if (formData.get("enabled") === "on" && current?.enabled !== true) {
+  // S-53: reads accounts.trade before a Sofía/web-chat switch-on; every caller is an agency-only action.
+  "lib/vetting/sofia-guard.ts": "agency-only",
+```
+
+`voice/actions.ts`: add `import { sofiaSwitchOnRefusal } from "@/lib/vetting/sofia-guard";` and `import { switchesSofiaOn } from "@/lib/vetting/sofia-state";`.
+
+`saveVoiceProfileAction`:
+- Widen `current`'s type at :123 to `Pick<VoiceProfileRow, "facts" | "services" | "textback_body_es" | "textback_body_es_basis" | "enabled" | "concierge_enabled"> | null`.
+- Read the numbers inside the SAME fail-closed try (:124-132):
+
+```ts
+  let brandName: string;
+  let current: Pick<VoiceProfileRow, "facts" | "services" | "textback_body_es" | "textback_body_es_basis" | "enabled" | "concierge_enabled"> | null;
+  let numbers: Awaited<ReturnType<typeof listPhoneNumbersForAccount>>;
+  try {
+    const db = serviceDb();
+    const [branding, profile, rows] = await Promise.all([
+      getBranding(db, accountId), getVoiceProfile(db, accountId), listPhoneNumbersForAccount(db, accountId),
+    ]);
+    brandName = brandDisplayName(branding);
+    current = profile;
+    numbers = rows;
+  } catch (e) {
+    console.error(`saveVoiceProfileAction: branding/profile/numbers read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.profile.saveFailed"] };
+  }
+
+  // S-53 (spec 5.3; plan review C1): this save switches Sofía on when it takes the company from not
+  // answering to answering - Receptionist enabled off -> on beside a live number, OR the first profile
+  // beside a testing number (a testing number answers once any profile exists, enabled or not). Checked
+  // before any write; a save that keeps her as she is, or turns her off, never asks.
+  const enabledAfter = formData.get("enabled") === "on";
+  if (switchesSofiaOn(
+    { profile: current, numbers },
+    { profile: { enabled: enabledAfter, concierge_enabled: current?.concierge_enabled ?? false }, numbers },
+  )) {
     const refusal = await sofiaSwitchOnRefusal(accountId);
     if (refusal) return { ok: false, error: refusal };
   }
 ```
 
-`setNumberStatusAction`: replace the D-042 block (:391-400) with a version that reads the rows once and adds the vetting check:
+The rest is unchanged. `patch.enabled` still reads `formData.get("enabled") === "on"`.
+
+`setNumberStatusAction`: replace :387-409 (the D-042 block and the `live` profile check) with:
 
 ```ts
   // D-042: bringing a released number back must not make it the account's
@@ -1503,21 +1630,35 @@ export async function sofiaSwitchOnRefusal(accountId: string, locale: Locale = "
     }
   }
 
-  // S-53 (spec 5.3): testing and live make Sofía answer. A number that already answers keeps moving
-  // between the two (anything already on stays on); a number coming from provisioned or released is
-  // switching Sofía on, and needs a trade that allows her.
   if (validStatus === "testing" || validStatus === "live") {
-    const wasAnswering = rows.some((n) => n.id === phoneNumberId && (n.status === "testing" || n.status === "live"));
-    if (!wasAnswering) {
+    let profile: Awaited<ReturnType<typeof getVoiceProfile>>;
+    try {
+      profile = await getVoiceProfile(serviceDb(), accountId);
+    } catch (e) {
+      console.error(`setNumberStatusAction: profile read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
+    }
+    // S-53 (spec 5.3; plan review C1): this change switches Sofía on when the company goes from not
+    // answering to answering - provisioned/released -> testing or live, AND live -> testing while the
+    // profile is disabled (testing answers whatever `enabled` says). Already answering stays on.
+    const after = rows.map((n) => (n.id === phoneNumberId ? { ...n, status: validStatus } : n));
+    if (switchesSofiaOn({ profile, numbers: rows }, { profile, numbers: after })) {
       const refusal = await sofiaSwitchOnRefusal(accountId);
       if (refusal) return { ok: false, error: refusal };
+    }
+    if (validStatus === "live") {
+      const hasGreeting = Boolean(profile?.greeting_en?.trim() || profile?.greeting_es?.trim());
+      const hasFacts = Boolean(profile?.facts?.trim());
+      if (!hasGreeting && !hasFacts) {
+        return { ok: false, error: m["voice.numbers.goLiveNeedsProfile"] };
+      }
     }
   }
 ```
 
 `hasOtherActiveNumber` stays; `assignNumberAction` still uses it.
 
-`enableConciergeAction`: after `if (!isAgency) …` (:527), insert:
+`enableConciergeAction`: after `if (!isAgency) …` (:527), insert the following. It is unconditional because the card calls this only while the chat is off. Re-enabling an already-on chat is not a path the UI has.
 
 ```ts
   // S-53 (spec 5.3): the web chat's on switch needs a trade that allows it. The off switch never asks.
@@ -1525,29 +1666,39 @@ export async function sofiaSwitchOnRefusal(accountId: string, locale: Locale = "
   if (refusal) return { ok: false, error: refusal };
 ```
 
-`setup/actions.ts` `goLiveAction`: add the import, and after `if (!isAgency) return …` (:122), insert:
+`setup/actions.ts` `goLiveAction`: add both imports. After `const target = …; if (!target) return …` (:154-155) and before the `goLive` try, insert:
 
 ```ts
-  // S-53 (spec 5.3): going live switches Sofía on, so the trade is checked first, before any read.
-  const refusal = await sofiaSwitchOnRefusal(accountId);
-  if (refusal) return { ok: false, error: refusal };
+  // S-53 (spec 5.3; plan review C1): go-live enables the profile and sets `target` live. It switches Sofía
+  // on only when nothing answered before (a provisioned number that already had its test call); from the
+  // ordinary testing number she already answers, and that stays on.
+  const after = numbers.map((n) => (n.id === target.id ? { ...n, status: "live" as const } : n));
+  if (switchesSofiaOn(
+    { profile: inputs.profile, numbers },
+    { profile: { enabled: true, concierge_enabled: inputs.profile?.concierge_enabled ?? false }, numbers: after },
+  )) {
+    const refusal = await sofiaSwitchOnRefusal(accountId);
+    if (refusal) return { ok: false, error: refusal };
+  }
 ```
 
 - [ ] **Step 5: Run to see them pass, and run the mutation probes**
 
 Run the Step 2 command, then `pnpm --filter web exec vitest run src/app/api/voice/texml/route.test.ts`.
-Expected: PASS, including every pre-existing D-042 and concierge case.
+Expected: PASS, including every pre-existing D-042, go-live and concierge case.
 
 Probes (each must turn its named case red; revert after):
 1. Delete each of the four guard calls in turn.
-2. In `setNumberStatusAction`, replace `if (!wasAnswering)` with `if (true)`.
-3. In `saveVoiceProfileAction`, drop `&& current?.enabled !== true`.
+2. In `sofia-state.ts`, make `sofiaIsOn` ignore `profile.enabled` for live numbers → hole A and the off→on cases FAIL.
+3. In `setNumberStatusAction`, compute "before" from the number's own status only → hole A FAILS.
+4. In `saveVoiceProfileAction`, guard only when `formData.get("enabled") === "on"` → hole B FAILS.
+5. In `setNumberStatusAction`, return `null` profile on a read error instead of refusing → the fail-closed case FAILS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/lib/vetting/sofia-guard.ts apps/web/src/lib/vetting/sofia-guard.test.ts apps/web/src/lib/vetting/sofia-state.ts apps/web/src/lib/vetting/sofia-state.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.test.ts"
-git commit -m "S-53: going live, test calls, Receptionist enabled and the web chat's switch refuse a CRM-only or missing trade"
+git add apps/web/src/lib/vetting/sofia-guard.ts apps/web/src/lib/vetting/sofia-guard.test.ts apps/web/src/lib/vetting/sofia-state.ts apps/web/src/lib/vetting/sofia-state.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"
+git commit -m "S-53: whatever takes Sofía or the web chat from off to on refuses a CRM-only or missing trade"
 ```
 
 ---
@@ -1557,6 +1708,8 @@ git commit -m "S-53: going live, test calls, Receptionist enabled and the web ch
 **Files:**
 - Create: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts`
 - Create: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.test.ts`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts` (`ALLOWED` gains `"app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts": "agency-only"` with the comment `// S-53: the Settings Trade card's write; requireAgencyOnlyAccountAccess first.`)
+- Affected tests: `trade-actions.test.ts`, `.../[accountId]/in-account-service-reads.test.ts` (plan review I3)
 
 **Interfaces:**
 - Consumes: `checkTradeChoice`, `tradeChoiceRefusal` (Task 2), `sofiaIsOn` (Task 5), `setAccountTrade`, `getVoiceProfile`, `listPhoneNumbersForAccount` (`@bis/db`).
@@ -1570,9 +1723,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({ setAccountTrade: vi.fn(), getVoiceProfile: vi.fn(), listPhoneNumbersForAccount: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}) }));
-const guard = vi.hoisted(() => ({ calls: 0 }));
+// The real requireAgencyOnlyAccountAccess REDIRECTS a non-agency caller (Next's redirect() throws); the mock
+// throws the same way for a non-agency fixture, so "refused before any read or write" is provable (plan review I5).
+const guard = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({
-  requireAgencyOnlyAccountAccess: async () => { guard.calls += 1; return { userId: "user_agency", isAgency: true }; },
+  requireAgencyOnlyAccountAccess: async () => {
+    if (!guard.isAgency) throw new Error("NEXT_REDIRECT");
+    return { userId: "user_agency", isAgency: true };
+  },
 }));
 
 import { m } from "@/lib/messages";
@@ -1585,13 +1743,16 @@ beforeEach(() => {
   dbMocks.setAccountTrade.mockResolvedValue(undefined);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
   dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
-  guard.calls = 0;
+  guard.isAgency = true;
 });
 
 describe("setTradeAction (spec 5.2)", () => {
-  it("runs the agency-only guard first", async () => {
-    await setTradeAction("a1", fd({ trade: "hvac" }));
-    expect(guard.calls).toBe(1);
+  it("a non-agency caller is refused before any read or write (mutation: move the guard below the writes -> FAILS)", async () => {
+    guard.isAgency = false;
+    await expect(setTradeAction("a1", fd({ trade: "restaurant" }))).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.setAccountTrade).not.toHaveBeenCalled();
+    expect(dbMocks.getVoiceProfile).not.toHaveBeenCalled();
+    expect(dbMocks.listPhoneNumbersForAccount).not.toHaveBeenCalled();
   });
   it("saves an allowed trade without reading Sofía's state", async () => {
     expect(await setTradeAction("a1", fd({ trade: "roofing" }))).toEqual({ ok: true });
@@ -1612,6 +1773,11 @@ describe("setTradeAction (spec 5.2)", () => {
   it("refuses a CRM-only trade while the web chat is on, in Spanish when asked", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: false, concierge_enabled: true });
     expect(await setTradeAction("a1", fd({ trade: "child_care", locale: "es" }))).toEqual({ ok: false, error: m["vetting.turnOffFirst.es"] });
+  });
+  it("refuses a CRM-only trade while a live number answers with an enabled profile", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, concierge_enabled: false });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([{ status: "live" }]);
+    expect(await setTradeAction("a1", fd({ trade: "restaurant" }))).toEqual({ ok: false, error: m["vetting.turnOffFirst"] });
   });
   it("saves a CRM-only trade when Sofía is off (a live number with a disabled profile does not answer)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: false, concierge_enabled: false });
@@ -1693,12 +1859,12 @@ export async function setTradeAction(accountId: string, formData: FormData): Pro
 }
 ```
 
-- [ ] **Step 4: Run to see it pass.** Probe: delete `on.answering ||` and the answering case must FAIL. Delete the `crm_only` block and both refusal cases must FAIL.
+- [ ] **Step 4: Run to see it pass**, together with `in-account-service-reads.test.ts` after adding its `ALLOWED` entry. Probe: delete `on.answering ||` and the answering case must FAIL. Delete the `crm_only` block and both refusal cases must FAIL.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.test.ts"
+git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"
 git commit -m "S-53: the agency sets a company's trade; CRM-only is refused while Sofía or the web chat is on"
 ```
 
@@ -1860,7 +2026,7 @@ export function TradeFields({
 `create-account-dialog.tsx`:
 - Add `import { Notice } from "@/components/ui/notice";` and `import { TradeFields, type TradeSetup } from "@/components/vetting/trade-fields";`.
 - Add the prop `trade: TradeSetup` to the props type and destructuring.
-- Replace the `useFormSubmit` block (:141-146) with:
+- Replace the `useFormSubmit` block (`create-account-dialog.tsx:44-49`) with:
 
 ```tsx
   // S-53 (spec 5.1): a refusal is a FORM message, not a toast - the agency reads it and passes it on
@@ -2012,7 +2178,7 @@ git commit -m "S-53: Add company and Add as a company ask for the trade; refusal
     const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
     const entry = settings.find((e) => e.id === "settings:trade");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#trade`);
-    expect(buildPaletteEntries(BASE, false, false).some((e) => e.id === "settings:trade")).toBe(false);
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:trade")).toBe(false);
   });
 ```
 
@@ -2174,100 +2340,190 @@ git commit -m "S-53: the agency's Settings has a Trade card, found from the pale
 ## Task 9 (LOW): The switches say why they are off; Setup says it too
 
 **Files:**
-- Modify: `.../voice/page.tsx` (imports :3-7; `Promise.all` :82-98 gains `getAccountTrade`; VoiceSettings gets `vettingLock`)
+- Modify: `.../voice/page.tsx` (imports :3-7; `Promise.all` :82-98 gains `getAccountTrade`; `VoiceSettings` gets `vettingLock`)
 - Modify: `.../voice/voice-settings.tsx`:
   - `VoiceProfileForm` (:83-100 props; the `enabled` checkbox at :308-311)
-  - `ConciergeCard` (:665-675 props; `showEmptyState`/`reasonText`/`toggleDisabled` at :746-776)
+  - `ConciergeCard` (:665-675 props; `showEmptyState` / `reasonText` / `toggleDisabled` at :746-776)
   - `NumberStatusSelect` and `PhoneNumbersPanel` (:1017-1110)
   - `VoiceSettings` (:1114-1204)
 - Modify: `apps/web/src/lib/setup/setup-status.ts` (`SetupInputs` :26-81 gains `trade?`; the filter at :211-219)
 - Modify: `apps/web/src/lib/setup/setup-inputs.ts` (:104-109 select and type; :191 inputs)
-- Modify: `.../setup/page.tsx` (:65 the name read becomes `name, trade`; a Notice above `SetupPanel`)
-- Modify tests: `.../voice/page.test.ts` (its full-replace `@bis/db` mock at :41 MUST gain `getAccountTrade`, or the page throws on import use), `apps/web/src/lib/setup/setup-status.test.ts`, `apps/web/src/lib/setup/setup-inputs.test.ts`
-- Affected tests: `voice/page.test.ts`, `voice/voice-settings.test.ts`, `src/lib/setup/*`, `.../accounts/[accountId]/shell-actions` tests if any (the sidebar meter reads `deriveSetupStatus`), `src/lib/i18n/ratchet.test.ts`
+- Create: `.../setup/setup-vetting-notice.tsx`, `.../setup/setup-vetting-notice.test.ts`
+- Modify: `.../setup/page.tsx` (:65 the name read becomes `name, trade`; the notice above `SetupPanel`)
+- Modify tests:
+  - `.../voice/page.test.ts`: its full-replace `@bis/db` mock at :41 MUST gain `getAccountTrade`, or the page throws when it calls it.
+  - `.../voice/voice-settings.test.ts`
+  - `apps/web/src/lib/setup/setup-status.test.ts`
+  - `apps/web/src/lib/setup/setup-inputs.test.ts`
+- Affected tests: the files above; `src/lib/setup/*`; any test of `.../[accountId]/shell-actions.ts` (the sidebar meter reads `deriveSetupStatus`); `src/lib/i18n/ratchet.test.ts` (the new `.tsx` must count 0)
 
 **Interfaces:**
-- Consumes: `getAccountTrade` (Task 3); `sofiaGate`, `sofiaGateText` (Task 2).
+- Consumes: `getAccountTrade` (Task 3); `sofiaGate`, `sofiaGateText` (Task 2); `switchesSofiaOn` (Task 5).
 - Produces:
-  - `VoiceSettings`, `VoiceProfileForm`, `ConciergeCard` and `PhoneNumbersPanel` take an optional `vettingLock?: string | null` (a resolved sentence, or null).
+  - `type VettingLock = { text: string; link: { href: string; label: string } | null }` (exported from `voice-settings.tsx`). The link is present only for "no trade", pointing at Settings (spec 5.3: "links to Settings"; plan review M6).
+  - `VoiceSettings`, `VoiceProfileForm`, `ConciergeCard` and `PhoneNumbersPanel` take an optional `vettingLock?: VettingLock | null`.
   - `SetupInputs.trade?: string | null`.
+  - `SetupVettingNotice({ accountId, trade })`.
+
+**UI rule.** The concierge toggle locks, with the reason, whenever the chat is off and the trade forbids it. `NumberStatusSelect` disables `testing` / `live` exactly when Task 5's `switchesSofiaOn` says that choice would switch Sofía on: the server's rule, same function. The Receptionist enabled checkbox locks, with the reason, whenever it is off and the trade forbids Sofía. That is stricter than the server, which allows enabling with no answering number. The difference is on purpose: a ticked box with no number is a promise that switches her on later. The two server-only cases (hole B, a first profile beside a testing number) surface as the Save's own refusal toast.
 
 - [ ] **Step 1: Write the failing tests**
 
-`setup-status.test.ts`:
+`setup-status.test.ts`, using the file's own `fullInputs` (:12):
 
 ```ts
 describe("S-53: a CRM-only trade drops the Sofía steps, like a CRM-only plan", () => {
-  const base = /* reuse the file's own minimal SetupInputs fixture builder */ makeInputs();
   it("restaurant drops voice_profile, number, forwarding, test_call, go_live and website_assistant (mutation: ignore trade -> FAILS)", () => {
-    const keys = deriveSetupStatus({ ...base, trade: "restaurant" }).map((s) => s.key);
-    for (const k of ["voice_profile", "number", "forwarding", "test_call", "go_live", "website_assistant"]) expect(keys).not.toContain(k);
+    const keys = deriveSetupStatus(fullInputs({ trade: "restaurant" })).map((s) => s.key);
     expect(keys).toEqual(["account", "branding", "hours", "email"]);
   });
-  it("an allowed trade and no trade keep every step", () => {
-    expect(deriveSetupStatus({ ...base, trade: "hvac" })).toHaveLength(10);
-    expect(deriveSetupStatus({ ...base, trade: null })).toHaveLength(10);
-    expect(deriveSetupStatus({ ...base })).toHaveLength(10);
+  it("an allowed trade, no trade, and no field at all keep every step", () => {
+    expect(deriveSetupStatus(fullInputs({ trade: "hvac" }))).toHaveLength(10);
+    expect(deriveSetupStatus(fullInputs({ trade: null }))).toHaveLength(10);
+    expect(deriveSetupStatus(fullInputs())).toHaveLength(10);
   });
 });
 ```
 
-(Use the file's existing fixture helper for a full `SetupInputs`. If it is named differently, use that name; the assertion lists are the contract.)
-
-`setup-inputs.test.ts`. Add `trade` to its `AccountRow` type and add a case:
+`setup-inputs.test.ts`:
+- Add `trade?: string | null` to `AccountRow` (:41).
+- Add a fake that records what is selected. `dbWithAccountRow` (:48) ignores `select()`'s argument, so it cannot pin it (plan review M1).
+- Add the case, beside the permissions describe:
 
 ```ts
-  it("the account's trade reaches SetupInputs (S-53; mutation: hardcode trade: null -> FAILS)", async () => {
-    // same fake as the permissions case above, with trade: "restaurant"
-    const { inputs } = await gatherSetupInputs(fakeDb({ brand_name: "Acme", from_email: null, permissions: {}, trade: "restaurant" }), "acct_1");
+function dbRecordingSelect(row: AccountRow, seen: string[]): SupabaseClient {
+  return {
+    from: (table: string) => {
+      if (table !== "accounts") throw new Error(`unexpected table in test fake: ${table}`);
+      return {
+        select: (cols: string) => {
+          seen.push(cols);
+          return { eq: () => ({ maybeSingle: () => Promise.resolve({ data: row, error: null }) }) };
+        },
+      };
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe("gatherSetupInputs — accounts.trade reaches SetupInputs (S-53)", () => {
+  it("selects trade on the same row read and passes it through (mutation: drop trade from the select, or hardcode trade: null -> FAILS)", async () => {
+    const seen: string[] = [];
+    const { inputs } = await gatherSetupInputs(
+      dbRecordingSelect({ brand_name: "Acme", from_email: null, permissions: {}, trade: "restaurant" }, seen), "acct_1");
+    expect(seen).toEqual(["brand_name, from_email, permissions, trade"]);
     expect(inputs.trade).toBe("restaurant");
   });
-```
-
-(Mirror the file's existing permissions case for the fake's construction.)
-
-`voice/page.test.ts`:
-- Add `getAccountTrade: vi.fn(),` to `serviceDbMock` and `getAccountTrade: (...a: unknown[]) => serviceDbMock.getAccountTrade(...a),` to the `@bis/db` factory, alongside the other accessors it re-exports.
-- Default it in `beforeEach` to `{ trade: "hvac", tradeOther: null }`.
-- Add:
-
-```ts
-  it("passes no lock for an allowed trade, the CRM-only sentence for a restaurant, and fails closed on a failed read (S-53)", async () => {
-    await renderPage();
-    expect(captured.props.vettingLock).toBeNull();
-    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
-    await renderPage();
-    expect(captured.props.vettingLock).toBe("Sofía and the web chat aren't available for restaurant businesses yet.");
-    serviceDbMock.getAccountTrade.mockRejectedValue(new Error("down"));
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await renderPage();
-    errSpy.mockRestore();
-    expect(captured.props.vettingLock).toBe(m["vetting.readFailed"]);
-  });
-```
-
-(Use the file's own page-invocation helper in place of `renderPage`.)
-
-`voice/voice-settings.test.ts`. Render with `renderToStaticMarkup`, as that file already does:
-
-```ts
-describe("S-53: the on-switches are locked with the reason", () => {
-  const LOCK = "Sofía and the web chat aren't available for restaurant businesses yet.";
-  it("ConciergeCard: an off toggle is disabled and described by the lock, even with no profile (mutation: ignore vettingLock -> FAILS)", () => {
-    const html = renderToStaticMarkup(createElement(ConciergeCard, {
-      accountId: "a1", profile: null, publishedForms: [], origin: "https://x", enableAction: async () => ({ ok: true, publicId: "p" }),
-      disableAction: async () => ({ ok: true }), vettingLock: LOCK,
-    }));
-    expect(html).toContain(`id="concierge-toggle-reason"`);
-    expect(html).toContain(LOCK);
-    expect(html).toMatch(/id="concierge_enabled"[^>]*disabled=""/);
+  it("a failed account read degrades trade to null, like permissions", async () => {
+    const { inputs } = await gatherSetupInputs(dbWhoseAccountReadFails(), "acct_1");
+    expect(inputs.trade).toBeNull();
   });
 });
 ```
 
-(The `disabled=""` attribute order in Radix's checkbox markup may differ. If the regex misses, assert on the button element by locating `id="concierge_enabled"` and checking `disabled` in that tag.)
+(The other `@bis/db` reads in that file are its named-export mocks. Reuse its existing `beforeEach` defaults, exactly as the permissions cases do.)
 
-- [ ] **Step 2: Run to see them fail.** Run: `pnpm --filter web exec vitest run src/lib/setup "src/app/(dashboard)/dashboard/accounts/[accountId]/voice"`. Expected: FAIL.
+`.../setup/setup-vetting-notice.test.ts` (plan review M1: the no-trade notice and its link):
+
+```ts
+import { describe, it, expect } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+import { SetupVettingNotice } from "./setup-vetting-notice";
+
+const render = (trade: string | null) => renderToStaticMarkup(createElement(SetupVettingNotice, { accountId: "a1", trade }));
+
+describe("SetupVettingNotice (S-53)", () => {
+  it("no trade: asks for it and links to the Settings Trade card (mutation: drop the link -> FAILS)", () => {
+    const html = render(null);
+    expect(html).toContain(m["vetting.sofia.noTrade"]);
+    expect(html).toContain('href="/dashboard/accounts/a1/settings?from=setup#trade"');
+    expect(html).toContain(m["vetting.sofia.noTradeLink"]);
+  });
+  it("a CRM-only trade: says Sofía and the web chat are not available", () => {
+    expect(render("restaurant")).toContain(m["vetting.crmOnlyCreated"]);
+  });
+  it("an allowed trade: renders nothing", () => {
+    expect(render("hvac")).toBe("");
+  });
+});
+```
+
+`voice/page.test.ts`:
+- Add `getAccountTrade: vi.fn(),` to `serviceDbMock` (:34-37). Add `getAccountTrade: (...a: unknown[]) => serviceDbMock.getAccountTrade(...a),` to the `@bis/db` factory, beside the other accessors it re-exports.
+- Default it in `beforeEach` to `{ trade: "hvac", tradeOther: null }`.
+- Using the file's `render()` helper (:127), add:
+
+```ts
+  it("passes no lock for an allowed trade; the CRM-only sentence with no link; 'set the trade' linking to Settings; and fails closed on a failed read (S-53)", async () => {
+    await render();
+    expect(captured.props.vettingLock).toBeNull();
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    await render();
+    expect(captured.props.vettingLock).toEqual({ text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null });
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    await render();
+    expect(captured.props.vettingLock).toEqual({
+      text: m["vetting.sofia.noTrade"], link: { href: "/dashboard/accounts/a1/settings#trade", label: m["vetting.sofia.noTradeLink"] },
+    });
+    serviceDbMock.getAccountTrade.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await render();
+    errSpy.mockRestore();
+    expect(captured.props.vettingLock).toEqual({ text: m["vetting.readFailed"], link: null });
+  });
+```
+
+(The account id is whatever `render()` passes; the file's own fixtures use `a1`.)
+
+`voice/voice-settings.test.ts`, inside `describe("ConciergeCard — the render proof")` (:406):
+- Extend `renderCard`'s `opts` with `vettingLock?: VettingLock | null` and pass it to `createElement`.
+- Add the cases below. They use a READY profile and a PUBLISHED, SELECTED form, so the vetting lock is the ONLY lock (plan review I6): without it the toggle renders enabled.
+
+```ts
+  it("S-53: with a ready profile and a published selected form, the vetting lock alone disables the off toggle and its sentence describes it (mutation: ignore vettingLock -> FAILS)", () => {
+    const ready = { enabled: false, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }] };
+    const unlocked = renderCard(ready);
+    expect(unlocked).not.toMatch(DISABLED_CHECKBOX);      // positive control: nothing else locks it
+    const LOCK = { text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null };
+    const locked = renderCard({ ...ready, vettingLock: LOCK });
+    expect(locked).toMatch(DISABLED_CHECKBOX);
+    expect(locked).toContain('id="concierge-toggle-reason"');
+    expect(renderedText(locked)).toContain(LOCK.text);
+  });
+
+  it("S-53: an ON chat keeps its toggle (it is the off switch) whatever the lock says", () => {
+    const html = renderCard({ enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }],
+      vettingLock: { text: "x", link: null } });
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
+  });
+```
+
+Add, in the same file, a `PhoneNumbersPanel` / `NumberStatusSelect` case. Export `PhoneNumbersPanel` from `voice-settings.tsx` for this.
+
+Radix does not render items of a closed Select in static markup, so test the pure decision instead. Export `numberStatusLocked(vettingLock, profile, numbers, numberId, v)` from `voice-settings.tsx` and test it:
+
+```ts
+describe("numberStatusLocked (S-53: the server's switch-on rule, same function)", () => {
+  const LOCK = { text: "x", link: null };
+  const n = (id: string, status: PhoneNumberRow["status"]) => ({ id, status });
+  it("hole A in the UI: live -> testing is locked while the profile is disabled", () => {
+    expect(numberStatusLocked(LOCK, { enabled: false, concierge_enabled: false }, [n("p", "live")], "p", "testing")).toBe(true);
+  });
+  it("provisioned -> testing/live with a profile is locked; testing -> live is not; nothing is locked with no lock", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(true);
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "testing")], "p", "live")).toBe(false);
+    expect(numberStatusLocked(null, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(false);
+  });
+  it("provisioned and released are never locked", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "live")], "p", "provisioned")).toBe(false);
+  });
+});
+```
+
+(Import `PhoneNumberRow` as a type from `@bis/db`, as the file already does for `VoiceProfileRow`.)
+
+- [ ] **Step 2: Run to see them fail.** Run: `pnpm --filter web exec vitest run src/lib/setup "src/app/(dashboard)/dashboard/accounts/[accountId]/voice" "src/app/(dashboard)/dashboard/accounts/[accountId]/setup"`. Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
@@ -2298,49 +2554,95 @@ Then add the import (`import { sofiaGate } from "@/lib/vetting/trades";`) and, i
 - Add `trade: string | null;` to the row type.
 - Add `trade: account?.trade ?? null,` to the `inputs` literal after `permissions`.
 
-`setup/page.tsx`:
-- Read `select("name, trade")`.
-- Keep `accountTrade` beside `accountName`: `accountTrade = (data as { trade: string | null } | null)?.trade ?? null;`.
-- Import `Link` from `next/link` and `sofiaGate` from `@/lib/vetting/trades`.
-- Above `<SetupPanel …>`:
+`.../setup/setup-vetting-notice.tsx` (a server component; the copy stays English like the rest of Setup, decision 2):
 
 ```tsx
-        {/* S-53 (spec 5.1/5.3): why Sofía's steps are missing (a CRM-only trade) or will refuse (no trade). */}
-        {(() => {
-          const gate = sofiaGate(accountTrade);
-          if (gate.ok) return null;
-          return gate.reason === "crm_only" ? (
-            <Notice tone="warn" className="text-foreground" data-testid="setup-vetting">{m["vetting.crmOnlyCreated"]}</Notice>
-          ) : (
-            <Notice tone="warn" className="text-foreground" data-testid="setup-vetting">
-              {m["vetting.sofia.noTrade"]}{" "}
-              <Link className="underline" href={`/dashboard/accounts/${accountId}/settings?from=setup#trade`}>{m["vetting.sofia.noTradeLink"]}</Link>
-            </Notice>
-          );
-        })()}
+import Link from "next/link";
+import { Notice } from "@/components/ui/notice";
+import { m } from "@/lib/messages";
+import { sofiaGate } from "@/lib/vetting/trades";
+
+/** S-53 (spec 5.1/5.3): why Sofía's steps are missing (a CRM-only trade) or will refuse (no trade). */
+export function SetupVettingNotice({ accountId, trade }: { accountId: string; trade: string | null }) {
+  const gate = sofiaGate(trade);
+  if (gate.ok) return null;
+  if (gate.reason === "crm_only") {
+    return <Notice tone="warn" className="text-foreground" data-testid="setup-vetting">{m["vetting.crmOnlyCreated"]}</Notice>;
+  }
+  return (
+    <Notice tone="warn" className="text-foreground" data-testid="setup-vetting">
+      {m["vetting.sofia.noTrade"]}{" "}
+      <Link className="underline" href={`/dashboard/accounts/${accountId}/settings?from=setup#trade`}>{m["vetting.sofia.noTradeLink"]}</Link>
+    </Notice>
+  );
+}
 ```
 
-(Setup stays English: it renders through `m`, like the rest of the page, decision 2. A failed name/trade read leaves `accountTrade` null and shows the "set the trade" notice. That fails safe: the actions decide for themselves.)
+`setup/page.tsx`:
+- Read `select("name, trade")`.
+- Keep `let accountTrade: string | null = null;` beside `accountName`, and set `accountTrade = (data as { trade: string | null } | null)?.trade ?? null;`.
+- Render `<SetupVettingNotice accountId={accountId} trade={accountTrade} />` directly above `<SetupPanel …>`.
+
+A failed name/trade read leaves `accountTrade` null and shows the "set the trade" notice. That fails safe: the actions decide for themselves.
 
 `voice/page.tsx`:
-- Import `getAccountTrade` from `@bis/db`, `sofiaGate` from `@/lib/vetting/trades` and `sofiaGateText` from `@/lib/vetting/copy`.
+- Import `getAccountTrade` from `@bis/db`, `sofiaGate` from `@/lib/vetting/trades`, `sofiaGateText` from `@/lib/vetting/copy`, and `type VettingLock` from `./voice-settings`.
 - Add `getAccountTrade(db, accountId).then((r) => r.trade, (e: unknown) => { console.error(`voice: trade read failed for account ${accountId}: ${String(e)}`); return undefined; })` as the last `Promise.all` element, destructured as `storedTrade`.
 - After `const tr = makeTr(locale, pseudo);`:
 
 ```tsx
   // S-53 (spec 5.3): the on-switches below are locked, with this sentence beside them, unless the trade
-  // allows Sofía. A failed read locks too (the actions fail closed the same way); switches already on
-  // stay usable as off switches.
+  // allows Sofía. "No trade" links to the Settings Trade card (spec 5.3, plan review M6). A failed read
+  // locks too (the actions fail closed the same way); switches already on stay usable as off switches.
   const tradeGate = storedTrade === undefined ? null : sofiaGate(storedTrade);
-  const vettingLock = storedTrade === undefined ? tr.text("vetting.readFailed")
-    : tradeGate && !tradeGate.ok ? sofiaGateText(tradeGate, locale, pseudo) : null;
+  const vettingLock: VettingLock | null = storedTrade === undefined
+    ? { text: tr.text("vetting.readFailed"), link: null }
+    : tradeGate && !tradeGate.ok
+      ? {
+        text: sofiaGateText(tradeGate, locale, pseudo),
+        link: tradeGate.reason === "no_trade"
+          ? { href: `/dashboard/accounts/${accountId}/settings#trade`, label: tr.text("vetting.sofia.noTradeLink") }
+          : null,
+      }
+      : null;
 ```
 
 - Pass `vettingLock={vettingLock}` to `<VoiceSettings …>`.
 
 `voice-settings.tsx`:
-- `VoiceSettings`: add `vettingLock = null` to the destructuring and `vettingLock?: string | null;` to the props type. Pass `vettingLock={vettingLock}` to `VoiceProfileForm`, `ConciergeCard` and `PhoneNumbersPanel`.
-- `VoiceProfileForm`: add `vettingLock = null` and `vettingLock?: string | null;`. Replace the `enabled` checkbox block (:308-311) with:
+
+Add near the top (it already imports `Link` for the concierge empty state; import `switchesSofiaOn` from `@/lib/vetting/sofia-state`):
+
+```tsx
+/** S-53: why an on-switch is locked; `link` only when the fix is on Settings (no trade). */
+export type VettingLock = { text: string; link: { href: string; label: string } | null };
+
+function VettingLockReason({ id, lock }: { id: string; lock: VettingLock }) {
+  return (
+    <p id={id} className="text-xs text-muted-foreground">
+      {lock.text}
+      {lock.link ? <>{" "}<Link className="underline" href={lock.link.href}>{lock.link.label}</Link></> : null}
+    </p>
+  );
+}
+
+/** Task 5's switch-on rule, applied to one status choice: locked exactly when choosing `v` for number
+ *  `numberId` would take Sofía from not answering to answering while the trade forbids it. */
+export function numberStatusLocked(
+  vettingLock: VettingLock | null,
+  profile: { enabled?: boolean | null; concierge_enabled?: boolean | null } | null,
+  numbers: readonly { id: string; status: PhoneNumberRow["status"] }[],
+  numberId: string,
+  v: PhoneNumberRow["status"],
+): boolean {
+  if (vettingLock === null || (v !== "testing" && v !== "live")) return false;
+  const after = numbers.map((n) => (n.id === numberId ? { ...n, status: v } : n));
+  return switchesSofiaOn({ profile, numbers }, { profile, numbers: after });
+}
+```
+
+- `VoiceSettings`: add `vettingLock = null` and `vettingLock?: VettingLock | null;`. Pass `vettingLock` to `VoiceProfileForm` and `ConciergeCard`. Pass `vettingLock` and `profile` to `PhoneNumbersPanel`.
+- `VoiceProfileForm`: add `vettingLock = null` and `vettingLock?: VettingLock | null;`. Replace the `enabled` checkbox block (:308-311) with:
 
 ```tsx
           <div className="space-y-1">
@@ -2353,34 +2655,39 @@ Then add the import (`import { sofiaGate } from "@/lib/vetting/trades";`) and, i
               />
               <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
             </div>
-            {vettingLock !== null && !p.enabled ? (
-              <p id="sofia-enabled-reason" className="text-xs text-muted-foreground">{vettingLock}</p>
-            ) : null}
+            {vettingLock !== null && !p.enabled ? <VettingLockReason id="sofia-enabled-reason" lock={vettingLock} /> : null}
           </div>
 ```
 
-- `ConciergeCard`: add `vettingLock = null` / `vettingLock?: string | null;`.
-  - Wrap `showEmptyState`: `const showEmptyState = vettingLock === null && shouldShowConciergeEmptyState(enabled, lockReason);`. The empty state sells "publish a form", which is no use when the trade forbids the chat.
-  - Make `reasonText`'s OFF branch `(vettingLock ?? conciergeOffReason(lockReason, selectedFormId, formUnpublished))`.
-  - Make `toggleDisabled` `pending || (!enabled && vettingLock !== null) || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished)`.
-  - In `turnOn`, add `if (vettingLock !== null) return;` as its first line.
-- `NumberStatusSelect`: add a prop `vettingLock: string | null`. Inside it, `const answering = phoneNumber.status === "testing" || phoneNumber.status === "live";` and change each item to:
+- `ConciergeCard`: add `vettingLock = null` and `vettingLock?: VettingLock | null;`.
+  - `const showEmptyState = vettingLock === null && shouldShowConciergeEmptyState(enabled, lockReason);`. The empty state sells "publish a form", which is no use when the trade forbids the chat.
+  - `const vettingOff = !enabled && vettingLock !== null;`
+  - `toggleDisabled` becomes `pending || vettingOff || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished)`.
+  - In `turnOn`, add `if (vettingOff) return;` as its first line.
+  - Render the reason: where the card renders `{reasonText ? <p id={reasonId} …>{reasonText}</p> : null}`, render `{vettingOff ? <VettingLockReason id={reasonId} lock={vettingLock!} /> : reasonText ? <p id={reasonId} className="text-xs text-muted-foreground">{reasonText}</p> : null}`. Set the checkbox's `aria-describedby` to `vettingOff || reasonText ? reasonId : undefined`.
+- `NumberStatusSelect`: add props `vettingLock: VettingLock | null`, `profile: VoiceProfileRow | null` and `numbers: PhoneNumberRow[]`, and change each item to:
 
 ```tsx
           <SelectItem key={v} value={v}
-            disabled={vettingLock !== null && !answering && (v === "testing" || v === "live")}>
+            disabled={numberStatusLocked(vettingLock, profile, numbers, phoneNumber.id, v)}>
             {NUMBER_STATUS_LABEL[v]}
           </SelectItem>
 ```
 
-- `PhoneNumbersPanel`: take `vettingLock`, pass it to each `NumberStatusSelect`. After the list, render `{vettingLock !== null ? <p id="number-vetting-reason" className="text-xs text-muted-foreground">{vettingLock}</p> : null}`.
+- `PhoneNumbersPanel` (export it): take `vettingLock?: VettingLock | null` and `profile?: VoiceProfileRow | null`, and pass `vettingLock={vettingLock ?? null} profile={profile ?? null} numbers={numbers}` to each `NumberStatusSelect`. After the list, render `{vettingLock ? <VettingLockReason id="number-vetting-reason" lock={vettingLock} /> : null}`.
 
-- [ ] **Step 4: Verify.** Run the Step 2 command plus `pnpm --filter web exec vitest run src/lib/i18n "src/app/(dashboard)/dashboard/accounts/[accountId]"`, then lint and tsc. Expected: PASS. Manual check (dev server): a restaurant company's Voice page in dark and light, with the reasons visible; Setup's notice; the keyboard reaches each locked control and its reason is announced (`aria-describedby`).
+- [ ] **Step 4: Verify.** Run the Step 2 command plus `pnpm --filter web exec vitest run src/lib/i18n "src/app/(dashboard)/dashboard/accounts/[accountId]"`, then lint and tsc. Expected: PASS.
+
+Manual check (dev server):
+- A restaurant company's Voice page in dark and light, with the reasons visible.
+- A no-trade company's lock links to Settings#trade.
+- Setup's notice appears.
+- The keyboard reaches each locked control, and its reason is announced (`aria-describedby`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/page.tsx" apps/web/src/lib/setup
+git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/page.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/setup-vetting-notice.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/setup/setup-vetting-notice.test.ts" apps/web/src/lib/setup
 git commit -m "S-53: Sofía's and the web chat's switches say why they are off; Setup drops Sofía's steps for a CRM-only trade"
 ```
 
@@ -2410,10 +2717,10 @@ The specs mutate only companies they create, named `E2E Co <Date.now()>`. That n
 - [ ] **Step 2: Write `apps/web/e2e/vetting.spec.ts`**
 
 ```ts
-import type { Page } from "@playwright/test";
-import { test, expect } from "./fixtures/test";
+// Everything Playwright from ./fixtures/test, never "@playwright/test" (clerk-cookie-guard.test.ts; plan review I4).
+import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
-import { serviceDb } from "@bis/db";
+import { serviceDb, createForm, updateForm, upsertVoiceProfile } from "@bis/db";
 import { clerkClient } from "@clerk/nextjs/server";
 import { deleteAccountCascade, emptySweepReport } from "./fixtures/sweep";
 import { m } from "../src/lib/messages";
@@ -2482,7 +2789,19 @@ test("a CRM-only company is created, and its Sofía and web-chat switches are of
     await page.getByRole("button", { name: "Add", exact: true }).click();
     await expect(page).toHaveURL(/\/setup$/, { timeout: 30_000 });
     await expect(page.getByTestId("setup-vetting")).toHaveText(m["vetting.crmOnlyCreated"]);
-    const accountId = new URL(page.url()).pathname.split("/")[3];
+    const accountId = new URL(page.url()).pathname.split("/")[3]!;
+
+    // Plan review I6: give this company a READY profile (greeting + facts, Receptionist off) and ONE
+    // published form, so the web-chat toggle's only possible lock is the trade. With no profile the card
+    // would already lock it ("set up the assistant first") and the assertion below would prove nothing.
+    // Both rows go with the account in cleanup (forms is in ACCOUNT_OWNED_TABLES; voice_profiles cascades).
+    const db = serviceDb();
+    await upsertVoiceProfile(db, accountId, {
+      persona_name: "Sofía", greeting_en: "Thanks for calling.", greeting_es: "", facts: "We serve lunch and dinner.",
+      languages: "en", enabled: false,
+    }, "e2e-vetting-spec");
+    const { id: formId } = await createForm(db, accountId, { name: `Vetting chat form ${stamp}` }, "e2e-vetting-spec");
+    await updateForm(db, accountId, formId, { status: "published" }, "e2e-vetting-spec");
 
     await page.goto(`/dashboard/accounts/${accountId}/voice`);
     const reason = m["vetting.sofia.crmOnly"].replace("{trade}", "restaurant");
@@ -2554,15 +2873,15 @@ git commit -m "S-53 e2e: Add company refuses a held trade; a CRM-only company's 
      - The digest query from `proposals-drop.test.ts:94-98` → `52|b66203ca5d355155540b520af510d120`.
   4. **Parity** (`docs/runbooks/ci-supabase-project.md` §5): fingerprint on both projects, diffed. Only the allowed differences.
   5. Merge on green: read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`), squash. Confirm the production deploy.
-  6. **The three production companies (spec 5.4)**, with the owner's explicit OK, through the app's Settings → Trade card, signed in as the agency:
+  6. **The three production companies (spec 5.4), RIGHT AFTER the deploy is confirmed** (plan review M3), with the owner's explicit OK, through the app's Settings → Trade card, signed in as the agency:
      - Bespoke Intelligent Solutions → Other, "Marketing and AI receptionist agency".
      - 956 Woodworks → Woodworking and cabinets.
      - Resaca Air Conditioning & Heating → Heating and air conditioning.
 
      Verify read-only: `select name, trade, trade_other from accounts order by name`.
 
-     Until this step, these companies' already-on Sofía and web chat keep working (nothing is gated at call time). Only new switch-ons are refused.
-  7. Optional, bis-ci: set `Test Client One`'s trade to `hvac` through Vercel Preview's Settings, so Preview's Voice page shows no lock. CI's own stacks seed it with `hvac` already (Task 3).
+     Until this step, these companies' already-on Sofía and web chat keep working: nothing is gated at call time. But every switch-on is refused with "Set this company's trade first." That includes the web chat's Undo after turning it off, a number moved back to testing, and go-live from a provisioned number. So ask the owner for the OK BEFORE merging, and set the three trades the moment the deploy is live.
+  7. **MANDATORY, bis-ci** (plan review M4): set `Test Client One`'s trade to `hvac` through Vercel Preview's Settings → Trade card, signed in as the agency, right after 0101 reaches bis-ci (step 2). `ci:seed` never updates an existing account (`packages/db/src/ci-seed/seed.ts:196-200` creates only when none is found), so Task 3's `trade: "hvac"` reaches only CI's throwaway stacks. Without this step, bis-ci's Test Client One has no trade: every switch-on on Preview, local e2e runs against bis-ci and the dispatched screenshot capture is refused, and its Voice page shows the lock. Verify read-only on bis-ci: `select name, trade from accounts where name = 'Test Client One'` → `hvac`.
   8. Update the execution ledger (`.superpowers/sdd/progress.md`), the roadmap tracker's S-53 / F-173 rows (memory `bis-roadmap-tracker`) and memory `bis-next-work`.
 
 ---
@@ -2594,12 +2913,15 @@ git commit -m "S-53 e2e: Add company refuses a held trade; a CRM-only company's 
 - `sofiaGate` → `SofiaGate` (`reason: "crm_only" | "no_trade"`, `trade`)
 - `sofiaGateText(gate, locale, pseudo?)`
 - `sofiaSwitchOnRefusal(accountId, locale?)`
-- `sofiaIsOn(profile, numbers)`
+- `sofiaIsOn(profile, numbers)`, `switchesSofiaOn(before, after)`, `SofiaProfileState`, `SofiaSnapshot`
+- `numberStatusLocked(vettingLock, profile, numbers, numberId, v)`
 - `getAccountTrade` → `{ trade, tradeOther }`
 - `setAccountTrade(db, id, { trade, tradeOther }, actorId)`
 - `createAccount({ trade, tradeOther })`
 - `TradeSetup` / `TradeFieldsCopy` / `TradeFields` / `TradePicker`
-- `vettingLock?: string | null`
+- `VettingLock = { text, link }`, `vettingLock?: VettingLock | null`
+- `SetupVettingNotice({ accountId, trade })`
+- Event `account.trade_updated` (matches `account.language_updated` and the other account events; plan review M7)
 - `SetupInputs.trade?`
 - Form fields `trade` / `tradeOther` / `locale`
 
@@ -2607,7 +2929,7 @@ git commit -m "S-53 e2e: Add company refuses a held trade; a CRM-only company's 
 
 1. **The spec's two CHECK expressions admit NULL. Fixed in 0101.** In §4, `check (trade is distinct from 'other' or length(btrim(trade_other)) between 1 and 120)` passes `('other', NULL)`, and `check (trade_other is null or trade = 'other')` passes `(NULL, 'desc')`, because a CHECK that evaluates to NULL passes. Both leaks were reproduced on the replica ("2 rows admitted"). 0101 uses `trade_other is not null and …` and `is not distinct from`. Recommendation: accept; the intent is unchanged.
 2. **Add as a company (adopt-orphan) also requires a trade.** The spec names only Add company. Without the check, a held or turned-away business could be taken on through the orphan path. Recommendation: accept, as Task 4 does.
-3. **"Switching Sofía on" is defined as the call path defines answering.** The guarded paths are: a number to testing/live (unless it already answers), Receptionist enabled off→on, go-live, and the web chat's on switch. Assigning or moving a number is not guarded, because both leave it `provisioned`, which never answers. Turning call-forwarding off is not guarded, because it only resumes a line already answering. No call-time gate is added, because the spec says "anything already on stays on" and the three production companies have no trade until Task 11. Recommendation: accept. Revisit a call-time gate (TeXML, beside billing's `voiceBlock`) only if the owner wants a CRM-only trade to also silence an already-live line.
+3. **"Switching Sofía on" is defined as the call path defines answering (revised after plan review C1).** A write switches her on exactly when it takes the company from not answering to answering under `callAnswerable`, or the chat from off to on. Every guarded action computes the state before and the state it would write. That rule closes two paths the first draft missed: a live number moved to testing while the profile is disabled, and a first profile saved beside a testing number. The guarded actions are: a number's status (it also reads the profile), any profile save (it also reads the numbers), go-live, and the web chat's on switch. Assigning or moving a number is not guarded, because both leave it `provisioned`, which never answers. Turning call-forwarding off is not guarded, because it only resumes a line already answering. No call-time gate is added, because the spec says "anything already on stays on" and the three production companies have no trade until Task 11. Recommendation: accept. Revisit a call-time gate (TeXML, beside billing's `voiceBlock`) only if the owner wants a CRM-only trade to also silence an already-live line.
 4. **Setup drops Sofía's steps for a CRM-only trade**, exactly as it does for a CRM-only plan. Otherwise a restaurant's Setup could never complete (`docs/crm-features.md:883`'s defect). The spec only says "the UI disables the switch". Recommendation: accept.
 5. **The CRM-only sentence names the trade in lower case with a noun:** "aren't available for restaurant businesses yet" / "para el giro restaurante". The spec's "for <trade>" would read "for Restaurant yet". Recommendation: accept the wording; the owner may reword it in review.
 6. **Clients can READ `accounts.trade` through the data API.** `accounts` SELECT is table-level for an account's own members. The app never shows it (spec 5.2 is met in the UI), and a trade is not secret. Hiding it would mean moving `accounts` to column-level SELECT grants, a larger change. Recommendation: accept, and note it.
