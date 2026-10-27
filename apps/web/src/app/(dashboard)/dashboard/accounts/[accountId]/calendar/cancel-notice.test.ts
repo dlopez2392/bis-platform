@@ -319,8 +319,7 @@ describe("expireCancelNotice — too late to tell the customer: never sent, said
     const [, , id, status, patch, actor] = db.updateMessageStatus.mock.calls[0]!;
     expect([id, status, actor]).toEqual(["msg_1", "failed", "user_1"]);
     expect((patch as { error: string }).error).toBe(CANCEL_NOTICE_EXPIRED.started);
-    expect(CANCEL_NOTICE_EXPIRED.started).toMatch(/^Not sent: /);
-    expect(CANCEL_NOTICE_EXPIRED.too_old).toMatch(/^Not sent: /);
+    expect(CANCEL_NOTICE_EXPIRED.started).not.toBe(CANCEL_NOTICE_EXPIRED.too_old);
   });
 
   it("names why: an appointment already started, or a notice a day old", async () => {
@@ -377,5 +376,20 @@ describe("the Calendar page states its own ceiling, long enough for the notice",
     const declared = /^export const maxDuration = (\d+);$/m.exec(src);
     expect(declared, "page.tsx exports maxDuration").not.toBeNull();
     expect(Number(declared![1]) * 1000).toBeGreaterThanOrEqual(UNDO_WINDOW_MS + NOTICE_GRACE_MS + 30_000);
+  });
+
+  // F-048 follow-up (m2): the sweep reads a row only once it has been due for
+  // CANCEL_NOTICE_SWEEP_SLACK_MS. If that point is past the page's own
+  // ceiling, the after() job that queued the row has either settled it or
+  // been killed by then, so a LIVE after() and the sweep never claim the same
+  // notice in the ordinary course; the claim decides the rare overlap anyway.
+  it("the sweep's first look at a row comes after the page's ceiling: window + grace + slack > maxDuration (mutation: maxDuration = 200, or a 30 s slack → FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { CANCEL_NOTICE_SWEEP_SLACK_MS } = await import("@/lib/automations/passes/cancel-notices");
+    const src = readFileSync(join(__dirname, "page.tsx"), "utf8");
+    const declared = /^export const maxDuration = (\d+);$/m.exec(src);
+    expect(declared, "page.tsx exports maxDuration").not.toBeNull();
+    expect(UNDO_WINDOW_MS + NOTICE_GRACE_MS + CANCEL_NOTICE_SWEEP_SLACK_MS).toBeGreaterThan(Number(declared![1]) * 1000);
   });
 });

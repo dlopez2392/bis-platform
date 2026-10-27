@@ -292,7 +292,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.billingPause).toEqual(expect.objectContaining({ paused: 0, failed: 0 }));
     expect(results.billingPause).not.toHaveProperty("errored");
     expect(results.releaseHeld).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
-    expect(results.cancelNotices).toEqual({ sent: 0, failed: 0, expired: 0, undone: 0, elsewhere: 0, unsettled: 0 });
+    expect(results.cancelNotices).toEqual({ sent: 0, failed: 0, expired: 0, undone: 0, elsewhere: 0, unsettled: 0, abandoned: 0, deferred: 0 });
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
       .map((args) => JSON.stringify(args)).join("\n");

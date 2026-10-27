@@ -13,6 +13,7 @@ import {
 } from "@/lib/email/templates/booking";
 import { formatWhen, safeZone } from "@/lib/booking/time";
 import type { PublicLocale } from "@/lib/forms/public-strings";
+import { CANCEL_NOTICE_EXPIRED, type ExpiredReason } from "@/lib/booking/cancel-notice-expired";
 import { UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
 import type { NoticeAvailability } from "./cancel-flow";
 
@@ -184,14 +185,11 @@ export type CancelNotice = {
  *  the same client. The two are the same gate. */
 type DeliverDeps = { db: SupabaseClient; send?: (req: EmailRequest) => Promise<SendEmailResult> };
 
-/** Why a notice is too late to send. The text is the thread row's `error`;
- *  the thread itself shows the generic failed line (failure-reason.ts never
- *  prints `error`), so these are for the log and the record. */
-export const CANCEL_NOTICE_EXPIRED = {
-  started: "Not sent: the appointment time had already passed when the email could go out.",
-  too_old: "Not sent: the email could not go out within a day of the cancel.",
-} as const;
-export type ExpiredReason = keyof typeof CANCEL_NOTICE_EXPIRED;
+/** Why a notice is too late to send: the marker written to the thread row's
+ *  `error`, which failure-reason.ts turns into plain words for the owner
+ *  ("too late to tell the customer"). Defined in lib/booking so lib/email can
+ *  read it without importing this page module. */
+export { CANCEL_NOTICE_EXPIRED, type ExpiredReason };
 
 const tagOf = (n: CancelNotice) => `cancel notice for booking ${n.bookingId} (account ${n.accountId})`;
 
@@ -302,7 +300,7 @@ export async function deliverCancelNotice(n: CancelNotice, deps: DeliverDeps): P
  * has started, or the cancel is a day old): CLAIM first, exactly as a send
  * would, so an Undo that won is never told "failed" and a notice someone
  * else sent is never relabelled. Claimed: the thread row is marked failed in
- * plain words (the owner sees "This didn't go through" on the thread) and
+ * plain words (the thread says it was too late to tell the customer) and
  * the pending row is settled. Lost: rule 4, as `deliverCancelNotice`. A
  * claim that throws touches nothing: the next tick tries again.
  *

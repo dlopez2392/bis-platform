@@ -485,7 +485,10 @@ export async function undoCancelBookingAction(
   }
 
   if (messageId) {
-    // Best effort: the notice's own job also removes it when its claim loses.
+    // Best effort. If this fails, the notice's after() job or the cron sweep
+    // loses its claim, reads the booking no longer cancelled (this Undo won),
+    // and removes the row then (`onLostClaim`, rule 4). A sender that reads
+    // the booking still cancelled never removes it.
     try {
       await discardQueuedNotice(serviceDb(), accountId, messageId);
     } catch (e) {

@@ -16,6 +16,7 @@ import { SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS 
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
 import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 import { EXPIRY_BUDGET_MS } from "./passes/documents-expiry";
+import { CANCEL_NOTICE_BUDGET_MS } from "./passes/cancel-notices";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -325,23 +326,33 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
    * ceiling: five budgets could be raised independently, each passing
    * its own neighbour's check, until together they left the other
    * registered passes no room at all inside one tick. `MIN_HEADROOM_MS`
-   * is one more 60 s budget's worth — the smallest margin that still
+   * was one more 60 s budget's worth — the smallest margin that still
    * reads as "room for the rest", not a number tuned to pass today's
-   * five. Mutation: raise any one budget past the point this leaves
+   * five. Since the F-048 follow-up it is 50 s: a sixth budget (the
+   * cancel-notice sweep, 10 s) moved one of "the rest" into the sum, so the
+   * same room is now partly a bound that pass enforces on itself. Mutation: raise any one budget past the point this leaves
    * zero headroom → FAILS; comment out `maxDuration` or any budget
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).
    */
-  it("the five wall-clock budgets, summed, still leave at least one more budget's worth of headroom inside maxDuration", () => {
+  it("the six wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside maxDuration", () => {
     // Since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s)
     // joined the other three; since S-07 3a, the documents expiry pass
     // (EXPIRY_BUDGET_MS, 15 s) is the fifth: 60 + 60 + 60 + 45 + 15 = 240 s,
     // plus the 60 s headroom = 300 = maxDuration, exactly.
+    // F-048 follow-up: the cancel-notice sweep (CANCEL_NOTICE_BUDGET_MS, 10 s)
+    // is the sixth. It was one of the UNBUDGETED passes the 60 s headroom was
+    // there for; with its own budget it is counted in the sum instead, so the
+    // headroom left for the passes that still have none is 50 s:
+    // 240 + 10 + 50 = 300 = maxDuration, exactly. The real room for
+    // unbudgeted work is unchanged; part of it is now a stated, enforced bound.
+    // The next budget added must come out of a neighbour or raise maxDuration.
     const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
     expect(m).not.toBeNull();
     const maxDuration = Number(m![1]);
-    const MIN_HEADROOM_MS = 60_000;
-    const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS + EXPIRY_BUDGET_MS;
+    const MIN_HEADROOM_MS = 50_000;
+    const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS + EXPIRY_BUDGET_MS
+      + CANCEL_NOTICE_BUDGET_MS;
     expect(maxDuration * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
   });
 });

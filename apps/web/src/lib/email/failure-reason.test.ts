@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { m } from "@/lib/messages";
 import { messageFailureReason, COMPLAINT_ERROR_MARKER } from "./failure-reason";
+import { CANCEL_NOTICE_EXPIRED } from "@/lib/booking/cancel-notice-expired";
 
 /**
  * D-017 (what gets shown) and D-016 (what the webhook records to be shown).
@@ -89,6 +90,27 @@ describe("messageFailureReason", () => {
   it("a staff email the gate blocked `billing_paused` (M7a PR-4) reads \"Not sent: the account is paused\", in the reader's language, never the generic line (mutation: drop the mapping → FAILS)", () => {
     expect(messageFailureReason({ status: "failed", error: "email not sent: billing_paused" })).toBe(m["automations.reason.billingPaused"]);
     expect(messageFailureReason({ status: "failed", error: "email not sent: billing_paused" }, "es")).toBe(m["automations.reason.billingPaused.es"]);
+  });
+
+  it("F-048: a cancel notice the sweep found too late says so in plain words, in the reader's language, one line per reason, never the generic line (mutation: drop either mapping → FAILS)", () => {
+    expect(messageFailureReason({ status: "failed", error: CANCEL_NOTICE_EXPIRED.started }))
+      .toBe(m["conversations.failureReason.noticeTooLateStarted"]);
+    expect(messageFailureReason({ status: "failed", error: CANCEL_NOTICE_EXPIRED.started }, "es"))
+      .toBe(m["conversations.failureReason.noticeTooLateStarted.es"]);
+    expect(messageFailureReason({ status: "failed", error: CANCEL_NOTICE_EXPIRED.too_old }))
+      .toBe(m["conversations.failureReason.noticeTooLateDayOld"]);
+    expect(messageFailureReason({ status: "failed", error: CANCEL_NOTICE_EXPIRED.too_old }, "es"))
+      .toBe(m["conversations.failureReason.noticeTooLateDayOld.es"]);
+    for (const key of ["noticeTooLateStarted", "noticeTooLateDayOld"]) {
+      expect(m[`conversations.failureReason.${key}` as keyof typeof m]).toMatch(/too late to tell the customer/);
+    }
+  });
+
+  it("F-048: only the exact marker maps, on a failed row only (mutation: match by substring → FAILS)", () => {
+    expect(messageFailureReason({ status: "failed", error: `${CANCEL_NOTICE_EXPIRED.started} (retry)` }))
+      .toBe(m["conversations.failureReason.failed"]);
+    expect(messageFailureReason({ status: "bounced", error: CANCEL_NOTICE_EXPIRED.started }))
+      .toBe(m["conversations.failureReason.bounced"]);
   });
 });
 

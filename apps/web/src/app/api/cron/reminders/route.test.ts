@@ -325,7 +325,7 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
 
 const EMPTY_RELEASE = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
 // F-048: the cancel-notice sweep, right after the release pass: nothing is waiting in this suite.
-const EMPTY_CANCEL_NOTICES = { sent: 0, failed: 0, expired: 0, undone: 0, elsewhere: 0, unsettled: 0 };
+const EMPTY_CANCEL_NOTICES = { sent: 0, failed: 0, expired: 0, undone: 0, elsewhere: 0, unsettled: 0, abandoned: 0, deferred: 0 };
 const EMPTY_FOLLOWUPS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
