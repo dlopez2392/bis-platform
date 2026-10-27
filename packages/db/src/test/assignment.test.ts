@@ -322,6 +322,22 @@ describe("assignment core (spec §8)", () => {
     expect(await holder(db, "contacts", c2)).toBe(other.id);   // mutation: drop the .is("assigned_to", null) guard -> FAILS
     expect(await holder(db, "tasks", t)).toBe(a.id);           // mutation: drop reassignReleased's tasks branch -> FAILS
   }));
+  // F-085 follow-up, Task A: the role change's give-back (actions.ts's
+  // giveBackTechnicianTasks) feeds this function task ids read back from an
+  // events row, never the browser — but the write itself must never cross
+  // the tenant boundary even if a forged or stale id did (the same property
+  // assignContacts's membership check protects on the customer side, A5).
+  it("reassignReleased never touches a task from another account, even when one rides along with a legitimate id (tenant boundary; mutation: drop the account_id filter -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "ta1", "staff");
+      const mine = await task(db, accountId, null, null, "mine, open and Unassigned");
+      await withTestAccount(async (_db, otherAccountId) => {
+        const stranger = await task(db, otherAccountId, null, null, "someone else's, open and Unassigned");
+        await reassignReleased(db, accountId, a.id, { contacts: [], tasks: [mine, stranger] });
+        expect(await holder(db, "tasks", mine)).toBe(a.id);
+        expect(await holder(db, "tasks", stranger)).toBeNull();
+      });
+    }));
 });
 
 /** Only `.rpc()`, answering what the database never should: enough to pin the parse without a database. */

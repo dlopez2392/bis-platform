@@ -35,6 +35,9 @@ vi.mock("@/lib/team/clerk-team", async (importOriginal) => ({
 const log = vi.hoisted(() => ({ recordRemoval: vi.fn(), latestRemoval: vi.fn() }));
 vi.mock("@/lib/team/removal-log", () => log);
 
+const techlog = vi.hoisted(() => ({ recordTechnicianRelease: vi.fn(), latestTechnicianRelease: vi.fn() }));
+vi.mock("@/lib/team/technician-release-log", () => techlog);
+
 import { UNDO_WINDOW_MS } from "@/lib/team/team-view";
 import {
   inviteTeamMemberAction, setTeamRoleAction, setTeamLanguageAction, removeTeamMemberAction,
@@ -70,7 +73,12 @@ function removal(member: { userId: string; clerkUserId: string; role: "owner" | 
   return { userId: member.userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language, released, removedAt: new Date(Date.now() - agoMs).toISOString() };
 }
 
-const allDataMocks = () => [from, ...Object.values(db).filter((f) => f !== db.serviceDb), ...Object.values(clerk), ...Object.values(log)];
+/** A technician-release event `agoMs` old, in the shape latestTechnicianRelease returns. */
+function techRelease(userId: string, taskIds: string[], agoMs = 10_000) {
+  return { userId, taskIds, releasedAt: new Date(Date.now() - agoMs).toISOString() };
+}
+
+const allDataMocks = () => [from, ...Object.values(db).filter((f) => f !== db.serviceDb), ...Object.values(clerk), ...Object.values(log), ...Object.values(techlog)];
 const logged = () => vi.mocked(console.error).mock.calls.map(String).join("\n");
 const order = (f: { mock: { invocationCallOrder: number[] } }, i = 0) => f.mock.invocationCallOrder[i] ?? Number.NaN;
 
@@ -99,6 +107,8 @@ beforeEach(() => {
   clerk.reassertClerkRole.mockResolvedValue({ ok: true, changed: false });
   log.recordRemoval.mockResolvedValue(undefined);
   log.latestRemoval.mockResolvedValue(removal(STAFF_C));
+  techlog.recordTechnicianRelease.mockResolvedValue(undefined);
+  techlog.latestTechnicianRelease.mockResolvedValue(null);
 });
 
 describe("Staff calling an Owner action is redirected before anything is read or written", () => {
@@ -547,6 +557,98 @@ describe("setTeamRoleAction: a person made a Technician lets go of tasks on cust
     db.releaseTasksOffCustomers.mockRejectedValue(new Error("releaseTasksOffCustomers failed: down"));
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).toEqual({ ok: true, previous: "staff" });
     expect(logged()).toMatch(new RegExp(`tasks[^\\n]*${STAFF_C.userId}[^\\n]*releaseTasksOffCustomers failed: down`));
+  });
+});
+
+/**
+ * F-085 follow-up, Task A: the doc comment used to say "An Undo of the role
+ * change does not give those tasks back." These pin the fix: a move INTO
+ * Technician records what it released, and a move OUT gives it back, the
+ * same shape as the removal's record and give-back.
+ */
+describe("setTeamRoleAction: a move to Technician records what it released, so leaving can give it back", () => {
+  it("records the released ids as the caller, after the release (mutation: record before releasing, or skip the record -> FAILS)", async () => {
+    db.releaseTasksOffCustomers.mockResolvedValue(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]);
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).toEqual({ ok: true, previous: "staff" });
+    expect(techlog.recordTechnicianRelease).toHaveBeenCalledWith(
+      expect.anything(), ACCT, "user_A", STAFF_C.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]);
+    expect(order(db.releaseTasksOffCustomers)).toBeLessThan(order(techlog.recordTechnicianRelease));
+  });
+  it("nothing released is nothing recorded (mutation: record an empty list anyway -> FAILS)", async () => {
+    db.releaseTasksOffCustomers.mockResolvedValue([]);
+    await setTeamRoleAction(ACCT, STAFF_C.userId, "technician");
+    expect(techlog.recordTechnicianRelease).not.toHaveBeenCalled();
+  });
+  it("a record that throws is logged by id and the role change still stands (mutation: let it throw -> FAILS)", async () => {
+    db.releaseTasksOffCustomers.mockResolvedValue(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]);
+    techlog.recordTechnicianRelease.mockRejectedValue(new Error("event emit failed: down"));
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).toEqual({ ok: true, previous: "staff" });
+    expect(logged()).toMatch(new RegExp(`cannot give them back[^\\n]*${STAFF_C.userId}`));
+  });
+});
+
+describe("setTeamRoleAction: leaving Technician gives back what the move into it released", () => {
+  it("still-Unassigned tasks come back when a Technician is set to Staff, read from the record, never the browser (mutation: skip giveBackTechnicianTasks -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "technician" });
+    expect(techlog.latestTechnicianRelease).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId);
+    expect(db.reassignReleased).toHaveBeenCalledWith(
+      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] });
+  });
+  it("...and when a Technician is promoted to Owner, the promotion's own branch (mutation: skip it on the promotion path -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, TECH_D]).mockResolvedValue([OWNER_A, { ...TECH_D, role: "owner" }]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "owner")).toEqual({ ok: true, previous: "technician" });
+    expect(db.reassignReleased).toHaveBeenCalledWith(
+      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] });
+  });
+  it("never carries a contact id: only the recorded task ids move, never the member's own customers (mutation: pass the member's contacts too -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
+    await setTeamRoleAction(ACCT, TECH_D.userId, "staff");
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), { contacts: [], tasks: expect.any(Array) });
+  });
+  it("a record older than UNDO_WINDOW_MS gives back nothing (mutation: drop the window check -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], UNDO_WINDOW_MS + 5_000));
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "technician" });
+    expect(db.reassignReleased).not.toHaveBeenCalled();
+  });
+  it("no record, or a record with no task ids, gives back nothing (mutation: give back on no record -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(null);
+    await setTeamRoleAction(ACCT, TECH_D.userId, "staff");
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, []));
+    await setTeamRoleAction(ACCT, TECH_D.userId, "staff");
+    expect(db.reassignReleased).not.toHaveBeenCalled();
+  });
+  it("landing on Staff or Owner always checks for something to give back, even for someone never a Technician: a no-op read, never a write (mutation: skip the check entirely -> FAILS)", async () => {
+    await setTeamRoleAction(ACCT, OWNER_B.userId, "staff");
+    expect(techlog.latestTechnicianRelease).toHaveBeenCalledWith(expect.anything(), ACCT, OWNER_B.userId);
+    expect(db.reassignReleased).not.toHaveBeenCalled();
+  });
+  it("a give-back failure is logged by id, never by address, and the role change still stands (mutation: let it throw -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
+    db.reassignReleased.mockRejectedValue(new Error("reassignReleased tasks failed: down"));
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "technician" });
+    expect(logged()).toContain(TECH_D.userId);
+    expect(logged()).toContain(ACCT);
+    expect(logged()).not.toContain("d@x.com");
+  });
+  // The removal's give-back heals a missed one on a second Undo (review I2);
+  // this is the same shape, except there is no separate undo action to
+  // re-click — any later landing on Staff or Owner inside the window retries,
+  // which is exactly why giveBackTechnicianTasks is never gated on `previous`.
+  it("a second move away from Technician inside the window retries a missed give-back and it lands (mutation: gate the retry on `previous` -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
+    db.reassignReleased.mockRejectedValueOnce(new Error("down")).mockResolvedValueOnce(undefined);
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "technician" });
+    db.listAccountTeam.mockResolvedValue([OWNER_A, { ...TECH_D, role: "staff" }]);   // the BIS write already landed
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "staff" });
+    expect(db.reassignReleased).toHaveBeenCalledTimes(2);
   });
 });
 
