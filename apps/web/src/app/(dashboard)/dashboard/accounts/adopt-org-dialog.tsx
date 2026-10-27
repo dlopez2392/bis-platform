@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Notice } from "@/components/ui/notice";
 import { TradeFields, type TradeSetup } from "@/components/vetting/trade-fields";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { SubmitButton } from "./submit-button";
 import { settleCreateAccount } from "./create-account-feedback";
+import { RefusalNotice, type Refusal } from "./refusal-notice";
 import type { CreateAccountResult } from "./actions";
 
 /**
@@ -33,12 +33,12 @@ export function AdoptOrgDialog({
   const [open, setOpen] = useState(false);
   // S-53 (spec 5.1): the same inline-refusal shape as Add company — a held or
   // turned-away trade's reason, read in the form rather than toasted away.
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<Refusal | null>(null);
   const { pending, onSubmit } = useFormSubmit((formData) => {
     setFormError(null);
     return settleCreateAccount(() => action(formData), {
       close: () => setOpen(false),
-      error: (message) => setFormError(message),
+      error: (text, lang) => setFormError({ text, lang }),
     });
   });
   return (
@@ -56,9 +56,9 @@ export function AdoptOrgDialog({
             <Label htmlFor="adopt-timezone">{m["accounts.timezone"]}</Label>
             <Input id="adopt-timezone" name="timezone" defaultValue="America/Chicago" />
           </div>
-          <TradeFields idPrefix="adopt" {...trade} />
-          <input type="hidden" name="locale" value={trade.locale} />
-          {formError ? <Notice tone="crit" className="text-foreground">{formError}</Notice> : null}
+          {/* Changing the trade clears a refusal about the old one (design check M2). */}
+          <TradeFields idPrefix="adopt" {...trade} onTradeChange={() => setFormError(null)} />
+          {formError ? <RefusalNotice refusal={formError} /> : null}
           <DialogFooter>
             <SubmitButton pending={pending}>{m["accounts.add"]}</SubmitButton>
           </DialogFooter>

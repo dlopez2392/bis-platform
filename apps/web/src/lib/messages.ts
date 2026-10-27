@@ -6095,8 +6095,11 @@ export const m = {
   "styleguide.aiActs.es": "Las acciones de la asistente y Deshacer",
   // S-53 tenant vetting (docs/superpowers/specs/2026-10-27-tenant-vetting-design.md). Agency-only
   // surfaces (Add company, Add as a company, Settings' Trade card, the Voice page's locked switches,
-  // Setup's notice); bilingual because the spec's DoD asks it. The trades' own labels and reasons live
-  // in lib/vetting/trades.ts. Never shown to a client (spec 5.2).
+  // Setup's notice). Bilingual where the surface reads in the operator's own language (the dialogs'
+  // trade fields, the Trade card, the Voice page's lock sentences). Setup's notice reads only the
+  // English keys: the Setup page is English, so it renders vetting.crmOnlyCreated, vetting.sofia.noTrade
+  // and vetting.sofia.noTradeLink as they are (setup-vetting-notice.tsx). The trades' own labels and reasons live in
+  // lib/vetting/trades.ts. Never shown to a client (spec 5.2).
   "vetting.trade.label": "Trade",
   "vetting.trade.label.es": "Giro",
   "vetting.trade.placeholder": "Choose the business's trade",
@@ -6131,8 +6134,18 @@ export const m = {
   "vetting.card.description.es": "A qué se dedica este negocio. Decide si se pueden activar Sofía y el chat del sitio web. La empresa nunca lo ve.",
   "vetting.card.empty": "No trade yet. Sofía and the web chat can't be switched on until you set one.",
   "vetting.card.empty.es": "Aún no tiene giro. Sofía y el chat del sitio web no se pueden activar hasta que indique uno.",
-  "palette.settings.trade": "Trade",
-  "palette.settings.trade.es": "Giro",
+  // The card's title, apart from its field's "Trade" label (design check M6: both read "Trade"/"Giro").
+  "vetting.card.title": "Business trade",
+  "vetting.card.title.es": "Giro del negocio",
+  // The Trade card's crash toast. common.actionCrashed.es is in tú; this card speaks usted (final review M7).
+  "vetting.crashed": "That didn't go through — this page may be out of date. Reload it and try again.",
+  "vetting.crashed.es": "Eso no se completó: puede que esta página esté desactualizada. Vuelva a cargarla e inténtelo de nuevo.",
+  // Beside a phone-number status the trade will not let Sofía answer on (design check M1): a word, not opacity alone.
+  "vetting.numberStatusLocked": "not available",
+  "vetting.numberStatusLocked.es": "no disponible",
+  // The Trade card's own title (vetting.card.title): the palette names a section by its title.
+  "palette.settings.trade": "Business trade",
+  "palette.settings.trade.es": "Giro del negocio",
 } as const;
 
 export type MessageKey = keyof typeof m;

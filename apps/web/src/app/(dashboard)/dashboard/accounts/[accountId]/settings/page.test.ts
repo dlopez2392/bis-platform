@@ -23,6 +23,10 @@ const fx = vi.hoisted(() => ({
   brandingReads: [] as unknown[][],
   neverLogReads: [] as unknown[][],
   neverLogFails: false,
+  /** S-53: the stored trade the page's accounts read answers with. */
+  trade: null as string | null,
+  /** S-53: the operator's own language (getPersonPrefs), which the Trade card reads in. */
+  language: null as "en" | "es" | null,
   /** The request-scoped client. Answers the page's one inline accounts read. */
   requestDb: {
     tag: "dbForRequest",
@@ -32,7 +36,7 @@ const fx = vi.hoisted(() => ({
           maybeSingle: () => Promise.resolve({
             data: {
               clerk_org_id: null, client_access_enabled: false, report_emails: [], alert_phone: null,
-              required_document_categories: ["insurance"], trade: null, trade_other: null,
+              required_document_categories: ["insurance"], trade: fx.trade, trade_other: null,
             },
             error: null,
           }),
@@ -88,7 +92,7 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 
 // S-53: the trade field's locale read is stubbed the same way every other page's is.
-vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: fx.language, theme: null }) }));
 
 // "use server" modules — stubbed, never imported into a vitest run.
 const noop = async () => ({ ok: true });
@@ -185,6 +189,8 @@ beforeEach(() => {
   fx.brandingReads = [];
   fx.neverLogReads = [];
   fx.neverLogFails = false;
+  fx.trade = null;
+  fx.language = null;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -366,6 +372,43 @@ describe("settings page — the Trade card (S-53)", () => {
     expect(card, "TradeCard mounted").toBeTruthy();
     expect(card?.props.current).toEqual({ trade: null, tradeOther: null });
     expect((card?.props.copy as { status: string | null } | undefined)?.status).toBe(m["vetting.card.empty"]);
+  });
+
+  async function tradeCard() {
+    const { TradeCard } = await import("./trade-card");
+    const card = (await pageElements()).find((el) => el.type === TradeCard);
+    expect(card, "TradeCard mounted").toBeTruthy();
+    return card!.props as { current: unknown; copy: Record<string, string | null>; setup: { locale: string } };
+  }
+
+  it("a CRM-only trade shows its current value and the CRM-only line (final review M2; mutation: status null for crm_only -> FAILS)", async () => {
+    fx.trade = "restaurant";
+    const card = await tradeCard();
+    expect(card.current).toEqual({ trade: "restaurant", tradeOther: null });
+    expect(card.copy.status).toBe(m["vetting.crmOnlyCreated"]);
+  });
+
+  it("an allowed trade shows no status line", async () => {
+    fx.trade = "hvac";
+    expect((await tradeCard()).copy.status).toBeNull();
+  });
+
+  it("the card is titled apart from its own field label, in both languages (design check M6; mutation: title from vetting.trade.label -> FAILS)", async () => {
+    const en = await tradeCard();
+    expect(en.copy.title).toBe(m["vetting.card.title"]);
+    expect(en.copy.title).not.toBe(en.copy.label);
+    fx.language = "es";
+    const es = await tradeCard();
+    expect(es.setup.locale).toBe("es");
+    expect(es.copy.title).toBe(m["vetting.card.title.es"]);
+    expect(es.copy.title).not.toBe(es.copy.label);
+  });
+
+  it("its crash line is in usted in Spanish, not common.actionCrashed's tú (final review M7; mutation: common.actionCrashed -> FAILS)", async () => {
+    fx.language = "es";
+    const card = await tradeCard();
+    expect(card.copy.crashed).toBe(m["vetting.crashed.es"]);
+    expect(card.copy.crashed).not.toBe(m["common.actionCrashed.es"]);
   });
 });
 

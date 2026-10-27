@@ -8,6 +8,7 @@ import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId
 import { m } from "@/lib/messages";
 import { checkTradeChoice } from "@/lib/vetting/trades";
 import { tradeChoiceRefusal } from "@/lib/vetting/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 /**
@@ -17,8 +18,12 @@ import { NO_BLUEPRINT_SENTINEL } from "./constants";
  * reach the dialog untouched (create-account-feedback.ts rethrows it). What
  * comes back as a value is a refusal the operator can act on; anything else
  * still throws, and the dialog shows its generic line for it.
+ *
+ * `lang` is the language `error` is written in, so the dialog's Notice can say so (design check I2).
+ * Only the trade refusals are bilingual - they follow the dialog's own language - so only they carry
+ * it; every other refusal here is English, and an absent `lang` means exactly that.
  */
-export type CreateAccountResult = { ok: true } | { ok: false; error: string };
+export type CreateAccountResult = { ok: true } | { ok: false; error: string; lang?: Locale };
 
 export async function createClientAccount(formData: FormData): Promise<CreateAccountResult> {
   const { userId } = await requireAgency();
@@ -59,7 +64,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   // refusal is the entry's own reason (or "choose a trade"), in the dialog's language, shown in the form.
   const locale = formData.get("locale") === "es" ? "es" : "en";
   const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
-  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale) };
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale), lang: locale };
 
   const clerk = await clerkClient();
   const org = await clerk.organizations.createOrganization({ name: brandName, createdBy: userId });
@@ -178,7 +183,7 @@ export async function adoptOrphanOrgAction(
   // nothing is created on a refusal and the organisation is left alone (this action never deletes it).
   const locale = formData.get("locale") === "es" ? "es" : "en";
   const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
-  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale) };
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale), lang: locale };
 
   let org: { id: string; name: string };
   try {

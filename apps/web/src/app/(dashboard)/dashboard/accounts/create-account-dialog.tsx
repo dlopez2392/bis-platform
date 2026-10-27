@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Notice } from "@/components/ui/notice";
 import { TradeFields, type TradeSetup } from "@/components/vetting/trade-fields";
 import { m } from "@/lib/messages";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
@@ -28,6 +27,7 @@ import { AccountNameFields } from "./account-name-fields";
 import { SubmitButton } from "./submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { settleCreateAccount } from "./create-account-feedback";
+import { RefusalNotice, type Refusal } from "./refusal-notice";
 import type { CreateAccountResult } from "./actions";
 
 export function CreateAccountDialog({
@@ -41,8 +41,9 @@ export function CreateAccountDialog({
 }) {
   const [open, setOpen] = useState(false);
   // S-53 (spec 5.1): a refusal is a FORM message, not a toast - the agency reads it and passes it on
-  // (a held or turned-away trade's reason). Every refusal shows here now, so one place answers.
-  const [formError, setFormError] = useState<string | null>(null);
+  // (a held or turned-away trade's reason). Every refusal shows here now, so one place answers. It
+  // carries its language (a trade refusal follows this dialog's; the rest are English).
+  const [formError, setFormError] = useState<Refusal | null>(null);
   // A refusal the action returns is shown in its own words; an unexpected
   // throw gets the generic line; a successful create's redirect() propagates
   // so the navigation happens. The branching lives in
@@ -51,7 +52,7 @@ export function CreateAccountDialog({
     setFormError(null);
     return settleCreateAccount(() => action(formData), {
       close: () => setOpen(false),
-      error: (message) => setFormError(message),
+      error: (text, lang) => setFormError({ text, lang }),
     });
   });
   return (
@@ -82,8 +83,8 @@ export function CreateAccountDialog({
             <Label htmlFor="timezone">{m["accounts.timezone"]}</Label>
             <Input id="timezone" name="timezone" defaultValue="America/Chicago" />
           </div>
-          <TradeFields idPrefix="acct" {...trade} />
-          <input type="hidden" name="locale" value={trade.locale} />
+          {/* A refusal about the trade no longer on screen is stale: changing the trade clears it (design check M2). */}
+          <TradeFields idPrefix="acct" {...trade} onTradeChange={() => setFormError(null)} />
           {blueprints.length > 0 ? (
             <div className="space-y-1.5">
               <Label htmlFor="acct-blueprint">{m["accounts.blueprint"]}</Label>
@@ -101,7 +102,7 @@ export function CreateAccountDialog({
               <p className="text-xs text-muted-foreground">{m["accounts.blueprintHint"]}</p>
             </div>
           ) : null}
-          {formError ? <Notice tone="crit" className="text-foreground">{formError}</Notice> : null}
+          {formError ? <RefusalNotice refusal={formError} /> : null}
           <DialogFooter>
             <SubmitButton pending={pending}>{m["common.add"]}</SubmitButton>
           </DialogFooter>

@@ -16,6 +16,10 @@ describe("TradeFields", () => {
     expect(html).toContain("Elija el giro del negocio");
     expect(html).toContain('name="trade"');
   });
+  it("posts the form's language beside the trade, so a refusal comes back in it (final review M3; mutation: drop the hidden input -> FAILS)", () => {
+    expect(render("", "es")).toContain('<input type="hidden" name="locale" value="es"/>');
+    expect(render("", "en")).toContain('<input type="hidden" name="locale" value="en"/>');
+  });
   it("asks for the description only when Other is chosen, capped at 120 (mutation: always render it -> FAILS)", () => {
     expect(render()).not.toContain('name="tradeOther"');
     const other = render("other");

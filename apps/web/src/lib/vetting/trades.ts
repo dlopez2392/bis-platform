@@ -80,14 +80,14 @@ export const TRADES = [
     key: "law", group: "professional", label: { en: "Law firm", es: "Despacho de abogados" }, verdict: "held",
     reason: {
       en: "Law firms open once our Texas cloud-storage sheet for lawyers (Opinions 680 and 705) is ready.",
-      es: "Los despachos de abogados se abrirán cuando esté lista nuestra hoja para abogados sobre el almacenamiento en la nube en Texas (Opiniones 680 y 705).",
+      es: "Aceptaremos despachos de abogados cuando esté lista nuestra hoja para abogados sobre el almacenamiento en la nube en Texas (Opiniones 680 y 705).",
     },
   },
   {
     key: "tax", group: "professional", label: { en: "Tax preparation", es: "Preparación de impuestos" }, verdict: "held",
     reason: {
       en: "Tax preparers aren't open yet; planned for the 2028 tax season.",
-      es: "Aún no aceptamos preparadores de impuestos; está previsto para la temporada de impuestos de 2028.",
+      es: "Aún no aceptamos preparadores de impuestos; lo tenemos previsto para la temporada de impuestos de 2028.",
     },
   },
   { key: "restaurant", group: "food_and_care", label: { en: "Restaurant", es: "Restaurante" }, verdict: "crm_only" },

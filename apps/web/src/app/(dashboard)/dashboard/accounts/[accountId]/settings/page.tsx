@@ -184,8 +184,8 @@ export default async function CrmSettingsPage({
           copy={{
             label: tr.text("vetting.trade.label"), placeholder: tr.text("vetting.trade.placeholder"),
             hint: tr.text("vetting.trade.hint"), otherLabel: tr.text("vetting.other.label"), otherHint: tr.text("vetting.other.hint"),
-            title: tr.text("vetting.trade.label"), description: tr.text("vetting.card.description"), status: tradeStatus,
-            save: tr.text("common.save"), saved: tr.text("vetting.saved"), crashed: tr.text("common.actionCrashed"),
+            title: tr.text("vetting.card.title"), description: tr.text("vetting.card.description"), status: tradeStatus,
+            save: tr.text("common.save"), saved: tr.text("vetting.saved"), crashed: tr.text("vetting.crashed"),
           }}
           current={currentTrade}
           action={boundSetTrade}

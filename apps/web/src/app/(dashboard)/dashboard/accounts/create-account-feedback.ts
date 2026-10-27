@@ -1,5 +1,6 @@
 import { unstable_rethrow } from "next/navigation";
 import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
 import type { CreateAccountResult } from "./actions";
 
 /**
@@ -18,19 +19,21 @@ import type { CreateAccountResult } from "./actions";
  * A refusal the action RETURNS carries its own words (a blank name, an
  * unusable timezone, a test-shaped org id) and is shown as-is; the dialog
  * stays open with what the operator typed, so they can fix it and resubmit.
+ * `error` is handed the language the sentence is in (the result's `lang`, else English: the generic
+ * line and every refusal that carries none are English), so the dialog's Notice sets `lang`.
  */
 export async function settleCreateAccount(
   run: () => Promise<CreateAccountResult>,
-  ui: { close: () => void; error: (message: string) => void },
+  ui: { close: () => void; error: (message: string, lang: Locale) => void },
 ): Promise<void> {
   let result: CreateAccountResult;
   try {
     result = await run();
   } catch (e) {
     unstable_rethrow(e);
-    ui.error(m["accounts.createFailed"]);
+    ui.error(m["accounts.createFailed"], "en");
     return;
   }
   if (result.ok) ui.close();
-  else ui.error(result.error);
+  else ui.error(result.error, result.lang ?? "en");
 }

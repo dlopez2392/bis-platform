@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildNavGroups } from "@/lib/nav-groups";
 import { buildPaletteEntries, filterEntries } from "./registry";
+import { m } from "@/lib/messages";
 
 const BASE = "/dashboard/accounts/acc_1";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -133,6 +134,9 @@ describe("buildPaletteEntries", () => {
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#trade`);
     expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:trade")).toBe(false);
     expect(filterEntries(settings, "giro").some((e) => e.id === "settings:trade")).toBe(true);
+    // The palette jumps to a section BY NAME (DESIGN.md), so it names the card's own title (design check M6).
+    expect((entry as { label: string } | undefined)?.label).toBe(m["vetting.card.title"]);
+    expect(filterEntries(settings, "trade").some((e) => e.id === "settings:trade")).toBe(true);
   });
 
   it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {

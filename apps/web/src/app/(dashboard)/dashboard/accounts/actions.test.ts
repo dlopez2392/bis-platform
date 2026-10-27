@@ -304,14 +304,15 @@ describe("S-53 vetting: the trade is checked before Clerk is touched", () => {
     [{ trade: "other", tradeOther: "   " }, m["vetting.error.otherDescription"]],
   ])("createClientAccount refuses %j with its reason, and creates no Clerk org and no row (mutation: move the check after createOrganization -> FAILS)", async (over, error) => {
     const r = await createClientAccount(form(over as Record<string, string>));
-    expect(r).toEqual({ ok: false, error });
+    // lang: the refusal says which language it is written in, so the dialog's Notice can set it (design check I2).
+    expect(r).toEqual({ ok: false, error, lang: "en" });
     expect(clerkMocks.createOrg).not.toHaveBeenCalled();
     expect(dbMocks.createAccount).not.toHaveBeenCalled();
   });
 
-  it("refuses in Spanish when the form says es", async () => {
+  it("refuses in Spanish when the form says es, and says so (mutation: drop lang from the trade refusal -> FAILS)", async () => {
     const r = await createClientAccount(form({ trade: "tax", locale: "es" }));
-    expect(r).toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; está previsto para la temporada de impuestos de 2028." });
+    expect(r).toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; lo tenemos previsto para la temporada de impuestos de 2028.", lang: "es" });
   });
 
   it("creates a crm_only trade and records it, and a trimmed Other description (mutation: drop trade from createAccount's input -> FAILS)", async () => {
@@ -326,7 +327,11 @@ describe("S-53 vetting: the trade is checked before Clerk is touched", () => {
     f.set("timezone", "America/Chicago");
     f.set("trade", "dental");
     const r = await adoptOrphanOrgAction(CLERK_ORG_ID, f);
-    expect(r).toMatchObject({ ok: false });
+    // The exact sentence (T4+T6 review m4): a generic refusal must not pass.
+    expect(r).toEqual({
+      ok: false, lang: "en",
+      error: "Health-care businesses aren't open yet: they need protections for patient information that BIS doesn't have today.",
+    });
     expect(clerkMocks.getOrg).not.toHaveBeenCalled();
     expect(clerkMocks.deleteOrg).not.toHaveBeenCalled();
     expect(dbMocks.createAccount).not.toHaveBeenCalled();
@@ -338,7 +343,16 @@ describe("S-53 vetting: the trade is checked before Clerk is touched", () => {
     f.set("trade", "tax");
     f.set("locale", "es");
     expect(await adoptOrphanOrgAction(CLERK_ORG_ID, f))
-      .toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; está previsto para la temporada de impuestos de 2028." });
+      .toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; lo tenemos previsto para la temporada de impuestos de 2028.", lang: "es" });
+  });
+
+  it("adoptOrphanOrgAction records Other with its description trimmed to one line (T4+T6 review m2; mutation: pass the raw tradeOther -> FAILS)", async () => {
+    const f = new FormData();
+    f.set("timezone", "America/Chicago");
+    f.set("trade", "other");
+    f.set("tradeOther", "  Sign   painting ");
+    await adoptOrphanOrgAction(CLERK_ORG_ID, f);
+    expect(dbMocks.createAccount).toHaveBeenLastCalledWith({}, expect.objectContaining({ trade: "other", tradeOther: "Sign painting" }));
   });
 
   it("adoptOrphanOrgAction records the trade it is given", async () => {
