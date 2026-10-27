@@ -572,7 +572,10 @@ export async function enableConciergeAction(
   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
 
   // S-53 (spec 5.3): the web chat's on switch needs a trade that allows it. Unconditional: the card calls
-  // this only while the chat is off. The off switch (disableConciergeAction) never asks.
+  // this only while the chat is off. The off switch (disableConciergeAction) never asks. Being
+  // unconditional, it also refuses a "re-enable" of a chat already on for a CRM-only or no-trade company;
+  // no UI path sends one, and the chat stays on (accepted, T5 review m3; lib/vetting/sofia-guard.ts).
+  // The refusal is English, like every other refusal in this file (sofia-guard.ts's locale note).
   const refusal = await sofiaSwitchOnRefusal(accountId);
   if (refusal) return { ok: false, error: refusal };
 

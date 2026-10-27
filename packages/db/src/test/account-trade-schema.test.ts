@@ -18,7 +18,8 @@ function fileCreatableKeys(): string[] {
   const sql = fs.readFileSync(MIGRATION, "utf8");
   const list = /constraint accounts_trade_check check \(trade is null or trade in \(([^)]*)\)\)/.exec(sql);
   if (!list) throw new Error("accounts_trade_check's list not found in 0101");
-  return [...list[1]!.matchAll(/'([a-z_]+)'/g)].map((x) => x[1]!);
+  // Any quoted string (T1-T3 review m2): a key with a capital, digit or hyphen must still be read.
+  return [...list[1]!.matchAll(/'([^']*)'/g)].map((x) => x[1]!);
 }
 
 async function seed(c: Client, label: string): Promise<{ accountId: string; orgId: string }> {
@@ -53,7 +54,7 @@ describe("0101 accounts.trade / accounts.trade_other", () => {
       expect(keys).toHaveLength(21);
       const { rows: [def] } = await c.query<{ d: string }>(
         "select pg_get_constraintdef(oid) as d from pg_constraint where conname = 'accounts_trade_check' and conrelid = 'public.accounts'::regclass");
-      const live = [...def!.d.matchAll(/'([a-z_]+)'::text/g)].map((x) => x[1]!);
+      const live = [...def!.d.matchAll(/'([^']*)'::text/g)].map((x) => x[1]!);
       expect([...live].sort()).toEqual([...keys].sort());
     }));
 

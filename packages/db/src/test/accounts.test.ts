@@ -405,7 +405,9 @@ describe("account language", () => {
 });
 
 describe("account trade (S-53, 0101)", () => {
-  it("createAccount stores the trade it is given; a company created without one has none (mutation: drop the spread from the insert -> FAILS)", async () => {
+  // Titled for what it checks (T1-T3 review m6): "created without one has none" is the next test's
+  // fresh-account read, not this one's.
+  it("createAccount stores the trade it is given, with Other's description (mutation: drop the spread from the insert -> FAILS)", async () => {
     const db = serviceDb();
     const orgId = `org_test_${suffix()}`;
     const { id } = await createAccount(db, { clerkOrgId: orgId, name: "Trade Co", actorId: "user_test", trade: "other", tradeOther: "Sign painting" });

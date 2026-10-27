@@ -59,6 +59,16 @@ describe("setTradeAction (spec 5.2)", () => {
   it("refuses a CRM-only trade while the web chat is on, in Spanish when asked", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: false, concierge_enabled: true });
     expect(await setTradeAction("a1", fd({ trade: "child_care", locale: "es" }))).toEqual({ ok: false, error: m["vetting.turnOffFirst.es"] });
+    expect(dbMocks.setAccountTrade).not.toHaveBeenCalled();
+  });
+  it("saves Other with its description trimmed to one line (T4+T6 review m1; mutation: write the raw description -> FAILS)", async () => {
+    expect(await setTradeAction("a1", fd({ trade: "other", tradeOther: "  Sign   painting " }))).toEqual({ ok: true });
+    expect(dbMocks.setAccountTrade).toHaveBeenCalledWith({}, "a1", { trade: "other", tradeOther: "Sign painting" }, "user_agency");
+  });
+  it("refuses Other with a blank description, writing nothing (mutation: let a blank Other through -> FAILS)", async () => {
+    expect(await setTradeAction("a1", fd({ trade: "other", tradeOther: "   " })))
+      .toEqual({ ok: false, error: m["vetting.error.otherDescription"] });
+    expect(dbMocks.setAccountTrade).not.toHaveBeenCalled();
   });
   it("refuses a CRM-only trade while a live number answers with an enabled profile", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, concierge_enabled: false });

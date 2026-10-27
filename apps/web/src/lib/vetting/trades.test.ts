@@ -6,22 +6,30 @@ import {
   checkTradeChoice, sofiaGate, canUseSofia,
 } from "./trades";
 
-/** The spec's section 3 table, key and verdict, in its order. A changed verdict must change this list
- *  (a dated owner decision, V3) - the module cannot drift from the spec silently. */
-const SPEC: [string, string][] = [
-  ["hvac", "allowed"], ["plumbing", "allowed"], ["electrical", "allowed"], ["roofing", "allowed"],
-  ["landscaping", "allowed"], ["pool", "allowed"], ["pest_control", "allowed"], ["cleaning", "allowed"],
-  ["painting", "allowed"], ["remodeling", "allowed"], ["woodworking", "allowed"], ["handyman", "allowed"],
-  ["auto", "allowed"], ["beauty", "allowed"], ["fitness", "allowed"], ["insurance", "allowed"],
-  ["real_estate", "allowed"], ["events", "allowed"], ["law", "held"], ["tax", "held"],
-  ["restaurant", "crm_only"], ["child_care", "crm_only"], ["medical", "held"], ["dental", "held"],
-  ["therapy", "held"], ["chiropractic", "held"], ["other_health", "held"], ["adult_day_care", "turned_away"],
-  ["home_health", "turned_away"], ["other", "allowed"],
+/** The spec's section 3 table - key, group and verdict - in its order. A changed verdict must change this
+ *  list (a dated owner decision, V3), and so must a trade moved to another group (T1-T3 review m3): the
+ *  module cannot drift from the spec silently. */
+const SPEC: [string, string, string][] = [
+  ["hvac", "home_services", "allowed"], ["plumbing", "home_services", "allowed"],
+  ["electrical", "home_services", "allowed"], ["roofing", "home_services", "allowed"],
+  ["landscaping", "home_services", "allowed"], ["pool", "home_services", "allowed"],
+  ["pest_control", "home_services", "allowed"], ["cleaning", "home_services", "allowed"],
+  ["painting", "home_services", "allowed"], ["remodeling", "home_services", "allowed"],
+  ["woodworking", "home_services", "allowed"], ["handyman", "home_services", "allowed"],
+  ["auto", "auto", "allowed"],
+  ["beauty", "personal_care", "allowed"], ["fitness", "personal_care", "allowed"],
+  ["insurance", "professional", "allowed"], ["real_estate", "professional", "allowed"],
+  ["events", "professional", "allowed"], ["law", "professional", "held"], ["tax", "professional", "held"],
+  ["restaurant", "food_and_care", "crm_only"], ["child_care", "food_and_care", "crm_only"],
+  ["medical", "health", "held"], ["dental", "health", "held"], ["therapy", "health", "held"],
+  ["chiropractic", "health", "held"], ["other_health", "health", "held"],
+  ["adult_day_care", "care_at_home", "turned_away"], ["home_health", "care_at_home", "turned_away"],
+  ["other", "other", "allowed"],
 ];
 
 describe("the trade list (spec section 3)", () => {
-  it("is the spec's 30 keys with the spec's verdicts, in its order (mutation: make 'law' allowed -> FAILS)", () => {
-    expect(TRADES.map((e) => [e.key, e.verdict])).toEqual(SPEC);
+  it("is the spec's 30 keys with the spec's groups and verdicts, in its order (mutation: make 'law' allowed, or move 'pool' to auto -> FAILS)", () => {
+    expect(TRADES.map((e) => [e.key, e.group, e.verdict])).toEqual(SPEC);
   });
 
   it("every entry has an English and a Spanish label, and a group that exists", () => {
@@ -52,7 +60,7 @@ describe("the trade list (spec section 3)", () => {
   });
 
   it("the creatable keys are every allowed and crm_only key, other included - 21 of them", () => {
-    expect(creatableTradeKeys()).toEqual(SPEC.filter(([, v]) => v === "allowed" || v === "crm_only").map(([k]) => k));
+    expect(creatableTradeKeys()).toEqual(SPEC.filter(([, , v]) => v === "allowed" || v === "crm_only").map(([k]) => k));
     expect(creatableTradeKeys()).toHaveLength(21);
   });
 });
@@ -63,7 +71,9 @@ describe("migration 0101 and the module cannot drift (spec section 4)", () => {
     const sql = fs.readFileSync(file, "utf8");
     const list = /constraint accounts_trade_check check \(trade is null or trade in \(([^)]*)\)\)/.exec(sql);
     expect(list, "accounts_trade_check's list not found").not.toBeNull();
-    const keys = [...list![1]!.matchAll(/'([a-z_]+)'/g)].map((x) => x[1]!);
+    // Any quoted string, not just [a-z_]: a key with a capital, a digit or a hyphen must still be read,
+    // or it would slip past this comparison (T1-T3 review m2).
+    const keys = [...list![1]!.matchAll(/'([^']*)'/g)].map((x) => x[1]!);
     expect([...keys].sort()).toEqual([...creatableTradeKeys()].sort());
   });
 });
@@ -96,9 +106,11 @@ describe("checkTradeChoice (the server's validation, spec 5.1)", () => {
     expect(checkTradeChoice("other", desc)).toEqual({ ok: false, problem: "other_description" });
   });
   // The database's twin (0101 accounts_trade_other_check) must admit everything this accepts. Postgres text
-  // cannot hold a NUL at all (22021, probed on the replica), so a NUL that got through here would surface as
-  // a failed save - after Add company has already made the Clerk org - instead of this sentence. \s already
-  // folds tab, newline and carriage return into spaces; every other control character is refused.
+  // cannot hold a NUL at all: 22021 when probed in SQL on the replica, and 22P05 ("unsupported Unicode escape
+  // sequence") on the app's own path, where PostgREST hands the JSON body's \u0000 to Postgres. A NUL that got
+  // through here would surface as a failed save - after Add company has already made the Clerk org - instead
+  // of this sentence. \s already folds tab, newline and carriage return into spaces; every other control
+  // character is refused.
   it.each([0, 1, 27, 127])("refuses other with a control character (code %i) inside (mutation: drop the control-character check -> FAILS)", (code) => {
     expect(checkTradeChoice("other", `Sign${String.fromCharCode(code)}painting`)).toEqual({ ok: false, problem: "other_description" });
   });

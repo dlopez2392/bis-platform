@@ -6,6 +6,13 @@
  * UPDATE on accounts.trade. Same validation as Add company (checkTradeChoice). Moving to a CRM-only
  * trade is refused while Sofía is answering or the web chat is on: the switch-on guards stop new
  * switch-ons, so only this path could otherwise leave a CRM-only company with Sofía live.
+ *
+ * A RACE, ACCEPTED (T4+T6 review m3): this is check-then-write, and so is every switch-on guard
+ * (lib/vetting/sofia-guard.ts). Sent within milliseconds of each other - this save reading "Sofía is
+ * off" while a Voice-page switch-on reads "the trade is still allowed" - both pass and the company ends
+ * CRM-only with Sofía on. Accepted, not guaranteed against: both writers are agency staff, it takes two
+ * actions in the same instant, and closing it needs the check inside the database (a trigger or a
+ * locking function over accounts, voice_profiles and phone_numbers), which this release does not add.
  */
 import { revalidatePath } from "next/cache";
 import { serviceDb, setAccountTrade, getVoiceProfile, listPhoneNumbersForAccount } from "@bis/db";

@@ -54,8 +54,8 @@ async function cleanup(name: string) {
   } catch (e) { console.error(`vetting.spec cleanup: Clerk org lookup for "${name}": ${String(e)}`); }
 }
 
-async function openAddCompany(page: Page, name: string) {
-  await page.goto("/dashboard/accounts");
+async function openAddCompany(page: Page, name: string, locale: "en" | "es" = "en") {
+  await page.goto(locale === "es" ? "/dashboard/accounts?locale=es" : "/dashboard/accounts");
   await page.getByRole("button", { name: /add company/i }).click();
   await page.getByLabel("Business name").fill(name);
 }
@@ -74,12 +74,17 @@ test("Add company refuses a held trade with its reason, and creates nothing", as
     await page.getByRole("button", { name: "Add", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText(tradeEntry("law")!.reason!.en)).toBeVisible({ timeout: 20_000 });
+    // The refusal states its language (design check I2): it sits outside the trade field's lang wrapper.
+    await expect(dialog.getByRole("alert")).toHaveAttribute("lang", "en");
     await expect(page).toHaveURL(/\/dashboard\/accounts$/);
     const { data, error } = await serviceDb().from("accounts").select("id").eq("name", name);
     expect(error).toBeNull();
     expect(data ?? [], "a held trade must create no account").toEqual([]);
     // Refused BEFORE Clerk (Task 4): no organization under this name either.
     expect(await clerkOrgsNamed(name), "a held trade must mint no Clerk org").toEqual([]);
+    // A refusal about a trade no longer chosen is stale: picking another trade clears it (design check M2).
+    await pickTrade(page, tradeEntry("plumbing")!.label.en);
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
   } finally {
     await cleanup(name);
   }
@@ -114,6 +119,7 @@ test("a CRM-only company is created, and its Sofía and web-chat switches are of
     const reason = m["vetting.sofia.crmOnly"].replace("{trade}", tradeEntry("restaurant")!.label.en.toLowerCase());
     await expect(page.locator("#enabled")).toBeDisabled();
     await expect(page.locator("#sofia-enabled-reason")).toHaveText(reason);
+    await expect(page.locator("#sofia-enabled-reason")).toHaveAttribute("lang", "en");
     await expect(page.locator("#concierge_enabled")).toBeDisabled();
     await expect(page.locator("#concierge-toggle-reason")).toHaveText(reason);
 
@@ -130,14 +136,29 @@ test("a CRM-only company is created, and its Sofía and web-chat switches are of
   }
 });
 
-test("the trade field reads in Spanish and sets lang (bilingual DoD)", async ({ page }) => {
-  await page.goto("/dashboard/accounts?locale=es");
-  await page.getByRole("button", { name: /add company/i }).click();
-  const field = page.getByRole("combobox", { name: m["vetting.trade.label.es"] });
-  await expect(field).toBeVisible();
-  await expect(page.locator('[lang="es"]').getByRole("combobox", { name: m["vetting.trade.label.es"] })).toBeVisible();
-  await field.click();
-  // A literal, not trades.ts's own label: an English word left in the `es` slot would pass a derived one.
-  await expect(page.getByRole("option", { name: "Plomería", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
+test("the trade field reads in Spanish and sets lang, and a held trade is refused in Spanish (bilingual DoD)", async ({ page }) => {
+  const name = `E2E Co ${Date.now()}`;
+  try {
+    await openAddCompany(page, name, "es");
+    const field = page.getByRole("combobox", { name: m["vetting.trade.label.es"] });
+    await expect(field).toBeVisible();
+    await expect(page.locator('[lang="es"]').getByRole("combobox", { name: m["vetting.trade.label.es"] })).toBeVisible();
+    await field.click();
+    // The list is portaled out of the form, so it states its own language (design check I1).
+    await expect(page.getByRole("listbox")).toHaveAttribute("lang", "es");
+    // Literals, not trades.ts's own words: an English word left in the `es` slot would pass a derived one.
+    await expect(page.getByRole("option", { name: "Plomería", exact: true })).toBeVisible();
+    await page.getByRole("option", { name: "Despacho de abogados", exact: true }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    // In Spanish because the form posted its locale (final review M3), and saying so (design check I2).
+    const alert = page.getByRole("dialog").getByRole("alert");
+    await expect(alert).toHaveText(
+      "Aceptaremos despachos de abogados cuando esté lista nuestra hoja para abogados sobre el almacenamiento en la nube en Texas (Opiniones 680 y 705).",
+      { timeout: 20_000 },
+    );
+    await expect(alert).toHaveAttribute("lang", "es");
+    expect(await clerkOrgsNamed(name), "a held trade must mint no Clerk org").toEqual([]);
+  } finally {
+    await cleanup(name);
+  }
 });
