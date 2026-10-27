@@ -8,6 +8,7 @@ import {
   setA2pRegistration, getA2pRegistration, getAlertPhone, setAlertPhone,
   getTransferPhone, setTransferPhone, MessagingProfileTakenError,
   getAccountLanguage, setAccountLanguage,
+  getAccountTrade, setAccountTrade,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -400,5 +401,41 @@ describe("account language", () => {
       await db.from("events").delete().eq("account_id", id);
       await db.from("accounts").delete().eq("id", id);
     }
+  });
+});
+
+describe("account trade (S-53, 0101)", () => {
+  it("createAccount stores the trade it is given; a company created without one has none (mutation: drop the spread from the insert -> FAILS)", async () => {
+    const db = serviceDb();
+    const orgId = `org_test_${suffix()}`;
+    const { id } = await createAccount(db, { clerkOrgId: orgId, name: "Trade Co", actorId: "user_test", trade: "other", tradeOther: "Sign painting" });
+    try {
+      expect(await getAccountTrade(db, id)).toEqual({ trade: "other", tradeOther: "Sign painting" });
+    } finally {
+      await db.from("events").delete().eq("account_id", id);
+      await db.from("accounts").delete().eq("id", id);
+    }
+  });
+
+  it("getAccountTrade reads null on a fresh account; setAccountTrade writes, emits account.trade_updated, and the database refuses a held trade", async () => {
+    await withTestAccount(async (db, accountId) => {
+      expect(await getAccountTrade(db, accountId)).toEqual({ trade: null, tradeOther: null });
+      await setAccountTrade(db, accountId, { trade: "restaurant", tradeOther: null }, "user_test");
+      expect(await getAccountTrade(db, accountId)).toEqual({ trade: "restaurant", tradeOther: null });
+      const { data: ev } = await db.from("events").select("type, actor_type, actor_id, payload")
+        .eq("account_id", accountId).eq("type", "account.trade_updated").single();
+      expect(ev).toMatchObject({ actor_type: "user", actor_id: "user_test", payload: { trade: "restaurant", tradeOther: null } });
+      await expect(setAccountTrade(db, accountId, { trade: "tax", tradeOther: null }, "user_test"))
+        .rejects.toThrow(/setAccountTrade failed: .*accounts_trade_check/);
+    });
+  });
+
+  it("both throw for an account that does not exist, and setAccountTrade emits nothing", async () => {
+    const db = serviceDb();
+    const ghost = randomUUID();
+    await expect(getAccountTrade(db, ghost)).rejects.toThrow(/no account/);
+    await expect(setAccountTrade(db, ghost, { trade: "hvac", tradeOther: null }, "user_test")).rejects.toThrow(/no account/);
+    const { data } = await db.from("events").select("id").eq("account_id", ghost).eq("type", "account.trade_updated");
+    expect(data ?? []).toEqual([]);
   });
 });

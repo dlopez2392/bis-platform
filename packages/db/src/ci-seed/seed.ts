@@ -195,7 +195,7 @@ export async function ensureCiBaseline(
   const created: string[] = [];
   let accountId = before.account?.id;
   if (!accountId) {
-    accountId = (await createAccount(db, { clerkOrgId: spec.clerkOrgId, name: spec.name, actorId: CI_SEED_ACTOR })).id;
+    accountId = (await createAccount(db, { clerkOrgId: spec.clerkOrgId, name: spec.name, actorId: CI_SEED_ACTOR, trade: "hvac" })).id;
     created.push("account");
   }
 
