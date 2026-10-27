@@ -7,6 +7,8 @@ import { ArrowLeft } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { withWho, type Who } from "@/lib/assign/who";
 
 /**
@@ -53,6 +55,10 @@ export function shouldGoBackOnEscape(
  */
 export function ConversationBack({ base, before, who = "all" }: { base: string; before?: string; who?: Who }) {
   const router = useRouter();
+  // F-085 follow-up (Task B): the conversations list's LocaleProvider
+  // (requestLocale), the same context AssigneeField and BulkActionBar
+  // already read.
+  const locale = useLocale();
   const linkRef = useRef<HTMLAnchorElement>(null);
   // F-085 part 1: Back from a thread opened inside Mine returns to Mine.
   const qs = new URLSearchParams(withWho(before ? { before } : {}, who)).toString();
@@ -87,7 +93,7 @@ export function ConversationBack({ base, before, who = "all" }: { base: string; 
       className={cn(buttonVariants({ variant: "outline", size: "sm" }), "lg:hidden")}
     >
       <ArrowLeft className="size-3.5" aria-hidden />
-      {m["nav.conversations"]}
+      {t(m, "nav.conversations", locale)}
     </Link>
   );
 }

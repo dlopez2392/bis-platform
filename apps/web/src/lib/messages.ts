@@ -533,6 +533,7 @@ export const m = {
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
 
   "contacts.title": "Contacts",
+  "contacts.title.es": "Contactos",
   "contacts.add": "Add contact",
   // The header badge (Task 3): a whole-phrase pick by count, never a plural
   // template reused for one — see setup.progress below for the {placeholder}
@@ -540,14 +541,22 @@ export const m = {
   // "1 people" bug on the Website screen by templating a plural with no
   // singular form; this is the same shape, fixed at the source.
   "contacts.count": "{count} contacts",
+  "contacts.count.es": "{count} contactos",
   "contacts.countOne": "1 contact",
+  "contacts.countOne.es": "1 contacto",
   // Cursor pager (Task 3): "Newer" always returns to the unpaged head rather
   // than walking back one page at a time — see page.tsx's own comment on
   // newerHref for why a full back-stack isn't worth the state here.
+  // .es twins reuse timeline.older.es/timeline.newer.es's own words — the
+  // same pager, the same two words, never reworded per screen.
   "contacts.newer": "Newer",
+  "contacts.newer.es": "Más recientes",
   "contacts.older": "Older",
+  "contacts.older.es": "Anteriores",
   "contacts.import": "Import CSV",
+  "contacts.import.es": "Importar CSV",
   "contacts.export": "Export CSV",
+  "contacts.export.es": "Exportar CSV",
   // Import wizard. Singular twins are not decoration: the Website screen ships
   // a live "1 people" bug from exactly this omission, and every count below can
   // legitimately be 1.
@@ -595,16 +604,27 @@ export const m = {
   // a business date).
   "contacts.export.filename": "contacts-{date}.csv",
   "contacts.search": "Search name, email, phone…",
+  "contacts.search.es": "Buscar nombre, correo o teléfono…",
   "contacts.col.name": "Contact name",
+  "contacts.col.name.es": "Nombre del contacto",
   "contacts.col.phone": "Phone",
+  "contacts.col.phone.es": "Teléfono",
   "contacts.col.email": "Email",
+  "contacts.col.email.es": "Correo",
   "contacts.col.company": "Business name",
+  "contacts.col.company.es": "Nombre del negocio",
   "contacts.col.created": "Created",
+  "contacts.col.created.es": "Creado",
   "contacts.empty.title": "No contacts yet",
+  "contacts.empty.title.es": "Todavía no hay contactos",
   "contacts.empty.body":
     "Contacts show up when Sofía takes a call, a form is submitted, or you add one yourself.",
+  "contacts.empty.body.es":
+    "Los contactos aparecen cuando Sofía atiende una llamada, se envía un formulario o usted agrega uno.",
   "contacts.noMatches.title": "No matches",
+  "contacts.noMatches.title.es": "Sin coincidencias",
   "contacts.noMatches.body": "Try a different name, email, or phone number.",
+  "contacts.noMatches.body.es": "Pruebe con otro nombre, correo o número de teléfono.",
   "contacts.firstName": "First name",
   "contacts.firstName.es": "Nombre",
   "contacts.lastName": "Last name",
@@ -622,11 +642,17 @@ export const m = {
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
   // the house {placeholder} convention (see setup.progress above).
   "bulk.selectPage": "Select all on this page",
+  "bulk.selectPage.es": "Seleccionar todo en esta página",
   "bulk.selected": "{count} selected",
+  "bulk.selected.es": "{count} seleccionados",
   "bulk.addTag": "Add tag",
+  "bulk.addTag.es": "Agregar etiqueta",
   "bulk.delete": "Delete…",
   "bulk.delete.es": "Borrar…",
+  // Never "Borrar selección" — this clears the checkboxes, it does not
+  // delete anything, and bulk.delete above already owns "Borrar…".
   "bulk.clear": "Clear selection",
+  "bulk.clear.es": "Quitar selección",
   "bulk.confirmTitle": "Delete {count} contacts?",
   "bulk.confirmTitle.es": "¿Borrar {count} contactos?",
   // Singular pair, same house convention as shell.presence.idleOne: the
@@ -639,10 +665,15 @@ export const m = {
   "bulk.confirmBody": "This can't be undone. Type {count} to confirm.",
   "bulk.confirmBody.es": "Esto no se puede deshacer. Escriba {count} para confirmar.",
   "bulk.tagged": "Tagged {count} contacts with \"{tag}\"",
+  "bulk.tagged.es": "Se aplicó la etiqueta “{tag}” a {count} contactos",
   "bulk.taggedOne": "Tagged 1 contact with \"{tag}\"",
+  "bulk.taggedOne.es": "Se aplicó la etiqueta “{tag}” a 1 contacto",
   "bulk.deleted": "Deleted {count} contacts",
+  "bulk.deleted.es": "Se borraron {count} contactos",
   "bulk.deletedOne": "Deleted 1 contact",
+  "bulk.deletedOne.es": "Se borró 1 contacto",
   "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
+  "bulk.deletedSkipped.es": "Se borraron {count} · se conservaron {skipped} por estar vinculados a citas, oportunidades o conversaciones",
 
   "pipeline.title": "Opportunities",
   // The header badge used to read "N · $X" — the same shape the per-column
@@ -949,6 +980,7 @@ export const m = {
   "todo.consent.timelineHint": "Close this one from the To do page.",
   "todo.consent.timelineHint.es": "Ciérrelo desde la página de Pendientes.",
   "todo.consent.failed": "Couldn't save that — please try again.",
+  "todo.consent.failed.es": "No se guardó. Vuelva a intentarlo.",
 
   // The contact list's drawer (S-03 part 3): the record's quick look.
   "drawer.recent": "Recent",
@@ -1323,13 +1355,16 @@ export const m = {
   "compose.smsSegments.es": "{chars} caracteres · {segments} mensaje(s)",
 
   "conversations.empty.title": "No conversations yet",
+  "conversations.empty.title.es": "Todavía no hay conversaciones",
   // Named against every real ensureConversation() caller: voice
   // (finish-call.ts, textback.ts, tools/registry.ts), sms/inbound's route,
   // bookings and cancellations (b/[publicId]'s actions), and forms/enrich.ts
   // — web chat (c/[publicId]) creates none. Rule 5: what appears + the
   // action that causes it.
   "conversations.empty.body": "Calls, texts, emails, bookings and form submissions with a contact show up here.",
+  "conversations.empty.body.es": "Las llamadas, mensajes de texto, correos, citas y formularios enviados por un contacto aparecen aquí.",
   "conversations.pickThread": "Select a conversation to read it.",
+  "conversations.pickThread.es": "Seleccione una conversación para leerla.",
   "conversations.status.queued": "Queued",
   "conversations.status.queued.es": "En cola",
   "conversations.status.sent": "Sent",
@@ -1343,10 +1378,14 @@ export const m = {
   "conversations.status.failed": "Failed",
   "conversations.status.failed.es": "No se envió",
   // D-019's pager (DESIGN.md "Paged lists"): exactly one, Older/Newer,
-  // carrying `?before=`.
+  // carrying `?before=`. .es twins reuse timeline.older.es/timeline.newer.es's
+  // own words — the same pager, the same two words, never reworded per screen.
   "conversations.older": "Older",
+  "conversations.older.es": "Anteriores",
   "conversations.newer": "Newer",
+  "conversations.newer.es": "Más recientes",
   "conversations.pagesLabel": "Pages",
+  "conversations.pagesLabel.es": "Páginas",
   // D-017: the plain-language reason shown next to a bounced/failed
   // message, never the provider's own words (DESIGN.md's "no provider
   // jargon/codes" rule) — see lib/email/failure-reason.ts, the one place
@@ -1482,6 +1521,7 @@ export const m = {
   "forms.undoStale": "This form's status already changed since then — there's nothing to undo.",
 
   "conversations.unread": "unread",
+  "conversations.unread.es": "sin leer",
   "conversations.channel.form": "Form submission",
   "conversations.channel.form.es": "Formulario",
   "conversations.channel.email": "Email",
@@ -3620,18 +3660,31 @@ export const m = {
   // action buttons, added here so this namespace is edited once rather
   // than twice; this read-only screen renders none of them.
   "work.title": "To do",
+  "work.title.es": "Pendientes",
   "work.empty": "Nothing needs you right now.",
+  "work.empty.es": "No hay nada que necesite su atención en este momento.",
   "work.empty.body":
     "Tasks you create, contacts waiting on a reply, and jobs nobody has confirmed happened will show up here.",
+  "work.empty.body.es":
+    "Las tareas que usted cree, los contactos que esperan una respuesta y los trabajos que nadie ha confirmado aparecerán aquí.",
   "work.bucket.overdue": "Overdue",
+  "work.bucket.overdue.es": "Atrasado",
   "work.bucket.today": "Today",
+  "work.bucket.today.es": "Hoy",
   "work.bucket.waiting": "Waiting",
+  "work.bucket.waiting.es": "En espera",
   "work.conversation": "Reply to {name}",
+  "work.conversation.es": "Responder a {name}",
   "work.booking": "Did this job happen?",
+  "work.booking.es": "¿Se realizó este trabajo?",
   "work.notNow": "Not now",
+  "work.notNow.es": "Ahora no",
   "work.done": "Done",
+  "work.done.es": "Hecho",
   "work.booking.completed": "It happened",
+  "work.booking.completed.es": "Se realizó",
   "work.booking.noShow": "They didn't show",
+  "work.booking.noShow.es": "No se presentaron",
   // Task 4's toasts for the four buttons above. One shared failure string —
   // every action here fails the same honest way (try again in a moment) —
   // and the booking close-out's OWN failure copy is never used: it passes
@@ -3639,10 +3692,13 @@ export const m = {
   // reused action) already returns, so the two screens never say two
   // different things about the same write.
   "work.done.toast": "Marked done.",
+  "work.done.toast.es": "Marcado como hecho.",
   "work.notNow.toast": "Moved to tomorrow.",
+  "work.notNow.toast.es": "Pasado a mañana.",
   // "Not now" on the zone-degrade path creates the task with no due date —
   // nothing actually moved to tomorrow, so that toast would be a lie here.
   "work.notNow.toastNoDate": "Added to your to-do list.",
+  "work.notNow.toastNoDate.es": "Agregado a su lista de pendientes.",
   // The two close-out buttons are both irreversible and each arms a
   // different outbound message to the customer (a review request on
   // completion, a no-show follow-up on no-show — automations.noShow.title/
@@ -3656,7 +3712,9 @@ export const m = {
   // daily cap — see no-show-nudge.ts's own per-row refusal list), so
   // "will" would overclaim for a row the pass is about to skip.
   "work.booking.completed.toast": "Marked as completed. A review request may go out.",
+  "work.booking.completed.toast.es": "Marcado como realizado. Es posible que se envíe una solicitud de reseña.",
   "work.booking.noShow.toast": "Marked as a no-show. A follow-up message may go out.",
+  "work.booking.noShow.toast.es": "Marcado como inasistencia. Es posible que se envíe un mensaje de seguimiento.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
   // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
   // (Task 3) already carries the zero-queue sentence, reused rather than

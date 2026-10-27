@@ -37,6 +37,8 @@ import { toast } from "sonner";
 import type { WorkSource } from "@bis/db";
 import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import type { ActionResult, DismissResult } from "./actions";
 
 /** A 44px touch target below md, the compact 32px row button from md up —
@@ -70,14 +72,18 @@ export function WorkRowActions({
   closeOutBooking: (bookingId: string, status: "completed" | "no_show") => Promise<ActionResult>;
 }) {
   const [pending, startTransition] = useTransition();
+  // F-085 follow-up (Task B): the To do page now wraps this client leaf in a
+  // LocaleProvider (requestLocale) — the same context AssigneeField and the
+  // contacts list's BulkActionBar already read.
+  const locale = useLocale();
 
   function runComplete() {
     startTransition(async () => {
       const result = await completeWorkTask(rawId);
       if (!result.ok) { toast.error(result.error); return; }
-      toast.success(m["work.done.toast"], {
+      toast.success(t(m, "work.done.toast", locale), {
         action: {
-          label: m["common.undo"],
+          label: t(m, "common.undo", locale),
           // Inside a SECOND transition of its own — not fired-and-forgotten
           // outside `pending` — so the row's button stays disabled for the
           // duration of the undo too, not just the original action.
@@ -98,9 +104,9 @@ export function WorkRowActions({
       // The action reports whether a due date actually got set (the zone
       // could be unresolvable) — "Moved to tomorrow." is a lie on that
       // degrade path, since nothing moved and no date was set.
-      toast.success(result.dueAt ? m["work.notNow.toast"] : m["work.notNow.toastNoDate"], {
+      toast.success(t(m, result.dueAt ? "work.notNow.toast" : "work.notNow.toastNoDate", locale), {
         action: {
-          label: m["common.undo"],
+          label: t(m, "common.undo", locale),
           onClick: () => startTransition(async () => {
             const r = await completeWorkTask(newTaskId);
             if (!r.ok) toast.error(r.error);
@@ -119,7 +125,7 @@ export function WorkRowActions({
       // identical, so a wrong click must be visible immediately rather than
       // hidden behind one shared "Updated." toast.
       toast.success(
-        status === "completed" ? m["work.booking.completed.toast"] : m["work.booking.noShow.toast"],
+        t(m, status === "completed" ? "work.booking.completed.toast" : "work.booking.noShow.toast", locale),
       );
     });
   }
@@ -127,7 +133,7 @@ export function WorkRowActions({
   if (source === "task") {
     return (
       <Button data-work-row-done type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runComplete}>
-        {m["work.done"]}
+        {t(m, "work.done", locale)}
       </Button>
     );
   }
@@ -135,7 +141,7 @@ export function WorkRowActions({
   if (source === "conversation") {
     return (
       <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runDismiss}>
-        {m["work.notNow"]}
+        {t(m, "work.notNow", locale)}
       </Button>
     );
   }
@@ -147,10 +153,10 @@ export function WorkRowActions({
   return (
     <div className="flex shrink-0 gap-2">
       <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("completed")}>
-        {m["work.booking.completed"]}
+        {t(m, "work.booking.completed", locale)}
       </Button>
       <Button type="button" variant="destructive" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("no_show")}>
-        {m["work.booking.noShow"]}
+        {t(m, "work.booking.noShow", locale)}
       </Button>
     </div>
   );

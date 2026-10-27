@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { makeTr } from "@/lib/record/copy";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
 
 vi.mock("./actions", () => ({
   completeWorkTask: vi.fn(), reopenWorkTask: vi.fn(), dismissToTask: vi.fn(), closeOutBooking: vi.fn(),
@@ -36,5 +37,19 @@ describe("the consent To-do row (spec §6)", () => {
     const out = render(task({ eventId: "r1", action: "revoked" }));
     expect(out).toContain(`>${m["work.done"]}<`);
     expect(out).not.toContain(`>${m["contact.texts.confirmStop"]}<`);
+  });
+
+  // F-085 follow-up (Task B): ConsentHoldActions reads the To do page's
+  // LocaleProvider (requestLocale) through context, the same way
+  // AssigneeField and BulkActionBar already do.
+  it("in Spanish, both hold buttons read Spanish (mutation: hard-code useLocale()'s default -> FAILS)", () => {
+    const out = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(WorkList, {
+        buckets: { overdue: [], today: [task({ eventId: "h1", action: "held" })], waiting: [] },
+        accountId: "a1", contactNames: { c1: "Ana" }, timezone: "America/Chicago", tr: makeTr("es"),
+      })),
+    );
+    expect(out).toContain(`>${m["contact.texts.confirmStop.es"]}<`);
+    expect(out).toContain(`>${m["contact.texts.notAStop.es"]}<`);
   });
 });

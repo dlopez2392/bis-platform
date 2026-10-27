@@ -361,6 +361,18 @@ describe("WhoFilter: All · Mine · Unassigned (spec §9)", () => {
     expect(html).toMatch(/^<nav[^>]*class="[^"]*flex-wrap[^"]*min-w-0|^<nav[^>]*class="[^"]*min-w-0[^"]*flex-wrap/);
     for (const a of links(html)) expect(a).toContain("focus-visible:ring-2");
   });
+
+  // F-085 follow-up (Task B): the filter is shared by the contacts, To do and
+  // conversations lists, each of which now resolves its own render locale and
+  // passes it straight through as a prop (WhoFilter is a Server Component, so
+  // it cannot read a LocaleProvider's context itself).
+  it("reads the given locale (mutation: hard-code the 'en' default regardless of the prop -> FAILS)", () => {
+    const html = render({ locale: "es" });
+    expect(html).toMatch(new RegExp(`^<nav[^>]*aria-label="${m["assign.filter.label.es"]}"`));
+    expect(links(html).map((a) => renderedText(a).trim())).toEqual([
+      m["assign.filter.all.es"], m["assign.filter.mine.es"], m["assign.unassigned.es"],
+    ]);
+  });
 });
 
 describe("copy", () => {

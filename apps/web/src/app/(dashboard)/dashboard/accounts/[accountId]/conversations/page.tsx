@@ -29,6 +29,8 @@ import { ledgerDb } from "@/lib/consent/ledger-db";
 import { readEmailView, type EmailView } from "@/lib/consent/email-view";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
+import { makeTr } from "@/lib/record/copy";
 import { softSmsGate } from "@/lib/record/loaders";
 import { smsRecipientState, emailRecipientState } from "@/lib/consent/recipient-state";
 import { readInboundMeta } from "./inbound-meta";
@@ -135,6 +137,10 @@ export default async function ConversationsPage({
   // T17 design review M-6: ?locale= (the QA override, off on every Vercel deployment) as the call page reads it.
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
   const pseudo = requestPseudoMode({ locale: localeParam });
+  // F-085 follow-up (Task B): the page's own chrome (title, empty states) goes through `tr`, which
+  // survives the QA pseudo-locale sweep (DESIGN.md DoD) — the pre-existing direct `t(m, key, locale)`
+  // calls below it (the held-queue filter pill, the composer's consent line) are untouched.
+  const tr = makeTr(locale, pseudo);
   const base = `/dashboard/accounts/${accountId}/conversations`;
 
   // Task 12: the "Needs a look" filter pill, beside Mine/Unassigned — read
@@ -182,10 +188,10 @@ export default async function ConversationsPage({
   // page one, and the open thread (`c`) belonged to the old list.
   const header = (
     <PageHeader
-      title={m["nav.conversations"]}
+      title={tr.text("nav.conversations")}
       filters={assign.canAssign || showHeldFilter ? (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {assign.canAssign ? <WhoFilter base={base} current={heldView ? null : assign.who} showMine={assign.showMine} params={{}} /> : null}
+          {assign.canAssign ? <WhoFilter base={base} current={heldView ? null : assign.who} showMine={assign.showMine} params={{}} locale={locale} /> : null}
           {showHeldFilter ? heldFilterPill : null}
         </div>
       ) : undefined}
@@ -194,7 +200,12 @@ export default async function ConversationsPage({
 
   if (heldView) {
     return (
-      <>
+      // F-085 follow-up (Task B): every read-only word on this list reads in
+      // the reader's own language, with `lang` on the wrapper (same pattern
+      // the contact and group record pages already use); the thread pane
+      // beside it keeps its own explicit `locale` prop, unchanged.
+      <LocaleProvider locale={locale}>
+        <div lang={locale}>
         {header}
         <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
           <div className="block">
@@ -204,11 +215,13 @@ export default async function ConversationsPage({
           </div>
           <EmptyState
             icon={MessagesSquare}
-            title={m["conversations.pickThread"]}
+            title={tr.text("conversations.pickThread")}
+            lang={locale}
             className="hidden lg:flex"
           />
         </div>
-      </>
+        </div>
+      </LocaleProvider>
     );
   }
 
@@ -219,17 +232,19 @@ export default async function ConversationsPage({
   if (conversations.length === 0 && !cursor) {
     // An emptied filter is not an empty inbox (F-085), so it says which.
     const empty = assign.who === "mine"
-      ? { title: m["assign.empty.mine"] }
+      ? { title: tr.text("assign.empty.mine") }
       : assign.who === "unassigned"
-        ? { title: m["assign.empty.unassigned"] }
-        : { title: m["conversations.empty.title"], body: m["conversations.empty.body"] };
+        ? { title: tr.text("assign.empty.unassigned") }
+        : { title: tr.text("conversations.empty.title"), body: tr.text("conversations.empty.body") };
     return (
-      <>
+      <LocaleProvider locale={locale}>
+        <div lang={locale}>
         {header}
         <div className="p-6">
-          <EmptyState icon={MessagesSquare} title={empty.title} body={empty.body} />
+          <EmptyState icon={MessagesSquare} title={empty.title} body={empty.body} lang={locale} />
         </div>
-      </>
+        </div>
+      </LocaleProvider>
     );
   }
 
@@ -363,7 +378,8 @@ export default async function ConversationsPage({
   const accountPaused = composerFacts ? (await billingVerdictFor(accountId)).paused : false;
 
   return (
-    <>
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
       {header}
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         {/* D-021: below `lg` the two columns above stack into one scroll, so
@@ -443,11 +459,13 @@ export default async function ConversationsPage({
              the stacking D-021 exists to end, just for the empty case. */
           <EmptyState
             icon={MessagesSquare}
-            title={m["conversations.pickThread"]}
+            title={tr.text("conversations.pickThread")}
+            lang={locale}
             className="hidden lg:flex"
           />
         )}
       </div>
-    </>
+      </div>
+    </LocaleProvider>
   );
 }

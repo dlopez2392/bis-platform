@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { LocaleProvider } from "@/components/locale-provider";
 
 const bulkAddTagAction = vi.fn();
 const bulkRemoveTagAction = vi.fn();
@@ -85,6 +86,27 @@ describe("BulkActionBar's Delete control is Owner-only (staff and roles)", () =>
   });
 });
 
+// F-085 follow-up (Task B): the bar's own labels — "N selected", Add tag,
+// Assign to…, Delete…, Clear selection — read the LocaleProvider the
+// contacts list seeds (same context AssigneeField already reads).
+describe("BulkActionBar reads the LocaleProvider's locale (F-085 follow-up, Task B)", () => {
+  const renderEs = (canAssign = true) => renderToStaticMarkup(
+    createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
+      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], canDelete: true, onDone: () => {},
+      canAssign, members: [],
+    })),
+  );
+
+  it("renders every bar label in Spanish (mutation: hard-code useLocale()'s default -> FAILS)", () => {
+    const html = renderEs();
+    expect(html).toContain(">2 seleccionados<");
+    expect(html).toContain(">Agregar etiqueta<");
+    expect(html).toContain(">Asignar a…<");
+    expect(html).toContain(">Borrar…<");
+    expect(html).toContain('aria-label="Quitar selección"');
+  });
+});
+
 // F-085 part 1 (spec §9, A2): "Assign to…" in the bulk bar for Owner, Staff
 // and the agency. A Technician keeps the bar (bulk tagging, so the
 // checkboxes stay: rule 4) but never the Assign control.
@@ -123,7 +145,8 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
       { assignee: ANA.userId, label: ANA.label },
       { assignee: TOM.userId, label: TOM.label },
     ]);
-    expect(BAR_SRC).toMatch(/bulkAssignChoices\(members\)\.map\(\(c\) => \([\s\S]{0,200}?assignSelected\(accountId, \[\.\.\.selectedIds\], c\.assignee, c\.label, onDone\)/);
+    // F-085 follow-up (Task B): both the choices and the assign call now carry the bar's own locale.
+    expect(BAR_SRC).toMatch(/bulkAssignChoices\(members, locale\)\.map\(\(c\) => \([\s\S]{0,200}?assignSelected\(accountId, \[\.\.\.selectedIds\], c\.assignee, c\.label, onDone, locale\)/);
   });
 
   it("choosing a member assigns the selected ids, clears the selection, and toasts the one-customer sentence with an Undo that hands back the returned array (mutation: Undo calls assignContactsAction -> FAILS)", async () => {
@@ -174,12 +197,18 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     expect(toasts.success.mock.calls[0]![0]).toBe("1 customer is now unassigned.");
   });
 
-  it("the sentences are chosen by plural() over the One twins, both with Spanish (fix round 1, M6; mutation: hand-pick by ids.length === 1 -> FAILS)", () => {
-    expect(BAR_SRC).toContain('plural(m, "assign.bulkDone", ids.length, "en", { count: ids.length, name })');
-    expect(BAR_SRC).toContain('plural(m, "assign.bulkUnassigned", ids.length, "en", { count: ids.length })');
+  it("the sentences are chosen by plural() over the One twins, now in the reader's own language (F-085 follow-up, Task B; mutation: hand-pick by ids.length === 1 -> FAILS)", () => {
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkDone", ids.length, locale, { count: ids.length, name })');
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkUnassigned", ids.length, locale, { count: ids.length })');
     const cat = m as Record<string, string>;
     expect(cat["assign.bulkUnassigned.es"]).toBe("{count} clientes ahora están sin asignar.");
     expect(cat["assign.bulkUnassignedOne.es"]).toBe("1 cliente ahora está sin asignar.");
+  });
+
+  it("a Spanish-locale caller gets the Spanish sentence, not the English one (mutation: drop locale from assignSelected's plural() calls -> FAILS)", async () => {
+    assignContactsAction.mockResolvedValue({ ok: true, previous: [] });
+    await assignSelected("a1", ["c1"], ANA.userId, ANA.label, () => {}, "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe("1 cliente asignado a Ana Ruiz.");
   });
 
   it("nothing changed (previous = []) still confirms, but offers no Undo (mutation: offer Undo on an empty array -> FAILS)", async () => {
@@ -267,13 +296,29 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
     announceDeleteResult({ ok: false, error: "Delete failed — please try again." }, "en");
     expect(toasts.error).toHaveBeenCalledWith("Delete failed — please try again.");
   });
-  it("customers kept because their files could not go are named after the success line (mutation: drop the skippedFiles toast -> FAILS)", () => {
+  // F-085 follow-up (Task B) deviation: this success line used to be pinned to the bar's own
+  // English regardless of locale ("The success line itself is the bar's existing English copy,
+  // unchanged" — owner ruling 2026-10-13); Task B's brief is explicit that every toast fired from
+  // this list reads in the reader's language, so this line now does too (plural() over
+  // bulk.deleted/.deletedOne, both with Spanish twins added alongside this change).
+  it("customers kept because their files could not go are named after the success line, now in the reader's language (mutation: drop the skippedFiles toast -> FAILS)", () => {
     announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 2 }, "es");
-    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne"]);
+    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne.es"]);
     expect(toasts.error).toHaveBeenCalledWith("Se borraron 1 · se conservaron 2 cuyos archivos no se pudieron borrar. Intente de nuevo.");
     toasts.error.mockReset();
     announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0 }, "en");
     expect(toasts.error).not.toHaveBeenCalled();
+    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deleted"].replace("{count}", "3"));
+  });
+
+  it("the plain English case still reads English, and the skipped-bookings line is localized too (mutation: ignore locale -> FAILS)", () => {
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "en");
+    expect(toasts.success).toHaveBeenCalledWith("Deleted 2 · skipped 1 linked to bookings, deals, or conversations");
+    toasts.success.mockReset();
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "es");
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Se borraron 2 · se conservaron 1 por estar vinculados a citas, oportunidades o conversaciones",
+    );
   });
 });
 

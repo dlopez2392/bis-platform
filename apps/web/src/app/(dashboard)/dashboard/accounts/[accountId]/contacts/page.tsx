@@ -16,8 +16,12 @@ import { withWho, type Who } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
 import { renderZone } from "@/lib/zone";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { makeTr, type Tr } from "@/lib/record/copy";
+import { LocaleProvider } from "@/components/locale-provider";
 
 export const dynamic = "force-dynamic";
 
@@ -123,14 +127,16 @@ export function buildExportHref(
  * Which empty state a zero-row page one means (F-085 part 1, spec §9). A
  * search that found nothing is the narrower fact and wins; then the filter
  * in effect; then a Technician, whose list is only ever theirs, gets their
- * own sentence rather than the Owner's "add your first contact".
+ * own sentence rather than the Owner's "add your first contact". In the
+ * reader's own language (F-085 follow-up, Task B): the page's `tr`, never a
+ * bare `m[...]` lookup.
  */
-function emptyCopy(q: string | undefined, who: Who, wholeAccount: boolean): { title: string; body?: string } {
-  if (q) return { title: m["contacts.noMatches.title"], body: m["contacts.noMatches.body"] };
-  if (who === "mine") return { title: m["assign.empty.mine"] };
-  if (who === "unassigned") return { title: m["assign.empty.unassigned"] };
-  if (!wholeAccount) return { title: m["assign.empty.technician"] };
-  return { title: m["contacts.empty.title"], body: m["contacts.empty.body"] };
+function emptyCopy(q: string | undefined, who: Who, wholeAccount: boolean, tr: Tr): { title: string; body?: string } {
+  if (q) return { title: tr.text("contacts.noMatches.title"), body: tr.text("contacts.noMatches.body") };
+  if (who === "mine") return { title: tr.text("assign.empty.mine") };
+  if (who === "unassigned") return { title: tr.text("assign.empty.unassigned") };
+  if (!wholeAccount) return { title: tr.text("assign.empty.technician") };
+  return { title: tr.text("contacts.empty.title"), body: tr.text("contacts.empty.body") };
 }
 
 export default async function ContactsPage({
@@ -138,10 +144,13 @@ export default async function ContactsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string; who?: string }>;
+  // `locale` is the QA override only (requestLocale's own contract): off on
+  // every Vercel deployment, on only in Playwright's webServer env and CI's
+  // e2e job.
+  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string; who?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { q, before, sort: rawSort, dir: rawDir, who: rawWho } = await searchParams;
+  const { q, before, sort: rawSort, dir: rawDir, who: rawWho, locale: localeParam } = await searchParams;
   // Staff and roles: delete and export are Owner-only. The account-level
   // layout already calls requireAccountAccess to gate entry into this
   // whole account subtree, but discards the role it reads — this page
@@ -169,7 +178,7 @@ export default async function ContactsPage({
   const sort = parseSort(rawSort);
   const dir = parseDir(rawDir);
 
-  const [rows, total, tags, account] = await Promise.all([
+  const [rows, total, tags, account, prefs] = await Promise.all([
     listContacts(db, accountId, {
       search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir }, assignee: assign.assignee,
     }),
@@ -177,13 +186,22 @@ export default async function ContactsPage({
     listTags(db, accountId),
     // D-010: the "Created" column's own zone — not a throw, the contact
     // detail page's own reasoning: one cosmetic date column must not 500
-    // the whole list. `undefined` makes `renderZone` fall back.
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    // the whole list. `undefined` makes `renderZone` fall back. `language`
+    // (F-085 follow-up, Task B) is the account's own default locale —
+    // requestLocale's client-role branch, same read every other account-
+    // scoped page already does.
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
+    getPersonPrefs(),
   ]);
   if (account.error) {
-    console.error(`contacts list: account ${accountId} timezone read failed: ${account.error.message}`);
+    console.error(`contacts list: account ${accountId} timezone and language read failed: ${account.error.message}`);
   }
-  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+  const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
+  const zone = await renderZone(accountRow?.timezone);
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: accountRow?.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
   const base = `/dashboard/accounts/${accountId}/contacts`;
   const boundCreateContact = createContactAction.bind(null, accountId);
 
@@ -198,18 +216,22 @@ export default async function ContactsPage({
 
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment in messages.ts for the bug this avoids.
-  const countLabel = total === 1
-    ? m["contacts.countOne"]
-    : m["contacts.count"].replace("{count}", String(total));
+  // `tr.count` runs the same plural() rule through the reader's own language.
+  const countLabel = tr.count("contacts.count", total);
   // F-085 part 1: a Technician (and a client whose role is unsettled) sees
   // only their own customers, so a CSV import, like Export, is not theirs.
   const wholeAccount = seesWholeAccount(access);
-  const empty = emptyCopy(q, assign.who, wholeAccount);
+  const empty = emptyCopy(q, assign.who, wholeAccount, tr);
 
   return (
-    <>
+    // F-085 follow-up (Task B): every read-only word on this list comes from
+    // the page's own `tr`, in ONE locale (the contacts list's own analogue of
+    // the record page's C1) — `lang` on the wrapper, same pattern the contact
+    // and group record pages already use.
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
       <PageHeader
-        title={m["contacts.title"]}
+        title={tr.text("contacts.title")}
         count={countLabel}
         actions={
           <>
@@ -219,7 +241,7 @@ export default async function ContactsPage({
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
               >
                 <Download className="size-4" aria-hidden />
-                {m["contacts.export"]}
+                {tr.text("contacts.export")}
               </Link>
             ) : null}
             {wholeAccount ? (
@@ -228,7 +250,7 @@ export default async function ContactsPage({
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
               >
                 <Upload className="size-4" aria-hidden />
-                {m["contacts.import"]}
+                {tr.text("contacts.import")}
               </Link>
             ) : null}
             <AddContactDialog accountId={accountId} action={boundCreateContact} />
@@ -243,6 +265,7 @@ export default async function ContactsPage({
             current={assign.who}
             showMine={assign.showMine}
             params={{ ...(q ? { q } : {}), sort, dir }}
+            locale={locale}
           />
         ) : undefined}
         search={
@@ -261,7 +284,7 @@ export default async function ContactsPage({
             <Input
               name="q"
               defaultValue={q ?? ""}
-              placeholder={m["contacts.search"]}
+              placeholder={tr.text("contacts.search")}
               // F-107 (rider part): full width below `sm` — a fixed 288px
               // box here was wider than this page's own available column
               // at phone width (contacts is outside this rider's named
@@ -281,7 +304,7 @@ export default async function ContactsPage({
           // zero (below) means the opposite: real history, just none older
           // than the cursor — the table still renders (headers, no rows) with
           // a "Newer" link back to the head, rather than this empty state.
-          <EmptyState icon={Users} title={empty.title} body={empty.body} />
+          <EmptyState icon={Users} title={empty.title} body={empty.body} lang={locale} />
         ) : (
           <>
             <ContactsTable
@@ -307,7 +330,7 @@ export default async function ContactsPage({
                       className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                     >
                       <ArrowLeft className="size-3.5" aria-hidden />
-                      {m["contacts.newer"]}
+                      {tr.text("contacts.newer")}
                     </Link>
                   ) : null}
                 </div>
@@ -317,7 +340,7 @@ export default async function ContactsPage({
                       href={olderHref}
                       className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                     >
-                      {m["contacts.older"]}
+                      {tr.text("contacts.older")}
                       <ArrowRight className="size-3.5" aria-hidden />
                     </Link>
                   ) : null}
@@ -327,6 +350,7 @@ export default async function ContactsPage({
           </>
         )}
       </div>
-    </>
+      </div>
+    </LocaleProvider>
   );
 }

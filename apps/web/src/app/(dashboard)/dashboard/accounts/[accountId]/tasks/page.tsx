@@ -20,7 +20,7 @@ import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
-import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
 import { makeTr } from "@/lib/record/copy";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { groupSuggestions, type SuggestionGroup } from "@/lib/proposals/group";
@@ -203,9 +203,15 @@ export default async function TasksPage({
   }
 
   return (
-    <>
+    // F-085 follow-up (Task B): every read-only word on this list comes from
+    // `tr`, in ONE locale; `lang` on the wrapper, and the LocaleProvider
+    // reaches the client leaves below (WorkRowActions, ConsentHoldActions,
+    // the assignee pickers) through context, the same way the drawer and
+    // bulk-action bar already do.
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
       <PageHeader
-        title={m["work.title"]}
+        title={tr.text("work.title")}
         // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see
         // the whole account. Nothing else rides along: this list has no
         // search, sort or pager.
@@ -215,6 +221,7 @@ export default async function TasksPage({
             current={assign.who}
             showMine={assign.showMine}
             params={{}}
+            locale={locale}
           />
         ) : undefined}
       />
@@ -242,6 +249,7 @@ export default async function TasksPage({
           } : undefined}
         />
       </div>
-    </>
+      </div>
+    </LocaleProvider>
   );
 }

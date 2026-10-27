@@ -5,6 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { contactDisplayName, formatDateTimeInZone } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { cn } from "@/lib/utils";
 import type { Who } from "@/lib/assign/who";
 import type { Locale } from "@/lib/i18n/locale";
@@ -96,13 +97,13 @@ export function ConversationList({
                 )}
                 <span className="flex shrink-0 items-center gap-1.5">
                   {conversation.unreadCount > 0 ? (
-                    <Badge aria-label={`${conversation.unreadCount} ${m["conversations.unread"]}`}>
+                    <Badge aria-label={`${conversation.unreadCount} ${t(m, "conversations.unread", locale)}`}>
                       {conversation.unreadCount}
                     </Badge>
                   ) : null}
                   {conversation.lastMessageAt ? (
                     <span className="text-xs text-muted-foreground">
-                      {formatDateTimeInZone(conversation.lastMessageAt, timezone)}
+                      {formatDateTimeInZone(conversation.lastMessageAt, timezone, locale)}
                     </span>
                   ) : null}
                 </span>
@@ -115,15 +116,15 @@ export function ConversationList({
         })}
       </ListPanel>
       {olderHref || newerHref ? (
-        <nav className="flex justify-end gap-2" aria-label={m["conversations.pagesLabel"]}>
+        <nav className="flex justify-end gap-2" aria-label={t(m, "conversations.pagesLabel", locale)}>
           {newerHref ? (
             <Link href={newerHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>
-              {m["conversations.newer"]}
+              {t(m, "conversations.newer", locale)}
             </Link>
           ) : null}
           {olderHref ? (
             <Link href={olderHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>
-              {m["conversations.older"]}
+              {t(m, "conversations.older", locale)}
             </Link>
           ) : null}
         </nav>

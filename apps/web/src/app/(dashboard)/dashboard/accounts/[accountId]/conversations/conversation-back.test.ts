@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
@@ -79,5 +81,16 @@ describe("ConversationBack (D-021, review fix: selection survives a page change)
     }));
     expect(html).toContain('href="/dashboard/accounts/a1/conversations"');
     expect(html).not.toContain("before=");
+  });
+
+  // F-085 follow-up (Task B): reads the conversations list's LocaleProvider
+  // (requestLocale) through context, the same way AssigneeField already does.
+  it("reads Spanish from the LocaleProvider (mutation: hard-code useLocale()'s default -> FAILS)", () => {
+    const html = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(ConversationBack, {
+        base: "/dashboard/accounts/a1/conversations",
+      })),
+    );
+    expect(html).toContain(`>${m["nav.conversations.es"]}<`);
   });
 });

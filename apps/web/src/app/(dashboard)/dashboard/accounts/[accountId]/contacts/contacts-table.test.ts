@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { LocaleProvider } from "@/components/locale-provider";
 import { ContactsTable, sortHref, type ContactRow } from "./contacts-table";
 
 // `useRouter()` is called at render time for the header buttons' onClick —
@@ -109,6 +111,34 @@ describe("ContactsTable", () => {
       expect(html).toContain("Oct 9, 2026");
       expect(html).not.toContain("Oct 8, 2026");
     });
+  });
+});
+
+// F-085 follow-up (Task B): the header, the bulk-select checkbox's label and
+// the Created column read the reader's own language, from the LocaleProvider
+// the page (contacts/page.tsx) seeds — the same context AssigneeField and
+// BulkActionBar already consume.
+describe("ContactsTable reads the LocaleProvider's locale (F-085 follow-up, Task B)", () => {
+  it("renders the header and the Created date in Spanish when the page's locale is es (mutation: hard-code t(m, key, 'en') -> FAILS)", () => {
+    const r = row(0);
+    r.created_at = "2026-09-01T00:00:00.000000+00:00";
+    const html = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(ContactsTable, {
+        rows: [r], accountId: "acct1", existingTags: [], sort: "created", dir: "desc", timezone: "America/Chicago", canDelete: true,
+      })),
+    );
+    expect(html).toContain(t(m, "contacts.col.name", "es"));
+    expect(html).toContain(t(m, "contacts.col.phone", "es"));
+    expect(html).toContain(t(m, "contacts.col.company", "es"));
+    expect(html).toContain(t(m, "contacts.col.created", "es"));
+    expect(html).toContain('aria-label="' + t(m, "bulk.selectPage", "es") + '"');
+    // "Created" cell: Aug 31, 2026 in America/Chicago (UTC midnight is the prior evening there).
+    expect(html).toContain("31 ago 2026");
+  });
+
+  it("defaults to English with no LocaleProvider ancestor (same default useLocale() falls back to, pinned at the module level)", () => {
+    const html = render([row(0)]);
+    expect(html).toContain(m["contacts.col.name"]);
   });
 });
 

@@ -1066,6 +1066,60 @@ describe("TasksPage — the tray grouped by customer, then call (item 8b-2)", ()
   });
 });
 
+// F-085 follow-up (Task B): the page title, the bucket chips/headings, the
+// row's own sentence and the empty states now read the reader's own language
+// (requestLocale) instead of a bare m[...] English lookup — the QA override
+// is the same mechanism the suite above already proves works end to end.
+describe("TasksPage in Spanish (requestLocale; F-085 follow-up, Task B)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    resetFake();
+  });
+
+  async function renderEs(rows: WorkRow[], searchParams: Record<string, string> = {}) {
+    workRows = rows;
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const { default: TasksPage } = await import("./page");
+      return renderToStaticMarkup(await TasksPage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "es", ...searchParams }),
+      }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it("the page title, the bucket heading and the row's own sentence all read Spanish, with lang set (mutation: wrap the page in no LocaleProvider, or leave work-list.tsx's tr.text calls as bare m[...] -> FAILS)", async () => {
+    // Safely in the past no matter when this test runs — a real "overdue" bucket, not "waiting".
+    const html = await renderEs([taskRow({ id: "task:1", contactId: null, dueAt: "2020-01-01T12:00:00Z" })]);
+    expect(html).toMatch(/<div lang="es"/);
+    expect(html).toContain(">Pendientes<");
+    expect(html).toContain(">Atrasado<");
+  });
+
+  it("the Mine-filter empty state reads Spanish too (mutation: pass EmptyState an English title regardless of locale -> FAILS)", async () => {
+    role = "staff";
+    const html = await renderEs([], { who: "mine" });
+    expect(html).toContain(m["assign.empty.mine.es"]);
+    role = null;
+  });
+
+  it("a derived conversation row's sentence interpolates the contact's name in Spanish (mutation: hard-code tr's locale to 'en' in primaryLabel -> FAILS)", async () => {
+    const row: WorkRow = {
+      id: "conversation:1", source: "conversation", accountId: "acct1", contactId: "ct-ana",
+      title: "", dueAt: null, occurredAt: "2026-10-05T10:00:00Z",
+    };
+    fake.tables = { contacts: [{ id: "ct-ana", account_id: "acct1", first_name: "Ana", last_name: "López" }] };
+    const html = await renderEs([row]);
+    expect(html).toContain("Responder a Ana López");
+  });
+});
+
 describe("TasksPage — a To-do on a shared number's holding record (S-47e P19; T17 review M9)", () => {
   beforeEach(() => {
     accountTimezone = "America/Chicago";

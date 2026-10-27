@@ -16,6 +16,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ListPanel } from "@/components/ui/list-panel";
 import { contactDisplayName, formatDateInZone, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
 import { withWho, type Who } from "@/lib/assign/who";
@@ -128,6 +130,11 @@ export function ContactsTable({
   viewerId?: string | null;
 }) {
   const router = useRouter();
+  // F-085 follow-up (Task B): the page wraps this table in a LocaleProvider
+  // seeded from requestLocale (page.tsx); the bulk-action bar and the
+  // assignee fields already read this same context — the header/row copy
+  // below joins them instead of staying hard-coded English.
+  const locale = useLocale();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { peekId, open, close } = usePeek();
   // The last row seen for the open peek (fix round 1, I2: see peekRow).
@@ -202,24 +209,24 @@ export function ContactsTable({
               <Checkbox
                 checked={selectionState === "all" ? true : selectionState === "some" ? "indeterminate" : false}
                 onCheckedChange={() => setSelected((s) => togglePageSelection(s, rowIds))}
-                aria-label={m["bulk.selectPage"]}
+                aria-label={t(m, "bulk.selectPage", locale)}
               />
             </TableHead>
             <TableHead aria-sort={sort === "name" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
                 sortKey="name"
-                label={m["contacts.col.name"]}
+                label={t(m, "contacts.col.name", locale)}
                 active={sort === "name"}
                 dir={dir}
                 onClick={() => toggleSort("name")}
               />
             </TableHead>
-            <TableHead>{m["contacts.col.phone"]}</TableHead>
-            <TableHead>{m["contacts.col.email"]}</TableHead>
+            <TableHead>{t(m, "contacts.col.phone", locale)}</TableHead>
+            <TableHead>{t(m, "contacts.col.email", locale)}</TableHead>
             <TableHead aria-sort={sort === "company" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
                 sortKey="company"
-                label={m["contacts.col.company"]}
+                label={t(m, "contacts.col.company", locale)}
                 active={sort === "company"}
                 dir={dir}
                 onClick={() => toggleSort("company")}
@@ -228,7 +235,7 @@ export function ContactsTable({
             <TableHead aria-sort={sort === "created" ? (dir === "asc" ? "ascending" : "descending") : "none"}>
               <SortButton
                 sortKey="created"
-                label={m["contacts.col.created"]}
+                label={t(m, "contacts.col.created", locale)}
                 active={sort === "created"}
                 dir={dir}
                 onClick={() => toggleSort("created")}
@@ -291,7 +298,7 @@ export function ContactsTable({
                   ) : null}
                 </TableCell>
                 <TableCell className="text-muted-foreground">{c.company_name}</TableCell>
-                <TableCell className="text-muted-foreground">{formatDateInZone(c.created_at, timezone)}</TableCell>
+                <TableCell className="text-muted-foreground">{formatDateInZone(c.created_at, timezone, locale)}</TableCell>
               </TableRow>
             );
           })}

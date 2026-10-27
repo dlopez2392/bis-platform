@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { makeTr } from "@/lib/record/copy";
 import type { WorkRow } from "@bis/db";
+import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
 
 vi.mock("./actions", () => ({
   completeWorkTask: vi.fn(), reopenWorkTask: vi.fn(), dismissToTask: vi.fn(), closeOutBooking: vi.fn(),
@@ -34,5 +36,24 @@ describe("the callback To do on today's queue (F-033; DESIGN.md provenance)", ()
     expect(callback).toContain("Ana Reyes");
     expect(callback).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
     expect(callback).not.toContain("Ana Reyes · Sofía");
+  });
+});
+
+// F-085 follow-up (Task B): WorkRowActions reads the To do page's
+// LocaleProvider (requestLocale) through context for its Done/Not now
+// buttons, the same way AssigneeField and BulkActionBar already do.
+describe("WorkRowActions reads the LocaleProvider's locale (F-085 follow-up, Task B)", () => {
+  it("Done and Not now read Spanish when the page's locale is es (mutation: hard-code useLocale()'s default -> FAILS)", () => {
+    const out = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(WorkList, {
+        buckets: {
+          overdue: [],
+          today: [task("t1", "Order shingles", null), task("t2", "Reply to Ana", "call1")],
+          waiting: [],
+        },
+        accountId: "a1", contactNames: { c1: "Ana Reyes" }, timezone: "America/Chicago", tr: makeTr("es"),
+      })),
+    );
+    expect(out).toContain(`>${m["work.done.es"]}<`);
   });
 });

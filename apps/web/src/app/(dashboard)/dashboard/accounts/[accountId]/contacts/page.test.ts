@@ -15,6 +15,11 @@ const requireAccountAccessMock = vi.fn(async (_accountId: string) => (
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (accountId: string) => requireAccountAccessMock(accountId),
 }));
+// F-085 follow-up (Task B): the page now resolves its own render locale
+// (requestLocale), the same way tasks/page.tsx and conversations/page.tsx
+// already do — same stub, same reason (person-prefs pulls in @/lib/auth and
+// Clerk, neither available under a plain vitest render).
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 
 // D-009's search-form describe block below renders the WHOLE page (the
 // hidden sort/dir fields live in page.tsx's own JSX, not in a pure
@@ -103,9 +108,9 @@ describe("contacts list", () => {
   it("counts with the same search and assignee filter the list uses", () => {
     expect(page).toMatch(/countContacts\(db, accountId, \{ search: q, assignee: assign\.assignee \}\)/);
   });
-  it("offers import and export", () => {
-    expect(page).toContain('m["contacts.import"]');
-    expect(page).toContain('m["contacts.export"]');
+  it("offers import and export, in the reader's language (F-085 follow-up, Task B: tr.text, never a bare m[...] lookup)", () => {
+    expect(page).toContain('tr.text("contacts.import")');
+    expect(page).toContain('tr.text("contacts.export")');
   });
 });
 
@@ -600,5 +605,43 @@ describe("the All · Mine · Unassigned row and its empty states (F-085)", () =>
     }
     requireAccountAccessMock.mockResolvedValueOnce(STAFF);
     expect(await render({})).toContain(m["contacts.import"]);
+  });
+});
+
+// F-085 follow-up (Task B): the list now resolves its own render locale
+// (requestLocale), the same role split the contact and group record pages
+// already pin — a client's own account language, an agency operator's own
+// English regardless of the account they're looking at.
+describe("the reader's own language (requestLocale; F-085 follow-up, Task B)", () => {
+  async function render(searchParams: Record<string, string> = {}) {
+    return renderToStaticMarkup(
+      await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+
+  it("a client-role Owner on a Spanish account reads the list in Spanish, lang set (mutation: drop language from the accounts select -> English, FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const html = await render();
+    expect(html).toMatch(/<div lang="es"/);
+    expect(html).toContain(">Contactos<");
+    expect(html).toContain(m["contacts.export.es"]);
+  });
+
+  it("an agency operator on that same Spanish account reads English (requestLocale's role split; mutation: pass isOperator false -> Spanish, FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const html = await render();
+    expect(html).toMatch(/<div lang="en"/);
+    expect(html).toContain(">Contacts<");
+    expect(html).not.toContain(m["contacts.export.es"]);
+  });
+
+  it("the Mine/Unassigned filter and an empty state read Spanish too, from the same tr (mutation: pass the filter a bare locale='en' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ who: "mine" });
+    expect(html).toContain(m["assign.empty.mine.es"]);
+    expect(html).toContain(`aria-label="${m["assign.filter.label.es"]}"`);
   });
 });
