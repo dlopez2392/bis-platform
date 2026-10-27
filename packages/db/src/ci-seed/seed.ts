@@ -6,7 +6,10 @@
  * and the public logo bucket (supabase/bootstrap/ci-project.sql) — so one
  * command answers "is this project ready for the suites".
  *
- * Idempotent by natural key, and additive only: it never updates or deletes.
+ * Idempotent by natural key, and additive only: it never deletes, and it updates exactly one thing -
+ * the seeded account's trade (S-53, migration 0101), set to hvac when the account exists with NONE.
+ * An account made before 0101 has no trade, and with none Sofía and the web chat cannot be switched
+ * on; a trade someone already recorded is theirs and is never overwritten.
  * Each natural key, and the constraint or rule behind it:
  *   account         clerk_org_id           (accounts.clerk_org_id is unique, 0001)
  *   pipeline        any pipeline at all    (ensureDefaultPipeline's own rule)
@@ -26,7 +29,7 @@
  * product makes, events included.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createAccount } from "../accounts";
+import { createAccount, setAccountTrade } from "../accounts";
 import { ensureDefaultPipeline, createCustomField } from "../crm-config";
 import { createContact, emailKey } from "../contacts";
 import { createOpportunity } from "../opportunities";
@@ -41,7 +44,7 @@ export type BaselineSnapshot = {
   agencyCount: number;
   bucket: { public: boolean } | null;
   accountsNamed: { id: string; clerk_org_id: string }[];
-  account: { id: string; name: string } | null;
+  account: { id: string; name: string; trade: string | null } | null;
   pipelines: { id: string; name: string; stageCount: number }[];
   contact: { id: string; first_name: string | null; last_name: string | null } | null;
   field: { id: string; data_type: string } | null;
@@ -64,6 +67,9 @@ export function baselineGaps(s: BaselineSnapshot, spec: CiBaselineSpec): string[
     gaps.push(`${s.accountsNamed.length} accounts are named ${who} (client-access.spec reads it with .single())`);
   } else if (s.accountsNamed[0]!.clerk_org_id !== spec.clerkOrgId) {
     gaps.push(`account ${who} has org id ${s.accountsNamed[0]!.clerk_org_id}, expected ${spec.clerkOrgId}`);
+  }
+  if (s.account && s.account.trade === null) {
+    gaps.push(`account ${who} has no trade, so Sofía and the web chat cannot be switched on (S-53)`);
   }
 
   if (!s.contact) gaps.push(`no contact ${c.email} (${c.firstName} ${c.lastName}) on ${who}`);
@@ -133,7 +139,7 @@ export async function readBaselineSnapshot(db: SupabaseClient, spec: CiBaselineS
   const named = await db.from("accounts").select("id, clerk_org_id").eq("name", spec.name);
   if (named.error) fail("accounts by name", named.error.message);
 
-  const byOrg = await db.from("accounts").select("id, name").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
+  const byOrg = await db.from("accounts").select("id, name, trade").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
   if (byOrg.error) fail("account by org id", byOrg.error.message);
   const account = (byOrg.data as BaselineSnapshot["account"]) ?? null;
 
@@ -197,6 +203,11 @@ export async function ensureCiBaseline(
   if (!accountId) {
     accountId = (await createAccount(db, { clerkOrgId: spec.clerkOrgId, name: spec.name, actorId: CI_SEED_ACTOR, trade: "hvac" })).id;
     created.push("account");
+  } else if (before.account?.trade === null) {
+    // The one update this seed makes (see the header): an account from before 0101 gets the trade every
+    // fresh seed is born with. A recorded trade is never touched.
+    await setAccountTrade(db, accountId, { trade: "hvac", tradeOther: null }, CI_SEED_ACTOR);
+    created.push("trade");
   }
 
   // Only on an account with no pipeline at all: ensureDefaultPipeline returns

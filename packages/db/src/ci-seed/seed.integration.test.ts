@@ -3,6 +3,7 @@ import "dotenv/config";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceDb } from "../service";
 import { deleteAccountCascade } from "../account-teardown";
+import { createAccount, getAccountTrade, setAccountTrade } from "../accounts";
 import { assertCiTarget } from "../ci/target";
 import { testPhoneNumber } from "../test/fixtures";
 import { ensureCiBaseline, readBaselineSnapshot, baselineGaps } from "./seed";
@@ -97,6 +98,39 @@ describe("ensureCiBaseline (live, CI project only)", () => {
       const { data, error } = await db.from("accounts").select("id").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
       if (error) throw new Error(`ci-seed idempotence cleanup lookup failed: ${error.message}`);
       if (data) await deleteAccountCascade(db, data.id as string, "ci-seed idempotence");
+    }
+  }, 60_000);
+
+  // S-53 (migration 0101): an account made before 0101 has no trade, and with none Sofía and the web chat
+  // cannot be switched on. The seed gives it hvac, the trade every fresh seed is born with - once, and
+  // never over a trade someone recorded.
+  it("gives an existing account with no trade hvac, once, and never overwrites a recorded trade (mutation: drop the trade update -> FAILS)", async () => {
+    assertRunnableHere();
+    const db = serviceDb();
+    const tag = Math.random().toString(36).slice(2, 10);
+    const spec: CiBaselineSpec = {
+      name: `CI Seed Test ${tag}`,
+      clerkOrgId: `org_test_ciseed_${tag}`,
+      phoneE164: testPhoneNumber(),
+    };
+    try {
+      const { id } = await createAccount(db, { clerkOrgId: spec.clerkOrgId, name: spec.name, actorId: "ci-seed-test" });
+      expect(await getAccountTrade(db, id)).toEqual({ trade: null, tradeOther: null });
+
+      const first = await ensureCiBaseline(db, spec);
+      expect(first.accountId).toBe(id);
+      expect(first.created).toContain("trade");
+      expect(await getAccountTrade(db, id)).toEqual({ trade: "hvac", tradeOther: null });
+      expect(baselineGaps(await readBaselineSnapshot(db, spec), spec)).toEqual([]);
+
+      await setAccountTrade(db, id, { trade: "plumbing", tradeOther: null }, "ci-seed-test");
+      const second = await ensureCiBaseline(db, spec);
+      expect(second.created).toEqual([]);
+      expect(await getAccountTrade(db, id)).toEqual({ trade: "plumbing", tradeOther: null });
+    } finally {
+      const { data, error } = await db.from("accounts").select("id").eq("clerk_org_id", spec.clerkOrgId).maybeSingle();
+      if (error) throw new Error(`ci-seed trade cleanup lookup failed: ${error.message}`);
+      if (data) await deleteAccountCascade(db, data.id as string, "ci-seed trade");
     }
   }, 60_000);
 });
