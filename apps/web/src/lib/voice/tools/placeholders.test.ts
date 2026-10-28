@@ -17,8 +17,18 @@ const GENERIC_STRIP = [
 const UNKNOWN = ["Unknown", "unknown", "Desconocido", "desconocida"];
 /** Only as a NAME. */
 const NAME_ONLY_STRIP = ["User", "Guest", "guest", "Customer", "Cliente", "Caller"];
+/** Multi-word stand-ins (contact-archive spec §7.2(c), §7.3): Sofía heard these verbatim as a caller's "name" and
+ *  must never store them, whole, as one — a real business name that merely contains one of these words survives
+ *  (below). */
+const NAME_ONLY_MULTIWORD = [
+  "Unknown caller", "unknown caller", "UNKNOWN CALLER.", "No name", "no name", "Not provided", "NOT PROVIDED.",
+  "Sin nombre", "No proporcionado", "No dio su nombre", "Anonymous", "Anónimo", "anonimo",
+];
 /** Real values that merely contain a placeholder word. */
 const NAME_KEEP = ["Guest House LLC", "Usera", "Nonestop Plumbing", "Ana Ruiz", "Users", "Callery Ortiz", "Cliente Hernández", "Unknown Mortal Orchestra"];
+/** A real business name that CONTAINS a multi-word stand-in's own words must survive (brief: "Anonymous Plumbing"
+ *  must NOT count as a placeholder). */
+const NAME_KEEP_MULTIWORD = ["Anonymous Plumbing", "Anonymous Plumbing LLC"];
 const BEST_TIME_FILLER = ["any time", "Anytime", "anytime.", "cualquier hora", "A cualquier hora"];
 const BEST_TIME_KEEP = ["anytime after 3pm", "any time before noon", "cualquier hora después de las 3", "mornings", "en la mañana"];
 /** The visitor said nothing about a time: the only case in which a filler best time is dropped. */
@@ -63,8 +73,8 @@ describe("\"unknown\" / \"desconocido(a)\" are real answers, kept inside what wa
 });
 
 describe("isPlaceholderName: a stand-in instead of a name", () => {
-  it.each([...GENERIC_STRIP, ...NAME_ONLY_STRIP])("strips %j", (v) => { expect(isPlaceholderName(v)).toBe(true); });
-  it.each(NAME_KEEP)("keeps %j", (v) => { expect(isPlaceholderName(v)).toBe(false); });
+  it.each([...GENERIC_STRIP, ...NAME_ONLY_STRIP, ...NAME_ONLY_MULTIWORD])("strips %j", (v) => { expect(isPlaceholderName(v)).toBe(true); });
+  it.each([...NAME_KEEP, ...NAME_KEEP_MULTIWORD])("keeps %j", (v) => { expect(isPlaceholderName(v)).toBe(false); });
 });
 
 describe("isFillerBestTime: 'any time' ONLY as a filler best time", () => {

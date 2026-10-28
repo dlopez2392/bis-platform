@@ -29,6 +29,7 @@ import {
   cardReadable, readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
 import { maskIdNumbers, maskTranscript } from "./id-mask";
+import { isPlaceholderName } from "./tools/placeholders";
 import type { TradeModuleId } from "@/lib/voice/modules";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
@@ -302,11 +303,19 @@ function contactsBooked(state: CallState): Set<string> {
   return ids;
 }
 
+/** A placeholder said is the same as none (contact-archive spec §7.3), enforced again here at the choke point:
+ *  `sanitizeLeadFields` (capture_lead) and `messageName` (take_message) already drop one before it reaches this
+ *  file in the live call path, but a future tool path that forgets either guard still yields "" here, so
+ *  `splitFullName` never stores the placeholder itself. */
+function spokenName(raw: string): string {
+  return isPlaceholderName(raw) ? "" : raw;
+}
+
 /** Every name the caller gave this call's leads, and its messages when not declined. */
 function namesSaid(state: CallState): string[] {
   const said = [
-    ...state.leads.map((l) => l.fields?.fullName),
-    ...state.messages.map((m) => (m.nameDeclined ? undefined : m.name)),
+    ...state.leads.map((l) => spokenName(l.fields?.fullName ?? "")),
+    ...state.messages.map((m) => (m.nameDeclined ? "" : spokenName(m.name ?? ""))),
   ];
   return said.filter((n): n is string => typeof n === "string" && n.trim().length > 0);
 }
@@ -383,7 +392,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
 
   if (lead) {
     const fields = lead.fields ?? {};
-    const { firstName, lastName } = splitFullName(fields.fullName ?? "");
+    const { firstName, lastName } = splitFullName(spokenName(fields.fullName ?? ""));
     // As said, or the caller ID (review R2-C1): phoneFields flags a number that could be Mexican or US.
     const phone = spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined;
     const number = phone ? e164Of(phone) : null;
@@ -466,7 +475,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name, email: null, confirmedId });
       if (pick.kind === "existing") return pick.contactId;
       if (pick.kind !== "create") return null;
-      const { firstName, lastName } = splitFullName(name!);
+      const { firstName, lastName } = splitFullName(spokenName(name!));
       const created = await createContact(ctx.db, ctx.accountId,
         { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only" }, ACTOR_ID, ACTOR_TYPE);
       if (!created.existing) {

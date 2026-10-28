@@ -270,4 +270,10 @@ describe("messageName", () => {
     expect(messageName({ name: "   " })).toBeNull();
     expect(messageName({})).toBeNull();
   });
+  // contact-archive spec §7.3: a placeholder name is the same as none given.
+  it("a placeholder name reads as null, not a name (mutation: drop the isPlaceholderName check → FAILS)", () => {
+    expect(messageName({ name: "Unknown" })).toBeNull();
+    expect(messageName({ name: "Unknown Caller" })).toBeNull();
+    expect(messageName({ name: "Desconocido" })).toBeNull();
+  });
 });
