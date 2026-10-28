@@ -108,9 +108,13 @@ contact that is deleted for good.
 - `grant update (archived_at) on public.contacts to authenticated;` is the only new column grant.
   `archived_by` is never client-writable; the trigger in step 4 sets it.
 - The guard tests change by exactly this grant: `EXPECTED_WRITES` for contacts in
-  `packages/db/src/test/schema-grants-guard.test.ts:86` gains `archived_at`, and the client-write digest
-  in `packages/db/src/test/proposals-drop.test.ts:100` (`52|b66203ca...` today) is re-pinned to the new
-  value, read off the local replica.
+  `packages/db/src/test/schema-grants-guard.test.ts:86-89` gains `archived_at`. The client-write digest
+  in `packages/db/src/test/proposals-drop.test.ts:100` (`52|b66203ca...`) does NOT change: it counts
+  table-level privileges only (`has_table_privilege`, `:94-98`; column grants "do not count here",
+  `:91-92`), and the new table gets no client write. (Corrected 2026-10-28 while planning.)
+- `contact_archive_log` takes Supabase's default privileges on create, so the migration says
+  `revoke all on public.contact_archive_log from anon, authenticated; grant select ... to authenticated;
+  grant select, insert, update, delete ... to service_role`, the 0091 pattern (`0091_ai_acts.sql:116-119`).
 
 **4. Stamp trigger `app.contacts_archive_stamp()`.** A plain trigger (not a definer), `BEFORE UPDATE OF
 archived_at`, with the same shape as `app.contacts_holding_server_only` (`0098:86-106`). For
@@ -122,7 +126,7 @@ archived_at`, with the same shape as `app.contacts_holding_server_only` (`0098:8
 - restoring (the new value is null): `new.archived_by := null`;
 - refuses (42501) when `old.holds_shared_number`. A holding record is never on the list, so archiving it
   means nothing;
-- refuses (42501) when `app.is_technician(new.account_id)`, pending open question 3.
+- refuses (42501) when `app.is_technician(new.account_id)` (owner ruling Q3, 2026-10-28: Technicians may not archive).
 
 For any other role (service_role, or a definer's owner) it changes nothing.
 
@@ -142,10 +146,12 @@ SECURITY DEFINER, EXECUTE to `service_role` only. It runs
 If a row changed, it inserts one log row (`'restored'`, `'customer'`, `p_sign`) and returns true. An
 active contact returns false and writes nothing.
 
-**7. `public.contact_delete_blockers(p_account_id uuid, p_contact_ids uuid[]) returns table (contact_id uuid, reason text)`.**
+**7. `public.contact_delete_blockers(p_account_id uuid, p_contact_ids uuid[]) returns table (contact_id uuid, reasons text[])`.**
 SECURITY DEFINER, EXECUTE to `service_role` only, `stable`. It refuses more than 500 ids (22023). It
-returns one row per (contact, reason) for the reasons in §5.1, each an `exists (...)`, so it reads no
-rows and PostgREST's `max_rows` cap can never truncate it. That cap was the CRITICAL in
+returns ONE row per blocked contact, with every §5.1 reason it has in `reasons`. Each reason is an
+`exists (...)`, so it reads no rows, and the answer is at most 500 rows, under PostgREST's `max_rows`
+cap of 1000. (Corrected 2026-10-28 while planning: one row per contact and reason could reach 4,000 rows
+for 500 ids, past the cap, and the truncated answer would read as "no blocker". That is fail-open.) That cap was the CRITICAL in
 `contacts.ts:1177-1183`. It is a definer on purpose: a plain function would read `consent_events` and
 `automation_log` under the caller's RLS, and a row the caller cannot see would read as "no blocker". A
 blocker check must never fail open (see the `plpgsql NULL guard` lesson). The app proves the ids
@@ -228,7 +234,7 @@ there, §3.3), and that is a lost customer nobody can see. If it restores, the w
 caller who reappears, and one click archives them again. The first failure is silent and costs revenue;
 the second is visible and costs a click.
 
-**Signs that restore** (pending open question 1). Each is the customer's own act, recorded through
+**Signs that restore** (owner ruling Q1, 2026-10-28). Each is the customer's own act, recorded through
 `restore_contact_on_sign` on the service client:
 
 | Sign | Site | `p_sign` |
@@ -248,8 +254,9 @@ the second is visible and costs a click.
 - a STOP reply, which is recorded in the consent ledger while the contact stays archived;
 - anything staff do: a note, a manual text, a deal (`createOpportunity`), a booking made from the
   record page;
-- a CSV import. A matched archived row fills blanks, stays archived, and the import's result says how
-  many (from real results, per DESIGN.md CSV import).
+- a CSV import. A matched archived row fills blanks and stays archived: the import never writes
+  `archived_at`. (Planning, 2026-10-28: a separate "N of these were archived" summary line is deferred.
+  It would touch the import's three-step UI for a number nobody has asked for.)
 
 **Not gated by archive:** the missed-call text-back (`prepareTextback`) is a reply in the moment, and
 "a reply in the moment follows the moment" (DESIGN.md, A customer's language). It still sends.
@@ -348,16 +355,21 @@ Spanish is usted, as everywhere in the catalogue (`messages.ts:411`). A count ha
 | `bulk.archived` / `One` | Archived {count} contacts · Undo / Archived 1 contact | Se archivaron {count} contactos / Se archivó 1 contacto |
 | `bulk.restore` | Restore | Restaurar |
 | `bulk.restored` / `One` | Moved {count} contacts back to your list / Moved 1 contact back to your list | Se devolvieron {count} contactos a su lista / Se devolvió 1 contacto a su lista |
-| `contacts.view.active` | Contacts | Contactos |
 | `contacts.view.archived` | Archived | Archivados |
 | `contacts.archived.count` / `One` | {count} archived / 1 archived | {count} archivados / 1 archivado |
 | `contacts.archived.emptyTitle` | Nothing archived | No hay contactos archivados |
 | `contacts.archived.emptyBody` | Contacts you archive wait here, off your list, with every call and text kept. Archive one from your list when you no longer need to see it. | Aquí quedan los contactos que archive: fuera de su lista y con todas sus llamadas y mensajes guardados. Archive uno desde su lista cuando ya no necesite verlo. |
 | `contacts.archived.emptyAction` | Back to contacts | Volver a contactos |
-| `contacts.archived.error` | Archived contacts didn't load. Try again. | No se cargaron los contactos archivados. Intente de nuevo. |
 | `contacts.archive.failed` | Couldn't archive. Nothing changed. Try again. | No se pudo archivar. No cambió nada. Intente de nuevo. |
 | `contacts.restore.failed` | Couldn't restore. Nothing changed. Try again. | No se pudo restaurar. No cambió nada. Intente de nuevo. |
 | `contacts.archived.mark` (To do and lists, beside a name) | Archived | Archivado |
+| `contacts.archive.keepsAppointment` (second line of the Archive toast, ruling Q2) | They still have an appointment on {date}. Its reminders still go. | Todavía tiene una cita el {date}. Sus recordatorios se siguen enviando. |
+
+No link on the list is named exactly "Contacts": `phone-width.spec.ts:376` and `staff-roles.spec.ts:115`
+find the sidebar's link with an UNSCOPED `getByRole("link", { name: "Contacts", exact: true })`, so a
+second one is a strict-mode failure. The list links to the Archived view with "Archived"; the Archived
+view links back with "Back to contacts". The Archived view's error state is the list's own, the
+`(dashboard)/dashboard/error.tsx` boundary, so it needs no key of its own. (Both corrected 2026-10-28.)
 
 ### 6.2 Record header, drawer and timeline
 
@@ -497,7 +509,7 @@ line. A `-t` filter that matches no test name proves nothing.
 | a signed-in archive stamps `archived_by` with the caller's id and `archived_at` with now, whatever the client sent | drop `new.archived_by := ...` / drop `new.archived_at := now()` |
 | a signed-in client cannot write `archived_by` | add `archived_by` to the column grant |
 | archiving a holding record is refused 42501 | delete the holding check |
-| a Technician's archive is refused (if Q3 holds) | delete the technician check |
+| a Technician's archive is refused (ruling Q3) | delete the technician check |
 | a signed-in archive writes exactly one `person` log row; a signed-in restore writes one | drop the log trigger's insert / move the role test from WHEN into the definer body (then nothing is logged) |
 | a `restore_contact_on_sign` restore writes exactly one row, the `customer` one | drop `current_user = 'authenticated'` from WHEN (then it logs twice) |
 | `restore_contact_on_sign` on an archived contact writes one `customer` row with its sign; on an active contact it writes nothing and answers false | remove `and archived_at is not null` |
@@ -556,6 +568,9 @@ Delete-for-good is left out of e2e: it is irreversible and fully covered by the 
 
 ## 10. Tasks
 
+Superseded by the plan's task list (`docs/superpowers/plans/2026-10-28-contact-archive.md`), which splits
+T5 by owner (bis-automations, bis-comms) and renumbers. Kept here as the design-time sketch.
+
 Tiers follow the speed process (tier each task). Within a wave, no two tasks touch the same file.
 
 **Wave 1** (no dependencies)
@@ -563,8 +578,7 @@ Tiers follow the speed process (tier each task). Within a wave, no two tasks tou
 - **T1, high, bis-db-schema**: migration 0103 and its schema tests (§3.1, §9 Schema). Files:
   `packages/db/supabase/migrations/0103_contact_archive.sql`,
   `packages/db/src/test/contact-archive-schema.test.ts` (new),
-  `packages/db/src/test/schema-grants-guard.test.ts`, `packages/db/src/test/definer-search-path.test.ts`,
-  `packages/db/src/test/proposals-drop.test.ts`.
+  `packages/db/src/test/schema-grants-guard.test.ts`, `packages/db/src/test/definer-search-path.test.ts`.
 - **T2, low, bis-voice**: placeholder names (§7.3). Files: `apps/web/src/lib/voice/tools/placeholders.ts`,
   `apps/web/src/lib/voice/tools/placeholders.test.ts`, `apps/web/src/lib/voice/identity/flow.ts`,
   `apps/web/src/lib/voice/identity/flow.test.ts`, `apps/web/src/lib/voice/finish-call.ts`,
@@ -617,21 +631,34 @@ Tiers follow the speed process (tier each task). Within a wave, no two tasks tou
 
 ---
 
-## 11. Open questions for the owner
+## 11. Owner rulings (decided 2026-10-28; were the open questions)
+
+The owner took all three recommendations. Each ruling is binding on the plan
+(`docs/superpowers/plans/2026-10-28-contact-archive.md`).
+
 
 1. **Which of the customer's own acts bring an archived contact back to the list?**
    Recommendation: a text or email they send (not STOP, START, HELP or an auto-reply), a call Sofía
    answers that ends in a booking, a lead or a message, a booking, a form, or a website chat lead. A
    hang-up or spam call is recorded but leaves them archived, so the junk "Caller" records stay out of
    sight when the same robocaller rings again.
+   **Ruling: as recommended.** Only real contact brings an archived contact back: a text or email they
+   send (not STOP, START, HELP or an auto-reply), an answered call with a booked, lead or message
+   outcome, a booking, a form, or a website chat lead. Hang-ups and spam calls are recorded and leave
+   the contact archived.
 2. **Can a contact with an upcoming appointment be archived?**
    Recommendation: yes. The appointment stays, and its reminders and confirmation still go, because
    that promise was made. Every message that starts a new conversation stops (follow-up, review,
    referral, no-show nudge, reactivation, quote follow-up). The Archive toast adds "They still have an
    appointment on {date}." The alternative is refusing the archive, which would block a real use: a
    customer who asked to be left alone after booking.
+   **Ruling: yes, as recommended.** The appointment and its reminders and confirmation stay; every
+   other automatic message stops. The Archive toast names the date (`contacts.archive.keepsAppointment`,
+   section 6.1).
 3. **Who may archive?**
    Recommendation: Owners, Staff and the agency. It is reversible with Undo (rule 6), so it does not
    need the Owner-only gate that delete has. Technicians may not: their list is only their assigned
    customers, and archiving one would take it off the Owner's list without the Owner seeing it.
    Delete for good stays Owner-only.
+   **Ruling: as recommended.** Owners, Staff and the agency may archive; Technicians may not. Permanent
+   delete stays Owner-only.
