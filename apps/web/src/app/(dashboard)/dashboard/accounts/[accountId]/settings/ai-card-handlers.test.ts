@@ -50,7 +50,7 @@ describe("aiCardHandlers.setGlobal", () => {
     const d = deps("en");
     await d.h.setGlobal(false, "off");
     expect(d.setGlobal).toHaveBeenCalledWith({ enabled: false, confirm: "off" });
-    expect(d.said[0]).toMatchObject({ kind: "ok", text: "AI is off in every account.", undo: "Undo" });
+    expect(d.said[0]).toMatchObject({ kind: "ok", text: "Summaries, cards and suggestions are off in every account.", undo: "Undo" });
     d.said[0]!.onUndo!();
     await settle();
     expect(d.setGlobal).toHaveBeenLastCalledWith({ enabled: true, confirm: undefined, expected: false });
@@ -59,7 +59,7 @@ describe("aiCardHandlers.setGlobal", () => {
   it("turning on is immediate, and its Undo turns AI off again with the reader's word and the expected value the write made (mutation: undo without the word -> FAILS)", async () => {
     const d = deps("es", { setGlobal: vi.fn(async () => ({ ok: true as const, prior: false })) });
     await d.h.setGlobal(true);
-    expect(d.said[0]).toMatchObject({ kind: "ok", text: "La IA está encendida en todas las cuentas.", undo: "Deshacer" });
+    expect(d.said[0]).toMatchObject({ kind: "ok", text: "Los resúmenes, las tarjetas y las sugerencias volvieron a encenderse en todas las cuentas.", undo: "Deshacer" });
     d.said[0]!.onUndo!();
     await settle();
     expect(d.setGlobal).toHaveBeenLastCalledWith({ enabled: false, confirm: "APAGAR", expected: true });
@@ -68,6 +68,6 @@ describe("aiCardHandlers.setGlobal", () => {
   it("a wrong word says which word, in the reader's language", async () => {
     const d = deps("en", { setGlobal: vi.fn(async () => ({ ok: false as const, error: "aiSettings.global.wrongWord" as const })) });
     expect(await d.h.setGlobal(false, "of")).toBe(false);
-    expect(d.said).toEqual([{ kind: "error", text: "Type OFF to turn AI off everywhere." }]);
+    expect(d.said).toEqual([{ kind: "error", text: "Type OFF to turn off summaries, cards and suggestions everywhere." }]);
   });
 });

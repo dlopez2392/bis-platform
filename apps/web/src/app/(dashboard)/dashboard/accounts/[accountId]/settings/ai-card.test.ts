@@ -27,7 +27,7 @@ describe("the AI card (spec 3.6; DESIGN.md rules 1, 5, 6, 7, 8)", () => {
   });
 
   it("loaded: the spend, reached and skipped lines it is given, each in its own marker (mutation: drop the reached Notice -> FAILS)", () => {
-    const html = card({ spendLine: "$1.84 of $10.00 this month, estimated", reachedLine: "Budget reached. AI is paused for this account until Nov 1.", skippedLine: "AI was skipped once this month because it was off or over budget." });
+    const html = card({ spendLine: "$1.84 of $10.00 this month, estimated", reachedLine: "Budget reached. Summaries, cards and suggestions are paused for this account until Nov 1.", skippedLine: "Summaries, cards and suggestions were skipped once this month because this account's AI was off or over budget." });
     expect([count(html, "data-ai-spend"), count(html, "data-ai-reached"), count(html, "data-ai-skipped"), count(html, "data-ai-empty")]).toEqual([1, 1, 1, 0]);
     expect(renderedText(html)).toContain("$1.84 of $10.00 this month, estimated");
   });
@@ -49,7 +49,7 @@ describe("the AI card (spec 3.6; DESIGN.md rules 1, 5, 6, 7, 8)", () => {
     expect(renderedText(card({ globalEnabled: true }))).toContain("Turn off everywhere");
     const off = card({ globalEnabled: false });
     expect(renderedText(off)).toContain("Turn on everywhere");
-    expect(renderedText(off)).toContain("Off in every account. Nothing goes to AI until you turn it back on.");
+    expect(renderedText(off)).toContain("Off in every account: no summaries, cards or suggestions until you turn it back on. Sofía still answers calls, and every account's website chat still runs.");
     expect([count(off, "data-ai-global-on"), count(off, "data-ai-global-off")]).toEqual([1, 0]);
   });
 
@@ -74,8 +74,8 @@ describe("the typed word (rule 6, choice I12)", () => {
     expect(form("off")).not.toMatch(DISABLED);
   });
   it("says what it does and which word, in both languages", () => {
-    expect(renderedText(form(""))).toContain("Every account loses call summaries and suggestions until AI is turned back on. Type OFF to confirm.");
-    expect(renderedText(form("", "es"))).toContain("Todas las cuentas pierden los resúmenes de llamadas y las sugerencias hasta que la IA se vuelva a encender. Escriba APAGAR para confirmar.");
+    expect(renderedText(form(""))).toContain("Every account loses call summaries, call cards, suggestions and customer summaries until this is turned back on. Sofía's calls and the website chat are not affected. Type OFF to confirm.");
+    expect(renderedText(form("", "es"))).toContain("Todas las cuentas pierden los resúmenes de llamada, las tarjetas de llamada, las sugerencias y los resúmenes de clientes hasta que esto se vuelva a encender. Las llamadas de Sofía y el chat del sitio no se ven afectados. Escriba APAGAR para confirmar.");
   });
 });
 
