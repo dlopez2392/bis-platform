@@ -23,7 +23,7 @@ describe("looksAutomaticText", () => {
     ["estoy conduciendo", "Estoy conduciendo ahora"],
     ["respuesta automatica", "Respuesta automática: volvemos el lunes"],
     ["mensaje automatico", "Mensaje automático: no conteste a este número."],
-    ["no puede recibir mensajes", "Este número no puede recibir mensajes"],
+    ["este numero no puede recibir mensajes", "Este número no puede recibir mensajes"],
     ["este numero no recibe", "Este número no recibe textos."],
     ["fuera de la oficina", "Fuera de la oficina hasta el lunes"],
   ])("%s: %j is a phone's own reply (mutation: drop the phrase → FAILS)", (_phrase, body) => {
@@ -45,6 +45,8 @@ describe("looksAutomaticText", () => {
     "Can you come today? Estoy manejando ahora…",
     "Is your auto reply working? I need a quote…",
     "Sorry I missed you, I'm driving. Can we book Tuesday?",
+    // Final review minor: the Spanish carrier phrase is anchored on "este numero", like the English ones.
+    "Mi teléfono no puede recibir mensajes, llámeme",
   ])("%j is the customer, not an auto-reply (mutation: match the single word 'driving' or 'auto' → FAILS; drop the word-boundary padding → 'Send him driving directions' FAILS)", (body) => {
     expect(looksAutomaticText(body)).toBe(false);
   });

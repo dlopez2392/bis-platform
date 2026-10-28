@@ -366,7 +366,8 @@ export default async function ContactsPage({
               canDelete={canManage}
               view={view}
               canArchive={wholeAccount}
-              paused={verdict.paused}
+              // The agency is never refused a delete on a paused account (final review minor), so only a client sees it off.
+              paused={verdict.paused && !access.isAgency}
               who={assign.who}
               canAssign={assign.canAssign}
               members={assign.members}

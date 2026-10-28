@@ -14,7 +14,7 @@ const STATUS_PHRASES = [
 /** A carrier's or a gateway's wording, which no customer writes about themselves: it counts anywhere. */
 const CARRIER_PHRASES = [
   "this number cannot receive", "this number can't receive", "this number does not accept", "cannot receive text messages",
-  "no puede recibir mensajes", "este numero no recibe",
+  "este numero no puede recibir mensajes", "este numero no recibe",
 ] as const;
 
 /** Lower case, accents off, curly quotes straight, and every run of characters that is not a letter, digit or

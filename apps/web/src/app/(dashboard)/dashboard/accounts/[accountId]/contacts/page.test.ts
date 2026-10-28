@@ -804,8 +804,14 @@ describe("a paused account (final review M3)", () => {
     contactsTableMock.mockClear();
     verdictPaused.on = true;
     try {
+      // A client Owner: paused turns Delete off.
+      requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
       renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
       expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: true }));
+      // The agency is never refused a delete on a paused account (final review minor; mutation: drop !access.isAgency -> FAILS).
+      contactsTableMock.mockClear();
+      renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+      expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: false }));
     } finally { verdictPaused.on = false; }
     contactsTableMock.mockClear();
     renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
