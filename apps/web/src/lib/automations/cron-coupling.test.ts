@@ -26,6 +26,8 @@ import {
   DISPATCH_SLACK_S, LEGACY_TICK_CEILING_S,
 } from "./fanout";
 import { RATE_LIMIT_MAX_WAIT_MS, SEND_TIMEOUT_MS } from "@/lib/http/retry-after";
+import { JOBS_DRAIN_BUDGET_MS } from "./passes/jobs-drain";
+import { JOB_TIMEOUT_MAX_MS } from "./jobs/types";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -43,6 +45,9 @@ const routeSource = readFileSync(
 );
 const passRouteSource = readFileSync(
   new URL("../../app/api/cron/pass/[key]/route.ts", import.meta.url), "utf-8",
+);
+const drainRouteSource = readFileSync(
+  new URL("../../app/api/cron/pass/jobsDrain/route.ts", import.meta.url), "utf-8",
 );
 /** A route's LIVE `maxDuration`, anchored to a whole line so a commented-out export cannot match. NaN when absent. */
 function declaredMaxDuration(source: string): number {
@@ -451,5 +456,23 @@ describe("fan-out: each pass in its own function, the plan inside the dispatcher
 
   it("6. the dispatcher's ceiling is inside the age a pass route accepts for the tick's now, so no pass the plan starts is refused as stale (mutation: TICK_NOW_MAX_AGE_MS 600_000 → FAILS)", () => {
     expect(DISPATCHER_MAX_S * 1000).toBeLessThanOrEqual(TICK_NOW_MAX_AGE_MS);
+  });
+});
+
+/**
+ * F-196 Task 8: the jobs drain runs in its own 300 s function. It checks its
+ * budget before each claim (elapsed + the 60 s job ceiling must fit 200 s),
+ * so the job in flight ends by the budget; after the loop come the sweep and
+ * the two queue reads, inside the 30 s left. Today: 200 + 30 = 230 <= 300,
+ * and 60 <= 200.
+ */
+describe("the jobs drain: its budget, its job ceiling and its route are coupled", () => {
+  it("7. the drain route declares a LIVE maxDuration of JOBS_DRAIN_MAX_S (mutation: drain literal 120, or the export commented out -> FAILS)", () => {
+    expect(declaredMaxDuration(drainRouteSource)).toBe(JOBS_DRAIN_MAX_S);
+  });
+
+  it("8. the drain's budget plus 30 s fits its route, and one job's own ceiling fits the budget (mutation: JOBS_DRAIN_BUDGET_MS 280_000 -> FAILS)", () => {
+    expect(JOBS_DRAIN_BUDGET_MS + 30_000).toBeLessThanOrEqual(JOBS_DRAIN_MAX_S * 1000);
+    expect(JOB_TIMEOUT_MAX_MS).toBeLessThanOrEqual(JOBS_DRAIN_BUDGET_MS);
   });
 });

@@ -107,5 +107,18 @@ describe("describeKey — every key a webhook route stamps has a plain-language 
     expect(mail?.body).toContain("- virus scanning of uploaded files");
     expect(mail?.body).not.toContain("- documents.scanner");
   });
+
+  it.each([
+    ["jobs.dead", "background jobs that gave up"],
+    ["jobs.backlog", "background jobs waiting too long"],
+  ])("names the job queue's %s heartbeat in plain words and alerts on its first failure (F-196; mutation: remove its describeKey case -> FAILS)", (key, label) => {
+    expect(describeKey(key)).toBe(label);
+    const at = new Date("2026-10-28T15:00:00Z");
+    const h = { key, lastOkAt: new Date(at.getTime() - 15 * 60_000), lastErrorAt: at, lastError: "2 jobs gave up: calendar.push (2)", consecutiveFailures: 1, alertedAt: null };
+    expect(isFailing(h)).toBe(true);
+    const mail = composeOpsEmail(evaluate([h], at));
+    expect(mail?.body).toContain(`- ${label}`);
+    expect(mail?.body).not.toContain(`- ${key}`);
+  });
 });
 
