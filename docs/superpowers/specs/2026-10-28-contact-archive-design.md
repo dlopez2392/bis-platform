@@ -158,7 +158,13 @@ blocker check must never fail open (see the `plpgsql NULL guard` lesson). The ap
 against the request client first, as `deleteContacts` does today (`contacts.ts:1236-1242`).
 
 **8. `public.delete_internal_contacts(p_account_id uuid, p_contact_ids uuid[]) returns uuid[]`.**
-SECURITY DEFINER, `service_role` only. It locks the contacts `for update` in id order, then their
+SECURITY DEFINER, executable by `authenticated` and `service_role`. It keeps the DATABASE's Owner check
+(review I9, 2026-10-28): it refuses (42501) unless the caller is an Owner of this account
+(`app.is_account_owner(p_account_id)`, `0066_staff_and_roles.sql:63-66`, the agency included, with the 0066
+policy's own `p_account_id = app.current_account_id()` term), or server code with a `service_role` JWT.
+PostgREST verifies the token before it sets `request.jwt.claims`, so a client cannot claim that role. The
+e2e cleanup (`shared-number.spec.ts:136`) and the live suites call it so. The app calls it on the request
+client. It locks the contacts `for update` in id order, then their
 conversations in id order, then re-runs the step 7 checks inside the lock: each statement gets a fresh
 snapshot under READ COMMITTED, the same lock-then-fresh-snapshot approach `delete_empty_conversations`
 uses (0083 §3; read it before writing this). For each contact still unblocked, inside its own
@@ -171,19 +177,40 @@ uses (0083 §3; read it before writing this). For each contact still unblocked, 
 A `documents_contact_fkey` violation (`0077_document_vault.sql:76`, NO ACTION) means a file survived the
 purge. That contact alone is kept, not the whole batch. The function returns the ids it deleted.
 
-**9. Index.** `create index contacts_account_archived on public.contacts (account_id, archived_at desc, id desc) where archived_at is not null;`
-This serves the Archived view's count and its default order. The main list gets no new index: its
+**9. Index.** `create index contacts_account_archived_created on public.contacts (account_id, created_at desc, id desc) where archived_at is not null;`
+It is keyed on the Archived view's DEFAULT order (`created_at desc, id desc`, `SORT_COLUMN` at
+`contacts.ts:790-794`), so it serves that view's first page and its count (review M4: an index on
+`archived_at` serves no order the list uses). The name and company sorts use the existing sort indexes
+with the filter; measure before adding more. The main list gets no new index: its
 queries already use `contacts_account_created` (`0003_crm_core.sql:19`) and `contacts_account_sort_name`
 (`0030_contacts_sort_name.sql:26`), and `archived_at is null` is a cheap heap filter while archived rows
 are a minority. Measure with `explain` on the replica before adding a partial index for the main list.
 
-**10. Definers.** Four new definers (steps 5, 6, 7, 8) are added by name to `EXPECTED_DEFINERS` in
-`packages/db/src/test/definer-search-path.test.ts:27`. The count is 23 at this base (`:68`); add 4 to
-whatever 0102 leaves it at.
+**10. The inbox column (owner decision 2026-10-28, review I8).**
+`conversations.contact_archived boolean not null default false` follows the contact:
+- an AFTER UPDATE OF `archived_at` trigger on contacts (definer) sets it on that contact's conversation;
+- a BEFORE INSERT OR UPDATE OF `contact_id` trigger on conversations (definer) sets it from the contact.
 
-**11. ROLLBACK** (roll the app back first): drop the four functions and two triggers, the index, the
-log table and the constraint, `revoke update (archived_at)`, then drop both columns. Archived contacts
-then read as ordinary contacts again.
+`conversations.inbox_visible boolean generated always as (not contact_archived or unread_count > 0) stored`
+is the one column the inbox and search filter on. A PostgREST `or` cannot span a conversation column and an
+embedded contact column, and `listConversations` already spends its one `or` on the cursor. Authenticated
+gets no grant on either column.
+
+**11. Definers.** Six new definers are added by name to `EXPECTED_DEFINERS` in
+`packages/db/src/test/definer-search-path.test.ts:27`: the log trigger (step 5), the two inbox triggers
+(step 10), and steps 6, 7 and 8. The count is 23 at this base (`:68`); add 6 to whatever 0102 leaves it
+at. Two more tests pin contacts' column grants exactly and gain `archived_at`:
+`contacts-marketing-optout-schema.test.ts:69-72` and `server-only-writes-grants.test.ts:130-133`
+(review I2).
+
+`contact_archive_log` has no account FK; it cascades with its contact. It is listed in
+`ACCOUNT_OWNED_TABLES` (`packages/db/src/account-teardown.ts:20-37`) before `contacts` anyway, as
+`record_summaries` is, so the list stays the account's whole set of tables (review M9).
+
+**12. ROLLBACK** (roll the app back first): drop the inbox triggers, their functions and the two
+conversations columns; drop the four functions and two archive triggers, the index, the log table and the
+constraint; `revoke update (archived_at)`; then drop both contacts columns. Archived contacts then read as
+ordinary contacts again.
 
 ### 3.2 Order of landing
 
@@ -216,9 +243,10 @@ What a match does is decided per caller (§4).
 | Pickers | deal picker `ACCT/pipeline/page.tsx:26`, household picker `ACCT/contacts/relationship-actions.ts:238` | Covered by the default. |
 | CSV export | `ACCT/contacts/export/route.ts:128` | Exports the view it was opened from (`view=archived` passes `"only"`). The default export leaves archived contacts out, matching the screen. |
 | Account dashboard total | `ACCT/dashboard/page.tsx:148` (`countContacts`) | Covered by the default. |
-| Agency dashboard total | `apps/web/src/app/(dashboard)/dashboard/page.tsx:20` | Add `.is("archived_at", null)` beside the holding filter. |
+| Agency dashboard total | `apps/web/src/app/(dashboard)/dashboard/page.tsx:20` | **Deferred** (coordinator, 2026-10-28). Until it lands, that agency-only tile counts archived contacts. |
 | To do, per account and agency-wide | `ACCT/tasks/page.tsx:166-175`, `apps/web/src/app/(dashboard)/dashboard/work/page.tsx:157-165` | **Not hidden.** Select `archived_at`; the contact's name gains the word "Archived" (§6). Hiding a To-do would hide work silently. Staff close it or restore the contact. |
-| Inbox and unread badge | `listConversations` (`messaging.ts:646`), `sumUnreadCount` (`:629`), `searchConversations` (`:913`) | Leave out conversations whose contact is archived. Use the `!inner` embed with a filter, as the assignee filter already does (`:651-657`). The badge and the list must agree, or c937e062's unread "Test" would keep a badge on with no visible thread. Nothing new is hidden, because a new inbound text restores the contact first (§4.2). |
+| Inbox and search | `listConversations` (`messaging.ts:646`), `searchConversations` (`:913`) | **Owner decision, 2026-10-28 (review I8): an archived contact's thread leaves the inbox and search ONLY while nothing in it is unread.** A customer's words are never hidden. A junk caller's thread holds only our outbound text-back (unread 0), so it disappears. Both filter `inbox_visible` (§3.1 step 10). Search filters in its messages read, BEFORE its five-thread cap (review M2). |
+| Unread badge | `sumUnreadCount` (`:629`) | **Unchanged.** Every thread with unread messages is visible by the rule above, so the badge already counts exactly what the inbox shows. |
 | Record page and drawer | `getContact`, `contacts.ts:955-960` | **Unchanged.** A deep link still opens an archived contact, which shows the archived banner (§6). |
 | Weekly report and dashboard metrics | `weeklyMetrics`, `apps/web/src/lib/reports/weekly-metrics.ts:165-191` | **Unchanged.** They count events (answered calls, lead instants, bookings, visitors), not people. A report already sent must not change after the fact, and archiving a hang-up does not un-answer the call. |
 | Calls log and calls search | `searchCalls`, the calls page | **Unchanged.** A call is a fact of the phone line, and the calls log must reconcile with "Calls answered". |
@@ -242,8 +270,8 @@ the second is visible and costs a click.
 | A call Sofía answered that ended booked, lead or message (`isMeaningful`, `apps/web/src/lib/voice/finish-call.ts:166-170`), on the contact `resolveContactId` returns (`:350`; used at `:599`) | finish-call | `call` |
 | A booking Sofía made (`book_appointment`, `apps/web/src/lib/voice/tools/registry.ts:453`, contact at `:569`/`:590`) | registry | `booking` |
 | A booking on the public page (`apps/web/src/app/b/[publicId]/actions.ts:305`) | booking page | `booking` |
-| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP) or an auto-reply | SMS inbound route, after the contact at `:200-215` | `text` |
-| An inbound email filed onto the thread (not a held one) | `apps/web/src/lib/email/inbound/file.ts` | `email` |
+| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP, a stop phrase) or Telnyx's own autoresponse, **and unless it reads as a phone's auto-reply** (`looksAutomaticText`: a CLOSED English and Spanish phrase list, such as "I'm driving", "this number cannot receive texts", "estoy manejando" or "respuesta automática"; review I7, owner decision). A robocaller's number that answers our text-back automatically stays archived. | SMS inbound route, INSIDE the filing try, right after the message is written and before the unread bump (review I8). There a failure is a 503 that Telnyx retries, never a 200 that loses it. It runs on every delivery, idempotently. | `text` |
+| An inbound email filed by the pipeline as the customer's (not a teammate's forward, not a stop, not a duplicate) | `apps/web/src/lib/email/inbound/pipeline.ts` (`resumeExisting`), **never** `file.ts`: `fileHeldEmailAction` (`conversations/inbound-actions.ts:149`) also calls `fileInboundEmail`, and a teammate's manual File is a staff act, not the customer's (review I6). Automatic mail never gets this far: `classifyAutomatic` drops it before filing (`pipeline.ts:200-211`). | `email` |
 | A form submission linked to the contact | `apps/web/src/lib/forms/enrich.ts:108` | `form` |
 | A web chat lead | `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` (its `createContact`) | `chat` |
 
@@ -262,9 +290,9 @@ the second is visible and costs a click.
 "a reply in the moment follows the moment" (DESIGN.md, A customer's language). It still sends.
 Archiving does not touch consent.
 
-**Add contact by hand** (`apps/web/src/lib/contacts/add-contact-by-hand.ts`): a dedupe hit on an archived
-contact answers `{ kind: "existing", archived: true }`. The dialog says the contact is archived and
-offers Restore. It never restores on its own.
+**Add contact by hand** (`apps/web/src/lib/contacts/add-contact-by-hand.ts`): **deferred** (coordinator,
+2026-10-28). Today a dedupe hit on an archived contact answers `{ kind: "existing" }`, and the dialog links
+to it. The record then shows the archived banner with Restore. It never restores on its own.
 
 ### 4.3 Calls and conversations in the palette
 
@@ -285,7 +313,7 @@ A contact may be deleted for good when it has **none** of these. Each is one `re
 |---|---|---|---|
 | `messages` | any `messages` row on any of its conversations with `channel <> 'note'` (sms, email, webchat, voice, form; either direction) | a text, email or chat we sent is carrier and consent evidence, and one they sent is their own words | `messages.conversation_id` NO ACTION; channels `0005_messaging.sql:34-35`, `0006_forms.sql:92` |
 | `inbound_email` | any `inbound_emails` row on its conversations | their own words; a cascade would destroy a held email silently | ON DELETE CASCADE, `0082_inbound_email.sql:93-94` |
-| `calls` | any `calls.contact_id` row | carrier record, recording, transcript | **SET NULL** (`0019_voice_core.sql:48`): today a delete would orphan the call rather than block, so this check must be explicit |
+| `calls` | any call with `contact_id` = the contact, OR on the contact's conversation with no `contact_id` (`calls.conversation_id`, `0019_voice_core.sql:49`, review M3) | carrier record, recording, transcript | **SET NULL** (`0019:48-49`): today a delete would orphan the call rather than block, so this check must be explicit |
 | `forms` | any `form_submissions.contact_id` row | their own words, with consent | SET NULL (`0006_forms.sql:42`) |
 | `consent` | any `consent_events` row | consent evidence | SET NULL (`0054_consent_ledger.sql:88-89`) |
 | `automations` | any `automation_log` row with `status = 'sent'` | we sent them something | SET NULL (`0046_automation_log.sql:40`; status at `:43-44`) |
@@ -316,10 +344,14 @@ Documents never block, as today. The owner's ruling of 2026-10-13 says a custome
 2. Call `contact_delete_blockers` on the service client. Blocked ids are kept and reported by reason.
 3. `beforeDelete` runs the vault purge (`purgeContactDocuments`, `actions.ts:505`) on the remaining
    ids only. This is irreversible, and it runs only after every knowable blocker has been read.
-4. Call `delete_internal_contacts` on the service client. It re-checks under lock and deletes.
+4. Call `delete_internal_contacts` on the REQUEST client, so its Owner check decides (§3.1 step 8). It
+   re-checks under lock and deletes.
 
-A file sent through a document request is never purged by mistake: the request's text or email is a
-`messages` row, so that contact is blocked at step 2. The accepted residual is the one
+A document request sent by text or email leaves a `messages` row, so that contact is blocked at step 2.
+A request whose link staff copied by hand (`channel = 'link'`, `0080_document_requests.sql:81`) leaves no
+message. A file the customer uploaded through it IS purged with the contact (corrected 2026-10-28; the
+earlier sentence here claimed no request-delivered file could ever be purged). The owner's ruling of
+2026-10-13 stands: a customer's files go with them, and the typed-name dialog counts them first. The accepted residual is the one
 `contacts.ts:1196-1206` already accepts. A contact that becomes blocked between steps 2 and 4 (a text
 arrives) is kept by step 4, and its files are already gone. The existing `contacts.delete.filesGoneKept`
 line (`actions.ts:512-519`) says exactly that.
@@ -329,8 +361,11 @@ later migration drops it once nothing calls it.
 
 ### 5.4 Who and how
 
-- Delete stays Owner-only (`requireAccountOwner`, `actions.ts:489`; the RLS backstop is
-  `0066_staff_and_roles.sql:84-86`).
+- Delete stays Owner-only, twice: in the app (`requireAccountOwner`, `actions.ts:489`) and in the database.
+  `delete_internal_contacts` refuses anyone but an Owner of the account, the agency, or a `service_role` JWT
+  (§3.1 step 8, review I9). It does the deleting, so the `contacts_owner_delete` policy
+  (`0066_staff_and_roles.sql:84-86`) no longer sees these deletes, and the function's own check is the
+  backstop.
 - **One contact** (record page, drawer): the confirm is typing the contact's display name. A contact
   with no name types its phone's last four digits, and the dialog says which.
 - **Bulk** (bulk bar): the confirm stays typing the count, as today (`bulk-action-bar.tsx:117-120`).
@@ -400,11 +435,14 @@ exactly the kept ids. This needs `skippedIds` returned by the action.
 
 | Key | English | Spanish |
 |---|---|---|
-| `bulk.deletedSkipped` | Deleted {count} · kept {skipped} that have calls, texts, bookings or deals. You can archive those instead. | Contactos borrados: {count} · conservados porque tienen llamadas, mensajes, citas u oportunidades: {skipped}. Puede archivarlos. |
+| `bulk.deletedSkipped` | Deleted {count} · kept {skipped} that have a history with you. You can archive those instead. | Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Puede archivarlos. |
 | `bulk.archiveKept` (toast action) | Archive them | Archivarlos |
-| `contacts.delete.archiveOnly` (single contact) | {name} can't be deleted: they have calls, texts, bookings or deals on file, and we keep that history. Archive them instead. They leave your list and nothing is lost. | No se puede borrar a {name}: tiene llamadas, mensajes, citas u oportunidades registradas, y ese historial se conserva. Mejor archive este contacto: sale de su lista y no se pierde nada. |
-| `contacts.delete.someKept` (bulk dialog line) | {kept} of these will be kept: they have calls, texts, bookings or deals. | Se conservarán {kept} de estos porque tienen llamadas, mensajes, citas u oportunidades. |
-| `contacts.delete.noneDeletable` | None of these can be deleted: they all have calls, texts, bookings or deals. Archive them instead. | Ninguno se puede borrar porque todos tienen llamadas, mensajes, citas u oportunidades. Mejor archívelos. |
+| `contacts.delete.archiveOnly` (single contact) | {name} can't be deleted because they have a history with you, and we keep it. Archive them instead: they leave your list and nothing is lost. | No se puede borrar a {name} porque tiene un historial con usted, y lo conservamos. Mejor archive este contacto: sale de su lista y no se pierde nada. |
+| `contacts.delete.someKept` (bulk dialog line) | {kept} of these have a history with you and will be kept. | {kept} de estos tienen un historial con usted y se conservarán. |
+| `contacts.delete.noneDeletable` | None of these can be deleted: they all have a history with you. Archive them instead. | Ninguno se puede borrar porque todos tienen un historial con usted. Mejor archívelos. |
+
+The delete copy says "a history with you" rather than listing reasons (review M8). A list of record types
+reads like a form at 7 AM, and it goes stale the day §5.1 gains a reason.
 | `contacts.delete.oneTitle` | Delete {name} for good? | ¿Borrar a {name} para siempre? |
 | `contacts.delete.oneBody` | This removes them with their notes, tasks and files. It can't be undone. Type {name} to confirm. | Esto borra el contacto con sus notas, tareas y archivos. No se puede deshacer. Escriba {name} para confirmar. |
 | `contacts.delete.oneBodyNoName` | This contact has no name. Type the last four digits of their phone, {digits}, to confirm. | Este contacto no tiene nombre. Escriba los últimos cuatro dígitos de su teléfono, {digits}, para confirmar. |
@@ -422,6 +460,9 @@ component (`ACCT/contacts/contact-drawer.tsx:208`).
 ---
 
 ## 7. Sofía never saves "Unknown" as a name (ruling 2)
+
+**Moved out of this plan (coordinator, 2026-10-28):** it ships as its own small PR on its own branch. The
+analysis below stands as that PR's spec.
 
 ### 7.1 How the lead's name reaches `createContact`
 
@@ -513,7 +554,8 @@ line. A `-t` filter that matches no test name proves nothing.
 | a signed-in archive writes exactly one `person` log row; a signed-in restore writes one | drop the log trigger's insert / move the role test from WHEN into the definer body (then nothing is logged) |
 | a `restore_contact_on_sign` restore writes exactly one row, the `customer` one | drop `current_user = 'authenticated'` from WHEN (then it logs twice) |
 | `restore_contact_on_sign` on an archived contact writes one `customer` row with its sign; on an active contact it writes nothing and answers false | remove `and archived_at is not null` |
-| `authenticated` cannot execute the three service-role functions | grant execute to authenticated |
+| `authenticated` cannot execute `restore_contact_on_sign` or `contact_delete_blockers` | grant execute to authenticated |
+| a Staff member's `delete_internal_contacts` call is refused; an Owner's succeeds (review I9) | drop the Owner check |
 | one test per §5.1 reason: a contact with ONLY that row is blocked with that reason | delete that reason's `exists` |
 | a contact with notes, tasks, tags, a place, a household, a document request skip and a note-channel message has no blockers | treat `channel = 'note'` as a blocker |
 | `delete_internal_contacts` keeps a contact that gained an outbound text after the blockers read | remove the re-check inside the lock |

@@ -1,8 +1,10 @@
-# Contact archive, internal-only delete and no placeholder names: implementation plan
+# Contact archive and internal-only delete: implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let staff archive any contact at once with Undo, restore it by hand or when the customer gets in touch again, delete for good only a contact with nothing but internal work on it, and stop Sofía storing "Unknown" as a name.
+**Goal:** Let staff archive any contact at once with Undo, restore it by hand or when the customer gets in touch again, and delete for good only a contact with nothing but internal work on it.
+
+**Scope note (coordinator, 2026-10-28 fix round):** "Sofía never stores a placeholder name" (spec §7) is OUT of this plan. It ships as its own small PR on its own branch, run separately. Two items are deferred; see "Deferred" at the end.
 
 **Architecture:** Migration 0103 adds `contacts.archived_at`/`archived_by`, an append-only `contact_archive_log`, a stamp trigger, a log trigger, and three service-role functions (`restore_contact_on_sign`, `contact_delete_blockers`, `delete_internal_contacts`). Every list read filters archived contacts through one helper per module. Each customer-contact entry point calls `restoreContactOnSign`. The UI adds Archive and Restore to the bulk bar, the record header and the drawer, plus an Archived view of the list.
 
@@ -38,7 +40,8 @@ public.contact_archive_log(id bigint, account_id uuid, contact_id uuid, action '
   author_kind 'person'|'customer', author_id text null, sign text null, created_at timestamptz)
 public.restore_contact_on_sign(p_account_id uuid, p_contact_id uuid, p_sign text) returns boolean   -- service_role
 public.contact_delete_blockers(p_account_id uuid, p_contact_ids uuid[]) returns table(contact_id uuid, reasons text[])  -- service_role
-public.delete_internal_contacts(p_account_id uuid, p_contact_ids uuid[]) returns uuid[]           -- service_role
+public.delete_internal_contacts(p_account_id uuid, p_contact_ids uuid[]) returns uuid[]           -- authenticated (Owner of the account, or the agency) and service_role JWTs
+conversations.contact_archived boolean (trigger-maintained), conversations.inbox_visible boolean (generated: not contact_archived or unread_count > 0)
 ```
 
 TypeScript (T4, `packages/db/src/contacts.ts`, exported from `packages/db/src/index.ts`):
@@ -58,6 +61,7 @@ restoreContacts(db: SupabaseClient, accountId: string, contactIds: string[]): Pr
 restoreContactOnSign(serviceDb: SupabaseClient, accountId: string, contactId: string, sign: RestoreSign): Promise<boolean>
 contactDeleteBlockers(serviceDb: SupabaseClient, accountId: string, contactIds: string[]): Promise<Map<string, DeleteBlockReason[]>>
 deleteContacts(db, accountId, contactIds, opts: { serviceDb: SupabaseClient; beforeDelete?: (deletable: string[]) => Promise<string[]> })
+  // blockers on opts.serviceDb; delete_internal_contacts on `db` (the request client), so 0103's Owner check decides
   : Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number; skippedIds: string[]; lateKept: number }>
 ```
 
@@ -77,6 +81,8 @@ export async function contactDeleteBlockersAction(accountId: string, contactIds:
 
 `bulkDeleteContactsAction` (`ACCT/contacts/actions.ts:476`) keeps its name. Its ok-result gains `skippedIds: string[]` and `lateKept: number`.
 
+`looksAutomaticText(body: string): boolean` (T9, `apps/web/src/lib/contacts/automatic-text.ts`).
+
 `ACCT/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/`.
 
 ### Bare `@bis/db` mock factories a task must update
@@ -90,16 +96,17 @@ There are 68 bare `vi.mock("@bis/db", () => ({` factories in `apps/web/src`. A b
 | `apps/web/src/app/b/[publicId]/actions.test.ts:105` | bare | booking action calls it | same | T9 |
 | `apps/web/src/app/f/[publicId]/actions.test.ts:64` | bare | the action imports the REAL `enrich` (no `@/lib/forms/enrich` mock in the file), which now calls it | same | T9 |
 | `apps/web/src/lib/forms/enrich.test.ts:12` | partial | `enrich` calls it | same | T9 |
-| `apps/web/src/lib/email/inbound/file.test.ts:4` | bare | `fileInboundEmail` calls it | same | T9 |
+| `apps/web/src/lib/email/inbound/pipeline.test.ts:9` | bare (`db` object) | `resumeExisting` calls it | add `restoreContactOnSign: vi.fn(async () => false)` to `db` | T9 |
+| `apps/web/src/lib/email/inbound/file.test.ts:4` | bare | guard only: `fileInboundEmail` must NEVER call it (review I6) | `restoreContactOnSign: vi.fn()`, asserted not called | T9 |
+| `ACCT/conversations/inbound-actions.test.ts:63` | bare (`dbMock`) | guard only: the manual File must never restore (review I6) | `restoreContactOnSign: vi.fn()`, asserted not called | T9 |
 | `apps/web/src/lib/voice/finish-call.test.ts:28` | partial (`...dbMocks`) | `finishCall` calls it | add `restoreContactOnSign: vi.fn()` to `dbMocks` | T8 |
 | `ACCT/contacts/actions.test.ts:66` | bare | `deleteContacts` result shape and its `serviceDb` option | update the `deleteContacts` resolutions at `:157` | T4 (that line), T10 (new cases) |
 | `ACCT/contacts/page.test.ts:87` | bare | page passes `archived` | none (no new symbol); assertions on `listContacts`/`countContacts` args gain `archived` | T10 |
 | `ACCT/contacts/[contactId]/page.test.ts:104` | bare | page renders `ArchiveControls`, which imports `archive-actions.ts` → `archiveContacts`, `restoreContacts`, `contactDeleteBlockers` | `archiveContacts: vi.fn(), restoreContacts: vi.fn(), contactDeleteBlockers: vi.fn()` | T11 |
-| `apps/web/src/app/(dashboard)/dashboard/page.test.ts:27` | bare, hand-built `.eq`-only chain | the count adds `.is("archived_at", null)`; the chain has no `.is` and would throw | add `is: (k, v) => { contactFilters.push([k, v]); return q; }` to the chain at `:33-37` | T12 |
 | `apps/web/src/app/(dashboard)/dashboard/work/page.test.ts:78` | bare | contacts select adds `archived_at` | fixture rows gain `archived_at` | T12 |
 | `ACCT/tasks/page.test.ts:131` | partial | same | same | T12 |
 
-Checked and NOT affected: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts:125` and `apps/web/src/lib/concierge/lead.test.ts` mock `@/lib/forms/enrich` whole. `apps/web/src/lib/email/inbound/pipeline.test.ts:11` mocks `./file` whole. `apps/web/src/app/api/voice/incoming/lifecycle.test.ts:94` mocks `@/lib/voice/finish-call` whole.
+Checked and NOT affected: `apps/web/src/app/api/concierge/[publicId]/turn/route.test.ts:125` and `apps/web/src/lib/concierge/lead.test.ts` mock `@/lib/forms/enrich` whole. `apps/web/src/app/(dashboard)/dashboard/page.test.ts:27` (the agency total) is untouched now that its half of T12 is deferred. `apps/web/src/app/api/voice/incoming/lifecycle.test.ts:94` mocks `@/lib/voice/finish-call` whole.
 
 ### The second-account rule
 
@@ -109,11 +116,10 @@ Every account-scoped read that now filters on archive gets a test in which a SEC
 |---|---|---|
 | `listContacts`, `countContacts` (both `archived` values) | `packages/db/src/test/contact-archive-live.test.ts` | T4 |
 | `archiveContacts` / `restoreContacts` (an id from account B changes nothing) | same | T4 |
-| `restore_contact_on_sign`, `contact_delete_blockers`, `delete_internal_contacts` (account B's id passed under account A) | `packages/db/src/test/contact-archive-schema.test.ts` | T1 |
+| `restore_contact_on_sign`, `contact_delete_blockers`, `delete_internal_contacts` (account B's id passed under account A; an Owner of B calling for A) | `packages/db/src/test/contact-archive-schema.test.ts` | T1 |
 | the six "new conversation" due-lists and their by-id reads | `packages/db/src/test/automations-archive-live.test.ts` | T5 |
-| `listConversations`, `sumUnreadCount`, `searchConversations` | `packages/db/src/test/messaging-archive-live.test.ts` | T6 |
+| `listConversations`, `searchConversations` (and `sumUnreadCount`, deliberately unfiltered) | `packages/db/src/test/messaging-archive-live.test.ts` | T6 |
 | the timeline's `archive` source | `packages/db/src/test/contact-archive-live.test.ts` (T7 adds a `describe`; T4 creates the file) | see T7, wave note |
-| agency dashboard count (agency-wide by design: an archived contact in account B is also left out) | `apps/web/src/app/(dashboard)/dashboard/page.test.ts` | T12 |
 
 ### e2e locators a new control can collide with
 
@@ -131,20 +137,19 @@ Every account-scoped read that now filters on archive gets a test in which a SEC
 | # | Tier | Owner | Wave | Deliverable |
 |---|---|---|---|---|
 | T1 | high | bis-db-schema | 1 | Migration 0103 and its schema tests on the replica |
-| T2 | low | bis-voice | 1 | No placeholder names from Sofía |
 | T3 | low | bis-crm | 1 | Every new and changed string, English and Spanish |
 | T4 | high | bis-crm | 2 | Contact queries: archive filter, archive/restore, sign restore, blockers, the new delete |
 | T5 | medium | bis-automations | 2 | Scheduled sends that start a conversation skip archived contacts |
-| T6 | medium | bis-comms | 2 | Inbox, unread badge and conversation search leave archived threads out |
+| T6 | medium | bis-comms | 2 | Inbox and conversation search leave an archived contact's thread out while nothing in it is unread |
 | T7 | medium | bis-crm | 3 | Archive rows on the timeline (record, household, drawer) |
 | T8 | medium | bis-voice | 3 | A meaningful call restores an archived contact |
-| T9 | medium | bis-crm | 3 | Texts, emails, bookings, forms and chats restore an archived contact |
+| T9 | medium | bis-crm | 3 | Texts (not auto-replies), emails (pipeline only), bookings, forms and chats restore an archived contact |
 | T10 | medium | bis-crm | 3 | List: Archived view, bulk Archive/Restore, new delete dialog and toast |
-| T12 | low | bis-crm | 3 | Agency dashboard count, "Archived" mark in To do, search test |
+| T12 | low | bis-crm | 3 | "Archived" mark in To do, search test |
 | T11 | medium | bis-frontend | 4 | Record header and drawer: Archive, Restore, banner, typed-name delete |
 | T13 | medium | bis-e2e-qa | 5 | `contacts-archive.spec.ts` and the two changed lines in `contacts-drawer.spec.ts` |
 
-Waves: wave 2 starts once T1 is green on the replica. Wave 3 needs T4 merged (T7 needs T4's `contact-archive-live.test.ts` and `COLS`; T9 and T8 need `restoreContactOnSign`; T10 needs T3 and T4). Wave 4 needs T10's `archive-actions.ts`. Wave 5 runs after everything has landed. Two tasks in one wave never share a file. The file lists below are the complete set each task may touch.
+Task numbers are kept from the reviewed draft so review findings stay traceable; T2 left the plan. Waves: wave 2 starts once T1 is green on the replica. Wave 3 needs T4 merged (T7 needs T4's `contact-archive-live.test.ts` and `COLS`; T9 and T8 need `restoreContactOnSign`; T10 needs T3 and T4). Wave 4 needs T10's `archive-actions.ts`. Wave 5 runs after everything has landed. Two tasks in one wave never share a file. The file lists below are the complete set each task may touch.
 
 ---
 
@@ -157,11 +162,13 @@ Waves: wave 2 starts once T1 is green on the replica. Wave 3 needs T4 merged (T7
 - Create: `packages/db/src/test/contact-archive-schema.test.ts`
 - Modify: `packages/db/src/test/schema-grants-guard.test.ts:86-89` (the `"authenticated contacts"` entry)
 - Modify: `packages/db/src/test/definer-search-path.test.ts:27-50` (`EXPECTED_DEFINERS`), `:68` (`toHaveLength(23)`), `:77` (`toBeGreaterThanOrEqual(23)`)
+- Modify: `packages/db/src/test/contacts-marketing-optout-schema.test.ts:69-72` and `packages/db/src/test/server-only-writes-grants.test.ts:130-133`. Both pin contacts' column grants exactly, so `grant update (archived_at)` turns them red (review I2). Each gains `"archived_at"` in sorted position: red on `pre`, green on `post`.
+- Modify: `packages/db/src/account-teardown.ts:36` (review M9): `"contact_archive_log"` goes before `"contacts"`. It cascades with its contact, and it has no account FK of its own, so teardown works without it. It is listed anyway, as `record_summaries` is at `:33` ("cascades with its contact too"), so the list stays the whole account's tables.
 
 **Interfaces:** Produces the SQL objects listed under "Shared facts". Consumes nothing.
 
 **Run locally (replica only):**
-`cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55434/post pnpm exec vitest run src/test/contact-archive-schema.test.ts src/test/schema-grants-guard.test.ts src/test/definer-search-path.test.ts src/test/proposals-drop.test.ts`
+`cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55434/post pnpm exec vitest run src/test/contact-archive-schema.test.ts src/test/schema-grants-guard.test.ts src/test/definer-search-path.test.ts src/test/proposals-drop.test.ts src/test/contacts-marketing-optout-schema.test.ts src/test/server-only-writes-grants.test.ts`
 
 Run the same command against `pre` for the red. `proposals-drop.test.ts` is in the list to prove the digest does NOT move (spec §3.1, corrected).
 
@@ -306,7 +313,18 @@ describe("0103: contact_archive_log", () => {
       ]);
     }));
 
-  it("a signed-in client cannot insert into the log, and reads only its own account's rows (mutation: grant insert on contact_archive_log to authenticated -> FAILS)", () =>
+  it("authenticated holds no write privilege on the log (mutation: grant insert on contact_archive_log to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      // A privilege read, not an attempted insert (review I1): with RLS on and no insert policy, an insert is
+      // refused 42501 whether or not the grant exists, so a refusal cannot tell the two apart.
+      const { rows: [p] } = await c.query(
+        `select has_table_privilege('authenticated', 'public.contact_archive_log', 'INSERT') as i,
+                has_table_privilege('authenticated', 'public.contact_archive_log', 'UPDATE') as u,
+                has_table_privilege('authenticated', 'public.contact_archive_log', 'DELETE') as d`);
+      expect(p).toEqual({ i: false, u: false, d: false });
+    }));
+
+  it("a member reads only their own account's log rows (second account; mutation: policy `using (true)` -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "logA");
       const b = await seedAccount(c, "logB");
@@ -315,9 +333,6 @@ describe("0103: contact_archive_log", () => {
       await c.query("update public.contacts set archived_at = now() where id = $1", [idB]);
       await actAsMember(c, a.accountId, a.orgId, "owner");
       expect((await c.query("select 1 from public.contact_archive_log where contact_id = $1", [idB])).rowCount).toBe(0);
-      expect((await refusal(c,
-        "insert into public.contact_archive_log (account_id, contact_id, action, author_kind) values ($1, $2, 'archived', 'person')",
-        [a.accountId, idB]))?.code).toBe("42501");
     }));
 });
 
@@ -335,8 +350,14 @@ describe("0103: restore_contact_on_sign", () => {
       const two = await c.query("select public.restore_contact_on_sign($1, $2, 'text') as r", [a.accountId, active]);
       await c.query("reset role");
       expect([one.rows[0].r, two.rows[0].r]).toEqual([true, false]);
-      const { rows } = await c.query("select contact_id, action, author_kind, sign from public.contact_archive_log where account_id = $1 and author_kind = 'customer'", [a.accountId]);
-      expect(rows).toEqual([{ contact_id: archived, action: "restored", author_kind: "customer", sign: "text" }]);
+      // The WHOLE log of both contacts, by id (review I1): a filter on author_kind would hide a person row that a
+      // log trigger without its WHEN role test writes for this same restore.
+      const { rows } = await c.query(
+        "select contact_id, action, author_kind, sign from public.contact_archive_log where account_id = $1 order by id", [a.accountId]);
+      expect(rows).toEqual([
+        { contact_id: archived, action: "archived", author_kind: "person", sign: null },
+        { contact_id: archived, action: "restored", author_kind: "customer", sign: "text" },
+      ]);
     }));
 
   it("another account's contact is never restored (second account; mutation: drop `account_id = p_account_id` -> FAILS)", () =>
@@ -354,7 +375,7 @@ describe("0103: restore_contact_on_sign", () => {
       expect((await c.query("select archived_at from public.contacts where id = $1 and archived_at is not null", [idB])).rowCount).toBe(1);
     }));
 
-  it("authenticated cannot execute the three service-role functions (mutation: grant execute on restore_contact_on_sign to authenticated -> FAILS)", () =>
+  it("authenticated cannot execute the two service-role functions (mutation: grant execute on restore_contact_on_sign to authenticated -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "exec");
       const id = await contact(c, a.accountId);
@@ -362,8 +383,43 @@ describe("0103: restore_contact_on_sign", () => {
       for (const sql of [
         "select public.restore_contact_on_sign($1, $2, 'text')",
         "select * from public.contact_delete_blockers($1, array[$2]::uuid[])",
-        "select public.delete_internal_contacts($1, array[$2]::uuid[])",
       ]) expect((await refusal(c, sql, [a.accountId, id]))?.code, sql).toBe("42501");
+    }));
+});
+
+describe("0103: delete_internal_contacts keeps the database's Owner check (review I9)", () => {
+  it("a Staff member's call is refused 42501 and deletes nothing (mutation: drop the Owner check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "staffdel");
+      const id = await contact(c, a.accountId);
+      await actAsMember(c, a.accountId, a.orgId, "staff");
+      expect((await refusal(c, "select public.delete_internal_contacts($1, array[$2]::uuid[])", [a.accountId, id]))?.code).toBe("42501");
+      await actAsOwner(c);
+      expect((await c.query("select 1 from public.contacts where id = $1", [id])).rowCount).toBe(1);
+    }));
+
+  it("an Owner of the account deletes; an Owner of ANOTHER account is refused (second account; mutation: drop `p_account_id = app.current_account_id()` -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "ownA");
+      const b = await seedAccount(c, "ownB");
+      const idA = await contact(c, a.accountId);
+      await actAsMember(c, b.accountId, b.orgId, "owner");
+      expect((await refusal(c, "select public.delete_internal_contacts($1, array[$2]::uuid[])", [a.accountId, idA]))?.code).toBe("42501");
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      const { rows: [r] } = await c.query("select public.delete_internal_contacts($1, array[$2]::uuid[]) as d", [a.accountId, idA]);
+      expect(r.d).toEqual([idA]);
+    }));
+
+  it("server code (a service_role JWT) may call it: the e2e cleanup and the live suites do (mutation: drop the service_role term -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "svcdel");
+      const id = await contact(c, a.accountId);
+      await actAsOwner(c);
+      await c.query("set local role service_role");
+      await c.query(`select set_config('request.jwt.claims', '{"role":"service_role"}', true)`);
+      const { rows: [r] } = await c.query("select public.delete_internal_contacts($1, array[$2]::uuid[]) as d", [a.accountId, id]);
+      await c.query("reset role");
+      expect(r.d).toEqual([id]);
     }));
 });
 ```
@@ -374,7 +430,7 @@ Then the blocker cases. Write ONE `it` per reason, each seeding a contact that h
 |---|---|
 | `messages` | `conversation` + `message(…, 'sms', 'outbound')` |
 | `inbound_email` | `conversation` + one `public.inbound_emails` row on it. Copy the column list from the `recordInboundEmail` insert in `packages/db/src/inbound-email.ts:155-178` |
-| `calls` | one `public.calls` row with `contact_id`. Copy the minimal insert from `packages/db/src/test/voice.test.ts` |
+| `calls` | TWO cases (review M3). (a) One `public.calls` row with `contact_id`. (b) A call with `contact_id` NULL but `conversation_id` = this contact's conversation: `calls.conversation_id` exists (`0019_voice_core.sql:49`), and a shared-number move or a lost contact link leaves exactly this shape. Copy the minimal insert from `packages/db/src/test/voice.test.ts`. |
 | `forms` | one `public.forms` row + one `public.form_submissions` row with `contact_id` (minimal inserts from `packages/db/src/test/forms.test.ts`) |
 | `consent` | one `public.consent_events` row with `contact_id` (from `packages/db/src/test/consent*.test.ts`) |
 | `automations` | one `public.automation_log` row with `contact_id` and `status 'sent'`, AND a second contact with only a `status 'skipped'` row, which must NOT be blocked |
@@ -387,14 +443,18 @@ Plus four more:
 
 ```ts
   it("notes, a To-do, a tag, a place, a note-channel message and an EMPTY conversation block nothing (mutation: treat channel 'note' as a blocker -> FAILS)", ...
-  // seed: notes row, tasks row, tags + contact_tags, places row (0071 minimal), conversation + message(..., 'note', 'outbound'),
-  // a second empty conversation. expect(await blockers(c, accountId, [id])).toEqual([]).
+  // seed: notes row, tasks row, tags + contact_tags, places row (0071 minimal), conversation + message(..., 'note', 'outbound').
+  // A second contact with an EMPTY conversation (one conversation per contact, 0005:24-25). Both expect no blockers.
 
   it("a contact with three reasons is ONE row with all three, and 500 ids answer at most 500 rows (mutation: return one row per reason -> FAILS)", ...
   // seed messages + calls + deals on one contact; expect reasons sorted to equal ["calls","deals","messages"];
-  // then call with 501 ids -> refusal code "22023".
+  // then 501 ids, through refusal() so the error is caught inside its savepoint and the transaction stays usable (review M7):
+  //   await actAsOwner(c); await c.query("set local role service_role");
+  //   expect((await refusal(c, "select * from public.contact_delete_blockers($1, $2::uuid[])", [a.accountId, ids501]))?.code).toBe("22023");
+  //   await c.query("reset role");
 
   it("delete_internal_contacts deletes an internal-only contact with its notes, note messages and empty conversations, and returns its id (mutation: skip the note-message delete -> the conversation delete hits messages_conversation_id_fkey, the id is not returned, FAILS)", ...
+  // These three run as the account's Owner (actAsMember(..., "owner")), the path the app takes.
 
   it("delete_internal_contacts keeps a contact that gained an outbound text after the blockers were read, and still deletes the rest of the batch (mutation: drop the in-lock re-check -> FAILS)", ...
   // seed free1, free2; read blockers (empty); then insert an outbound sms on free2; call delete_internal_contacts(array[free1, free2]);
@@ -407,14 +467,60 @@ Plus four more:
   it("another account's id passed under account A is neither reported nor deleted (second account; mutation: drop `k.account_id = p_account_id` in delete_internal_contacts -> FAILS)", ...
 ```
 
-Write each of these in full, in the same style as the `it` blocks above. Every seed copies a minimal insert from the named existing test file. Read that file for the columns; do not guess them.
+And the inbox column (review I8, T6's rule):
+
+```ts
+describe("0103: conversations.contact_archived and inbox_visible", () => {
+  it("archiving and restoring a contact flips its conversations' contact_archived; inbox_visible stays true while unread > 0 (mutation: drop the sync trigger -> FAILS)", () =>
+    withRollback(async (c) => {
+      // One conversation per contact (0005_messaging.sql:24-25), so two contacts: one thread with nothing unread
+      // (a junk caller's: only our text-back), one with an unread customer text.
+      const a = await seedAccount(c, "inbox");
+      const quietContact = await contact(c, a.accountId, "Quiet");
+      const loudContact = await contact(c, a.accountId, "Loud");
+      const quiet = await conversation(c, a.accountId, quietContact);
+      const loud = await conversation(c, a.accountId, loudContact);
+      await actAsOwner(c);
+      await c.query("update public.conversations set unread_count = 2 where id = $1", [loud]);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      await c.query("update public.contacts set archived_at = now() where id = any($1::uuid[])", [[quietContact, loudContact]]);
+      await actAsOwner(c);
+      const read = async (id: string) => (await c.query("select contact_archived, inbox_visible from public.conversations where id = $1", [id])).rows[0];
+      expect(await read(quiet)).toEqual({ contact_archived: true, inbox_visible: false });
+      expect(await read(loud)).toEqual({ contact_archived: true, inbox_visible: true });
+      await c.query("set local role service_role");
+      await c.query("select public.restore_contact_on_sign($1, $2, 'text')", [a.accountId, quietContact]);
+      await c.query("reset role");
+      expect(await read(quiet)).toEqual({ contact_archived: false, inbox_visible: true });
+    }));
+
+  it("a conversation created for an archived contact starts archived (mutation: drop the BEFORE INSERT trigger -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "inbox2");
+      const id = await contact(c, a.accountId);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      await c.query("update public.contacts set archived_at = now() where id = $1", [id]);
+      const cv = await conversation(c, a.accountId, id);
+      expect((await c.query("select contact_archived from public.conversations where id = $1", [cv])).rows[0]).toEqual({ contact_archived: true });
+    }));
+
+  it("authenticated cannot write contact_archived (mutation: grant update (contact_archived) -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows: [p] } = await c.query(
+        "select has_column_privilege('authenticated', 'public.conversations', 'contact_archived', 'UPDATE') as u");
+      expect(p).toEqual({ u: false });
+    }));
+});
+```
+
+Write each of the abbreviated blocker and delete cases above in full, in the same style as the complete `it` blocks. Every seed copies a minimal insert from the named existing test file. Read that file for the columns; do not guess them.
 
 - [ ] **Step 3: Run it red on `pre`.**
 Run: `cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55434/pre pnpm exec vitest run src/test/contact-archive-schema.test.ts`
 Expected: every test FAILS. The first failing line reads `column "archived_at" of relation "contacts" does not exist` or `function public.restore_contact_on_sign(...) does not exist`. Paste one.
 
 - [ ] **Step 4: Write the migration.** Create `packages/db/supabase/migrations/0103_contact_archive.sql`. ASCII only, no backslash, every dollar sign part of a `$$` pair (the 0098 rule, `0098_shared_number_holding.sql:58`). The header follows 0098's sections (WHY / WHAT / GRANTS / SEARCH PATHS / LOCKS AND COST / LOAD-BEARING / ROLLBACK), stating:
-  - GRANTS: one column grant, `update (archived_at)` to authenticated. `EXPECTED_WRITES` gains it. The client-write digest does NOT change (`proposals-drop.test.ts:94-98` counts table privileges only). Four definers are added to `EXPECTED_DEFINERS` (23 -> 27, or 0102's count + 4).
+  - GRANTS: one column grant, `update (archived_at)` to authenticated. `EXPECTED_WRITES` and the two contacts column-grant pins (`contacts-marketing-optout-schema.test.ts:69-72`, `server-only-writes-grants.test.ts:130-133`) gain it. The client-write digest does NOT change (`proposals-drop.test.ts:94-98` counts table privileges only). `delete_internal_contacts` is executable by authenticated and keeps its own Owner check. Six definers are added to `EXPECTED_DEFINERS` (23 -> 29, or 0102's count + 6).
   - LOAD-BEARING: the app after this file names `archived_at` in `COLS` and every list read, so it merges only after this file is on production.
 
 ```sql
@@ -545,7 +651,10 @@ begin
                  on ie.account_id = cv.account_id and ie.conversation_id = cv.id
            where cv.account_id = p_account_id and cv.contact_id = k.id)
         union all select 'calls' where exists (
-          select 1 from public.calls x where x.account_id = p_account_id and x.contact_id = k.id)
+          select 1 from public.calls x where x.account_id = p_account_id
+             and (x.contact_id = k.id
+                  or x.conversation_id in (select cv.id from public.conversations cv
+                                            where cv.account_id = p_account_id and cv.contact_id = k.id)))
         union all select 'forms' where exists (
           select 1 from public.form_submissions x where x.account_id = p_account_id and x.contact_id = k.id)
         union all select 'consent' where exists (
@@ -563,7 +672,10 @@ end $$;
 revoke all on function public.contact_delete_blockers(uuid, uuid[]) from public, anon, authenticated;
 grant execute on function public.contact_delete_blockers(uuid, uuid[]) to service_role;
 
--- 8. Delete for good, internal-only contacts. Locks the contacts, then their conversations, in id order,
+-- 8. Delete for good, internal-only contacts. The DATABASE keeps the Owner check (review I9): an Owner of THIS
+--    account (app.is_account_owner, 0066:63, the agency included, with the 0066 policy's own account term), or
+--    server code with a service_role JWT (PostgREST verifies the token before it sets request.jwt.claims, so a
+--    client cannot claim the role; the e2e cleanup and the live suites call it so). Locks the contacts, then their conversations, in id order,
 --    then re-reads the blockers inside the lock: each statement takes a fresh snapshot under READ
 --    COMMITTED (the 0083 section 3 approach). Each contact in its own subtransaction, so one file the
 --    purge left behind (documents_contact_fkey, NO ACTION) keeps that contact alone.
@@ -574,6 +686,11 @@ declare
   v_id uuid;
   v_deleted uuid[] := '{}';
 begin
+  if not (coalesce(app.jwt() ->> 'role', '') = 'service_role'
+          or coalesce(app.is_agency(), false)
+          or (p_account_id = app.current_account_id() and coalesce(app.is_account_owner(p_account_id), false))) then
+    raise exception 'delete_internal_contacts: Owners only' using errcode = '42501';
+  end if;
   if p_contact_ids is null or pg_catalog.cardinality(p_contact_ids) > 500 then
     raise exception 'delete_internal_contacts: between 0 and 500 ids' using errcode = '22023';
   end if;
@@ -599,30 +716,65 @@ begin
   end loop;
   return v_deleted;
 end $$;
-revoke all on function public.delete_internal_contacts(uuid, uuid[]) from public, anon, authenticated;
-grant execute on function public.delete_internal_contacts(uuid, uuid[]) to service_role;
+revoke all on function public.delete_internal_contacts(uuid, uuid[]) from public, anon;
+grant execute on function public.delete_internal_contacts(uuid, uuid[]) to authenticated, service_role;
 
--- 9. The Archived view's count and order.
-create index contacts_account_archived on public.contacts (account_id, archived_at desc, id desc)
+-- 9. The Archived view: keyed on its DEFAULT order (created_at desc, id desc; listContacts' default sort,
+--    contacts.ts SORT_COLUMN), so its first page and its count read only archived rows (review M4). The other
+--    sorts (name, company) use the existing sort indexes with this filter; measure with explain on the replica
+--    before adding more.
+create index contacts_account_archived_created on public.contacts (account_id, created_at desc, id desc)
   where archived_at is not null;
+
+-- 10. The inbox rule (owner decision 2026-10-28, review I8): an archived contact's thread leaves the inbox only
+--     while nothing in it is unread. contact_archived follows the contact; inbox_visible is the one column the
+--     inbox and search filter on, so neither needs an OR across an embed.
+alter table public.conversations
+  add column contact_archived boolean not null default false,
+  add column inbox_visible boolean generated always as (not contact_archived or unread_count > 0) stored;
+
+create function app.conversations_follow_contact_archive() returns trigger
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+begin
+  update public.conversations set contact_archived = (new.archived_at is not null)
+   where account_id = new.account_id and contact_id = new.id;
+  return null;
+end $$;
+revoke all on function app.conversations_follow_contact_archive() from public, anon, authenticated;
+create trigger contacts_archive_to_conversations after update of archived_at on public.contacts
+  for each row when (old.archived_at is distinct from new.archived_at)
+  execute function app.conversations_follow_contact_archive();
+
+create function app.conversation_contact_archived() returns trigger
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+begin
+  new.contact_archived := coalesce((select k.archived_at is not null from public.contacts k
+                                     where k.account_id = new.account_id and k.id = new.contact_id), false);
+  return new;
+end $$;
+revoke all on function app.conversation_contact_archived() from public, anon, authenticated;
+create trigger conversations_contact_archived before insert or update of contact_id on public.conversations
+  for each row execute function app.conversation_contact_archived();
 ```
 
-ROLLBACK in the header, in order: drop index `contacts_account_archived`; drop the three public functions; drop trigger `contacts_archive_log` and function `app.contacts_archive_log()`; drop trigger `contacts_archive_stamp` and function `app.contacts_archive_stamp()`; drop table `public.contact_archive_log`; `revoke update (archived_at) on public.contacts from authenticated`; drop constraint `contacts_archived_by_needs_at`; drop both columns.
+ROLLBACK in the header, in order: drop triggers `conversations_contact_archived` and `contacts_archive_to_conversations` and their two functions; drop the conversations columns `inbox_visible` then `contact_archived`; drop index `contacts_account_archived_created`; drop the three public functions; drop trigger `contacts_archive_log` and function `app.contacts_archive_log()`; drop trigger `contacts_archive_stamp` and function `app.contacts_archive_stamp()`; drop table `public.contact_archive_log`; `revoke update (archived_at) on public.contacts from authenticated`; drop constraint `contacts_archived_by_needs_at`; drop both columns.
 
 - [ ] **Step 5: Apply to `post` and run green.**
 Run: `psql -p 55434 -d post -1 -v ON_ERROR_STOP=1 -f supabase/migrations/0103_contact_archive.sql`, then the Step 3 command against `post`.
 Expected: all pass. Paste vitest's summary line.
 
-- [ ] **Step 6: Update the two guard tests.** In `schema-grants-guard.test.ts:86-89` add `"archived_at"` in sorted position (after `"assigned_to"`). In `definer-search-path.test.ts` add these four entries in sorted position, then change `:68` to `toHaveLength(27)` and `:77` to `toBeGreaterThanOrEqual(27)`. If 0102 is in your `pre`, use its count + 4, read off the file:
+- [ ] **Step 6: Update the two guard tests.** In `schema-grants-guard.test.ts:86-89` add `"archived_at"` in sorted position (after `"assigned_to"`). Add `"archived_at"` the same way to `contacts-marketing-optout-schema.test.ts:69-72` and `server-only-writes-grants.test.ts:130-133`. In `account-teardown.ts:36` put `"contact_archive_log"` before `"contacts"`. In `definer-search-path.test.ts` add these six entries in sorted position, then change `:68` to `toHaveLength(29)` and `:77` to `toBeGreaterThanOrEqual(29)`. If 0102 is in your `pre`, use its count + 6, read off the file:
 
 ```ts
   "app.contacts_archive_log()": PG_CATALOG_PG_TEMP,
+  "app.conversation_contact_archived()": PG_CATALOG_PG_TEMP,
+  "app.conversations_follow_contact_archive()": PG_CATALOG_PG_TEMP,
   "public.contact_delete_blockers(uuid,uuid[])": PG_CATALOG_PG_TEMP,
   "public.delete_internal_contacts(uuid,uuid[])": PG_CATALOG_PG_TEMP,
   "public.restore_contact_on_sign(uuid,uuid,text)": PG_CATALOG_PG_TEMP,
 ```
 
-Run all four files on `post` (green) and the two guard files on `pre` (red: `expected 23 to be 27` and the `archived_at` diff). Paste both lines. `proposals-drop.test.ts` must be GREEN on both `pre` and `post` with `52|b66203ca5d355155540b520af510d120`.
+Run all four files on `post` (green) and the two guard files on `pre` (red: `expected 23 to be 27` and the `archived_at` diff). Paste each red line: the definer count, and the three `archived_at` column-list diffs (`schema-grants-guard`, `contacts-marketing-optout-schema`, `server-only-writes-grants`). `proposals-drop.test.ts` must be GREEN on both `pre` and `post` with `52|b66203ca5d355155540b520af510d120`.
 
 - [ ] **Step 7: Mutation probes (the reviewer runs each; paste the red line).** Apply each to `post` with `create or replace function …` (or `drop trigger`/`grant`), run the named test, then rebuild `post` from `pre`:
 
@@ -635,6 +787,13 @@ Run all four files on `post` (green) and the two guard files on `pre` (red: `exp
 | recreate the log trigger with no `current_user` in WHEN, and the test in the body instead | "a signed-in archive and a signed-in restore each write ONE person row" |
 | recreate the log trigger with no `current_user` test at all | "restores an archived contact and writes ONE customer row" (it logs a person row too) |
 | restore fn: drop `and archived_at is not null` | "… an active one answers false and writes nothing" |
+| `grant insert on public.contact_archive_log to authenticated` | "authenticated holds no write privilege on the log" (the privilege read; an insert attempt could not fail, review I1) |
+| delete fn: delete the Owner `if not (…)` block | "a Staff member's call is refused" |
+| delete fn: drop `p_account_id = app.current_account_id() and` | "an Owner of ANOTHER account is refused" |
+| delete fn: drop the `service_role` term | "server code (a service_role JWT) may call it" |
+| blockers: drop the `or x.conversation_id in (…)` term | the calls case (b) |
+| drop trigger `contacts_archive_to_conversations` | "archiving and restoring a contact flips its conversations' contact_archived" |
+| drop trigger `conversations_contact_archived` | "a conversation created for an archived contact starts archived" |
 | blockers: delete each `exists` in turn | that reason's own `it` |
 | blockers: `m.channel <> 'note'` → `true` | "notes, a To-do, … block nothing" |
 | delete fn: delete the `not exists (… contact_delete_blockers …)` line | "keeps a contact that gained an outbound text" |
@@ -643,126 +802,10 @@ Run all four files on `post` (green) and the two guard files on `pre` (red: `exp
 - [ ] **Step 8: Commit.**
 
 ```bash
-git add packages/db/supabase/migrations/0103_contact_archive.sql packages/db/src/test/contact-archive-schema.test.ts packages/db/src/test/schema-grants-guard.test.ts packages/db/src/test/definer-search-path.test.ts
-git commit -m "feat(db): 0103 contact archive: archived_at, archive log, sign restore and internal-only delete" -- packages/db/supabase/migrations/0103_contact_archive.sql packages/db/src/test/contact-archive-schema.test.ts packages/db/src/test/schema-grants-guard.test.ts packages/db/src/test/definer-search-path.test.ts
+P="packages/db/supabase/migrations/0103_contact_archive.sql packages/db/src/test/contact-archive-schema.test.ts packages/db/src/test/schema-grants-guard.test.ts packages/db/src/test/definer-search-path.test.ts packages/db/src/test/contacts-marketing-optout-schema.test.ts packages/db/src/test/server-only-writes-grants.test.ts packages/db/src/account-teardown.ts"
+git add $P
+git commit -m "feat(db): 0103 contact archive: archived_at, archive log, inbox visibility, sign restore and an Owner-checked internal-only delete" -- $P
 ```
-
----
-
-### Task 2: Sofía never stores a placeholder as a name
-
-**Tier:** low · **Owner:** bis-voice · **Wave:** 1
-
-**Files:**
-- Modify: `apps/web/src/lib/voice/tools/placeholders.ts:26-33` (the three sets)
-- Modify: `apps/web/src/lib/voice/tools/placeholders.test.ts`
-- Modify: `apps/web/src/lib/voice/identity/flow.ts:95-98` (`messageName`)
-- Modify: `apps/web/src/lib/voice/identity/flow.test.ts`
-- Modify: `apps/web/src/lib/voice/finish-call.ts:306-313` (`namesSaid`), `:386`, `:393`, `:464` (the shared-number message name)
-- Modify: `apps/web/src/lib/voice/finish-call.test.ts`
-
-**Interfaces:** none produced. Consumes `isPlaceholderName` (`placeholders.ts:46-49`).
-
-**Run:** `pnpm --filter web exec vitest run src/lib/voice/tools/placeholders.test.ts src/lib/voice/identity/flow.test.ts src/lib/voice/finish-call.test.ts src/lib/voice/modules/corpus-parity.test.ts`
-
-- [ ] **Step 1: Failing tests.** In `placeholders.test.ts` add:
-
-```ts
-describe("isPlaceholderName: multi-word stand-ins (contact archive spec §7.2c)", () => {
-  it.each(["Unknown caller", "Unknown Caller", "No name", "No name given", "Anonymous", "Anónimo", "Anónima",
-           "Sin nombre", "No dio su nombre", "Not provided", "No proporcionado"])(
-    "%s is a placeholder name (mutation: drop it from the sets -> FAILS)", (v) => {
-      expect(isPlaceholderName(v)).toBe(true);
-    });
-  it.each(["Anonymous Plumbing LLC", "Ana Unknown", "Sinclair Nombre"])(
-    "%s is a real name, never touched (mutation: match by substring -> FAILS)", (v) => {
-      expect(isPlaceholderName(v)).toBe(false);
-    });
-});
-```
-
-In `flow.test.ts`:
-
-```ts
-it("messageName treats a placeholder as no name (mutation: drop the isPlaceholderName check -> FAILS)", () => {
-  expect(messageName({ name: "Unknown" })).toBeNull();
-  expect(messageName({ name: " desconocido " })).toBeNull();
-  expect(messageName({ name: "Ana Ruiz" })).toBe("Ana Ruiz");
-});
-```
-
-In `finish-call.test.ts`, beside the lead tests (`:263-300`), using `withLead` directly. This bypasses `capture_lead`, so the upstream guard cannot hide a missing choke point:
-
-```ts
-it("a lead whose fullName is a placeholder makes a \"Caller\" contact, never \"Desconocido\" (spec §7.3; mutation: remove spokenName at the splitFullName call -> FAILS)", async () => {
-  const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-    { fields: { fullName: "Desconocido", need: "roof quote", callbackNumber: "+19562921696" } });
-  await finishCall(s, ctx, meta);
-  expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
-    expect.objectContaining({ firstName: "Caller", lastName: undefined }), "voice", "ai");
-});
-
-it("a placeholder lead name never stops a real message name agreeing (mutation: remove spokenName in namesSaid -> namesAgree fails, no contact, FAILS)", async () => {
-  const s = withMessage(withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-    { fields: { fullName: "Unknown", need: "roof quote", callbackNumber: "+19562921696" } }),
-    { body: "call me back", name: "Ana Ruiz", at: "t" });
-  await finishCall(s, ctx, meta);
-  expect(dbMocks.createContact).toHaveBeenCalled();
-});
-```
-
-Read `withMessage`'s real signature in `apps/web/src/lib/voice/state.ts` (or wherever `withLead` is imported from in `finish-call.test.ts`) before writing the second test. If its shape differs, keep the test's meaning: a placeholder lead name next to a real message name still yields a contact.
-
-- [ ] **Step 2: Run red.** Expected: the eleven `it.each` placeholder cases fail (`expected false to be true`), the `messageName` case fails (`expected 'Unknown' to be null`), and both finish-call cases fail. Paste one line of each.
-
-- [ ] **Step 3: Implement.** In `placeholders.ts`:
-
-```ts
-const GENERIC = new Set([
-  "not specified", "unspecified", "n/a", "not given", "not provided",
-  "no se indico", "no especificado", "no especificada", "sin especificar", "no proporcionado", "no proporcionada",
-]);
-const UNKNOWN = new Set(["unknown", "desconocido", "desconocida"]);
-/** A stand-in for a name. Whole value only ("Anonymous Plumbing LLC" is a business). */
-const NAME_STANDINS = new Set([
-  "user", "guest", "customer", "cliente", "caller",
-  "unknown caller", "no name", "no name given", "anonymous", "anonimo", "anonima", "sin nombre", "no dio su nombre",
-]);
-```
-
-`norm` lowercases and strips accents (`:19-22`), so "Anónimo" matches "anonimo".
-
-In `flow.ts` add `import { isPlaceholderName } from "../tools/placeholders";` (an import-free module, `placeholders.ts:11-13`) and change `messageName`:
-
-```ts
-export function messageName(args: { name?: unknown }): string | null {
-  const n = typeof args.name === "string" ? args.name.replace(/\s+/g, " ").trim() : "";
-  return n.length > 0 && !isPlaceholderName(n) ? n : null;
-}
-```
-
-In `finish-call.ts` import `isPlaceholderName` from `./tools/placeholders` and add, above `namesSaid`:
-
-```ts
-/** A placeholder ("Unknown", "Desconocido", "N/A") is no name: S-47b's rule, enforced again at the one place every
- *  name reaches createContact, so a tool path that forgets the guard still yields "Caller" (contact archive spec §7.3). */
-function spokenName(raw: string | null | undefined): string {
-  const v = (raw ?? "").trim();
-  return v && !isPlaceholderName(v) ? v : "";
-}
-```
-
-Then:
-- `namesSaid` (`:308-309`): `...state.leads.map((l) => spokenName(l.fields?.fullName)),` and `...state.messages.map((m) => (m.nameDeclined ? undefined : spokenName(m.name))),`. The existing filter drops the empty strings.
-- `:386`: `const { firstName, lastName } = splitFullName(spokenName(fields.fullName));`
-- `:393`: `pickRecordOnNumber({ …, name: spokenName(fields.fullName) || undefined, … })`
-- `:464`: `const name = msg && !msg.nameDeclined ? spokenName(msg.name) || undefined : undefined;`
-
-- [ ] **Step 4: Run green**, then the corpus parity test (`corpus-parity.test.ts` imports `placeholders.ts`). Paste the summary line.
-
-- [ ] **Step 5: Mutation probes.** (a) Remove `"anonymous"` from `NAME_STANDINS` → the "Anonymous" case fails. (b) Revert `messageName` → its test fails. (c) Replace `splitFullName(spokenName(fields.fullName))` with `splitFullName(fields.fullName ?? "")` → "makes a \"Caller\" contact" fails. This can fail because `withLead` bypasses `capturePhoneLead`. (d) Revert `namesSaid` → the agreement test fails.
-
-- [ ] **Step 6: Commit** the six files: `git commit -m "fix(voice): a placeholder like Unknown or Anonymous is never a contact's name" -- <the six paths>`.
 
 ---
 
@@ -773,6 +816,7 @@ Then:
 **Files:**
 - Modify: `apps/web/src/lib/messages.ts` (`bulk.*` block at `:662-699`; add the `contacts.archive*` and `record.*` keys beside their namespaces; add the `timeline.*` keys beside `timeline.note` at `:5345`)
 - Modify: `apps/web/src/lib/messages.test.ts`
+- Modify: `ACCT/contacts/bulk-action-bar.test.ts:364-370`. That ONE test pins the old `bulk.deletedSkipped` text in both languages (review I5). Its two literals become the new strings, read from `m` (`m["bulk.deletedSkipped"].replace(...)`), so the branch is not red from wave 1 to wave 3. T10 owns the rest of the file in wave 3.
 
 **Interfaces:** Produces these keys, which T7, T10, T11 and T12 consume by name. Every key has its `.es` twin on the next line.
 
@@ -784,7 +828,7 @@ Then:
 | `bulk.restore` | Restore | Restaurar |
 | `bulk.restored` | Moved {count} contacts back to your list | Se devolvieron {count} contactos a su lista |
 | `bulk.restoredOne` | Moved 1 contact back to your list | Se devolvió 1 contacto a su lista |
-| `bulk.deletedSkipped` (REPLACES `:696`/`:699`) | Deleted {count} · kept {skipped} that have calls, texts, bookings or deals. You can archive those instead. | Contactos borrados: {count} · conservados porque tienen llamadas, mensajes, citas u oportunidades: {skipped}. Puede archivarlos. |
+| `bulk.deletedSkipped` (REPLACES `:696`/`:699`) | Deleted {count} · kept {skipped} that have a history with you. You can archive those instead. | Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Puede archivarlos. |
 | `bulk.archiveKept` | Archive them | Archivarlos |
 | `contacts.archived.link` | Archived | Archivados |
 | `contacts.archived.title` | Archived contacts | Contactos archivados |
@@ -798,10 +842,9 @@ Then:
 | `contacts.restore.failed` | Couldn't restore. Nothing changed. Try again. | No se pudo restaurar. No cambió nada. Intente de nuevo. |
 | `contacts.archive.keepsAppointment` | They still have an appointment on {date}. Its reminders still go. | Todavía tiene una cita el {date}. Sus recordatorios se siguen enviando. |
 | `contacts.archive.keepsAppointments` | {count} of them still have appointments. Their reminders still go. | {count} de ellos todavía tienen citas. Sus recordatorios se siguen enviando. |
-| `contacts.add.existingArchived` | That contact is archived. Open it to restore it. | Ese contacto está archivado. Ábralo para restaurarlo. |
-| `contacts.delete.archiveOnly` | {name} can't be deleted: they have calls, texts, bookings or deals on file, and we keep that history. Archive them instead. They leave your list and nothing is lost. | No se puede borrar a {name}: tiene llamadas, mensajes, citas u oportunidades registradas, y ese historial se conserva. Mejor archive este contacto: sale de su lista y no se pierde nada. |
-| `contacts.delete.someKept` | {kept} of these will be kept: they have calls, texts, bookings or deals. | Se conservarán {kept} de estos porque tienen llamadas, mensajes, citas u oportunidades. |
-| `contacts.delete.noneDeletable` | None of these can be deleted: they all have calls, texts, bookings or deals. Archive them instead. | Ninguno se puede borrar porque todos tienen llamadas, mensajes, citas u oportunidades. Mejor archívelos. |
+| `contacts.delete.archiveOnly` | {name} can't be deleted because they have a history with you, and we keep it. Archive them instead: they leave your list and nothing is lost. | No se puede borrar a {name} porque tiene un historial con usted, y lo conservamos. Mejor archive este contacto: sale de su lista y no se pierde nada. |
+| `contacts.delete.someKept` | {kept} of these have a history with you and will be kept. | {kept} de estos tienen un historial con usted y se conservarán. |
+| `contacts.delete.noneDeletable` | None of these can be deleted: they all have a history with you. Archive them instead. | Ninguno se puede borrar porque todos tienen un historial con usted. Mejor archívelos. |
 | `contacts.delete.archiveInstead` | Archive instead | Archivar |
 | `contacts.delete.blockersFailed` | Couldn't check which of these can be deleted. Close this and try again. | No se pudo revisar cuáles se pueden borrar. Cierre esto e intente de nuevo. |
 | `contacts.delete.oneTitle` | Delete {name} for good? | ¿Borrar a {name} para siempre? |
@@ -826,12 +869,12 @@ Then:
 
 The timeline verbs are lower-case because the row draws "{mark} {verb}" (`timeline.note` = "added a note", `messages.ts:5345`). `timeline.cameBack.call` names "Sofía": read how `timeline.chat` takes the persona (`apps/web/src/lib/record/timeline-rows.ts:129-130`) and, if it uses `{persona}`, write `{persona}` here instead and pass it in T7.
 
-- [ ] **Step 1: Failing test.** Add a `describe("contact archive copy (spec §6)")` to `messages.test.ts` in the shape of the existing per-feature blocks (`:575-600`). It needs a `WANT` record holding every row above, plus the three tests those blocks carry: exact text, `.es` on the next line, usted and placeholder survival. Also assert `m["bulk.deletedSkipped"]` no longer contains "linked to".
-- [ ] **Step 2: Run red:** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/i18n`. Expected: `bulk.archive: expected undefined to be 'Archive'`. Paste it.
+- [ ] **Step 1: Failing test.** Add a `describe("contact archive copy (spec §6)")` to `messages.test.ts` in the shape of the existing per-feature blocks (`:575-600`). It needs a `WANT` record holding every row above, plus the three tests those blocks carry: exact text, `.es` on the next line, usted and placeholder survival. Also assert `m["bulk.deletedSkipped"]` no longer contains "linked to", and that none of the delete keys lists reasons: no "calls, texts" (review M8; a reason list reads as a form and goes stale when §5.1 grows).
+- [ ] **Step 2: Run red:** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/i18n "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/bulk-action-bar.test.ts"`. Expected: `bulk.archive: expected undefined to be 'Archive'`. Paste it.
 - [ ] **Step 3: Add the keys** to `messages.ts`, each English key followed by its `.es` line.
 - [ ] **Step 4: Run green**, including `src/lib/i18n`: the accents guard, the ratchet and catalogue parity must pass with NO baseline change, because every key has its twin. Paste the summary line.
 - [ ] **Step 5: Mutation:** swap one `.es` line out of position → "the .es twin on the very next line" fails. Write "Vuelve" into `contacts.archive.failed.es` → the usted test fails.
-- [ ] **Step 6: Commit:** `git commit -m "feat(contacts): archive and delete copy, English and Spanish" -- apps/web/src/lib/messages.ts apps/web/src/lib/messages.test.ts`
+- [ ] **Step 6: Commit:** `git commit -m "feat(contacts): archive and delete copy, English and Spanish" -- apps/web/src/lib/messages.ts apps/web/src/lib/messages.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/bulk-action-bar.test.ts"`
 
 ---
 
@@ -846,10 +889,11 @@ The timeline verbs are lower-case because the row draws "{mark} {verb}" (`timeli
 - Create: `packages/db/src/test/contact-archive-live.test.ts` (`withTestAccount`, CI only)
 - Modify: `packages/db/src/test/contacts.test.ts` (the 12 `deleteContacts(` calls; tests at `:814`, `:833`, `:951`, `:990`, `:1012`, `:1051`, `:1060`, `:1095`, `:1117`)
 - Modify: `ACCT/contacts/actions.ts:500-509` (the ONE `deleteContacts` caller: `serviceDb: serviceDb()` replaces `conversationsDb`) and `ACCT/contacts/actions.test.ts:157` (the resolved shape gains `skippedIds: [], lateKept: 0`). Only these lines; T10 owns the rest of both files in wave 3.
+- Modify: `apps/web/e2e/shared-number.spec.ts:136` (review I3): `deleteContacts(svc, accountId, ids, { serviceDb: svc })`. The web tsconfig includes `e2e/`, so the old `conversationsDb` key fails typecheck. `svc` carries a service_role JWT, which 0103's Owner check admits. That spec's cleanup deletes its contacts' messages and conversations first and creates no call, consent, booking or deal row (checked 2026-10-28), so no new blocker stops it.
 
 **Interfaces:** Produces the TypeScript block under "Shared facts". Consumes T1's SQL.
 
-**Run locally:** `cd packages/db && pnpm exec vitest run src/contacts-archive.test.ts src/contacts-phone.test.ts` (no env, so the sweep skips) and `pnpm --filter @bis/db exec tsc --noEmit -p .`. `src/test/contact-archive-live.test.ts` and `src/test/contacts.test.ts` run in CI verify only.
+**Run locally:** `cd packages/db && pnpm exec vitest run src/contacts-archive.test.ts src/contacts-phone.test.ts` (no env, so the sweep skips), `pnpm --filter @bis/db exec tsc --noEmit -p .` and `pnpm --filter web typecheck` (it covers `e2e/`). `src/test/contact-archive-live.test.ts` and `src/test/contacts.test.ts` run in CI verify only.
 
 - [ ] **Step 1: Pure failing tests.** Create `packages/db/src/contacts-archive.test.ts`:
 
@@ -875,11 +919,12 @@ function recordingDb(answers: Record<string, unknown> = {}, rpc: Record<string, 
     });
     return chain;
   };
+  const rpcAnswers: Record<string, unknown> = { ...rpc };
   const db = {
     from: (table: string) => chainFor(table),
-    rpc: async (fn: string, args: unknown) => { rpcs.push({ fn, args }); return { data: rpc[fn] ?? null, error: null }; },
+    rpc: async (fn: string, args: unknown) => { rpcs.push({ fn, args }); return { data: rpcAnswers[fn] ?? null, error: null }; },
   } as unknown as SupabaseClient;
-  return { db, calls, rpcs };
+  return { db, calls, rpcs, rpcAnswers };
 }
 const has = (calls: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
   calls.some((c) => c.method === method && JSON.stringify(c.args) === JSON.stringify(args));
@@ -920,6 +965,12 @@ describe("archiveContacts / restoreContacts", () => {
     expect(has(calls, "not", "archived_at", "is", null)).toBe(true);
     expect(has(calls, "update", { archived_at: null })).toBe(true);
   });
+  it("450 ids go in three .in() batches of at most 200 (review M1; mutation: one .in() of 450 -> FAILS)", async () => {
+    const { db, calls } = recordingDb({ contacts: [] });
+    await archiveContacts(db, "A", Array.from({ length: 450 }, (_, i) => `c${i}`));
+    const ins = calls.filter((c) => c.method === "in").map((c) => (c.args[1] as string[]).length);
+    expect(ins).toEqual([200, 200, 50]);
+  });
   it("more than 500 ids is refused before any query (mutation: drop the cap -> FAILS)", async () => {
     const { db, calls } = recordingDb();
     await expect(archiveContacts(db, "A", Array.from({ length: 501 }, (_, i) => `c${i}`))).rejects.toThrow(/500/);
@@ -940,20 +991,21 @@ describe("deleteContacts", () => {
     const request = recordingDb({ contacts: [{ id: "free" }, { id: "kept" }] });
     const service = recordingDb({}, {
       contact_delete_blockers: [{ contact_id: "kept", reasons: ["messages"] }],
-      delete_internal_contacts: ["free"],
     });
+    request.rpcAnswers.delete_internal_contacts = ["free"];
     const seen: string[][] = [];
     const r = await deleteContacts(request.db, "A", ["free", "kept", "stranger"], {
       serviceDb: service.db, beforeDelete: async (ids) => { seen.push(ids); return []; },
     });
-    expect(service.rpcs[0]).toEqual({ fn: "contact_delete_blockers", args: { p_account_id: "A", p_contact_ids: ["free", "kept"] } });
+    expect(service.rpcs).toEqual([{ fn: "contact_delete_blockers", args: { p_account_id: "A", p_contact_ids: ["free", "kept"] } }]);
     expect(seen).toEqual([["free"]]);
-    expect(service.rpcs[1]).toEqual({ fn: "delete_internal_contacts", args: { p_account_id: "A", p_contact_ids: ["free"] } });
+    // On the REQUEST client, so the database's own Owner check runs (review I9; mutation: call it on serviceDb -> FAILS).
+    expect(request.rpcs).toEqual([{ fn: "delete_internal_contacts", args: { p_account_id: "A", p_contact_ids: ["free"] } }]);
     expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["kept"], lateKept: 0 });
   });
   it("an id the database kept after the purge is reported as lateKept and skipped (mutation: count every id sent as deleted -> FAILS)", async () => {
-    const request = recordingDb({ contacts: [{ id: "a" }, { id: "b" }] });
-    const service = recordingDb({}, { contact_delete_blockers: [], delete_internal_contacts: ["a"] });
+    const request = recordingDb({ contacts: [{ id: "a" }, { id: "b" }] }, { delete_internal_contacts: ["a"] });
+    const service = recordingDb({}, { contact_delete_blockers: [] });
     const r = await deleteContacts(request.db, "A", ["a", "b"], { serviceDb: service.db });
     expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["b"], lateKept: 1 });
   });
@@ -976,6 +1028,14 @@ export const MAX_CONTACT_BATCH = 500;
 function capBatch(ids: readonly string[], fn: string): void {
   if (ids.length > MAX_CONTACT_BATCH) throw new Error(`${fn}: at most ${MAX_CONTACT_BATCH} contacts at once`);
 }
+/** At most this many ids in one `.in()` (review M1): TAG_LOOKUP_BATCH_SIZE's measured limit (`:1088-1097`), the
+ *  size assignment.ts's ASSIGN_IN_BATCH_SIZE (`:92-99`) settled on too. RPC arguments travel in the body and are
+ *  not split. */
+function inBatches<T>(ids: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < ids.length; i += TAG_LOOKUP_BATCH_SIZE) out.push(ids.slice(i, i + TAG_LOOKUP_BATCH_SIZE));
+  return out;
+}
 ```
 
 In `listContacts`, add `archived?: ArchivedFilter` to `opts` and `q = withArchived(q, opts.archived);` after `q = withAssignee(q, opts.assignee);`. Do the same in `countContacts` (its `opts` type and a line after `withAssignee`).
@@ -989,13 +1049,16 @@ export async function archiveContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
 ): Promise<{ changedIds: string[] }> {
   capBatch(contactIds, "archiveContacts");
-  if (contactIds.length === 0) return { changedIds: [] };
-  const { data, error } = await db.from("contacts").update({ archived_at: new Date().toISOString() })
-    .eq("account_id", accountId).in("id", contactIds)
-    .eq("holds_shared_number", false).is("archived_at", null)
-    .select("id");
-  if (error) throw new Error(`archiveContacts failed: ${error.message}`);
-  return { changedIds: (data ?? []).map((r) => r.id as string) };
+  const changedIds: string[] = [];
+  for (const batch of inBatches(contactIds)) {
+    const { data, error } = await db.from("contacts").update({ archived_at: new Date().toISOString() })
+      .eq("account_id", accountId).in("id", batch)
+      .eq("holds_shared_number", false).is("archived_at", null)
+      .select("id");
+    if (error) throw new Error(`archiveContacts failed: ${error.message}`);
+    changedIds.push(...(data ?? []).map((r) => r.id as string));
+  }
+  return { changedIds };
 }
 
 /** Restore by hand (the Archived view, the record's banner, an Archive's Undo). */
@@ -1003,12 +1066,15 @@ export async function restoreContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
 ): Promise<{ changedIds: string[] }> {
   capBatch(contactIds, "restoreContacts");
-  if (contactIds.length === 0) return { changedIds: [] };
-  const { data, error } = await db.from("contacts").update({ archived_at: null })
-    .eq("account_id", accountId).in("id", contactIds).not("archived_at", "is", null)
-    .select("id");
-  if (error) throw new Error(`restoreContacts failed: ${error.message}`);
-  return { changedIds: (data ?? []).map((r) => r.id as string) };
+  const changedIds: string[] = [];
+  for (const batch of inBatches(contactIds)) {
+    const { data, error } = await db.from("contacts").update({ archived_at: null })
+      .eq("account_id", accountId).in("id", batch).not("archived_at", "is", null)
+      .select("id");
+    if (error) throw new Error(`restoreContacts failed: ${error.message}`);
+    changedIds.push(...(data ?? []).map((r) => r.id as string));
+  }
+  return { changedIds };
 }
 
 export const RESTORE_SIGNS = ["text", "email", "call", "booking", "form", "chat"] as const;
@@ -1049,7 +1115,8 @@ Replace `deleteContacts`' body and signature. Rewrite its doc comment (`:1155-12
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
   opts: {
-    /** The SERVICE client: the blockers read and the delete itself (0103, executed by service_role only). */
+    /** The SERVICE client, for the blockers read only (0103 step 7, service_role only). The delete itself runs on
+     *  `db`, the request client, so 0103's Owner check in delete_internal_contacts decides (review I9). */
     serviceDb: SupabaseClient;
     /** Runs on the deletable ids BEFORE any contact row is deleted; answers the ids it could not clear. The
      *  document vault's purge (0077). */
@@ -1060,10 +1127,13 @@ export async function deleteContacts(
   const none = { deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [] as string[], lateKept: 0 };
   if (contactIds.length === 0) return none;
   // The proof (review I1): only ids this client READS as this account's contacts go on.
-  const { data: mine, error: mineError } = await db.from("contacts").select("id")
-    .eq("account_id", accountId).in("id", contactIds);
-  if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
-  const ourSet = new Set((mine ?? []).map((r) => r.id as string));
+  const ourSet = new Set<string>();
+  for (const batch of inBatches([...new Set(contactIds)])) {
+    const { data: mine, error: mineError } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).in("id", batch);
+    if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
+    for (const r of mine ?? []) ourSet.add(r.id as string);
+  }
   const ours = [...new Set(contactIds)].filter((id) => ourSet.has(id));
   if (ours.length === 0) return none;
   const blockers = await contactDeleteBlockers(opts.serviceDb, accountId, ours);
@@ -1072,7 +1142,7 @@ export async function deleteContacts(
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { ...none, skippedBlocked: blocked.length, skippedFiles: kept.size, skippedIds: blocked };
-  const { data, error } = await opts.serviceDb.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go });
+  const { data, error } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go });
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
   const deleted = new Set((data ?? []) as string[]);
   // Blocked between the read and the lock (a text arrived), or a file the purge left: kept by the database.
@@ -1126,9 +1196,9 @@ Write it in full against the real functions, and add one test for each of these:
 - `:1012` and `:1117`: keep them; they still hold under `delete_internal_contacts`.
 - ADD: "a contact with only a call row is blocked (calls are SET NULL, so before 0103 the delete orphaned the call) (mutation: drop the 'calls' exists -> FAILS)".
 
-- [ ] **Step 7: Mutation probes** (pure file, local): (a) delete `q = withArchived(q, opts.archived);` in `countContacts` → "countContacts does too" fails. (b) In `archiveContacts` delete `.is("archived_at", null)` → its test fails. (c) In `deleteContacts` pass `ours` (not `go`) to `delete_internal_contacts` → the first deleteContacts test fails. (d) Return `deleted: go.length` → "lateKept" fails. Each must be seen red by name.
+- [ ] **Step 7: Mutation probes** (pure file, local): (a) delete `q = withArchived(q, opts.archived);` in `countContacts` → "countContacts does too" fails. (b) In `archiveContacts` delete `.is("archived_at", null)` → its test fails. (c) In `deleteContacts` pass `ours` (not `go`) to `delete_internal_contacts` → the first deleteContacts test fails. (d) Return `deleted: go.length` → "lateKept" fails. (e) Call `delete_internal_contacts` on `opts.serviceDb` → the first deleteContacts test fails (review I9). (f) Replace the `inBatches` loop in `archiveContacts` with one `.in("id", contactIds)` → "450 ids go in three batches" fails (review M1). Each must be seen red by name.
 
-- [ ] **Step 8: Commit** the seven paths with `git commit -m "feat(contacts): archive filter, archive and restore, sign restore and internal-only delete in the contact queries" -- …`.
+- [ ] **Step 8: Commit** the eight paths with `git commit -m "feat(contacts): archive filter, archive and restore, sign restore and internal-only delete in the contact queries" -- …`.
 
 ---
 
@@ -1208,57 +1278,67 @@ Read each by-id function's real signature first (`automations.ts:329`, `:511`, `
 
 ---
 
-### Task 6: Inbox, unread badge and conversation search
+### Task 6: Inbox and conversation search
 
 **Tier:** medium · **Owner:** bis-comms · **Wave:** 2
 
+**Rule (owner decision, 2026-10-28, review I8):** an archived contact's thread leaves the inbox and search
+ONLY while it holds nothing unread. A thread with unread messages from the customer stays visible until
+someone reads it, so a customer's words are never hidden. A junk caller's thread holds only our outbound
+text-back (unread 0), so it disappears. T1 adds `conversations.inbox_visible`, a stored generated column:
+`not contact_archived or unread_count > 0`. `contact_archived` follows the contact by trigger.
+
 **Files:**
-- Modify: `packages/db/src/messaging.ts` (`sumUnreadCount :629-636`, `listConversations` embed `:657` and query `:658-685`, `searchConversations` second read `:937-940`)
+- Modify: `packages/db/src/messaging.ts` (`listConversations` query `:658-685`; `searchConversations` messages read `:920-925`)
 - Create: `packages/db/src/messaging-archive.test.ts` (pure, local)
 - Create: `packages/db/src/test/messaging-archive-live.test.ts` (CI only)
 
-**Unchanged on purpose:** `getConversationSummary` (`:777-800`). A deep link to an archived contact's thread still opens it, matching the record page (spec §4.1).
+**Unchanged on purpose:**
+- `sumUnreadCount` (`:629-636`). Every thread with unread messages is visible by the rule above, so the badge already counts exactly the visible unread. Filtering it would hide the very messages the rule keeps.
+- `getConversationSummary` (`:777-800`). A deep link still opens an archived contact's thread, as the record page does.
 
 **Run locally:** `cd packages/db && pnpm exec vitest run src/messaging-archive.test.ts`
 
-- [ ] **Step 1: Pure failing test** (`recordingDb` copied as in T4):
+- [ ] **Step 1: Pure failing test** (`recordingDb` copied from T4 Step 1):
 
 ```ts
-describe("an archived contact's thread is off the inbox, its badge and its search (spec §4.1)", () => {
-  it("sumUnreadCount counts no archived contact's unread (mutation: drop the filter -> FAILS)", async () => {
-    const { db, calls } = recordingDb();
-    await sumUnreadCount(db, "A");
-    expect(has(calls, "is", "contacts.archived_at", null)).toBe(true);
-    expect(calls.some((c) => c.method === "select" && String(c.args[0]).includes("contacts!inner("))).toBe(true);
-  });
-  it("listConversations lists no archived contact's thread, with or without Mine (mutation: filter only in the assignee branch -> FAILS)", async () => {
+describe("an archived contact's thread leaves the inbox and search while nothing in it is unread (review I8)", () => {
+  it("listConversations keeps only inbox_visible threads, with or without Mine (mutation: drop the filter -> FAILS)", async () => {
     for (const opts of [{}, { assignee: { who: "mine" as const, userId: "u1" } }]) {
       const { db, calls } = recordingDb();
       await listConversations(db, "A", opts);
-      expect(has(calls, "is", "contacts.archived_at", null)).toBe(true);
+      expect(has(calls, "eq", "inbox_visible", true)).toBe(true);
     }
   });
-  it("searchConversations finds no archived contact's thread (mutation: drop it -> FAILS)", async () => {
-    const { db, calls } = recordingDb({ messages: [{ conversation_id: "cv1", body: "roof", created_at: "t" }] });
+  it("searchConversations filters BEFORE its five-thread cap: the messages read itself joins visible threads (M2; mutation: filter only the second read -> FAILS)", async () => {
+    const { db, calls } = recordingDb({ messages: [] });
     await searchConversations(db, "A", { search: "roof" });
-    expect(has(calls, "is", "contacts.archived_at", null)).toBe(true);
+    const msgSelect = calls.find((c) => c.table === "messages" && c.method === "select");
+    expect(String(msgSelect?.args[0])).toContain("conversations!inner(inbox_visible)");
+    expect(calls.some((c) => c.table === "messages" && c.method === "eq"
+      && JSON.stringify(c.args) === JSON.stringify(["conversations.inbox_visible", true]))).toBe(true);
+  });
+  it("sumUnreadCount is NOT filtered: an archived contact's unread customer text still counts (mutation: add an archive filter -> FAILS)", async () => {
+    const { db, calls } = recordingDb();
+    await sumUnreadCount(db, "A");
+    expect(calls.some((c) => JSON.stringify(c.args).includes("archived") || JSON.stringify(c.args).includes("inbox_visible"))).toBe(false);
   });
 });
 ```
 
 - [ ] **Step 2: Run red.** Paste the first failing line.
 - [ ] **Step 3: Implement.**
-  - `sumUnreadCount`: `.select("unread_count, contacts!inner(archived_at)").eq("account_id", accountId).is("contacts.archived_at", null)`.
-  - `listConversations`: both embeds become `contacts!inner(…, archived_at)` (the unfiltered one gains `!inner`), and `.is("contacts.archived_at", null)` goes after `.eq("messages.account_id", accountId)`. Rewrite the comment at `:651-656`. The unfiltered inbox is no longer byte-for-byte the old query; say why (archive, 0103). `conversations.contact_id` is NOT NULL (`0005_messaging.sql:14`), so the inner join drops nothing except through this filter.
-  - `searchConversations` (`:937-940`): select `contacts!inner(…, archived_at)` and add `.is("contacts.archived_at", null)`.
+  - `listConversations`: add `.eq("inbox_visible", true)` after `.eq("messages.account_id", accountId)`. The embeds stay as they are, because the column is the conversation's own. Add a comment naming review I8's rule. Do NOT use a second `.or()`: the cursor clause at `:688-700` is already this query's one `or`.
+  - `searchConversations`: the messages read selects `"conversation_id, body, created_at, conversations!inner(inbox_visible)"` and adds `.eq("conversations.inbox_visible", true)` before `.order(...)`. The 200-row read and the five-thread cap then only ever see visible threads. The second read (`:937-940`) is unchanged.
 - [ ] **Step 4: Run green.** Paste.
 - [ ] **Step 5: Live tests (CI)**, two accounts:
-  - A's archived contact's thread with unread 2 is not listed, and A's badge sum excludes those 2. B's identical active thread IS in B's inbox and badge, and never in A's.
-  - A search for a word in A's archived thread finds nothing, while the same word in A's active thread is found.
-  - A Technician's inbox (`actAs` with the technician role) is unchanged for their own assigned, active customer. This proves the inner join adds no RLS loss.
-  - Mutations: drop each `.is` in turn → its case FAILS.
-- [ ] **Step 6: Mutation probes** (pure): remove each of the three `.is` lines → its test fails by name.
-- [ ] **Step 7: Commit** the three paths: `fix(sms): an archived contact's thread leaves the inbox, the unread badge and search`.
+  - A's archived contact with only an outbound text (unread 0) is not listed and not found by search.
+  - A's archived contact with an unread inbound text IS listed, IS found, and its unread counts in A's badge. After `clearUnreadCount` it leaves the list.
+  - B's matching threads never appear in A's inbox, search or badge.
+  - A Technician's inbox for their own active customer is unchanged.
+  - Mutations: drop each `.eq` in turn → its case FAILS.
+- [ ] **Step 6: Mutation probes** (pure) as named in Step 1, each red by name.
+- [ ] **Step 7: Commit** the three paths: `fix(sms): an archived contact's thread leaves the inbox and search once nothing in it is unread`.
 
 ---
 
@@ -1377,56 +1457,96 @@ Define `const CREATED_CONTACT_ID` at the top of the new `describe` as the id the
 **Tier:** medium · **Owner:** bis-crm · **Wave:** 3
 
 **Files:**
-- Modify: `apps/web/src/app/api/sms/inbound/route.ts` (inside `if (firstFiling)` after the confirmation block, `:233-276`)
+- Create: `apps/web/src/lib/contacts/automatic-text.ts`, `apps/web/src/lib/contacts/automatic-text.test.ts`
+- Modify: `apps/web/src/app/api/sms/inbound/route.ts` (inside the filing `try`, after the `if (firstFiling) { await createMessage(…) }` block, `:219-229`)
 - Modify: `apps/web/src/app/api/sms/inbound/route.test.ts` (mock `:35`), `apps/web/src/app/api/sms/inbound/route.consent.test.ts` (mock `:22`)
 - Modify: `apps/web/src/app/b/[publicId]/actions.ts` (after the language-signal block `:374-382`), `apps/web/src/app/b/[publicId]/actions.test.ts` (mock `:105`)
 - Modify: `apps/web/src/lib/forms/enrich.ts` (after the language-signal try `:121-131`), `apps/web/src/lib/forms/enrich.test.ts` (mock `:12`), `apps/web/src/app/f/[publicId]/actions.test.ts` (mock `:64`, stub only)
-- Modify: `apps/web/src/lib/email/inbound/file.ts` (after `createMessage`, `:114-118`), `apps/web/src/lib/email/inbound/file.test.ts` (mock `:4`)
+- Modify: `apps/web/src/lib/email/inbound/pipeline.ts` (in `resumeExisting`, after `fileInboundEmail`, `:64-67`), `apps/web/src/lib/email/inbound/pipeline.test.ts` (mock `:9`)
+- Modify (guards only, no production change): `apps/web/src/lib/email/inbound/file.test.ts` (mock `:4`), `ACCT/conversations/inbound-actions.test.ts` (mock `:63`)
 
-**Interfaces:** consumes `restoreContactOnSign` and `RestoreSign` (T4).
+**Why the email restore is in the pipeline, not `file.ts` (review I6):** `fileInboundEmail` is also called by `fileHeldEmailAction` (`ACCT/conversations/inbound-actions.ts:149`), where a teammate files a held email by hand. A restore there would log a staff act as the customer's ("came back"), breaking spec §4.2 and the provenance rule. Only the pipeline's own customer filing restores.
 
-**Run:** `pnpm --filter web exec vitest run src/app/api/sms/inbound "src/app/b/[publicId]/actions.test.ts" src/lib/forms "src/app/f/[publicId]/actions.test.ts" src/lib/email/inbound src/app/api/concierge src/lib/concierge`
+**Interfaces:** consumes `restoreContactOnSign` (T4). Produces `looksAutomaticText(body: string): boolean`.
 
-The concierge files are in the run to prove they need no change: their tests mock `enrich` whole.
+**Run:** `pnpm --filter web exec vitest run src/lib/contacts/automatic-text.test.ts src/app/api/sms/inbound "src/app/b/[publicId]/actions.test.ts" src/lib/forms "src/app/f/[publicId]/actions.test.ts" src/lib/email/inbound "src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/inbound-actions.test.ts" src/app/api/concierge src/lib/concierge`
 
-- [ ] **Step 1: Failing tests, one per site:**
-  - **SMS** (`route.test.ts`): a plain inbound text on a non-shared number calls `restoreContactOnSign(db, accountId, contactId, "text")` once. A STOP calls it never, and so do START, HELP, a Telnyx autoresponse (`consent.kind` `stop`/`start`/`help`/`telnyx_only`/`phrase`) and a shared-number text. (Mutation: drop the `consent.kind === "none"` condition → the STOP case FAILS. Drop `!shared` → the shared case FAILS.)
-  - **Booking page** (`actions.test.ts`): a successful booking restores with `"booking"`. A slot-taken booking (`SlotTakenError`) restores nobody. (Mutation: restore before `createBooking` → FAILS.)
-  - **Forms** (`enrich.test.ts`): a form submission restores with `"form"`; a web chat lead (`webchat: { chatId }`) with `"chat"`. (Mutation: always `"form"` → FAILS.) A failing restore still records the conversation and the alert.
-  - **Email** (`file.test.ts`): a filed email restores with `"email"`. A teammate's forward (`forward` set) and a clear STOP (`cls.kind === "clear"`) restore nobody. (Mutation: drop the `!forward` term → FAILS.)
-  - **f/actions.test.ts**: add the stub only, and assert nothing new. The file must stay green.
-- [ ] **Step 2: Run red.** Paste one line per site.
-- [ ] **Step 3: Implement**, each in its own try, logged and never thrown:
-  - **SMS**, inside `if (firstFiling)`, after the confirmation `try`:
+The concierge files run to prove they need no change: their tests mock `enrich` whole.
+
+- [ ] **Step 1: `looksAutomaticText`, red then green (review I7, owner decision).** A CLOSED list of whole phrases, English and Spanish, matched on a lower-cased, accent-stripped, whitespace-collapsed copy of the body:
 
 ```ts
-    // Contact archive, owner ruling Q1: a customer's own text brings an archived contact back. Not a STOP, START or
-    // HELP, not a reply Telnyx already answered (consent.kind), and not a shared number's holding record.
-    if (consent.kind === "none" && !shared) {
+// apps/web/src/lib/contacts/automatic-text.ts
+/** A phone's own auto-reply is not the customer getting in touch (contact archive, review I7): a robocaller's number
+ *  that answers our text-back with "I'm driving" must not bring the junk record back. A CLOSED list: a phrase is
+ *  added only with a real example. A real reply that happens to contain a listed phrase is still a match, by design:
+ *  a missed restore costs one click, while a junk record back on the list costs the owner's trust. */
+const PHRASES = [
+  "i'm driving", "im driving", "i am driving", "driving right now", "do not disturb while driving",
+  "this number cannot receive", "this number can't receive", "this number does not accept", "cannot receive text messages",
+  "auto-reply", "auto reply", "autoreply", "automatic reply", "this is an automated message", "out of office",
+  "estoy manejando", "estoy conduciendo", "respuesta automatica", "mensaje automatico", "no puede recibir mensajes",
+  "este numero no recibe", "fuera de la oficina",
+] as const;
+const norm = (s: string) => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
+export function looksAutomaticText(body: string): boolean {
+  const b = norm(body);
+  return PHRASES.some((p) => b.includes(p));
+}
+```
+
+  Tests both ways:
+  - `it.each` over one real example per phrase → true (mutation: drop a phrase → its case FAILS).
+  - `it.each(["Yes please send the quote", "Test", "Can you come Tuesday?", "Gracias, ¿pueden venir el martes?", "Stop by anytime"])` → false (mutation: match a single word like "driving" or "auto" → FAILS).
+
+- [ ] **Step 2: Failing tests, one per site:**
+  - **SMS** (`route.test.ts`). A plain inbound text on a non-shared number calls `restoreContactOnSign(db, accountId, contactId, "text")`. It is called BEFORE `incrementUnreadCount`; assert with `mock.invocationCallOrder` (review I8; mutation: move it after the unread bump → FAILS). It runs on a RETRY delivery too, the one where `firstFiling` is false (mutation: put it inside `if (firstFiling)` → FAILS). It is not called for STOP, START, HELP, a Telnyx autoresponse or a stop phrase (`consent.kind !== "none"`), for "I'm driving, will reply later" (`looksAutomaticText`), or on a shared number. Mutations: drop each condition → its case FAILS. A failing restore is a `FilingFailed` (503) on the first filing, so Telnyx retries; assert the 503.
+  - **Booking page** (`actions.test.ts`): a successful booking restores with `"booking"`. A slot-taken booking restores nobody (mutation: restore before `createBooking` → FAILS).
+  - **Forms** (`enrich.test.ts`): a form submission restores with `"form"`, and a web chat lead (`webchat: { chatId }`) with `"chat"` (mutation: always `"form"` → FAILS). A failing restore still records the conversation and the alert.
+  - **Email** (`pipeline.test.ts`):
+    - a customer filing with `result.created` and `consent.kind === "none"` restores with `"email"`;
+    - a teammate's forward, a duplicate (`created: false`) and a clear stop (`consent.kind === "stopped"`) restore nobody;
+    - mutations: drop each term → FAILS.
+    - Automatic mail never reaches filing: `classifyAutomatic` drops it at `pipeline.ts:200-211`, before `resumeExisting`. Add one case that an `auto-submitted: auto-replied` email restores nobody.
+  - **Manual File never restores (review I6):**
+    - In `inbound-actions.test.ts`, add `restoreContactOnSign: vi.fn()` to `dbMock` and assert it is never called by `fileHeldEmailAction`.
+    - In `file.test.ts`, add it to the bare mock and assert `fileInboundEmail` never calls it.
+    - Mutation: call it from `file.ts` → the `file.test.ts` case FAILS.
+  - **f/actions.test.ts**: add the stub only, and assert nothing new. The file must stay green.
+- [ ] **Step 3: Run red.** Paste one line per site.
+- [ ] **Step 4: Implement.**
+  - **SMS**, INSIDE the filing `try`, right after the `if (firstFiling) { await createMessage(…) }` block and before the `catch`. That is before `incrementUnreadCount` (`:240`), which runs outside the try: if the bump threw after a restore placed below it, the route would answer 200 and Telnyx would never retry. Inside the try, a failed restore is `FilingFailed` (503), and Telnyx's retry runs it again. It is idempotent: an active contact answers false.
+
+```ts
+    // Contact archive, owner ruling Q1 and review I7/I8: the customer's own text brings an archived contact back —
+    // not a STOP/START/HELP or stop phrase (consent.kind), not a phone's auto-reply, not a shared number's holding
+    // record. Runs on every delivery (idempotent), inside the filing try, so a failure is retried, never lost.
+    if (!shared && consent.kind === "none" && !looksAutomaticText(text)) {
+      await restoreContactOnSign(db, accountId, contact.id, "text");
+    }
+```
+
+  - **Booking page**, after the `pageSign` block: `try { await restoreContactOnSign(db, calendar.account_id, contactId, "booking"); } catch (e) { console.error(`booking ${publicId}: restore failed for contact ${contactId}: ${String(e)}`); }`
+  - **enrich**, after the language-signal try: `try { await restoreContactOnSign(db, accountId, contactId, webchat ? "chat" : "form"); } catch (e) { console.error(`form ${form.id} submission ${submissionId}: restore failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`); }`
+  - **pipeline.ts** `resumeExisting`, after `fileInboundEmail`. `deps.db` is the service client. Add `restoreContactOnSign` to the `@bis/db` import:
+
+```ts
+    // Contact archive, owner ruling Q1: the customer's own email brings an archived contact back. Never a forward,
+    // never a stop (result.consent), never a duplicate, and never fileHeldEmailAction's manual File (review I6), which
+    // does not pass through here. Automatic mail was dropped above (classifyAutomatic). A failure is logged: the email
+    // is filed, and its unread keeps the thread in the inbox (T6's rule).
+    if (result.created && !isForward && result.consent.kind === "none") {
       try {
-        await restoreContactOnSign(db, accountId, contact.id, "text");
-      } catch (e) {
-        log("could not restore an archived contact — the customer's message is filed regardless", accountId, loggableError(e));
+        await restoreContactOnSign(deps.db, row.accountId, contactId, "email");
+      } catch {
+        deps.log(`inbound email: could not restore an archived contact on account ${row.accountId}; the email is filed`);
       }
     }
 ```
 
-  - **Booking page**: after the `pageSign` block: `try { await restoreContactOnSign(db, calendar.account_id, contactId, "booking"); } catch (e) { console.error(\`booking ${publicId}: restore failed for contact ${contactId}: ${String(e)}\`); }`
-  - **enrich**: after the language-signal try: `try { await restoreContactOnSign(db, accountId, contactId, webchat ? "chat" : "form"); } catch (e) { console.error(\`form ${form.id} submission ${submissionId}: restore failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}\`); }`
-  - **email**: after the `createMessage` call inside `if (!forward)`. Add `restoreContactOnSign` to the import at `:1`:
-
-```ts
-    // Contact archive, owner ruling Q1: a customer's own email (not a clear stop) brings an archived contact back.
-    if (cls.kind !== "clear") {
-      try { await restoreContactOnSign(db, row.accountId, i.contactId, "email"); }
-      catch (e) { console.error(`fileInboundEmail: restore failed for ${i.contactId}: ${String(e)}`); }
-    }
-```
-
-  Confirm `db` in `file.ts` is the service client. Read `FileDeps`; the pipeline passes the service client. If a manual "File" from the inbox passes a request client, pass `serviceDb()` here instead, and say so in your report.
-- [ ] **Step 4: Run green.** Paste.
-- [ ] **Step 5: Mutation probes** as named in Step 1. Each must fail by name.
-- [ ] **Step 6: Commit** the eleven paths: `feat(contacts): a text, email, booking, form or chat from the customer brings an archived contact back`.
+- [ ] **Step 5: Run green.** Paste.
+- [ ] **Step 6: Mutation probes** as named in Steps 1 and 2. Each must fail by name.
+- [ ] **Step 7: Commit** the fifteen paths: `feat(contacts): a text, email, booking, form or chat from the customer brings an archived contact back; phone auto-replies and manual filing never do`.
 
 ---
 
@@ -1437,16 +1557,16 @@ The concierge files are in the run to prove they need no change: their tests moc
 **Files:**
 - Create: `apps/web/src/lib/contacts/view.ts`, `apps/web/src/lib/contacts/view.test.ts`
 - Create: `ACCT/contacts/archive-actions.ts`, `ACCT/contacts/archive-actions.test.ts`
-- Modify: `ACCT/contacts/actions.ts:476-524` (`bulkDeleteContactsAction`) and `:51-99` (`createContactAction`: an archived match), `ACCT/contacts/actions.test.ts`
+- Modify: `ACCT/contacts/actions.ts:476-524` (`bulkDeleteContactsAction`), `ACCT/contacts/actions.test.ts`
+- Modify: `ACCT/in-account-service-reads.test.ts:61` (`ALLOWED`, review I4): add `"app/(dashboard)/dashboard/accounts/[accountId]/contacts/archive-actions.ts": "owner-only",` with a comment saying the service client is used ONLY by `contactDeleteBlockersAction`, behind `requireAccountOwner` and a request-client proof of the ids. Archive and Restore stay on `dbForRequest`. The test scans every in-account file that names `serviceDb` and fails on one it does not list.
 - Modify: `ACCT/contacts/bulk-action-bar.tsx`, `ACCT/contacts/bulk-action-bar.test.ts`
 - Modify: `ACCT/contacts/contacts-table.tsx` (the `view` prop, threaded to `BulkActionBar` at `:196-205`), `ACCT/contacts/contacts-table.test.ts`
 - Modify: `ACCT/contacts/page.tsx`, `ACCT/contacts/page.test.ts`
-- Modify: `ACCT/contacts/add-contact-dialog.tsx` (`:62`, `:114-120`), `ACCT/contacts/add-contact-dialog.test.ts`
 - Modify: `ACCT/contacts/export/route.ts:128` (passes `archived` from `?view=`), `ACCT/contacts/export/route.get.test.ts`
 
 **Interfaces:** Produces the three actions in "Shared facts". `bulkDeleteContactsAction`'s ok-result gains `skippedIds` and `lateKept`. `parseView(raw): "active" | "archived"`, `withView(params, view)` and `archivedFilterOf(view)` come from `lib/contacts/view.ts`.
 
-**Run:** `pnpm --filter web exec vitest run src/lib/contacts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts"` and `pnpm --filter web typecheck`
+**Run:** `pnpm --filter web exec vitest run src/lib/contacts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" "src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` and `pnpm --filter web typecheck`
 
 - [ ] **Step 1: `view.ts` test first, then the module:**
 
@@ -1505,7 +1625,13 @@ export async function archiveContactsAction(accountId: string, contactIds: strin
     let withAppointments = 0;
     if (changedIds.length > 0) {
       try {
-        const upcoming = await listContactUpcomingBookings(db, accountId, changedIds, new Date().toISOString(), MAX_CONTACT_BATCH);
+        // listContactUpcomingBookings `.in()`s its ids: at most 200 per call (review M1).
+        const now = new Date().toISOString();
+        const upcoming = [];
+        for (let i = 0; i < changedIds.length; i += 200) {
+          upcoming.push(...await listContactUpcomingBookings(db, accountId, changedIds.slice(i, i + 200), now, MAX_CONTACT_BATCH));
+        }
+        upcoming.sort((x, y) => x.starts_at.localeCompare(y.starts_at));
         withAppointments = new Set(upcoming.map((b) => b.contact_id)).size;
         const first = upcoming[0];
         if (changedIds.length === 1 && first) nextAppointment = { contactId: first.contact_id, startsAt: first.starts_at };
@@ -1543,9 +1669,13 @@ export async function contactDeleteBlockersAction(
   if (!okIds(contactIds)) return { ok: false };
   try {
     const ids = contactIds.map((id) => id.toLowerCase());
-    const { data, error } = await (await dbForRequest()).from("contacts").select("id").eq("account_id", accountId).in("id", ids);
-    if (error) throw new Error(error.message);
-    const proven = (data ?? []).map((r) => r.id as string);
+    const db = await dbForRequest();
+    const proven: string[] = [];
+    for (let i = 0; i < ids.length; i += 200) {  // review M1: at most 200 ids per .in()
+      const { data, error } = await db.from("contacts").select("id").eq("account_id", accountId).in("id", ids.slice(i, i + 200));
+      if (error) throw new Error(error.message);
+      proven.push(...(data ?? []).map((r) => r.id as string));
+    }
     return { ok: true, blocked: Object.fromEntries(await contactDeleteBlockers(serviceDb(), accountId, proven)) };
   } catch (e) {
     console.error(`contacts delete: blockers read failed (account ${accountId}): ${loggableError(e)}`);
@@ -1589,32 +1719,30 @@ export async function contactDeleteBlockersAction(
   - the Archived empty state's copy;
   - no element with accessible name exactly "Contacts" in either view.
 
-- [ ] **Step 6: Add contact.** `createContactAction` (`actions.ts:51-99`): when `result.existing`, read `getContact(db, accountId, result.id)`. If `archived_at` is set, return `{ kind: "existing", contactId, archived: true }`. Extend `CreateContactResult` (`:44-47`). `add-contact-dialog.tsx:114-120` shows `contacts.add.existingArchived` with the same link when `archived`. Test both branches (mutation: ignore `archived` → FAILS).
+- [ ] **Step 6: Export.** `export/route.ts:128`: `archived: archivedFilterOf(parseView(url.searchParams.get("view")))`. Add one `route.get.test.ts` case (mutation: drop it → FAILS).
 
-- [ ] **Step 7: Export.** `export/route.ts:128`: `archived: archivedFilterOf(parseView(url.searchParams.get("view")))`. Add one `route.get.test.ts` case (mutation: drop it → FAILS).
-
-- [ ] **Step 8: Run green** and `pnpm --filter web typecheck`. Paste both.
-- [ ] **Step 9: Commit** every path listed under Files: `feat(contacts): archive from the list, an Archived view with Restore, and a delete that says what it keeps`.
+- [ ] **Step 7: Run green** and `pnpm --filter web typecheck`. Paste both.
+- [ ] **Step 8: Commit** every path listed under Files: `feat(contacts): archive from the list, an Archived view with Restore, and a delete that says what it keeps`.
 
 ---
 
-### Task 12: Agency dashboard, To do and search
+### Task 12: To do and search
 
 **Tier:** low · **Owner:** bis-crm · **Wave:** 3
 
+(The agency dashboard's total, `apps/web/src/app/(dashboard)/dashboard/page.tsx:20`, is DEFERRED by the coordinator; see "Deferred".)
+
 **Files:**
-- Modify: `apps/web/src/app/(dashboard)/dashboard/page.tsx:20` and `apps/web/src/app/(dashboard)/dashboard/page.test.ts` (chain `:33-37`)
 - Modify: `ACCT/tasks/page.tsx:166-175` and `ACCT/tasks/page.test.ts`
 - Modify: `apps/web/src/app/(dashboard)/dashboard/work/page.tsx:157-165` and `apps/web/src/app/(dashboard)/dashboard/work/page.test.ts`
 - Modify: `apps/web/src/app/api/accounts/[accountId]/search/route.test.ts`
 
-**Run:** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/page.test.ts" "src/app/(dashboard)/dashboard/work" "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks" "src/app/api/accounts/[accountId]/search"`
+**Run:** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/work" "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks" "src/app/api/accounts/[accountId]/search"`
 
 - [ ] **Step 1: Failing tests.**
-  - Dashboard: add `is` to the hand-built chain (it records into `contactFilters`) and assert `contactFilters` contains `["archived_at", null]` beside `["holds_shared_number", false]`. This tile is agency-wide by design, so the filter carries no account term; the test asserts that no `account_id` filter was added (mutation: drop `.is` → FAILS).
   - To do and work: a To-do on an archived contact names it as "Maria Garcia · Archived" (`contacts.archived.mark`), so it is still listed, never hidden (mutation: filter archived out → the row disappears, FAILS; mutation: drop the mark → FAILS).
   - Search route: `listContacts` is called WITHOUT an `archived` override, so the default (`exclude`) holds (mutation: pass `archived: "only"` → FAILS).
-- [ ] **Step 2: Run red**, paste. **Step 3: Implement:** add `.is("archived_at", null)` at `page.tsx:20`. Add `archived_at` to both contacts selects and append `` ` · ${tr.text("contacts.archived.mark")}` `` (or the page's own translator; read which it uses) when `c.archived_at`. **Step 4: Run green**, paste. **Step 5: Commit** the eight paths: `feat(contacts): the agency total leaves archived contacts out; To do marks them Archived`.
+- [ ] **Step 2: Run red**, paste. **Step 3: Implement:** add `archived_at` to both contacts selects and append `` ` · ${tr.text("contacts.archived.mark")}` `` (or the page's own translator; read which it uses) when `c.archived_at`. **Step 4: Run green**, paste. **Step 5: Commit** the five paths: `feat(contacts): To do marks an archived customer Archived, never hides the work`.
 
 ---
 
@@ -1636,10 +1764,10 @@ export async function contactDeleteBlockersAction(
   - `archiveOne(...)` toasts `record.archivedToast` with Undo → `restoreContactsAction([id])`, plus the appointment line when `nextAppointment` is set;
   - `confirmTyped(typed, name, digits)`: an exact, trimmed, case-SENSITIVE match against `name`, or the last four digits when `name` is null (mutation: case-insensitive → FAILS);
   - `deleteOne` after a blocked answer shows `contacts.delete.archiveOnly` and never calls `bulkDeleteContactsAction` (mutation: call it anyway → FAILS);
-  - a Technician (`canArchive` false) renders no Archive (string-match test on the component's JSX the way `contact-drawer.wiring.test.ts` checks wiring).
+  - a Technician (`canArchive` false) renders no Archive button: render `ArchiveControls` with `renderToStaticMarkup` (react-dom/server, as `app/(dashboard)/dashboard/accounts/account-name-fields.test.ts` and `billing-done/page.test.ts` already do) inside a `LocaleProvider`, with `next/navigation`'s `useRouter` mocked, and assert the markup has no `data-archive-action="archive"` while the Owner's render has one (review M5; mutation: ignore `canArchive` → FAILS). A source regex would pass on a dead branch.
 - [ ] **Step 2: Run red**, paste.
 - [ ] **Step 3: Implement `ArchiveControls`.** Props: `{ accountId, contactId, name: string | null, phoneLast4: string | null, archived: { at: string; byLabel: string | null } | null, canArchive: boolean, canDelete: boolean, timezone: string, variant: "page" | "drawer", onGone?: () => void }`.
-  - Ghost buttons only (rule 8: Call stays the header's one primary).
+  - Ghost buttons only (rule 8: Call stays the header's one primary). Each carries `data-archive-action="archive" | "restore" | "delete"`, which the `renderToStaticMarkup` test reads. The test file builds the element with `createElement`, as `account-name-fields.test.ts:2-3,28` does, so it stays a `.test.ts`.
   - Not archived and `canArchive`: an `Archive` button. Archived: the banner (`record.archivedBanner` with `{date}` from `formatDateInZone` and `{name}` from `byLabel ?? t(m, "assign.someone")`, or `record.archivedBannerShort` in the drawer) and a `Restore` button.
   - `canDelete`: a `Delete…` (`record.delete`) button opening a `Dialog`. On open it reads `contactDeleteBlockersAction([contactId])`, showing a `Skeleton` while loading (rule 7).
     - Blocked: `contacts.delete.archiveOnly`, plus an "Archive" button when not archived.
@@ -1663,11 +1791,11 @@ export async function contactDeleteBlockersAction(
 **Run:** only through the orchestrator's `pnpm --filter web test:e2e` slot, after checking that no `screenshots.yml` run is in progress (CLAUDE.md).
 
 - [ ] **Step 1: `contacts-archive.spec.ts`.** Copy `fullFixture()`, `CLIENT_FIXTURE_FILE` and the `test.describe.configure({ timeout: 180_000 })` header from `contacts-drawer.spec.ts:59-93`. Create two contacts through the UI with a unique stamp ("Archive One {stamp}", "Archive Two {stamp}"), as `contacts-drawer.spec.ts:676-684` does. Then:
-  1. Read the header total (`m["contacts.count"]` text).
+  1. Before EVERY action below, read the header total as a number off the page (parse the digits of the count element), and assert after the action against that value: `before - 1`, then `before`, and so on (review M6). Never assert a literal total: the fixture account's contact count is whatever earlier specs left.
   2. Tick "Archive One", then `bar.getByRole("button", { name: m["bulk.archive"] })`. Wait for the action's answer with a `waitForRequest` matching the contact id (the `bulkDeleteAnswered` pattern, `:119-129`).
-  3. Expect toast `Archived 1 contact`, the row gone, and the total down by one.
+  3. Expect toast `Archived 1 contact`, the row gone, and the total equal to the value read before step 2, minus one.
   4. Click the toast's `m["common.undo"]` → the row back, the total back.
-  5. Archive again. `page.getByRole("link", { name: m["contacts.archived.link"], exact: true })`, then expect the row in the Archived view and the header `1 archived`.
+  5. Archive again. `page.getByRole("link", { name: m["contacts.archived.link"], exact: true })`. Read the Archived view's total; expect the row in it. After step 6, expect that total minus one, rather than a literal `1 archived`: an earlier run's leftovers may be archived there too.
   6. Tick it, then `m["bulk.restore"]` → toast `Moved 1 contact back to your list`, and the Archived view is empty (`m["contacts.archived.emptyTitle"]`).
   7. `page.getByRole("link", { name: m["contacts.archived.back"] })` returns to the list.
 
@@ -1675,6 +1803,14 @@ export async function contactDeleteBlockersAction(
 - [ ] **Step 2: `contacts-drawer.spec.ts` BulkGate test (`:719-739`).** The dialog is now `page.getByRole("dialog").filter({ hasText: /delete 1 contact/i })`. That title appears once the blockers load and is the deletable count, so it doubles as the wait. Fill `"1"` (not `"2"`). The toast text becomes `m["bulk.deletedSkipped"]` with `{count}` 1 and `{skipped}` 1, read from the catalogue and never hard-coded. Add one assertion: the toast's "Archive them" button (`m["bulk.archiveKept"]`) is visible. The Bulk One/Two test (`:688-717`) is unchanged: both contacts are internal-only, so the title stays "Delete 2 contacts?" and "2" still enables Delete. Confirm this on the run.
 - [ ] **Step 3:** The orchestrator runs the suite. Paste the spec lines from the run (pass, or the first failure).
 - [ ] **Step 4: Commit** the two paths: `test(e2e): archive, undo, the Archived view and restore on the fixture account; the delete dialog's new count`.
+
+---
+
+## Deferred (coordinator, 2026-10-28 fix round)
+
+- **The archived match in Add contact** (was T10 Step 6). Today a dedupe hit on an archived contact answers `{ kind: "existing" }`, and the dialog links to that contact (`ACCT/contacts/actions.ts:51-99`, `add-contact-dialog.tsx:114-120`). The record page then shows the archived banner with Restore (T11), so the link still lands somewhere honest. Its copy key `contacts.add.existingArchived` was dropped from T3.
+- **The agency dashboard's contact total** (`apps/web/src/app/(dashboard)/dashboard/page.tsx:20`, was half of T12). Until it lands, that agency-only tile counts archived contacts, while the account's own list and total (T4) do not. The ledger records the gap.
+- **Out of this plan, its own PR:** Sofía never stores a placeholder name (spec §7).
 
 ---
 
@@ -1692,8 +1828,33 @@ export async function contactDeleteBlockersAction(
 
 ---
 
+## Review fix round (2026-10-28): what changed, and one pushback
+
+Opus plan review: 9 Important, 9 Minor. Each was verified against the source before it was applied:
+- I1: both probes rewritten; the RLS refusal claim was checked against `0103`'s own policy set.
+- I2: `contacts-marketing-optout-schema.test.ts:69-72` and `server-only-writes-grants.test.ts:130-133` both pin contacts' column grants.
+- I3: `shared-number.spec.ts:136` passes `conversationsDb`.
+- I4: `in-account-service-reads.test.ts` `ALLOWED`.
+- I5: `bulk-action-bar.test.ts:364-370`.
+- I6: `inbound-actions.ts:149`, and `cls` scoped inside `if (!forward)` at `file.ts:56-61`.
+- I7: applied as decided.
+- I8: `incrementUnreadCount` at `route.ts:240` runs outside the filing try.
+- M1: `contacts.ts:1097`, `assignment.ts:99`.
+- M2: `messaging.ts:928-932`.
+- M3: `0019:49`.
+- M4: `SORT_COLUMN` at `contacts.ts:790-794`.
+- M5: `renderToStaticMarkup` precedent.
+- M6, M7, M8: applied.
+- M9: `account-teardown.ts:20-37`.
+
+**Pushback, partial (I9):** "refuse unless agency or Owner" alone would refuse `shared-number.spec.ts:136` and the `deleteContacts` live suites, which call it on the service client with no Owner JWT. So the function also admits a `service_role` JWT. PostgREST verifies the token before setting `request.jwt.claims`, so a client cannot claim that role. Everything else in I9 is applied: execute granted to authenticated, the app calls it on the request client, and a Staff member's call is refused.
+
+**Two of my own corrections, found while applying I8:**
+- One conversation per contact (`0005_messaging.sql:24-25`). The T1 inbox test and a blocker seed used two conversations on one contact; both now use two contacts.
+- The unread rule cannot be a PostgREST `or` across a conversation column and an embedded contact column, and `listConversations` already spends its one `or` on the cursor. Hence the stored `conversations.inbox_visible` column.
+
 ## Self-review (done while writing, 2026-10-28)
 
-- **Spec coverage.** §3 → T1. §4.1 reads → T4 (list, count, search, pickers, export via T10), T6 (inbox), T12 (dashboards, To do). §4.2 signs → T8, T9; the import → T4 Step 5. §5 delete → T1, T4, T10, T11. §6 copy → T3. §7 → T2. §8 → T5. §9 tests → each task. §11 rulings → Q1 in T8/T9, Q2 in T5 and the T10 toast, Q3 in T1 and T10/T11. Gaps closed: the spec named `registry.ts` for Sofía's booking (not needed, T8 note); the spec named `proposals-drop.test.ts` (not needed, corrected).
+- **Spec coverage.** §3 → T1. §4.1 reads → T4 (list, count, search, pickers, export via T10), T6 (inbox, by the unread rule), T12 (To do); the agency total is deferred. §4.2 signs → T8, T9 (SMS auto-replies by `looksAutomaticText`; email only from the pipeline's customer filing); the import → T4 Step 5. §5 delete → T1 (with the database's Owner check), T4, T10, T11. §6 copy → T3. §7 → its own PR, not here. §8 → T5. §9 tests → each task. §11 rulings → Q1 in T8/T9, Q2 in T5 and the T10 toast, Q3 in T1 and T10/T11. Gaps closed: the spec named `registry.ts` for Sofía's booking (not needed, T8 note); the spec named `proposals-drop.test.ts` (not needed, corrected).
 - **Placeholders.** T1 Step 2's blocker cases and T4/T5/T6 live tests name the existing test file to copy each seed from rather than inventing column lists. That is deliberate: those inserts carry NOT NULL columns this plan did not read, and rule 1 says the source wins.
 - **Type consistency.** `ArchiveActionResult`, `restoreContactOnSign(serviceDb, accountId, contactId, sign)`, `contactDeleteBlockers → Map<string, DeleteBlockReason[]>` and `deleteContacts`' `{ serviceDb, beforeDelete }` are used with the same names in T4, T8, T9, T10 and T11.
