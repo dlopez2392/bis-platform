@@ -27,7 +27,7 @@ describe("the AI card (spec 3.6; DESIGN.md rules 1, 5, 6, 7, 8)", () => {
   });
 
   it("loaded: the spend, reached and skipped lines it is given, each in its own marker (mutation: drop the reached Notice -> FAILS)", () => {
-    const html = card({ spendLine: "$1.84 of $10.00 this month, estimated", reachedLine: "Budget reached. Summaries, cards and suggestions are paused for this account until Nov 1.", skippedLine: "One of them was skipped this month because this account's AI was off or over budget." });
+    const html = card({ spendLine: "$1.84 of $10.00 this month, estimated", reachedLine: "Budget reached. Summaries, cards and suggestions are paused for this account until Nov 1.", skippedLine: "Summaries, cards and suggestions were skipped once this month because this account's AI was off or over budget." });
     expect([count(html, "data-ai-spend"), count(html, "data-ai-reached"), count(html, "data-ai-skipped"), count(html, "data-ai-empty")]).toEqual([1, 1, 1, 0]);
     expect(renderedText(html)).toContain("$1.84 of $10.00 this month, estimated");
   });

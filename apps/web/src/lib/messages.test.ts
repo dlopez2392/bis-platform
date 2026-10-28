@@ -882,7 +882,7 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
     expect([m["aiSettings.account.label"], m["aiSettings.account.label.es"]]).toEqual(["AI for this account", "IA para esta cuenta"]);
     expect([m["aiSettings.global.confirmWord"], m["aiSettings.global.confirmWord.es"]]).toEqual(["OFF", "APAGAR"]);
     expect([plural(m, "aiSettings.skipped", 1, "en"), plural(m, "aiSettings.skipped", 3, "es", { count: 3 })])
-      .toEqual(["One of them was skipped this month because this account's AI was off or over budget.", "Se omitieron 3 de ellos este mes porque la IA de esta cuenta estaba apagada o sin presupuesto."]);
+      .toEqual(["Summaries, cards and suggestions were skipped once this month because this account's AI was off or over budget.", "Los resúmenes, las tarjetas y las sugerencias se omitieron 3 veces este mes porque la IA de esta cuenta estaba apagada o sin presupuesto."]);
   });
 
   it("no copy names the vendor or the plumbing (mutation: 'OpenAI' or 'tokens' in any value -> FAILS)", () => {

@@ -80,8 +80,8 @@ describe("aiCardView (spec 3.6)", () => {
   it("how often AI was skipped, once and many (choice I10; mutation: drop the One form -> FAILS)", () => {
     const v = (n: number, locale: "en" | "es") => aiCardView({ settings: settings(), refusals: n, overBudgetAt: null, now: NOW, zone: ZONE, locale }).skippedLine;
     expect([v(1, "en"), v(3, "es"), v(0, "en")]).toEqual([
-      "One of them was skipped this month because this account's AI was off or over budget.",
-      "Se omitieron 3 de ellos este mes porque la IA de esta cuenta estaba apagada o sin presupuesto.",
+      "Summaries, cards and suggestions were skipped once this month because this account's AI was off or over budget.",
+      "Los resúmenes, las tarjetas y las sugerencias se omitieron 3 veces este mes porque la IA de esta cuenta estaba apagada o sin presupuesto.",
       null,
     ]);
   });
