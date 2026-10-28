@@ -18,17 +18,28 @@ vi.mock("./actions", () => ({
   bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction, assignContactsAction, undoAssignContactsAction,
   countContactDocumentsAction,
 }));
+const archiveContactsAction = vi.fn();
+const restoreContactsAction = vi.fn();
+const contactDeleteBlockersAction = vi.fn();
+vi.mock("./archive-actions", () => ({ archiveContactsAction, restoreContactsAction, contactDeleteBlockersAction }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toasts }));
 
 const {
   applyBulkTag, BulkActionBar, assignSelected, bulkAssignChoices,
   DeleteFilesLine, canConfirmDelete, deleteDialogCopy, announceDeleteResult, latestCountSettler,
+  archiveSelected, restoreSelected, inChunks, readDeleteBlockers, deletableIds, DeleteKeptLine, deleteInChunks,
 } = await import("./bulk-action-bar");
 type FilesState = import("./bulk-action-bar").FilesState;
+type BlockersState = import("./bulk-action-bar").BlockersState;
 const BAR_SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "bulk-action-bar.tsx"), "utf8");
 
 beforeEach(() => {
+  archiveContactsAction.mockReset();
+  restoreContactsAction.mockReset();
+  contactDeleteBlockersAction.mockReset();
+  bulkDeleteContactsAction.mockReset();
+  countContactDocumentsAction.mockReset();
   bulkAddTagAction.mockReset();
   bulkRemoveTagAction.mockReset();
   assignContactsAction.mockReset();
@@ -71,7 +82,7 @@ describe("applyBulkTag's undo (D-007)", () => {
 // `requireAccountAccess`-derived `canManage` through ContactsTable.
 describe("BulkActionBar's Delete control is Owner-only (staff and roles)", () => {
   const render = (canDelete: boolean) => renderToStaticMarkup(createElement(BulkActionBar, {
-    accountId: "a1", selectedIds: ["c1"], existingTags: [], canDelete, onDone: () => {},
+    accountId: "a1", selectedIds: ["c1"], existingTags: [], view: "active", canArchive: true, timezone: "America/Chicago", canDelete, onDone: () => {},
   }));
 
   it("renders no Delete button when canDelete is false, but Add tag still renders (mutation: ignore the prop → FAILS)", () => {
@@ -92,7 +103,7 @@ describe("BulkActionBar's Delete control is Owner-only (staff and roles)", () =>
 describe("BulkActionBar reads the LocaleProvider's locale (F-085 follow-up, Task B)", () => {
   const renderEs = (canAssign = true) => renderToStaticMarkup(
     createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
-      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], canDelete: true, onDone: () => {},
+      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], view: "active", canArchive: true, timezone: "America/Chicago", canDelete: true, onDone: () => {},
       canAssign, members: [],
     })),
   );
@@ -112,7 +123,7 @@ describe("BulkActionBar reads the LocaleProvider's locale (F-085 follow-up, Task
 describe("BulkActionBar counts one selected in the singular (F-085 follow-ups)", () => {
   const renderOne = (locale: "en" | "es") => renderToStaticMarkup(
     createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
-      accountId: "a1", selectedIds: ["c1"], existingTags: [], canDelete: true, onDone: () => {},
+      accountId: "a1", selectedIds: ["c1"], existingTags: [], view: "active", canArchive: true, timezone: "America/Chicago", canDelete: true, onDone: () => {},
     })),
   );
 
@@ -134,7 +145,7 @@ describe("BulkActionBar counts one selected in the singular (F-085 follow-ups)",
 describe("BulkActionBar wraps at phone width (F-085 follow-ups)", () => {
   it("the toolbar is a wrapping flex row with a row gap (mutation: drop flex-wrap -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(BulkActionBar, {
-      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], canDelete: true, onDone: () => {}, canAssign: true, members: [],
+      accountId: "a1", selectedIds: ["c1", "c2"], existingTags: [], view: "active", canArchive: true, timezone: "America/Chicago", canDelete: true, onDone: () => {}, canAssign: true, members: [],
     }));
     const cls = html.match(/<div role="toolbar"[^>]*class="([^"]*)"/)?.[1]?.split(/\s+/) ?? [];
     expect(cls).toContain("flex");
@@ -168,7 +179,7 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     { contactId: "c2", assignee: TOM.userId, target: ANA.userId, movedTaskIds: ["t1"] },
   ];
   const render = (canAssign: boolean) => renderToStaticMarkup(createElement(BulkActionBar, {
-    accountId: "a1", selectedIds: ["c1"], existingTags: [], canDelete: false, onDone: () => {},
+    accountId: "a1", selectedIds: ["c1"], existingTags: [], view: "active", canArchive: true, timezone: "America/Chicago", canDelete: false, onDone: () => {},
     canAssign, members: [ANA, TOM],
   }));
   const undoOf = (call: unknown[] | undefined) => {
@@ -306,11 +317,12 @@ describe("the delete dialog says how many files go (owner ruling 2026-10-13)", (
     expect(cat["contacts.delete.filesFailed.es"]).toBe("No se pudo revisar si hay archivos. Cierre esto e intente de nuevo.");
   });
   it("Delete is enabled only with the typed count AND a known file count (mutation: ignore the file count -> FAILS)", () => {
-    expect(canConfirmDelete("2", 2, { status: "ready", count: 3 })).toBe(true);
-    expect(canConfirmDelete(" 2 ", 2, { status: "ready", count: 0 })).toBe(true);
-    expect(canConfirmDelete("2", 2, { status: "loading" })).toBe(false);
-    expect(canConfirmDelete("2", 2, { status: "error" })).toBe(false);
-    expect(canConfirmDelete("3", 2, { status: "ready", count: 0 })).toBe(false);
+    const free: BlockersState = { status: "ready", kept: [] };
+    expect(canConfirmDelete("2", 2, { status: "ready", count: 3 }, free)).toBe(true);
+    expect(canConfirmDelete(" 2 ", 2, { status: "ready", count: 0 }, free)).toBe(true);
+    expect(canConfirmDelete("2", 2, { status: "loading" }, free)).toBe(false);
+    expect(canConfirmDelete("2", 2, { status: "error" }, free)).toBe(false);
+    expect(canConfirmDelete("3", 2, { status: "ready", count: 0 }, free)).toBe(false);
   });
   it("the dialog's own words are in the reader's language (plan review minor 10; mutation: read m[\"bulk.confirmBody\"] directly -> FAILS)", () => {
     expect(deleteDialogCopy(2, "es")).toEqual({
@@ -325,25 +337,29 @@ describe("the delete dialog says how many files go (owner ruling 2026-10-13)", (
   it("the dialog is wired to them: Delete opens through openConfirm (which counts), the line sits in the header, the copy comes from deleteDialogCopy, and the destructive button is gated on canConfirmDelete (mutation: setConfirmOpen(true) on the Delete button -> FAILS)", () => {
     expect(BAR_SRC).toMatch(/onClick=\{openConfirm\}/);
     expect(BAR_SRC).not.toContain("onClick={() => setConfirmOpen(true)}");
-    expect(BAR_SRC).toMatch(/countContactDocumentsAction\(accountId, ids\)/);
-    expect(BAR_SRC).toMatch(/<\/DialogDescription>\s*<DeleteFilesLine state=\{files\} locale=\{locale\} \/>\s*<\/DialogHeader>/);
-    expect(BAR_SRC).toContain("disabled={!canConfirmDelete(typed, count, files)}");
-    expect(BAR_SRC).toContain("deleteDialogCopy(count, locale)");
+    // Contact archive (plan Task 10): the files are counted for the DELETABLE ids only, once the blockers
+    // read says which those are; a kept customer's files are not deleted, so they are never counted.
+    expect(BAR_SRC).toMatch(/countContactDocumentsAction\(accountId, go\)/);
+    expect(BAR_SRC).toMatch(/<DeleteKeptLine state=\{blockers\} locale=\{locale\} \/>\s*\{showFiles \? <DeleteFilesLine state=\{files\} locale=\{locale\} \/> : null\}\s*<\/DialogHeader>/);
+    expect(BAR_SRC).toContain("disabled={!canConfirmDelete(typed, count, files, blockers)}");
+    expect(BAR_SRC).toContain("deleteDialogCopy(none ? count : deletable, locale)");
     expect(BAR_SRC).not.toContain('m["bulk.confirmBody"]');
-    expect(BAR_SRC).toContain("announceDeleteResult(r, locale)");
+    expect(BAR_SRC).toContain("announceDeleteResult(done, locale, ctx)");
+    expect(BAR_SRC).toContain("announceDeleteResult(failure, locale, ctx)");
   });
 });
 
+const CTX = { accountId: "a1", timezone: "America/Chicago" };
 describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
   const cat = m as Record<string, string>;
   it("files gone but the customers kept says exactly that, in the reader's language (mutation: always toast r.error -> FAILS)", () => {
-    announceDeleteResult({ ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" }, "es");
+    announceDeleteResult({ ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" }, "es", CTX);
     expect(toasts.error).toHaveBeenCalledWith(cat["contacts.delete.filesGoneKept.es"]);
     expect(cat["contacts.delete.filesGoneKept.es"]).toBe("Los archivos se borraron, pero los clientes se conservaron. Intente de nuevo.");
     expect(toasts.success).not.toHaveBeenCalled();
   });
   it("a plain failure toasts the action's own error", () => {
-    announceDeleteResult({ ok: false, error: "Delete failed — please try again." }, "en");
+    announceDeleteResult({ ok: false, error: "Delete failed — please try again." }, "en", CTX);
     expect(toasts.error).toHaveBeenCalledWith("Delete failed — please try again.");
   });
   // F-085 follow-up (Task B): this success line used to stay in the bar's own English. That was S-07's
@@ -352,23 +368,23 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
   // that every toast fired from this list reads in the reader's language, so this line now does too
   // (plural() over bulk.deleted/.deletedOne, both with Spanish twins).
   it("customers kept because their files could not go are named after the success line, now in the reader's language (mutation: drop the skippedFiles toast -> FAILS)", () => {
-    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 2 }, "es");
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 2, skippedIds: [], lateKept: 0 }, "es", CTX);
     expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne.es"]);
     expect(toasts.error).toHaveBeenCalledWith("Se borraron 1 · se conservaron 2 cuyos archivos no se pudieron borrar. Intente de nuevo.");
     toasts.error.mockReset();
-    announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0 }, "en");
+    announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 }, "en", CTX);
     expect(toasts.error).not.toHaveBeenCalled();
     expect(toasts.success).toHaveBeenCalledWith(m["bulk.deleted"].replace("{count}", "3"));
   });
 
   it("the plain English case still reads English, and the skipped-with-history line is localized too (mutation: ignore locale -> FAILS)", () => {
-    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "en");
-    expect(toasts.success).toHaveBeenCalledWith(
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["k1"], lateKept: 0 }, "en", CTX);
+    expect(toasts.success.mock.calls[0]![0]).toBe(
       m["bulk.deletedSkipped"].replace("{count}", "2").replace("{skipped}", "1"),
     );
     toasts.success.mockReset();
-    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "es");
-    expect(toasts.success).toHaveBeenCalledWith(
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["k1"], lateKept: 0 }, "es", CTX);
+    expect(toasts.success.mock.calls[0]![0]).toBe(
       m["bulk.deletedSkipped.es"].replace("{count}", "2").replace("{skipped}", "1"),
     );
   });
@@ -376,8 +392,8 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
   // F-085 follow-ups (final M2): "Se borraron 1 · se conservaron 1 ..." disagreed in number at a count
   // of one. Each count now follows a colon, so the words agree at any count, one included.
   it("the Spanish skipped line agrees at a count of one (mutation: restore \"Se borraron {count} · se conservaron {skipped}\" -> FAILS)", () => {
-    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0 }, "es");
-    expect(toasts.success).toHaveBeenCalledWith(
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["k1"], lateKept: 0 }, "es", CTX);
+    expect(toasts.success.mock.calls[0]![0]).toBe(
       "Contactos borrados: 1 · conservados porque tienen un historial con usted: 1. Puede archivarlos.",
     );
   });
@@ -395,5 +411,293 @@ describe("only the newest file count lands (review fix round)", () => {
     first({ status: "error" });
     expect(seen).toEqual([{ status: "ready", count: 1 }]);
     expect(BAR_SRC).toContain("const settle = latestCountSettler(countSeq, setFiles);");
+  });
+});
+
+// Contact archive (plan Task 10; owner rulings 2026-10-28). Archive runs at once with an Undo (rule 6); the
+// Archived view's bar offers Restore instead; a Technician gets neither and keeps Add tag (rule 4).
+describe("BulkActionBar: Archive on the list, Restore on the Archived view (plan Task 10)", () => {
+  const render = (view: "active" | "archived", canArchive: boolean, locale: "en" | "es" = "en") => renderToStaticMarkup(
+    createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(BulkActionBar, {
+      accountId: "a1", selectedIds: ["c1"], existingTags: [], view, canArchive, timezone: "America/Chicago",
+      canDelete: false, onDone: () => {},
+    })),
+  );
+  const buttons = (html: string) => [...html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((b) => renderedText(b[1]!).trim());
+
+  it("the list's bar shows Archive and no Restore (mutation: show Restore on the list -> FAILS)", () => {
+    const names = buttons(render("active", true));
+    expect(names).toContain(m["bulk.archive"]);
+    expect(names).not.toContain(m["bulk.restore"]);
+  });
+
+  it("the Archived view's bar shows Restore and no Archive (mutation: ignore view -> FAILS)", () => {
+    const names = buttons(render("archived", true));
+    expect(names).toContain(m["bulk.restore"]);
+    expect(names).not.toContain(m["bulk.archive"]);
+  });
+
+  it("a Technician (canArchive false) gets neither, and the bar still has Add tag (rule 4; mutation: ignore canArchive -> FAILS)", () => {
+    for (const view of ["active", "archived"] as const) {
+      const names = buttons(render(view, false));
+      expect(names).not.toContain(m["bulk.archive"]);
+      expect(names).not.toContain(m["bulk.restore"]);
+      expect(names).toContain(m["bulk.addTag"]);
+    }
+  });
+
+  it("both read Spanish from the LocaleProvider", () => {
+    expect(buttons(render("active", true, "es"))).toContain("Archivar");
+    expect(buttons(render("archived", true, "es"))).toContain("Restaurar");
+  });
+
+  it("no new control in the bar contains the word delete (the e2e's /delete/i locators; plan, e2e locators)", () => {
+    const names = buttons(render("active", true)).concat(buttons(render("archived", true)));
+    expect(names.filter((n) => /delete/i.test(n))).toEqual([]);
+  });
+});
+
+const flush = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0)); };
+type ToastOpts = { description?: string; action?: { label: string; onClick: () => void } } | undefined;
+const optsOf = (call: unknown[] | undefined) => call?.[1] as ToastOpts;
+const ok = (changedIds: string[], extra: Partial<{ nextAppointment: { contactId: string; startsAt: string } | null; withAppointments: number }> = {}) =>
+  ({ ok: true, changedIds, nextAppointment: null, withAppointments: 0, ...extra });
+
+describe("archiveSelected: at once, with an Undo for exactly what changed (rule 6, D-007's rule)", () => {
+  it("archives the selection, clears it, and toasts the count with an Undo that restores EXACTLY changedIds (mutation: Undo restores the selection -> FAILS)", async () => {
+    archiveContactsAction.mockResolvedValue(ok(["c1", "c2"]));
+    restoreContactsAction.mockResolvedValue(ok(["c1", "c2"]));
+    const onDone = vi.fn();
+    await archiveSelected("a1", ["c1", "c2", "c3"], onDone, "America/Chicago", "en");
+    expect(archiveContactsAction).toHaveBeenCalledWith("a1", ["c1", "c2", "c3"]);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(toasts.success.mock.calls[0]![0]).toBe("Archived 2 contacts");
+    const opts = optsOf(toasts.success.mock.calls[0]);
+    expect(opts?.action?.label).toBe(m["common.undo"]);
+    expect(opts?.description).toBeUndefined();
+    opts!.action!.onClick();
+    await flush();
+    expect(restoreContactsAction).toHaveBeenCalledWith("a1", ["c1", "c2"]);
+  });
+
+  it("one archived contact with an appointment names its date IN THE ACCOUNT'S ZONE (owner ruling Q2; mutation: drop the description -> FAILS; mutation: format in UTC -> FAILS)", async () => {
+    // 03:30 UTC on Nov 3 is still the evening of Nov 2 in Chicago.
+    archiveContactsAction.mockResolvedValue(ok(["c1"], { nextAppointment: { contactId: "c1", startsAt: "2026-11-03T03:30:00Z" }, withAppointments: 1 }));
+    await archiveSelected("a1", ["c1"], () => {}, "America/Chicago", "en");
+    expect(toasts.success.mock.calls[0]![0]).toBe("Archived 1 contact");
+    expect(optsOf(toasts.success.mock.calls[0])?.description).toBe("They still have an appointment on Nov 2, 2026. Its reminders still go.");
+  });
+
+  it("…and in Spanish, the date in the reader's language", async () => {
+    archiveContactsAction.mockResolvedValue(ok(["c1"], { nextAppointment: { contactId: "c1", startsAt: "2026-11-03T03:30:00Z" }, withAppointments: 1 }));
+    await archiveSelected("a1", ["c1"], () => {}, "America/Chicago", "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe("Se archivó 1 contacto");
+    expect(optsOf(toasts.success.mock.calls[0])?.description).toBe("Todavía tiene una cita el 2 nov 2026. Sus recordatorios se siguen enviando.");
+    expect(optsOf(toasts.success.mock.calls[0])?.action?.label).toBe("Deshacer");
+  });
+
+  it("several with appointments say how many (contacts.archive.keepsAppointments)", async () => {
+    archiveContactsAction.mockResolvedValue(ok(["c1", "c2", "c3"], { withAppointments: 2 }));
+    await archiveSelected("a1", ["c1", "c2", "c3"], () => {}, "America/Chicago", "en");
+    expect(optsOf(toasts.success.mock.calls[0])?.description).toBe("2 of them still have appointments. Their reminders still go.");
+  });
+
+  it("nothing changed (all already archived) still confirms, with no Undo (mutation: offer Undo on an empty array -> FAILS)", async () => {
+    archiveContactsAction.mockResolvedValue(ok([]));
+    await archiveSelected("a1", ["c1"], () => {}, "America/Chicago", "en");
+    expect(toasts.success).toHaveBeenCalledTimes(1);
+    expect(optsOf(toasts.success.mock.calls[0])?.action).toBeUndefined();
+  });
+
+  it("a refusal toasts its own sentence and keeps the selection; a throw (a stale tab) is contacts.archive.failed", async () => {
+    archiveContactsAction.mockResolvedValue({ ok: false, errorKey: "contacts.archive.failed" });
+    const onDone = vi.fn();
+    await archiveSelected("a1", ["c1"], onDone, "America/Chicago", "es");
+    expect(toasts.error).toHaveBeenCalledWith((m as Record<string, string>)["contacts.archive.failed.es"]);
+    expect(onDone).not.toHaveBeenCalled();
+    archiveContactsAction.mockRejectedValue(new Error("stale"));
+    await archiveSelected("a1", ["c1"], onDone, "America/Chicago", "en");
+    expect(toasts.error).toHaveBeenLastCalledWith(m["contacts.archive.failed"]);
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("an Undo that fails says so", async () => {
+    archiveContactsAction.mockResolvedValue(ok(["c1"]));
+    restoreContactsAction.mockResolvedValue({ ok: false, errorKey: "contacts.restore.failed" });
+    await archiveSelected("a1", ["c1"], () => {}, "America/Chicago", "en");
+    optsOf(toasts.success.mock.calls[0])!.action!.onClick();
+    await flush();
+    expect(toasts.error).toHaveBeenCalledWith(m["contacts.restore.failed"]);
+  });
+
+  it("a selection kept across pages past 500 goes in calls of 500, and the Undo restores every changed id the same way (mutation: one call for the whole selection -> FAILS)", async () => {
+    const ids = Array.from({ length: 1200 }, (_, i) => `c${i}`);
+    archiveContactsAction.mockImplementation(async (_a: string, chunk: string[]) => ok(chunk));
+    restoreContactsAction.mockImplementation(async (_a: string, chunk: string[]) => ok(chunk));
+    await archiveSelected("a1", ids, () => {}, "America/Chicago", "en");
+    expect(archiveContactsAction.mock.calls.map((c) => (c[1] as string[]).length)).toEqual([500, 500, 200]);
+    expect(toasts.success.mock.calls[0]![0]).toBe("Archived 1200 contacts");
+    optsOf(toasts.success.mock.calls[0])!.action!.onClick();
+    await flush();
+    expect(restoreContactsAction.mock.calls.map((c) => (c[1] as string[]).length)).toEqual([500, 500, 200]);
+    expect(restoreContactsAction.mock.calls.flatMap((c) => c[1] as string[])).toEqual(ids);
+  });
+
+  it("a later call that fails after earlier ones changed contacts still offers Undo for exactly those (ContactBatchError's rule, across calls)", async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => `c${i}`);
+    archiveContactsAction
+      .mockImplementationOnce(async (_a: string, chunk: string[]) => ok(chunk))
+      .mockResolvedValueOnce({ ok: false, errorKey: "contacts.archive.failed" });
+    restoreContactsAction.mockImplementation(async (_a: string, chunk: string[]) => ok(chunk));
+    const onDone = vi.fn();
+    await archiveSelected("a1", ids, onDone, "America/Chicago", "en");
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(toasts.success.mock.calls[0]![0]).toBe("Archived 500 contacts");
+    optsOf(toasts.success.mock.calls[0])!.action!.onClick();
+    await flush();
+    expect(restoreContactsAction.mock.calls.flatMap((c) => c[1] as string[])).toEqual(ids.slice(0, 500));
+  });
+});
+
+describe("restoreSelected: the Archived view's Restore", () => {
+  it("restores, clears the selection, and toasts with an Undo that archives EXACTLY changedIds again (mutation: Undo archives the selection -> FAILS)", async () => {
+    restoreContactsAction.mockResolvedValue(ok(["c2"]));
+    archiveContactsAction.mockResolvedValue(ok(["c2"]));
+    const onDone = vi.fn();
+    await restoreSelected("a1", ["c1", "c2"], onDone, "en");
+    expect(restoreContactsAction).toHaveBeenCalledWith("a1", ["c1", "c2"]);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(toasts.success.mock.calls[0]![0]).toBe("Moved 1 contact back to your list");
+    optsOf(toasts.success.mock.calls[0])!.action!.onClick();
+    await flush();
+    expect(archiveContactsAction).toHaveBeenCalledWith("a1", ["c2"]);
+  });
+
+  it("several, in Spanish; a refusal is contacts.restore.failed and keeps the selection", async () => {
+    restoreContactsAction.mockResolvedValue(ok(["c1", "c2"]));
+    await restoreSelected("a1", ["c1", "c2"], () => {}, "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe("Se devolvieron 2 contactos a su lista");
+    restoreContactsAction.mockResolvedValue({ ok: false, errorKey: "contacts.restore.failed" });
+    const onDone = vi.fn();
+    await restoreSelected("a1", ["c1"], onDone, "en");
+    expect(toasts.error).toHaveBeenCalledWith(m["contacts.restore.failed"]);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+describe("inChunks", () => {
+  it("splits into calls of at most 500, the database's own cap (MAX_CONTACT_BATCH)", () => {
+    expect(inChunks([1, 2, 3], 2)).toEqual([[1, 2], [3]]);
+    expect(inChunks([]).length).toBe(0);
+    expect(inChunks(Array.from({ length: 1001 }, (_, i) => i)).map((c) => c.length)).toEqual([500, 500, 1]);
+  });
+});
+
+// Spec §5.4: the bulk confirm is typing the count that WILL be deleted. A contact with a history is
+// archive-only, so the dialog reads which are kept before anything can be confirmed.
+describe("the delete dialog knows what it keeps before it can delete (spec §5.4)", () => {
+  const files = { status: "ready", count: 0 } as const;
+  const ready = (kept: string[]) => ({ status: "ready" as const, kept });
+
+  it("Delete stays off while the blockers load, and after a failed read (rule 5, rule 7; mutation: ignore blockers -> FAILS)", () => {
+    expect(canConfirmDelete("2", 2, files, { status: "loading" })).toBe(false);
+    expect(canConfirmDelete("2", 2, files, { status: "error" })).toBe(false);
+    expect(canConfirmDelete("2", 2, files, ready([]))).toBe(true);
+  });
+
+  it("the typed number is the DELETABLE count, not the selection (mutation: compare to the selection count -> FAILS)", () => {
+    expect(canConfirmDelete("2", 3, files, ready(["c3"]))).toBe(true);
+    expect(canConfirmDelete("3", 3, files, ready(["c3"]))).toBe(false);
+  });
+
+  it("nothing deletable never enables Delete, whatever is typed", () => {
+    expect(canConfirmDelete("0", 2, files, ready(["c1", "c2"]))).toBe(false);
+  });
+
+  it("deletableIds leaves out exactly the kept ones", () => {
+    expect(deletableIds(["c1", "c2", "c3"], ready(["c2"]))).toEqual(["c1", "c3"]);
+  });
+
+  it("readDeleteBlockers merges the kept ids across calls of 500; any failed call is the error state, never 'nothing blocks' (mutation: skip a failed call -> FAILS)", async () => {
+    const ids = Array.from({ length: 600 }, (_, i) => `c${i}`);
+    contactDeleteBlockersAction
+      .mockResolvedValueOnce({ ok: true, blocked: { c1: ["messages"] } })
+      .mockResolvedValueOnce({ ok: true, blocked: { c550: ["bookings", "deals"] } });
+    expect(await readDeleteBlockers("a1", ids)).toEqual({ status: "ready", kept: ["c1", "c550"] });
+    expect(contactDeleteBlockersAction.mock.calls.map((c) => (c[1] as string[]).length)).toEqual([500, 100]);
+    contactDeleteBlockersAction.mockReset()
+      .mockResolvedValueOnce({ ok: true, blocked: {} })
+      .mockResolvedValueOnce({ ok: false });
+    expect(await readDeleteBlockers("a1", ids)).toEqual({ status: "error" });
+    contactDeleteBlockersAction.mockReset().mockRejectedValue(new Error("stale"));
+    expect(await readDeleteBlockers("a1", ["c1"])).toEqual({ status: "error" });
+  });
+
+  it("the kept line: a skeleton while loading, the failure in words, and how many are kept (rule 7, rule 5)", () => {
+    const line = (state: BlockersState, locale: "en" | "es" = "en") =>
+      renderedText(renderToStaticMarkup(createElement(DeleteKeptLine, { state, locale }))).trim();
+    const loading = renderToStaticMarkup(createElement(DeleteKeptLine, { state: { status: "loading" }, locale: "en" }));
+    expect(loading).toContain("data-delete-kept-skeleton");
+    expect(renderedText(loading).trim()).toBe("");
+    expect(line({ status: "error" })).toBe(m["contacts.delete.blockersFailed"]);
+    expect(line(ready(["c1"]))).toBe("1 of these have a history with you and will be kept.");
+    expect(line(ready(["c1", "c2"]), "es")).toBe("2 de estos tienen un historial con usted y se conservarán.");
+    expect(line(ready([]))).toBe("");
+  });
+
+  it("the dialog's words: the deletable count in the title once ready, the none-deletable sentence, and Archive instead with no word delete in it", () => {
+    expect(BAR_SRC).toContain('{none ? t(m, "contacts.delete.noneDeletable", locale) : copy.body}');
+    // In the footer, nothing deletable puts "Archive instead" where the destructive Delete would be.
+    expect(BAR_SRC).toMatch(/\{none \? \([\s\S]{0,700}?t\(m, "contacts\.delete\.archiveInstead", locale\)[\s\S]{0,300}?\) : \(\s*<Button\s+variant="destructive"/);
+    expect(m["contacts.delete.archiveInstead"]).not.toMatch(/delete/i);
+    expect((m as Record<string, string>)["contacts.delete.archiveInstead.es"]).not.toMatch(/borrar/i);
+  });
+});
+
+describe("deleteInChunks: a selection past 500 deletes in calls of 500, and says what really happened", () => {
+  const res = (deleted: number, skippedIds: string[], lateKept = 0, skippedFiles = 0) =>
+    ({ ok: true, deleted, skippedBlocked: skippedIds.length, skippedFiles, skippedIds, lateKept });
+
+  it("sums every call into one answer (mutation: keep only the last call's answer -> FAILS)", async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => `c${i}`);
+    bulkDeleteContactsAction.mockResolvedValueOnce(res(498, ["c1", "c2"], 1, 0)).mockResolvedValueOnce(res(199, ["c650"], 0, 1));
+    const r = await deleteInChunks("a1", ids, "en");
+    expect(bulkDeleteContactsAction.mock.calls.map((c) => (c[1] as string[]).length)).toEqual([500, 200]);
+    expect(r).toEqual({ done: res(697, ["c1", "c2", "c650"], 1, 1), failure: null });
+  });
+
+  it("a later call that fails keeps what the earlier ones did, and the failure", async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => `c${i}`);
+    const fail = { ok: false, error: "Delete failed — please try again." };
+    bulkDeleteContactsAction.mockResolvedValueOnce(res(500, [])).mockResolvedValueOnce(fail);
+    expect(await deleteInChunks("a1", ids, "en")).toEqual({ done: res(500, []), failure: fail });
+    bulkDeleteContactsAction.mockReset().mockRejectedValue(new Error("stale"));
+    expect(await deleteInChunks("a1", ["c1"], "en")).toEqual({ done: null, failure: { ok: false, error: m["inline.crashed"] } });
+  });
+});
+
+describe("what the delete says about the ones it kept (spec §5.4, plan Task 10)", () => {
+  it("Archive them archives EXACTLY skippedIds (mutation: archive the selection -> FAILS)", async () => {
+    archiveContactsAction.mockResolvedValue(ok(["k1", "k2"]));
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 2, skippedFiles: 0, skippedIds: ["k1", "k2"], lateKept: 0 }, "en", CTX);
+    const opts = optsOf(toasts.success.mock.calls[0]);
+    expect(opts?.action?.label).toBe(m["bulk.archiveKept"]);
+    opts!.action!.onClick();
+    await flush();
+    expect(archiveContactsAction).toHaveBeenCalledWith("a1", ["k1", "k2"]);
+    expect(toasts.success.mock.calls[1]![0]).toBe("Archived 2 contacts");
+  });
+
+  it("nothing kept offers no Archive them", () => {
+    announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 }, "en", CTX);
+    expect(optsOf(toasts.success.mock.calls[0])?.action).toBeUndefined();
+  });
+
+  it("customers the database kept after their files went also get the files-gone line (mutation: drop the lateKept toast -> FAILS)", () => {
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["k1"], lateKept: 1 }, "es", CTX);
+    expect(toasts.error).toHaveBeenCalledWith((m as Record<string, string>)["contacts.delete.filesGoneKept.es"]);
+    toasts.error.mockReset();
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["k1"], lateKept: 0 }, "es", CTX);
+    expect(toasts.error).not.toHaveBeenCalled();
   });
 });

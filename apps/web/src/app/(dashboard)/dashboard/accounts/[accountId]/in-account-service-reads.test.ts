@@ -103,6 +103,10 @@ const ALLOWED: Record<string, Reason> = {
   // delete_internal_contacts pre-flight passed the database's Owner check. The delete itself runs on the
   // request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
+  // Contact archive (0103, plan Task 10): the service client is used ONLY by contactDeleteBlockersAction,
+  // behind requireAccountOwner, and only for the ids a request-client read of contacts proved are this
+  // account's (contact_delete_blockers is service_role only). Archive and Restore stay on dbForRequest.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/archive-actions.ts": "owner-only",
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions.ts": "proven-target",

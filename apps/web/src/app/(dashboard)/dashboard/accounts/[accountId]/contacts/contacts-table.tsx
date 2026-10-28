@@ -21,6 +21,7 @@ import { useLocale } from "@/components/locale-provider";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
 import { withWho, type Who } from "@/lib/assign/who";
+import { withView, type ContactsView } from "@/lib/contacts/view";
 import type { AssignMember } from "@/lib/assign/view";
 import { ContactDrawer } from "./contact-drawer";
 import { BulkActionBar } from "./bulk-action-bar";
@@ -76,10 +77,12 @@ export function peekRow(rows: ContactRow[], peekId: string | null, remembered: C
  */
 export function sortHref(
   accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string, who: Who = "all",
+  view: ContactsView = "active",
 ): string {
   const dir: SortDir = current.key === key && current.dir === "asc" ? "desc" : "asc";
-  // `who` (Mine / Unassigned) rides along too: re-sorting Mine stays in Mine.
-  const params = new URLSearchParams(withWho({ ...(q ? { q } : {}), sort: key, dir }, who));
+  // `who` (Mine / Unassigned) rides along too: re-sorting Mine stays in Mine. So does the view
+  // (contact archive): re-sorting the Archived view stays in it.
+  const params = new URLSearchParams(withView(withWho({ ...(q ? { q } : {}), sort: key, dir }, who), view));
   return `/dashboard/accounts/${accountId}/contacts?${params}`;
 }
 
@@ -96,6 +99,8 @@ export function ContactsTable({
   canAssign = false,
   members = [],
   viewerId = null,
+  view = "active",
+  canArchive = false,
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -128,6 +133,11 @@ export function ContactsTable({
   members?: AssignMember[];
   /** The viewer's own person here (readPersonId), for the drawer's "You". */
   viewerId?: string | null;
+  /** Contact archive (plan Task 10): the list or its Archived view, carried into a re-sort's href and
+   *  handed to the bulk bar (Archive on the list, Restore on the Archived view). */
+  view?: ContactsView;
+  /** Owners, Staff and the agency archive and restore (seesWholeAccount); false (the default) never. */
+  canArchive?: boolean;
 }) {
   const router = useRouter();
   // F-085 follow-up (Task B): the page wraps this table in a LocaleProvider
@@ -176,7 +186,7 @@ export function ContactsTable({
     // firing at all here. The effect above is the second half: it wins
     // focus back even if the re-render itself replaces the clicked button's
     // DOM node, which `scroll: false` alone does not cover.
-    router.push(sortHref(accountId, { key: sort, dir }, key, q, who), { scroll: false });
+    router.push(sortHref(accountId, { key: sort, dir }, key, q, who, view), { scroll: false });
   }
 
   function toggleRow(id: string) {
@@ -201,6 +211,9 @@ export function ContactsTable({
         onDone={() => setSelected(new Set())}
         canAssign={canAssign}
         members={members}
+        view={view}
+        canArchive={canArchive}
+        timezone={timezone}
       />
       <Table>
         <TableHeader>

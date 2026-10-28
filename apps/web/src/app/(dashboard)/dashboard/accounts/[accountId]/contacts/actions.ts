@@ -476,7 +476,10 @@ export async function bulkRemoveTagAction(
 export async function bulkDeleteContactsAction(
   accountId: string, contactIds: string[],
 ): Promise<
-  | { ok: true; deleted: number; skippedBlocked: number; skippedFiles: number }
+  // skippedIds: every contact kept, blocked or kept late (the bar's "Archive them" archives exactly these).
+  // lateKept: of those, the ones the database kept AFTER the purge removed files (the bar's
+  // contacts.delete.filesGoneKept line); already counted in skippedBlocked, never added to it.
+  | { ok: true; deleted: number; skippedBlocked: number; skippedFiles: number; skippedIds: string[]; lateKept: number }
   | { ok: false; error: string; errorKey?: "contacts.delete.filesGoneKept" }
 > {
   // Staff and roles: delete is Owner-only (requireAccountOwner's own doc
@@ -509,7 +512,9 @@ export async function bulkDeleteContactsAction(
       },
     });
     revalidatePath(contactsPath(accountId));
-    return { ok: true, ...r };
+    // A contact the database kept late (a text arrived between the blockers read and the lock) lost files
+    // only if the purge removed any: with none removed, "the files were deleted" would be untrue.
+    return { ok: true, ...r, lateKept: purged > 0 ? r.lateKept : 0 };
   } catch (e) {
     console.error(`contacts delete (account ${accountId}): ${loggableError(e)}`);
     // Files were already removed and then the contact delete failed (most likely a file added between

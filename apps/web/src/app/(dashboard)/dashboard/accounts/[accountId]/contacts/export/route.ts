@@ -2,6 +2,7 @@ import { listContacts, listTagNamesForContacts, type SortKey, type SortDir } fro
 import { requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { archivedFilterOf, parseView } from "@/lib/contacts/view";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +96,9 @@ export async function GET(
   const q = url.searchParams.get("q") ?? undefined;
   const sort = parseSort(url.searchParams.get("sort"));
   const dir = parseDir(url.searchParams.get("dir"));
+  // Contact archive (spec 4.1): the view the Export link was opened from. The list leaves archived
+  // contacts out, like the screen; the Archived view exports only them.
+  const archived = archivedFilterOf(parseView(url.searchParams.get("view")));
 
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
 
@@ -126,7 +130,7 @@ export async function GET(
         let cursor: { v: string | null; id: string } | undefined;
         for (;;) {
           const chunk = await listContacts(db, accountId,
-            { search: q, limit: CHUNK_SIZE, before: cursor, sort: { key: sort, dir } });
+            { search: q, limit: CHUNK_SIZE, before: cursor, sort: { key: sort, dir }, archived });
           if (chunk.length === 0) break;
           // D-008: the export's own "tags" column was always blank — this
           // used to read "no bulk 'tags for many contacts' read exists

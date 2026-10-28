@@ -200,7 +200,8 @@ describe("sortHref", () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
-    expect(src).toContain("sortHref(accountId, { key: sort, dir }, key, q, who)");
+    // Contact archive (plan Task 10): the view rides along after who.
+    expect(src).toContain("sortHref(accountId, { key: sort, dir }, key, q, who, view)");
   });
 
   // F-085 part 1: re-sorting Mine must stay inside Mine.
@@ -255,5 +256,39 @@ describe("peekRow: the drawer's row survives the list losing it (fix round 1, I2
     const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
     expect(src).toContain("row={peekRow(rows, peekId, remembered)}");
     expect(src).toMatch(/if \(found && found !== remembered\) setRemembered\(found\);/);
+  });
+});
+
+// Contact archive (plan Task 10): re-sorting the Archived view stays in it, and the bulk bar learns which
+// view it is on, whether this reader archives, and the account's zone (the Archive toast's date).
+describe("the Archived view through the table (plan Task 10)", () => {
+  it("sortHref carries view=archived, and nothing on the list (mutation: drop withView -> FAILS)", () => {
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", "x", "all", "archived"))
+      .toBe("/dashboard/accounts/acct1/contacts?q=x&sort=name&dir=asc&view=archived");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", "x", "mine", "archived"))
+      .toBe("/dashboard/accounts/acct1/contacts?q=x&sort=name&dir=asc&who=mine&view=archived");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", undefined, "all", "active"))
+      .toBe("/dashboard/accounts/acct1/contacts?sort=name&dir=asc");
+  });
+
+  // The header click and the bar are wired in JSX that a static render cannot reach (no click, and the
+  // bar renders nothing until a box is ticked), so the wiring is read off the source.
+  it("the header click builds its href with the table's view, and the bar gets view, canArchive and the zone", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("sortHref(accountId, { key: sort, dir }, key, q, who, view)");
+    const bar = src.match(/<BulkActionBar\b[\s\S]*?\/>/)?.[0] ?? "";
+    expect(bar).toContain("view={view}");
+    expect(bar).toContain("canArchive={canArchive}");
+    expect(bar).toContain("timezone={timezone}");
+  });
+
+  it("renders in the Archived view with Archive withheld (a Technician) without trouble", () => {
+    const html = renderToStaticMarkup(createElement(ContactsTable, {
+      rows: [row(0)], accountId: "acct1", existingTags: [], sort: "created", dir: "desc",
+      timezone: "America/Chicago", canDelete: false, view: "archived", canArchive: false,
+    }));
+    expect(html).toContain('data-contact-row="c0"');
   });
 });
