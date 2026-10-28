@@ -680,7 +680,7 @@ describe("0091: ai_contact_held_by, table by table (plan Task 1 case 9)", () => 
       expect(await heldBy(c, s.acct, z.act)).toEqual([]);
     }));
 
-  it("every table in the list has exactly one blocker case below, and the list is every FK into contacts but the two that never block (guards the cases from a forgotten table)", () => {
+  it("every table in the list has exactly one blocker case below, and the list is every FK into contacts but the three that never block (guards the cases from a forgotten table)", () => {
     const named = new Set(BLOCKERS.map((b) => b[1]));
     named.delete("edits");
     // conversations' blockers are what its rows hold: a message or an inbound email (the conversation itself is
@@ -688,7 +688,9 @@ describe("0091: ai_contact_held_by, table by table (plan Task 1 case 9)", () => 
     named.delete("messages");
     named.delete("inbound_emails");
     named.add("conversations");
-    expect([...named, "contact_duplicate_flags", "record_summaries"].sort()).toEqual([...FK_TABLES].sort());
+    // contact_archive_log (0103) cascades with its contact and predates this function by a later migration:
+    // nothing here reads it, so it never blocks either, same as the other two.
+    expect([...named, "contact_archive_log", "contact_duplicate_flags", "record_summaries"].sort()).toEqual([...FK_TABLES].sort());
   });
 
   it.each(BLOCKERS)("%s answers exactly {%s} (mutation: drop that table's clause -> FAILS)", (_t, name, add) =>
@@ -844,21 +846,22 @@ describe("0091: ai_contact_held_by, table by table (plan Task 1 case 9)", () => 
   // Pairs, not distinct tables (0092 review): a second FK on a table already listed (a third contact column on
   // contact_relationships, say) is a new way to hold a contact that the function's clause for that table may not
   // read, and a distinct-table compare could never see it.
-  it("the guard: the foreign keys into contacts are exactly the typed list of 22 (table, constraint) pairs, two each on contact_duplicate_flags and contact_relationships (mutation: a second FK into contacts on notes -> FAILS naming it)", () =>
+  it("the guard: the foreign keys into contacts are exactly the typed list of 23 (table, constraint) pairs, two each on contact_duplicate_flags and contact_relationships (mutation: a second FK into contacts on notes -> FAILS naming it)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ t: string; n: string }>(
         "select conrelid::regclass::text as t, conname as n from pg_constraint where confrelid = 'public.contacts'::regclass and contype = 'f'");
       expect(rows.map((r) => `${r.t.replace(/^public\./, "")} ${r.n}`).sort()).toEqual([...FK_PAIRS].sort());
-      expect(FK_PAIRS).toHaveLength(22);
+      expect(FK_PAIRS).toHaveLength(23);
       expect([...new Set(FK_PAIRS.map((p) => p.split(" ")[0]))].sort()).toEqual([...FK_TABLES].sort());
     }));
 });
 
-/** Every foreign key into public.contacts after 0091, as "table constraint" (pg_constraint, re-read on the replica). */
+/** Every foreign key into public.contacts after 0103, as "table constraint" (pg_constraint, re-read on the replica). */
 const FK_PAIRS = [
   "ai_acts ai_acts_contact_fkey", "automation_log automation_log_contact_id_fkey", "bookings bookings_contact_id_fkey",
   "calls calls_contact_id_fkey", "client_group_members client_group_members_contact_fkey",
   "consent_events consent_events_contact_fkey",
+  "contact_archive_log contact_archive_log_contact_fkey",
   "contact_duplicate_flags contact_duplicate_flags_contact_a_fkey", "contact_duplicate_flags contact_duplicate_flags_contact_b_fkey",
   "contact_relationships contact_relationships_contact_fkey", "contact_relationships contact_relationships_related_fkey",
   "contact_tags contact_tags_contact_id_fkey", "conversations conversations_contact_id_fkey",
@@ -867,11 +870,12 @@ const FK_PAIRS = [
   "opportunities opportunities_contact_id_fkey", "places places_contact_fkey", "proposals proposals_contact_fkey",
   "record_summaries record_summaries_contact_fkey", "tasks tasks_contact_id_fkey",
 ] as const;
-/** The 20 distinct tables those keys sit on. */
+/** The 21 distinct tables those keys sit on. */
 const FK_TABLES = [
-  "ai_acts", "automation_log", "bookings", "calls", "client_group_members", "consent_events", "contact_duplicate_flags",
-  "contact_relationships", "contact_tags", "conversations", "document_requests", "document_requirement_skips", "documents",
-  "form_submissions", "notes", "opportunities", "places", "proposals", "record_summaries", "tasks",
+  "ai_acts", "automation_log", "bookings", "calls", "client_group_members", "consent_events", "contact_archive_log",
+  "contact_duplicate_flags", "contact_relationships", "contact_tags", "conversations", "document_requests",
+  "document_requirement_skips", "documents", "form_submissions", "notes", "opportunities", "places", "proposals",
+  "record_summaries", "tasks",
 ] as const;
 
 /** Exactly what a lead call leaves on the contact Sofia made from it (finish-call.ts): the call, linked to her

@@ -178,10 +178,11 @@ describe("0103 (T5): scheduled sends skip archived contacts", () => {
     await withTestAccount(async (dbA, accountA) => {
       await withTestAccount(async (dbB, accountB) => {
         const now = new Date("2027-03-10T12:00:00Z");
+        const calA = await getOrCreateCalendar(dbA, accountA, "user_test");
+        const calB = await getOrCreateCalendar(dbB, accountB, "user_test");
         await updateCalendarSettings(dbA, accountA, { followupEnabled: true, followupBody: "How did it go?" }, "user_test");
         await updateCalendarSettings(dbB, accountB, { followupEnabled: true, followupBody: "How did it go?" }, "user_test");
 
-        const calA = await getOrCreateCalendar(dbA, accountA, "user_test");
         const { id: archivedContact } = await createContact(dbA, accountA, { firstName: "Archived", email: "archived-fu@example.com" }, "user_test");
         const archivedBooking = await createBooking(dbA, accountA,
           { calendarId: calA.id, contactId: archivedContact,
@@ -189,7 +190,6 @@ describe("0103 (T5): scheduled sends skip archived contacts", () => {
           "user_test");
         await archiveContact(dbA, archivedContact);
 
-        const calB = await getOrCreateCalendar(dbB, accountB, "user_test");
         const { id: activeContact } = await createContact(dbB, accountB, { firstName: "Active", email: "active-fu@example.com" }, "user_test");
         const activeBooking = await createBooking(dbB, accountB,
           { calendarId: calB.id, contactId: activeContact,

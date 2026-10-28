@@ -194,9 +194,9 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
   });
 
   it("every source failing is still a page, not a throw (mutation: Promise.all without the per-source catch -> rejects, FAILS)", async () => {
-    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents"];
+    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents", "contact_archive_log"];
     const page = await listContactTimelinePage(fakeDb({}, { throwOn: all }).db, u(100), u(99));
-    const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+    const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
     expect(page).toEqual({ items: [], older: null, failed: NINE, sources: NINE });
     // 8b-2: asked for, the suggestions source is read too, and fails with the rest.
     const asked = await listContactTimelinePage(fakeDb({}, { throwOn: [...all, "proposals"] }).db, u(100), u(99), undefined, { suggestions: true });
