@@ -1113,6 +1113,7 @@ export const m = {
   // F-196: the weekly report goes to at most WEEKLY_REPORT_MAX_RECIPIENTS
   // addresses (lib/automations/caps.ts says why). {max} is that number.
   "settings.weeklyReportTooMany": "The weekly report can go to {max} addresses at most.",
+  "settings.weeklyReportTooMany.es": "El informe semanal puede ir a {max} direcciones como máximo.",
   "settings.weeklyReportOff": "Nobody is receiving this yet.",
 
   // accounts.alert_phone (0035_alert_phone.sql) — agency-write, client-read.
