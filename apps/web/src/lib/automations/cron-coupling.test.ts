@@ -17,6 +17,11 @@ import { RELEASE_BUDGET_MS } from "./passes/release-held";
 import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 import { EXPIRY_BUDGET_MS } from "./passes/documents-expiry";
 import { CANCEL_NOTICE_BUDGET_MS } from "./passes/cancel-notices";
+import {
+  PLAN, longestPathS, PASS_ROUTE_MAX_S, JOBS_DRAIN_MAX_S, JOBS_DRAIN_KEY, DISPATCHER_MAX_S,
+  DISPATCH_SLACK_S, LEGACY_TICK_CEILING_S,
+} from "./fanout";
+import { RATE_LIMIT_MAX_WAIT_MS, SEND_TIMEOUT_MS } from "@/lib/http/retry-after";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -32,6 +37,14 @@ const vercel = JSON.parse(
 const routeSource = readFileSync(
   new URL("../../app/api/cron/reminders/route.ts", import.meta.url), "utf-8",
 );
+const passRouteSource = readFileSync(
+  new URL("../../app/api/cron/pass/[key]/route.ts", import.meta.url), "utf-8",
+);
+/** A route's LIVE `maxDuration`, anchored to a whole line so a commented-out export cannot match. NaN when absent. */
+function declaredMaxDuration(source: string): number {
+  const m = /^export const maxDuration = (\d+);$/m.exec(source);
+  return m ? Number(m[1]) : Number.NaN;
+}
 
 function tickIntervalMs(schedule: string): number {
   const m = /^\*\/(\d+) \* \* \* \*$/.exec(schedule);
@@ -298,26 +311,23 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect((SMS_REMINDER_WINDOW_END_MS - SMS_REMINDER_WINDOW_START_MS) / tick).toBe(3);
   });
 
-  it("the route declares a LIVE maxDuration at least double the release pass's own wall-clock budget — the budget bounds the release pass, and the rest of the tick belongs to the passes after it (mutation: comment the export out, or delete it, or set it to 61 → each FAILS)", () => {
-    // Anchored to a whole line (^…$, multiline) so a COMMENTED-OUT export
-    // ("// export const maxDuration = 300;") cannot match — the regex used
-    // to be bare `export const maxDuration = (\d+);`, which `.exec` finds
-    // anywhere in the file including inside a `//` comment, so Vercel could
-    // silently fall back to its inherited default while this test stayed green.
-    const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
-    expect(m).not.toBeNull();
-    const maxDuration = Number(m![1]);
+  it("the in-process tick's ceiling is at least double the release pass's own wall-clock budget — the budget bounds the release pass, and the rest of the tick belongs to the passes after it (mutation: set LEGACY_TICK_CEILING_S to 61 → FAILS)", () => {
+    // F-196: retargeted from the route's own `maxDuration` to
+    // LEGACY_TICK_CEILING_S. The route now declares the dispatcher's 800 s
+    // (pinned live, anchored, in the fan-out describe below); the in-process
+    // tick (CRON_FANOUT off) keeps its 300 s budget as a constant, so this
+    // coupling still binds the passes the way it did before fan-out.
     // At LEAST double: 61s (one second of headroom) would still pass a
     // ">" check but leaves nothing for the passes that run after the release
     // pass in the same tick. No count in the prose: `PASSES` grows by a line
-    // per recipe (it is seventeen entries today, and was nine when this
-    // sentence was written), and a number written down here rots silently.
-    expect(maxDuration).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
+    // per recipe, and a number written down here rots silently.
+    expect(LEGACY_TICK_CEILING_S).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
   });
 
   /**
-   * Review M2: the test above checks ONE budgeted pass against the route's
-   * `maxDuration`. FIVE passes carry a wall-clock budget today —
+   * Review M2: the test above checks ONE budgeted pass against the tick's
+   * ceiling (the route's `maxDuration` until F-196, LEGACY_TICK_CEILING_S
+   * since). FIVE passes carry a wall-clock budget today —
    * release-held (RELEASE_BUDGET_MS), the usage report
    * (USAGE_REPORT_BUDGET_MS), since D-067, the weekly client report
    * (WEEKLY_REPORT_BUDGET_MS), since S-07 2a, the document scan pass
@@ -331,28 +341,85 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
    * five. Since the F-048 follow-up it is 50 s: a sixth budget (the
    * cancel-notice sweep, 10 s) moved one of "the rest" into the sum, so the
    * same room is now partly a bound that pass enforces on itself. Mutation: raise any one budget past the point this leaves
-   * zero headroom → FAILS; comment out `maxDuration` or any budget
+   * zero headroom → FAILS; comment out LEGACY_TICK_CEILING_S or any budget
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).
    */
-  it("the six wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside maxDuration", () => {
+  it("the six wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside the in-process tick's ceiling", () => {
     // Since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s)
     // joined the other three; since S-07 3a, the documents expiry pass
     // (EXPIRY_BUDGET_MS, 15 s) is the fifth: 60 + 60 + 60 + 45 + 15 = 240 s,
-    // plus the 60 s headroom = 300 = maxDuration, exactly.
+    // plus the 60 s headroom = 300 = the in-process ceiling, exactly.
     // F-048 follow-up: the cancel-notice sweep (CANCEL_NOTICE_BUDGET_MS, 10 s)
     // is the sixth. It was one of the UNBUDGETED passes the 60 s headroom was
     // there for; with its own budget it is counted in the sum instead, so the
     // headroom left for the passes that still have none is 50 s:
-    // 240 + 10 + 50 = 300 = maxDuration, exactly. The real room for
+    // 240 + 10 + 50 = 300 = the in-process ceiling, exactly. The real room for
     // unbudgeted work is unchanged; part of it is now a stated, enforced bound.
-    // The next budget added must come out of a neighbour or raise maxDuration.
-    const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
-    expect(m).not.toBeNull();
-    const maxDuration = Number(m![1]);
+    // The next budget added must come out of a neighbour or raise LEGACY_TICK_CEILING_S.
+    // F-196: retargeted to LEGACY_TICK_CEILING_S, the in-process tick's
+    // budget (the route itself now declares the dispatcher's 800 s).
     const MIN_HEADROOM_MS = 50_000;
     const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS + EXPIRY_BUDGET_MS
       + CANCEL_NOTICE_BUDGET_MS;
-    expect(maxDuration * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
+    expect(LEGACY_TICK_CEILING_S * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
+  });
+});
+
+/**
+ * F-196: with `CRON_FANOUT=1` every pass runs in its own function (the pass
+ * route, 90 s) and the cron route becomes a dispatcher that awaits the plan
+ * (800 s). The couplings, each read from the literal Vercel will honour:
+ *  1. every budgeted pass fits its own function, with 30 s for the work
+ *     around its budget;
+ *  2. every node's ceiling IS its route's ceiling;
+ *  3. the plan's longest chain of ceilings, plus slack, fits the dispatcher;
+ *  4. the dispatcher ends before the next tick starts (no two dispatchers
+ *     overlap);
+ *  5. the row in flight past a budget ends inside the pass route: a pass
+ *     checks its budget BEFORE a row, so one send can run past it, and one
+ *     send is at most attempt + rate-limit wait + attempt (Task 4).
+ */
+describe("fan-out: each pass in its own function, the plan inside the dispatcher's ceiling", () => {
+  const BUDGETS_MS = {
+    RELEASE_BUDGET_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS,
+    DOCUMENT_SCAN_BUDGET_MS, EXPIRY_BUDGET_MS, CANCEL_NOTICE_BUDGET_MS,
+  };
+
+  it("1. the pass route declares a LIVE maxDuration of PASS_ROUTE_MAX_S, and each of the six budgets plus 30 s fits it (mutation: route literal 60, RELEASE_BUDGET_MS 61_000, or the export commented out → FAILS)", () => {
+    expect(declaredMaxDuration(passRouteSource)).toBe(PASS_ROUTE_MAX_S);
+    expect(Object.keys(BUDGETS_MS)).toHaveLength(6);
+    for (const [name, ms] of Object.entries(BUDGETS_MS)) {
+      expect(ms + 30_000, name).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+    }
+  });
+
+  it("2. every plan node's ceiling is the pass route's, except the jobs drain, which is its own route's", () => {
+    for (const node of PLAN) {
+      expect(node.ceilingS, node.key).toBe(node.key === JOBS_DRAIN_KEY ? JOBS_DRAIN_MAX_S : PASS_ROUTE_MAX_S);
+    }
+    expect(PLAN.some((n) => n.key === JOBS_DRAIN_KEY)).toBe(true);
+  });
+
+  it("3. the plan's longest path (760 s today: eight nodes of 90 + 5) plus the slack fits the dispatcher's LIVE maxDuration (mutation: PASS_ROUTE_MAX_S 120, or siteTraffic after reactivations → FAILS)", () => {
+    // The number itself is asserted so a longer path is seen in review, not
+    // only when it finally overflows: billingPause → releaseHeld → followups
+    // → reviewRequests → referralAsks → reactivations → usageReport → opsWatch.
+    expect(longestPathS(PLAN)).toBe(760);
+    expect(longestPathS(PLAN) + DISPATCH_SLACK_S).toBeLessThanOrEqual(declaredMaxDuration(routeSource));
+  });
+
+  it("4. the dispatcher declares a LIVE maxDuration of DISPATCHER_MAX_S, shorter than one tick, so two dispatchers never overlap (mutation: literal 900, or the export commented out → FAILS)", () => {
+    const entry = vercel.crons.find((c) => c.path === "/api/cron/reminders");
+    expect(entry).toBeDefined();
+    const declared = declaredMaxDuration(routeSource);
+    expect(declared).toBe(DISPATCHER_MAX_S);
+    expect(declared).toBeLessThan(tickIntervalMs(entry!.schedule) / 1000);
+  });
+
+  it("5. the row in flight past the largest budget ends inside the pass route: budget + two send attempts + one rate-limit wait + 5 s ≤ 90 s (mutation: RATE_LIMIT_MAX_WAIT_MS 10_000, or SEND_TIMEOUT_MS 15_000 → FAILS)", () => {
+    // 60 + 2 × 10 + 3 + 5 = 88 ≤ 90 today.
+    const largest = Math.max(...Object.values(BUDGETS_MS));
+    expect(largest + 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS + 5_000).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
   });
 });
