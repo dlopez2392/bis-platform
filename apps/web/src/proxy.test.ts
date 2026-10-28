@@ -24,6 +24,7 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/f/i994hbegzxng", "/b/7t36x3a3izen", "/u/sometoken", "/embed.js",
     "/d/sometoken", "/d/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "/s/sometoken", "/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "/cal/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.ics",
   ])("%s skips the proxy, so a signed-in visitor's cookie can never turn the framed page into a Clerk handshake redirect (mutation: drop c/ f/ b/ u/ d/ s/ from the matcher → FAILS)", (path) => {
     expect(runs(path)).toBe(false);
   });
@@ -33,6 +34,7 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/api/concierge/b2swbbu52be8/turn", "/api/unsubscribe/tok", "/api/voice/texml",
     "/docs", "/dashboard/d", "/api/d/sometoken/start",
     "/api/s/sometoken/download", "/settings", "/s",
+    "/cal", "/cal/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   ])("%s still runs the proxy: the dashboard stays protected and every API keeps Clerk's request state (mutation: an over-broad exclusion → FAILS)", (path) => {
     expect(runs(path)).toBe(true);
   });
