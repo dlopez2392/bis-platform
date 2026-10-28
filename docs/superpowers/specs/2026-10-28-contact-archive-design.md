@@ -116,17 +116,23 @@ contact that is deleted for good.
   `revoke all on public.contact_archive_log from anon, authenticated; grant select ... to authenticated;
   grant select, insert, update, delete ... to service_role`, the 0091 pattern (`0091_ai_acts.sql:116-119`).
 
-**4. Stamp trigger `app.contacts_archive_stamp()`.** A plain trigger (not a definer), `BEFORE UPDATE OF
-archived_at`, with the same shape as `app.contacts_holding_server_only` (`0098:86-106`). For
-`current_user = 'authenticated'`, when `archived_at` changes:
+**4. Stamp trigger `app.contacts_archive_stamp()`.** A plain trigger (not a definer), `BEFORE INSERT OR
+UPDATE OF archived_at` (corrected in T1: a signed-in client holds table-level INSERT on contacts, so an
+update-only trigger let an insert be born archived under someone else's name, unlogged), with the same shape
+as `app.contacts_holding_server_only` (`0098:86-106`). For `current_user = 'authenticated'`:
 
-- archiving (the new value is not null): `new.archived_at := now()`, so a client can never back-date an
+- on INSERT: `archived_at` and `archived_by` are stored null. An archive is always an update;
+- archiving (null to a value): `new.archived_at := now()`, so a client can never back-date an
   archive, and `new.archived_by := nullif(app.jwt() ->> 'sub', '')` (the same actor expression as
-  `record_event`, `0053_server_only_writes.sql:71`);
-- restoring (the new value is null): `new.archived_by := null`;
-- refuses (42501) when `old.holds_shared_number`. A holding record is never on the list, so archiving it
-  means nothing;
-- refuses (42501) when `app.is_technician(new.account_id)` (owner ruling Q3, 2026-10-28: Technicians may not archive).
+  `record_event`, `0053_server_only_writes.sql:71`; a bare `nullif`, because NULLIF is a keyword and
+  `pg_catalog.nullif` does not exist, which T1's replica caught at run time);
+- restoring (a value to null): `new.archived_by := null`;
+- neither (an archived contact archived again, a stale tab): the first archive stands, with its own
+  instant and person, and nothing is logged (T1 fix round);
+- on an archive or a restore, refuses (42501) when `old.holds_shared_number`. A holding record is never on
+  the list, so archiving it means nothing;
+- on an archive or a restore, refuses (42501) when `app.is_technician(new.account_id)` (owner ruling Q3,
+  2026-10-28: Technicians may not archive, nor restore).
 
 For any other role (service_role, or a definer's owner) it changes nothing.
 
@@ -156,13 +162,19 @@ for 500 ids, past the cap, and the truncated answer would read as "no blocker". 
 `automation_log` under the caller's RLS, and a row the caller cannot see would read as "no blocker". A
 blocker check must never fail open (see the `plpgsql NULL guard` lesson). The app proves the ids
 against the request client first, as `deleteContacts` does today (`contacts.ts:1236-1242`).
+Every lookup binds the account on the table it reads (`m.account_id = p_account_id` on messages, the 0083
+shape, so `messages_thread` is used on its leading column), and calls is two `exists`, by contact and by
+the contact's conversation, never one `or` across the two columns (T1 fix round: production is Postgres 17,
+which has no skip scan; see step 12).
 
 **8. `public.delete_internal_contacts(p_account_id uuid, p_contact_ids uuid[]) returns uuid[]`.**
 SECURITY DEFINER, executable by `authenticated` and `service_role`. It keeps the DATABASE's Owner check
-(review I9, 2026-10-28), written as `if not coalesce(<the whole test>, false)`. The outer coalesce is
+(review I9, 2026-10-28), written as `if not coalesce(<the whole test>, false)`. The NULL path is
 load-bearing (re-review Critical): `app.current_account_id()` is NULL when client access is off
-(`0008_client_access.sql:13-18`), while `is_account_owner` stays true (`0066:52-66`). Without it the test is
-NULL, and `IF NULL` never raises. It refuses (42501) unless the caller is an Owner of this account
+(`0008_client_access.sql:13-18`), while `is_account_owner` stays true (`0066:52-66`). Bare, the test is
+NULL, and `IF NULL` never raises. Two coalesces stand in its way, the one on the account term and the
+outer one, and each alone refuses (corrected in T1: dropping the outer one alone cannot turn the test red;
+the probe drops both). It also refuses NULL ids and more than 500 (22023). It refuses (42501) unless the caller is an Owner of this account
 (`app.is_account_owner(p_account_id)`, `0066_staff_and_roles.sql:63-66`, the agency included, with the 0066
 policy's own `p_account_id = app.current_account_id()` term), or server code with a `service_role` JWT.
 PostgREST verifies the token before it sets `request.jwt.claims`, so a client cannot claim that role. The
@@ -215,7 +227,18 @@ at. Two more tests pin contacts' column grants exactly and gain `archived_at`:
 `ACCOUNT_OWNED_TABLES` (`packages/db/src/account-teardown.ts:20-37`) before `contacts` anyway, as
 `record_summaries` is, so the list stays the account's whole set of tables (review M9).
 
-**12. ROLLBACK** (roll the app back first): drop the inbox triggers, their functions and the two
+**12. Indexes for Postgres 17 (T1 fix round).** Production runs Postgres 17, which has no skip scan, so a
+lookup on a column that only appears second in an index (`messages_thread`, `calls_account_contact`,
+`form_submissions_contact`, `conversations_account_contact_unique` all lead on `account_id`) reads the whole
+table there. A contact or conversation delete checks or clears every single-column foreign key by that
+column alone, so each gets an index leading on it: `calls(contact_id)`, `calls(conversation_id)`,
+`automation_log(contact_id)`, `form_submissions(contact_id)` (partial where not null),
+`messages(conversation_id)` and `conversations(contact_id)`. The blockers read the same ones. A schema
+test pins that every such key has one, except three older ones (`tasks.contact_id`,
+`contact_duplicate_flags.contact_a`/`contact_b`) reported for their own fix. Measured timings are in
+0103's LOCKS AND COST.
+
+**13. ROLLBACK** (roll the app back first): drop the six step 12 indexes; drop the inbox triggers, their functions and the two
 conversations columns; drop the four functions and two archive triggers, the index, the log table and the
 constraint; `revoke update (archived_at)`; then drop both contacts columns. Archived contacts then read as
 ordinary contacts again.

@@ -16,7 +16,9 @@
 --     signed-in session it refuses (42501) archiving a shared number's holding record or any archive by a
 --     Technician (ruling Q3), stamps archived_at with now() and archived_by with the token's sub on archive,
 --     clears archived_by on restore, and on INSERT stores neither (a signed-in insert is never born archived,
---     so no archive goes unstamped or unlogged). Server code is not limited.
+--     so no archive goes unstamped or unlogged). An update that is neither an archive nor a restore (an
+--     archived contact archived again) keeps the first archive's instant and person and logs nothing. The
+--     Technician and holding refusals apply to a restore as much as to an archive. Server code is not limited.
 --   public.contact_archive_log: one row per archive or restore, append-only for every client: account,
 --     contact, action, author kind (person or customer), the person's sub, the customer's sign. Cascades with
 --     its contact. Read by members through the contacts they can see; written only by the two writers below.
@@ -38,6 +40,10 @@
 --     so a row the purge left behind (a document: documents_contact_fkey is NO ACTION) keeps that one contact.
 --     Returns the ids it deleted.
 --   contacts_account_archived_created: the Archived view's default order, archived rows only.
+--   Six indexes for Postgres 17 (section 11): production has no skip scan, so each single-column foreign key a
+--     contact or conversation delete checks or clears gets an index leading on its own column, and the
+--     blockers read them too (calls by contact and by conversation, automation_log and form_submissions by
+--     contact, messages by conversation, conversations by contact).
 --   conversations.contact_archived (trigger-maintained) and conversations.inbox_visible (generated: not
 --     contact_archived or unread_count > 0): the inbox rule (owner decision 2026-10-28) is one stored column the
 --     inbox and search filter on, so neither needs an OR across an embed. app.conversations_follow_contact_archive()
@@ -69,11 +75,29 @@
 --     file in 0.47 s; 50,000 (21 MB) in 414 ms, the whole file in 0.73 s. The orchestrator reads
 --       select count(*), pg_size_pretty(pg_total_relation_size('public.conversations')) from public.conversations
 --     on production at apply time; above 100,000 rows, apply off-peak.
+--   section 11's six indexes: a plain CREATE INDEX (CONCURRENTLY cannot run in a transaction) takes SHARE on
+--     its table, held to the end of the file: reads go on, but inserts and updates of messages, calls,
+--     automation_log and form_submissions wait until the file commits. MEASURED on a real Postgres 17.6
+--     replica (one account: 20,500 contacts and conversations, 300,400 messages, 20,100 calls, 20,000
+--     automation rows, 5,000 form submissions): calls_contact_id 23 ms, calls_conversation_id 21 ms,
+--     automation_log_contact_id 21 ms, form_submissions_contact_id 8 ms, messages_conversation_id 332 ms,
+--     conversations_contact_id 11 ms; the conversations rewrite 125 ms; the whole file 1.05 s. Because the file
+--     holds conversations (ACCESS EXCLUSIVE) and then waits for SHARE on messages, a concurrent filing that
+--     holds messages and wants conversations can deadlock with it: Postgres aborts one side within a second.
+--     The file is all or nothing; if it is the side aborted (or lock_timeout fires), run it again.
+--   What the indexes buy, on that Postgres 17.6 replica, warm (the 500-id calls the app makes): before them
+--     (and before the account term on messages and the calls split), contact_delete_blockers 22.6 s and
+--     delete_internal_contacts 33.0 s, each reading all 300,400 messages per contact; after, 19 ms and 168 ms.
+--     Without messages_conversation_id and conversations_contact_id (the two NO ACTION checks a delete makes),
+--     the delete still takes 6.6 s. A PG18 replica hides all of this: its skip scan read the account-led
+--     indexes (before: 2.4 s and 3.5 s there).
 --
 -- LOAD-BEARING. The app after this file names archived_at in contacts' COLS and in every list read, and
 -- inbox_visible in the inbox reads, so it merges only after this file is on production.
 --
 -- ROLLBACK (roll the app back first), in this order:
+--   drop index public.calls_contact_id, public.calls_conversation_id, public.automation_log_contact_id,
+--     public.form_submissions_contact_id, public.messages_conversation_id, public.conversations_contact_id;
 --   drop trigger conversations_contact_archived on public.conversations;
 --   drop function app.conversation_contact_archived();
 --   drop trigger contacts_archive_to_conversations on public.contacts;
@@ -145,7 +169,13 @@ begin
       -- A signed-in insert is never born archived: an archive is always an update, stamped and logged.
       new.archived_at := null;
       new.archived_by := null;
-    elsif new.archived_at is distinct from old.archived_at then
+    elsif (new.archived_at is null) = (old.archived_at is null) then
+      -- Not an archive and not a restore (an archived contact archived again, a stale tab): the first archive
+      -- stands as it was, with its own instant and person, and nothing is logged (the log trigger compares
+      -- the stored values, which this leaves unchanged).
+      new.archived_at := old.archived_at;
+      new.archived_by := old.archived_by;
+    else
       if old.holds_shared_number then
         raise exception 'A shared number holding record is never archived' using errcode = '42501';
       end if;
@@ -224,16 +254,19 @@ begin
       select pg_catalog.array_agg(x.reason order by x.reason) as reasons from (
         select 'messages'::text as reason where exists (
           select 1 from public.conversations cv join public.messages m on m.conversation_id = cv.id
-           where cv.account_id = p_account_id and cv.contact_id = k.id and m.channel <> 'note')
+           where cv.account_id = p_account_id and cv.contact_id = k.id
+             and m.account_id = p_account_id and m.channel <> 'note')
         union all select 'inbound_email' where exists (
           select 1 from public.conversations cv join public.inbound_emails ie
                  on ie.account_id = cv.account_id and ie.conversation_id = cv.id
            where cv.account_id = p_account_id and cv.contact_id = k.id)
+        -- Two EXISTS, not one OR: each reads its own index (calls_contact_id, calls_conversation_id), where an OR
+        -- across the two columns read every call of the account per contact.
         union all select 'calls' where exists (
-          select 1 from public.calls x where x.account_id = p_account_id
-             and (x.contact_id = k.id
-                  or x.conversation_id in (select cv.id from public.conversations cv
-                                            where cv.account_id = p_account_id and cv.contact_id = k.id)))
+          select 1 from public.calls x where x.account_id = p_account_id and x.contact_id = k.id)
+          or exists (
+          select 1 from public.conversations cv join public.calls x on x.conversation_id = cv.id
+           where cv.account_id = p_account_id and cv.contact_id = k.id and x.account_id = p_account_id)
         union all select 'forms' where exists (
           select 1 from public.form_submissions x where x.account_id = p_account_id and x.contact_id = k.id)
         union all select 'consent' where exists (
@@ -268,6 +301,9 @@ declare
   v_id uuid;
   v_deleted uuid[] := '{}';
 begin
+  -- The Owner check is the FIRST statement, before any validation or early return: the app's Owner pre-flight
+  -- (deleteContacts, before the vault purge) calls this with an EMPTY array, so an "empty array, return early"
+  -- above it would wave everyone through. An empty array is valid (0 to 500 ids), takes no lock and touches no row.
   -- The NULL path (re-review Critical, proven on PG18): app.current_account_id() is NULL when the account's
   -- client access is off or the token names no org (0008_client_access.sql:13-18), while is_account_owner keys
   -- on the token's sub alone (0066:63-66) and stays true. Bare, the account term is NULL, the whole test is
@@ -297,7 +333,8 @@ begin
   loop
     begin
       delete from public.messages m using public.conversations cv
-       where m.conversation_id = cv.id and cv.account_id = p_account_id and cv.contact_id = v_id and m.channel = 'note';
+       where m.conversation_id = cv.id and cv.account_id = p_account_id and cv.contact_id = v_id
+         and m.account_id = p_account_id and m.channel = 'note';
       delete from public.conversations cv where cv.account_id = p_account_id and cv.contact_id = v_id;
       delete from public.contacts k where k.account_id = p_account_id and k.id = v_id;
       v_deleted := v_deleted || v_id;
@@ -348,3 +385,16 @@ revoke all on function app.conversation_contact_archived() from public, anon, au
 -- message bumps last_message_at, every read clears unread) heals it at the next write. One PK lookup per write.
 create trigger conversations_contact_archived before insert or update on public.conversations
   for each row execute function app.conversation_contact_archived();
+
+-- 11. Indexes for the delete and the blockers on Postgres 17 (production), which has no skip scan: a lookup on a
+--     column that only appears second in an index (messages_thread, calls_account_contact,
+--     form_submissions_contact, conversations_account_contact_unique all lead on account_id) reads the whole
+--     index or table there. Each foreign key that a contact or conversation delete has to check or clear gets an
+--     index leading on its own column; the blockers read the same ones. Partial where the column is nullable:
+--     the foreign key's lookup (col equal to a value) implies col is not null, so the partial index serves it.
+create index calls_contact_id on public.calls (contact_id) where contact_id is not null;
+create index calls_conversation_id on public.calls (conversation_id) where conversation_id is not null;
+create index automation_log_contact_id on public.automation_log (contact_id) where contact_id is not null;
+create index form_submissions_contact_id on public.form_submissions (contact_id) where contact_id is not null;
+create index messages_conversation_id on public.messages (conversation_id);
+create index conversations_contact_id on public.conversations (contact_id);

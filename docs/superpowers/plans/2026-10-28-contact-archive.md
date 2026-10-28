@@ -410,7 +410,7 @@ describe("0103: delete_internal_contacts keeps the database's Owner check (revie
       expect(r.d).toEqual([idA]);
     }));
 
-  it("an Owner of an account whose client access is OFF is refused 42501 (re-review Critical; mutation: drop the outer coalesce -> FAILS)", () =>
+  it("an Owner of an account whose client access is OFF is refused 42501 (re-review Critical; mutation: drop the outer coalesce AND the inner one around `p_account_id = app.current_account_id()` -> FAILS; either one alone refuses)", () =>
     withRollback(async (c) => {
       // current_account_id() is NULL here (0008:13-18) while is_account_owner is still true (0066:52-66): the
       // expression is NULL, and only the outer coalesce turns that into a refusal.
@@ -470,7 +470,9 @@ Plus four more:
   it("delete_internal_contacts deletes an internal-only contact with its notes, note messages and empty conversations, and returns its id (mutation: skip the note-message delete -> the conversation delete hits messages_conversation_id_fkey, the id is not returned, FAILS)", ...
   // These three run as the account's Owner (actAsMember(..., "owner")), the path the app takes.
 
-  it("delete_internal_contacts keeps a contact that gained an outbound text after the blockers were read, and still deletes the rest of the batch (mutation: drop the in-lock re-check -> FAILS)", ...
+  it("delete_internal_contacts keeps a contact that gained a call or a text after the blockers were read, and still deletes the rest of the batch (mutation: drop the in-lock re-check -> the call's contact is deleted, FAILS)", ...
+  // T1: a late TEXT alone cannot prove the re-check: messages_conversation_id_fkey (NO ACTION) and the exception block
+  // keep that contact anyway. A late CALL can: calls_contact_id_fkey is ON DELETE SET NULL. Seed both.
   // seed free1, free2; read blockers (empty); then insert an outbound sms on free2; call delete_internal_contacts(array[free1, free2]);
   // expect returned = [free1]; free2 still exists.
 
@@ -598,25 +600,35 @@ create policy contact_archive_log_read on public.contact_archive_log for select 
 create function app.contacts_archive_stamp() returns trigger
 language plpgsql set search_path = pg_catalog, pg_temp as $$
 begin
-  if coalesce(current_user = 'authenticated', false)
-     and new.archived_at is distinct from old.archived_at then
-    if old.holds_shared_number then
-      raise exception 'A shared number holding record is never archived' using errcode = '42501';
-    end if;
-    if coalesce(app.is_technician(new.account_id), false) then
-      raise exception 'A Technician cannot archive a customer' using errcode = '42501';
-    end if;
-    if new.archived_at is not null then
-      new.archived_at := pg_catalog.now();
-      new.archived_by := pg_catalog.nullif(app.jwt() ->> 'sub', '');
-    else
+  if coalesce(current_user = 'authenticated', false) then
+    if tg_op = 'INSERT' then
+      -- T1: a signed-in client holds table-level INSERT, so an insert is never born archived.
+      new.archived_at := null;
       new.archived_by := null;
+    elsif (new.archived_at is null) = (old.archived_at is null) then
+      -- T1 fix round: archived again (a stale tab): the first archive stands, nothing is logged.
+      new.archived_at := old.archived_at;
+      new.archived_by := old.archived_by;
+    else
+      if old.holds_shared_number then
+        raise exception 'A shared number holding record is never archived' using errcode = '42501';
+      end if;
+      if coalesce(app.is_technician(new.account_id), false) then
+        raise exception 'A Technician cannot archive a customer' using errcode = '42501';
+      end if;
+      if new.archived_at is not null then
+        new.archived_at := pg_catalog.now();
+        -- Bare nullif (T1): NULLIF is a keyword; pg_catalog.nullif does not exist and failed at run time.
+        new.archived_by := nullif(app.jwt() ->> 'sub', '');
+      else
+        new.archived_by := null;
+      end if;
     end if;
   end if;
   return new;
 end $$;
 revoke all on function app.contacts_archive_stamp() from public, anon;
-create trigger contacts_archive_stamp before update of archived_at on public.contacts
+create trigger contacts_archive_stamp before insert or update of archived_at on public.contacts
   for each row execute function app.contacts_archive_stamp();
 
 -- 5. The person's log row. DEFINER (it writes a table authenticated cannot). The role test is in WHEN,
@@ -629,7 +641,7 @@ begin
   values (new.account_id, new.id,
           case when new.archived_at is null then 'restored' else 'archived' end,
           'person',
-          coalesce(new.archived_by, pg_catalog.nullif(app.jwt() ->> 'sub', '')));
+          coalesce(new.archived_by, nullif(app.jwt() ->> 'sub', '')));
   return null;
 end $$;
 revoke all on function app.contacts_archive_log() from public, anon, authenticated;
@@ -675,16 +687,17 @@ begin
       select pg_catalog.array_agg(x.reason order by x.reason) as reasons from (
         select 'messages'::text as reason where exists (
           select 1 from public.conversations cv join public.messages m on m.conversation_id = cv.id
-           where cv.account_id = p_account_id and cv.contact_id = k.id and m.channel <> 'note')
+           where cv.account_id = p_account_id and cv.contact_id = k.id
+             and m.account_id = p_account_id and m.channel <> 'note')
         union all select 'inbound_email' where exists (
           select 1 from public.conversations cv join public.inbound_emails ie
                  on ie.account_id = cv.account_id and ie.conversation_id = cv.id
            where cv.account_id = p_account_id and cv.contact_id = k.id)
         union all select 'calls' where exists (
-          select 1 from public.calls x where x.account_id = p_account_id
-             and (x.contact_id = k.id
-                  or x.conversation_id in (select cv.id from public.conversations cv
-                                            where cv.account_id = p_account_id and cv.contact_id = k.id)))
+          select 1 from public.calls x where x.account_id = p_account_id and x.contact_id = k.id)
+          or exists (
+          select 1 from public.conversations cv join public.calls x on x.conversation_id = cv.id
+           where cv.account_id = p_account_id and cv.contact_id = k.id and x.account_id = p_account_id)
         union all select 'forms' where exists (
           select 1 from public.form_submissions x where x.account_id = p_account_id and x.contact_id = k.id)
         union all select 'consent' where exists (
@@ -716,7 +729,8 @@ declare
   v_id uuid;
   v_deleted uuid[] := '{}';
 begin
-  -- The OUTER coalesce is load-bearing (re-review Critical, proven on PG18): app.current_account_id() is NULL when
+  -- The NULL path is load-bearing (re-review Critical, proven on PG18; corrected in T1: the coalesce on the account
+  -- term and the outer one each refuse alone, so the probe drops both): app.current_account_id() is NULL when
   -- the account's client access is off or the token names no org (0008_client_access.sql:13-18), while
   -- is_account_owner keys on the token's sub alone (0066:52-66) and stays true. Without it the test is
   -- `not (false or false or (NULL and true))` = NULL, and IF NULL never raises: it would fail OPEN.
@@ -743,7 +757,8 @@ begin
   loop
     begin
       delete from public.messages m using public.conversations cv
-       where m.conversation_id = cv.id and cv.account_id = p_account_id and cv.contact_id = v_id and m.channel = 'note';
+       where m.conversation_id = cv.id and cv.account_id = p_account_id and cv.contact_id = v_id
+         and m.account_id = p_account_id and m.channel = 'note';
       delete from public.conversations cv where cv.account_id = p_account_id and cv.contact_id = v_id;
       delete from public.contacts k where k.account_id = p_account_id and k.id = v_id;
       v_deleted := v_deleted || v_id;
@@ -795,7 +810,19 @@ revoke all on function app.conversation_contact_archived() from public, anon, au
 -- message bumps last_message_at, every read clears unread) heals it at the next write. One PK lookup per write.
 create trigger conversations_contact_archived before insert or update on public.conversations
   for each row execute function app.conversation_contact_archived();
+
+-- 11. (T1 fix round) Production is Postgres 17, with no skip scan: every single-column foreign key a contact or
+--     conversation delete checks or clears gets an index leading on its own column; the blockers read them too.
+create index calls_contact_id on public.calls (contact_id) where contact_id is not null;
+create index calls_conversation_id on public.calls (conversation_id) where conversation_id is not null;
+create index automation_log_contact_id on public.automation_log (contact_id) where contact_id is not null;
+create index form_submissions_contact_id on public.form_submissions (contact_id) where contact_id is not null;
+create index messages_conversation_id on public.messages (conversation_id);
+create index conversations_contact_id on public.conversations (contact_id);
 ```
+
+The committed `0103_contact_archive.sql` is the source of truth over this block; its header carries the
+Postgres 17 timings and the index-build lock cost.
 
 ROLLBACK in the header, in order: drop triggers `conversations_contact_archived` and `contacts_archive_to_conversations` and their two functions; drop the conversations columns `inbox_visible` then `contact_archived`; drop index `contacts_account_archived_created`; drop the three public functions; drop trigger `contacts_archive_log` and function `app.contacts_archive_log()`; drop trigger `contacts_archive_stamp` and function `app.contacts_archive_stamp()`; drop table `public.contact_archive_log`; `revoke update (archived_at) on public.contacts from authenticated`; drop constraint `contacts_archived_by_needs_at`; drop both columns.
 
@@ -803,7 +830,7 @@ ROLLBACK in the header, in order: drop triggers `conversations_contact_archived`
 Run: `psql -p 55434 -d post -1 -v ON_ERROR_STOP=1 -f supabase/migrations/0103_contact_archive.sql`, then the Step 3 command against `post`.
 Expected: all pass. Paste vitest's summary line.
 
-- [ ] **Step 6: Update the two guard tests.** In `schema-grants-guard.test.ts:86-89` add `"archived_at"` in sorted position (after `"assigned_to"`). Add `"archived_at"` the same way to `contacts-marketing-optout-schema.test.ts:69-72` and `server-only-writes-grants.test.ts:130-133`. In `account-teardown.ts:36` put `"contact_archive_log"` before `"contacts"`. In `definer-search-path.test.ts` add these six entries in sorted position, then change `:68` to `toHaveLength(29)` and `:77` to `toBeGreaterThanOrEqual(29)`. If 0102 is in your `pre`, use its count + 6, read off the file:
+- [ ] **Step 6: Update the two guard tests.** In `schema-grants-guard.test.ts:86-89` add `"archived_at"` in sorted position (BEFORE `"assigned_to"`: "ar" sorts before "as"; corrected in T1). Add `"archived_at"` the same way to `contacts-marketing-optout-schema.test.ts:69-72` and `server-only-writes-grants.test.ts:130-133`. In `account-teardown.ts:36` put `"contact_archive_log"` before `"contacts"`. In `definer-search-path.test.ts` add these six entries in sorted position, then change `:68` to `toHaveLength(29)` and `:77` to `toBeGreaterThanOrEqual(29)`. If 0102 is in your `pre`, use its count + 6, read off the file:
 
 ```ts
   "app.contacts_archive_log()": PG_CATALOG_PG_TEMP,
@@ -830,14 +857,20 @@ Run all four files on `post` (green) and the two guard files on `pre` (red: `exp
 | `grant insert on public.contact_archive_log to authenticated` | "authenticated holds no write privilege on the log" (the privilege read; an insert attempt could not fail, review I1) |
 | delete fn: delete the Owner `if not (…)` block | "a Staff member's call is refused" |
 | delete fn: drop `p_account_id = app.current_account_id() and` | "an Owner of ANOTHER account is refused" |
-| delete fn: drop the OUTER `coalesce(…, false)` (keep the inner ones) | "an Owner of an account whose client access is OFF is refused" (the NULL path; re-review Critical) |
+| delete fn: drop BOTH the outer `coalesce(…, false)` and the inner one around `p_account_id = app.current_account_id()` (T1: either one alone refuses, so dropping only the outer one cannot fail) | "an Owner of an account whose client access is OFF is refused" (the NULL path; re-review Critical) |
+| delete fn: drop `p_account_id = app.current_account_id()` | "an Owner of ANOTHER account is refused, and so is an Owner of both signed in to the other" (T1 added the Owner of both: is_account_owner(A) already refuses an Owner of B alone) and the client-access-OFF case |
+| delete fn: the cap at 501, or drop `p_contact_ids is null or` | "refuses 501 ids with 22023" / "refuses no array at all with 22023" (T1 fix round) |
+| stamp: refuse a Technician only when archiving | "a Technician's restore is refused 42501 too" (T1 fix round) |
+| stamp: drop the keep-the-first-archive branch | "archiving an already-archived contact again keeps the first archive" (T1 fix round) |
+| log policy in the house shape `using (app.is_agency() or account_id = app.current_account_id())` | "a Technician reads the log rows of the customers assigned to them and no others" (T1 fix round) |
+| drop `calls_conversation_id` (or any section 11 index) | "every single-column foreign key into contacts or conversations has a valid index" (T1 fix round) |
 | delete fn: drop the `service_role` term | "server code (a service_role JWT) may call it" |
-| blockers: drop the `or x.conversation_id in (…)` term | the calls case (b) |
+| blockers: drop the second calls `exists` (by the contact's conversation) | the calls case (b) |
 | drop trigger `contacts_archive_to_conversations` | "archiving and restoring a contact flips its conversations' contact_archived" |
 | drop trigger `conversations_contact_archived` | "a conversation created for an archived contact starts archived" |
 | blockers: delete each `exists` in turn | that reason's own `it` |
 | blockers: `m.channel <> 'note'` → `true` | "notes, a To-do, … block nothing" |
-| delete fn: delete the `not exists (… contact_delete_blockers …)` line | "keeps a contact that gained an outbound text" |
+| delete fn: delete the `not exists (… contact_delete_blockers …)` line | "keeps a contact that gained a call or a text" (red by the call) |
 | delete fn: remove `exception when foreign_key_violation` | "a document left behind keeps that one contact" |
 
 - [ ] **Step 8: Commit.**

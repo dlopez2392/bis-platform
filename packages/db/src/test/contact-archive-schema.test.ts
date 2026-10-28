@@ -155,6 +155,34 @@ describe("0103: archive columns and the stamp trigger", () => {
       expect((await refusal(c, "update public.contacts set archived_at = now() where id = $1", [id]))?.code).toBe("42501");
     }));
 
+  it("archiving an already-archived contact again keeps the first archive: same instant, same person, no second log row (mutation: drop the keep-the-first-archive branch -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "rearchive");
+      const id = await contact(c, a.accountId);
+      await actAsOwner(c);
+      // The first archive, a day ago, by someone else (written as the table owner, so neither trigger stamps it).
+      await c.query("update public.contacts set archived_at = now() - interval '1 day', archived_by = 'user_first' where id = $1", [id]);
+      await actAsMember(c, a.accountId, a.orgId, "staff");
+      await c.query("update public.contacts set archived_at = now() where id = $1", [id]);
+      await actAsOwner(c);
+      const { rows: [k] } = await c.query(
+        "select archived_by, archived_at < now() - interval '23 hours' as first from public.contacts where id = $1", [id]);
+      expect(k).toEqual({ archived_by: "user_first", first: true });
+      expect((await c.query("select 1 from public.contact_archive_log where contact_id = $1", [id])).rowCount).toBe(0);
+    }));
+
+  it("a Technician's restore is refused 42501 too, on a customer assigned to them (ruling Q3; mutation: refuse a Technician only when archiving -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "techrestore");
+      const id = await contact(c, a.accountId);
+      const sub = await actAsMember(c, a.accountId, a.orgId, "technician");
+      await actAsOwner(c);
+      const { rows: [u] } = await c.query<{ id: string }>("select id from public.users where clerk_user_id = $1", [sub]);
+      await c.query("update public.contacts set assigned_to = $2, archived_at = now(), archived_by = 'user_owner' where id = $1", [id, u!.id]);
+      await actAs(c, { org_id: a.orgId, sub });
+      expect((await refusal(c, "update public.contacts set archived_at = null where id = $1", [id]))?.code).toBe("42501");
+    }));
+
   it("archiving a shared number's holding record is refused 42501 (mutation: drop the holds_shared_number check -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "holding");
@@ -206,6 +234,26 @@ describe("0103: contact_archive_log", () => {
       await actAsOwner(c); // actAsMember seeds its users row as the current role, which must be the table owner
       await actAsMember(c, a.accountId, a.orgId, "owner");
       expect((await c.query("select 1 from public.contact_archive_log where contact_id = $1", [idB])).rowCount).toBe(0);
+    }));
+});
+
+describe("0103: contact_archive_log, what a Technician reads", () => {
+  it("a Technician reads the log rows of the customers assigned to them and no others (the policy reads through contacts' RLS; mutation: policy `using (account_id = app.current_account_id())` -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "techlog");
+      const mine = await contact(c, a.accountId, "Mine");
+      const other = await contact(c, a.accountId, "Other");
+      const sub = await actAsMember(c, a.accountId, a.orgId, "technician");
+      await actAsOwner(c);
+      const { rows: [u] } = await c.query<{ id: string }>("select id from public.users where clerk_user_id = $1", [sub]);
+      await c.query("update public.contacts set assigned_to = $2 where id = $1", [mine, u!.id]);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      await c.query("update public.contacts set archived_at = now() where id = any($1::uuid[])", [[mine, other]]);
+      await actAsOwner(c);
+      expect((await c.query("select 1 from public.contact_archive_log where account_id = $1", [a.accountId])).rowCount).toBe(2);
+      await actAs(c, { org_id: a.orgId, sub });
+      const { rows } = await c.query("select contact_id, action from public.contact_archive_log where account_id = $1", [a.accountId]);
+      expect(rows).toEqual([{ contact_id: mine, action: "archived" }]);
     }));
 });
 
@@ -328,6 +376,31 @@ describe("0103: delete_internal_contacts keeps the database's Owner check (revie
       expect((await c.query("select 1 from public.contacts where id = $1", [id])).rowCount).toBe(1);
     }));
 
+  it("the app's Owner pre-flight, an EMPTY array: a Staff member is refused 42501, an Owner gets an empty answer (T4 calls it before the purge; mutations: an empty-array early return above the Owner check, or a lower bound of 1 -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "preflight");
+      await actAsMember(c, a.accountId, a.orgId, "staff");
+      expect((await refusal(c, "select public.delete_internal_contacts($1, '{}'::uuid[])", [a.accountId]))?.code).toBe("42501");
+      await actAsOwner(c);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      const { rows: [r] } = await c.query<{ d: string[] }>("select public.delete_internal_contacts($1, '{}'::uuid[]) as d", [a.accountId]);
+      expect(r!.d).toEqual([]);
+    }));
+
+  const badIds: [string, () => string[] | null][] = [
+    ["501 ids (mutation: the cap at 501 -> FAILS)", () => Array.from({ length: 501 }, () => randomUUID())],
+    ["no array at all (mutation: drop `p_contact_ids is null or` -> FAILS)", () => null],
+  ];
+  it.each(badIds)("refuses %s with 22023, before it locks anything", (_label, ids) =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "delcap");
+      await actAsOwner(c);
+      await c.query("set local role service_role");
+      await c.query(`select set_config('request.jwt.claims', '{"role":"service_role"}', true)`);
+      expect((await refusal(c, "select public.delete_internal_contacts($1, $2::uuid[])", [a.accountId, ids()]))?.code).toBe("22023");
+      await c.query("reset role");
+    }));
+
   it("server code (a service_role JWT) may call it: the e2e cleanup and the live suites do (mutation: drop the service_role term -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "svcdel");
@@ -372,7 +445,7 @@ describe("0103: contact_delete_blockers, one reason at a time", () => {
       expect(await blockers(c, a.accountId, [id])).toEqual([{ contact_id: id, reasons: ["calls"] }]);
     }));
 
-  it("a call with no contact on the contact's conversation blocks with 'calls' (review M3, 0019:49; mutation: drop the `or x.conversation_id in (...)` term -> FAILS)", () =>
+  it("a call with no contact on the contact's conversation blocks with 'calls' (review M3, 0019:49; mutation: drop the second calls exists, by the contact's conversation -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "bcallcv");
       const id = await contact(c, a.accountId);
@@ -547,6 +620,27 @@ describe("0103: delete_internal_contacts, what it deletes and what it keeps", ()
       expect(await blockers(c, a.accountId, [freeB, textedB])).toEqual([]);
       expect(await deleteAsOwner(c, a, [freeB, textedB])).toEqual([]);
       expect(await exists(c, [freeB, textedB])).toEqual([freeB, textedB].sort());
+    }));
+});
+
+describe("0103: the delete's foreign-key lookups each have an index of their own (production is Postgres 17: no skip scan)", () => {
+  it("every single-column foreign key into contacts or conversations has a valid index leading on its column, except three older ones named here (mutation: drop calls_conversation_id -> FAILS naming it)", () =>
+    withRollback(async (c) => {
+      // A contact delete checks or clears each of these by its column alone (`where col = $1`). On Postgres 17 an
+      // index leading on account_id cannot serve that lookup, so it reads the whole table once per deleted row.
+      const { rows } = await c.query<{ fk: string }>(
+        `select c.conrelid::regclass::text || '.' || a.attname as fk
+           from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+          where c.contype = 'f' and c.confrelid in ('public.contacts'::regclass, 'public.conversations'::regclass)
+            and pg_catalog.cardinality(c.conkey) = 1
+            and not exists (
+              select 1 from pg_index i
+               where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1] and i.indisvalid
+                 and (i.indpred is null or pg_get_expr(i.indpred, i.indrelid) = '(' || quote_ident(a.attname) || ' IS NOT NULL)'))
+          order by 1`);
+      // Older than 0103 and outside its brief, reported in its fix round: every contact delete since they were
+      // made has read them whole (tasks 0003, contact_duplicate_flags 0033). Small tables today.
+      expect(rows.map((r) => r.fk)).toEqual(["contact_duplicate_flags.contact_a", "contact_duplicate_flags.contact_b", "tasks.contact_id"]);
     }));
 });
 
