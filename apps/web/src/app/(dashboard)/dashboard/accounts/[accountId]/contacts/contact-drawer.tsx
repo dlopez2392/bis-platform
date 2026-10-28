@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
+  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -70,6 +70,9 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   suggestion: CheckSquare,
   // item 8c: the type's exhaustive case only. The drawer's Recent never reads ai_acts either (plan Task 3).
   aiAct: Bot,
+  // contact archive: archived / came-back rows. recent-rows.ts answers null for them, so the drawer's
+  // Recent never shows one; this is the type's exhaustive case only.
+  archive: Archive,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";
