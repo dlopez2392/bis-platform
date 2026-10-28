@@ -261,6 +261,51 @@ describe("runFanout — what starts, and when", () => {
     const results = await h.run;
     expect(results.reminders).toEqual({ notStarted: 1 });
   });
+
+  it("9c. releaseHeld answers 200 with NO counters field at all -> unreadable, and the recipes stay blocked: one predicate reads unreadable for both the release rule and the counters (mutation: isCompleted tests `counters !== null` -> the recipes start, FAILS)", async () => {
+    const h = harness({ answers: { releaseHeld: { status: 200 } as unknown as Answer } });
+    const results = await h.run;
+    expect(results.releaseHeld).toEqual({ unreadable: 1 });
+    for (const k of [...RELEASED, ...TRANSITIVELY_BLOCKED]) {
+      expect(results[k], k).toEqual({ notStarted: 1 });
+      expect(h.invoked(k), k).toBe(false);
+    }
+    for (const k of RELEASED) {
+      expect(h.beats.filter(([b]) => b === `cron.pass.${k}`), k).toEqual([[`cron.pass.${k}`, { ok: false, error: "not started: the release pass answered unreadably" }]]);
+    }
+  });
+
+  it("9d. billingPause gives no answer -> only billingPause, usageReport and opsWatch run, 18 nodes never start, each released recipe's beat names the billing pause as the cause, then cron.tick (mutation: drop the root cause from the blocked wording -> FAILS)", async () => {
+    const h = harness({ answers: { billingPause: "reject" } });
+    const results = await h.run;
+    expect(h.events.filter((e) => e.startsWith("invoke:"))).toEqual(["invoke:billingPause", "invoke:usageReport", "invoke:opsWatch"]);
+    expect(results.billingPause).toEqual({ errored: 1, noAnswer: 1 });
+    const notStarted = keys(PLAN).filter((k) => results[k]?.notStarted === 1);
+    expect(notStarted).toEqual(keys(PLAN).filter((k) => !["billingPause", "usageReport", "opsWatch"].includes(k)));
+    expect(notStarted).toHaveLength(18);
+    expect(h.beats).toEqual([
+      ["cron.pass.billingPause", { ok: false, error: "the pass's function did not answer: Error: socket hang up" }],
+      ...RELEASED.map((k) => [`cron.pass.${k}`, { ok: false, error: "not started: the release pass was not started because the billingPause pass did not answer" }]),
+      ["cron.tick", { ok: true }],
+    ]);
+    for (const k of RELEASED) expect(h.events.indexOf(`beat:cron.pass.${k}`), k).toBeLessThan(h.events.indexOf("invoke:usageReport"));
+  });
+
+  it("9e. the cause named is the ROOT that gave no answer, however deep: a -> b -> c -> d(released), a silent -> d's beat names a (mutation: a blocked node records its direct predecessor as the cause -> names b, FAILS)", async () => {
+    const h = harness({
+      answers: { a: "reject" },
+      plan: [
+        { key: "a", after: [], rule: "settled", ceilingS: 1 },
+        { key: "b", after: ["a"], rule: "settled", ceilingS: 1 },
+        { key: "c", after: ["b"], rule: "settled", ceilingS: 1 },
+        { key: "d", after: ["c"], rule: "released", ceilingS: 1 },
+      ],
+    });
+    expect(await h.run).toEqual({ a: { errored: 1, noAnswer: 1 }, b: { notStarted: 1 }, c: { notStarted: 1 }, d: { notStarted: 1 } });
+    expect(h.beats.filter(([k]) => k === "cron.pass.d")).toEqual([
+      ["cron.pass.d", { ok: false, error: "not started: the release pass was not started because the a pass did not answer" }],
+    ]);
+  });
 });
 
 describe("runFanout — the dispatcher's own heartbeats", () => {

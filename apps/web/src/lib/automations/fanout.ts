@@ -115,9 +115,28 @@ type Outcome =
   | { kind: "answered"; status: number; counters: PassCounters | null }
   | { kind: "noAnswer"; error: string }
   | { kind: "skipped" }    // a `completed` predecessor did not answer 200
-  | { kind: "blocked" };   // some ancestor gave no answer and may still be running
+  // Some ancestor gave no answer (or, for a `released` node, the release pass
+  // did not complete) and may still be running. `cause` is that ancestor's key,
+  // never a blocked node's, so a heartbeat can name where the tick stopped.
+  | { kind: "blocked"; cause: string };
 
-const isCompleted = (p: Outcome) => p.kind === "answered" && p.status === 200 && p.counters !== null;
+/** A 200's body is readable only as a plain object. ONE reading, shared by the
+ *  release rule and the reported counters, so an answer the JSON calls
+ *  `unreadable` can never release the recipes (it fails closed). */
+const readable = (c: unknown): c is PassCounters => c !== null && typeof c === "object" && !Array.isArray(c);
+const isCompleted = (p: Outcome) => p.kind === "answered" && p.status === 200 && readable(p.counters);
+
+/** The key of the ancestor that blocks `node`: a predecessor that gave no
+ *  answer, a blocked predecessor's own cause, or (for `released`) the
+ *  predecessor that did not complete. */
+function blockCause(node: PlanNode, done: ReadonlyMap<string, Outcome>): string {
+  for (const k of node.after) {
+    const p = done.get(k)!;
+    if (p.kind === "noAnswer") return k;
+    if (p.kind === "blocked") return p.cause;
+  }
+  return node.after.find((k) => !isCompleted(done.get(k)!))!;
+}
 
 function decide(node: PlanNode, done: ReadonlyMap<string, Outcome>): "wait" | "start" | "skipped" | "blocked" {
   const preds = node.after.map((k) => done.get(k));
@@ -129,7 +148,14 @@ function decide(node: PlanNode, done: ReadonlyMap<string, Outcome>): "wait" | "s
   return "start";
 }
 
-/** Why a `released` node never started, in the words its heartbeat carries. */
+/**
+ * Why a `released` node never started, in the words its heartbeat carries.
+ * Every `released` node waits on releaseHeld ALONE (fanout.test.ts case 4 pins
+ * `after` to exactly ["releaseHeld"]), so "the release pass" names its one
+ * predecessor. Four causes: it answered non-200, answered 200 unreadably, did
+ * not answer, or was itself never started (an ancestor of it, named, did not
+ * answer).
+ */
 function notStartedReason(node: PlanNode, done: ReadonlyMap<string, Outcome>): string {
   const cause = node.after.map((k) => done.get(k)!).find((p) => !isCompleted(p))!;
   switch (cause.kind) {
@@ -139,16 +165,24 @@ function notStartedReason(node: PlanNode, done: ReadonlyMap<string, Outcome>): s
         : `not started: the release pass answered HTTP ${cause.status}`;
     case "noAnswer":
       return "not started: the release pass did not answer";
-    default:
-      return "not started: the release pass was not started";
+    case "blocked":
+      // `cause.cause` is always a node that answered or did not (blockCause never names a blocked one).
+      return `not started: the release pass was not started because the ${cause.cause} pass ${describe(done.get(cause.cause)!)}`;
+    case "skipped":
+      return "not started: the release pass was skipped";
   }
+}
+
+function describe(o: Outcome): string {
+  if (o.kind === "answered") return o.status === 200 ? "answered unreadably" : `answered HTTP ${o.status}`;
+  return "did not answer";
 }
 
 function countersOf(o: Outcome): PassCounters {
   switch (o.kind) {
     case "answered":
       if (o.status !== 200) return { errored: 1 };
-      return o.counters ?? { unreadable: 1 };
+      return readable(o.counters) ? o.counters : { unreadable: 1 };
     case "noAnswer":
       return { errored: 1, noAnswer: 1 };
     default:
@@ -216,14 +250,15 @@ export async function runFanout(input: {
         // Its own task, like a started node's, so a slow heartbeat write never
         // stalls the scan for unrelated branches; done only once it landed.
         const error = notStartedReason(node, done);
+        const cause = blockCause(node, done);
         inFlight.set(node.key, (async () => {
           await safeBeat(`cron.pass.${node.key}`, { ok: false, error });
-          done.set(node.key, { kind: "blocked" });
+          done.set(node.key, { kind: "blocked", cause });
           inFlight.delete(node.key);
         })());
         continue;
       }
-      done.set(node.key, { kind: decision });
+      done.set(node.key, decision === "blocked" ? { kind: "blocked", cause: blockCause(node, done) } : { kind: "skipped" });
     }
     if (changed) continue;
     if (inFlight.size === 0) {
