@@ -621,3 +621,15 @@ describe("the forwarding tick key is mirrored in @bis/db", () => {
     expect(DEMO_FORWARDING_TICK_KEY).toBe(SETUP_TICK_KEYS.forwardingDone);
   });
 });
+
+describe("S-53: a CRM-only trade drops the Sofía steps, like a CRM-only plan", () => {
+  it("restaurant drops voice_profile, number, forwarding, test_call, go_live and website_assistant (mutation: ignore trade -> FAILS)", () => {
+    const keys = deriveSetupStatus(fullInputs({ trade: "restaurant" })).map((s) => s.key);
+    expect(keys).toEqual(["account", "branding", "hours", "email"]);
+  });
+  it("an allowed trade, no trade, and no field at all keep every step", () => {
+    expect(deriveSetupStatus(fullInputs({ trade: "hvac" }))).toHaveLength(10);
+    expect(deriveSetupStatus(fullInputs({ trade: null }))).toHaveLength(10);
+    expect(deriveSetupStatus(fullInputs())).toHaveLength(10);
+  });
+});

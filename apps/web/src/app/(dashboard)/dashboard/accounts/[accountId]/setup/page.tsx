@@ -9,6 +9,7 @@ import { buildSetupViews, resolveAssignedNumber } from "@/lib/setup/setup-view";
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { SetupPanel, type MovableNumber } from "./setup-panel";
+import { SetupVettingNotice } from "./setup-vetting-notice";
 import { setSetupTickAction, goLiveAction, renameAccountAction } from "./actions";
 import { moveNumberAction, setNumberStatusAction } from "../voice/actions";
 
@@ -62,10 +63,16 @@ export default async function SetupPage({
   // omits the name span (same fallback the page always had); it has no
   // bearing on any step's done/not-done/unknown state.
   let accountName: string | null = null;
+  // S-53 (spec 5.1/5.3): read on the SAME small query, since it already has its own try/catch and
+  // degrades independently of gatherSetupInputs's six reads below. A failed read leaves this null, which
+  // sofiaGate(null) reads as "no trade" — the safest default (the notice asks for it; the actions, which
+  // read the stored row themselves, decide for real).
+  let accountTrade: string | null = null;
   try {
-    const { data, error } = await db.from("accounts").select("name").eq("id", accountId).maybeSingle();
+    const { data, error } = await db.from("accounts").select("name, trade").eq("id", accountId).maybeSingle();
     if (error) throw new Error(error.message);
-    accountName = (data as { name: string } | null)?.name ?? null;
+    accountName = (data as { name: string; trade: string | null } | null)?.name ?? null;
+    accountTrade = (data as { name: string; trade: string | null } | null)?.trade ?? null;
   } catch (e) {
     console.error(`setup: account name lookup failed for account ${accountId}: ${String(e)}`);
   }
@@ -151,6 +158,7 @@ export default async function SetupPage({
         {apply === "partial" ? (
           <Notice tone="warn">{m["accounts.blueprintPartial"]}</Notice>
         ) : null}
+        <SetupVettingNotice accountId={accountId} trade={accountTrade} />
         <SetupPanel
           accountId={accountId}
           steps={views}

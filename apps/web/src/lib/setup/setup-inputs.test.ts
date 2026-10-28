@@ -38,7 +38,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
 
 import { gatherSetupInputs } from "./setup-inputs";
 
-type AccountRow = { brand_name: string | null; from_email: string | null; permissions: unknown };
+type AccountRow = { brand_name: string | null; from_email: string | null; permissions: unknown; trade?: string | null };
 
 /** A fake `db` whose ONLY implemented call is the exact chain
  *  `gatherSetupInputs` makes against `accounts` —
@@ -121,6 +121,49 @@ describe("gatherSetupInputs — accounts.permissions reaches SetupInputs (review
     const { inputs, failed } = await gatherSetupInputs(db, "a1");
     expect(inputs.permissions).toBeNull();
     expect(failed.account).toBe(false);
+  });
+});
+
+/** `dbWithAccountRow` ignores `select()`'s own argument, so it cannot pin which columns the query asks
+ *  for (plan review M1) — this fake records the exact string instead. */
+function dbRecordingSelect(row: AccountRow, seen: string[]): SupabaseClient {
+  return {
+    from: (table: string) => {
+      if (table !== "accounts") throw new Error(`unexpected table in test fake: ${table}`);
+      return {
+        select: (cols: string) => {
+          seen.push(cols);
+          return { eq: () => ({ maybeSingle: () => Promise.resolve({ data: row, error: null }) }) };
+        },
+      };
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe("gatherSetupInputs — accounts.trade reaches SetupInputs (S-53)", () => {
+  beforeEach(() => {
+    Object.values(dbMocks).forEach((mock) => mock.mockReset());
+    dbMocks.getCalendarForAccount.mockResolvedValue(null);
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
+    dbMocks.countCallsSince.mockResolvedValue(0);
+    dbMocks.countAnsweredCallsSince.mockResolvedValue(0);
+    dbMocks.listChecklistState.mockResolvedValue([]);
+    dbMocks.listForms.mockResolvedValue([]);
+    dbMocks.hasConciergeSiteConversation.mockResolvedValue(false);
+  });
+
+  it("selects trade on the same row read and passes it through (mutation: drop trade from the select, or hardcode trade: null -> FAILS)", async () => {
+    const seen: string[] = [];
+    const { inputs } = await gatherSetupInputs(
+      dbRecordingSelect({ brand_name: "Acme", from_email: null, permissions: {}, trade: "restaurant" }, seen), "a1");
+    expect(seen).toEqual(["brand_name, from_email, permissions, trade"]);
+    expect(inputs.trade).toBe("restaurant");
+  });
+
+  it("a failed account read degrades trade to null, like permissions", async () => {
+    const { inputs } = await gatherSetupInputs(dbWhoseAccountReadFails(), "a1");
+    expect(inputs.trade).toBeNull();
   });
 });
 

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { Children, createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { VoiceProfileRow } from "@bis/db";
+import type { VoiceProfileRow, PhoneNumberRow } from "@bis/db";
 import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
   conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
-  type DisclosureCopy, type TradeRulesCopy,
+  numberStatusLocked, VoiceSettings, PhoneNumbersPanel, conciergeDisabledToast,
+  type DisclosureCopy, type TradeRulesCopy, type VettingLock,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { isVoiceProfileDone } from "@/lib/setup/setup-status";
@@ -427,6 +428,8 @@ describe("ConciergeCard — the render proof", () => {
     publicId?: string | null;
     facts?: string;
     languages?: VoiceProfileRow["languages"];
+    /** S-53: null (the default) means no other lock in this file's own faces. */
+    vettingLock?: VettingLock | null;
   }) {
     const profile: VoiceProfileRow = {
       ...BASE_PROFILE, concierge_enabled: opts.enabled, concierge_form_id: opts.storedFormId,
@@ -441,6 +444,7 @@ describe("ConciergeCard — the render proof", () => {
       createElement(ConciergeCard, {
         accountId: "a1", profile, publishedForms: opts.publishedForms,
         origin: "https://app.example.com", enableAction, disableAction,
+        vettingLock: opts.vettingLock ?? null,
       }),
     );
     expect(enableAction).not.toHaveBeenCalled();
@@ -594,6 +598,23 @@ describe("ConciergeCard — the render proof", () => {
       publishedForms: [{ id: "A", name: "Contact us" }, { id: "B", name: "Other" }],
     });
     expect(renderedText(html)).not.toContain("data-concierge=");
+  });
+
+  it("S-53: with a ready profile and a published selected form, the vetting lock alone disables the off toggle and its sentence describes it (mutation: ignore vettingLock -> FAILS)", () => {
+    const ready = { enabled: false, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }] };
+    const unlocked = renderCard(ready);
+    expect(unlocked).not.toMatch(DISABLED_CHECKBOX);      // positive control: nothing else locks it
+    const LOCK: VettingLock = { text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null, locale: "en" };
+    const locked = renderCard({ ...ready, vettingLock: LOCK });
+    expect(locked).toMatch(DISABLED_CHECKBOX);
+    expect(locked).toContain('id="concierge-toggle-reason"');
+    expect(renderedText(locked)).toContain(LOCK.text);
+  });
+
+  it("S-53: an ON chat keeps its toggle (it is the off switch) whatever the lock says", () => {
+    const html = renderCard({ enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact" }],
+      vettingLock: { text: "x", link: null, locale: "en" } });
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
   });
 });
 
@@ -996,5 +1017,95 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
     // The Spanish phrase, not the English placeholder's brand mention —
     // `defaultTextbackBody(brandName, "es")`'s own wording.
     expect(html).toContain("somos Rio Roofing");
+  });
+});
+
+describe("numberStatusLocked (S-53: the server's switch-on rule, same function)", () => {
+  const LOCK: VettingLock = { text: "x", link: null, locale: "en" };
+  const n = (id: string, status: PhoneNumberRow["status"]) => ({ id, status });
+  it("hole A in the UI: live -> testing is locked while the profile is disabled", () => {
+    expect(numberStatusLocked(LOCK, { enabled: false, concierge_enabled: false }, [n("p", "live")], "p", "testing")).toBe(true);
+  });
+  it("provisioned -> testing/live with a profile is locked; testing -> live is not; nothing is locked with no lock", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(true);
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "testing")], "p", "live")).toBe(false);
+    expect(numberStatusLocked(null, { enabled: true, concierge_enabled: false }, [n("p", "provisioned")], "p", "live")).toBe(false);
+  });
+  it("provisioned and released are never locked", () => {
+    expect(numberStatusLocked(LOCK, { enabled: true, concierge_enabled: false }, [n("p", "live")], "p", "provisioned")).toBe(false);
+  });
+});
+
+describe("S-53: the Receptionist checkbox under the vetting lock (final review M1)", () => {
+  const PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "We fix roofs.", services: "",
+    languages: "en", booking_enabled: true, after_hours: "hours_then_message",
+    enabled: false, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
+    business_hours: null,
+  };
+  const LOCK: VettingLock = { text: "Sofía y el chat del sitio web aún no están disponibles para el giro restaurante.", link: null, locale: "es" };
+  const RECEPTIONIST = /<button\b(?=[^>]*\bid="enabled")[^>]*>/;
+  const render = (enabled: boolean, vettingLock: VettingLock | null) => renderToStaticMarkup(createElement(VoiceProfileForm, {
+    profile: { ...PROFILE, enabled }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+    disclosureCopy: EN_DISCLOSURE_COPY, tradeRulesCopy: EN_TRADE_COPY, vettingLock,
+  }));
+
+  it("locks an OFF receptionist, pointed at the reason, which states its own language (mutation: drop disabled, or drop lang -> FAILS)", () => {
+    const html = render(false, LOCK);
+    const box = RECEPTIONIST.exec(html)?.[0] ?? "";
+    expect(box).toMatch(/ disabled=""/);
+    expect(box).toContain('aria-describedby="sofia-enabled-reason"');
+    expect(html).toContain('<p id="sofia-enabled-reason" lang="es"');
+    expect(renderedText(html)).toContain(LOCK.text);
+  });
+
+  it("leaves an ON receptionist its checkbox, which is its off switch (mutation: lock whatever enabled says -> FAILS)", () => {
+    const html = render(true, LOCK);
+    expect(RECEPTIONIST.exec(html)?.[0] ?? "").not.toMatch(/ disabled=""/);
+    expect(html).not.toContain('id="sofia-enabled-reason"');
+  });
+
+  it("is an ordinary checkbox with no lock (control)", () => {
+    expect(RECEPTIONIST.exec(render(false, null))?.[0] ?? "").not.toMatch(/ disabled=""/);
+  });
+});
+
+describe("S-53: VoiceSettings hands the lock to all three switch owners (final review M1)", () => {
+  it("forwards vettingLock to VoiceProfileForm, ConciergeCard and PhoneNumbersPanel (mutation: drop any one -> FAILS)", () => {
+    const LOCK: VettingLock = { text: "x", link: null, locale: "en" };
+    const noop = async () => ({ ok: true as const });
+    const el = VoiceSettings({
+      accountId: "a1", profile: null, brandName: "Rio Roofing", numbers: [], transferPhone: null, publishedForms: [],
+      origin: "https://app.example.com", saveProfileAction: noop, assignNumberAction: noop, setStatusAction: noop,
+      setTransferPhoneAction: noop, enableConciergeAction: async () => ({ ok: true as const, publicId: "p" }),
+      disableConciergeAction: noop, setForwardCallsAction: noop, disclosureCopy: EN_DISCLOSURE_COPY, disclosureResults: null,
+      tradeRulesCopy: EN_TRADE_COPY, persona: "Sofía", locale: "en", pseudo: false, timezone: null, storedHours: null,
+      calendar: { ok: true, hours: null }, insurance: false, services: { ok: true, rows: [] }, hasHours: false,
+      hasPriceList: false, saveBusinessHoursAction: noop, saveServicesAction: noop, vettingLock: LOCK,
+    } as Parameters<typeof VoiceSettings>[0]) as ReactElement<{ children: ReactElement[] }>;
+    const kids = Children.toArray(el.props.children) as ReactElement<{ vettingLock?: unknown }>[];
+    for (const type of [VoiceProfileForm, ConciergeCard, PhoneNumbersPanel]) {
+      const child = kids.find((k) => k.type === type);
+      expect(child, String((type as { name?: string }).name)).toBeTruthy();
+      expect(child!.props.vettingLock, String((type as { name?: string }).name)).toBe(LOCK);
+    }
+  });
+});
+
+describe("conciergeDisabledToast — the web chat's Undo after turning it off (final review M6)", () => {
+  it("offers Undo when the trade allows the chat, and the Undo runs the re-enable", () => {
+    const undo = vi.fn();
+    const opts = conciergeDisabledToast(null, undo);
+    expect(opts.action?.label).toBe(m["common.undo"]);
+    opts.action?.onClick();
+    expect(undo).toHaveBeenCalledOnce();
+  });
+
+  it("offers no Undo under the vetting lock: it could only fail (mutation: always offer it -> FAILS)", () => {
+    expect(conciergeDisabledToast({ text: "x", link: null, locale: "en" }, vi.fn())).toEqual({});
   });
 });

@@ -6,6 +6,9 @@ import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
 import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId } from "@bis/db";
 import { m } from "@/lib/messages";
+import { checkTradeChoice } from "@/lib/vetting/trades";
+import { tradeChoiceRefusal } from "@/lib/vetting/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 
 /**
@@ -15,8 +18,12 @@ import { NO_BLUEPRINT_SENTINEL } from "./constants";
  * reach the dialog untouched (create-account-feedback.ts rethrows it). What
  * comes back as a value is a refusal the operator can act on; anything else
  * still throws, and the dialog shows its generic line for it.
+ *
+ * `lang` is the language `error` is written in, so the dialog's Notice can say so (design check I2).
+ * Only the trade refusals are bilingual - they follow the dialog's own language - so only they carry
+ * it; every other refusal here is English, and an absent `lang` means exactly that.
  */
-export type CreateAccountResult = { ok: true } | { ok: false; error: string };
+export type CreateAccountResult = { ok: true } | { ok: false; error: string; lang?: Locale };
 
 export async function createClientAccount(formData: FormData): Promise<CreateAccountResult> {
   const { userId } = await requireAgency();
@@ -52,6 +59,13 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
     return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
   }
 
+  // S-53 (spec 5.1, V1): the trade, checked BEFORE the Clerk org for the same reason as the zone above -
+  // a held or turned-away business must not create and destroy a tenant in an external system. The
+  // refusal is the entry's own reason (or "choose a trade"), in the dialog's language, shown in the form.
+  const locale = formData.get("locale") === "es" ? "es" : "en";
+  const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale), lang: locale };
+
   const clerk = await clerkClient();
   const org = await clerk.organizations.createOrganization({ name: brandName, createdBy: userId });
   // compensating rollback: never leave a Clerk org without a tenant row.
@@ -86,7 +100,10 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, brandName, timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), {
+      clerkOrgId: org.id, name, brandName, timezone, actorId: userId,
+      trade: tradeCheck.choice.trade, tradeOther: tradeCheck.choice.tradeOther,
+    }));
   } catch (err) {
     await rollback();
     throw err;
@@ -161,6 +178,13 @@ export async function adoptOrphanOrgAction(
     return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
   }
 
+  // S-53: an adopted organisation becomes a company BIS serves, so it is vetted exactly like Add company -
+  // otherwise a held or turned-away business could enter through this door. Checked before Clerk is read;
+  // nothing is created on a refusal and the organisation is left alone (this action never deletes it).
+  const locale = formData.get("locale") === "es" ? "es" : "en";
+  const tradeCheck = checkTradeChoice(formData.get("trade"), formData.get("tradeOther"));
+  if (!tradeCheck.ok) return { ok: false, error: tradeChoiceRefusal(tradeCheck, locale), lang: locale };
+
   let org: { id: string; name: string };
   try {
     const clerk = await clerkClient();
@@ -185,7 +209,10 @@ export async function adoptOrphanOrgAction(
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), {
+      clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId,
+      trade: tradeCheck.choice.trade, tradeOther: tradeCheck.choice.tradeOther,
+    }));
   } catch (e) {
     console.error(`adoptOrphanOrgAction: account write failed for org ${org.id}: ${String(e)}`);
     return { ok: false, error: m["accounts.orphan.adoptFailed"] };

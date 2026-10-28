@@ -3,6 +3,7 @@ import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { VoiceProfileRow } from "@bis/db";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
+import { m } from "@/lib/messages";
 
 /**
  * What is under test here is ONE thing: which company name this page hands
@@ -34,6 +35,7 @@ const dbFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 const serviceDbMock = vi.hoisted(() => ({
   getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(), listForms: vi.fn(),
   readAccountTimezone: vi.fn(), listVoiceServices: vi.fn(), getCalendarForAccount: vi.fn(),
+  getAccountTrade: vi.fn(),
 }));
 
 // One stable client, so the results card can be shown to receive THIS client rather than one of its own.
@@ -62,6 +64,8 @@ vi.mock("@bis/db", () => ({
   readAccountTimezone: (...a: unknown[]) => serviceDbMock.readAccountTimezone(...a),
   listVoiceServices: (...a: unknown[]) => serviceDbMock.listVoiceServices(...a),
   getCalendarForAccount: (...a: unknown[]) => serviceDbMock.getCalendarForAccount(...a),
+  // S-53: the trade gate every Sofía/web-chat on-switch below reads.
+  getAccountTrade: (...a: unknown[]) => serviceDbMock.getAccountTrade(...a),
   // S-47a: never invoked in this test — `VoiceSettings` is stubbed below and
   // never renders the `disclosureResults` prop it is handed — but the Global
   // Constraints bare-`@bis/db`-factory grep requires every factory this file
@@ -102,6 +106,7 @@ const captured = vi.hoisted(() => ({
     timezone?: string | null; storedHours?: unknown; calendar?: { ok: true; hours: unknown } | { ok: false };
     insurance?: boolean; services?: { ok: true; rows: unknown[] } | { ok: false };
     hasHours?: boolean; hasPriceList?: boolean;
+    vettingLock?: { text: string; link: { href: string; label: string } | null; locale: "en" | "es" } | null;
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -146,6 +151,7 @@ beforeEach(() => {
   serviceDbMock.readAccountTimezone.mockReset().mockResolvedValue("America/Chicago");
   serviceDbMock.listVoiceServices.mockReset().mockResolvedValue([]);
   serviceDbMock.getCalendarForAccount.mockReset().mockResolvedValue(null);
+  serviceDbMock.getAccountTrade.mockReset().mockResolvedValue({ trade: "hvac", tradeOther: null });
   prefsFixture.language = null;
 });
 
@@ -377,5 +383,35 @@ describe("voice settings page — the Business hours / Services & prices cards' 
     const withNeither = await render();
     expect(withNeither.hasHours).toBe(false);
     expect(withNeither.hasPriceList).toBe(false);
+  });
+});
+
+describe("voice settings page — the trade gate (S-53)", () => {
+  it("passes no lock for an allowed trade; the CRM-only sentence with no link; 'set the trade' linking to Settings; and fails closed on a failed read (S-53)", async () => {
+    await render();
+    expect(captured.props!.vettingLock).toBeNull();
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    await render();
+    expect(captured.props!.vettingLock).toEqual({ text: "Sofía and the web chat aren't available for restaurant businesses yet.", link: null, locale: "en" });
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    await render();
+    expect(captured.props!.vettingLock).toEqual({
+      text: m["vetting.sofia.noTrade"], link: { href: "/dashboard/accounts/a1/settings#trade", label: m["vetting.sofia.noTradeLink"] },
+      locale: "en",
+    });
+    serviceDbMock.getAccountTrade.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await render();
+    errSpy.mockRestore();
+    expect(captured.props!.vettingLock).toEqual({ text: m["vetting.readFailed"], link: null, locale: "en" });
+  });
+
+  it("the lock says which language it is in: the operator's own (design check I3; mutation: hard-code en -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    serviceDbMock.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    await render();
+    expect(captured.props!.vettingLock).toEqual({
+      text: "Sofía y el chat del sitio web aún no están disponibles para el giro restaurante.", link: null, locale: "es",
+    });
   });
 });

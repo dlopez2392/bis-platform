@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildNavGroups } from "@/lib/nav-groups";
 import { buildPaletteEntries, filterEntries } from "./registry";
+import { m } from "@/lib/messages";
 
 const BASE = "/dashboard/accounts/acc_1";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -124,6 +125,18 @@ describe("buildPaletteEntries", () => {
     expect(entry?.agencyOnly).toBe(true);
     expect(filterEntries(entries, "checklist").some((e) => e.id === "settings:required-documents")).toBe(true);
     expect(filterEntries(entries, "documentos").some((e) => e.id === "settings:required-documents")).toBe(true);
+  });
+
+  // S-53: the company's trade (settings/trade-card.tsx, #trade). Agency only, like every SETTINGS_SECTIONS entry.
+  it("registers the trade settings section, agency only, found by 'giro' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+    const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
+    const entry = settings.find((e) => e.id === "settings:trade");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#trade`);
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:trade")).toBe(false);
+    expect(filterEntries(settings, "giro").some((e) => e.id === "settings:trade")).toBe(true);
+    // The palette jumps to a section BY NAME (DESIGN.md), so it names the card's own title (design check M6).
+    expect((entry as { label: string } | undefined)?.label).toBe(m["vetting.card.title"]);
+    expect(filterEntries(settings, "trade").some((e) => e.id === "settings:trade")).toBe(true);
   });
 
   it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
@@ -268,6 +281,8 @@ describe("buildPaletteEntries", () => {
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/required-documents-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx",
+      // S-53: the Trade card (settings:trade).
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card.tsx",
       "../../components/alert-phone-card.tsx",
       "../../components/branding-panel.tsx",

@@ -277,7 +277,7 @@ export async function seedDemoTenant(
   // check that the flag actually held, not the thing that sets it.
   const { id: accountId } = await createAccount(db, {
     clerkOrgId: orgId, name: DEMO_ACCOUNT_NAME, timezone: DEMO_TIMEZONE, actorId: ACTOR,
-    outboundSuppressed: true,
+    outboundSuppressed: true, trade: "hvac",
   });
   await suppressAndVerify(db, accountId);
 

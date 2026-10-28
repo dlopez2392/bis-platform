@@ -10,6 +10,7 @@ export type { A2pStatus, A2pRegistration, A2pRegistrationRecord } from "./accoun
 export { getAlertPhone, setAlertPhone } from "./accounts";
 export { getTransferPhone, setTransferPhone } from "./accounts";
 export { getAccountLanguage, setAccountLanguage, type Locale as DbLocale } from "./accounts";
+export { getAccountTrade, setAccountTrade, type AccountTrade } from "./accounts";
 export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
          generateAlertCode, hashAlertCode, ALERT_CODE_MAX_SENDS_PER_HOUR,
          countRecentAlertPhoneVerifications, startAlertPhoneVerification,

@@ -23,14 +23,20 @@ describe("settleCreateAccount", () => {
     await settleCreateAccount(
       async () => ({ ok: false as const, error: "Enter a business name." }), u);
     expect(u.error).toHaveBeenCalledTimes(1);
-    expect(u.error).toHaveBeenCalledWith("Enter a business name.");
+    expect(u.error).toHaveBeenCalledWith("Enter a business name.", "en");
     expect(u.close).not.toHaveBeenCalled();
+  });
+
+  it("hands the dialog the language the refusal is written in, so its Notice sets lang (design check I2; mutation: always \"en\" -> FAILS)", async () => {
+    const u = ui();
+    await settleCreateAccount(async () => ({ ok: false as const, error: "Elija el giro del negocio.", lang: "es" as const }), u);
+    expect(u.error).toHaveBeenCalledWith("Elija el giro del negocio.", "es");
   });
 
   it("an unexpected throw still gets the generic toast", async () => {
     const u = ui();
     await settleCreateAccount(async () => { throw new Error("db is down"); }, u);
-    expect(u.error).toHaveBeenCalledWith(m["accounts.createFailed"]);
+    expect(u.error).toHaveBeenCalledWith(m["accounts.createFailed"], "en");
     expect(u.close).not.toHaveBeenCalled();
   });
 

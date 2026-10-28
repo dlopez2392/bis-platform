@@ -6093,6 +6093,59 @@ export const m = {
   "aiActs.contactDialog.mismatch.es": "El nombre no coincide. Escríbalo tal como aparece.",
   "styleguide.aiActs": "The assistant's actions and Undo",
   "styleguide.aiActs.es": "Las acciones de la asistente y Deshacer",
+  // S-53 tenant vetting (docs/superpowers/specs/2026-10-27-tenant-vetting-design.md). Agency-only
+  // surfaces (Add company, Add as a company, Settings' Trade card, the Voice page's locked switches,
+  // Setup's notice). Bilingual where the surface reads in the operator's own language (the dialogs'
+  // trade fields, the Trade card, the Voice page's lock sentences). Setup's notice reads only the
+  // English keys: the Setup page is English, so it renders vetting.crmOnlyCreated, vetting.sofia.noTrade
+  // and vetting.sofia.noTradeLink as they are (setup-vetting-notice.tsx). The trades' own labels and reasons live in
+  // lib/vetting/trades.ts. Never shown to a client (spec 5.2).
+  "vetting.trade.label": "Trade",
+  "vetting.trade.label.es": "Giro",
+  "vetting.trade.placeholder": "Choose the business's trade",
+  "vetting.trade.placeholder.es": "Elija el giro del negocio",
+  "vetting.trade.hint": "Decides whether BIS can take this business on, and whether Sofía and the web chat can be switched on.",
+  "vetting.trade.hint.es": "Decide si BIS puede aceptar este negocio y si se pueden activar Sofía y el chat del sitio web.",
+  "vetting.other.label": "What does the business do?",
+  "vetting.other.label.es": "¿A qué se dedica el negocio?",
+  "vetting.other.hint": "One line, up to 120 characters.",
+  "vetting.other.hint.es": "Una línea, hasta 120 caracteres.",
+  "vetting.error.missing": "Choose the business's trade.",
+  "vetting.error.missing.es": "Elija el giro del negocio.",
+  "vetting.error.otherDescription": "Say what the business does, in one line of up to 120 characters.",
+  "vetting.error.otherDescription.es": "Diga a qué se dedica el negocio, en una línea de hasta 120 caracteres.",
+  "vetting.crmOnlyCreated": "Sofía and the web chat aren't available for this trade yet.",
+  "vetting.crmOnlyCreated.es": "Sofía y el chat del sitio web aún no están disponibles para este giro.",
+  "vetting.sofia.crmOnly": "Sofía and the web chat aren't available for {trade} businesses yet.",
+  "vetting.sofia.crmOnly.es": "Sofía y el chat del sitio web aún no están disponibles para el giro {trade}.",
+  "vetting.sofia.noTrade": "Set this company's trade first.",
+  "vetting.sofia.noTrade.es": "Primero indique el giro de esta empresa.",
+  "vetting.sofia.noTradeLink": "Set the trade",
+  "vetting.sofia.noTradeLink.es": "Indicar el giro",
+  "vetting.turnOffFirst": "Turn off Sofía and the web chat first.",
+  "vetting.turnOffFirst.es": "Primero apague a Sofía y el chat del sitio web.",
+  "vetting.readFailed": "We couldn't check this company's trade. Try again.",
+  "vetting.readFailed.es": "No pudimos revisar el giro de esta empresa. Inténtelo de nuevo.",
+  "vetting.saveFailed": "The trade wasn't saved. Try again.",
+  "vetting.saveFailed.es": "No se guardó el giro. Inténtelo de nuevo.",
+  "vetting.saved": "Trade saved.",
+  "vetting.saved.es": "Giro guardado.",
+  "vetting.card.description": "What this business does. It decides whether Sofía and the web chat can be switched on. The company never sees it.",
+  "vetting.card.description.es": "A qué se dedica este negocio. Decide si se pueden activar Sofía y el chat del sitio web. La empresa nunca lo ve.",
+  "vetting.card.empty": "No trade yet. Sofía and the web chat can't be switched on until you set one.",
+  "vetting.card.empty.es": "Aún no tiene giro. Sofía y el chat del sitio web no se pueden activar hasta que indique uno.",
+  // The card's title, apart from its field's "Trade" label (design check M6: both read "Trade"/"Giro").
+  "vetting.card.title": "Business trade",
+  "vetting.card.title.es": "Giro del negocio",
+  // The Trade card's crash toast. common.actionCrashed.es is in tú; this card speaks usted (final review M7).
+  "vetting.crashed": "That didn't go through — this page may be out of date. Reload it and try again.",
+  "vetting.crashed.es": "Eso no se completó: puede que esta página esté desactualizada. Vuelva a cargarla e inténtelo de nuevo.",
+  // Beside a phone-number status the trade will not let Sofía answer on (design check M1): a word, not opacity alone.
+  "vetting.numberStatusLocked": "not available",
+  "vetting.numberStatusLocked.es": "no disponible",
+  // The Trade card's own title (vetting.card.title): the palette names a section by its title.
+  "palette.settings.trade": "Business trade",
+  "palette.settings.trade.es": "Giro del negocio",
 } as const;
 
 export type MessageKey = keyof typeof m;

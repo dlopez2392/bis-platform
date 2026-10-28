@@ -199,6 +199,8 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
     clerkOrgId: org.id,
     name: companyName,
     actorId: user.id,
+    // S-53: an allowed trade, so every fixture spec that switches Sofía or the web chat on keeps working.
+    trade: "hvac",
   });
   await setClientAccess(db, accountId, true, user.id);
 

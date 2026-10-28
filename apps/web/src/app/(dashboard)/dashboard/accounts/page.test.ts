@@ -7,6 +7,11 @@ import { isValidElement, type ReactElement } from "react";
 // page is called, not rendered, and its element tree walked.
 
 vi.mock("@/lib/auth", () => ({ requireAgency: async () => ({ userId: "user_agency" }) }));
+// S-53: AccountsPage now resolves the trade field's own locale through
+// getPersonPrefs (same as every other requestLocale call site); stub it so
+// this file's tests, which do not exercise locale, never reach the real
+// Clerk-backed read.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   serviceDb: () => ({}),

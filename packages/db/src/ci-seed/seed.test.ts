@@ -22,7 +22,7 @@ const complete = (over: Partial<BaselineSnapshot> = {}): BaselineSnapshot => ({
   agencyCount: 1,
   bucket: { public: true },
   accountsNamed: [{ id: ACCOUNT, clerk_org_id: spec.clerkOrgId }],
-  account: { id: ACCOUNT, name: spec.name },
+  account: { id: ACCOUNT, name: spec.name, trade: "hvac" },
   pipelines: [{ id: SALES, name: "Sales", stageCount: 5 }],
   contact: { id: MARIA, first_name: "Maria", last_name: "Garcia" },
   field: { id: "f", data_type: "single_select" },
@@ -50,6 +50,16 @@ describe("baselineGaps", () => {
       'no opportunity "Deck build" on "Test Client One"',
       'phone number +12105550100 is not on "Test Client One"',
     ]);
+  });
+
+  it("names a seeded account with no trade, which leaves Sofía and the web chat locked (S-53; mutation: drop the trade gap -> FAILS)", () => {
+    expect(baselineGaps(complete({ account: { id: ACCOUNT, name: spec.name, trade: null } }), spec)).toEqual([
+      'account "Test Client One" has no trade, so Sofía and the web chat cannot be switched on (S-53)',
+    ]);
+  });
+
+  it("does not ask for hvac in particular: any recorded trade is the agency's to choose", () => {
+    expect(baselineGaps(complete({ account: { id: ACCOUNT, name: spec.name, trade: "plumbing" } }), spec)).toEqual([]);
   });
 
   it("names a missing agencies row (0001 seeds it; was the push run?)", () => {
@@ -130,7 +140,7 @@ describe("seedConflicts", () => {
   });
 
   it("refuses to rename the account its org id already holds", () => {
-    expect(seedConflicts(complete({ account: { id: ACCOUNT, name: "Renamed Co" } }), spec)).toEqual([
+    expect(seedConflicts(complete({ account: { id: ACCOUNT, name: "Renamed Co", trade: "hvac" } }), spec)).toEqual([
       'org org_3H2aweJ6b2GRZghk3DCrNDmrMXU already holds account "Renamed Co"; ci:seed will not rename it',
     ]);
   });

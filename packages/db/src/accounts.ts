@@ -23,6 +23,14 @@ export async function createAccount(
      * default (not suppressed), as for every real account.
      */
     outboundSuppressed?: boolean;
+    /**
+     * S-53 (0101): the company's trade and, for 'other', its one-line description. Add company and
+     * Add as a company always pass one (apps/web lib/vetting/trades.ts validates it first); absent
+     * means no trade recorded (NULL), which only fixtures that never switch Sofía on rely on. The
+     * database refuses a held or turned-away key whatever the caller sends (accounts_trade_check).
+     */
+    trade?: string;
+    tradeOther?: string | null;
   },
 ): Promise<{ id: string }> {
   // BEFORE the agency read, so an unusable zone costs no round trip and — more
@@ -44,6 +52,7 @@ export async function createAccount(
       agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name,
       brand_name: input.brandName?.trim() || input.name, timezone,
       ...(input.outboundSuppressed ? { outbound_suppressed: true } : {}),
+      ...(input.trade !== undefined ? { trade: input.trade, trade_other: input.tradeOther ?? null } : {}),
     })
     .select("id")
     .single();
@@ -151,6 +160,37 @@ export async function setAccountLanguage(
   if (error) throw new Error(`setAccountLanguage failed: ${error.message}`);
   if (!data?.length) throw new Error(`setAccountLanguage: no account ${accountId}`);
   await emit(db, accountId, "account.language_updated", actorId, { language });
+}
+
+/** S-53 (0101): the company's trade. Both NULL until the agency records one. */
+export type AccountTrade = { trade: string | null; tradeOther: string | null };
+
+/**
+ * Reads `accounts.trade` / `trade_other`. Throws on a failed read AND on a missing account: every caller
+ * gates a switch-on on this answer, and "no row" must never read as "no trade" silently.
+ */
+export async function getAccountTrade(db: SupabaseClient, accountId: string): Promise<AccountTrade> {
+  const { data, error } = await db.from("accounts").select("trade, trade_other").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`getAccountTrade failed: ${error.message}`);
+  if (!data) throw new Error(`getAccountTrade: no account ${accountId}`);
+  const row = data as { trade: string | null; trade_other: string | null };
+  return { trade: row.trade ?? null, tradeOther: row.trade_other ?? null };
+}
+
+/**
+ * Sets the company's trade (the agency's Settings Trade card). SERVER ONLY: 0101 grants `authenticated`
+ * no UPDATE on either column, so the only writer is `serviceDb()` behind requireAgencyOnlyAccountAccess.
+ * Shaped after setAccountLanguage: `.select("id")` so a zero-row update is a failure, and an `account.*`
+ * event because accounts has no updated_at. The database refuses a held key (accounts_trade_check).
+ */
+export async function setAccountTrade(
+  db: SupabaseClient, accountId: string, input: { trade: string; tradeOther: string | null }, actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({ trade: input.trade, trade_other: input.tradeOther }).eq("id", accountId).select("id");
+  if (error) throw new Error(`setAccountTrade failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setAccountTrade: no account ${accountId}`);
+  await emit(db, accountId, "account.trade_updated", actorId, { trade: input.trade, tradeOther: input.tradeOther });
 }
 
 export type A2pStatus = "not_started" | "pending" | "approved" | "rejected";

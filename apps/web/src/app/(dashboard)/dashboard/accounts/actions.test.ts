@@ -47,6 +47,7 @@ const form = (over: Record<string, string> = {}) => {
   f.set("brandName", "Rio Roofing");
   f.set("timezone", "America/Chicago");
   f.set("blueprintId", NO_BLUEPRINT_SENTINEL);
+  f.set("trade", "hvac");
   for (const [k, v] of Object.entries(over)) f.set(k, v);
   return f;
 };
@@ -208,7 +209,7 @@ describe("createClientAccount", () => {
  * still unable to sign in. Adopting links the organisation that exists.
  */
 describe("adoptOrphanOrgAction (D-087)", () => {
-  const tz = (zone = "America/Chicago") => { const f = new FormData(); f.set("timezone", zone); return f; };
+  const tz = (zone = "America/Chicago") => { const f = new FormData(); f.set("timezone", zone); f.set("trade", "hvac"); return f; };
 
   it("creates the account on the EXISTING organisation, under its own Clerk name, and never creates a second one (mutation: call createOrganization → FAILS; use a typed name → FAILS)", async () => {
     await adoptOrphanOrgAction(CLERK_ORG_ID, tz("America/Denver"));
@@ -217,6 +218,7 @@ describe("adoptOrphanOrgAction (D-087)", () => {
     expect(dbMocks.createAccount).toHaveBeenCalledOnce();
     expect(dbMocks.createAccount.mock.calls[0]?.[1]).toEqual({
       clerkOrgId: CLERK_ORG_ID, name: "Rio Roofing", timezone: "America/Denver", actorId: "user_agency",
+      trade: "hvac", tradeOther: null,
     });
     // Lands on the Client access card, not setup (review): an adopted account
     // is born with client access OFF, so the people already invited cannot
@@ -291,5 +293,73 @@ describe("the half-created-company warning (D-087)", () => {
   it("no longer tells the agency to add the company again by name (mutation: restore the old remedy → FAILS)", () => {
     expect(m["accounts.orphan.body"]).not.toMatch(/same name/i);
     expect(m["accounts.orphan.body"]).toContain(m["accounts.orphan.adopt"]);
+  });
+});
+
+describe("S-53 vetting: the trade is checked before Clerk is touched", () => {
+  it.each([
+    [{ trade: "" }, m["vetting.error.missing"]],
+    [{ trade: "law" }, "Law firms open once our Texas cloud-storage sheet for lawyers (Opinions 680 and 705) is ready."],
+    [{ trade: "adult_day_care" }, "BIS doesn't serve adult day care or home health, so we can't take this business on."],
+    [{ trade: "other", tradeOther: "   " }, m["vetting.error.otherDescription"]],
+  ])("createClientAccount refuses %j with its reason, and creates no Clerk org and no row (mutation: move the check after createOrganization -> FAILS)", async (over, error) => {
+    const r = await createClientAccount(form(over as Record<string, string>));
+    // lang: the refusal says which language it is written in, so the dialog's Notice can set it (design check I2).
+    expect(r).toEqual({ ok: false, error, lang: "en" });
+    expect(clerkMocks.createOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("refuses in Spanish when the form says es, and says so (mutation: drop lang from the trade refusal -> FAILS)", async () => {
+    const r = await createClientAccount(form({ trade: "tax", locale: "es" }));
+    expect(r).toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; lo tenemos previsto para la temporada de impuestos de 2028.", lang: "es" });
+  });
+
+  it("creates a crm_only trade and records it, and a trimmed Other description (mutation: drop trade from createAccount's input -> FAILS)", async () => {
+    await createClientAccount(form({ trade: "restaurant" }));
+    expect(dbMocks.createAccount).toHaveBeenLastCalledWith({}, expect.objectContaining({ trade: "restaurant", tradeOther: null }));
+    await createClientAccount(form({ trade: "other", tradeOther: "  Sign painting " }));
+    expect(dbMocks.createAccount).toHaveBeenLastCalledWith({}, expect.objectContaining({ trade: "other", tradeOther: "Sign painting" }));
+  });
+
+  it("adoptOrphanOrgAction refuses a held trade before Clerk is read, and never deletes the org (mutation: drop the adopt check -> FAILS)", async () => {
+    const f = new FormData();
+    f.set("timezone", "America/Chicago");
+    f.set("trade", "dental");
+    const r = await adoptOrphanOrgAction(CLERK_ORG_ID, f);
+    // The exact sentence (T4+T6 review m4): a generic refusal must not pass.
+    expect(r).toEqual({
+      ok: false, lang: "en",
+      error: "Health-care businesses aren't open yet: they need protections for patient information that BIS doesn't have today.",
+    });
+    expect(clerkMocks.getOrg).not.toHaveBeenCalled();
+    expect(clerkMocks.deleteOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("adoptOrphanOrgAction refuses in Spanish when the form says es (mutation: ignore the adopt form's locale -> FAILS)", async () => {
+    const f = new FormData();
+    f.set("timezone", "America/Chicago");
+    f.set("trade", "tax");
+    f.set("locale", "es");
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, f))
+      .toEqual({ ok: false, error: "Aún no aceptamos preparadores de impuestos; lo tenemos previsto para la temporada de impuestos de 2028.", lang: "es" });
+  });
+
+  it("adoptOrphanOrgAction records Other with its description trimmed to one line (T4+T6 review m2; mutation: pass the raw tradeOther -> FAILS)", async () => {
+    const f = new FormData();
+    f.set("timezone", "America/Chicago");
+    f.set("trade", "other");
+    f.set("tradeOther", "  Sign   painting ");
+    await adoptOrphanOrgAction(CLERK_ORG_ID, f);
+    expect(dbMocks.createAccount).toHaveBeenLastCalledWith({}, expect.objectContaining({ trade: "other", tradeOther: "Sign painting" }));
+  });
+
+  it("adoptOrphanOrgAction records the trade it is given", async () => {
+    const f = new FormData();
+    f.set("timezone", "America/Chicago");
+    f.set("trade", "plumbing");
+    await adoptOrphanOrgAction(CLERK_ORG_ID, f);
+    expect(dbMocks.createAccount).toHaveBeenLastCalledWith({}, expect.objectContaining({ trade: "plumbing", tradeOther: null }));
   });
 });

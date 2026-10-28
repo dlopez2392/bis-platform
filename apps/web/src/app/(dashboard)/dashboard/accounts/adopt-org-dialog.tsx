@@ -1,15 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TradeFields, type TradeSetup } from "@/components/vetting/trade-fields";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { SubmitButton } from "./submit-button";
 import { settleCreateAccount } from "./create-account-feedback";
+import { RefusalNotice, type Refusal } from "./refusal-notice";
 import type { CreateAccountResult } from "./actions";
 
 /**
@@ -23,20 +24,25 @@ import type { CreateAccountResult } from "./actions";
  * dialog, so a refusal stays open with its own words and success navigates.
  */
 export function AdoptOrgDialog({
-  orgName, action,
+  orgName, action, trade,
 }: {
   orgName: string;
   action: (formData: FormData) => Promise<CreateAccountResult>;
+  trade: TradeSetup;
 }) {
   const [open, setOpen] = useState(false);
-  const { pending, onSubmit } = useFormSubmit((formData) =>
-    settleCreateAccount(() => action(formData), {
+  // S-53 (spec 5.1): the same inline-refusal shape as Add company — a held or
+  // turned-away trade's reason, read in the form rather than toasted away.
+  const [formError, setFormError] = useState<Refusal | null>(null);
+  const { pending, onSubmit } = useFormSubmit((formData) => {
+    setFormError(null);
+    return settleCreateAccount(() => action(formData), {
       close: () => setOpen(false),
-      error: (message) => toast.error(message),
-    }),
-  );
+      error: (text, lang) => setFormError({ text, lang }),
+    });
+  });
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setFormError(null); }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">{m["accounts.orphan.adopt"]}</Button>
       </DialogTrigger>
@@ -50,6 +56,9 @@ export function AdoptOrgDialog({
             <Label htmlFor="adopt-timezone">{m["accounts.timezone"]}</Label>
             <Input id="adopt-timezone" name="timezone" defaultValue="America/Chicago" />
           </div>
+          {/* Changing the trade clears a refusal about the old one (design check M2). */}
+          <TradeFields idPrefix="adopt" {...trade} onTradeChange={() => setFormError(null)} />
+          {formError ? <RefusalNotice refusal={formError} /> : null}
           <DialogFooter>
             <SubmitButton pending={pending}>{m["accounts.add"]}</SubmitButton>
           </DialogFooter>

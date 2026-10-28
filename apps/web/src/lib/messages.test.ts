@@ -2237,3 +2237,31 @@ describe("M7a PR-4 copy (billing pause, English and Spanish)", () => {
     }
   });
 });
+
+describe("tenant vetting copy (S-53)", () => {
+  it("is the plan's wording in both languages (mutation: any word changed, or a tu form such as 'Elige' -> FAILS)", () => {
+    expect([m["vetting.trade.label"], m["vetting.trade.label.es"]]).toEqual(["Trade", "Giro"]);
+    expect([m["vetting.sofia.noTrade"], m["vetting.sofia.noTrade.es"]])
+      .toEqual(["Set this company's trade first.", "Primero indique el giro de esta empresa."]);
+    expect([m["vetting.turnOffFirst"], m["vetting.turnOffFirst.es"]])
+      .toEqual(["Turn off Sofía and the web chat first.", "Primero apague a Sofía y el chat del sitio web."]);
+    expect([m["vetting.crmOnlyCreated"], m["vetting.crmOnlyCreated.es"]])
+      .toEqual(["Sofía and the web chat aren't available for this trade yet.", "Sofía y el chat del sitio web aún no están disponibles para este giro."]);
+    for (const [k, v] of Object.entries(m)) {
+      if (k.startsWith("vetting.") && k.endsWith(".es")) {
+        expect(v, k).not.toMatch(/\b(elige|indica|apaga|escribe|di|recárgala|inténtalo|vuelve)\b/i);
+      }
+    }
+  });
+
+  it("the Trade card has its own title, its own usted crash line, and the number list its own word (final review M7, design checks M1 and M6)", () => {
+    expect([m["vetting.card.title"], m["vetting.card.title.es"]]).toEqual(["Business trade", "Giro del negocio"]);
+    expect(m["vetting.card.title"]).not.toBe(m["vetting.trade.label"]);
+    expect(m["vetting.card.title.es"]).not.toBe(m["vetting.trade.label.es"]);
+    expect([m["vetting.crashed"], m["vetting.crashed.es"]]).toEqual([
+      m["common.actionCrashed"],
+      "Eso no se completó: puede que esta página esté desactualizada. Vuelva a cargarla e inténtelo de nuevo.",
+    ]);
+    expect([m["vetting.numberStatusLocked"], m["vetting.numberStatusLocked.es"]]).toEqual(["not available", "no disponible"]);
+  });
+});

@@ -101,6 +101,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // now created under THIS name — is still "E2E Co <stamp>", the shape
     // fixtures/stale.ts sweeps a killed run's org by.
     await expect(page.getByLabel("Name their customers see")).toHaveValue(companyName);
+    // S-53: Add company requires a trade. An ALLOWED one, so this company is
+    // created with every product available, as before the trade existed.
+    await page.getByRole("combobox", { name: "Trade" }).click();
+    await page.getByRole("option", { name: "Heating and air conditioning", exact: true }).click();
     await page.getByRole("combobox", { name: "Apply a blueprint" }).click();
     await page.getByRole("option", { name: blueprintName }).click();
     await page.getByRole("button", { name: "Add", exact: true }).click();

@@ -6,6 +6,8 @@ import { requireAccountAccess, requireAgencyOnlyAccountAccess } from "@/lib/auth
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { m } from "@/lib/messages";
+import { sofiaSwitchOnRefusal } from "@/lib/vetting/sofia-guard";
+import { switchesSofiaOn } from "@/lib/vetting/sofia-state";
 
 /** Same shape voice/actions.ts uses, and for the same reason: these run from
  *  client islands that need the failure to arrive as a value they can render,
@@ -148,6 +150,19 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   // whatever sorted first.
   const target = numbers.find((n) => n.status !== "released");
   if (!target) return { ok: false, error: m["setup.goLive.notReady"] };
+
+  // S-53 (spec 5.3; plan review C1): go-live enables the profile and sets `target` live. It switches Sofía
+  // on only when nothing answered before (a provisioned number that already had its test call); from the
+  // ordinary testing number she already answers, and that stays on. The profile and numbers legs above
+  // already fail closed (reReadFailed), and the trade read inside the guard does too.
+  const after = numbers.map((n) => (n.id === target.id ? { ...n, status: "live" as const } : n));
+  if (switchesSofiaOn(
+    { profile: inputs.profile, numbers },
+    { profile: { enabled: true, concierge_enabled: inputs.profile?.concierge_enabled ?? false }, numbers: after },
+  )) {
+    const refusal = await sofiaSwitchOnRefusal(accountId);
+    if (refusal) return { ok: false, error: refusal };
+  }
 
   try {
     // ONE call, one transaction (0063, D-043). This used to be two writes,

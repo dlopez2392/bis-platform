@@ -41,6 +41,8 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { m, type MessageKey } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
+import { sofiaSwitchOnRefusal } from "@/lib/vetting/sofia-guard";
+import { switchesSofiaOn } from "@/lib/vetting/sofia-state";
 import { saveKnowledgeParts, type SaveOutcome } from "@/lib/voice/knowledge/save";
 import {
   hoursFromForm, hoursErrorKey, parseHoursFormJson, servicesFromForm, serviceErrorKey, parseServicesFormJson,
@@ -60,6 +62,8 @@ function pickOne<T extends readonly string[]>(raw: string, allowed: T): T[number
  * Whether the account holds an active (not `released`) number other than
  * `exceptId` — the one-active-number rule (D-042) `assignNumberAction` and
  * `setNumberStatusAction` share with `moveNumberAction`'s destination check.
+ * (`setNumberStatusAction` applies the same rule inline, S-53: it keeps the
+ * rows it read for its switch-on check.)
  * Throws on a failed read; each caller fails closed.
  */
 async function hasOtherActiveNumber(accountId: string, exceptId: string | null): Promise<boolean> {
@@ -119,16 +123,39 @@ export async function saveVoiceProfileAction(
   // and its basis (the English it was last saved beside). A failed read
   // fails the save outright, as every other read-before-write in this file
   // does — this is a save, and the operator can press it again.
+  //
+  // S-53: the account's numbers are read in the SAME fail-closed try, for the
+  // switch-on check below.
   let brandName: string;
-  let current: Pick<VoiceProfileRow, "facts" | "services" | "textback_body_es" | "textback_body_es_basis"> | null;
+  let current: Pick<
+    VoiceProfileRow,
+    "facts" | "services" | "textback_body_es" | "textback_body_es_basis" | "enabled" | "concierge_enabled"
+  > | null;
+  let numbers: Awaited<ReturnType<typeof listPhoneNumbersForAccount>>;
   try {
     const db = serviceDb();
-    const [branding, profile] = await Promise.all([getBranding(db, accountId), getVoiceProfile(db, accountId)]);
+    const [branding, profile, rows] = await Promise.all([
+      getBranding(db, accountId), getVoiceProfile(db, accountId), listPhoneNumbersForAccount(db, accountId),
+    ]);
     brandName = brandDisplayName(branding);
     current = profile;
+    numbers = rows;
   } catch (e) {
-    console.error(`saveVoiceProfileAction: branding/profile read failed for account ${accountId}: ${String(e)}`);
+    console.error(`saveVoiceProfileAction: branding/profile/numbers read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["voice.profile.saveFailed"] };
+  }
+
+  // S-53 (spec 5.3; plan review C1): this save switches Sofía on when it takes the company from not
+  // answering to answering - Receptionist enabled off -> on beside a live number, OR the first profile
+  // beside a testing number (a testing number answers once any profile exists, enabled or not). Checked
+  // before any write; a save that keeps her as she is, or turns her off, never asks.
+  const enabledAfter = formData.get("enabled") === "on";
+  if (switchesSofiaOn(
+    { profile: current, numbers },
+    { profile: { enabled: enabledAfter, concierge_enabled: current?.concierge_enabled ?? false }, numbers },
+  )) {
+    const refusal = await sofiaSwitchOnRefusal(accountId);
+    if (refusal) return { ok: false, error: refusal };
   }
 
   const { bodyEs, basis } = nextSpanishBox({
@@ -152,7 +179,7 @@ export async function saveVoiceProfileAction(
     languages,
     booking_enabled: formData.get("booking_enabled") === "on",
     after_hours: afterHours,
-    enabled: formData.get("enabled") === "on",
+    enabled: enabledAfter,
     textback_enabled: formData.get("textback_enabled") === "on",
     textback_body: textbackBody,
     textback_body_es: bodyEs,
@@ -387,24 +414,42 @@ export async function setNumberStatusAction(
   // D-042: bringing a released number back must not make it the account's
   // SECOND active one. Releasing is never gated — it is how an account that
   // already has two gets back to one, and an off switch must not depend on a
-  // read that can be down.
+  // read that can be down. The same rows feed S-53's switch-on check below.
+  let rows: Awaited<ReturnType<typeof listPhoneNumbersForAccount>> = [];
   if (validStatus !== "released") {
     try {
-      if (await hasOtherActiveNumber(accountId, phoneNumberId)) {
-        return { ok: false, error: m["voice.numbers.anotherActive"] };
-      }
+      rows = await listPhoneNumbersForAccount(serviceDb(), accountId);
     } catch (e) {
       console.error(`setNumberStatusAction: active-number check failed for account ${accountId}: ${String(e)}`);
       return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
     }
+    if (rows.some((n) => n.id !== phoneNumberId && n.status !== "released")) {
+      return { ok: false, error: m["voice.numbers.anotherActive"] };
+    }
   }
 
-  if (validStatus === "live") {
-    const profile = await getVoiceProfile(serviceDb(), accountId);
-    const hasGreeting = Boolean(profile?.greeting_en?.trim() || profile?.greeting_es?.trim());
-    const hasFacts = Boolean(profile?.facts?.trim());
-    if (!hasGreeting && !hasFacts) {
-      return { ok: false, error: m["voice.numbers.goLiveNeedsProfile"] };
+  if (validStatus === "testing" || validStatus === "live") {
+    let profile: Awaited<ReturnType<typeof getVoiceProfile>>;
+    try {
+      profile = await getVoiceProfile(serviceDb(), accountId);
+    } catch (e) {
+      console.error(`setNumberStatusAction: profile read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
+    }
+    // S-53 (spec 5.3; plan review C1): this change switches Sofía on when the company goes from not
+    // answering to answering - provisioned/released -> testing or live, AND live -> testing while the
+    // profile is disabled (testing answers whatever `enabled` says). Already answering stays on.
+    const after = rows.map((n) => (n.id === phoneNumberId ? { ...n, status: validStatus } : n));
+    if (switchesSofiaOn({ profile, numbers: rows }, { profile, numbers: after })) {
+      const refusal = await sofiaSwitchOnRefusal(accountId);
+      if (refusal) return { ok: false, error: refusal };
+    }
+    if (validStatus === "live") {
+      const hasGreeting = Boolean(profile?.greeting_en?.trim() || profile?.greeting_es?.trim());
+      const hasFacts = Boolean(profile?.facts?.trim());
+      if (!hasGreeting && !hasFacts) {
+        return { ok: false, error: m["voice.numbers.goLiveNeedsProfile"] };
+      }
     }
   }
 
@@ -525,6 +570,14 @@ export async function enableConciergeAction(
 ): Promise<EnableConciergeResult> {
   const { isAgency } = await requireAccountAccess(accountId);
   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  // S-53 (spec 5.3): the web chat's on switch needs a trade that allows it. Unconditional: the card calls
+  // this only while the chat is off. The off switch (disableConciergeAction) never asks. Being
+  // unconditional, it also refuses a "re-enable" of a chat already on for a CRM-only or no-trade company;
+  // no UI path sends one, and the chat stays on (accepted, T5 review m3; lib/vetting/sofia-guard.ts).
+  // The refusal is English, like every other refusal in this file (sofia-guard.ts's locale note).
+  const refusal = await sofiaSwitchOnRefusal(accountId);
+  if (refusal) return { ok: false, error: refusal };
 
   try {
     const { publicId } = await enableConcierge(serviceDb(), accountId, formId);

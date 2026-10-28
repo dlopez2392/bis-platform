@@ -21,6 +21,8 @@ const dbMocks = vi.hoisted(() => ({
   getLatestKnowledgeVersion: vi.fn(), readAccountTimezone: vi.fn(),
   // S-47d: every knowledge save also snapshots the planned closed days.
   listClosedDaysFrom: vi.fn(),
+  // S-53: sofiaSwitchOnRefusal reads the company's trade before any switch-on.
+  getAccountTrade: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -87,6 +89,8 @@ beforeEach(() => {
   dbMocks.listVoiceServices.mockResolvedValue([]);
   dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "ok", version: 1 });
   dbMocks.listClosedDaysFrom.mockResolvedValue([]);
+  // S-53: an allowed trade, so no pre-existing case is refused by the switch-on guard.
+  dbMocks.getAccountTrade.mockResolvedValue({ trade: "hvac", tradeOther: null });
   guardFixture.isAgency = true;
 });
 
@@ -1042,5 +1046,127 @@ describe("saveVoiceProfileAction — Facts and Services go through the snapshot 
     dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "stale" });
     expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
     expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("S-53 vetting: switching Sofía or the web chat on (spec 5.3; plan review C1)", () => {
+  const CRM = "Sofía and the web chat aren't available for restaurant businesses yet.";
+  const row = (id: string, status: string) => ({ id, account_id: "a1", e164: `+1956555010${id.slice(-1)}`, telnyx_id: null, status });
+
+  it("enableConciergeAction refuses a crm_only trade and no trade, writing nothing (mutation: delete the guard -> FAILS)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    expect(await enableConciergeAction("a1", "form1")).toEqual({ ok: false, error: CRM });
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    expect(await enableConciergeAction("a1", "form1")).toEqual({ ok: false, error: m["vetting.sofia.noTrade"] });
+    expect(dbMocks.enableConcierge).not.toHaveBeenCalled();
+  });
+
+  it("enableConciergeAction fails closed when the trade cannot be read, writing nothing", async () => {
+    dbMocks.getAccountTrade.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await enableConciergeAction("a1", "form1")).toEqual({ ok: false, error: m["vetting.readFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.enableConcierge).not.toHaveBeenCalled();
+  });
+
+  it("disableConciergeAction is never gated", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.disableConcierge.mockResolvedValue(undefined);
+    expect(await disableConciergeAction("a1")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+  });
+
+  it.each(["testing", "live"])("setNumberStatusAction refuses provisioned -> %s on a crm_only trade (mutation: delete the guard -> FAILS)", async (status) => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "provisioned")]);
+    expect(await setNumberStatusAction("a1", "pn1", status)).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+
+  it("hole A: setNumberStatusAction refuses live -> testing while the profile is disabled (mutation: compute 'was answering' from the number's status alone -> FAILS)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    expect(await setNumberStatusAction("a1", "pn1", "testing")).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+
+  it("setNumberStatusAction lets an answering number move testing -> live with no trade (already on stays on)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing")]);
+    dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+    expect(await setNumberStatusAction("a1", "pn1", "live")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+  });
+
+  it("setNumberStatusAction: provisioned -> testing with no profile yet answers nobody, so it asks for no trade", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "provisioned")]);
+    dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+    expect(await setNumberStatusAction("a1", "pn1", "testing")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+  });
+
+  it("setNumberStatusAction fails closed when the profile cannot be read for a testing/live change", async () => {
+    dbMocks.getVoiceProfile.mockRejectedValue(new Error("down"));
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "provisioned")]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const status of ["testing", "live"]) {
+      expect(await setNumberStatusAction("a1", "pn1", status), status).toEqual({ ok: false, error: m["voice.numbers.statusUpdateFailed"] });
+    }
+    errSpy.mockRestore();
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(["provisioned", "released"])("setNumberStatusAction -> %s is never gated", async (status) => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+    expect(await setNumberStatusAction("a1", "pn1", status)).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+  });
+
+  it("saveVoiceProfileAction refuses Receptionist enabled off -> on beside a live number on a crm_only trade, saving nothing (mutation: delete the guard -> FAILS)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }));
+    expect(r).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("hole B: saveVoiceProfileAction refuses the FIRST profile beside a testing number, Receptionist off (mutation: guard only on enabled=on -> FAILS)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing")]);
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" }));
+    expect(r).toEqual({ ok: false, error: CRM });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("saveVoiceProfileAction fails closed when the numbers cannot be read", async () => {
+    dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" })))
+      .toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("saveVoiceProfileAction: enabling with no number, an already-answering profile, and turning off are never gated", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "restaurant", tradeOther: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: false });
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }))).toEqual({ ok: true });
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", enabled: true });
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live")]);
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both", enabled: "on" }))).toEqual({ ok: true });
+    expect(await saveVoiceProfileAction("a1", fd({ persona_name: "Sofía", languages: "both" }))).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
   });
 });

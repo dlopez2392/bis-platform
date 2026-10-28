@@ -26,6 +26,8 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
+import { switchesSofiaOn } from "@/lib/vetting/sofia-state";
+import { t } from "@/lib/i18n/t";
 import type { ActionResult, EnableConciergeResult } from "./actions";
 import { BusinessHoursCard, type CalendarRead } from "./business-hours-card";
 import { ServicesPricesCard } from "./services-prices-card";
@@ -75,6 +77,33 @@ export type TradeRulesCopy = {
   options: Array<{ value: "none" | "insurance_pc" | "events"; label: string; hint: string }>;
 };
 
+/** S-53: why an on-switch is locked; `link` only when the fix is on Settings (no trade). `locale` is the
+ *  language `text` and the link are written in (the operator's own), which the page around them may not be. */
+export type VettingLock = { text: string; link: { href: string; label: string } | null; locale: "en" | "es" };
+
+function VettingLockReason({ id, lock }: { id: string; lock: VettingLock }) {
+  return (
+    <p id={id} lang={lock.locale} className="text-xs text-muted-foreground">
+      {lock.text}
+      {lock.link ? <>{" "}<Link className="underline" href={lock.link.href}>{lock.link.label}</Link></> : null}
+    </p>
+  );
+}
+
+/** Task 5's switch-on rule, applied to one status choice: locked exactly when choosing `v` for number
+ *  `numberId` would take Sofía from not answering to answering while the trade forbids it. */
+export function numberStatusLocked(
+  vettingLock: VettingLock | null,
+  profile: { enabled?: boolean | null; concierge_enabled?: boolean | null } | null,
+  numbers: readonly { id: string; status: PhoneNumberRow["status"] }[],
+  numberId: string,
+  v: PhoneNumberRow["status"],
+): boolean {
+  if (vettingLock === null || (v !== "testing" && v !== "live")) return false;
+  const after = numbers.map((n) => (n.id === numberId ? { ...n, status: v } : n));
+  return switchesSofiaOn({ profile, numbers }, { profile, numbers: after });
+}
+
 // Exported (additive — no other symbol in this file changes) so the
 // text-back segment counter can be exercised directly the same way
 // `ConciergeCard` is below, rather than only through the page-level
@@ -88,6 +117,8 @@ export function VoiceProfileForm({
   // before this task: English, no persona override, nothing stored yet —
   // `FactsFlags` renders nothing for any of those fixtures' plain Facts text.
   persona = "Sofía", locale = "en", pseudo = false, hasHours = false, hasPriceList = false,
+  // S-53: null (the default) means no other call site's fixtures change.
+  vettingLock = null,
 }: {
   profile: VoiceProfileRow | null;
   brandName: string;
@@ -103,6 +134,8 @@ export function VoiceProfileForm({
    *  Services & prices list — the two things `FactsFlags` warns about duplicating in free text. */
   hasHours?: boolean;
   hasPriceList?: boolean;
+  /** S-53: why the receptionist cannot be switched ON, or null when the trade allows it. */
+  vettingLock?: VettingLock | null;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
   // Controlled, not the uncontrolled `defaultValue` every other field in this
@@ -305,9 +338,17 @@ export function VoiceProfileForm({
             {bookingChecked ? <input type="hidden" name="booking_enabled" value="on" /> : null}
           </div>
 
-          <div className="flex items-center gap-2">
-            <Checkbox id="enabled" name="enabled" defaultChecked={p.enabled} />
-            <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              {/* S-53: locked OFF only - an enabled receptionist keeps its checkbox, which is its off switch. */}
+              <Checkbox
+                id="enabled" name="enabled" defaultChecked={p.enabled}
+                disabled={vettingLock !== null && !p.enabled}
+                aria-describedby={vettingLock !== null && !p.enabled ? "sofia-enabled-reason" : undefined}
+              />
+              <Label htmlFor="enabled">{m["voice.profile.enabled"]}</Label>
+            </div>
+            {vettingLock !== null && !p.enabled ? <VettingLockReason id="sofia-enabled-reason" lock={vettingLock} /> : null}
           </div>
 
           <div className="space-y-2 border-t border-border pt-4">
@@ -662,9 +703,21 @@ export function conciergeSnippetPublicId(
  * Ghost actions throughout (DESIGN.md rule 8) — `VoiceProfileForm`'s Save
  * button above is this page's one primary button.
  */
+/**
+ * The toast options after the web chat is turned OFF. Its Undo is a re-enable, which the trade gate refuses
+ * whenever the page carries a vetting lock, so under a lock there is no Undo to offer (final review M6):
+ * an Undo that can only fail is worse than none. Without a lock it is the usual Undo.
+ */
+export function conciergeDisabledToast(
+  vettingLock: VettingLock | null, undo: () => void,
+): { action?: { label: string; onClick: () => void } } {
+  return vettingLock === null ? { action: { label: m["common.undo"], onClick: undo } } : {};
+}
+
 export function ConciergeCard({
   accountId, profile, publishedForms, origin,
   enableAction, disableAction,
+  vettingLock = null,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -672,6 +725,8 @@ export function ConciergeCard({
   origin: string;
   enableAction: (formId: string) => Promise<EnableConciergeResult>;
   disableAction: () => Promise<ActionResult>;
+  /** S-53: why the web chat cannot be switched ON, or null when the trade allows it. */
+  vettingLock?: VettingLock | null;
 }) {
   const lockReason = conciergeLockReason(profile, publishedForms.length);
   const enabled = Boolean(profile?.concierge_enabled);
@@ -689,6 +744,10 @@ export function ConciergeCard({
   const [optimisticPublicId, setOptimisticPublicId] = useState<string | null>(null);
 
   function turnOn() {
+    // S-53: the vetting lock only ever disables the OFF face (vettingOff,
+    // below) — this mirrors that in the handler, since a disabled checkbox's
+    // onCheckedChange can still fire from a stray keyboard event.
+    if (vettingOff) return;
     // Same gate the checkbox's own `disabled` and the disable toast's Undo
     // share (`conciergeCanTurnOn`, I2) — `!selectedFormId` used to be the
     // only check here, which let a click through on an unpublished shown
@@ -717,22 +776,21 @@ export function ConciergeCard({
       const result = await disableAction();
       if (!result.ok) { toast.error(result.error); return; }
       setOptimisticPublicId(null);
-      toast.success(m["voice.assistant.disabledToast"], {
-        action: {
-          label: m["common.undo"],
-          onClick: () => startTransition(async () => {
-            // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
-            // Undo is "re-enable", not a bypass of the same rule.
-            const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
-            if (!r.ok) { toast.error(r.error); return; }
-            setOptimisticPublicId(r.publicId);
-          }),
-        },
-      });
+      toast.success(m["voice.assistant.disabledToast"], conciergeDisabledToast(vettingLock, () => startTransition(async () => {
+        // Shares `turnOn`'s own gate (`conciergeAttemptReenable`, I2) —
+        // Undo is "re-enable", not a bypass of the same rule.
+        const r = await conciergeAttemptReenable(lockReason, selectedFormId, formUnpublished, enableAction);
+        if (!r.ok) { toast.error(r.error); return; }
+        setOptimisticPublicId(r.publicId);
+      })));
     });
   }
 
-  const showEmptyState = shouldShowConciergeEmptyState(enabled, lockReason);
+  // S-53: the empty state sells "publish a form", which is no use when the trade forbids the chat.
+  const showEmptyState = vettingLock === null && shouldShowConciergeEmptyState(enabled, lockReason);
+  // S-53: the vetting lock only ever disables the OFF face — an ON chat keeps its toggle, which is its
+  // off switch (spec 5.3: "Anything already on stays on; turning off is never blocked").
+  const vettingOff = !enabled && vettingLock !== null;
   // Both helpers below are driven off the id the Select is actually SHOWING
   // (`selectedFormId`), never the stored id directly and never `enabled` —
   // fix round 2, IMPORTANT B. While ON the Select is disabled so the two
@@ -772,7 +830,7 @@ export function ConciergeCard({
   );
   const reasonId = "concierge-toggle-reason";
 
-  const toggleDisabled = pending || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished);
+  const toggleDisabled = pending || vettingOff || conciergeToggleLocked(enabled, lockReason, selectedFormId, formUnpublished);
 
   return (
     <>
@@ -827,11 +885,13 @@ export function ConciergeCard({
                   checked={enabled}
                   disabled={toggleDisabled}
                   onCheckedChange={(v) => (v === true ? turnOn() : turnOff())}
-                  aria-describedby={reasonText ? reasonId : undefined}
+                  aria-describedby={vettingOff || reasonText ? reasonId : undefined}
                 />
                 <Label htmlFor="concierge_enabled">{m["voice.assistant.toggleLabel"]}</Label>
               </div>
-              {reasonText ? (
+              {vettingOff ? (
+                <VettingLockReason id={reasonId} lock={vettingLock!} />
+              ) : reasonText ? (
                 <p id={reasonId} className="text-xs text-muted-foreground">{reasonText}</p>
               ) : null}
             </>
@@ -1015,10 +1075,14 @@ function ForwardCallsCard({
 }
 
 function NumberStatusSelect({
-  phoneNumber, statusAction,
+  phoneNumber, statusAction, vettingLock, profile, numbers,
 }: {
   phoneNumber: PhoneNumberRow;
   statusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+  /** S-53: why answering cannot be switched ON, or null when the trade allows it. */
+  vettingLock: VettingLock | null;
+  profile: VoiceProfileRow | null;
+  numbers: PhoneNumberRow[];
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -1030,24 +1094,37 @@ function NumberStatusSelect({
     });
   }
 
+  // S-53 (design check M1): a locked status is said in words, not opacity alone - the option carries
+  // "not available" in the lock's language, and the trigger points at the reason under the list.
+  const locked = new Set(STATUS_VALUES.filter((v) => numberStatusLocked(vettingLock, profile, numbers, phoneNumber.id, v)));
   return (
     <Select value={phoneNumber.status} onValueChange={run} disabled={pending}>
-      <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+      <SelectTrigger className="w-36" aria-describedby={locked.size > 0 ? "number-vetting-reason" : undefined}>
+        <SelectValue />
+      </SelectTrigger>
       <SelectContent>
         {STATUS_VALUES.map((v) => (
-          <SelectItem key={v} value={v}>{NUMBER_STATUS_LABEL[v]}</SelectItem>
+          <SelectItem key={v} value={v} disabled={locked.has(v)}>
+            {NUMBER_STATUS_LABEL[v]}
+            {locked.has(v) && vettingLock
+              ? <span lang={vettingLock.locale}>{" — "}{t(m, "vetting.numberStatusLocked", vettingLock.locale)}</span>
+              : null}
+          </SelectItem>
         ))}
       </SelectContent>
     </Select>
   );
 }
 
-function PhoneNumbersPanel({
-  numbers, assignAction, statusAction,
+export function PhoneNumbersPanel({
+  numbers, assignAction, statusAction, vettingLock = null, profile = null,
 }: {
   numbers: PhoneNumberRow[];
   assignAction: (formData: FormData) => Promise<ActionResult>;
   statusAction: (phoneNumberId: string, status: string) => Promise<ActionResult>;
+  /** S-53: why answering cannot be switched ON, or null when the trade allows it. */
+  vettingLock?: VettingLock | null;
+  profile?: VoiceProfileRow | null;
 }) {
   const assignSubmit = useFormSubmit(async (formData, form) => {
     const result = await assignAction(formData);
@@ -1079,11 +1156,15 @@ function PhoneNumbersPanel({
                     <p className="text-xs text-muted-foreground">{n.telnyx_id}</p>
                   ) : null}
                 </div>
-                <NumberStatusSelect phoneNumber={n} statusAction={statusAction} />
+                <NumberStatusSelect
+                  phoneNumber={n} statusAction={statusAction}
+                  vettingLock={vettingLock} profile={profile} numbers={numbers}
+                />
               </li>
             ))}
           </ul>
         )}
+        {vettingLock ? <VettingLockReason id="number-vetting-reason" lock={vettingLock} /> : null}
 
         <form
           // Same reason as every other converted form (see
@@ -1118,6 +1199,7 @@ export function VoiceSettings({
   disclosureCopy, disclosureResults, tradeRulesCopy,
   persona, locale, pseudo, timezone, storedHours, calendar, insurance, services,
   hasHours, hasPriceList, saveBusinessHoursAction, saveServicesAction,
+  vettingLock = null,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -1172,13 +1254,15 @@ export function VoiceSettings({
   hasPriceList: boolean;
   saveBusinessHoursAction: (formData: FormData) => Promise<ActionResult>;
   saveServicesAction: (formData: FormData) => Promise<ActionResult>;
+  /** S-53: why Sofía/the web chat cannot be switched ON, or null when the trade allows it. */
+  vettingLock?: VettingLock | null;
 }) {
   return (
     <div className="space-y-6">
       <VoiceProfileForm
         profile={profile} brandName={brandName} action={saveProfileAction} disclosureCopy={disclosureCopy}
         tradeRulesCopy={tradeRulesCopy} persona={persona} locale={locale} pseudo={pseudo}
-        hasHours={hasHours} hasPriceList={hasPriceList}
+        hasHours={hasHours} hasPriceList={hasPriceList} vettingLock={vettingLock}
       />
       <BusinessHoursCard
         locale={locale} pseudo={pseudo} persona={persona} timezone={timezone}
@@ -1196,10 +1280,14 @@ export function VoiceSettings({
         origin={origin}
         enableAction={enableConciergeAction}
         disableAction={disableConciergeAction}
+        vettingLock={vettingLock}
       />
       <TransferPanel transferPhone={transferPhone} action={setTransferPhoneAction} />
       <ForwardCallsCard profile={profile} transferPhone={transferPhone} action={setForwardCallsAction} />
-      <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
+      <PhoneNumbersPanel
+        numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction}
+        vettingLock={vettingLock} profile={profile}
+      />
     </div>
   );
 }

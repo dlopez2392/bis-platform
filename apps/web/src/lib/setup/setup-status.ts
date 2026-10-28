@@ -1,5 +1,6 @@
 import type { CalendarRow, VoiceProfileRow, PhoneNumberRow } from "@bis/db";
 import { assistantProfileGap, isAssistantProfileReady } from "@bis/db/profile-ready";
+import { sofiaGate } from "@/lib/vetting/trades";
 
 // Pure module by design: the wizard's whole promise is that step completion
 // is COMPUTED from live rows on every render, never stored as its own flag
@@ -71,6 +72,14 @@ export type SetupInputs = {
    * (docs/crm-features.md:883).
    */
   permissions: SetupPermissions | null;
+  /**
+   * S-53: the company's stored trade (accounts.trade, read on the same row as permissions). A CRM-only
+   * trade drops the same steps a CRM-only plan does: Sofía and the web chat cannot be switched on, so a
+   * Setup that kept them could never complete (docs/crm-features.md:883's defect). No trade (null) keeps
+   * every step; their actions refuse with "Set this company's trade first", and Setup's notice says so.
+   * Optional so every SetupInputs literal written before this field still compiles.
+   */
+  trade?: string | null;
 };
 
 // localStorage-style keys the wizard persists the two ticks under. Named
@@ -208,8 +217,10 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
   // assume full" by construction, which is also what makes a failed
   // permissions read (SetupInputs's own doc comment: degrades to `null`)
   // safe to fall through here without a separate check.
-  const voiceReceptionistOff = permissions?.voice_receptionist === false;
-  const webConciergeOff = permissions?.web_concierge === false;
+  const tradeGate = sofiaGate(inputs.trade ?? null);
+  const tradeCrmOnly = !tradeGate.ok && tradeGate.reason === "crm_only";
+  const voiceReceptionistOff = permissions?.voice_receptionist === false || tradeCrmOnly;
+  const webConciergeOff = permissions?.web_concierge === false || tradeCrmOnly;
 
   return allSteps.filter((s) => {
     if (voiceReceptionistOff && CRM_ONLY_DROPPED_KEYS.has(s.key)) return false;

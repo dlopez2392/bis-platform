@@ -61,6 +61,8 @@ const dbMocks = vi.hoisted(() => ({
   // they are the helper's own behaviour, and the helper is mocked. Their
   // proof is packages/db/src/test/accounts.test.ts, against real Postgres.
   renameAccount: vi.fn(),
+  // S-53: goLiveAction's switch-on guard (sofiaSwitchOnRefusal) reads the company's trade.
+  getAccountTrade: vi.fn(),
 }));
 
 /** The one object `serviceDb()` resolves to everywhere in this file. Kept as
@@ -175,6 +177,8 @@ beforeEach(() => {
   // signals failure by THROWING, so a resolved value here would be a shape
   // the action never inspects.
   dbMocks.renameAccount.mockResolvedValue(undefined);
+  // S-53: an allowed trade, so no pre-existing go-live case is refused by the switch-on guard.
+  dbMocks.getAccountTrade.mockResolvedValue({ trade: "hvac", tradeOther: null });
   guardFixture.isAgency = true;
 });
 
@@ -389,6 +393,41 @@ describe("goLiveAction", () => {
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: false, error: m["setup.goLive.failed"] });
     errSpy.mockRestore();
+  });
+});
+
+describe("goLiveAction - S-53 vetting (plan review C1)", () => {
+  const provisioned = () => readyNumbers().map((n) => ({ ...n, status: "provisioned" as const }));
+
+  it("refuses a crm_only trade when going live switches Sofía on (a provisioned number), writing nothing (mutation: delete the guard -> FAILS)", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ numbers: provisioned() }));
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: "child_care", tradeOther: null });
+    const r = await goLiveAction("a1");
+    expect(r).toEqual({ ok: false, error: "Sofía and the web chat aren't available for child care businesses yet." });
+    expect(dbMocks.goLive).not.toHaveBeenCalled();
+  });
+
+  it("refuses no trade on the same switch-on", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ numbers: provisioned() }));
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    expect(await goLiveAction("a1")).toEqual({ ok: false, error: m["vetting.sofia.noTrade"] });
+    expect(dbMocks.goLive).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the trade cannot be read on the same switch-on (fails closed)", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({ numbers: provisioned() }));
+    dbMocks.getAccountTrade.mockRejectedValue(new Error("down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await goLiveAction("a1")).toEqual({ ok: false, error: m["vetting.readFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.goLive).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for a trade when the testing number already answers (already on stays on)", async () => {
+    dbMocks.getAccountTrade.mockResolvedValue({ trade: null, tradeOther: null });
+    expect(await goLiveAction("a1")).toEqual({ ok: true });
+    expect(dbMocks.getAccountTrade).not.toHaveBeenCalled();
+    expect(dbMocks.goLive).toHaveBeenCalledOnce();
   });
 });
 
