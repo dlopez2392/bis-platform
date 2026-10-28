@@ -1,6 +1,6 @@
 import {
   findReplyThread, matchSender, recordInboundEmail, findInboundEmailByProviderId, getConversationSummary,
-  INBOUND_EMAIL_COLLISION, listNeverLog, matchTeamSender,
+  INBOUND_EMAIL_COLLISION, listNeverLog, matchTeamSender, restoreContactOnSign,
   type InboundEmailRow, type SenderMatch, type SupabaseClient, type TeamSender,
 } from "@bis/db";
 import { neverLogMatches } from "@bis/db/never-log-rules";
@@ -65,6 +65,18 @@ async function resumeExisting(
       row, contactId, sender: filing.kind === "customer" ? filing.sender : null, attachmentCount: row.attachmentCount,
       raiseUnread: !isForward, actor: ACTOR, ...(filing.kind === "forward" ? { forward: { authorId: filing.authorId } } : {}),
     });
+    // Contact archive, owner ruling Q1: the customer's own email brings an archived contact back (logged as
+    // the customer's act). Never a forward, never a stop or a stop phrase (result.consent), never a duplicate,
+    // and never fileHeldEmailAction's manual File (review I6), which does not pass through here. Automatic
+    // mail was dropped earlier (classifyAutomatic). A failure is logged: the email is filed, and its unread
+    // keeps the thread in the inbox.
+    if (result.created && filing.kind === "customer" && result.consent.kind === "none") {
+      try {
+        await restoreContactOnSign(deps.db, row.accountId, contactId, "email");
+      } catch {
+        deps.log(`inbound email: could not restore an archived contact on account ${row.accountId}; the email is filed`);
+      }
+    }
     // Spec §4: the owner's forwarded copy is NOT sent for a teammate's forward.
     if (result.created && !isForward) {
       try {

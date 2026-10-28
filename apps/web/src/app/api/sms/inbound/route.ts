@@ -38,8 +38,10 @@ import {
   serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
   applyConfirmationReply, ensureHoldingContact, listOutstandingConfirmAsks, matchConfirmationReply,
+  restoreContactOnSign,
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
+import { looksAutomaticText } from "@/lib/contacts/automatic-text";
 import { readCandidates, isShared } from "@/lib/voice/identity/candidates";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { stampHeartbeat } from "@/lib/ops/stamp";
@@ -217,6 +219,14 @@ async function handleInbound(
       );
     }
     conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
+    // Contact archive, owner ruling Q1 and review I7/I8: the customer's own text brings an archived contact
+    // back (logged as the customer's act) — not a STOP/START/HELP, a Telnyx autoresponse or a stop phrase
+    // (consent.kind), not a phone's auto-reply, not a shared number's holding record. Runs on every delivery
+    // (idempotent: an active contact answers false), inside the filing try and BEFORE the message, so a
+    // failure on the first filing files nothing and Telnyx's retry redoes the whole text.
+    if (!shared && consent.kind === "none" && !looksAutomaticText(text)) {
+      await restoreContactOnSign(db, accountId, contact.id, "text");
+    }
     if (firstFiling) {
       await createMessage(db, accountId, {
         conversationId: conversation.id, channel: "sms", direction: "inbound",

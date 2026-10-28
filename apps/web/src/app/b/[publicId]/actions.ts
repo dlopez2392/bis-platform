@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import {
   serviceDb, getCalendarByPublicId, createContact, fillContactBlanks, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
-  incrementUnreadCount, recordLanguageSignal,
+  incrementUnreadCount, recordLanguageSignal, restoreContactOnSign,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
@@ -379,6 +379,15 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       } catch (e) {
         console.error(`booking ${publicId}: language signal failed for contact ${contactId}: ${String(e)}`);
       }
+    }
+
+    // Contact archive, owner ruling Q1: the customer's own booking brings an archived contact back (logged
+    // as the customer's act). After createBooking, so a booker who lost the slot race restores nobody.
+    // Best-effort, its own try: the booking is real and a restore must never cost it.
+    try {
+      await restoreContactOnSign(db, calendar.account_id, contactId, "booking");
+    } catch (e) {
+      console.error(`booking ${publicId}: restore failed for contact ${contactId}: ${String(e)}`);
     }
 
     const contactName = [firstName, lastName].filter(Boolean).join(" ").trim() || email;

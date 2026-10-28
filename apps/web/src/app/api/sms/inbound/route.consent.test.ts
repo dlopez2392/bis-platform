@@ -18,6 +18,8 @@ const db = vi.hoisted(() => ({
   // S-47e (Task 10): the shared number's holding filing and the household reply (S30).
   listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(), listOutstandingConfirmAsks: vi.fn(),
   addTask: vi.fn(), getAccountLanguage: vi.fn(),
+  // Contact archive (T9): a stub, so the partial mock never runs the real restore against the fake client.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sendReply = vi.hoisted(() => vi.fn());

@@ -30,6 +30,8 @@ const dbMocks = vi.hoisted(() => ({
   matchConfirmationReply: vi.fn(),
   addTask: vi.fn(),
   getAccountLanguage: vi.fn(),
+  // Contact archive (T9): the customer's own text brings an archived contact back.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@/lib/voice/telnyx-signature", () => ({ verifyTelnyxSignature: verify }));
 vi.mock("@bis/db", () => dbMocks);
@@ -73,6 +75,7 @@ beforeEach(() => {
   dbMocks.listOutstandingConfirmAsks.mockResolvedValue([]);
   dbMocks.addTask.mockResolvedValue({ id: "t1" });
   dbMocks.getAccountLanguage.mockResolvedValue(null);
+  dbMocks.restoreContactOnSign.mockResolvedValue(false);
   // The real matcher (pure): the household reply reads "Sí" as yes exactly as production does.
   dbMocks.matchConfirmationReply.mockImplementation(realDb.matchConfirmationReply);
   afterMock.mockReset();
@@ -640,3 +643,73 @@ describe("a one-word answer from a shared number (S-47e S30)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Contact archive (owner ruling Q1, review I7/I8): the customer's own text brings an archived contact back.
+// Never a keyword, a Telnyx autoresponse or a stop sentence (consent.kind), never a phone's auto-reply
+// (looksAutomaticText), never a shared number's holding record. Inside the filing try, BEFORE the message.
+// ---------------------------------------------------------------------------
+describe("an inbound text brings an archived contact back (contact archive T9)", () => {
+  const theService = () => dbMocks.serviceDb.mock.results[0]!.value;
+  const order = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0]!;
+
+  it("a plain text restores the contact it filed on, with the sign 'text', on the service client, BEFORE the message is written (mutation: restore after createMessage → FAILS)", async () => {
+    anOwnedNumberAndAKnownContact();
+    const res = await POST(inbound("Can you come Tuesday?"));
+    expect(res.status).toBe(200);
+    expect(dbMocks.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(theService(), "acct_1", "contact_1", "text");
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(order(dbMocks.restoreContactOnSign)).toBeLessThan(order(dbMocks.createMessage));
+    expect(order(dbMocks.ensureConversation)).toBeLessThan(order(dbMocks.restoreContactOnSign));
+  });
+
+  it("a retried delivery (the message already filed) restores too: it is idempotent and runs on every delivery (mutation: restore only inside if (firstFiling) → FAILS)", async () => {
+    anOwnedNumberAndAKnownContact();
+    dbMocks.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+    await POST(inbound("Can you come Tuesday?"));
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(theService(), "acct_1", "contact_1", "text");
+  });
+
+  it.each([
+    ["STOP", {}],
+    ["START", {}],
+    ["HELP", {}],
+    ["a text Telnyx answered itself (telnyx_only)", { autoresponse_type: "HELP" }],
+    ["unsubscribe me", {}],
+  ] as const)("%s restores nobody: consent.kind is not none (mutation: drop the consent.kind term → FAILS)", async (body, over) => {
+    anOwnedNumberAndAKnownContact();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const text = body.startsWith("a text") ? "hello there" : body;
+    await POST(post({ data: { event_type: "message.received", payload: {
+      id: `evt_consent_${text}`, to: [{ phone_number: OUR_NUMBER }], from: { phone_number: THEIR_NUMBER }, text, ...over } } }));
+    // The text still reached the filing step, so a missing guard WOULD have restored.
+    expect(dbMocks.ensureConversation).toHaveBeenCalledTimes(1);
+    expect(dbMocks.restoreContactOnSign).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("a phone's own auto-reply restores nobody, but is still filed (mutation: drop the looksAutomaticText term → FAILS)", async () => {
+    anOwnedNumberAndAKnownContact();
+    await POST(inbound("I'm driving, will reply later"));
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a text from a shared number restores nobody: it files on the number's holding record (mutation: drop the shared term → FAILS)", async () => {
+    aNumberWith([HOLDING_ROW, ANA, BETO]);
+    await POST(inbound("can you come Tuesday?"));
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a restore that fails on the first filing files nothing and answers 503, so Telnyx retries the whole text (mutation: catch the restore → 200, FAILS; restore after createMessage → a message is written, FAILS)", async () => {
+    anOwnedNumberAndAKnownContact();
+    dbMocks.restoreContactOnSign.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await POST(inbound("Can you come Tuesday?"));
+    expect(res.status).toBe(503);
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+});
