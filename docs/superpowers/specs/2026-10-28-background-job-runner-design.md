@@ -563,6 +563,11 @@ bis-ci.
 
 ## 14. Open questions for the owner
 
+**Decided 2026-10-28 (owner, all four as recommended):** Q1 no kick in this part, decide with
+S-22; Q2 (a) the dispatcher calls `APP_ORIGIN`; Q3 succeeded rows 7 days, dead rows 30 days, the
+`jobs.dead` alert repeating every six hours; Q4 (a) bis-comms makes both providers wait out one
+429 and retry once, before the switch goes on.
+
 **Q1. Should a new job start sooner than the next tick?** A "kick" would have `enqueue()` invoke
 the drain route once, right after the insert, so a job starts within seconds instead of within
 15 minutes. It is safe (`SKIP LOCKED` lets a kicked drain and the tick's drain run side by side) and
