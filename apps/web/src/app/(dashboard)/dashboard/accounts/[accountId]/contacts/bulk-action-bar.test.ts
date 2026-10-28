@@ -361,13 +361,15 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
     expect(toasts.success).toHaveBeenCalledWith(m["bulk.deleted"].replace("{count}", "3"));
   });
 
-  it("the plain English case still reads English, and the skipped-bookings line is localized too (mutation: ignore locale -> FAILS)", () => {
+  it("the plain English case still reads English, and the skipped-with-history line is localized too (mutation: ignore locale -> FAILS)", () => {
     announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "en");
-    expect(toasts.success).toHaveBeenCalledWith("Deleted 2 · skipped 1 linked to bookings, deals, or conversations");
+    expect(toasts.success).toHaveBeenCalledWith(
+      m["bulk.deletedSkipped"].replace("{count}", "2").replace("{skipped}", "1"),
+    );
     toasts.success.mockReset();
     announceDeleteResult({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 }, "es");
     expect(toasts.success).toHaveBeenCalledWith(
-      "Contactos borrados: 2 · conservados por estar vinculados a citas, oportunidades o conversaciones: 1",
+      m["bulk.deletedSkipped.es"].replace("{count}", "2").replace("{skipped}", "1"),
     );
   });
 
