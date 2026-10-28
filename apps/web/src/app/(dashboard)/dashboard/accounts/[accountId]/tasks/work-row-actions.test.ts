@@ -27,6 +27,12 @@ describe("failureText", () => {
     );
   });
 
+  it("the calendar's close-out failure reads Spanish once the action names it (2026-10-28)", () => {
+    const r = { ok: false as const, error: m["calendar.bookings.statusUpdateFailed"], errorKey: "calendar.bookings.statusUpdateFailed" as const };
+    expect(failureText(r, "es")).toBe("No se pudo actualizar esta cita.");
+    expect(failureText(r, "en")).toBe("Could not update this booking.");
+  });
+
   it("a failure with no key is shown exactly as it came (mutation: t(m, undefined) -> FAILS)", () => {
     const forwarded: { ok: false; error: string } = { ok: false, error: "Could not update this booking." };
     expect(failureText(forwarded, "es")).toBe("Could not update this booking.");

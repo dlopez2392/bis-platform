@@ -37,10 +37,16 @@ import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
  * here, not re-implemented, so "what looks like an email" has one answer
  * everywhere it's asked.
  */
+/** Add contact's refusals, named by key (2026-10-28) so the dialog words them in the reader's
+ *  language; `error` stays the English line for any caller that reads only that. */
+export type AddContactErrorKey = "contacts.add.blank" | "contacts.add.badEmail" | "contacts.add.badPhone";
 export type CreateContactResult =
   | { kind: "created" }
   | { kind: "existing"; contactId: string }
-  | { kind: "invalid"; error: string };
+  | { kind: "invalid"; error: string; errorKey?: AddContactErrorKey };
+
+const refuse = (errorKey: AddContactErrorKey): CreateContactResult =>
+  ({ kind: "invalid", error: m[errorKey], errorKey });
 
 export async function createContactAction(
   accountId: string, formData: FormData,
@@ -50,10 +56,10 @@ export async function createContactAction(
   const firstName = val("firstName");
   const lastName = val("lastName");
   if (!firstName && !lastName && !val("email") && !val("phone")) {
-    return { kind: "invalid", error: m["contacts.add.blank"] };
+    return refuse("contacts.add.blank");
   }
   const email = normalizeFieldInput("email", val("email"));
-  if (!email.ok) return { kind: "invalid", error: email.error };
+  if (!email.ok) return refuse("contacts.add.badEmail");
   // Named `phoneField`, not `phone`: this file's OWN scan (F-009,
   // scans.test.ts) tracks a "local that carries a normaliser's number" by
   // name across the WHOLE FILE, not per function — `setPhoneCountryAction`,
@@ -67,7 +73,7 @@ export async function createContactAction(
   // SAME value `updateContactFieldAction`'s own `norm.value` below writes)
   // — as if it carried one of theirs.
   const phoneField = normalizeFieldInput("phone", val("phone"));
-  if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
+  if (!phoneField.ok) return refuse("contacts.add.badPhone");
 
   // F-085 part 1 (spec §8): a customer someone adds by hand is theirs; the
   // narrow path for a caller who cannot see the whole account lives in the

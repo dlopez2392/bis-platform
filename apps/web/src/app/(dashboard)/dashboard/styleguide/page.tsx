@@ -993,7 +993,7 @@ export default async function StyleguidePage({
           </div>
         </Section>
 
-        <Section title="Toasts" file="components/ui/sonner.tsx">
+        <Section title={t(m, "styleguide.toasts", "en")} file="components/ui/sonner.tsx">
           <ToastDemo />
         </Section>
 

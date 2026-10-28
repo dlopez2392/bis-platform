@@ -90,9 +90,8 @@ export function ZoneNote({
   /**
    * The reader's language for the zone line (F-085 follow-ups: the To do
    * page reads Spanish). Defaults to English, so every screen that passes
-   * none is unchanged. The guessed-zone warning below has no Spanish twins
-   * yet, so it stays English and says so with its own `lang="en"` rather
-   * than sit unmarked inside a Spanish page.
+   * none is unchanged. The guessed-zone warning reads it too (Spanish twins
+   * since 2026-10-28) and carries it as its own `lang`.
    */
   locale?: Locale;
   className?: string;
@@ -115,29 +114,29 @@ export function ZoneNote({
         // `text-foreground`, per the repo's standing rule (setup-shell.tsx):
         // a full SENTENCE keeps the foreground colour and lets the ground
         // carry the hue, because a sentence in `--warn` sits at the AA floor.
-        <Notice tone="warn" role="note" lang="en" className="text-foreground">
+        <Notice tone="warn" role="note" lang={locale} className="text-foreground">
           {accountless ? (
             // The agency's own zone was unusable too — the one case left
             // that is still worth a warning on a screen with no company.
             // No "fix" line: unlike the in-account case, the fix here is not
             // the "Add company" dialog, and this repo does not have a
             // recommendation worth printing for the agency's own zone yet.
-            m["zone.guessed.accountless.fallback"]
+            t(m, "zone.guessed.accountless.fallback", locale)
           ) : isAgency ? (
             <>
               {zone.source === "agency"
-                ? m["zone.guessed.agency"]
-                : m["zone.guessed.fallback"]}{" "}
+                ? t(m, "zone.guessed.agency", locale)
+                : t(m, "zone.guessed.fallback", locale)}{" "}
               {/* D-076: PLAIN TEXT, not a Link — the only zone input in the
                   whole product is the "Add company" dialog, and only at
                   creation. A Link to Settings here (as this used to be)
                   sent the agency to a page with nothing on it to fix, which
                   is worse than no link, the exact reasoning the CLIENT
                   branch below already followed. */}
-              {m["zone.guessed.fix"]}
+              {t(m, "zone.guessed.fix", locale)}
             </>
           ) : (
-            m["zone.guessed.client"]
+            t(m, "zone.guessed.client", locale)
           )}
         </Notice>
       ) : null}

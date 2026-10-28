@@ -56,7 +56,7 @@ export function AddContactDialog({
     }
     if (result.kind === "invalid") {
       setExistingContactId(null);
-      toast.error(result.error);
+      toast.error(result.errorKey ? t(m, result.errorKey, locale) : result.error);
       return;
     }
     if (result.kind === "existing") {

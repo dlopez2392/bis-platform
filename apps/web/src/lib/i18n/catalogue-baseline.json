@@ -351,13 +351,11 @@
   "calendar.bookings.join",
   "calendar.bookings.markCompleted",
   "calendar.bookings.markNoShow",
-  "calendar.bookings.notStartedYet",
   "calendar.bookings.note",
   "calendar.bookings.restoreNotOurs",
   "calendar.bookings.restoreRescheduled",
   "calendar.bookings.restoreSlotTaken",
   "calendar.bookings.restored",
-  "calendar.bookings.statusUpdateFailed",
   "calendar.bookings.statusUpdated",
   "calendar.bookings.title",
   "calendar.embed.copied",
@@ -503,7 +501,6 @@
   "contact.texts.noNumber",
   "contact.texts.resumeNoteRequired",
   "contact.texts.undoExpired",
-  "contacts.add.blank",
   "contacts.export.filename",
   "contacts.import.back",
   "contacts.import.confirm",
@@ -1000,10 +997,5 @@
   "work.row.overdue",
   "work.usageStale.action",
   "work.usageStale.many",
-  "work.usageStale.one",
-  "zone.guessed.accountless.fallback",
-  "zone.guessed.agency",
-  "zone.guessed.client",
-  "zone.guessed.fallback",
-  "zone.guessed.fix"
+  "work.usageStale.one"
 ]

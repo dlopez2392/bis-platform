@@ -643,6 +643,14 @@ export const m = {
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
   "contacts.createFailed.es": "No se pudo agregar ese contacto. Revise los datos e intente de nuevo.",
   "contacts.add.blank": "Add a name, email, or phone number.",
+  "contacts.add.blank.es": "Agregue un nombre, un correo electrónico o un número de teléfono.",
+  // 2026-10-28: Add contact's two shape refusals, named so the dialog words
+  // them in the reader's language. The English is normalizeFieldInput's own
+  // (lib/contacts/field-input.ts), which inline editing still shows as-is.
+  "contacts.add.badEmail": "That doesn't look like an email address.",
+  "contacts.add.badEmail.es": "Eso no parece una dirección de correo electrónico.",
+  "contacts.add.badPhone": "That doesn't look like a phone number.",
+  "contacts.add.badPhone.es": "Eso no parece un número de teléfono.",
   "contacts.add.existing": "This person is already in your contacts.",
   "contacts.add.existing.es": "Esta persona ya está en sus contactos.",
   "contacts.add.viewContact": "View contact",
@@ -1784,6 +1792,8 @@ export const m = {
   "calendar.bookings.markNoShow": "No-show",
   "calendar.bookings.statusUpdated": "Booking updated",
   "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  // The To do list (Spanish since F-085) shows this when a close-out fails.
+  "calendar.bookings.statusUpdateFailed.es": "No se pudo actualizar esta cita.",
   // D-036: Cancel runs at once with Undo (rule 6). It emails nobody, so the
   // toast says the customer has not heard, rather than letting the operator
   // assume they have.
@@ -1793,6 +1803,7 @@ export const m = {
   "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
   "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
+  "calendar.bookings.notStartedYet.es": "Esta cita todavía no ha empezado. Cuando haya empezado, podrá marcar si se realizó o si no llegó.",
   // F-048: when an email can reach the customer, Cancel opens a dialog
   // showing it; the owner can change its words and language, or not send it.
   // Otherwise Cancel cancels at once and the toast says why nobody was told.
@@ -3607,6 +3618,8 @@ export const m = {
   // Mis preferencias (F-096, Task 6): the choice-tiles demo section title.
   "styleguide.choiceTiles": "Choice tiles",
   "styleguide.choiceTiles.es": "Opciones en mosaico",
+  "styleguide.toasts": "Toasts",
+  "styleguide.toasts.es": "Avisos emergentes",
   // ── Website (the traffic section; spec 2026-09-07-website-traffic-design) ──
   "website.title": "Website",
   "website.period.7": "7D",
@@ -3816,7 +3829,7 @@ export const m = {
   // with (see zone-resolution.ts).
   "zone.note": "Times shown in {zone}",
   // Only the To do page passes a locale today (F-085 follow-ups); the
-  // zone.guessed.* sentences below have no twins yet and render lang="en".
+  // zone.guessed.* sentences below have Spanish twins since 2026-10-28.
   "zone.note.es": "Las horas se muestran en {zone}",
 
   // Shown ONLY when `guessed` — i.e. the zone printed is not the account's
@@ -3827,8 +3840,12 @@ export const m = {
   // while "we used the agency's zone" names which setting is broken.
   "zone.guessed.agency":
     "This company has no timezone of its own, so times use the agency's.",
+  "zone.guessed.agency.es":
+    "Esta empresa no tiene zona horaria propia, así que las horas usan la de la agencia.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
+  "zone.guessed.fallback.es":
+    "Ni esta empresa ni la agencia tienen una zona horaria válida, así que las horas usan UTC.",
   // D-076: this used to be a Link to Settings ("Set it in Settings"),
   // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
   // would have been redirected straight back to their own dashboard — but
@@ -3839,6 +3856,7 @@ export const m = {
   // this string just hadn't caught up to its own sibling's rule. Plain
   // text now, naming the real constraint instead of a destination.
   "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
+  "zone.guessed.fix.es": "Todavía no hay un campo para esto en Ajustes: la zona horaria de una empresa solo se fija al crear su cuenta.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they
@@ -3851,6 +3869,8 @@ export const m = {
   // earlier wording described a state the schema makes impossible.
   "zone.guessed.client":
     "Your timezone needs fixing, so times are shown in another zone. Ask your account manager to sort it out.",
+  "zone.guessed.client.es":
+    "Su zona horaria necesita corregirse, así que las horas se muestran en otra zona. Pídale a la persona que administra su cuenta que lo corrija.",
   // Review of #225 (blueprints): an ACCOUNT-LESS screen's `renderZone(undefined)`
   // always answers `source: "agency"` when the agency's own zone is usable —
   // that is the EXPECTED source there, not a degraded one, so `ZoneNote`'s
@@ -3861,6 +3881,8 @@ export const m = {
   // unusable. Never "this company" (there is none here).
   "zone.guessed.accountless.fallback":
     "The agency has no usable timezone either, so times use UTC.",
+  "zone.guessed.accountless.fallback.es":
+    "La agencia tampoco tiene una zona horaria válida, así que las horas usan UTC.",
 
   // ── Screened calls (2026-09-18) ────────────────────────────────────────
   // A refused call used to leave no trace but a log line. These screens are

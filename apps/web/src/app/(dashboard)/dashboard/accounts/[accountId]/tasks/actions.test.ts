@@ -235,12 +235,22 @@ describe("closeOutBooking", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/acct_1/tasks");
   });
 
-  it("forwards a failure verbatim and does not revalidate", async () => {
-    setBookingStatusActionMock.mockResolvedValue({ ok: false, error: "Could not update this booking." });
+  it("forwards an unrecognised failure verbatim, with no key, and does not revalidate", async () => {
+    setBookingStatusActionMock.mockResolvedValue({ ok: false, error: "Something else went wrong." });
     const r = await closeOutBooking("acct_1", "booking_1", "no_show");
-    expect(r).toEqual({ ok: false, error: "Could not update this booking." });
+    expect(r).toEqual({ ok: false, error: "Something else went wrong." });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
+
+  // 2026-10-28: the calendar's close-out failures showed English on the
+  // Spanish To do list. The two the calendar action can return are named by
+  // key so failureText renders them in the reader's language.
+  it.each(["calendar.bookings.statusUpdateFailed", "calendar.bookings.notStartedYet"] as const)(
+    "names the calendar's %s failure by key (mutation: forward without errorKey -> FAILS)", async (key) => {
+      setBookingStatusActionMock.mockResolvedValue({ ok: false, error: m[key] });
+      const r = await closeOutBooking("acct_1", "booking_1", "completed");
+      expect(r).toEqual({ ok: false, error: m[key], errorKey: key });
+    });
 });
 
 describe("the consent To-do's buttons (consent chain PR-2)", () => {
