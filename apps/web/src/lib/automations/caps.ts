@@ -1,3 +1,6 @@
+import { RATE_LIMIT_MAX_WAIT_MS, SEND_TIMEOUT_MS } from "@/lib/http/retry-after";
+import { PASS_ROUTE_MAX_S } from "./fanout";
+
 /**
  * FIXED platform constants (danlo, 2026-09-06), and they apply to RECIPE
  * passes only — the reminder and follow-up passes are uncapped (see their doc
@@ -122,10 +125,13 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
  *     WEEKLY_REPORT_BUDGET_MS below (60 s), since S-07 2a the document scan
  *     pass's DOCUMENT_SCAN_BUDGET_MS (45 s), and since S-07 3a the documents
  *     expiry pass's EXPIRY_BUDGET_MS (15 s) — summing to 240 s against the
- *     route's 300 s `maxDuration`, leaving 60 s for every other registered
- *     pass. cron-coupling.test.ts pins the sum against the ceiling, so a
- *     sixth budgeted pass added without raising `maxDuration` reds there
- *     rather than only showing up as a timed-out tick in production. The
+ *     in-process tick's 300 s (LEGACY_TICK_CEILING_S, fanout.ts; the cron
+ *     route's own `maxDuration` until F-196), leaving 60 s for every other
+ *     registered pass. cron-coupling.test.ts pins the sum against that
+ *     ceiling, so a budgeted pass added without raising it reds there rather
+ *     than only showing up as a timed-out tick in production. Under fan-out
+ *     (F-196) each pass also runs in its own 90 s function, and the same test
+ *     pins each budget, plus the row in flight past it, inside that. The
  *     nightly billing step (lib/billing/nightly.ts) runs INSIDE this pass's
  *     budget, on its clock, so it adds no term.
  *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
@@ -197,3 +203,37 @@ export const METER_EVENT_WORST_CASE_MS = 21_000;
  */
 export const WEEKLY_REPORT_TICK_CAP = 150;
 export const WEEKLY_REPORT_BUDGET_MS = 60_000;
+
+/**
+ * F-196 (Task 7 review, I1): one ACCOUNT of the weekly report is one email
+ * per recipient, sent one after another and stamped once at the end, so its
+ * budget check alone cannot bound it: two recipients started at 59.9 s, each
+ * at its worst, run to ~106 s, past the 90 s pass route, which kills the
+ * function after recipient 1 and before the stamp, and recipient 1 is mailed
+ * again next tick. So the pass starts an account only when
+ *   elapsed + recipients x REPORT_EMAIL_WORST_CASE_MS + WEEKLY_REPORT_ACCOUNT_MARGIN_MS
+ *     <= WEEKLY_REPORT_ACCOUNT_END_MS
+ * (the usage report's "budget less the worst case" shape), and never checks
+ * per recipient: an account half-sent and left unstamped would re-send to
+ * everyone already sent.
+ *
+ *   REPORT_EMAIL_WORST_CASE_MS  one send at its worst: attempt + one
+ *     rate-limit wait + attempt (lib/http/retry-after.ts), 23 s.
+ *   WEEKLY_REPORT_ACCOUNT_MARGIN_MS  the account's own work around its sends:
+ *     both weeks' numbers and the voice profile read before them, the stamp
+ *     (with stampWithRetry's 0.9 s of backoff) and the log row after, and the
+ *     route's own work before the pass starts its clock. 10 s, not measured:
+ *     a margin, as cron-coupling.test.ts's 5 s for a one-send row is.
+ *   WEEKLY_REPORT_ACCOUNT_END_MS  the pass route's ceiling (fanout.ts).
+ *   WEEKLY_REPORT_MAX_RECIPIENTS  the most recipients an account may have:
+ *     the largest count that fits from a standing start (3 x 23 + 10 = 79 s
+ *     <= 90 s; 4 would be 102 s), so an account at the cap is always sent
+ *     once it is first in a tick. The Settings save refuses more; a list
+ *     saved before the cap existed is sent to its first three, and the rest
+ *     are counted (`recipientsOverCap`) and logged.
+ * cron-coupling.test.ts (fan-out case 5) pins all four together.
+ */
+export const REPORT_EMAIL_WORST_CASE_MS = 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS;
+export const WEEKLY_REPORT_ACCOUNT_MARGIN_MS = 10_000;
+export const WEEKLY_REPORT_ACCOUNT_END_MS = PASS_ROUTE_MAX_S * 1000;
+export const WEEKLY_REPORT_MAX_RECIPIENTS = 3;

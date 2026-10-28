@@ -1110,6 +1110,9 @@ export const m = {
   "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas.",
   "settings.weeklyReportSaved": "Saved. The next report goes out Monday morning.",
   "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
+  // F-196: the weekly report goes to at most WEEKLY_REPORT_MAX_RECIPIENTS
+  // addresses (lib/automations/caps.ts says why). {max} is that number.
+  "settings.weeklyReportTooMany": "The weekly report can go to {max} addresses at most.",
   "settings.weeklyReportOff": "Nobody is receiving this yet.",
 
   // accounts.alert_phone (0035_alert_phone.sql) — agency-write, client-read.

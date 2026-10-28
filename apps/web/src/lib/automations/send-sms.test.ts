@@ -74,6 +74,13 @@ describe("sendAutomationSms — through the send gate, write then send", () => {
     }, { prepare: expect.any(Function) });
   });
 
+  it("F-196: with a clock on the context, the gate judges the hours at the SEND's instant, on the clock holdOrSend reads (mutation: hand the gate ctx.now → FAILS)", async () => {
+    const sendAt = new Date(NOW.getTime() + 8 * 60_000);
+    const gate = vi.fn(async () => ({ kind: "blocked" as const, reason: "no_number" as const }));
+    await expect(sendAutomationSms({ ...ctx({ sms: gate }), clock: () => sendAt }, input())).rejects.toBeInstanceOf(SmsBlocked);
+    expect(gate).toHaveBeenCalledWith(expect.objectContaining({ now: sendAt }), { prepare: expect.any(Function) });
+  });
+
   it("the gate's prepare writes the conversation and the message row with the text AS SENT, then the send; both ids come back (mutation: store input.body → the row lacks the STOP line, FAILS)", async () => {
     const onProviderFailure = vi.fn(async () => {});
     expect(await sendAutomationSms(ctx(), input(onProviderFailure))).toEqual({ messageId: "msg_1", providerMessageId: "s1", usage: null });

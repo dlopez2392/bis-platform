@@ -25,6 +25,7 @@ import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { validateEnumValue } from "@/lib/enum-value";
 import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
+import { WEEKLY_REPORT_MAX_RECIPIENTS } from "@/lib/automations/caps";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
   await requireAgencyOnlyAccountAccess(accountId);
@@ -193,6 +194,12 @@ export async function setReportEmailsAction(
     if (!isValidEmail(email)) {
       return { ok: false, error: m["settings.weeklyReportBadEmail"].replace("{value}", email) };
     }
+  }
+  // F-196: the report sends one email per recipient inside a 90 s function,
+  // and only this many always fit (lib/automations/caps.ts). Refused whole,
+  // like a bad address, rather than trimmed behind the operator's back.
+  if (emails.length > WEEKLY_REPORT_MAX_RECIPIENTS) {
+    return { ok: false, error: m["settings.weeklyReportTooMany"].replace("{max}", String(WEEKLY_REPORT_MAX_RECIPIENTS)) };
   }
 
   await setReportEmails(serviceDb(), accountId, emails, userId);

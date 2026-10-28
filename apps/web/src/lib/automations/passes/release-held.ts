@@ -66,9 +66,12 @@ export const RELEASE_BATCH = 200;
  * ordered by `held_until` ascending (`listReleasableHolds`), so stopping
  * partway through is safe: the untouched rows keep their past `held_until`
  * and are the first examined again on the next tick, 15 minutes later. The
- * ceiling this budget sits under is the cron route's own `maxDuration`
- * (`api/cron/reminders/route.ts`, 300s) — `cron-coupling.test.ts` pins the
- * two together, so raising this value without raising that one is caught.
+ * ceilings this budget sits under are two since F-196: the in-process tick's
+ * (LEGACY_TICK_CEILING_S, 300 s, in `lib/automations/fanout.ts`; it was the
+ * cron route's own `maxDuration` before), and, under fan-out, this pass's own
+ * function (`api/cron/pass/[key]/route.ts`, 90 s), which must also hold the
+ * one release in flight past the budget. `cron-coupling.test.ts` pins this
+ * value against both, so raising it alone is caught.
  */
 export const RELEASE_BUDGET_MS = 60_000;
 

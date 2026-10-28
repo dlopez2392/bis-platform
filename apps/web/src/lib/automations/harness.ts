@@ -13,11 +13,14 @@ import { closureLoader } from "./closures";
  * (lib/consent/scans.test.ts).
  */
 export function buildPassContext(
-  input: { db: SupabaseClient; now: Date; origin: string },
+  input: { db: SupabaseClient; now: Date; origin: string; clock?: () => Date },
 ): PassContext {
   return {
     ...input, email: emailSenderFor(input.db), sms: smsSenderFor(input.db),
     closures: closureLoader(input.db, input.now),
+    // F-196: the sending hours are judged when the send happens, not at the
+    // tick's now (context.ts). Injectable for tests; real time otherwise.
+    clock: input.clock ?? (() => new Date()),
   };
 }
 

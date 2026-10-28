@@ -15,7 +15,7 @@ import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { NO_CLOSURES } from "../closures";
-import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS } from "../caps";
+import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS, WEEKLY_REPORT_MAX_RECIPIENTS } from "../caps";
 import { weeklyClientReportPass } from "./weekly-report";
 
 const ZONE = "America/New_York";
@@ -216,7 +216,46 @@ describe("weeklyClientReportPass", () => {
     expect(emailSend).toHaveBeenCalledTimes(1);
   });
 
+  // F-196 (Task 7 review, I1): under fan-out this pass runs in its own 90 s
+  // function, and an account's recipients are sent one after another, so the
+  // budget check alone let an account with two recipients start at 59.9 s and
+  // run to ~106 s: killed between recipient 1 and the stamp, and recipient 1
+  // mailed again next tick. An account now starts only if ALL its sends, at
+  // their worst (2 x 10 s attempts + a 3 s rate-limit wait each), plus the
+  // compute-and-stamp margin, end inside the route's 90 s. Never checked per
+  // recipient: an account half-sent and left unstamped re-sends to everyone
+  // already sent.
+  it("starts an account only if all its recipients' sends, at their worst, end inside the pass route: at 50 s one recipient starts, two wait for the next tick (mutation: check only the budget → both sent, FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([
+      row({ accountId: "two", reportEmails: ["a@rio.com", "b@rio.com"] }),
+      row({ accountId: "one", reportEmails: ["c@rio.com"] }),
+    ]);
+    // startedAt, then one read per eligible account: 50 s in for both.
+    // two: 50 + 2 x 23 + 10 = 106 > 90, waits; one: 50 + 23 + 10 = 83, starts.
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(50_000).mockReturnValueOnce(50_000);
+    expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, skippedBudget: 1 });
+    expect(emailSend.mock.calls.map((c) => (c[0] as { to: string }).to)).toEqual(["c@rio.com"]);
+  });
+
+  it("an account at the recipient cap starts from a standing start, so it is never stuck behind the fit check", async () => {
+    const full = Array.from({ length: WEEKLY_REPORT_MAX_RECIPIENTS }, (_, i) => `r${i}@rio.com`);
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ reportEmails: full })]);
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, sent: WEEKLY_REPORT_MAX_RECIPIENTS });
+  });
+
+  it("a list saved before the cap existed still sends, to the first WEEKLY_REPORT_MAX_RECIPIENTS, and counts the rest (mutation: send to every stored address → FAILS)", async () => {
+    const stored = Array.from({ length: WEEKLY_REPORT_MAX_RECIPIENTS + 2 }, (_, i) => `r${i}@rio.com`);
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ reportEmails: stored })]);
+    expect(await weeklyClientReportPass.run(ctx())).toEqual({
+      ...EMPTY, sent: WEEKLY_REPORT_MAX_RECIPIENTS, recipientsOverCap: 2,
+    });
+    expect(emailSend.mock.calls.map((c) => (c[0] as { to: string }).to)).toEqual(stored.slice(0, WEEKLY_REPORT_MAX_RECIPIENTS));
+    expect(dbMocks.stampWeeklyReportSent).toHaveBeenCalledTimes(1);
+  });
+
   it("pins the cap and the budget (mutation: change either → FAILS)", () => {
+    expect(WEEKLY_REPORT_MAX_RECIPIENTS).toBe(3);
     expect(WEEKLY_REPORT_TICK_CAP).toBe(150);
     expect(WEEKLY_REPORT_BUDGET_MS).toBe(60_000);
   });

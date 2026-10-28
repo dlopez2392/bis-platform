@@ -55,9 +55,12 @@ import { m } from "@/lib/messages";
  * hours.ts): an SMS subject uses its kind's rule from the registry
  * (automated 08:00-21:00; marketing 09:00-21:00, Sunday from noon), and an
  * EMAIL subject the automated rule (choice 31). Nothing reads the old
- * per-account quiet-hours settings. The gate checks the hours again for SMS,
- * at the same instant (`ctx.now`), so the two never disagree; if they ever
- * did, its SmsDeferred lands here as a hold all the same.
+ * per-account quiet-hours settings. The hours are judged at the SEND's
+ * instant (`sendInstant`: the context's clock, F-196), never the tick's now,
+ * which under fan-out can be minutes old. The gate checks the hours again for
+ * SMS on the same clock (sendAutomationSms), read a moment later, so it can
+ * only be stricter; if it ever is, its SmsDeferred lands here as a hold all
+ * the same. Every window (deadlines, closures, pause holds) still reads now.
  *
  * The `sent`/`failed`/`skipped` log writes are an isolated leg (`record`):
  * losing one loses a history line, not a send. The `held` write is NOT
@@ -68,7 +71,14 @@ import { m } from "@/lib/messages";
  * `{ kind: "failed" }`, which enrich.ts records into the submission's
  * `processing_error`.
  */
-export type HoldContext = Pick<PassContext, "db" | "now"> & Partial<Pick<PassContext, "closures">>;
+export type HoldContext = Pick<PassContext, "db" | "now"> & Partial<Pick<PassContext, "closures" | "clock">>;
+
+/** F-196: the instant the sending hours are judged at: the send's own clock
+ *  when the context has one (every pass's does, harness.ts), else `now`
+ *  (the inline callers, whose now is the moment). Never used for a window. */
+export function sendInstant(ctx: Pick<PassContext, "now" | "clock">): Date {
+  return ctx.clock ? ctx.clock() : ctx.now;
+}
 
 export type LogSubject = {
   accountId: string;
@@ -361,7 +371,9 @@ export async function holdOrSend(
     if (v.kind === "skipped") { await logSkipped(ctx, s, v.reason); return "skipped"; }
     if (v.kind === "held") { await writeHeld(ctx, s, v.until, zone, v.reason); return "held"; }
   }
-  const opening = nextOpening(hoursRuleOf(s), ctx.now, zone);
+  // F-196: the hours at the SEND's instant, not the tick's now: under
+  // fan-out a pass can start minutes after the tick (context.ts `clock`).
+  const opening = nextOpening(hoursRuleOf(s), sendInstant(ctx), zone);
   if (expiresBeforeOpening(opening, s.deadline)) {
     await logSkipped(ctx, s, REASONS.windowAfterDeadline);
     return "skipped";

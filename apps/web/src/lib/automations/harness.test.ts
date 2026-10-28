@@ -63,6 +63,29 @@ describe("buildPassContext — texts go through the send gate, bound to the tick
   });
 });
 
+describe("buildPassContext — the send's own clock (F-196)", () => {
+  it("ctx.clock reads the wall clock at each call, not the tick's now (mutation: clock: () => input.now → FAILS)", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const tickNow = new Date("2026-09-09T14:00:00Z");
+      vi.setSystemTime(new Date("2026-09-09T14:07:00Z"));
+      const c = buildPassContext({ db: {} as never, now: tickNow, origin: "https://app.example.com" });
+      expect(c.clock!().toISOString()).toBe("2026-09-09T14:07:00.000Z");
+      vi.setSystemTime(new Date("2026-09-09T14:09:00Z"));
+      expect(c.clock!().toISOString()).toBe("2026-09-09T14:09:00.000Z");
+      expect(c.now).toBe(tickNow);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an injected clock is the one the context carries", () => {
+    const clock = () => new Date("2030-01-01T00:00:00Z");
+    const c = buildPassContext({ db: {} as never, now: new Date(), origin: "https://app.example.com", clock });
+    expect(c.clock).toBe(clock);
+  });
+});
+
 describe("buildPassContext — the closures loader, bound to the tick (S-47d, spec 5.5.2)", () => {
   it("ctx.closures reads loadClosureSnapshot on THIS tick's client, for the account asked, from the UTC date 14 days back (mutation: drop it from buildPassContext → FAILS)", async () => {
     dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({

@@ -12,7 +12,11 @@ import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { ABANDONED_UPLOAD_MS, SIGNED_UPLOAD_URL_MS } from "./passes/documents-sweep";
 import { reminderDeadline } from "@/lib/booking/reminder-timing";
 import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
-import { SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS } from "./caps";
+import {
+  SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS,
+  WEEKLY_REPORT_MAX_RECIPIENTS, WEEKLY_REPORT_ACCOUNT_MARGIN_MS, WEEKLY_REPORT_ACCOUNT_END_MS, REPORT_EMAIL_WORST_CASE_MS,
+} from "./caps";
+import { TICK_NOW_MAX_AGE_MS } from "./pass-route";
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
 import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 import { EXPIRY_BUDGET_MS } from "./passes/documents-expiry";
@@ -417,9 +421,35 @@ describe("fan-out: each pass in its own function, the plan inside the dispatcher
     expect(declared).toBeLessThan(tickIntervalMs(entry!.schedule) / 1000);
   });
 
-  it("5. the row in flight past the largest budget ends inside the pass route: budget + two send attempts + one rate-limit wait + 5 s ≤ 90 s (mutation: RATE_LIMIT_MAX_WAIT_MS 10_000, or SEND_TIMEOUT_MS 15_000 → FAILS)", () => {
-    // 60 + 2 × 10 + 3 + 5 = 88 ≤ 90 today.
-    const largest = Math.max(...Object.values(BUDGETS_MS));
-    expect(largest + 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS + 5_000).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+  it("5. the row in flight past a budget ends inside the pass route, counting each pass's sends per row: budget + sends x (two attempts + one rate-limit wait) + 5 s ≤ 90 s (mutation: RATE_LIMIT_MAX_WAIT_MS 10_000, or SEND_TIMEOUT_MS 15_000 → FAILS)", () => {
+    // A pass checks its budget BEFORE a row, so the row in flight can run
+    // past it by every send that row makes. One send is at most attempt +
+    // wait + attempt (Task 4): 23 s today. Five passes make ONE send per row
+    // (or none), checked against their budget: 60 + 23 + 5 = 88 ≤ 90.
+    const sendWorstMs = 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS;
+    const SENDS_PER_ROW = {
+      RELEASE_BUDGET_MS: 1, USAGE_REPORT_BUDGET_MS: 1, DOCUMENT_SCAN_BUDGET_MS: 1,
+      EXPIRY_BUDGET_MS: 1, CANCEL_NOTICE_BUDGET_MS: 1,
+    } as const;
+    for (const [name, sends] of Object.entries(SENDS_PER_ROW)) {
+      const budget = BUDGETS_MS[name as keyof typeof BUDGETS_MS];
+      expect(budget + sends * sendWorstMs + 5_000, name).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+    }
+    // The weekly client report is the sixth, and the exception (Task 7
+    // review, I1): ONE row (an account) makes one send PER RECIPIENT, up to
+    // WEEKLY_REPORT_MAX_RECIPIENTS. Its budget alone cannot bound that
+    // (60 + 3 x 23 = 129 s), so it starts an account only when every send
+    // fits: elapsed + recipients x the send's worst case + the margin ≤ the
+    // route's ceiling, which bounds the row by construction. Pinned here: the
+    // pass's numbers ARE these, and an account at the cap fits from a
+    // standing start (3 x 23 + 10 = 79 ≤ 90), so it is never stuck.
+    expect(Object.keys(SENDS_PER_ROW).length + 1).toBe(Object.keys(BUDGETS_MS).length);
+    expect(REPORT_EMAIL_WORST_CASE_MS).toBe(sendWorstMs);
+    expect(WEEKLY_REPORT_ACCOUNT_END_MS).toBe(PASS_ROUTE_MAX_S * 1000);
+    expect(WEEKLY_REPORT_MAX_RECIPIENTS * sendWorstMs + WEEKLY_REPORT_ACCOUNT_MARGIN_MS).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
+  });
+
+  it("6. the dispatcher's ceiling is inside the age a pass route accepts for the tick's now, so no pass the plan starts is refused as stale (mutation: TICK_NOW_MAX_AGE_MS 600_000 → FAILS)", () => {
+    expect(DISPATCHER_MAX_S * 1000).toBeLessThanOrEqual(TICK_NOW_MAX_AGE_MS);
   });
 });
