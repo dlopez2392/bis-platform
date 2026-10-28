@@ -26,6 +26,7 @@ const states: { initial: unknown; set: ReturnType<typeof vi.fn> }[] = [];
  * children. Every other block leaves both off.
  */
 const harness: { readyFetched: unknown; openSheet: boolean } = { readyFetched: undefined, openSheet: false };
+const sheetContentProps: Record<string, unknown>[] = [];
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
@@ -44,7 +45,9 @@ vi.mock("@/components/ui/sheet", () => {
   const pass = ({ children }: { children?: unknown }) => (harness.openSheet ? children : null);
   const none = () => null;
   // SheetTitle passes its child through: the header's h2 is wrapped by it (wrapHeading), and must render.
-  return { Sheet: pass, SheetContent: pass, SheetDescription: none, SheetHeader: pass, SheetTitle: pass };
+  // SheetContent's props are recorded for the focus-return block below.
+  const content = (p: { children?: unknown }) => { sheetContentProps.push(p as Record<string, unknown>); return pass(p); };
+  return { Sheet: pass, SheetContent: content, SheetDescription: none, SheetHeader: pass, SheetTitle: pass };
 });
 // RecordSection's boundary and the facts' Try again read the router; there is no app router here.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -732,5 +735,27 @@ describe("ContactDrawer: every section's own state, and the chrome around them (
     const nonce = states.filter((s) => s.initial === 0);
     (el!.props.onChanged as () => void)();
     expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Found 2026-10-28 by a built-app keyboard check: Esc closed the drawer and
+// focus fell to <body>. A controlled Sheet has no Radix Trigger to go back to,
+// so the drawer hands focus to the row named by `returnFocusRowId` — a prop
+// the table keeps after the drawer's own `row` has gone null, which is
+// exactly when Radix calls onCloseAutoFocus.
+describe("ContactDrawer: closing gives focus back to the row (2026-10-28)", () => {
+  afterEach(() => { harness.openSheet = false; sheetContentProps.length = 0; });
+
+  it("SheetContent's onCloseAutoFocus focuses the returnFocusRowId row, after `row` is already null (mutation: drop the prop -> FAILS)", () => {
+    harness.openSheet = true;
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: null, onClose: () => {}, returnFocusRowId: "c1" }));
+    const props = sheetContentProps.at(-1);
+    expect(props?.onCloseAutoFocus).toBeTypeOf("function");
+    const rows = ["c0", "c1"].map((id) => ({ focus: vi.fn(), getAttribute: () => id }));
+    vi.stubGlobal("document", { querySelectorAll: (sel: string) => (sel === "[data-contact-row]" ? rows : []) });
+    const event = { preventDefault: vi.fn() };
+    (props!.onCloseAutoFocus as (e: unknown) => void)(event);
+    expect(rows.map((r) => r.focus.mock.calls.length)).toEqual([0, 1]);
+    expect(event.preventDefault).toHaveBeenCalled();
   });
 });
