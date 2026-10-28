@@ -30,8 +30,15 @@ const GENERIC = new Set([
 /** "I don't know" is a real answer (review I-2: "Injuries: unknown" on an urgent message must survive), so these
  *  are stand-ins ONLY as a whole name or contact value, never inside a need, a message or notes. */
 const UNKNOWN = new Set(["unknown", "desconocido", "desconocida"]);
-/** A stand-in for a name. */
-const NAME_STANDINS = new Set(["user", "guest", "customer", "cliente", "caller"]);
+/** A stand-in for a name. Multi-word phrases (contact-archive spec §7.2(c), §7.3) are Sofía's own observed
+ *  stand-ins for "I don't have a name" — added here, not to UNKNOWN, because none of them is ever a placeholder
+ *  CONTACT value (a phone or email). Whole-value match only (review of `norm`, above): "Anonymous Plumbing"
+ *  contains "anonymous" but is not equal to it, so it is never touched. */
+const NAME_STANDINS = new Set([
+  "user", "guest", "customer", "cliente", "caller",
+  "unknown caller", "no name", "not provided", "sin nombre", "no proporcionado", "no dio su nombre",
+  "anonymous", "anonimo",
+]);
 /** "Any time" as a best time is a filler, not a time they gave (only ever judged as a best time, and only where
  *  what they said is known and never mentions it: review M-4). */
 const FILLER_TIMES = new Set(["any time", "anytime", "cualquier hora", "a cualquier hora"]);

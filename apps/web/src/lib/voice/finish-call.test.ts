@@ -440,6 +440,15 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ language: "es" }));
   });
+  // contact-archive spec §7.3: a placeholder name never becomes the stored name, even reached directly (not
+  // through capture_lead's own sanitizeLeadFields guard, which would drop it before finishCall ever saw it).
+  it("a placeholder fullName creates \"Caller\", never the placeholder itself (mutation: remove spokenName before splitFullName at :386 → FAILS)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Desconocido", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ firstName: "Caller" }), "voice", "ai");
+  });
 });
 
 describe("finishCall — missed-call text-back", () => {
