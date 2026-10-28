@@ -76,6 +76,10 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     case "suggestion": return { kind: "person", personId: entry.suggestion.proposal.decidedBy };
     // item 8c: an act Sofia or the web chat took live, with no person approving it, is always hers.
     case "aiAct": return { kind: "ai", personId: null };
+    // Contact archive (0103, spec §4.2): an archive and a person's own restore carry the person who did
+    // it; a restore the CUSTOMER brought on by their own sign (text, email, call…) carries no person id.
+    case "archive": return entry.archive.author_kind === "customer"
+      ? { kind: "customer", personId: null } : { kind: "person", personId: entry.archive.author_id };
   }
 }
 

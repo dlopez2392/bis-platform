@@ -54,8 +54,8 @@ const DEAL_STATUS: StatusMap = {
 const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
-  documents: "timeline.what.documents", chats: "timeline.what.chats", suggestions: "timeline.what.suggestions",
-  ai_acts: "timeline.what.aiActs",
+  documents: "timeline.what.documents", chats: "timeline.what.chats", archive: "timeline.what.archive",
+  suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -199,6 +199,18 @@ function phrase(
     // item 8c: the act-kind registry's own sentence ("booked Thu, Oct 22, 10:00 AM CDT"), under the AI mark
     // (authorOf). No status word: whether it can still be undone is the row's view (`timelineRows`, `act`).
     case "aiAct": return { ...describeAct(entry.act, { tr, zone }), status: null };
+    // Contact archive (spec §6.2): an archive is always the person's own act. A restore is either the
+    // person's own undo ("moved back to the list") or the customer's own sign bringing them back
+    // ("Came back: …", one phrase per sign — the migration's own check keeps `sign` non-null exactly
+    // when `author_kind` is "customer"). No status, no detail.
+    case "archive": {
+      const a = entry.archive;
+      const key = a.action === "archived" ? "timeline.archived"
+        : a.author_kind === "customer" ? (`timeline.cameBack.${a.sign}` as MessageKey)
+          : "timeline.restored";
+      // The account's own AI persona (else Sofía), as every other AI-facing row on the timeline names it.
+      return { verb: tr.text(key, { persona }), status: null, detail: null };
+    }
   }
 }
 

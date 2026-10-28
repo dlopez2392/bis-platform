@@ -2265,3 +2265,165 @@ describe("tenant vetting copy (S-53)", () => {
     expect([m["vetting.numberStatusLocked"], m["vetting.numberStatusLocked.es"]]).toEqual(["not available", "no disponible"]);
   });
 });
+
+describe("contact archive copy, English and Spanish (plan Task 3, spec §6)", () => {
+  const WANT: Record<string, string> = {
+    "bulk.archive": "Archive",
+    "bulk.archive.es": "Archivar",
+    "bulk.archived": "Archived {count} contacts",
+    "bulk.archived.es": "Se archivaron {count} contactos",
+    "bulk.archivedOne": "Archived 1 contact",
+    "bulk.archivedOne.es": "Se archivó 1 contacto",
+    "bulk.restore": "Restore",
+    "bulk.restore.es": "Restaurar",
+    "bulk.restored": "Moved {count} contacts back to your list",
+    "bulk.restored.es": "Se devolvieron {count} contactos a su lista",
+    "bulk.restoredOne": "Moved 1 contact back to your list",
+    "bulk.restoredOne.es": "Se devolvió 1 contacto a su lista",
+    "bulk.deletedSkipped": "Deleted {count} · kept {skipped} that have a history with you. You can archive those instead.",
+    "bulk.deletedSkipped.es": "Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Puede archivarlos.",
+    "bulk.archiveKept": "Archive them",
+    "bulk.archiveKept.es": "Archivarlos",
+    "contacts.archived.link": "Archived",
+    "contacts.archived.link.es": "Archivados",
+    "contacts.archived.title": "Archived contacts",
+    "contacts.archived.title.es": "Contactos archivados",
+    "contacts.archived.count": "{count} archived",
+    "contacts.archived.count.es": "{count} archivados",
+    "contacts.archived.countOne": "1 archived",
+    "contacts.archived.countOne.es": "1 archivado",
+    "contacts.archived.back": "Back to contacts",
+    "contacts.archived.back.es": "Volver a contactos",
+    "contacts.archived.emptyTitle": "Nothing archived",
+    "contacts.archived.emptyTitle.es": "No hay contactos archivados",
+    "contacts.archived.emptyBody":
+      "Contacts you archive wait here, off your list, with every call and text kept. Archive one from your list when you no longer need to see it.",
+    "contacts.archived.emptyBody.es":
+      "Aquí quedan los contactos que archive: fuera de su lista y con todas sus llamadas y mensajes guardados. Archive uno desde su lista cuando ya no necesite verlo.",
+    "contacts.archived.mark": "Archived",
+    "contacts.archived.mark.es": "Archivado",
+    "contacts.archive.failed": "Couldn't archive. Nothing changed. Try again.",
+    "contacts.archive.failed.es": "No se pudo archivar. No cambió nada. Intente de nuevo.",
+    "contacts.restore.failed": "Couldn't restore. Nothing changed. Try again.",
+    "contacts.restore.failed.es": "No se pudo restaurar. No cambió nada. Intente de nuevo.",
+    "contacts.archive.keepsAppointment": "They still have an appointment on {date}. Its reminders still go.",
+    "contacts.archive.keepsAppointment.es": "Todavía tiene una cita el {date}. Sus recordatorios se siguen enviando.",
+    "contacts.archive.keepsAppointments": "{count} of them still have appointments. Their reminders still go.",
+    "contacts.archive.keepsAppointments.es": "{count} de ellos todavía tienen citas. Sus recordatorios se siguen enviando.",
+    "contacts.delete.archiveOnly":
+      "{name} can't be deleted because they have a history with you, and we keep it. Archive them instead: they leave your list and nothing is lost.",
+    "contacts.delete.archiveOnly.es":
+      "No se puede borrar a {name} porque tiene un historial con usted, y lo conservamos. Mejor archive este contacto: sale de su lista y no se pierde nada.",
+    "contacts.delete.someKept": "{kept} of these have a history with you and will be kept.",
+    "contacts.delete.someKept.es": "{kept} de estos tienen un historial con usted y se conservarán.",
+    "contacts.delete.noneDeletable": "None of these can be deleted: they all have a history with you. Archive them instead.",
+    "contacts.delete.noneDeletable.es": "Ninguno se puede borrar porque todos tienen un historial con usted. Mejor archívelos.",
+    "contacts.delete.archiveInstead": "Archive instead",
+    "contacts.delete.archiveInstead.es": "Archivar",
+    "contacts.delete.blockersFailed": "Couldn't check which of these can be deleted. Close this and try again.",
+    "contacts.delete.blockersFailed.es": "No se pudo revisar cuáles se pueden borrar. Cierre esto e intente de nuevo.",
+    "contacts.delete.oneTitle": "Delete {name} for good?",
+    "contacts.delete.oneTitle.es": "¿Borrar a {name} para siempre?",
+    "contacts.delete.oneBody": "This removes them with their notes, tasks and files. It can't be undone. Type {name} to confirm.",
+    "contacts.delete.oneBody.es":
+      "Esto borra el contacto con sus notas, tareas y archivos. No se puede deshacer. Escriba {name} para confirmar.",
+    "contacts.delete.oneBodyNoName": "This contact has no name. Type the last four digits of their phone, {digits}, to confirm.",
+    "contacts.delete.oneBodyNoName.es":
+      "Este contacto no tiene nombre. Escriba los últimos cuatro dígitos de su teléfono, {digits}, para confirmar.",
+    // Task 10 review: one-forms, the Archived view's delete lines, the partial-failure lines, the none title.
+    "bulk.deletedSkippedOne": "Deleted {count} · kept 1 that has a history with you. You can archive it instead.",
+    "bulk.deletedSkippedOne.es": "Contactos borrados: {count} · conservado porque tiene un historial con usted: 1. Puede archivarlo.",
+    "bulk.deletedSkippedArchived": "Deleted {count} · kept {skipped} that have a history with you. They stay archived.",
+    "bulk.deletedSkippedArchived.es": "Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Siguen archivados.",
+    "bulk.deletedSkippedArchivedOne": "Deleted {count} · kept 1 that has a history with you. It stays archived.",
+    "bulk.deletedSkippedArchivedOne.es": "Contactos borrados: {count} · conservado porque tiene un historial con usted: 1. Sigue archivado.",
+    "contacts.archive.partial": "Some of them couldn't be archived. Try again.",
+    "contacts.archive.partial.es": "Algunos no se pudieron archivar. Intente de nuevo.",
+    "contacts.restore.partial": "Some of them couldn't be restored. Try again.",
+    "contacts.restore.partial.es": "Algunos no se pudieron restaurar. Intente de nuevo.",
+    "contacts.archive.keepsAppointmentsOne": "1 of them still has an appointment. Its reminders still go.",
+    "contacts.archive.keepsAppointmentsOne.es": "1 de ellos todavía tiene una cita. Sus recordatorios se siguen enviando.",
+    "contacts.delete.someKeptOne": "1 of these has a history with you and will be kept.",
+    "contacts.delete.someKeptOne.es": "1 de estos tiene un historial con usted y se conservará.",
+    "contacts.delete.paused": "Nothing can be deleted while this account is paused.",
+    "contacts.delete.paused.es": "No se puede borrar nada mientras la cuenta está en pausa.",
+    "contacts.delete.noneTitle": "These can't be deleted",
+    "contacts.delete.noneTitle.es": "No se pueden borrar",
+    "contacts.delete.noneTitleOne": "This contact can't be deleted",
+    "contacts.delete.noneTitleOne.es": "Este contacto no se puede borrar",
+    "contacts.delete.noneDeletableOne": "They have a history with you, so they can't be deleted. Archive them instead.",
+    "contacts.delete.noneDeletableOne.es": "Tiene un historial con usted, así que no se puede borrar. Mejor archívelo.",
+    "contacts.delete.noneDeletableArchived": "None of these can be deleted: they all have a history with you, so they stay archived.",
+    "contacts.delete.noneDeletableArchived.es": "Ninguno se puede borrar porque todos tienen un historial con usted, así que siguen archivados.",
+    "contacts.delete.noneDeletableArchivedOne": "They have a history with you, so they can't be deleted. They stay archived.",
+    "contacts.delete.noneDeletableArchivedOne.es": "Tiene un historial con usted, así que no se puede borrar. Sigue archivado.",
+    "record.archive": "Archive",
+    "record.archive.es": "Archivar",
+    "record.restore": "Restore",
+    "record.restore.es": "Restaurar",
+    "record.delete": "Delete…",
+    "record.delete.es": "Borrar…",
+    "record.archivedBanner": "Archived {date} by {name}. Their calls and texts are kept.",
+    "record.archivedBanner.es": "Archivado el {date} por {name}. Sus llamadas y mensajes se conservan.",
+    "record.archivedBannerShort": "Archived {date}. Their calls and texts are kept.",
+    "record.archivedBannerShort.es": "Archivado el {date}. Sus llamadas y mensajes se conservan.",
+    "record.archivedToast": "{name} archived",
+    "record.archivedToast.es": "{name} se archivó",
+    "record.restoredToast": "{name} is back on your list",
+    "record.restoredToast.es": "{name} volvió a su lista",
+    "timeline.archived": "archived this contact",
+    "timeline.archived.es": "archivó este contacto",
+    "timeline.restored": "moved this contact back to the list",
+    "timeline.restored.es": "devolvió este contacto a la lista",
+    "timeline.cameBack.text": "came back: sent you a text",
+    "timeline.cameBack.text.es": "volvió: le envió un mensaje",
+    "timeline.cameBack.email": "came back: sent you an email",
+    "timeline.cameBack.email.es": "volvió: le envió un correo",
+    "timeline.cameBack.call": "came back: called and talked with {persona}",
+    "timeline.cameBack.call.es": "volvió: llamó y habló con {persona}",
+    "timeline.cameBack.booking": "came back: booked an appointment",
+    "timeline.cameBack.booking.es": "volvió: hizo una cita",
+    "timeline.cameBack.form": "came back: filled out your form",
+    "timeline.cameBack.form.es": "volvió: llenó su formulario",
+    "timeline.cameBack.chat": "came back: wrote in your website chat",
+    "timeline.cameBack.chat.es": "volvió: escribió en el chat de su sitio web",
+    "timeline.what.archive": "archive history",
+    "timeline.what.archive.es": "historial de archivo",
+  };
+
+  it("has every key with exactly this text (mutation: change any .es string → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("every English key has its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'Vuelve' in contacts.archive.failed.es → FAILS)", () => {
+    const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(WANT[k]!), k).toBe(false);
+      const en = WANT[k.slice(0, -3)]!;
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(WANT[k]!), k).toEqual(ph(en));
+    }
+  });
+
+  // Review I5: the bulk bar's skip toast used to list WHICH kinds of history blocked a delete
+  // ("linked to bookings, deals, or conversations"). Review M8: a reason list reads as a form
+  // and goes stale as the delete-blocker set (spec §5.1) grows, so the new copy names none —
+  // not here, and not on any contacts.delete.* key either.
+  it("the skip toast stops listing reasons, and no delete key lists reasons either (mutation: restore 'linked to bookings, deals, or conversations' → FAILS)", () => {
+    expect(m["bulk.deletedSkipped"]).not.toContain("linked to");
+    const REASON_LIST = /,\s*(messages|email|calls|texts|forms|consent|automations|bookings|deals|conversations)\b/i;
+    for (const [k, v] of Object.entries(WANT)) {
+      if (!k.startsWith("contacts.delete.")) continue;
+      expect(REASON_LIST.test(v), k).toBe(false);
+    }
+  });
+});

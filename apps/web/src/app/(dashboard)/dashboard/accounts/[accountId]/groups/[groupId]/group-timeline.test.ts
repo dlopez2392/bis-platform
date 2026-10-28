@@ -283,3 +283,23 @@ describe("GroupTimeline: an accepted suggestion row (item 8b-2, design review C1
     expect(html).toContain('<span lang="en">Send the quote</span>');
   });
 });
+
+describe("an archive/restore row on the group page (contact archive, spec §4.2)", () => {
+  it("renders as one: its member, its verb, its mark and the Archive/ArchiveRestore icon (mutation: return null for the archive case -> FAILS)", () => {
+    const tr = makeTr("es");
+    const entries = [
+      { kind: "archive", id: "g1", at: AT, contactId: "c-maria", archive: { action: "archived", author_kind: "person", author_id: "user_me", sign: null } },
+      { kind: "archive", id: "g2", at: AT, contactId: "c-maria", archive: { action: "restored", author_kind: "customer", author_id: null, sign: "call" } },
+    ] as TimelineEntry[];
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const html = render({ rows, tr }, "es");
+    expect([...html.matchAll(/data-timeline-item="archive"/g)]).toHaveLength(2);
+    const archived = rowHtml(html, "archive");
+    expect(archived).toContain(">Maria García</a>");
+    expect(archived).toContain(">archivó este contacto<");
+    expect(archived).toContain("lucide-archive ");
+    expect(html).toContain(">volvió: llamó y habló con Sofía<");
+    expect(html).toMatch(/data-author-mark="customer"/);
+    expect(html).toContain("lucide-archive-restore ");
+  });
+});

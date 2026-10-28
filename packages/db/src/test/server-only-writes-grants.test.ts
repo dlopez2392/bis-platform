@@ -127,8 +127,9 @@ describe("0053: server-only tables, at the catalogue", () => {
           where grantee = 'authenticated' and table_schema = 'public' and table_name = $1 and privilege_type = 'UPDATE'
           order by column_name`, [table])).rows.map((r) => r.column_name);
       // company_name left with 0072 (S-02 G9): a read-only copy only the group sync sets.
+      // archived_at joins with 0103 (contact archive).
       expect(await cols("contacts")).toEqual([
-        "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
+        "archived_at", "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
         "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
       ]);
       expect(await cols("opportunities")).toEqual([

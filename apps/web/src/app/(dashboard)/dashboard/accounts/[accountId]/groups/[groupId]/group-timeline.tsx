@@ -1,4 +1,4 @@
-import { Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -221,6 +221,9 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
     // item 8c (plan Task 3): a plain row, pending Task 5's own description, reason and Undo.
     case "aiAct":
       return <TimelineItem {...head} icon={Bot} />;
+    // Contact archive (spec §6.2): no body — the verb (row.verb) already says everything.
+    case "archive":
+      return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
     default:
       return unknownKind(e);
   }

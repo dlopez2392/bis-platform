@@ -302,7 +302,7 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
       // The pinned list, in source order (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS); 8b-2's
       // suggestions, then item 8c's ai_acts, both read only when asked.
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions", "ai_acts"]);
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "suggestions", "ai_acts"]);
     }));
 });
 
@@ -751,7 +751,7 @@ describe("the documents source's share rows (S-07 3b)", () => {
 describe("the suggestions source (item 8b-2)", () => {
   const FAR = "2031-03-04T05:06:07.000Z";
   const at = (d: number) => `2026-10-0${d}T15:00:00+00:00`;
-  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
   const TEN = [...NINE, "suggestions"];
 
   async function suggestionOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, title: string): Promise<string> {
@@ -820,7 +820,7 @@ describe("the suggestions source (item 8b-2)", () => {
       expect(after.items.filter((i) => i.kind === "suggestion")).toEqual([]);
     }));
 
-  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and a tenth source appear without the option, FAILS)", () =>
+  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and an eleventh source appear without the option, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { ana, phone } = await setUp(db, accountId);
       const id = await suggestionOn(db, accountId, ana, phone, "Call back Tuesday");
@@ -864,7 +864,7 @@ describe("the suggestions source (item 8b-2)", () => {
         .toEqual([null, { title: "Call back Tuesday", dueAt: null }]);
     }));
 
-  it("a failed suggestions read is named in `failed` and the other nine still render (mutation: let it reject the page -> FAILS)", () =>
+  it("a failed suggestions read is named in `failed` and the other ten still render (mutation: let it reject the page -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { ana } = await setUp(db, accountId);
       await addNote(db, accountId, ana, "still here", ACTOR);
@@ -891,7 +891,7 @@ describe("the suggestions source (item 8b-2)", () => {
  * when the caller asks (`opts.aiActs`) — the suggestions source's own shape, one source later.
  */
 describe("the ai_acts source (item 8c)", () => {
-  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
   const TEN = [...NINE, "ai_acts"];
 
   async function actOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, value: string) {
@@ -909,7 +909,7 @@ describe("the ai_acts source (item 8c)", () => {
     return { ana, phone: num.id };
   }
 
-  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and an eleventh source appear without the option, FAILS)", () =>
+  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and a twelfth source appear without the option, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { ana, phone } = await setUp(db, accountId);
       await actOn(db, accountId, ana, phone, "Ana");

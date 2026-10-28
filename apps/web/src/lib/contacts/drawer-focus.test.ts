@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { returnFocusToRow } from "./drawer-focus";
+import { returnFocusToRow, focusAfterBar, nextRowId } from "./drawer-focus";
 
 // Found 2026-10-28 by a built-app keyboard check: Esc closed the contact
 // drawer and focus landed on <body>. The drawer is a controlled Sheet with no
@@ -39,5 +39,32 @@ describe("returnFocusToRow: closing the drawer gives focus back to the row that 
     const { rows, doc } = fakeDoc(["c0"]);
     returnFocusToRow({ preventDefault: vi.fn() }, null, doc);
     expect(rows[0]!.focus).not.toHaveBeenCalled();
+  });
+});
+
+// Final review M5: Archive, Restore and Delete unmount the bulk bar (the selection empties), and the drawer
+// closes on them; either way the focused button is gone. Focus lands somewhere a keyboard can carry on from.
+describe("focusAfterBar: the bar unmounted, focus goes to the select-all box, else the table", () => {
+  const el = () => ({ focus: vi.fn() });
+  it("the select-all checkbox when it is there (mutation: focus nothing -> FAILS)", () => {
+    const box = el(), table = el();
+    focusAfterBar({ querySelector: (s: string) => (s === "[data-select-page]" ? box : s === "[data-contacts-table]" ? table : null) });
+    expect(box.focus).toHaveBeenCalledTimes(1);
+    expect(table.focus).not.toHaveBeenCalled();
+  });
+  it("the table container when the box is gone, and nothing (no throw) when neither is", () => {
+    const table = el();
+    focusAfterBar({ querySelector: (s: string) => (s === "[data-contacts-table]" ? table : null) });
+    expect(table.focus).toHaveBeenCalledTimes(1);
+    expect(() => focusAfterBar({ querySelector: () => null })).not.toThrow();
+  });
+});
+
+describe("nextRowId: the row that takes a gone row's place in the focus order", () => {
+  it("the next row; the previous one for the last row; null when it was the only one or is not on the page (mutation: always the previous -> FAILS)", () => {
+    expect(nextRowId(["c0", "c1", "c2"], "c1")).toBe("c2");
+    expect(nextRowId(["c0", "c1", "c2"], "c2")).toBe("c1");
+    expect(nextRowId(["c0"], "c0")).toBeNull();
+    expect(nextRowId(["c0", "c1"], "c9")).toBeNull();
   });
 });

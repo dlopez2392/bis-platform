@@ -198,6 +198,22 @@ describe("AgencyWorkPage", () => {
     expect(text).not.toMatch(/\bCaller\b/);
   });
 
+  it("a To-do on an archived contact is still listed, marked Archived, never hidden (contacts-archive Task 12; mutation: filter archived out -> row disappears, FAILS; mutation: drop the mark -> FAILS)", async () => {
+    listAgencyWorkMock.mockResolvedValueOnce([
+      row({ id: "task:archived", contactId: "ct-archived", title: "Follow up on the estimate" }),
+      row({ id: "task:active", contactId: "ct-active", title: "Call Ana back" }),
+    ]);
+    fake.tables.contacts = [
+      { id: "ct-archived", first_name: "Maria", last_name: "Garcia", archived_at: "2026-10-20T10:00:00Z" },
+      { id: "ct-active", first_name: "Ana", last_name: "López", archived_at: null },
+    ];
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).toContain("Follow up on the estimate");
+    expect(text).toContain(`Maria Garcia · ${m["contacts.archived.mark"]}`);
+    expect(text).toContain("Ana López");
+    expect(text).not.toContain(`Ana López · ${m["contacts.archived.mark"]}`);
+  });
+
   it("renders no line-down banner on the good day, when the count is zero", async () => {
     const html = renderToStaticMarkup(await AgencyWorkPage());
     expect(html).not.toContain(m["work.linesDown.action"]);

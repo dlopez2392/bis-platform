@@ -2,7 +2,7 @@ import type { serviceDb, FormRow } from "@bis/db";
 import {
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
-  setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal, phoneFields,
+  setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal, phoneFields, restoreContactOnSign,
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { ContactFieldName } from "@bis/db/proposal-rules";
@@ -131,6 +131,15 @@ export async function enrich(
       }
     } catch (e) {
       console.error(`form ${form.id} submission ${submissionId}: language signal failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // Contact archive, owner ruling Q1: the customer's own form, or a web chat lead, brings an archived
+    // contact back (logged as the customer's act). Its own try INSIDE the contact group, like the sign
+    // above: a failed restore never skips the thread, the alert or the event, and is not a processing error.
+    try {
+      await restoreContactOnSign(db, accountId, contactId, webchat ? "chat" : "form");
+    } catch (e) {
+      console.error(`form ${form.id} submission ${submissionId}: restore failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // S-02 §6 row 10: the business answer is a group (0069). A returning lead

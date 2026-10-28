@@ -1155,6 +1155,36 @@ describe("TasksPage — a To-do on a shared number's holding record (S-47e P19; 
   });
 });
 
+describe("TasksPage — a To-do on an archived contact (contacts-archive Task 12)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    resetFake();
+    fake.tables = {
+      contacts: [
+        { id: "ct-archived", account_id: "acct1", first_name: "Maria", last_name: "Garcia", archived_at: "2026-10-20T10:00:00Z" },
+        { id: "ct-active", account_id: "acct1", first_name: "Ana", last_name: "López", archived_at: null },
+      ],
+    };
+  });
+
+  it("still lists the work and marks the contact's name Archived, never hides the row (mutation: filter archived out -> row disappears, FAILS; mutation: drop the mark -> FAILS)", async () => {
+    workRows = [
+      taskRow({ id: "task:archived", contactId: "ct-archived", title: "Follow up on the estimate", dueAt: "2099-01-01T12:00:00Z" }),
+      taskRow({ id: "task:active", contactId: "ct-active", title: "Call Ana back", dueAt: "2099-01-01T12:00:00Z" }),
+    ];
+    const { default: TasksPage } = await import("./page");
+    const text = renderedText(renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) })));
+    expect(text).toContain("Follow up on the estimate");
+    expect(text).toContain(`Maria Garcia · ${m["contacts.archived.mark"]}`);
+    expect(text).toContain("Ana López");
+    expect(text).not.toContain(`Ana López · ${m["contacts.archived.mark"]}`);
+  });
+});
+
 describe("the To do route's loading skeleton: the tray is grouped (item 8b-2)", () => {
   it("a group heading's label bar sits above the skeleton cards, never a card around them (mutation: drop grouped -> FAILS)", async () => {
     const { default: Loading } = await import("./loading");

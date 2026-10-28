@@ -64,6 +64,7 @@ import { ForwardingDemo } from "./forwarding-demo";
 import { WebchatDemo } from "./webchat-demo";
 import { ToastDemo } from "./toast-demo";
 import { RecordDemo } from "./record-demo";
+import { ArchiveDemo } from "./archive-demo";
 import { AiActsDemo } from "./ai-acts-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -362,6 +363,13 @@ export default async function StyleguidePage({
             actions, a card loading, ready, empty, in error and closed on a phone. */}
         <Section title={t(m, "styleguide.recordKit", "en")} file="components/record/*">
           <RecordDemo />
+        </Section>
+
+        {/* Contact archive (final review M4): the record header's Archive / Restore and Delete…, the archived
+            banner on the page and in the drawer, and the bulk delete dialog's body loading, blocked, deletable
+            and in error. */}
+        <Section title={t(m, "styleguide.contactArchive", "en")} file="accounts/[accountId]/contacts/{archive-controls,bulk-action-bar}.tsx">
+          <ArchiveDemo />
         </Section>
 
         {/* item 8c (plan Task 6; Task 9 design I-8): the timeline's aiAct row and its three Undo controls — a

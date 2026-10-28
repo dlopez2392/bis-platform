@@ -18,6 +18,8 @@ const db = vi.hoisted(() => ({
   // S-47e (Task 10): the shared number's holding filing and the household reply (S30).
   listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(), listOutstandingConfirmAsks: vi.fn(),
   addTask: vi.fn(), getAccountLanguage: vi.fn(),
+  // Contact archive (T9): a stub, so the partial mock never runs the real restore against the fake client.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sendReply = vi.hoisted(() => vi.fn());
@@ -222,6 +224,18 @@ describe("YES/NO, the phrase list, the grant", () => {
     expect(res.status).toBe(200);
     expect(writes()).toEqual([["granted", "inbound_text", "if_empty"]]);
     expect(db.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // Contact archive, final review I3: on a REPEAT delivery the text is already filed, and the consent step is
+  // what the retry is for. A restore that fails there is logged, never allowed to skip the grant.
+  it("a failed restore on a retried delivery still records the first-text grant (mutation: rethrow on every delivery -> FAILS)", async () => {
+    db.findMessageByProviderId.mockResolvedValue({ id: "in_1" });
+    db.restoreContactOnSign.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    const res = await POST(text("see you Tuesday"));
+    expect(res.status).toBe(200);
+    expect(db.restoreContactOnSign).toHaveBeenCalledTimes(1);
+    expect(db.createMessage).not.toHaveBeenCalled();
+    expect(writes()).toEqual([["granted", "inbound_text", "if_empty"]]);
   });
 });
 

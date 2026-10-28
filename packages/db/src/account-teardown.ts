@@ -35,7 +35,9 @@ export const ACCOUNT_OWNED_TABLES = [
   "record_summaries",
   // S-07 3b (0085): a share's downloads, then its share, before documents (both cascade too; spec 4.4 lists them).
   "document_share_downloads", "document_shares", "documents", "opportunities", "pipeline_stages", "pipelines", "custom_fields",
-  "custom_values", "tags", "equipment", "places", "contact_relationships", "client_group_members", "client_groups", "contacts",
+  "custom_values", "tags", "equipment", "places", "contact_relationships", "client_group_members", "client_groups",
+  // 0103: the archive history (cascades with its contact; listed so the list stays the whole account's tables).
+  "contact_archive_log", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;
 

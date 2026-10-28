@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, Download, Upload, Users } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Download, Upload, Users } from "lucide-react";
 import { countContacts, listContacts, listTags, type SortKey, type SortDir } from "@bis/db";
 import { createContactAction } from "./actions";
 import { ContactsTable } from "./contacts-table";
@@ -13,11 +13,13 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
 import { withWho, type Who } from "@/lib/assign/who";
+import { archivedFilterOf, parseView, withView, type ContactsView } from "@/lib/contacts/view";
 import { loadAssignView } from "@/lib/assign/view";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { cn } from "@/lib/utils";
 import { renderZone } from "@/lib/zone";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { makeTr, type Tr } from "@/lib/record/copy";
@@ -76,8 +78,10 @@ function cursorValue(
  */
 export function buildNewerHref(
   hasCursor: boolean, q: string | undefined, sort: SortKey, dir: SortDir, who: Who = "all",
+  // Contact archive (plan Task 10): paging the Archived view stays in it.
+  view: ContactsView = "active",
 ): string | null {
-  return hasCursor ? `?${new URLSearchParams(withWho({ ...(q ? { q } : {}), sort, dir }, who))}` : null;
+  return hasCursor ? `?${new URLSearchParams(withView(withWho({ ...(q ? { q } : {}), sort, dir }, who), view))}` : null;
 }
 
 /**
@@ -91,11 +95,11 @@ export function buildNewerHref(
 export function buildOlderHref(
   hasOlder: boolean,
   lastRow: { sort_name: string | null; company_name: string | null; created_at: string; id: string } | undefined,
-  q: string | undefined, sort: SortKey, dir: SortDir, who: Who = "all",
+  q: string | undefined, sort: SortKey, dir: SortDir, who: Who = "all", view: ContactsView = "active",
 ): string | null {
   if (!hasOlder || !lastRow) return null;
-  return `?${new URLSearchParams(withWho({ ...(q ? { q } : {}), sort, dir,
-      before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) }, who))}`;
+  return `?${new URLSearchParams(withView(withWho({ ...(q ? { q } : {}), sort, dir,
+      before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) }, who), view))}`;
 }
 
 /**
@@ -116,11 +120,14 @@ export function buildOlderHref(
  *
  * Takes no `who` either (F-085 part 1): export is Owner-only and exports the
  * search, not the Mine / Unassigned filter.
+ *
+ * Takes the view (contact archive, spec §4.1): Export exports the view it was opened from, so the
+ * Archived view's Export downloads the archived contacts, and the list's leaves them out, like the screen.
  */
 export function buildExportHref(
-  base: string, q: string | undefined, sort: SortKey, dir: SortDir,
+  base: string, q: string | undefined, sort: SortKey, dir: SortDir, view: ContactsView = "active",
 ): string {
-  return `${base}/export?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}`;
+  return `${base}/export?${new URLSearchParams(withView({ ...(q ? { q } : {}), sort, dir }, view))}`;
 }
 
 /**
@@ -131,8 +138,12 @@ export function buildExportHref(
  * reader's own language (F-085 follow-up, Task B): the page's `tr`, never a
  * bare `m[...]` lookup.
  */
-function emptyCopy(q: string | undefined, who: Who, wholeAccount: boolean, tr: Tr): { title: string; body?: string } {
+function emptyCopy(
+  q: string | undefined, who: Who, wholeAccount: boolean, view: ContactsView, tr: Tr,
+): { title: string; body?: string } {
   if (q) return { title: tr.text("contacts.noMatches.title"), body: tr.text("contacts.noMatches.body") };
+  // Rule 5: the Archived view's empty state says what appears there and how it gets there.
+  if (view === "archived") return { title: tr.text("contacts.archived.emptyTitle"), body: tr.text("contacts.archived.emptyBody") };
   if (who === "mine") return { title: tr.text("assign.empty.mine") };
   if (who === "unassigned") return { title: tr.text("assign.empty.unassigned") };
   if (!wholeAccount) return { title: tr.text("assign.empty.technician") };
@@ -147,10 +158,14 @@ export default async function ContactsPage({
   // `locale` is the QA override only (requestLocale's own contract): off on
   // every Vercel deployment, on only in Playwright's webServer env and CI's
   // e2e job.
-  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string; who?: string; locale?: string }>;
+  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string; who?: string; view?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { q, before, sort: rawSort, dir: rawDir, who: rawWho, locale: localeParam } = await searchParams;
+  const { q, before, sort: rawSort, dir: rawDir, who: rawWho, view: rawView, locale: localeParam } = await searchParams;
+  // Contact archive (plan Task 10): `?view=archived` is the Archived view, read and counted on the server
+  // like every other filter here, so its total and its pager describe the archived rows.
+  const view = parseView(rawView);
+  const archived = archivedFilterOf(view);
   // Staff and roles: delete and export are Owner-only. The account-level
   // layout already calls requireAccountAccess to gate entry into this
   // whole account subtree, but discards the role it reads — this page
@@ -167,7 +182,8 @@ export default async function ContactsPage({
   // controls in ContactsTable.
   // `viewer`: a read-only viewer's own person too, so the drawer's
   // "Assigned to" says "You" only for customers that are theirs (fix round 1, I1).
-  const assign = await loadAssignView(db, accountId, access, rawWho, { members: true, viewer: true });
+  // The Archived view has no All / Mine / Unassigned row, so a `who` carried in from the list does not narrow it.
+  const assign = await loadAssignView(db, accountId, access, view === "archived" ? undefined : rawWho, { members: true, viewer: true });
 
   // Validated once, reused twice: as the query's own cursor below, and as the
   // signal that decides which empty state a zero-row result means (see the
@@ -178,11 +194,11 @@ export default async function ContactsPage({
   const sort = parseSort(rawSort);
   const dir = parseDir(rawDir);
 
-  const [rows, total, tags, account, prefs] = await Promise.all([
+  const [rows, total, tags, account, prefs, verdict] = await Promise.all([
     listContacts(db, accountId, {
-      search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir }, assignee: assign.assignee,
+      search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir }, assignee: assign.assignee, archived,
     }),
-    countContacts(db, accountId, { search: q, assignee: assign.assignee }),
+    countContacts(db, accountId, { search: q, assignee: assign.assignee, archived }),
     listTags(db, accountId),
     // D-010: the "Created" column's own zone — not a throw, the contact
     // detail page's own reasoning: one cosmetic date column must not 500
@@ -192,6 +208,9 @@ export default async function ContactsPage({
     // scoped page already does.
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
     getPersonPrefs(),
+    // Final review M3: the layout's cached verdict (no read of its own), so both delete dialogs know a
+    // paused account refuses the delete and keep Delete off.
+    billingVerdictFor(accountId),
   ]);
   if (account.error) {
     console.error(`contacts list: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -211,17 +230,29 @@ export default async function ContactsPage({
   // `sort`/`dir` are carried along on BOTH links (inside buildNewerHref /
   // buildOlderHref): a client scanning newest calls first, say, must not
   // have "Older" silently drop back to the default order.
-  const olderHref = buildOlderHref(hasOlder, last, q, sort, dir, assign.who);
-  const newerHref = buildNewerHref(!!cursor, q, sort, dir, assign.who);
+  const olderHref = buildOlderHref(hasOlder, last, q, sort, dir, assign.who, view);
+  const newerHref = buildNewerHref(!!cursor, q, sort, dir, assign.who, view);
 
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment in messages.ts for the bug this avoids.
   // `tr.count` runs the same plural() rule through the reader's own language.
-  const countLabel = tr.count("contacts.count", total);
+  const countLabel = view === "archived" ? tr.count("contacts.archived.count", total) : tr.count("contacts.count", total);
   // F-085 part 1: a Technician (and a client whose role is unsettled) sees
   // only their own customers, so a CSV import, like Export, is not theirs.
   const wholeAccount = seesWholeAccount(access);
-  const empty = emptyCopy(q, assign.who, wholeAccount, tr);
+  const empty = emptyCopy(q, assign.who, wholeAccount, view, tr);
+  // Never a link named exactly "Contacts" (the e2e's unscoped sidebar locator): the way back reads
+  // "Back to contacts".
+  const backLink = (
+    <Link href={base} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+      <ArrowLeft className="size-4" aria-hidden />
+      {tr.text("contacts.archived.back")}
+    </Link>
+  );
+  // The cold-start empty page (below). When the Archived view is empty its empty state carries the way
+  // back, so the header does not repeat it: exactly one "Back to contacts" on the screen at a time.
+  const showEmpty = page.length === 0 && !cursor;
+  const emptyBack = view === "archived" && showEmpty && !q;
 
   return (
     // F-085 follow-up (Task B): every read-only word on this list comes from
@@ -231,20 +262,32 @@ export default async function ContactsPage({
     <LocaleProvider locale={locale}>
       <div lang={locale}>
       <PageHeader
-        title={tr.text("contacts.title")}
+        title={view === "archived" ? tr.text("contacts.archived.title") : tr.text("contacts.title")}
         count={countLabel}
         actions={
           <>
+            {view === "archived" && !emptyBack ? backLink : null}
+            {/* The list's way to its Archived view, for those who archive (Owners, Staff, the agency). */}
+            {view === "active" && wholeAccount ? (
+              <Link
+                href={`?${new URLSearchParams(withView({}, "archived"))}`}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+              >
+                <Archive className="size-4" aria-hidden />
+                {tr.text("contacts.archived.link")}
+              </Link>
+            ) : null}
             {canManage ? (
               <Link
-                href={buildExportHref(base, q, sort, dir)}
+                href={buildExportHref(base, q, sort, dir, view)}
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
               >
                 <Download className="size-4" aria-hidden />
                 {tr.text("contacts.export")}
               </Link>
             ) : null}
-            {wholeAccount ? (
+            {/* Import and Add contact add to the list, so the Archived view offers neither. */}
+            {view === "active" && wholeAccount ? (
               <Link
                 href={`${base}/import`}
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
@@ -253,13 +296,13 @@ export default async function ContactsPage({
                 {tr.text("contacts.import")}
               </Link>
             ) : null}
-            <AddContactDialog accountId={accountId} action={boundCreateContact} />
+            {view === "active" ? <AddContactDialog accountId={accountId} action={boundCreateContact} /> : null}
           </>
         }
         // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who
         // see the whole account. Carries the search and sort, never the
         // cursor: a filter change returns to page one (Paged lists).
-        filters={assign.canAssign ? (
+        filters={assign.canAssign && view === "active" ? (
           <WhoFilter
             base={base}
             current={assign.who}
@@ -281,6 +324,8 @@ export default async function ContactsPage({
             <input type="hidden" name="dir" value={dir} />
             {/* F-085: a search inside Mine stays inside Mine, for D-009's reason. */}
             {assign.who !== "all" ? <input type="hidden" name="who" value={assign.who} /> : null}
+            {/* A search inside the Archived view stays inside it, for D-009's reason. */}
+            {view === "archived" ? <input type="hidden" name="view" value="archived" /> : null}
             <Input
               name="q"
               defaultValue={q ?? ""}
@@ -298,13 +343,16 @@ export default async function ContactsPage({
         }
       />
       <div className="p-6">
-        {page.length === 0 && !cursor ? (
+        {showEmpty ? (
           // The COLD-START reading of zero rows: no `?before=` cursor, so this
           // is page one and there is nothing behind it either. A cursored
           // zero (below) means the opposite: real history, just none older
           // than the cursor — the table still renders (headers, no rows) with
           // a "Newer" link back to the head, rather than this empty state.
-          <EmptyState icon={Users} title={empty.title} body={empty.body} lang={locale} />
+          <EmptyState
+            icon={Users} title={empty.title} body={empty.body} lang={locale}
+            action={emptyBack ? backLink : undefined}
+          />
         ) : (
           <>
             <ContactsTable
@@ -316,6 +364,10 @@ export default async function ContactsPage({
               q={q}
               timezone={zone.zone}
               canDelete={canManage}
+              view={view}
+              canArchive={wholeAccount}
+              // The agency is never refused a delete on a paused account (final review minor), so only a client sees it off.
+              paused={verdict.paused && !access.isAgency}
               who={assign.who}
               canAssign={assign.canAssign}
               members={assign.members}

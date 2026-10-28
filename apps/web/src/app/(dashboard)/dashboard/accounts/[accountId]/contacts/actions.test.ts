@@ -154,9 +154,9 @@ describe("updateContactFieldAction", () => {
 
 describe("bulkDeleteContactsAction", () => {
   it("passes through honest counts", async () => {
-    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["z"], lateKept: 0 });
     const r = await bulkDeleteContactsAction("a1", ["x", "y", "z"]);
-    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
+    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["z"], lateKept: 0 });
   });
   it("returns ok:false instead of throwing when the db op throws", async () => {
     dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
@@ -196,11 +196,11 @@ describe("bulkDeleteContactsAction", () => {
     await bulkDeleteContactsAction("a1", ["x"]);
     expect(dbMocks.deleteContacts.mock.calls[0]![0]).toBe(REQUEST);
   });
-  it("S-06 part 2: deleteContacts gets the SERVICE client as conversationsDb, so a customer's EMPTY conversation stops blocking (0053: no client deletes a conversation; mutation: drop conversationsDb -> FAILS)", async () => {
+  it("0103: deleteContacts gets the SERVICE client as serviceDb, for the blockers read only (contact_delete_blockers is service_role only; mutation: pass the request client as serviceDb -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
     await bulkDeleteContactsAction("a1", ["x"]);
-    expect((dbMocks.deleteContacts.mock.calls.at(-1)![3] as { conversationsDb?: unknown }).conversationsDb).toBe(SERVICE);
+    expect((dbMocks.deleteContacts.mock.calls.at(-1)![3] as { serviceDb?: unknown }).serviceDb).toBe(SERVICE);
   });
   it("a purge that throws fails the whole delete, never a silent success (mutation: catch the purge's throw and return [] -> FAILS)", async () => {
     dbMocks.purgeContactDocuments.mockRejectedValue(new Error("db down"));
@@ -227,6 +227,31 @@ describe("bulkDeleteContactsAction", () => {
     expect(await bulkDeleteContactsAction("a1", ["x"])).toMatchObject({ ok: false, errorKey: "contacts.delete.filesGoneKept" });
     dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 0, keptContacts: [] });
     expect(await bulkDeleteContactsAction("a1", ["x"])).toEqual({ ok: false, error: "Delete failed — please try again." });
+  });
+
+  // Contact archive (plan Task 10): the bar's "Archive them" archives exactly the kept contacts, so the
+  // ids come straight from deleteContacts, blocked and late-kept alike.
+  it("the ok-result carries skippedIds straight from deleteContacts (mutation: return skippedIds: [] -> FAILS)", async () => {
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 2, skippedFiles: 0, skippedIds: ["y", "z"], lateKept: 0 });
+    const r = await bulkDeleteContactsAction("a1", ["x", "y", "z"]);
+    expect(r.ok && r.skippedIds).toEqual(["y", "z"]);
+  });
+
+  // lateKept is what the bar's contacts.delete.filesGoneKept line rides on ("The files were deleted, but
+  // the customers were kept"). A contact kept by the database after a purge that removed NO file lost
+  // nothing, so that line would be untrue: lateKept is reported only when the purge removed files. Those
+  // contacts stay counted in skippedBlocked and listed in skippedIds either way.
+  it("lateKept is reported only when the purge removed files, and skippedBlocked/skippedIds are untouched (mutation: pass r.lateKept through -> FAILS)", async () => {
+    type DeleteOpts = { beforeDelete?: (ids: string[]) => Promise<string[]> };
+    const late = { deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["y"], lateKept: 1 };
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 0, keptContacts: [] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {
+      await opts!.beforeDelete!(["x", "y"]);
+      return late;
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x", "y"])).toEqual({ ok: true, ...late, lateKept: 0 });
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 3, keptContacts: [] });
+    expect(await bulkDeleteContactsAction("a1", ["x", "y"])).toEqual({ ok: true, ...late, lateKept: 1 });
   });
 });
 

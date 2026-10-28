@@ -37,6 +37,7 @@ import { ActivityTimeline } from "./activity-timeline";
 import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
+import { ArchiveControls, ArchivedBanner } from "../archive-controls";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { SummaryBody } from "./summary-card";
 import { AiSummary } from "./ai-summary";
@@ -125,10 +126,14 @@ export default async function ContactDetailPage({
     loadNextUp(db, accountId, contactId, now),
     // item 8c: `canDelete` is the Owner's right to remove a customer Sofía added (0066); `extraNames`
     // carries the record's own author id (when a person made it) into the SAME one names read, for the
-    // "Added by" fact below — never a second read.
+    // "Added by" fact below — never a second read. Contact archive (plan Task 11): so does whoever archived
+    // the contact, for the archived banner's "by {name}".
     loadTimeline(db, ledger, accountId, contactId, before, {
       canDelete: access.canManage,
-      extraNames: contact.author_kind === "person" && contact.author_id ? [contact.author_id] : [],
+      extraNames: [
+        ...(contact.author_kind === "person" && contact.author_id ? [contact.author_id as string] : []),
+        ...(contact.archived_at && contact.archived_by ? [contact.archived_by as string] : []),
+      ],
       // Review M-e: the page's one clock, so the acts' "has it happened" agrees with What's next.
       now,
     }),
@@ -237,6 +242,17 @@ export default async function ContactDetailPage({
     personaName: timeline.status === "ready" ? timeline.personaName : null,
     unnamed: "someone",
   });
+  // Contact archive (plan Task 11): when, and by whom from the ONE names read above. A person the reader
+  // cannot name is "Someone on the team" (DESIGN.md, Provenance); a failed names read (or no author, an
+  // archive by the system) leaves the name out rather than guess, and the banner says only when.
+  const archived = contact.archived_at
+    ? {
+      at: contact.archived_at as string,
+      byLabel: contact.archived_by && timeline.status === "ready" && timeline.namesOk
+        ? timeline.names[contact.archived_by as string] ?? tr.text("assign.someone")
+        : null,
+    }
+    : null;
   const facts = summary.status === "ready"
     ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts, addedBy }, { zone: zone.zone, now, tr }))
     : null;
@@ -379,10 +395,25 @@ export default async function ContactDetailPage({
       <RecordLayout
         lang={locale}
         skipLabel={tr.text("record.skipToDetails")}
-        header={<RecordHeader name={name} subtitle={subtitle} actions={actions}
-          // S-03 part 2b (§8.9, R2): the main group's words open its own page.
-          subtitleHref={mainGroup ? `/dashboard/accounts/${accountId}/groups/${mainGroup.id}` : undefined}
-          back={{ href: `/dashboard/accounts/${accountId}/contacts`, label: tr.text("record.back") }} />}
+        header={
+          <div className="space-y-2">
+            <RecordHeader name={name} subtitle={subtitle} actions={actions}
+              // S-03 part 2b (§8.9, R2): the main group's words open its own page.
+              subtitleHref={mainGroup ? `/dashboard/accounts/${accountId}/groups/${mainGroup.id}` : undefined}
+              back={{ href: `/dashboard/accounts/${accountId}/contacts`, label: tr.text("record.back") }}
+              // Contact archive (plan Task 11): Archive (Restore once archived) and Delete…, ghost beside the
+              // name; Call stays the header's one primary (rule 8).
+              trailing={
+                <ArchiveControls accountId={accountId} contactId={contactId} label={name}
+                  contact={{ first_name: contact.first_name ?? null, last_name: contact.last_name ?? null, email: contact.email ?? null, phone: contact.phone ?? null }}
+                  archived={archived}
+                  canArchive={seesWholeAccount(access)} canDelete={access.canManage} timezone={zone.zone} variant="page"
+                  paused={accountPaused && !access.isAgency} />
+              } />
+            {/* Under the header, never beside the name: a sentence on the name's line would squeeze it at 375px. */}
+            <ArchivedBanner archived={archived} timezone={zone.zone} variant="page" locale={locale} />
+          </div>
+        }
         columns={columns}
       />
     </LocaleProvider>

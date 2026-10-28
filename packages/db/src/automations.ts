@@ -264,8 +264,12 @@ export function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" 
  * query only says "enabled, completed, unstamped, inside 61h by either
  * anchor".
  */
+// contacts!inner (0103, review Q2): archived means no new conversation. `!inner`
+// is load-bearing, not decoration — PostgREST only turns an embed filter into a
+// row-excluding join when the embed is `!inner`; without it `.is("contacts.archived_at",
+// null)` below would filter the nested object and leave the booking row itself intact.
 const REVIEW_REQUEST_SELECT =
-  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, closure_kept_at, contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, closure_kept_at, contacts!inner(account_id, email, phone, language, archived_at)";
 
 function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueReviewRequest {
   return {
@@ -304,6 +308,8 @@ export async function listDueReviewRequests(
 
   const { data, error } = await db.from("bookings")
     .select(REVIEW_REQUEST_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .in("account_id", [...enabled.keys()])
     .eq("status", "completed").is("review_requested_at", null)
     .or(eitherAnchorSince("completed_at", windowStart))
@@ -329,6 +335,8 @@ async function enabledRecipeFor(db: SupabaseClient, accountId: string, recipeKey
 export async function getDueReviewRequestById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueReviewRequest>> {
   const { data, error } = await db.from("bookings")
     .select(REVIEW_REQUEST_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .eq("id", bookingId).eq("status", "completed").is("review_requested_at", null).maybeSingle();
   if (error) throw new Error(`getDueReviewRequestById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
@@ -449,8 +457,10 @@ export type DueNoShowNudge = {
  *  the moment. "Enabled, no_show, unstamped, inside 37h by either anchor".
  *  `calendars(account_id, ...)` because the rebook link is built from the
  *  calendar: both embeds go through `ownAccountEmbedsOnly`. */
+// contacts!inner (0103, review Q2): see REVIEW_REQUEST_SELECT's comment — the
+// filter below needs the inner join to exclude the row, not just the embed.
 const NO_SHOW_NUDGE_SELECT =
-  "id, account_id, contact_id, starts_at, ends_at, no_show_at, no_show_nudge_sms_failed_at, closure_kept_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, no_show_at, no_show_nudge_sms_failed_at, closure_kept_at, calendars(account_id, public_id, enabled), contacts!inner(account_id, email, phone, language, archived_at)";
 
 function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
   return {
@@ -490,6 +500,8 @@ export async function listDueNoShowNudges(
 
   const { data, error } = await db.from("bookings")
     .select(NO_SHOW_NUDGE_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .in("account_id", [...enabled.keys()])
     .eq("status", "no_show").is("no_show_nudged_at", null)
     .or(eitherAnchorSince("no_show_at", windowStart))
@@ -511,6 +523,8 @@ export async function listDueNoShowNudges(
 export async function getDueNoShowNudgeById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueNoShowNudge>> {
   const { data, error } = await db.from("bookings")
     .select(NO_SHOW_NUDGE_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .eq("id", bookingId).eq("status", "no_show").is("no_show_nudged_at", null).maybeSingle();
   if (error) throw new Error(`getDueNoShowNudgeById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
@@ -1080,8 +1094,10 @@ export type DueReferralAsk = {
 // `GenericStringError`, and the `data as { account_id: string }` cast below
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
+// contacts!inner (0103, review Q2): see REVIEW_REQUEST_SELECT's comment — the
+// filter below needs the inner join to exclude the row, not just the embed.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, closure_kept_at, contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, closure_kept_at, contacts!inner(account_id, email, phone, language, archived_at)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -1154,6 +1170,8 @@ export async function listDueReferralAsks(
   // #118 I1 starvation this query was built to avoid.
   const { data, error } = await db.from("bookings")
     .select(REFERRAL_ASK_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .in("account_id", [...enabled.keys()])
     .eq("status", "completed").is("referral_asked_at", null)
     .or(eitherAnchorSince("completed_at", windowStart))
@@ -1177,6 +1195,8 @@ export async function getDueReferralAskById(
 ): Promise<DueLookup<DueReferralAsk>> {
   const { data, error } = await db.from("bookings")
     .select(REFERRAL_ASK_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .eq("id", bookingId).eq("status", "completed").is("referral_asked_at", null).maybeSingle();
   if (error) throw new Error(`getDueReferralAskById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };
@@ -1572,10 +1592,12 @@ export async function listDueReactivations(
     // which two conversations sharing a `last_message_at` could swap places
     // between pages and one of them would never be read.
     const { data: convos, error: cErr } = await db.from("conversations")
-      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, account_id, first_name, last_name, email, language)")
+      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, account_id, first_name, last_name, email, language, archived_at)")
       .in("account_id", accountIds)
       .lte("last_message_at", widest.toISOString())
       .is("contacts.reactivation_sent_at", null)
+      // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest.
+      .is("contacts.archived_at", null)
       .not("contacts.email", "is", null)
       .order("last_message_at", { ascending: true })
       .order("id", { ascending: true })
@@ -1719,6 +1741,8 @@ export async function getDueReactivationById(
   const { data: contact, error } = await db.from("contacts")
     .select("id, account_id, first_name, last_name, email, language, reactivation_sent_at")
     .eq("id", contactId).is("reactivation_sent_at", null)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest.
+    .is("archived_at", null)
     .not("email", "is", null).maybeSingle();
   if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
   if (!contact) return { due: null, why: "gone" };
@@ -1951,8 +1975,9 @@ export type DueQuoteFollowup = {
 // parser answers `GenericStringError`, and the `data as {...}` below fails with
 // TS2352. Task 5 hit this and every other *_SELECT in the file is a single
 // literal for the same reason.
+// archived_at (0103, review Q2): already `!inner`; add the column the new filter reads.
 const QUOTE_FOLLOWUP_SELECT =
-  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts!inner(account_id, email, phone, language)";
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts!inner(account_id, email, phone, language, archived_at)";
 
 /**
  * Latest INBOUND message per contact since `sinceIso` — the "they already
@@ -2083,6 +2108,8 @@ export async function listDueQuoteFollowups(
   for (const [accountId, conf] of configured) {
     const { data, error } = await db.from("opportunities")
       .select(QUOTE_FOLLOWUP_SELECT)
+      // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+      .is("contacts.archived_at", null)
       .eq("account_id", accountId)
       .eq("contacts.account_id", accountId)
       .eq("stage_id", conf.config.stageId)
@@ -2164,6 +2191,8 @@ export async function getDueQuoteFollowupById(
 ): Promise<DueLookup<DueQuoteFollowup>> {
   const { data, error } = await db.from("opportunities")
     .select(QUOTE_FOLLOWUP_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .eq("id", opportunityId).eq("status", "open").is("quote_followup_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueQuoteFollowupById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };

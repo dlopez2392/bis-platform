@@ -218,6 +218,13 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
 });
 
 describe("the drawer's summary route: the header (D2, C7, C8)", () => {
+  it("says when the contact was archived, off the same getContact read, and null when it is not (final review M2; mutation: omit archivedAt -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ ...CONTACT, archived_at: "2026-10-20T15:00:00Z" });
+    expect((await body()).header.archivedAt).toBe("2026-10-20T15:00:00Z");
+    dbMocks.getContact.mockResolvedValue({ ...CONTACT, archived_at: null });
+    expect((await body()).header.archivedAt).toBeNull();
+  });
+
   it("Text and Email open the record page's composer, Call is the only primary (mutation: omit composeHref -> a bare #compose-sms, FAILS)", async () => {
     gate.mockResolvedValue({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] });
     const b = await body();
