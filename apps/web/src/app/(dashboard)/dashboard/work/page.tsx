@@ -155,12 +155,14 @@ export default async function AgencyWorkPage() {
   if (contactIds.length > 0) {
     const { data: contacts, error } = await db
       .from("contacts")
-      .select("id, first_name, last_name, phone, holds_shared_number")
+      .select("id, first_name, last_name, phone, holds_shared_number, archived_at")
       .in("id", contactIds);
     if (error) throw new Error(`work: contacts lookup failed: ${error.message}`);
     for (const c of contacts ?? []) {
       // S-47e (P19): a To-do on a shared number's holding record names the number, never "Caller".
-      contactNames[c.id] = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c);
+      const name = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c);
+      // contacts-archive Task 12: archiving never hides the work — it only marks whose it is.
+      contactNames[c.id] = c.archived_at ? `${name} · ${tr.text("contacts.archived.mark")}` : name;
     }
   }
 

@@ -98,6 +98,13 @@ describe("account search route", () => {
     expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
   });
 
+  it("contacts-archive Task 12: asks listContacts with no archived override, so its own default (exclude) holds (mutation: pass archived: \"only\" -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    await GET(req("rosa"), ctx());
+    const [, , opts] = dbMocks.listContacts.mock.calls[0]!;
+    expect(opts).not.toHaveProperty("archived");
+  });
+
   it("caps every source at five and asks the database for no more", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     const many = (n: number) =>
