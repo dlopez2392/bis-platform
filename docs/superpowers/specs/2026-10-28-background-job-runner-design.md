@@ -110,6 +110,12 @@ recipe. **Recommendation: C.**
     the dispatcher's own wait for it ran out) may still be running, so its dependants are not started
     this tick.
   - `completed`: start only if every predecessor answered 200 (its harness ran to the end).
+  - `released` (amended 2026-10-28 after the plan review): start only if the predecessor answered
+    200 with readable counters. Anything else (a 502/503 from Vercel's proxy proves nothing about the
+    function, an unreadable 200, no answer) blocks the node AND its dependants, and the dispatcher
+    writes the blocked node's `cron.pass.<key>` failed with the reason, before any `regardless` node
+    starts, so a release that keeps failing reaches the inbox. Only the six recipes after releaseHeld
+    use it (§5 row 2).
   - `regardless`: start once every predecessor has answered, been skipped or run out its wait; never
     blocked. Only the two read-and-report passes at the end use it.
 
@@ -118,7 +124,7 @@ recipe. **Recommendation: C.**
 | billingPause | (none) | | 1 |
 | releaseHeld | billingPause | settled | 1 |
 | cancelNotices | billingPause | settled | 1 |
-| reminders, followups, noShowNudge, smsReminder, appointmentConfirm, quoteFollowup | releaseHeld | settled | 2 |
+| reminders, followups, noShowNudge, smsReminder, appointmentConfirm, quoteFollowup | releaseHeld | **released** | 2 |
 | reviewRequest | followups | **completed** | 3 |
 | referralAsk | reviewRequest | **completed** | 4 |
 | reactivation | cancelNotices, reminders, referralAsk, noShowNudge, smsReminder, appointmentConfirm | settled | 5 |
