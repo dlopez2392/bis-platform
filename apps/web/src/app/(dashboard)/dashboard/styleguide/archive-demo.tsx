@@ -13,6 +13,8 @@ import { DeleteDialogBody, type BlockersState } from "../accounts/[accountId]/co
 const ACCOUNT = "00000000-0000-4000-8000-00000000a5c1";
 const CONTACT = "00000000-0000-4000-8000-00000000c0a1";
 const ANA = { first_name: "Ana", last_name: "López", email: null, phone: "+19565550100" };
+// The specimen name is data, not copy: built from ANA so no literal sits in the markup.
+const NAME = `${ANA.first_name} ${ANA.last_name}`;
 const AT = "2026-10-20T16:00:00Z";
 const ZONE = "America/Chicago";
 const noop = () => {};
@@ -29,16 +31,16 @@ export function ArchiveDemo() {
     <div className="flex min-w-0 w-full flex-col gap-6">
       <div className="flex min-w-0 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3" data-sg-archive="active">
-          <span className="text-sm font-medium">Ana López</span>
-          <ArchiveControls accountId={ACCOUNT} contactId={CONTACT} label="Ana López" contact={ANA} archived={null}
+          <span className="text-sm font-medium">{NAME}</span>
+          <ArchiveControls accountId={ACCOUNT} contactId={CONTACT} label={NAME} contact={ANA} archived={null}
             canArchive canDelete timezone={ZONE} variant="page" />
         </div>
         <div className="flex flex-wrap items-center gap-3" data-sg-archive="archived">
-          <span className="text-sm font-medium">Ana López</span>
-          <ArchiveControls accountId={ACCOUNT} contactId={CONTACT} label="Ana López" contact={ANA}
-            archived={{ at: AT, byLabel: "Ana López" }} canArchive canDelete timezone={ZONE} variant="page" />
+          <span className="text-sm font-medium">{NAME}</span>
+          <ArchiveControls accountId={ACCOUNT} contactId={CONTACT} label={NAME} contact={ANA}
+            archived={{ at: AT, byLabel: NAME }} canArchive canDelete timezone={ZONE} variant="page" />
         </div>
-        <ArchivedBanner archived={{ at: AT, byLabel: "Ana López" }} timezone={ZONE} variant="page" locale="en" />
+        <ArchivedBanner archived={{ at: AT, byLabel: NAME }} timezone={ZONE} variant="page" locale="en" />
         <ArchivedBanner archived={{ at: AT, byLabel: null }} timezone={ZONE} variant="drawer" locale="en" />
       </div>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
