@@ -378,7 +378,7 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
   it("the Spanish skipped line agrees at a count of one (mutation: restore \"Se borraron {count} · se conservaron {skipped}\" -> FAILS)", () => {
     announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 1, skippedFiles: 0 }, "es");
     expect(toasts.success).toHaveBeenCalledWith(
-      "Contactos borrados: 1 · conservados por estar vinculados a citas, oportunidades o conversaciones: 1",
+      "Contactos borrados: 1 · conservados porque tienen un historial con usted: 1. Puede archivarlos.",
     );
   });
 });
