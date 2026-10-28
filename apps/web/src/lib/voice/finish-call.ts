@@ -3,6 +3,7 @@ import {
   createContact, fillContactBlanksReport, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
   ensureCallbackTask, setCallCard, recordLanguageSignal, ensureHoldingContact,
+  restoreContactOnSign,
 } from "@bis/db";
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
@@ -623,6 +624,17 @@ export async function finishCall(
       } catch (e) {
         console.error(`finishCall ${meta.callRowId ?? "(no row)"}: language signal failed: ${String(e)}`);
       }
+    }
+  }
+
+  // Contact archive, owner ruling Q1 (2026-10-28): a call that ended booked, lead or message is the customer getting in
+  // touch again, so an archived contact comes back to the list. `contactId` is set only for meaningful calls (above).
+  // Its own try: a restore never costs the call.
+  if (contactId) {
+    try {
+      await restoreContactOnSign(ctx.db, ctx.accountId, contactId, "call");
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId ?? "(no row)"}: restore failed: ${String(e)}`);
     }
   }
 

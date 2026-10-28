@@ -24,6 +24,8 @@ const dbMocks = vi.hoisted(() => ({
   ensureCallbackTask: vi.fn(), setCallCard: vi.fn(),
   // S-47e (plan Task 8): who is on the caller ID, and the shared number's one holding record.
   listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),
+  // Contact archive, plan Task 8: a meaningful call brings an archived contact back.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -216,6 +218,7 @@ beforeEach(() => {
   dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
   dbMocks.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });
   dbMocks.recordLanguageSignal.mockResolvedValue(true);
+  dbMocks.restoreContactOnSign.mockResolvedValue(false);
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
@@ -2096,6 +2099,30 @@ describe("finishCall — the caller's words become the contact's language (S-09 
     const r = await finishCall(spoke("hola, necesito una cita para mañana por favor"), ctx, meta);
     expect(r.notified).toBe(true);
     expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("finishCall — a meaningful call restores an archived contact (contact archive, ruling Q1)", () => {
+  // dbMocks.createContact resolves { id: "ct1", existing: false } in beforeEach (read, not guessed).
+  const CREATED_CONTACT_ID = "ct1";
+
+  it("a lead call on an archived contact restores it with the call sign (ruling Q1; mutation: drop the restore -> FAILS)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.restoreContactOnSign).toHaveBeenCalledWith({}, "a1", CREATED_CONTACT_ID, "call");
+  });
+
+  it("an abandoned call restores nobody (mutation: restore outside `if (contactId)` -> FAILS)", async () => {
+    await finishCall(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }), ctx, meta);
+    expect(dbMocks.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a failed restore never costs the call its alert (mutation: let it throw -> FAILS)", async () => {
+    dbMocks.restoreContactOnSign.mockRejectedValueOnce(new Error("boom"));
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    expect(await finishCall(s, ctx, meta)).toMatchObject({ notified: true });
   });
 });
 
