@@ -732,6 +732,122 @@ export async function rescheduleChain(
   throw new Error(`rescheduleChain: booking ${bookingId} is more than ${RESCHEDULE_CHAIN_MAX} moves deep`);
 }
 
+/** F-048 part 2 (spec 3.2): the owner's feed window and its caps. */
+export const FEED_PAST_DAYS = 30;
+export const FEED_FUTURE_DAYS = 180;
+export const FEED_FUTURE_CAP = 1500;
+export const FEED_PAST_CAP = 300;
+const FEED_STATUSES = ["booked", "completed", "no_show"] as const;
+const FEED_DAY_MS = 86_400_000;
+/** ids per `in()` on a chain hop: keeps a GET's URL well under PostgREST's limits. */
+const ROOT_BATCH = 200;
+
+/**
+ * F-048 part 2: `rescheduleChain`'s answer for many rows at once, one account-scoped query per hop (per
+ * ROOT_BATCH ids), never one query per row. A row whose chain leaves the account, cannot be read, or is
+ * deeper than RESCHEDULE_CHAIN_MAX is LEFT OUT and logged (fail closed: no event, never a wrong UID).
+ * THROWS on a read error.
+ */
+export async function rescheduleRoots(
+  db: SupabaseClient, accountId: string, rows: readonly { id: string; rescheduled_from_id: string | null }[],
+): Promise<Map<string, { rootId: string; depth: number }>> {
+  const parent = new Map<string, string | null>();
+  const missingForever = new Set<string>();
+  for (const r of rows) parent.set(r.id, r.rescheduled_from_id);
+  for (let hop = 0; hop < RESCHEDULE_CHAIN_MAX; hop++) {
+    const want = [...new Set([...parent.values()])]
+      .filter((p): p is string => p !== null && !parent.has(p) && !missingForever.has(p));
+    if (want.length === 0) break;
+    for (let i = 0; i < want.length; i += ROOT_BATCH) {
+      const ids = want.slice(i, i + ROOT_BATCH);
+      const { data, error } = await db.from("bookings").select("id, rescheduled_from_id")
+        .eq("account_id", accountId).in("id", ids).limit(ids.length);
+      if (error) throw new Error(`rescheduleRoots failed: ${error.message}`);
+      const got = new Set<string>();
+      for (const r of (data ?? []) as { id: string; rescheduled_from_id: string | null }[]) {
+        parent.set(r.id, r.rescheduled_from_id);
+        got.add(r.id);
+      }
+      for (const id of ids) if (!got.has(id)) missingForever.add(id);
+    }
+  }
+  const out = new Map<string, { rootId: string; depth: number }>();
+  for (const r of rows) {
+    let id = r.id;
+    let depth = 0;
+    let ok = true;
+    for (;;) {
+      const p = parent.get(id);
+      if (p === null) break;
+      if (p === undefined || missingForever.has(p) || !parent.has(p) || depth >= RESCHEDULE_CHAIN_MAX) { ok = false; break; }
+      id = p;
+      depth++;
+    }
+    if (ok) out.set(r.id, { rootId: id, depth });
+    else console.error(`rescheduleRoots: booking ${r.id} has no root in account ${accountId}; left out of the feed`);
+  }
+  return out;
+}
+
+/** One row of a person's feed; structurally the web side's `FeedContentRow` (lib/booking/feed-content.ts). */
+export type FeedBookingRow = {
+  id: string; status: "booked" | "completed" | "no_show";
+  starts_at: string; ends_at: string; updated_at: string; created_at: string;
+  first_name: string | null; rootId: string; depth: number;
+};
+
+type FeedRaw = {
+  id: string; status: FeedBookingRow["status"]; starts_at: string; ends_at: string;
+  updated_at: string; created_at: string; rescheduled_from_id: string | null;
+  contacts: { first_name: string | null; assigned_to: string | null } | null;
+};
+
+/**
+ * F-048 part 2: the bookings one person's feed shows. The ACCOUNT's one calendar (0016's
+ * calendars_one_per_account), live and past statuses only (a cancelled row is a cancel or a superseded
+ * move, never an event), starts_at in [now - 30 d, now + 180 d), at most FEED_FUTURE_CAP upcoming and
+ * FEED_PAST_CAP past. A Technician (technicianUserId) sees only customers assigned to them: 0068's
+ * bookings_technician_scope restated, because the route reads with the service role. `truncated` says a
+ * cap cut rows. THROWS on a read error.
+ */
+export async function listFeedBookings(
+  db: SupabaseClient, accountId: string, o: { now: Date; technicianUserId: string | null },
+): Promise<{ meetingType: "in_person" | "phone" | "video"; rows: FeedBookingRow[]; truncated: boolean }> {
+  const { data: cal, error: calErr } = await db.from("calendars").select("id, meeting_type")
+    .eq("account_id", accountId).maybeSingle();
+  if (calErr) throw new Error(`listFeedBookings: calendar read failed: ${calErr.message}`);
+  if (!cal) return { meetingType: "in_person", rows: [], truncated: false };
+  const c = cal as { id: string; meeting_type: "in_person" | "phone" | "video" };
+  const nowIso = o.now.toISOString();
+  const fromIso = new Date(o.now.getTime() - FEED_PAST_DAYS * FEED_DAY_MS).toISOString();
+  const toIso = new Date(o.now.getTime() + FEED_FUTURE_DAYS * FEED_DAY_MS).toISOString();
+  const cols = "id, status, starts_at, ends_at, updated_at, created_at, rescheduled_from_id, contacts!inner(first_name, assigned_to)";
+  const base = () => {
+    let q = db.from("bookings").select(cols)
+      .eq("account_id", accountId).eq("calendar_id", c.id).in("status", [...FEED_STATUSES]);
+    if (o.technicianUserId !== null) q = q.eq("contacts.assigned_to", o.technicianUserId);
+    return q;
+  };
+  const [up, past] = await Promise.all([
+    base().gte("starts_at", nowIso).lt("starts_at", toIso).order("starts_at", { ascending: true }).limit(FEED_FUTURE_CAP + 1),
+    base().gte("starts_at", fromIso).lt("starts_at", nowIso).order("starts_at", { ascending: false }).limit(FEED_PAST_CAP + 1),
+  ]);
+  if (up.error) throw new Error(`listFeedBookings: upcoming read failed: ${up.error.message}`);
+  if (past.error) throw new Error(`listFeedBookings: past read failed: ${past.error.message}`);
+  const upRows = (up.data ?? []) as unknown as FeedRaw[];
+  const pastRows = (past.data ?? []) as unknown as FeedRaw[];
+  const truncated = upRows.length > FEED_FUTURE_CAP || pastRows.length > FEED_PAST_CAP;
+  const raw = [...pastRows.slice(0, FEED_PAST_CAP), ...upRows.slice(0, FEED_FUTURE_CAP)];
+  const roots = await rescheduleRoots(db, accountId, raw);
+  const rows = raw.flatMap((r): FeedBookingRow[] => {
+    const chain = roots.get(r.id);
+    if (!chain) return [];
+    return [{ id: r.id, status: r.status, starts_at: r.starts_at, ends_at: r.ends_at, updated_at: r.updated_at,
+      created_at: r.created_at, first_name: r.contacts?.first_name ?? null, rootId: chain.rootId, depth: chain.depth }];
+  });
+  return { meetingType: c.meeting_type, rows, truncated };
+}
+
 /** F-048: a move refused because the booking is not (or is no longer) a live
  *  booking of this account. Nothing was left written: either nothing was
  *  written at all, or the replacement was taken back out. */
