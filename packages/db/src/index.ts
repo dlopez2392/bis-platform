@@ -392,7 +392,7 @@ export {
   type ContactNextUp, type NextUpTask,
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
   type TimelineMessage, type TimelineChat, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
-  type TimelineSuggestion,
+  type TimelineSuggestion, type TimelineArchive,
   type ContactMessageRow,
   // S-03 part 2b: the household and business page reads its members as one set.
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,

@@ -216,6 +216,21 @@ describe("an accepted suggestion's mark (item 8b-2)", () => {
   });
 });
 
+describe("an archive/restore row's mark (contact archive, spec §4.2)", () => {
+  const archive = (
+    author_kind: "person" | "customer", author_id: string | null,
+    sign: "text" | "email" | "call" | "booking" | "form" | "chat" | null = null,
+    action: "archived" | "restored" = author_kind === "customer" ? "restored" : "archived",
+  ): TimelineEntry => ({ kind: "archive", id: "g1", at: AT, contactId: "c1", archive: { action, author_kind, author_id, sign } });
+  it("a person's archive or restore carries their id; a customer's own-sign restore carries none (mutation: return unnamed() for archive -> FAILS)", () => {
+    expect(authorOf(archive("person", "user_dan"))).toEqual({ kind: "person", personId: "user_dan" });
+    expect(authorOf(archive("customer", null, "text"))).toEqual({ kind: "customer", personId: null });
+    expect(authorMark(archive("person", "user_dan"), ctx())).toEqual({ kind: "person", label: "Dan López" });
+    expect(authorMark(archive("customer", null, "text"), ctx())).toEqual({ kind: "customer", label: "Customer" });
+    expect(personIdsOf([archive("person", "user_dan"), archive("customer", null, "call")])).toEqual(["user_dan"]);
+  });
+});
+
 // item 8c: an act Sofia (or the web chat) took live is hers, never a person's — Task 5 gives it the
 // persona's own label; this is the type-only case only.
 describe("an ai_acts row's mark (item 8c)", () => {

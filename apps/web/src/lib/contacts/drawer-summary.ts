@@ -57,6 +57,8 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   suggestion: true,
   // item 8c: the type's exhaustive case; the drawer's Recent never reads ai_acts either (plan Task 3).
   aiAct: true,
+  // Contact archive (0103, spec §4.2, T7): the drawer's Recent reads archive/restore rows like any other source.
+  archive: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,

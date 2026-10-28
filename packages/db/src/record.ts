@@ -20,6 +20,7 @@ import { listContactAcceptedSuggestions } from "./proposals";
 import { parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayload, type Proposal } from "./proposal-rules";
 import { listContactAiActs } from "./ai-acts";
 import type { AiAct } from "./ai-act-rules";
+import type { RestoreSign } from "./contacts";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -273,11 +274,11 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "suggestions" | "ai_acts";
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "suggestions" | "ai_acts";
 /** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`)
  *  and `ai_acts` only when asked (`opts.aiActs`, item 8c), so what a page read is its own `sources`,
  *  never this list. */
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions", "ai_acts"];
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "suggestions", "ai_acts"];
 
 /** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
  *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
@@ -319,6 +320,10 @@ export type TimelineMessage = {
 };
 /** S-06 part 3 (spec §7): one website chat on the customer's thread. */
 export type TimelineChat = { conversationId: string; count: number; matchedExisting: boolean };
+/** Contact archive (0103, spec §4.2, §6.2): one row of `contact_archive_log`. `action` "archived" is
+ *  always a person's; `action` "restored" is either a person's own undo or the customer's own sign
+ *  (`sign` non-null exactly then, the migration's own check) bringing them back ("Came back: …"). */
+export type TimelineArchive = { action: "archived" | "restored"; author_kind: "person" | "customer"; author_id: string | null; sign: RestoreSign | null };
 /** Every variant names its member (`contactId`, S-03 part 2b): the group page's merged timeline says
  *  whose row it is. On the contact page it is always that page's contact. */
 export type TimelineEntry =
@@ -351,7 +356,10 @@ export type TimelineEntry =
   | { kind: "suggestion"; id: string; at: string; contactId: string; suggestion: TimelineSuggestion }
   /** item 8c: one row per act Sofia or the web chat took live, at its created_at, from `ai_acts` so RLS
    *  decides; read only when `opts.aiActs` asks. `id` is the act's. */
-  | { kind: "aiAct"; id: string; at: string; contactId: string; act: AiAct };
+  | { kind: "aiAct"; id: string; at: string; contactId: string; act: AiAct }
+  /** Contact archive (0103, spec §4.2): one row per archive or restore, read from `contact_archive_log`
+   *  so RLS decides. `id` is the log row's id as a string. */
+  | { kind: "archive"; id: string; at: string; contactId: string; archive: TimelineArchive };
 /** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
  *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
  *  reads nothing, so both are empty and that is an empty timeline, not an error. */
@@ -416,8 +424,34 @@ async function listContactChats(
 }
 
 /**
+ * Contact archive (0103, spec §4.2, §6.2): the `archive` source, one row per archive or restore from
+ * `contact_archive_log`, paged like every other source (`withTimelinePage`, the `notes` source's own
+ * clause). On the caller's client: RLS decides (`contact_archive_log_read`, 0103). THROWS on a read
+ * error (listTimelinePage's settle).
+ */
+async function listContactArchiveLog(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
+): Promise<TimelineEntry[]> {
+  const q = forContacts(
+    db.from("contact_archive_log").select("id, contact_id, action, author_kind, author_id, sign, created_at").eq("account_id", accountId),
+    "contact_id", who,
+  );
+  const { data, error } = await withTimelinePage(q, "created_at", page);
+  if (error) throw new Error(`listContactArchiveLog failed: ${error.message}`);
+  type Row = {
+    id: number | string; contact_id: string; action: "archived" | "restored";
+    author_kind: "person" | "customer"; author_id: string | null; sign: RestoreSign | null; created_at: string;
+  };
+  return ((data ?? []) as Row[]).map((r): TimelineEntry => ({
+    kind: "archive", id: String(r.id), at: r.created_at, contactId: r.contact_id,
+    archive: { action: r.action, author_kind: r.author_kind, author_id: r.author_id, sign: r.sign },
+  }));
+}
+
+/**
  * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3), for one person or (2b, C6) a
- * household's set, each entry naming its member. Nine sources, ten with `opts.suggestions` (item 8b-2) (S-07 added documents, S-06 part 3 added chats; a group page
+ * household's set, each entry naming its member. Ten sources, eleven with `opts.suggestions` (item 8b-2)
+ * (S-07 added documents, S-06 part 3 added chats, contact archive 0103 added `archive`; a group page
  * passes `opts.groupId` so the group's OWN files are read too), each read on the
  * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
  * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
@@ -501,6 +535,8 @@ export async function listTimelinePage(
     }),
     // S-06 part 3 (spec §7): one row per website chat.
     settle("chats", () => listContactChats(db, accountId, who, page)),
+    // Contact archive (0103, spec §4.2): one row per archive or restore, newest first.
+    settle("archive", () => listContactArchiveLog(db, accountId, who, page)),
     // item 8b-2 (spec 5.4): one row per accepted suggestion, only when asked (owner decision 1, 2026-10-19:
     // the record page's timeline, not the drawer's Recent and not the household page).
     ...(opts.suggestions === true

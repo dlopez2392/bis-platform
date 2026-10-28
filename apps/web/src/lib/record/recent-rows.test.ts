@@ -181,3 +181,11 @@ describe("an ai_acts row in the drawer's Recent, type-only (item 8c)", () => {
     expect(rows[0]!.excerpt).toBeNull();
   });
 });
+
+describe("an archive/restore row in the drawer's Recent (contact archive)", () => {
+  it("has no excerpt: the head already says it all (mutation: return a non-null excerpt for archive -> FAILS)", () => {
+    const entry: TimelineEntry = { kind: "archive", id: "g1", at: AT, contactId: "c1",
+      archive: { action: "archived", author_kind: "person", author_id: "user_me", sign: null } };
+    expect(view([entry])[0]!.excerpt).toBeNull();
+  });
+});

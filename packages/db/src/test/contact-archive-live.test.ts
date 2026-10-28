@@ -7,6 +7,7 @@ import {
   archiveContacts, restoreContacts, restoreContactOnSign,
 } from "../contacts";
 import { buildMatchIndex, applyImportBatch } from "../contact-import";
+import { listContactTimelinePage, type TimelineEntry } from "../record";
 
 /**
  * Contact archive (0103), the contact queries against the real PostgREST. CI only (withTestAccount, which the
@@ -161,5 +162,33 @@ describe("restoreContactOnSign", () => {
       expect(log).toEqual([{ action: "restored", author_kind: "customer", author_id: null, sign: "form" }]);
       expect(await restoreContactOnSign(db, a, bArchived, "form")).toBe(false);
       expect(await archivedAt(db, b, bArchived)).not.toBeNull();
+    })));
+});
+
+describe("the archive source on the record timeline (0103, spec §4.2; T7)", () => {
+  it("shows a contact's archive/restore rows newest first; a second account's own rows never appear (second account; mutation: drop settle(\"archive\", …) from listTimelinePage -> the restore this test just wrote never shows up, FAILS)", () =>
+    withTestAccount((db, a) => withTestAccount(async (_db, b) => {
+      const c = await mk(db, a, "Timeline archive");
+      const bContact = await mk(db, b, "B timeline archive");
+      await archiveContacts(db, a, [c]);
+      await archiveContacts(db, b, [bContact]);
+      // db is the service client (withTestAccount): the stamp and log triggers fire only for `authenticated`
+      // (0103 steps 4/5, same note as above), so the PERSON'S archive row is seeded directly here, as the
+      // trigger would have written it for a signed-in staff member; the CUSTOMER'S restore below is real,
+      // through restore_contact_on_sign's own insert (which does not depend on that role gate).
+      const { error: seedErr } = await db.from("contact_archive_log").insert([
+        { account_id: a, contact_id: c, action: "archived", author_kind: "person", author_id: "user_dan", created_at: "2020-01-01T00:00:00Z" },
+        { account_id: b, contact_id: bContact, action: "archived", author_kind: "person", author_id: "user_other", created_at: "2020-01-01T00:00:00Z" },
+      ]);
+      if (seedErr) throw new Error(seedErr.message);
+      expect(await restoreContactOnSign(db, a, c, "text")).toBe(true);
+
+      const page = await listContactTimelinePage(db, a, c);
+      const rows = page.items.filter((i): i is Extract<TimelineEntry, { kind: "archive" }> => i.kind === "archive");
+      expect(rows.map((r) => [r.archive.action, r.archive.author_kind, r.archive.sign])).toEqual([
+        ["restored", "customer", "text"],
+        ["archived", "person", null],
+      ]);
+      expect(page.failed).toEqual([]);
     })));
 });
