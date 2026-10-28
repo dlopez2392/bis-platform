@@ -12,7 +12,7 @@ import type { PassContext } from "./context";
  * unchanged; the inline instant reply (instant-reply.ts) builds exactly these
  * three fields and never constructs the email provider it has no use for.
  */
-export type SmsSendContext = Pick<PassContext, "db" | "sms" | "now">;
+export type SmsSendContext = Pick<PassContext, "db" | "sms" | "now"> & Partial<Pick<PassContext, "clock">>;
 
 /** The messages rows automations write are the platform's, not a person's —
  *  the same actor shape the voice text-back uses ("voice"/"ai"). */
@@ -127,7 +127,10 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
   const row: { id: string | null } = { id: null };
   const result = await ctx.sms({
     accountId: input.accountId, kind: input.kind, to: input.to, body: input.body,
-    contactId: input.contactId, language: input.language, accountZone: input.accountTimezone, now: ctx.now,
+    contactId: input.contactId, language: input.language, accountZone: input.accountTimezone,
+    // F-196: the gate judges the hours at the send's own instant, on the
+    // clock holdOrSend read (context.ts `clock`); `now` when there is none.
+    now: ctx.clock ? ctx.clock() : ctx.now,
   }, {
     prepare: async ({ body }) => {
       const convo = await ensureConversation(

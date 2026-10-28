@@ -56,7 +56,8 @@ describe("automations — providers come from ctx, never from imports", () => {
     expect(walk(ROOT).map(rel)).toEqual(expect.arrayContaining(
       ["harness.ts", "context.ts", "registry.ts", "passes/reminders.ts", "passes/followups.ts",
        "passes/review-request.ts", "send-sms.ts", "passes/no-show-nudge.ts", "passes/sms-reminder.ts",
-       "instant-reply.ts", "instant-reply-copy.ts", "passes/site-traffic.ts"],
+       "instant-reply.ts", "instant-reply-copy.ts", "passes/site-traffic.ts",
+       "jobs/enqueue.ts", "jobs/platform-ping.ts", "passes/jobs-drain.ts"],
     ));
   });
 });

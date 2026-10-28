@@ -134,6 +134,109 @@ describe("telnyxSmsProvider", () => {
 });
 
 /**
+ * F-196 Q4: one 429 is waited out (at most RATE_LIMIT_MAX_WAIT_MS, 3 s) and
+ * the POST made once more, under a FRESH AbortController and a fresh 10 s
+ * timer, so a send's worst case is attempt + wait + attempt and no more.
+ * `sleep` is injected; fake timers only in (d).
+ */
+describe("telnyxSmsProvider: one rate-limit retry (F-196 Q4)", () => {
+  const tooMany = (headers: Record<string, string> = {}) =>
+    Promise.resolve(new Response(JSON.stringify({ errors: [{ code: "10011", title: "Too many requests" }] }), { status: 429, headers }));
+
+  it("(a) a 429 asking for 2 s, then a 200: resolves with the second id, 2 fetches of the same body, one 2 s wait (mutation: delete the retry → rejects, FAILS)", async () => {
+    let n = 0;
+    const fetchSpy = stubFetch(() => (++n === 1 ? tooMany({ "retry-after": "2" }) : ok({ data: { id: "msg_retry" } })));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(telnyxSmsProvider("k", undefined, sleep).send(INPUT)).resolves.toEqual({ providerMessageId: "msg_retry" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]![1]!.body).toBe(fetchSpy.mock.calls[0]![1]!.body);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(2_000);
+  });
+
+  it("(b) two 429s reject as an SmsProviderError with status 429 after exactly 2 fetches (mutation: retry twice → 3 fetches, FAILS)", async () => {
+    const fetchSpy = stubFetch(() => tooMany({ "retry-after": "1" }));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const err = await telnyxSmsProvider("k", undefined, sleep).send(INPUT).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SmsProviderError);
+    expect((err as SmsProviderError).status).toBe(429);
+    expect((err as SmsProviderError).codes).toEqual(["10011"]);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) a 500 is not a rate limit: rejects after 1 fetch, no wait (mutation: retry on any non-ok → 2 fetches, FAILS)", async () => {
+    const fetchSpy = stubFetch(() => Promise.resolve(new Response("upstream down", { status: 500 })));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(telnyxSmsProvider("k", undefined, sleep).send(INPUT)).rejects.toThrow(/telnyx send failed \(500\): upstream down/);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("a 429 asking for 30 s is not waited for: rejects with status 429 after 1 fetch, no wait (mutation: ignore the null → sleeps, FAILS)", async () => {
+    const fetchSpy = stubFetch(() => tooMany({ "retry-after": "30" }));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const err = await telnyxSmsProvider("k", undefined, sleep).send(INPUT).catch((e: unknown) => e);
+    expect((err as SmsProviderError).status).toBe(429);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("a 429 with no Retry-After waits the 1 s default", async () => {
+    let n = 0;
+    stubFetch(() => (++n === 1 ? tooMany() : ok({ data: { id: "msg_default" } })));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(telnyxSmsProvider("k", undefined, sleep).send(INPUT)).resolves.toEqual({ providerMessageId: "msg_default" });
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("the retry still goes to redirectTo, never the real recipient", async () => {
+    let n = 0;
+    const fetchSpy = stubFetch(() => (++n === 1 ? tooMany({ "retry-after": "0" }) : ok({ data: { id: "msg_r" } })));
+
+    await telnyxSmsProvider("k", "+15550009999", vi.fn().mockResolvedValue(undefined)).send(INPUT);
+    expect(JSON.parse(fetchSpy.mock.calls[1]![1]!.body as string).to).toBe("+15550009999");
+  });
+
+  it("(d) the retry has its OWN 10 s timer: not aborted at 2 s + 9.999 s, aborted at 2 s + 10 s (mutation: arm one timer for both attempts at t = 0 → the second signal aborts at 10 s, before 11.999 s, FAILS)", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    stubFetch((_url, init) => {
+      const signal = init.signal as AbortSignal;
+      signals.push(signal);
+      if (signals.length === 1) return tooMany({ "retry-after": "2" });
+      // The retry never answers: it rejects only when its own signal aborts.
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+    let outcome: "pending" | "resolved" | Error = "pending";
+    const pending = telnyxSmsProvider("k", undefined, sleep).send(INPUT);
+    pending.then(() => { outcome = "resolved"; }, (e: Error) => { outcome = e; });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).not.toBe(signals[0]);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signals[1]!.aborted).toBe(false);
+    expect(outcome).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[1]!.aborted).toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as unknown as Error).message).toMatch(/abort/i);
+  });
+});
+
+/**
  * Consent chain PR-1, gate step 9: a refusal carries Telnyx's own codes, so
  * the gate can tell "this number texted STOP" (40300, VERIFIED against
  * developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out on

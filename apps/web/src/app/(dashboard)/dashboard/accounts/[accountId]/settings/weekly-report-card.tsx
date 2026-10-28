@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { WEEKLY_REPORT_MAX_RECIPIENTS } from "@/lib/automations/caps";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
@@ -56,7 +57,7 @@ export function WeeklyReportCard({
             defaultValue={reportEmails.join(", ")}
             placeholder="owner@theircompany.com, manager@theircompany.com"
           />
-          <p className="text-xs text-muted-foreground">{m["settings.weeklyReportHint"]}</p>
+          <p className="text-xs text-muted-foreground">{m["settings.weeklyReportHint"].replace("{max}", String(WEEKLY_REPORT_MAX_RECIPIENTS))}</p>
           {reportEmails.length === 0 && (
             <p className="text-xs text-muted-foreground">{m["settings.weeklyReportOff"]}</p>
           )}

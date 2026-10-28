@@ -29,6 +29,8 @@ const dbMocks = vi.hoisted(() => ({
   // Task 10: the Replies row's own reads and writes.
   getInboundSettings: vi.fn(),
   setInboundSettings: vi.fn(),
+  // F-196 (Task 7 review, I1): the weekly report's recipient list.
+  setReportEmails: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -91,8 +93,9 @@ import { m } from "@/lib/messages";
 import { SmsProviderError } from "@/lib/sms/types";
 import {
   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setFromEmailAction,
-  createFieldAction, setAccountLanguageAction, setInboundModeAction, checkInboundDnsAction,
+  createFieldAction, setAccountLanguageAction, setInboundModeAction, checkInboundDnsAction, setReportEmailsAction,
 } from "./actions";
+import { WEEKLY_REPORT_MAX_RECIPIENTS } from "@/lib/automations/caps";
 
 const ACCOUNT = "acct_1";
 const USER = "user_1";
@@ -125,7 +128,33 @@ beforeEach(() => {
   });
   dbMocks.getInboundSettings.mockReset();
   dbMocks.setInboundSettings.mockReset().mockResolvedValue(undefined);
+  dbMocks.setReportEmails.mockReset().mockResolvedValue(undefined);
   mxMock.inboundMxReady.mockReset();
+});
+
+/**
+ * F-196 (Task 7 review, I1): the weekly report sends one email per recipient
+ * inside a 90 s function, so the list is bounded where it is saved. The cap
+ * is the number whose sends always fit (lib/automations/caps.ts,
+ * cron-coupling.test.ts case 5).
+ */
+describe("setReportEmailsAction — at most WEEKLY_REPORT_MAX_RECIPIENTS addresses", () => {
+  const list = (n: number) => Array.from({ length: n }, (_, i) => `r${i}@rioroofing.com`);
+
+  it("refuses one address over the cap, in words, and writes nothing (mutation: drop the cap check → FAILS)", async () => {
+    const result = await setReportEmailsAction(ACCOUNT, fd({ reportEmails: list(WEEKLY_REPORT_MAX_RECIPIENTS + 1).join(", ") }));
+    expect(result).toEqual({
+      ok: false, error: m["settings.weeklyReportTooMany"].replace("{max}", String(WEEKLY_REPORT_MAX_RECIPIENTS)),
+    });
+    expect(result.ok === false && result.error).not.toMatch(/\{max\}/);
+    expect(dbMocks.setReportEmails).not.toHaveBeenCalled();
+  });
+
+  it("saves a list at the cap", async () => {
+    const at = list(WEEKLY_REPORT_MAX_RECIPIENTS);
+    expect(await setReportEmailsAction(ACCOUNT, fd({ reportEmails: at.join(", ") }))).toEqual({ ok: true });
+    expect(dbMocks.setReportEmails).toHaveBeenCalledWith(SERVICE, ACCOUNT, at, USER);
+  });
 });
 
 describe("setAlertPhoneAction — clearing needs no proof", () => {

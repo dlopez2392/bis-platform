@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { m } from "@/lib/messages";
 
 /**
  * Source-text pins — the house pattern (hero.test.ts): this repo has no
@@ -35,6 +36,13 @@ describe("WeeklyReportCard", () => {
 
   it("posts the recipients as a named field the action can read", () => {
     expect(card).toContain('name="reportEmails"');
+  });
+
+  it("F-196: the hint says how many addresses, filled from WEEKLY_REPORT_MAX_RECIPIENTS, in both languages (mutation: drop the fill, or the sentence → FAILS)", () => {
+    expect(m["settings.weeklyReportHint"]).toContain("Up to {max} addresses.");
+    expect(m["settings.weeklyReportHint.es"]).toContain("Hasta {max} direcciones.");
+    expect(card).toContain('m["settings.weeklyReportHint"].replace("{max}", String(WEEKLY_REPORT_MAX_RECIPIENTS))');
+    expect(card).not.toContain('{m["settings.weeklyReportHint"]}');
   });
 });
 

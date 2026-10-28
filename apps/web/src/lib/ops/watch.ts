@@ -92,6 +92,9 @@ export function describeKey(key: string): string {
     case "email.inbound": return "customers' email replies (Resend)";
     case "stripe.webhook": return "billing events (Stripe)";
     case "documents.scanner": return "virus scanning of uploaded files";
+    // F-196: the job queue's two heartbeats, written by every drain (passes/jobs-drain.ts).
+    case "jobs.dead": return "background jobs that gave up";
+    case "jobs.backlog": return "background jobs waiting too long";
     default: return key;
   }
 }

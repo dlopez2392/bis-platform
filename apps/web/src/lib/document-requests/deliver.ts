@@ -58,7 +58,10 @@ const EMAIL_REASON: Record<string, MessageKey> = {
   suppressed: "documents.request.reason.bounced", no_address: "documents.request.reason.noEmail",
 };
 
-type DeliverArgs = { request: DocumentRequestRow; channel: "text" | "email"; actorId: string; origin: string; now: Date };
+// F-196: `clock` is a release's own (ctx.clock): the gates judge the hours at the send's instant, since under
+// fan-out a release can run minutes after its tick's now. Every window and stamp still reads `now`. Absent on
+// the staff path, whose now is the moment.
+type DeliverArgs = { request: DocumentRequestRow; channel: "text" | "email"; actorId: string; origin: string; now: Date; clock?: () => Date };
 
 /**
  * Where the at-most-once stamp stands while a delivery runs: `none` (never claimed, a lost claim, or
@@ -74,7 +77,7 @@ type Attempt =
 
 /** One delivery, with every throw caught and classified; writes nothing for a throw (the callers decide). */
 async function attempt(db: SupabaseClient, a: DeliverArgs): Promise<Attempt> {
-  const { request, channel, actorId, now } = a;
+  const { request, channel, actorId, now, clock } = a;
   const accountId = request.account_id;
   const lang = request.language;
   const subject: LogSubject = {
@@ -92,7 +95,7 @@ async function attempt(db: SupabaseClient, a: DeliverArgs): Promise<Attempt> {
     const items = itemsSentence(request.items, lang);
     const url = requestUrl(a.origin, request.id);
     const zone = await readAccountTimezone(db, accountId);
-    const c: Ctx = { request, target, actorId, now, zone, subject, business, items, url, stamp };
+    const c: Ctx = { request, target, actorId, now, sendAt: clock ?? (() => now), zone, subject, business, items, url, stamp };
     const outcome = channel === "text" ? await deliverText(db, c) : await deliverEmail(db, { ...c, branding, origin: a.origin });
     return { ok: true, outcome };
   } catch (e) {
@@ -110,7 +113,9 @@ export async function deliverDocumentRequest(db: SupabaseClient, a: DeliverArgs)
 }
 
 type Ctx = {
-  request: DocumentRequestRow; target: DocumentRequestTarget | null; actorId: string; now: Date; zone: string | null;
+  request: DocumentRequestRow; target: DocumentRequestTarget | null; actorId: string; now: Date;
+  /** The instant the gate judges the hours at: the release's clock, else `now`. */
+  sendAt: () => Date; zone: string | null;
   subject: LogSubject; business: string; items: string; url: string; stamp: Stamp;
 };
 
@@ -130,7 +135,7 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
   const row: { messageId: string | null } = { messageId: null };
   const result = await sendSms(db, {
     accountId, kind: "staff.document_request_sms", to: target.phone, body, contactId, language: request.language,
-    now, accountZone: c.zone,
+    now: c.sendAt(), accountZone: c.zone,
   }, {
     prepare: async ({ body: sentBody }) => {
       c.stamp.state = "unknown";
@@ -204,7 +209,7 @@ async function deliverEmail(db: SupabaseClient, c: Ctx & { branding: Awaited<Ret
     accountId, kind: "staff.document_request_email", contactId, to, fromName: c.business,
     fromAddress: fromEmail ?? undefined, replyTo: normalizeReplyTo(c.branding.replyToEmail),
     subject: mail.subject, body: mail.text, html: mail.html,
-    language: request.language, origin: c.origin, now, accountZone: c.zone,
+    language: request.language, origin: c.origin, now: c.sendAt(), accountZone: c.zone,
   }, { db }).catch(async (e: unknown) => {
     // The thrown path never holds. A clear that succeeds leaves no stamp, so a RELEASE may leave the row for the
     // next tick (I1); a clear that fails leaves the stamp held, so every path writes the row "failed".
@@ -300,7 +305,7 @@ export const releaseDocumentRequest: Releaser = async (ctx, row) => {
     await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
     return "skipped";
   }
-  const r = await attempt(ctx.db, { request, channel, actorId, origin: ctx.origin, now: ctx.now });
+  const r = await attempt(ctx.db, { request, channel, actorId, origin: ctx.origin, now: ctx.now, clock: ctx.clock });
   if (!r.ok) {
     // Orchestrator ruling I1 (textback.ts's 2026-09-27 rule): nothing went out and no stamp is held (a read, the
     // link key, a gate throw, a re-hold that could not be written), so the row is NOT written. THROWING is

@@ -417,6 +417,25 @@ describe("releaseInstantReply — from the held row's payload", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No longer due" }));
   });
 
+  // F-196: under fan-out the release pass can run minutes after the tick's now, so the hours are judged at
+  // the send's own instant (ctx.clock), by holdOrSend AND by the SMS gate behind it.
+  const TICK_2055 = new Date("2026-09-23T01:55:00Z");   // 20:55 CDT
+  const AT_2103 = new Date("2026-09-23T02:03:00Z");     // 21:03 CDT
+  it("F-196: holdOrSend judges a released reply's hours at ctx.clock: a tick at 20:55 reached at 21:03 is held before the gate is asked (mutation: holdOrSend({ db, now }) without the clock → the gate reads consent, FAILS)", async () => {
+    expect(await releaseInstantReply({ ...ctx, now: TICK_2055, clock: () => AT_2103 }, heldRow(PAYLOAD))).toBe("held");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.readConsentState).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "held", subjectKey: "submission:sub_1" }));
+  });
+
+  it("F-196: the SMS gate judges them on the same clock, read at the send: 20:59:59 for holdOrSend, 21:00:01 at the gate, held, never texted (mutation: the gate's context without the clock → sent at the tick's 20:55, FAILS)", async () => {
+    const reads = [new Date("2026-09-23T01:59:59Z"), new Date("2026-09-23T02:00:01Z")];
+    const clock = () => reads.shift() ?? new Date("2026-09-23T02:00:01Z");
+    expect(await releaseInstantReply({ ...ctx, now: TICK_2055, clock }, heldRow(PAYLOAD))).toBe("held");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+  });
+
   it("parseInstantReplyPayload accepts exactly the shape the hold wrote", () => {
     expect(parseInstantReplyPayload(PAYLOAD)).toEqual(PAYLOAD);
     expect(parseInstantReplyPayload({ ...PAYLOAD, locale: "fr" })).toBeNull();

@@ -3,6 +3,7 @@
 // the corpus stub (modules/corpus-lib.ts) run exactly this, so a corpus run cannot pass the ladder vacuously (O2).
 import type { CallState } from "../call-state";
 import { isCallerIdNumber } from "../phone-number";
+import { isPlaceholderName } from "../tools/placeholders";
 import type { Rung } from "./ladder";
 import { decideIdentity, type Candidate, type Decision } from "./match";
 import { withConfirmed, withMiss, withLocked, withMessageNameAsked, isLocked, confirmedFor } from "./state";
@@ -91,10 +92,12 @@ export function ownsStep(
   return { owned: false, result: notTheirs(next) };
 }
 
-/** The name the caller gave take_message, whitespace collapsed; null when none. */
+/** The name the caller gave take_message, whitespace collapsed; null when none — a placeholder ("Unknown",
+ *  "Desconocido", "Unknown Caller"…) is the same as none (contact-archive spec §7.3): Sofía heard it, but it is
+ *  not a name worth storing. */
 export function messageName(args: { name?: unknown }): string | null {
   const n = typeof args.name === "string" ? args.name.replace(/\s+/g, " ").trim() : "";
-  return n.length > 0 ? n : null;
+  return n.length > 0 && !isPlaceholderName(n) ? n : null;
 }
 /** Whether take_message must read the number before recording (spec 5.10.5; plan P6: asks once per call). Never
  *  on a locked call (owner decision 2026-10-26): its message files on no customer, so a name would pick nothing. */

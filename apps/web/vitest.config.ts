@@ -33,7 +33,10 @@ export default defineConfig({
     // (item 8a-1). BILLING_ENFORCE (M7a PR-4): a shell holding Production's
     // "1" would pause-gate every suite (route.reads.test.ts's read fence goes
     // red); the tests that exercise the switch set it with `vi.stubEnv`.
-    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "" },
+    // CRON_FANOUT (F-196): a developer's ambient CRON_FANOUT=1 must not flip
+    // route.test.ts onto the fan-out path; that test sets it with
+    // `vi.stubEnv` itself.
+    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "", BILLING_ENFORCE: "", CRON_FANOUT: "" },
   },
   resolve: {
     alias: {

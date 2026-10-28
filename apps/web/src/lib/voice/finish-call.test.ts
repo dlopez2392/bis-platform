@@ -443,6 +443,15 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ language: "es" }));
   });
+  // contact-archive spec §7.3: a placeholder name never becomes the stored name, even reached directly (not
+  // through capture_lead's own sanitizeLeadFields guard, which would drop it before finishCall ever saw it).
+  it("a placeholder fullName creates \"Caller\", never the placeholder itself (mutation: remove spokenName before splitFullName at :386 → FAILS)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Desconocido", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ firstName: "Caller" }), "voice", "ai");
+  });
 });
 
 describe("finishCall — missed-call text-back", () => {
@@ -728,10 +737,10 @@ describe("finishCall — missed-call text-back", () => {
    * The call record is worth more than the text. Everything the row needs —
    * contact, conversation, the outbound message row — is written before it;
    * the carrier round trip, which is the slow part and the part that can hang
-   * for ten seconds inside an invocation that can be near its maxDuration,
+   * for up to 23 seconds inside an invocation that can be near its maxDuration,
    * comes after. Not the default case since Pro lifted the voice route's
    * ceiling to 800s against a 240s call cap, but exactly the case whenever
-   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 679s clamp. Pinned
+   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 643s clamp. Pinned
    * so a future reorder cannot quietly put the network call back in front of
    * the durable record.
    */
@@ -2368,6 +2377,19 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       expect(dbMocks.setCallCard).toHaveBeenCalledTimes(1);
       expect(emailRefs.send).toHaveBeenCalledTimes(1);
       expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ contactId: null }), "voice", "ai");
+    });
+
+    // Review gap (coordinator): `spokenName` at the choke point before THIS branch's own `splitFullName`
+    // (finish-call.ts, the shared-number create path) had no test — built via `withMessage`, which (unlike
+    // `take_message`'s own registry path) bypasses `messageName`'s placeholder guard entirely, so this is the
+    // one case that reaches `spokenName` with the placeholder still in hand. A name nobody on the number
+    // matches reaches "create" only at two words or more, so the placeholder has to be the two-word stand-in,
+    // not the single-word "Unknown"/"Desconocido" (which `pickRecordOnNumber` would send to "ask_name" instead,
+    // never reaching this line at all).
+    it("a placeholder name nobody on the number has creates no one under that name (mutation: drop spokenName before splitFullName on this branch → FAILS)", async () => {
+      await finishCall(withMessage(caller(), { body: "Call me", at: "t", name: "Unknown Caller" }), ctx, meta);
+      expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ firstName: "", lastName: undefined }), "voice", "ai");
     });
   });
 

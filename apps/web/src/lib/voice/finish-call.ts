@@ -30,6 +30,7 @@ import {
   cardReadable, readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
 import { maskIdNumbers, maskTranscript } from "./id-mask";
+import { isPlaceholderName } from "./tools/placeholders";
 import type { TradeModuleId } from "@/lib/voice/modules";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
@@ -303,11 +304,19 @@ function contactsBooked(state: CallState): Set<string> {
   return ids;
 }
 
+/** A placeholder said is the same as none (contact-archive spec §7.3), enforced again here at the choke point:
+ *  `sanitizeLeadFields` (capture_lead) and `messageName` (take_message) already drop one before it reaches this
+ *  file in the live call path, but a future tool path that forgets either guard still yields "" here, so
+ *  `splitFullName` never stores the placeholder itself. */
+function spokenName(raw: string): string {
+  return isPlaceholderName(raw) ? "" : raw;
+}
+
 /** Every name the caller gave this call's leads, and its messages when not declined. */
 function namesSaid(state: CallState): string[] {
   const said = [
-    ...state.leads.map((l) => l.fields?.fullName),
-    ...state.messages.map((m) => (m.nameDeclined ? undefined : m.name)),
+    ...state.leads.map((l) => spokenName(l.fields?.fullName ?? "")),
+    ...state.messages.map((m) => (m.nameDeclined ? "" : spokenName(m.name ?? ""))),
   ];
   return said.filter((n): n is string => typeof n === "string" && n.trim().length > 0);
 }
@@ -384,7 +393,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
 
   if (lead) {
     const fields = lead.fields ?? {};
-    const { firstName, lastName } = splitFullName(fields.fullName ?? "");
+    const { firstName, lastName } = splitFullName(spokenName(fields.fullName ?? ""));
     // As said, or the caller ID (review R2-C1): phoneFields flags a number that could be Mexican or US.
     const phone = spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined;
     const number = phone ? e164Of(phone) : null;
@@ -467,7 +476,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name, email: null, confirmedId });
       if (pick.kind === "existing") return pick.contactId;
       if (pick.kind !== "create") return null;
-      const { firstName, lastName } = splitFullName(name!);
+      const { firstName, lastName } = splitFullName(spokenName(name!));
       const created = await createContact(ctx.db, ctx.accountId,
         { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only" }, ACTOR_ID, ACTOR_TYPE);
       if (!created.existing) {
@@ -537,12 +546,13 @@ async function resolveTextbackContact(state: CallState, ctx: FinishContext, call
  * The text-back leg is deliberately SPLIT around the row write: its database
  * work runs before (the row records the contact and conversation the text
  * lives in, so those ids have to exist first), its carrier send runs after.
- * Ordering by cost, not by leg — a 10-second provider call ahead of the
+ * Ordering by cost, not by leg — a provider call of up to 23 seconds (one
+ * attempt, one short 429 wait and one retry) ahead of the
  * durable record is how a slow carrier loses the call row on an invocation
  * running out of maxDuration. That is not the default case today (the voice
  * route's ceiling is 800s against a 240s call cap), but it is exactly the
  * case whenever an operator raises `PHONE_MAX_CALL_SECONDS` toward the
- * route's 679s clamp, so the ordering is not something the upgrade retires.
+ * route's 643s clamp, so the ordering is not something the upgrade retires.
  */
 export async function finishCall(
   state: CallState, ctx: FinishContext, meta: FinishMeta,
@@ -758,11 +768,12 @@ export async function finishCall(
   // needs — the contact, the conversation, and the outbound message row —
   // happens here, because `finishCallRow` writes those ids and cannot write
   // ids that do not exist yet. The PROVIDER SEND does not belong to that set:
-  // it is a network call to a carrier with a 10-second timeout, made inside
+  // it is a network call to a carrier bounded at 23 seconds (two 10-second
+  // attempts around one short 429 wait), made inside
   // an invocation whose remaining `maxDuration` budget is whatever the call
   // cap left behind — comfortable at the default 240s cap under the route's
   // 800s ceiling, and nearly nothing once an operator raises
-  // `PHONE_MAX_CALL_SECONDS` toward its 679s clamp — and running it ahead of
+  // `PHONE_MAX_CALL_SECONDS` toward its 643s clamp — and running it ahead of
   // the durable record meant a long abandoned call plus a slow carrier could
   // lose the call row entirely — the row the entire dashboard reads. So this half prepares the send, and the half below `finishCallRow`
   // performs it. Write-then-send is preserved exactly as before: the message
@@ -894,11 +905,11 @@ export async function finishCall(
 
   // The other half of the text-back leg: the actual send, deliberately AFTER
   // the durable row above. Everything before this point is database work
-  // measured in milliseconds; this is a carrier round trip with a 10-second
-  // timeout, inside an invocation that may or may not have budget left — the
+  // measured in milliseconds; this is a carrier round trip bounded at 23
+  // seconds (two 10-second attempts around one short 429 wait), inside an invocation that may or may not have budget left — the
   // voice route's 800s `maxDuration` leaves plenty at the default 240s call
   // cap, and almost none if `PHONE_MAX_CALL_SECONDS` is ever raised toward
-  // the route's 679s clamp, which is the case this ordering is written for.
+  // the route's 643s clamp, which is the case this ordering is written for.
   // Ahead of the row write it was a way to lose the call record itself, which
   // is the one artefact of the call the dashboard, the KPIs and any later
   // investigation all read. The text is worth less than the record of the

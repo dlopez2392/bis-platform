@@ -185,6 +185,12 @@ const ALLOWED: Record<string, Reason> = {
   // yet every member must see the pause; every caller has already passed requireAccountAccess (or is the
   // public concierge, whose public id is its authorisation).
   "lib/billing/standing-read.ts": "configuration",
+  // F-196: a cron pass route's handler (api/cron/pass/[key]); cronAuthorized refuses before the first query,
+  // and the pass it runs is the cron's own, on the service client as the in-process tick's always was.
+  "lib/automations/pass-route.ts": "public-or-cron",
+  // F-196: enqueue() writes one jobs row on the service client (jobs is service-only, 0102). Its callers
+  // are server code that has already authorised the act; no producer exists in this part.
+  "lib/automations/jobs/enqueue.ts": "public-or-cron",
   "lib/booking/availability.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",
   "lib/consent/email-context.ts": "proven-target",
