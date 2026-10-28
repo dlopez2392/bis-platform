@@ -676,6 +676,11 @@ export async function listConversations(
     // account's), so this filter changes no ROW the query returns — only how cheaply the planner can
     // find it.
     .eq("messages.account_id", accountId)
+    // Review I8 (owner decision 2026-10-28): an archived contact's thread leaves the inbox once nothing
+    // in it is unread. `inbox_visible` (0103, generated: not contact_archived or unread_count > 0) is
+    // the conversation's OWN column, so this is a plain `.eq` — not a second `.or()` (the cursor clause
+    // below is already this query's one `or`).
+    .eq("inbox_visible", true)
     // last_message_at remains the ORDER key (nulls last) — a thread kept by the exists filter above
     // despite a failed touch (so this column is null) still sorts; it just sorts to the bottom until
     // its next message repairs it, same self-healing promise createMessage's own comment makes. The
@@ -917,9 +922,15 @@ export async function searchConversations(
   if (!s) return [];
   const limit = opts.limit ?? 5;
 
+  // Review I8 (owner decision 2026-10-28; M2): the archive filter applies on THIS read, before the
+  // 200-row cap and the five-thread cap above it select from it — filtering only the second
+  // (conversations) read would let an archived, all-read thread's match still win one of those five
+  // slots. `conversations!inner(inbox_visible)` makes the embed itself an inner join, so a message
+  // whose own conversation is not inbox_visible never reaches `preview`/`ids` below.
   const { data: msgs, error: msgErr } = await db.from("messages")
-    .select("conversation_id, body, created_at")
+    .select("conversation_id, body, created_at, conversations!inner(inbox_visible)")
     .eq("account_id", accountId)
+    .eq("conversations.inbox_visible", true)
     .ilike("body", `%${s}%`)
     .order("created_at", { ascending: false })
     .limit(200);
