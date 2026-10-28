@@ -117,9 +117,9 @@ test.afterAll(async () => {
 
   const ids = [anaId, betoId, holdingId].filter((id) => id.length > 0);
   if (ids.length > 0) {
-    // Messages, then conversations, BEFORE deleteContacts: a conversation that still holds a message
-    // is "not empty" and deleteContacts's own delete_empty_conversations leaves it (and the contact
-    // that owns it) alone (packages/db/src/contacts.ts:1193-1202's own doc comment).
+    // Messages, then conversations, BEFORE deleteContacts: a contact with a sent or received message is
+    // blocked by contact_delete_blockers (0103, reason "messages") and deleteContacts keeps it
+    // (packages/db/src/contacts.ts, deleteContacts' own doc comment).
     try {
       const { data: convs, error: convErr } = await svc.from("conversations").select("id")
         .eq("account_id", accountId).in("contact_id", ids);
@@ -133,7 +133,7 @@ test.afterAll(async () => {
       fail(`shared-number e2e cleanup: reading/deleting conversations failed: ${String(e)}`);
     }
     try {
-      const result = await deleteContacts(svc, accountId, ids, { conversationsDb: svc });
+      const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc });
       if (result.deleted !== ids.length) {
         fail(`shared-number e2e cleanup: deleteContacts deleted ${result.deleted} of ${ids.length} `
           + `(skippedBlocked ${result.skippedBlocked}, skippedFiles ${result.skippedFiles})`);

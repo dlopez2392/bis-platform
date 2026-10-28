@@ -15,6 +15,7 @@ const setAttributionMock = vi.fn();
 const getMeetingProviderMock = vi.fn();
 const createMeetingRoomMock = vi.fn();
 const recordLanguageSignalMock = vi.fn();
+const restoreContactOnSignMock = vi.fn();
 // S-47d: the slot engine reads the account's closures (lib/booking/availability.ts readSlotClosures).
 const getBusinessStatusRowMock = vi.fn();
 const listClosedDaysFromMock = vi.fn();
@@ -143,6 +144,8 @@ vi.mock("@bis/db", () => ({
   // above skips it, but not this one). Allowed by default.
   readEmailSuppression: async () => null,
   recordLanguageSignal: (...a: unknown[]) => recordLanguageSignalMock(...a),
+  // Contact archive (T9): the customer's own booking brings an archived contact back.
+  restoreContactOnSign: (...a: unknown[]) => restoreContactOnSignMock(...a),
 }));
 
 // The SAME `setAttribution` helper the sibling public-form action owns (I3)
@@ -302,6 +305,7 @@ beforeEach(() => {
   sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
   formatWhenThrowsRef.current = false;
   recordLanguageSignalMock.mockReset().mockResolvedValue(true);
+  restoreContactOnSignMock.mockReset().mockResolvedValue(false);
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -1291,5 +1295,31 @@ describe("submitBookingAction — the booker's language becomes the contact's (S
     recordLanguageSignalMock.mockRejectedValue(new Error("db down"));
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("submitBookingAction — contact archive (T9): the customer's own booking brings an archived contact back", () => {
+  it("a booking restores its contact with the sign 'booking', on the account, AFTER the booking row exists (mutation: restore before createBooking → FAILS)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result.ok).toBe(true);
+    expect(restoreContactOnSignMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), ACCOUNT_ID, "contact_1", "booking");
+    expect(restoreContactOnSignMock.mock.invocationCallOrder[0]!).toBeGreaterThan(createBookingMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a booker who lost the slot race (SlotTakenError) restores nobody (mutation: restore before createBooking → FAILS)", async () => {
+    createBookingMock.mockReset().mockRejectedValueOnce(new SlotTakenError());
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: false, slotTaken: true });
+    expect(restoreContactOnSignMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed restore never costs the booking: still ok:true, the thread still written (mutation: let the throw escape → FAILS)", async () => {
+    restoreContactOnSignMock.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result.ok).toBe(true);
+    expect(createMessageMock).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls.map((c) => String(c[0]))).toContain(`booking ${PUBLIC_ID}: restore failed for contact contact_1: Error: restoreContactOnSign failed: down`);
+    spy.mockRestore();
   });
 });

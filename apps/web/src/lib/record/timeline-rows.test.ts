@@ -435,3 +435,37 @@ describe("an ai_acts row (item 8c)", () => {
     expect(rows([call(60)])[0]!.act).toBeUndefined();
   });
 });
+
+describe("an archive/restore row's phrase (contact archive, spec §6.2)", () => {
+  const AT = "2026-10-09T16:12:00Z";
+  const archiveEntry = (
+    action: "archived" | "restored", author_kind: "person" | "customer",
+    sign: "text" | "email" | "call" | "booking" | "form" | "chat" | null = null,
+  ): TimelineEntry => ({ kind: "archive", id: "g1", at: AT, contactId: "c1",
+    archive: { action, author_kind, author_id: author_kind === "person" ? "user_dan" : null, sign } });
+  it("a person's archive reads 'archived this contact', no status, no detail (mutation: map every customer row to timeline.restored -> FAILS)", () => {
+    const [r] = rows([archiveEntry("archived", "person")]);
+    expect([r!.verb, r!.status, r!.detail]).toEqual(["archived this contact", null, null]);
+  });
+  it("a person's own restore reads 'moved this contact back to the list' (mutation: always read a Came back phrase -> FAILS)", () => {
+    expect(rows([archiveEntry("restored", "person")])[0]!.verb).toBe("moved this contact back to the list");
+  });
+  it("a customer's own sign restore reads 'Came back', keyed by the sign, under the customer mark (mutation: map every customer row to timeline.restored -> FAILS)", () => {
+    const [r] = rows([archiveEntry("restored", "customer", "text")]);
+    expect(r!.verb).toBe("came back: sent you a text");
+    expect(r!.mark).toEqual({ kind: "customer", label: "Customer" });
+    expect(rows([archiveEntry("restored", "customer", "call")])[0]!.verb).toBe("came back: called and talked with Sofía");
+  });
+  it("a call that brought them back names the account's own AI persona, not a fixed Sofía (final review M6; mutation: drop { persona } -> FAILS)", () => {
+    const withPersona = (locale: "en" | "es") => ({
+      zone: "America/Chicago", tr: makeTr(locale), author: { viewerId: null, names: {}, personaName: "Rosa", tr: makeTr(locale) },
+    });
+    const entry = archiveEntry("restored", "customer", "call");
+    expect(timelineRows([entry], withPersona("en"))[0]!.verb).toBe("came back: called and talked with Rosa");
+    expect(timelineRows([entry], withPersona("es"))[0]!.verb).toBe("volvió: llamó y habló con Rosa");
+  });
+  it("in Spanish (mutation: build labels from m[...] -> English, FAILS)", () => {
+    expect(rows([archiveEntry("archived", "person")], "es")[0]!.verb).toBe("archivó este contacto");
+    expect(rows([archiveEntry("restored", "customer", "booking")], "es")[0]!.verb).toBe("volvió: hizo una cita");
+  });
+});

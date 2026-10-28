@@ -1700,7 +1700,11 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
  * memory, so without that column the ~12 ticks inside one morning band would
  * each send.
  */
-const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, closure_kept_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts(account_id, first_name, last_name, email, language)`;
+// contacts!inner (0103, review Q2): archived means no new conversation. `!inner`
+// is load-bearing, not decoration — PostgREST only turns an embed filter into a
+// row-excluding join when the embed is `!inner`; without it `.is("contacts.archived_at",
+// null)` below would filter the nested object and leave the booking row itself intact.
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, closure_kept_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts!inner(account_id, first_name, last_name, email, language, archived_at)`;
 
 function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -1724,6 +1728,8 @@ export async function listDueFollowups(
 
   const { data, error } = await db.from("bookings")
     .select(FOLLOWUP_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     // Widened past "booked": an operator's "Mark completed" on the list
     // must not silence the follow-up this feature exists to send.
     // no_show stays excluded -- deliberately deferred, not an oversight.
@@ -1750,6 +1756,8 @@ export async function listDueFollowups(
 
 export async function getDueFollowupById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueFollowup>> {
   const { data, error } = await db.from("bookings").select(FOLLOWUP_SELECT)
+    // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest (cf. :1510-1527).
+    .is("contacts.archived_at", null)
     .eq("id", bookingId).in("status", ["booked", "completed"]).is("followup_sent_at", null).maybeSingle();
   if (error) throw new Error(`getDueFollowupById failed: ${error.message}`);
   if (!data) return { due: null, why: "gone" };

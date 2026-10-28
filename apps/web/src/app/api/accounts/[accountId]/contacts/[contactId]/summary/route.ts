@@ -97,6 +97,8 @@ export async function GET(
       ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
       : null,
     subtitleHref: mainGroup ? `/dashboard/accounts/${accountId}/groups/${mainGroup.id}` : null,
+    // Off the same getContact read (no read of its own): a `?peek=` stub learns it is archived here.
+    archivedAt: contact.archived_at ?? null,
     // Text and Email open the record page's composer on that channel (D8, verified §8.2).
     actions: headerActionLabels(headerActions({
       phone: contact.phone ?? null,

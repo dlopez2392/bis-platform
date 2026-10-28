@@ -7,6 +7,8 @@ const dbMocks = vi.hoisted(() => ({
   ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emitFormSubmitted: vi.fn(),
   setSubmissionProcessingError: vi.fn(), setContactsBusiness: vi.fn(), recordLanguageSignal: vi.fn(),
   insertAiActs: vi.fn(),
+  // Contact archive (T9): a form or a chat lead brings an archived contact back.
+  restoreContactOnSign: vi.fn(),
 }));
 // `phoneFields` stays REAL (importOriginal): the act records the phone as the contact write stores it.
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
@@ -61,6 +63,7 @@ beforeEach(() => {
   dbMocks.setContactsBusiness.mockResolvedValue([{ status: "ok" }]);
   dbMocks.updateContact.mockResolvedValue({ flagged: false });
   dbMocks.insertAiActs.mockResolvedValue(undefined);
+  dbMocks.restoreContactOnSign.mockResolvedValue(false);
   instantReply.mockReset().mockResolvedValue({ kind: "skipped" });
 });
 
@@ -164,6 +167,38 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
  * customer's and nothing it files is recorded as Sofía's. Read off the source tree, because a
  * caller the tests here do not run is exactly the one that would slip through.
  */
+describe("enrich: the customer's own form or chat lead brings an archived contact back (contact archive T9)", () => {
+  it("a public form restores its contact with the sign 'form' (mutation: drop the call → FAILS)", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct-old", existing: true, flagged: false });
+    dbMocks.getContact.mockResolvedValue(null);
+    await run();
+    expect(dbMocks.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(DB, "acct-A", "ct-old", "form");
+  });
+
+  it("a web chat lead restores with the sign 'chat' (mutation: always 'form' → FAILS)", async () => {
+    await run(chat());
+    expect(dbMocks.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(DB, "acct-A", "ct-new", "chat");
+  });
+
+  it("no contact, no restore: a failed contact write restores nobody", async () => {
+    dbMocks.createContact.mockRejectedValue(new Error("db down"));
+    await run();
+    expect(dbMocks.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a failed restore still files the thread, the unread and the event, and is not a processing error (mutation: let the throw escape the group → FAILS)", async () => {
+    dbMocks.restoreContactOnSign.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await run();
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    expect(dbMocks.emitFormSubmitted).toHaveBeenCalledTimes(1);
+    expect(dbMocks.setSubmissionProcessingError).not.toHaveBeenCalled();
+    expect(spy.mock.calls.map((c) => String(c[0]))).toContain("form form-1 submission sub-1: restore failed for contact ct-new: restoreContactOnSign failed: down");
+    spy.mockRestore();
+  });
+});
+
 describe("only the web chat tells enrich it is the chat", () => {
   const SRC = join(__dirname, "..", "..");
   function sources(dir: string): string[] {

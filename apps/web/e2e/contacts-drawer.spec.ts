@@ -728,15 +728,20 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await expect(bar.getByText("2 selected")).toBeVisible();
 
     await bar.getByRole("button", { name: /delete/i }).click();
-    const dialog = page.getByRole("dialog").filter({ hasText: /delete 2 contacts/i });
-    await dialog.getByRole("textbox").fill("2");
+    // The dialog's title is the DELETABLE count, read once the blockers load (contact archive, plan
+    // Task 10): one of the two selected is blocked, so it reads "Delete 1 contact?", not "Delete 2
+    // contacts?" — and "1", not "2", is what the typed-count gate now asks for.
+    const dialog = page.getByRole("dialog").filter({ hasText: /delete 1 contact/i });
+    await dialog.getByRole("textbox").fill("1");
     const answered = bulkDeleteAnswered(page, blockedId);
     await dialog.getByRole("button", { name: /delete/i }).click();
 
     await answered;
-    await expect(page.getByText(
-      "Deleted 1 · skipped 1 linked to bookings, deals, or conversations",
-    )).toBeVisible();
+    // The toast's new copy (plan Task 10, T3): a contact with a history is "kept", not "skipped", and
+    // the line offers to archive it instead. Read from the catalogue, never hard-coded — the skipped
+    // count (1) picks bulk.deletedSkippedOne, whatever the deleted count interpolates to.
+    await expect(page.getByText(m["bulk.deletedSkippedOne"].replace("{count}", "1"))).toBeVisible();
+    await expect(page.getByRole("button", { name: m["bulk.archiveKept"] })).toBeVisible();
     await expect(page.getByText("BulkGate Free")).toHaveCount(0);
     await expect(page.getByText("BulkGate Blocked")).toBeVisible();
   });

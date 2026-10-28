@@ -127,6 +127,9 @@ vi.mock("@bis/db", () => ({
   contactFacts: (...args: unknown[]) => contactFactsMock(...args),
   contactNextUp: (...args: unknown[]) => contactNextUpMock(...args),
   listContactPlaces: (...args: unknown[]) => listContactPlacesMock(...args),
+  // Contact archive (plan Task 11): the header's ArchiveControls imports archive-actions.ts, which imports these.
+  // Rendered, never run, here.
+  archiveContacts: vi.fn(), restoreContacts: vi.fn(), contactDeleteBlockers: vi.fn(),
 }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
 // A desk: the three "have" cards render open, so their props and markers can be read.
@@ -1510,5 +1513,91 @@ describe("the record page's timeline: an accepted stage move (item 8b-2)", () =>
       const rows = (timelineProps.mock.calls[0]![0] as { rows: { verb: string; entry: { kind: string } }[] }).rows;
       expect(rows.map((r) => [r.entry.kind, r.verb])).toEqual([["suggestion", "accepted Lupe's suggestion: Move from Quote sent to Won over"]]);
     } finally { stageReads.tables = null; }
+  });
+});
+
+/**
+ * Contact archive (plan Task 11): the header's Archive / Restore / Delete…, rendered for real (the page's own
+ * renderToStaticMarkup), and the archived banner, whose "by whom" comes from the page's ONE names read.
+ */
+describe("ContactDetailPage: Archive, Restore and the archived banner (contact archive, plan Task 11)", () => {
+  const ARCHIVED_AT = "2026-10-28T03:30:00Z"; // Oct 27 in Chicago
+  const actionsOf = (html: string) => [...html.matchAll(/data-archive-action="(\w+)"/g)].map((x) => x[1]);
+  const header = (html: string) => html.match(/<header data-record-header[\s\S]*?<\/header>/)?.[0] ?? "";
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    requireAccountAccessMock.mockReset().mockResolvedValue({ userId: "u1", isAgency: true, role: null, canManage: true });
+    prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+    listContactTimelinePageMock.mockReset().mockResolvedValue(EMPTY_PAGE);
+    listContactPlacesMock.mockReset().mockResolvedValue(NO_PLACES);
+    contactFactsMock.mockReset().mockResolvedValue(READY_FACTS);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("the agency (or an Owner) gets Archive and Delete… in the header, beside the name (mutation: drop trailing -> FAILS)", async () => {
+    const html = await render();
+    expect(actionsOf(header(html))).toEqual(["archive", "delete"]);
+    expect(html).not.toContain("data-archived-banner");
+  });
+
+  it("Staff archive but never delete for good; a Technician gets neither (owner ruling Q3; mutation: canArchive = true -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    expect(actionsOf(await render())).toEqual(["archive"]);
+    requireAccountAccessMock.mockResolvedValue({ userId: "u1", isAgency: false, role: "technician", canManage: false });
+    expect(actionsOf(await render())).toEqual([]);
+  });
+
+  it("Call stays the header's one primary: the new controls are ghost (rule 8)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = header(await render());
+    expect(html.match(/data-variant="default"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-variant="default"[^>]*data-record-action="call"|data-record-action="call"[^>]*data-variant="default"/);
+  });
+
+  it("an archived contact shows the banner (when, in the account's zone, and by whom, from the ONE names read) and Restore (mutation: a second names read -> FAILS; mutation: drop archived_by from extraNames -> 'Someone on the team', FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, archived_at: ARCHIVED_AT, archived_by: "user_ana" });
+    listPeopleNamesMock.mockImplementation(async (_db: unknown, ids: unknown) =>
+      ((ids as string[]).includes("user_ana") ? { user_ana: "Ana Me" } : {}));
+    const html = await render();
+    expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
+    expect(listPeopleNamesMock.mock.calls[0]![1]).toContain("user_ana");
+    expect(actionsOf(header(html))).toEqual(["restore", "delete"]);
+    expect(renderedText(html).replace(/\s+/g, " ")).toContain("Archived Oct 27, 2026 by Ana Me. Their calls and texts are kept.");
+    expect(html).toMatch(/data-archived-banner[\s\S]*?data-status-dot/);
+  });
+
+  it("someone the reader cannot name reads 'Someone on the team'; a failed names read says only when (never a guess)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, archived_at: ARCHIVED_AT, archived_by: "user_gone" });
+    expect(renderedText(await render())).toContain(`Archived Oct 27, 2026 by ${m["assign.someone"]}.`);
+    listPeopleNamesMock.mockRejectedValue(new Error("names down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const text = renderedText(await render());
+      expect(text).toContain("Archived Oct 27, 2026. Their calls and texts are kept.");
+      expect(text).not.toContain(m["assign.someone"]);
+    } finally { errors.mockRestore(); }
+  });
+
+  it("reads Spanish", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, archived_at: ARCHIVED_AT, archived_by: null });
+    const html = await render();
+    expect(renderedText(html)).toContain("Archivado el 27 oct 2026. Sus llamadas y mensajes se conservan.");
+    expect(renderedText(header(html))).toContain("Restaurar");
+  });
+});
+
+// Final review M3: a paused account refuses every delete, so the flag reaches both delete dialogs. No DOM
+// renderer for this wiring (the dialogs portal; the page renders client components), so it is read.
+describe("the record page hands ArchiveControls the paused flag (final review M3)", () => {
+  it("paused={accountPaused && !access.isAgency}, the page's one billingVerdictFor read", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+    expect(src.match(/<ArchiveControls\b[\s\S]*?\/>/)?.[0]).toContain("paused={accountPaused && !access.isAgency}");
   });
 });

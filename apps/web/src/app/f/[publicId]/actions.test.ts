@@ -113,6 +113,9 @@ vi.mock("@bis/db", () => ({
   createMessage: (...a: unknown[]) => createMessageMock(...a),
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
   recordLanguageSignal: (...a: unknown[]) => recordLanguageSignalMock(...a),
+  // Contact archive (T9): the REAL enrich (not mocked in this file) now restores an archived contact.
+  // A stub only; enrich.test.ts owns what it is called with.
+  restoreContactOnSign: vi.fn(async () => false),
   // D-016 item 3: the email gate now reads the suppression ledger for
   // forms.receipt too (customer_initiated — the consent ledger read above
   // skips it, but not this one). Allowed by default.

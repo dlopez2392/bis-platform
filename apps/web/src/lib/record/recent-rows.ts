@@ -58,6 +58,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "suggestion": return null;
     // item 8c: the type's exhaustive case only. The drawer never asks for this source either (plan Task 3).
     case "aiAct": return null;
+    // Contact archive: the head already says it all ("archived this contact", "came back: sent you a text").
+    case "archive": return null;
   }
 }
 

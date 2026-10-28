@@ -20,6 +20,11 @@ vi.mock("@/lib/auth", () => ({
 // already do — same stub, same reason (person-prefs pulls in @/lib/auth and
 // Clerk, neither available under a plain vitest render).
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
+// Final review M3: the layout's cached billing verdict, so both delete dialogs know a paused account.
+const verdictPaused = vi.hoisted(() => ({ on: false }));
+vi.mock("@/lib/billing/standing-read", () => ({
+  billingVerdictFor: async () => ({ paused: verdictPaused.on, voice: true, concierge: true, forward: true, cause: null, pausedAt: null }),
+}));
 
 // D-009's search-form describe block below renders the WHOLE page (the
 // hidden sort/dir fields live in page.tsx's own JSX, not in a pure
@@ -106,7 +111,7 @@ describe("contacts list", () => {
     expect(page).toContain("PAGE_SIZE + 1");
   });
   it("counts with the same search and assignee filter the list uses", () => {
-    expect(page).toMatch(/countContacts\(db, accountId, \{ search: q, assignee: assign\.assignee \}\)/);
+    expect(page).toMatch(/countContacts\(db, accountId, \{ search: q, assignee: assign\.assignee, archived \}\)/);
   });
   it("offers import and export, in the reader's language (F-085 follow-up, Task B: tr.text, never a bare m[...] lookup)", () => {
     expect(page).toContain('tr.text("contacts.import")');
@@ -389,7 +394,7 @@ describe("?who= (Mine / Unassigned)", () => {
     await render({ who: "mine" });
     expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "a1", "u1");
     expect(listContactsMock.mock.calls[0]![2]).toMatchObject({ assignee: { who: "mine", userId: "p-me" } });
-    expect(countContactsMock.mock.calls[0]![2]).toEqual({ search: undefined, assignee: { who: "mine", userId: "p-me" } });
+    expect(countContactsMock.mock.calls[0]![2]).toEqual({ search: undefined, assignee: { who: "mine", userId: "p-me" }, archived: "exclude" });
   });
 
   it("who=unassigned filters both too", async () => {
@@ -645,5 +650,171 @@ describe("the reader's own language (requestLocale; F-085 follow-up, Task B)", (
     const html = await render({ who: "mine" });
     expect(html).toContain(m["assign.empty.mine.es"]);
     expect(html).toContain(`aria-label="${m["assign.filter.label.es"]}"`);
+  });
+});
+
+// Contact archive (plan Task 10, spec §4.1): `?view=archived` is the Archived view. Both reads take the
+// view's filter, so the header's total and the pager describe the rows shown; every link the page builds
+// keeps the view; the list leaves archived contacts out.
+describe("the Archived view (?view=archived)", () => {
+  const STAFF = { userId: "u1", isAgency: false, role: "staff" as const, canManage: false };
+  const OWNER = { userId: "u1", isAgency: false, role: "owner" as const, canManage: true };
+  const TECH = { userId: "u1", isAgency: false, role: "technician" as const, canManage: false };
+  const lastRow = { sort_name: "a", company_name: null, created_at: "2026-09-09T12:00:00Z", id: "6b503e2f-3cd3-4531-a0af-5cfaf9bc158e" };
+  async function render(searchParams: Record<string, string>) {
+    return renderToStaticMarkup(
+      await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+  function resetMocks() {
+    listContactsMock.mockClear();
+    countContactsMock.mockClear();
+    contactsTableMock.mockClear();
+  }
+  /** Every link's and button's accessible text, entities decoded. */
+  const controls = (html: string) => [...html.matchAll(/<(a|button)\b[^>]*>([\s\S]*?)<\/\1>/g)]
+    .map((x) => x[2]!.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim());
+  const hrefOf = (html: string, text: string) =>
+    [...html.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+      .find((x) => x[2]!.replace(/<[^>]+>/g, "").trim() === text)?.[1]?.replace(/&amp;/g, "&");
+
+  it("?view=archived reads ONLY archived contacts in both the list and the count; the default leaves them out of both (mutation: pass archived to one read only -> FAILS)", async () => {
+    resetMocks();
+    await render({ view: "archived" });
+    expect(listContactsMock.mock.calls[0]![2]).toMatchObject({ archived: "only" });
+    expect(countContactsMock.mock.calls[0]![2]).toMatchObject({ archived: "only" });
+    resetMocks();
+    await render({});
+    expect(listContactsMock.mock.calls[0]![2]).toMatchObject({ archived: "exclude" });
+    expect(countContactsMock.mock.calls[0]![2]).toMatchObject({ archived: "exclude" });
+    resetMocks();
+    await render({ view: "something-else" });
+    expect(listContactsMock.mock.calls[0]![2]).toMatchObject({ archived: "exclude" });
+  });
+
+  it("the pager keeps view=archived, and the list's pager adds nothing (mutation: drop withView -> FAILS)", () => {
+    const older = buildOlderHref(true, lastRow, "x", "name", "asc", "all", "archived")!;
+    expect(new URLSearchParams(older.slice(1)).get("view")).toBe("archived");
+    expect(new URLSearchParams(older.slice(1)).get("before")).not.toBeNull();
+    expect(new URLSearchParams(buildNewerHref(true, "x", "name", "asc", "all", "archived")!.slice(1)).get("view")).toBe("archived");
+    expect(buildOlderHref(true, lastRow, "x", "name", "asc", "all")).not.toContain("view=");
+    expect(buildNewerHref(true, "x", "name", "asc", "all", "active")).not.toContain("view=");
+  });
+
+  it("Export exports the view it was opened from (spec §4.1)", () => {
+    expect(new URLSearchParams(buildExportHref("/b", "x", "name", "asc", "archived").split("?")[1]).get("view")).toBe("archived");
+    expect(buildExportHref("/b", "x", "name", "asc")).not.toContain("view=");
+  });
+
+  it("the rendered Older link in the Archived view stays in it", async () => {
+    resetMocks();
+    listContactsMock.mockResolvedValueOnce(Array.from({ length: 51 }, (_, i) => ({
+      id: `c${i}`, first_name: "A", last_name: null, email: null, phone: null,
+      company_name: null, source: null, sort_name: `a${i}`, created_at: "2026-01-01T00:00:00Z",
+    })));
+    const html = await render({ view: "archived" });
+    const older = html.match(/href="(\?[^"]*before=[^"]*)"/)?.[1];
+    expect(older).toBeDefined();
+    expect(new URLSearchParams(older!.slice(1).replace(/&amp;/g, "&")).get("view")).toBe("archived");
+  });
+
+  it("the search form keeps the view as a hidden field there, and adds none on the list", async () => {
+    expect(await render({ view: "archived" })).toContain('<input type="hidden" name="view" value="archived"');
+    expect(await render({})).not.toContain('name="view"');
+  });
+
+  it("its header: the Archived title and total, Export kept, Import and Add contact gone, no Mine/Unassigned row, and Back to contacts", async () => {
+    resetMocks();
+    countContactsMock.mockResolvedValueOnce(3);
+    const html = await render({ view: "archived" });
+    expect(html).toContain(`>${m["contacts.archived.title"]}<`);
+    expect(html).toContain(">3 archived<");
+    expect(html).toContain(m["contacts.export"]);
+    expect(html).not.toContain(m["contacts.import"]);
+    expect(html).not.toContain(`aria-label="${m["assign.filter.label"]}"`);
+    expect(hrefOf(html, m["contacts.archived.back"])).toBe("/dashboard/accounts/a1/contacts");
+    expect(html).not.toContain(`>${m["contacts.archived.link"]}<`);
+    // A Mine filter carried in from the list does not narrow the Archived view: it has no such row.
+    expect((listContactsMock.mock.calls[0]![2] as { assignee?: unknown }).assignee).toBeUndefined();
+  });
+
+  it("one archived is singular, and the header reads Spanish for a Spanish reader", async () => {
+    countContactsMock.mockResolvedValueOnce(1);
+    expect(await render({ view: "archived" })).toContain(">1 archived<");
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const es = await render({ view: "archived" });
+    expect(es).toContain(`>${(m as Record<string, string>)["contacts.archived.title.es"]}<`);
+    expect(es).toContain(`>${(m as Record<string, string>)["contacts.archived.back.es"]}<`);
+  });
+
+  it("the list links to the Archived view for Owners, Staff and the agency, and not for a Technician", async () => {
+    for (const who of [OWNER, STAFF]) {
+      requireAccountAccessMock.mockResolvedValueOnce(who);
+      expect(hrefOf(await render({}), m["contacts.archived.link"])).toBe("?view=archived");
+    }
+    expect(hrefOf(await render({}), m["contacts.archived.link"])).toBe("?view=archived"); // the agency
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    expect(hrefOf(await render({}), m["contacts.archived.link"])).toBeUndefined();
+  });
+
+  it("the Archived view's empty state says what appears there, with the way back (rule 5; mutation: the list's empty state -> FAILS)", async () => {
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ view: "archived" });
+    expect(html).toContain(m["contacts.archived.emptyTitle"]);
+    expect(html).toContain(m["contacts.archived.emptyBody"]);
+    expect(html).not.toContain(m["contacts.empty.title"]);
+    expect(hrefOf(html, m["contacts.archived.back"])).toBe("/dashboard/accounts/a1/contacts");
+    // A search that found nothing in it is still "no matches", the narrower fact.
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(await render({ view: "archived", q: "zzz" })).toContain(m["contacts.noMatches.title"]);
+  });
+
+  it("exactly ONE Back to contacts link in every state of the Archived view, so the e2e's getByRole link locator is never ambiguous (mutation: keep the header's link beside the empty state's -> FAILS)", async () => {
+    const backs = (html: string) => controls(html).filter((c) => c === m["contacts.archived.back"]).length;
+    expect(backs(await render({ view: "archived" }))).toBe(1);
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(backs(await render({ view: "archived" }))).toBe(1);
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(backs(await render({ view: "archived", q: "zzz" }))).toBe(1);
+  });
+
+  it("no link or button on either view is named exactly 'Contacts' (the e2e's unscoped sidebar locator)", async () => {
+    for (const view of [{}, { view: "archived" }] as Record<string, string>[]) {
+      listContactsMock.mockResolvedValueOnce([]);
+      expect(controls(await render(view))).not.toContain("Contacts");
+      expect(controls(await render(view))).not.toContain("Contacts");
+    }
+  });
+
+  it("the table gets the view and canArchive (seesWholeAccount), for the bulk bar (mutation: canArchive from canManage -> Staff FAILS)", async () => {
+    resetMocks();
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    await render({ view: "archived" });
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ view: "archived", canArchive: true }));
+    resetMocks();
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    await render({});
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ view: "active", canArchive: false }));
+  });
+});
+
+describe("a paused account (final review M3)", () => {
+  it("the table learns the account is paused, so both delete dialogs keep Delete off (mutation: pass paused false -> FAILS)", async () => {
+    contactsTableMock.mockClear();
+    verdictPaused.on = true;
+    try {
+      // A client Owner: paused turns Delete off.
+      requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
+      renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+      expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: true }));
+      // The agency is never refused a delete on a paused account (final review minor; mutation: drop !access.isAgency -> FAILS).
+      contactsTableMock.mockClear();
+      renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+      expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: false }));
+    } finally { verdictPaused.on = false; }
+    contactsTableMock.mockClear();
+    renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: false }));
   });
 });

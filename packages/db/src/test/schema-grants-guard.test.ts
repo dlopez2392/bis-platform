@@ -83,8 +83,9 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]),
   "authenticated contact_tags": IUD,
   // company_name left with 0072 (S-02 G9): a read-only copy only the group sync sets.
+  // archived_at joins with 0103 (contact archive): the stamp trigger owns archived_by and the instant.
   "authenticated contacts": insertDeleteAndUpdate([
-    "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
+    "archived_at", "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
     "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
   ]),
   "authenticated custom_fields": IUD,

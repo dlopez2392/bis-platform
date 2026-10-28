@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const db = vi.hoisted(() => ({ createMessage: vi.fn(), findMessageByProviderId: vi.fn(), incrementUnreadCount: vi.fn(), setInboundMessage: vi.fn(), getContact: vi.fn() }));
+// restoreContactOnSign: a GUARD only (contact archive T9, review I6). fileHeldEmailAction's manual File
+// also runs this function, so a restore here would log a teammate's act as the customer's.
+const db = vi.hoisted(() => ({ createMessage: vi.fn(), findMessageByProviderId: vi.fn(), incrementUnreadCount: vi.fn(), setInboundMessage: vi.fn(), getContact: vi.fn(), restoreContactOnSign: vi.fn() }));
 vi.mock("@bis/db", () => db);
 const stop = vi.hoisted(() => ({ recordInboundStop: vi.fn() }));
 vi.mock("@/lib/consent/email-staff-actions", () => stop);
@@ -24,6 +26,17 @@ beforeEach(() => {
   db.setInboundMessage.mockResolvedValue(true);
   stop.recordInboundStop.mockResolvedValue({ outcome: "stopped", eventId: "ev_1" });
   db.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => ({ id, email: `${id}@example.com` }));
+});
+
+describe("fileInboundEmail never restores an archived contact (contact archive T9, review I6)", () => {
+  it.each([
+    ["the pipeline's own filing", input({ row: { ...ROW, text: "See you then" } })],
+    ["a teammate's manual File from Needs a look", input({ row: { ...ROW, text: "See you then" }, raiseUnread: false, actor: { id: "user_1", type: "user" } })],
+  ])("%s files the email and calls no restore: only pipeline.ts restores, for the customer (mutation: call restoreContactOnSign from file.ts → FAILS)", async (_label, i) => {
+    expect(await fileInboundEmail({ db: DB, now: () => new Date() }, i)).toMatchObject({ created: true, consent: { kind: "none" } });
+    expect(db.createMessage).toHaveBeenCalledTimes(1);
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
 });
 
 describe("fileInboundEmail (spec Inbound step 5, 7)", () => {

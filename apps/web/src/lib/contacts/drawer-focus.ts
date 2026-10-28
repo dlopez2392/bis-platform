@@ -22,3 +22,24 @@ export function returnFocusToRow(
   const rows = Array.from(doc.querySelectorAll("[data-contact-row]"));
   rows.find((r) => r.getAttribute("data-contact-row") === rowId)?.focus();
 }
+
+/**
+ * Where focus goes when the bulk bar unmounts (final review M5): Archive, Restore, Delete, a tag or Clear
+ * selection empty the selection, and the bar with the button that had focus goes with it. The table's
+ * select-all checkbox (`data-select-page`) is the nearest control that stays; else the table itself
+ * (`data-contacts-table`, focusable by script only).
+ */
+export function focusAfterBar(
+  doc: { querySelector(selector: string): { focus(): void } | null } = document,
+): void {
+  (doc.querySelector("[data-select-page]") ?? doc.querySelector("[data-contacts-table]"))?.focus();
+}
+
+/** The row that takes a gone row's place in the focus order (final review M5): the drawer closed because its
+ *  contact left the list (archived, restored or deleted), so focus goes to the next row, or the previous one
+ *  when it was the last. Null when it was the only row, or was not on this page. */
+export function nextRowId(rowIds: readonly string[], goneId: string): string | null {
+  const i = rowIds.indexOf(goneId);
+  if (i < 0) return null;
+  return rowIds[i + 1] ?? rowIds[i - 1] ?? null;
+}

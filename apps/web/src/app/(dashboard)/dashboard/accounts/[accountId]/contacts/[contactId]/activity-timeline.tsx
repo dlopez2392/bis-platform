@@ -1,4 +1,4 @@
-import { Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -288,6 +288,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // item 8c (plan Task 6): the view the page built (`buildActView`), its source line and its Undo.
     case "aiAct":
       return row.act ? <ActRow head={head} act={row.act} accountId={accountId} locale={tr.locale} /> : <TimelineItem {...head} icon={Bot} />;
+    // Contact archive (spec §6.2): no body — the verb (row.verb) already says everything.
+    case "archive":
+      return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
     default:
       return unknownKind(e);
   }

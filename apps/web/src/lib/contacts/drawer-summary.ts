@@ -18,7 +18,11 @@ export type DrawerFields = { first_name: string | null; last_name: string | null
  */
 export type DrawerSummary = {
   locale: Locale;
-  header: { name: string; subtitle: string | null; subtitleHref: string | null; actions: RecordHeaderAction[] };
+  header: {
+    name: string; subtitle: string | null; subtitleHref: string | null; actions: RecordHeaderAction[];
+    /** When the contact was archived, or null. A `?peek=` stub has no list row to say so (final review M2). */
+    archivedAt: string | null;
+  };
   facts: { status: "ready"; view: FactsView } | { status: "error"; text: string };
   nextUp: { status: "ready"; view: NextUpView; emptyText: string } | { status: "error"; text: string };
   recent:
@@ -57,6 +61,8 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   suggestion: true,
   // item 8c: the type's exhaustive case; the drawer's Recent never reads ai_acts either (plan Task 3).
   aiAct: true,
+  // Contact archive (0103, spec §4.2, T7): the drawer's Recent reads archive/restore rows like any other source.
+  archive: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,
@@ -67,13 +73,16 @@ const safeHref = (h: string) => /^(tel:|\/(?![\/\\])|#|https:\/\/)/.test(h);
 function parseHeader(v: unknown): DrawerSummary["header"] | null {
   if (!isRecord(v) || !isStr(v.name) || !strOrNull(v.subtitle) || !strOrNull(v.subtitleHref) || !Array.isArray(v.actions)) return null;
   if (v.subtitleHref !== null && !safeHref(v.subtitleHref)) return null;
+  // Absent (a body from before archive existed) reads not archived; anything but a string or null is malformed.
+  const archivedAt = v.archivedAt === undefined ? null : v.archivedAt;
+  if (!strOrNull(archivedAt)) return null;
   const actions: RecordHeaderAction[] = [];
   for (const a of v.actions) {
     if (!isRecord(a) || !isStr(a.id) || !isStr(a.label) || !isStr(a.href) || !safeHref(a.href)) return null;
     if (a.ariaLabel !== undefined && !isStr(a.ariaLabel)) return null;
     actions.push({ id: a.id, label: a.label, href: a.href, ariaLabel: a.ariaLabel, primary: a.primary === true, external: a.external === true });
   }
-  return { name: v.name, subtitle: v.subtitle, subtitleHref: v.subtitleHref, actions };
+  return { name: v.name, subtitle: v.subtitle, subtitleHref: v.subtitleHref, actions, archivedAt };
 }
 
 /** A section: the server's own error passes through; a ready one the parser accepts; anything else is `fallback`. */

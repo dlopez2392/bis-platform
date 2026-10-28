@@ -5,6 +5,8 @@ const db = vi.hoisted(() => ({
   findInboundEmailByProviderId: vi.fn(), getConversationSummary: vi.fn(),
   matchTeamSender: vi.fn(), listNeverLog: vi.fn(),
   INBOUND_EMAIL_COLLISION: "INBOUND_EMAIL_COLLISION",
+  // Contact archive (T9): the customer's own email brings an archived contact back.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@bis/db", () => db);
 const file = vi.hoisted(() => ({ fileInboundEmail: vi.fn() }));
@@ -38,6 +40,7 @@ beforeEach(() => {
   forward.mockResolvedValue(undefined);
   db.listNeverLog.mockResolvedValue([]);
   db.matchTeamSender.mockResolvedValue(null);
+  db.restoreContactOnSign.mockResolvedValue(false);
 });
 
 describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
@@ -472,5 +475,66 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     db.findInboundEmailByProviderId.mockResolvedValue({ id: "ie_1", accountId: "acc", conversationId: "conv", status: "held", holdReason: "not_on_record", messageId: null, decidedBy: null, fromEmail: "ana@gmail.com", attachmentCount: 0, text: "x" });
     db.listNeverLog.mockResolvedValue([{ id: "n1", pattern: "gmail.com", kind: "domain", addedBy: "u", createdAt: "x" }]);
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "duplicate" });
+  });
+});
+
+describe("contact archive (T9): only the customer's own filed email brings an archived contact back", () => {
+  const TEAM_FWD = () => EMAIL({
+    from: "Maria Lopez <maria@rio.com>", text: "---------- Forwarded message ---------\nFrom: Ana Ruiz <ana@gmail.com>\n\nCan we move Thursday?",
+    rawHeaders: SES_OK.replace(/gmail\.com/g, "rio.com"),
+  });
+
+  it("the customer's reply, newly filed with no stop, restores the thread's contact with the sign 'email' on the service client, AFTER it is filed (mutation: drop the call → FAILS)", async () => {
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(db.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(deps.db, "acc", "ana", "email");
+    expect(db.restoreContactOnSign.mock.invocationCallOrder[0]!).toBeGreaterThan(file.fileInboundEmail.mock.invocationCallOrder[0]!);
+  });
+
+  it("a retry that finally files an earlier, unlinked row restores too (the customer's filing, worked out again)", async () => {
+    db.findInboundEmailByProviderId.mockResolvedValue({ id: "ie_1", accountId: "acc", conversationId: "conv", status: "filed", messageId: null, decidedBy: "email-inbound", fromEmail: "ana@gmail.com", fromName: "Ana Ruiz", attachmentCount: 0 });
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(db.restoreContactOnSign).toHaveBeenCalledExactlyOnceWith(deps.db, "acc", "ana", "email");
+  });
+
+  it("a teammate's forward restores nobody: it is staff, not the customer (mutation: drop the filing.kind === 'customer' term → FAILS)", async () => {
+    fetchEmail.mockResolvedValue(TEAM_FWD());
+    db.matchSender.mockResolvedValue(null);
+    db.matchTeamSender.mockResolvedValue({ userId: "user_maria" });
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a duplicate (created: false) restores nobody (mutation: drop the result.created term → FAILS)", async () => {
+    file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: false, consent: { kind: "none" } });
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "duplicate" });
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a clear stop", { kind: "stopped", eventId: "ev_1" }],
+    ["an unclear stop phrase", { kind: "maybe", phrase: "stop emailing me" }],
+  ] as const)("%s restores nobody (mutation: drop the consent term → FAILS)", async (_label, consent) => {
+    file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent });
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("an automatic reply (Auto-Submitted: auto-replied) is dropped before filing and restores nobody", async () => {
+    fetchEmail.mockResolvedValue(EMAIL({ rawHeaders: `Auto-Submitted: auto-replied\r\n${SES_OK}` }));
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a held email (a stranger) restores nobody", async () => {
+    db.matchSender.mockResolvedValue(null);
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "held" });
+    expect(db.restoreContactOnSign).not.toHaveBeenCalled();
+  });
+
+  it("a failed restore is logged by account only and the filed email stands: 200, never a 503 (mutation: let the throw reach the filing catch → 503, FAILS)", async () => {
+    db.restoreContactOnSign.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: could not restore an archived contact on account acc; the email is filed"]);
   });
 });

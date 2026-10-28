@@ -82,14 +82,27 @@ describe("contacts CSV export route (GET)", () => {
     listContacts.mockResolvedValueOnce([]);
     await GET(req("?q=rosa&sort=company&dir=asc"), ctx());
     expect(listContacts).toHaveBeenCalledWith({}, "a1",
-      { search: "rosa", limit: 500, before: undefined, sort: { key: "company", dir: "asc" } });
+      { search: "rosa", limit: 500, before: undefined, sort: { key: "company", dir: "asc" }, archived: "exclude" });
+  });
+
+  // Contact archive (spec §4.1, plan Task 10): Export exports the view it was opened from. The list's
+  // Export leaves archived contacts out, like the screen; the Archived view's exports only them.
+  it("?view=archived exports only archived contacts; no view, or any other word, leaves them out (mutation: drop the view -> FAILS)", async () => {
+    listContacts.mockResolvedValue([]);
+    await GET(req("?view=archived&sort=name&dir=asc"), ctx());
+    expect(listContacts).toHaveBeenLastCalledWith({}, "a1",
+      { search: undefined, limit: 500, before: undefined, sort: { key: "name", dir: "asc" }, archived: "only" });
+    await GET(req("?view=Archived"), ctx());
+    expect(listContacts.mock.calls.at(-1)![2]).toMatchObject({ archived: "exclude" });
+    await GET(req(), ctx());
+    expect(listContacts.mock.calls.at(-1)![2]).toMatchObject({ archived: "exclude" });
   });
 
   it("falls back to the list page's own default (created, desc) for a missing or invalid sort/dir", async () => {
     listContacts.mockResolvedValueOnce([]);
     await GET(req("?sort=bogus&dir=sideways"), ctx());
     expect(listContacts).toHaveBeenCalledWith({}, "a1",
-      { search: undefined, limit: 500, before: undefined, sort: { key: "created", dir: "desc" } });
+      { search: undefined, limit: 500, before: undefined, sort: { key: "created", dir: "desc" }, archived: "exclude" });
   });
 
   it("streams just the header for zero matches, with the CSV response headers set", async () => {
@@ -163,7 +176,7 @@ describe("contacts CSV export route (GET)", () => {
       expect(listContacts).toHaveBeenNthCalledWith(2, {}, "a1", {
         search: undefined, limit: 500,
         before: { v: last1[cursorField], id: last1.id },
-        sort: { key: sortKey, dir: "desc" },
+        sort: { key: sortKey, dir: "desc" }, archived: "exclude",
       });
 
       // The property that actually matters: the ASSEMBLED FILE has every

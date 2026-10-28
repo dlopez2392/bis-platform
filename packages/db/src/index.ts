@@ -21,6 +21,10 @@ export { createContact, updateContact, listContacts, getContact,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          listTagNamesForContacts, flagMatchesOf,
          type ContactInput, type CreateContactInput, type SortKey, type SortDir } from "./contacts";
+// 0103, contact archive: the archive filter, archive/restore, the customer's sign restore and the internal-only delete.
+export { archiveContacts, restoreContacts, restoreContactOnSign, contactDeleteBlockers, ContactBatchError,
+         RESTORE_SIGNS, DELETE_BLOCK_REASONS, MAX_CONTACT_BATCH,
+         type ArchivedFilter, type RestoreSign, type DeleteBlockReason } from "./contacts";
 // item 8c: a field's own Undo (the compare-and-swap restore) and who most recently edited it.
 export { restoreContactFieldIf, lastFieldEditor } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
@@ -394,7 +398,7 @@ export {
   type ContactNextUp, type NextUpTask,
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
   type TimelineMessage, type TimelineChat, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
-  type TimelineSuggestion,
+  type TimelineSuggestion, type TimelineArchive,
   type ContactMessageRow,
   // S-03 part 2b: the household and business page reads its members as one set.
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,

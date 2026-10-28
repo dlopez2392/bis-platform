@@ -59,6 +59,8 @@ const dbMock = vi.hoisted(() => ({
   getContact: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
   deleteInboundMessageByProviderId: vi.fn(),
+  // Contact archive T9 (review I6): a GUARD only. A teammate's manual File is staff's act, never the customer's.
+  restoreContactOnSign: vi.fn(),
 }));
 vi.mock("@bis/db", () => dbMock);
 
@@ -123,6 +125,7 @@ beforeEach(() => {
   dbMock.getContact.mockReset().mockImplementation((c: { tag?: string }) =>
     c?.tag === "request-db" ? getContactResult() : Promise.reject(new Error("service read")));
   dbMock.deleteInboundMessageByProviderId.mockReset().mockResolvedValue(false);
+  dbMock.restoreContactOnSign.mockReset();
   fileMock.fileInboundEmail.mockReset();
 });
 
@@ -249,6 +252,18 @@ describe("fileHeldEmailAction (spec 'Needs a look')", () => {
     expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: true, undo: { kind: "unfile", id: "ie_1", messageId: "msg_1" } });
     expect(dbMock.decideInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "held", { status: "filed", decidedBy: USER });
     expect(fileMock.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ raiseUnread: false, actor: { id: USER, type: "user" }, contactId: HELD_CONTACT, attachmentCount: 2 }));
+  });
+
+  it("a teammate's File never restores an archived contact, on the suggestion or on Choose a record: the timeline would name staff's act as the customer's (contact archive T9, review I6; mutation: call restoreContactOnSign from fileHeldEmailAction → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockResolvedValue(true);
+    fileMock.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toMatchObject({ ok: true });
+    getContactResult.mockResolvedValue({ id: "pat" });
+    dbMock.ensureConversation.mockResolvedValue({ id: "conv_pat", created: false });
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", "pat")).toMatchObject({ ok: true });
+    expect(fileMock.fileInboundEmail).toHaveBeenCalledTimes(2);
+    expect(dbMock.restoreContactOnSign).not.toHaveBeenCalled();
   });
 
   it("a File that recorded a stop carries the stop's eventId on its Undo (fix round 1 item 1; mutation: drop eventId from the undo payload → FAILS)", async () => {

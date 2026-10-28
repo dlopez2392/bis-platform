@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
+  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -42,6 +42,7 @@ import { TextsRow } from "./texts-row";
 import { SourceField } from "./source-field";
 import { BusinessInlineField } from "./business-field";
 import { LanguageField } from "./language-field";
+import { ArchiveControls, ArchivedBanner } from "./archive-controls";
 import type { ContactRow } from "./contacts-table";
 
 // The body is PARSED (lib/contacts/drawer-summary.ts): checked, not cast, so a server older or newer
@@ -70,6 +71,9 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   suggestion: CheckSquare,
   // item 8c: the type's exhaustive case only. The drawer's Recent never reads ai_acts either (plan Task 3).
   aiAct: Bot,
+  // contact archive: archived / came-back rows. recent-rows.ts answers null for them, so the drawer's
+  // Recent never shows one; this is the type's exhaustive case only.
+  archive: Archive,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";
@@ -88,6 +92,7 @@ type SectionState = "loading" | "ready" | "error";
  */
 export function ContactDrawer({
   accountId, row, onClose, canAssign = false, members = [], viewerId = null, returnFocusRowId = null,
+  canArchive = false, canDelete = false, timezone = "UTC", paused = false, onGone,
 }: {
   accountId: string;
   row: ContactRow | null;
@@ -101,6 +106,18 @@ export function ContactDrawer({
   /** The row to give focus back to on close (lib/contacts/drawer-focus.ts). The table's, not
    *  `row?.id`: by the time Radix calls onCloseAutoFocus, `row` is already null. */
   returnFocusRowId?: string | null;
+  /** Contact archive (plan Task 11): Owners, Staff and the agency archive and restore (seesWholeAccount); a
+   *  Technician never. False (the default) shows neither. */
+  canArchive?: boolean;
+  /** Delete for good: Owner and agency only (canManage). False by default. */
+  canDelete?: boolean;
+  /** The account's resolved zone: the archived line's date and the Archive toast's appointment date. */
+  timezone?: string;
+  /** The account is paused (billingVerdictFor): Delete stays off, and the dialog says why (final review M3). */
+  paused?: boolean;
+  /** The drawer's own Archive, Restore or Delete took its contact off the list: the table closes it and points
+   *  focus at the next row (final review M5). Absent, they close it like Esc. */
+  onGone?: () => void;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -171,6 +188,11 @@ export function ContactDrawer({
     load.status === "loading" ? "loading" : s && s.status === "ready" ? "ready" : "error";
   const who = body && body.who.status === "ready" ? body.who : null;
   const fieldsRow = row ? drawerFieldsRow(row, load) : null;
+  const headerName = body?.header.name ?? (row ? contactDisplayName(row) : "");
+  // The list's own row says whether it is archived (listContacts reads archived_at); a `?peek=` stub does not
+  // know, so the summary body's header says it (final review M2).
+  const archivedAt = row?.archived_at ?? body?.header.archivedAt ?? null;
+  const archived = archivedAt ? { at: archivedAt, byLabel: null } : null;
   // The who section's one error. A `?peek=` stub whose fields never arrived (the whole drawer's
   // error, or a `who` the parser refused) shows it in place of the fields, and it is not said twice.
   const whoError = (
@@ -206,7 +228,7 @@ export function ContactDrawer({
             <div lang={locale} className="flex min-h-0 flex-1 flex-col">
               <SheetHeader>
                 <RecordHeader
-                  name={body?.header.name ?? contactDisplayName(row)}
+                  name={headerName}
                   subtitle={body?.header.subtitle ?? null}
                   subtitleHref={body?.header.subtitleHref ?? undefined}
                   actions={body?.header.actions ?? []}
@@ -214,13 +236,22 @@ export function ContactDrawer({
                   // The dialog is named by the customer's name (Radix needs a Dialog.Title).
                   wrapHeading={(h) => <SheetTitle asChild>{h}</SheetTitle>}
                   trailing={
-                    <Link href={fullHref} aria-label={tx("drawer.openFull")}
-                      // mr-8 clears the Sheet's absolutely placed close button (sheet.tsx:84).
-                      className="mr-8 inline-flex min-h-11 items-center rounded-[var(--radius-ctl)] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">
-                      <ExternalLink className="size-4" aria-hidden />
-                    </Link>
+                    <span className="inline-flex items-center gap-1">
+                      {/* Contact archive (plan Task 11): Archive (Restore once archived) and Delete…, icons in the
+                          drawer; each one that moves the contact off the list it was opened from closes it. */}
+                      <ArchiveControls accountId={accountId} contactId={row.id} label={headerName}
+                        contact={fieldsRow ?? row} archived={archived}
+                        canArchive={canArchive} canDelete={canDelete} timezone={timezone} variant="drawer" onGone={onGone ?? onClose}
+                        paused={paused} />
+                      <Link href={fullHref} aria-label={tx("drawer.openFull")}
+                        // mr-8 clears the Sheet's absolutely placed close button (sheet.tsx:84).
+                        className="mr-8 inline-flex min-h-11 items-center rounded-[var(--radius-ctl)] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">
+                        <ExternalLink className="size-4" aria-hidden />
+                      </Link>
+                    </span>
                   }
                 />
+                <ArchivedBanner archived={archived} timezone={timezone} variant="drawer" locale={locale} />
                 {load.status === "loading" ? <Skeleton data-testid="drawer-skeleton" className="h-11 w-2/3 rounded-[var(--radius-ctl)]" /> : null}
                 <SheetDescription className="sr-only">{tx("drawer.description")}</SheetDescription>
               </SheetHeader>
