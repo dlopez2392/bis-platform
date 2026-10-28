@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { listContacts, countContacts, archiveContacts, restoreContacts, contactDeleteBlockers, deleteContacts } from "./contacts";
+import { listContacts, countContacts, archiveContacts, restoreContacts, contactDeleteBlockers, deleteContacts, ContactBatchError } from "./contacts";
 
 /** Every call on every query, and a fixed answer per table. Pure: the live behaviour is CI-only
  *  (src/test/contact-archive-live.test.ts). */
-function recordingDb(answers: Record<string, unknown> = {}, rpc: Record<string, unknown> = {}) {
+function recordingDb(
+  answers: Record<string, unknown> = {}, rpc: Record<string, unknown> = {}, rpcErrors: Record<string, string> = {},
+) {
   const calls: { table: string; method: string; args: unknown[] }[] = [];
   const rpcs: { fn: string; args: unknown }[] = [];
   const chainFor = (table: string): unknown => {
@@ -22,7 +24,10 @@ function recordingDb(answers: Record<string, unknown> = {}, rpc: Record<string, 
   const rpcAnswers: Record<string, unknown> = { ...rpc };
   const db = {
     from: (table: string) => chainFor(table),
-    rpc: async (fn: string, args: unknown) => { rpcs.push({ fn, args }); return { data: rpcAnswers[fn] ?? null, error: null }; },
+    rpc: async (fn: string, args: unknown) => {
+      rpcs.push({ fn, args });
+      return rpcErrors[fn] ? { data: null, error: { message: rpcErrors[fn] } } : { data: rpcAnswers[fn] ?? null, error: null };
+    },
   } as unknown as SupabaseClient;
   return { db, calls, rpcs, rpcAnswers };
 }
@@ -71,6 +76,38 @@ describe("archiveContacts / restoreContacts", () => {
     const ins = calls.filter((c) => c.method === "in").map((c) => (c.args[1] as string[]).length);
     expect(ins).toEqual([200, 200, 50]);
   });
+  it("restore sends 450 ids in three .in() batches too (fix round; mutation: one .in() of 450 in restoreContacts -> FAILS)", async () => {
+    const { db, calls } = recordingDb({ contacts: [] });
+    await restoreContacts(db, "A", Array.from({ length: 450 }, (_, i) => `c${i}`));
+    const ins = calls.filter((c) => c.method === "in").map((c) => (c.args[1] as string[]).length);
+    expect(ins).toEqual([200, 200, 50]);
+  });
+  it("a batch that fails partway still names the ids already archived, so the caller can offer Undo for them (fix round; mutation: throw a plain Error -> FAILS)", async () => {
+    // Batch one archives c0..c199 (it answers two of them as changed); batch two fails.
+    let batch = 0;
+    const chain: unknown = new Proxy({}, {
+      get(_t, method: string) {
+        if (method === "then") {
+          batch++;
+          const answer = batch === 1
+            ? { data: [{ id: "c0" }, { id: "c1" }], error: null }
+            : { data: null, error: { message: "statement timeout" } };
+          return (res: (v: unknown) => unknown) => Promise.resolve(answer).then(res);
+        }
+        return () => chain;
+      },
+    });
+    const db = { from: () => chain } as unknown as SupabaseClient;
+    const ids = Array.from({ length: 250 }, (_, i) => `c${i}`);
+    const archived = await archiveContacts(db, "A", ids).then(() => null, (e: unknown) => e);
+    expect(archived).toBeInstanceOf(ContactBatchError);
+    expect((archived as ContactBatchError).changedIds).toEqual(["c0", "c1"]);
+    expect((archived as Error).message).toMatch(/archiveContacts failed: statement timeout/);
+    batch = 0;
+    const restored = await restoreContacts(db, "A", ids).then(() => null, (e: unknown) => e);
+    expect(restored).toBeInstanceOf(ContactBatchError);
+    expect((restored as ContactBatchError).changedIds).toEqual(["c0", "c1"]);
+  });
   it("more than 500 ids is refused before any query (mutation: drop the cap -> FAILS)", async () => {
     const { db, calls } = recordingDb();
     await expect(archiveContacts(db, "A", Array.from({ length: 501 }, (_, i) => `c${i}`))).rejects.toThrow(/500/);
@@ -83,6 +120,10 @@ describe("contactDeleteBlockers", () => {
     const { db } = recordingDb({}, { contact_delete_blockers: [{ contact_id: "c1", reasons: ["calls", "messages"] }] });
     const m = await contactDeleteBlockers(db, "A", ["c1", "c2"]);
     expect([...m]).toEqual([["c1", ["calls", "messages"]]]);
+  });
+  it("a null answer is a failure, never \"nothing blocks\" (fix round; mutation: read `data ?? []` -> FAILS)", async () => {
+    const { db } = recordingDb({}, { contact_delete_blockers: null });
+    await expect(contactDeleteBlockers(db, "A", ["c1"])).rejects.toThrow(/contactDeleteBlockers failed/);
   });
 });
 
@@ -100,7 +141,11 @@ describe("deleteContacts", () => {
     expect(service.rpcs).toEqual([{ fn: "contact_delete_blockers", args: { p_account_id: "A", p_contact_ids: ["free", "kept"] } }]);
     expect(seen).toEqual([["free"]]);
     // On the REQUEST client, so the database's own Owner check runs (review I9; mutation: call it on serviceDb -> FAILS).
-    expect(request.rpcs).toEqual([{ fn: "delete_internal_contacts", args: { p_account_id: "A", p_contact_ids: ["free"] } }]);
+    // The empty pre-flight runs first, so the Owner check refuses before any file is purged (fix round).
+    expect(request.rpcs).toEqual([
+      { fn: "delete_internal_contacts", args: { p_account_id: "A", p_contact_ids: [] } },
+      { fn: "delete_internal_contacts", args: { p_account_id: "A", p_contact_ids: ["free"] } },
+    ]);
     expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["kept"], lateKept: 0 });
   });
   it("an id the database kept after the purge is reported as lateKept and skipped (mutation: count every id sent as deleted -> FAILS)", async () => {
@@ -108,5 +153,22 @@ describe("deleteContacts", () => {
     const service = recordingDb({}, { contact_delete_blockers: [] });
     const r = await deleteContacts(request.db, "A", ["a", "b"], { serviceDb: service.db });
     expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["b"], lateKept: 1 });
+  });
+  it("the database's Owner refusal comes before the purge: a refused pre-flight throws and beforeDelete never runs (fix round; mutation: drop the pre-flight -> FAILS)", async () => {
+    const request = recordingDb({ contacts: [{ id: "a" }] }, {}, { delete_internal_contacts: "delete_internal_contacts: Owners only" });
+    const service = recordingDb({}, { contact_delete_blockers: [] });
+    const purged: string[][] = [];
+    await expect(deleteContacts(request.db, "A", ["a"], {
+      serviceDb: service.db, beforeDelete: async (ids) => { purged.push(ids); return []; },
+    })).rejects.toThrow(/Owners only/);
+    expect(purged).toEqual([]);
+    expect(service.rpcs).toEqual([]);
+  });
+  it("more than 500 ids is refused before any query (fix round; mutation: drop the cap in deleteContacts -> FAILS)", async () => {
+    const request = recordingDb();
+    const service = recordingDb();
+    await expect(deleteContacts(request.db, "A", Array.from({ length: 501 }, (_, i) => `c${i}`), { serviceDb: service.db }))
+      .rejects.toThrow(/500/);
+    expect([request.calls, request.rpcs, service.calls, service.rpcs]).toEqual([[], [], [], []]);
   });
 });

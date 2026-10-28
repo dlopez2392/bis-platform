@@ -22,7 +22,7 @@ export { createContact, updateContact, listContacts, getContact,
          listTagNamesForContacts, flagMatchesOf,
          type ContactInput, type CreateContactInput, type SortKey, type SortDir } from "./contacts";
 // 0103, contact archive: the archive filter, archive/restore, the customer's sign restore and the internal-only delete.
-export { archiveContacts, restoreContacts, restoreContactOnSign, contactDeleteBlockers,
+export { archiveContacts, restoreContacts, restoreContactOnSign, contactDeleteBlockers, ContactBatchError,
          RESTORE_SIGNS, DELETE_BLOCK_REASONS, MAX_CONTACT_BATCH,
          type ArchivedFilter, type RestoreSign, type DeleteBlockReason } from "./contacts";
 // item 8c: a field's own Undo (the compare-and-swap restore) and who most recently edited it.

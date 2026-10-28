@@ -1617,6 +1617,13 @@ export function looksAutomaticText(body: string): boolean {
 
 **Interfaces:** Produces the three actions in "Shared facts". `bulkDeleteContactsAction`'s ok-result gains `skippedIds` and `lateKept`. `parseView(raw): "active" | "archived"`, `withView(params, view)` and `archivedFilterOf(view)` come from `lib/contacts/view.ts`.
 
+**From T4's review fix round (2026-10-28), binding on this task:**
+- `archiveContactsAction` (and `restoreContactsAction`) refuse a Technician BY ROLE (`seesWholeAccount`) before any db call. The database does not: a Technician's RLS hides an unassigned contact, so `archiveContacts` matches 0 rows and returns `changedIds: []` with no error.
+- `deleteContacts`' `skippedBlocked` ALREADY includes `lateKept`. Never add the two; `lateKept` is the subset kept after the purge ran (the `contacts.delete.filesGoneKept` case).
+- A selection survives a page change, so it can exceed `MAX_CONTACT_BATCH` (500), and every one of `archiveContacts`, `restoreContacts`, `contactDeleteBlockers` and `deleteContacts` throws on 501 ids before any query. Cap the selection at 500 in the bulk bar or split the action's calls into chunks of 500.
+- `archiveContacts`/`restoreContacts` throw `ContactBatchError` (exported from `@bis/db`) when a batch after the first fails; its `changedIds` are the contacts already changed. The action catches it and still offers Undo for exactly those ids (and revalidates), rather than a bare failure.
+- `deleteContacts` now calls `delete_internal_contacts` with an empty array on the request client first (the Owner pre-flight), so a refusal throws BEFORE `beforeDelete` runs; the action's `purged === 0` branch then answers the plain failure, never `filesGoneKept`.
+
 **Run:** `pnpm --filter web exec vitest run src/lib/contacts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" "src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` and `pnpm --filter web typecheck`
 
 - [ ] **Step 1: `view.ts` test first, then the module:**

@@ -1184,6 +1184,18 @@ function inBatches<T>(ids: readonly T[]): T[][] {
   return out;
 }
 
+/** A multi-batch archive or restore that failed partway (fix round, 2026-10-28). The batches before the failure
+ *  were committed, one statement each, so those contacts DID change: `changedIds` names them, so the caller can
+ *  still offer Undo for exactly these (and refresh the list) instead of losing them behind the throw. */
+export class ContactBatchError extends Error {
+  readonly changedIds: string[];
+  constructor(message: string, changedIds: string[]) {
+    super(message);
+    this.name = "ContactBatchError";
+    this.changedIds = changedIds;
+  }
+}
+
 /**
  * Delete for good, internal-only contacts (0103; spec §5; owner rulings 2026-10-28). A contact any customer
  * fact touches (a non-note message, an inbound email, a call, a form, a consent event, a sent automation, a
@@ -1196,6 +1208,10 @@ function inBatches<T>(ids: readonly T[]): T[][] {
  * 1. The proof (review I1): only ids THIS client reads as this account's contacts go on. The ids come from the
  *    browser, and `beforeDelete` hands them to a service-role purge, so a filter there alone is not enough; on
  *    a request client RLS decides this read.
+ * 1b. The Owner pre-flight (fix round): `delete_internal_contacts` with an EMPTY array on `db`. 0103 runs its
+ *    Owner check before anything else and an empty array then deletes nothing (proven on the replica: an Owner
+ *    and a service_role JWT get `{}`, Staff, another org's token and a claim-less token get 42501), so a
+ *    caller the database would refuse is refused HERE, before the purge, never after the files are gone.
  * 2. `contact_delete_blockers` on `opts.serviceDb` (0103 step 7: service_role only, and definer, so a reason
  *    the caller's RLS hid can never read as no reason). One row per blocked contact, so 500 ids fit max_rows,
  *    and no messages row is ever read into this process (the 1001-message shape that misjudged a talked-to
@@ -1241,6 +1257,9 @@ export async function deleteContacts(
   }
   const ours = unique.filter((id) => ourSet.has(id));
   if (ours.length === 0) return none;
+  // Step 1b: the database's own Owner check, before the service client reads anything and before any purge.
+  const { error: ownerError } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: [] });
+  if (ownerError) throw new Error(`deleteContacts refused: ${ownerError.message}`);
   // Step 2: every knowable blocker, before anything irreversible runs.
   const blockers = await contactDeleteBlockers(opts.serviceDb, accountId, ours);
   const blocked = ours.filter((id) => blockers.has(id));
@@ -1263,7 +1282,10 @@ export async function deleteContacts(
 
 /** Archive (0103): the request client, so RLS and the stamp trigger decide who may and who did (the trigger
  *  refuses a Technician and a shared number's holding record). Only rows that CHANGE come back, so an Undo
- *  restores exactly these and never one that was archived before (D-007's rule). */
+ *  restores exactly these and never one that was archived before (D-007's rule). A batch that fails throws
+ *  ContactBatchError carrying the ids the earlier batches already archived.
+ *  NOT a role check: a Technician's RLS hides an unassigned contact, so the update matches 0 rows with no
+ *  error. The caller refuses Technicians by role first (seesWholeAccount). */
 export async function archiveContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
 ): Promise<{ changedIds: string[] }> {
@@ -1274,7 +1296,7 @@ export async function archiveContacts(
       .eq("account_id", accountId).in("id", batch)
       .eq("holds_shared_number", false).is("archived_at", null)
       .select("id");
-    if (error) throw new Error(`archiveContacts failed: ${error.message}`);
+    if (error) throw new ContactBatchError(`archiveContacts failed: ${error.message}`, changedIds);
     changedIds.push(...(data ?? []).map((r) => r.id as string));
   }
   return { changedIds };
@@ -1291,7 +1313,7 @@ export async function restoreContacts(
     const { data, error } = await db.from("contacts").update({ archived_at: null })
       .eq("account_id", accountId).in("id", batch).not("archived_at", "is", null)
       .select("id");
-    if (error) throw new Error(`restoreContacts failed: ${error.message}`);
+    if (error) throw new ContactBatchError(`restoreContacts failed: ${error.message}`, changedIds);
     changedIds.push(...(data ?? []).map((r) => r.id as string));
   }
   return { changedIds };
@@ -1325,7 +1347,9 @@ export async function contactDeleteBlockers(
   if (contactIds.length === 0) return out;
   const { data, error } = await serviceDb.rpc("contact_delete_blockers", { p_account_id: accountId, p_contact_ids: contactIds });
   if (error) throw new Error(`contactDeleteBlockers failed: ${error.message}`);
-  for (const r of (data ?? []) as { contact_id: string; reasons: DeleteBlockReason[] }[]) out.set(r.contact_id, r.reasons);
+  // Never `data ?? []`: a null answer read as "nothing blocks" would send a talked-to customer to the purge.
+  if (!Array.isArray(data)) throw new Error("contactDeleteBlockers failed: no answer");
+  for (const r of data as { contact_id: string; reasons: DeleteBlockReason[] }[]) out.set(r.contact_id, r.reasons);
   return out;
 }
 

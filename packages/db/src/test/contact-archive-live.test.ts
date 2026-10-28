@@ -63,8 +63,12 @@ describe("listContacts and countContacts: the archived filter", () => {
 
   it("the Archived view pages one row at a time with `before`, over A's archived rows only (second account; mutation: drop withArchived when `before` is set -> FAILS)", () =>
     withTestAccount((db, a) => withTestAccount(async (_db, b) => {
-      const archived = [await mk(db, a, "Page One"), await mk(db, a, "Page Two"), await mk(db, a, "Page Three")];
+      // Created One, Active, Two, Three (fix round): the list reads created_at desc with an `lt` cursor, so Active
+      // sits BETWEEN archived rows and a filter dropped under the cursor surfaces it on a later page. Inserted
+      // last, it was newer than every archived row and could never be reached past page one.
+      const one = await mk(db, a, "Page One");
       const active = await mk(db, a, "Page Active");
+      const archived = [one, await mk(db, a, "Page Two"), await mk(db, a, "Page Three")];
       const bArchived = await mk(db, b, "Page B");
       await archiveContacts(db, a, archived);
       await archiveContacts(db, b, [bArchived]);

@@ -1100,7 +1100,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       expect(await convs(db, accountId, kept)).toHaveLength(1);
     }));
 
-  it("another account's customer and its empty conversation are never touched (defence in depth: the request-client contacts proof AND the account filter on the conversations read AND on their delete each stop it alone, so no single mutation fails this; the probe drops all three -> FAILS)", () =>
+  it("another account's customer and its empty conversation are never touched (defence in depth: the request-client contacts proof AND delete_internal_contacts' own account term each stop it alone, so no single mutation fails this; the probe drops both -> FAILS)", () =>
     withTestAccount(async (dbB, accountB) =>
       withTestAccount(async (db, accountA) => {
         const b = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
@@ -1117,9 +1117,9 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
    * db-max-rows (1000 — see <SCRATCH>/s06b-kit/pgrst.sh) truncated that read, so a customer with
    * 1001 messages had none of them counted and was judged empty: beforeDelete (the irreversible
    * documents purge) ran, then the conversations delete hit messages_conversation_id_fkey and
-   * threw — files gone, customer kept. delete_empty_conversations (0083 section 3) replaces that
-   * read-then-decide with one atomic statement that never reads a messages/inbound_emails row into
-   * this process at all, so this is no longer reachable — the chatty customer here is blocked
+   * threw — files gone, customer kept. Since 0103, contact_delete_blockers answers ONE row per
+   * blocked contact (a definer-side EXISTS per reason), so no messages/inbound_emails row is read
+   * into this process at all and this is no longer reachable — the chatty customer here is blocked
    * exactly like the one-message customer, and beforeDelete (tracked via a spy) never sees either.
    */
   it("a customer with 1001 messages and a customer with 1 message are both blocked, and beforeDelete never sees either (mutation: go back to the pre-fix read-then-decide shape -> PostgREST's db-max-rows=1000 drops the quiet customer's one message row from the sorted read, their conversation is wrongly judged empty, and the quiet customer's purge runs and their conversation delete throws on messages_conversation_id_fkey, FAILS)", () =>

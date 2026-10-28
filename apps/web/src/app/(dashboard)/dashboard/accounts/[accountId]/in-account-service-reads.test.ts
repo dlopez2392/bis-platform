@@ -98,12 +98,10 @@ const ALLOWED: Record<string, Reason> = {
   // bulkDeleteContactsAction (0077, owner ruling 2026-10-13): the documents purge runs on the service
   // client only for the ids deleteContacts' request-client pre-read left deletable, scoped to the same
   // account, and only after requireAccountOwner. The same action hands deleteContacts the service client as
-  // conversationsDb (S-06 part 2, 0053: no client deletes a conversation; migration 0083 section 3,
-  // second review fix): it calls delete_empty_conversations only for the contacts that are otherwise
-  // deletable -- ours, under requireAccountOwner, and not already blocked by an opportunity or a
-  // booking, as the request client's own pre-read proved -- never on a contact a deal or a booking
-  // is keeping, so a reply token already sitting on that contact's empty conversation is never swept
-  // out from under it.
+  // serviceDb (0103): it reads contact_delete_blockers (service_role only) only for the ids the request
+  // client's own pre-read proved are this account's, and only after the request client's empty
+  // delete_internal_contacts pre-flight passed the database's Owner check. The delete itself runs on the
+  // request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
