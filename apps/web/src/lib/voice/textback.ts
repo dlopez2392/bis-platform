@@ -100,6 +100,12 @@ export interface TextbackRequest {
   /** The instant the hours are judged at. finishCall passes the call's own
    *  end; the release pass its tick; the handoff route the present. */
   now: Date;
+  /** F-196: the release's own clock (ctx.clock). When present the gate judges
+   *  the HOURS at it, the moment of the send, because under fan-out the
+   *  release can run minutes after its tick's now; every window (the
+   *  cooldown, the age cap) still reads `now`. Absent on the live paths,
+   *  whose now is the moment. */
+  clock?: () => Date;
   /** True on the 08:00 release of a text-back held overnight: the default
    *  body drops "just now" (danlo, 2026-09-26). */
   held?: boolean;
@@ -279,7 +285,8 @@ export async function prepareTextback(
     payload: { callerNumber: r.callerNumber, contactId, conversationId, language: chosen.language, missedAt: (r.missedAt ?? r.now).toISOString() } satisfies TextbackPayload,
   };
   const decision = await decideSms(db, {
-    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: chosen.language, now: r.now,
+    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: chosen.language,
+    now: r.clock ? r.clock() : r.now,
     // The caller ID, from the carrier: not held on the contact's stored
     // phone_country_unconfirmed, which is about a number a person typed.
     numberFromCarrier: true,
@@ -484,7 +491,7 @@ export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
     callerNumber: payload.callerNumber, contactId: payload.contactId, language: payload.language,
     brandName: brandDisplayName(branding), textbackBody: profile.textback_body ?? "",
     textbackBodyEs: profile.textback_body_es ?? null,
-    label, callId: match[1]!, now: ctx.now, held: true, missedAt: new Date(missedAt),
+    label, callId: match[1]!, now: ctx.now, clock: ctx.clock, held: true, missedAt: new Date(missedAt),
   });
   if (outcome.pending) return deliverTextback(db, row.account_id, outcome.pending, label);
   switch (outcome.notSent) {

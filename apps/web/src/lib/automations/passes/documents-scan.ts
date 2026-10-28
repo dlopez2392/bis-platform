@@ -55,8 +55,10 @@ import type { Pass } from "../context";
  * this tick produces, reconcile or not, each adding its own read (getDocumentRequestForVersion) and,
  * on a hit, openRequestTask's own reads and insert. None of this is time-budgeted; in the NORMAL case
  * — one short page, because the reconcile usually finds nothing stale past its first, often-empty,
- * page, and a tick's clean verdicts are few — it still sits well inside the 75 s of spare the 2a
- * review measured between the four budgeted passes' sum (285 s) and the route's 300 s maxDuration. A
+ * page, and a tick's clean verdicts are few — it still sits well inside the spare around this budget:
+ * in the in-process tick, what the budgeted passes leave of LEGACY_TICK_CEILING_S (300 s; the cron
+ * route's own maxDuration until F-196); under fan-out, the 45 s this pass's own 90 s function
+ * (`api/cron/pass/[key]/route.ts`) leaves past the budget. A
  * backlog that forces the full 40-page guard is the one case this spare does NOT cover; the guard's
  * own console.error names that call out for a human, not a timeout, rather than silently overrunning.
  */

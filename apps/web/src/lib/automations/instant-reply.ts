@@ -51,6 +51,10 @@ export type InstantReplyInput = {
   /** The submission instant, passed in by the action so the hold and the cap
    *  measure from ONE "now". */
   now: Date;
+  /** F-196: a release's own clock (ctx.clock), handed to holdOrSend and the
+   *  SMS gate so the hours are judged at the send, not at a tick's now that
+   *  under fan-out can be minutes old. Absent inline: there now IS the moment. */
+  clock?: () => Date;
   /** When the person wrote in: `now` on the inline send, the held payload's
    *  on a release. The re-hold age cap is measured from it. */
   submittedAt?: Date;
@@ -191,7 +195,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // The send gate, bound to this client (lib/consent/gate.ts): it decides,
   // and takes the SMS provider only once a send is cleared. No module here
   // imports a provider (imports.test.ts).
-  const ctx: SmsSendContext = { db, sms: smsSenderFor(db), now };
+  const ctx: SmsSendContext = { db, sms: smsSenderFor(db), now, clock: input.clock };
   // THE SENDING HOURS: the one inline send goes through the same seam as
   // every pass. Held → the row carries the payload, and releaseInstantReply
   // below re-runs this whole function from it when the hours open.
@@ -210,7 +214,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   let unstamped = false;
   let outcome: "sent" | "held" | "skipped";
   try {
-    outcome = await holdOrSend({ db, now }, subject, async () => {
+    outcome = await holdOrSend({ db, now, clock: input.clock }, subject, async () => {
       sent = await sendAutomationSms(ctx, {
         accountId, contactId: input.contactId, to: input.phoneAsTyped || to, body,
         kind: subject.smsKind, accountTimezone: subject.accountTimezone,
@@ -278,7 +282,7 @@ export const releaseInstantReply: Releaser = async (ctx, row) => {
     return "skipped";
   }
   const outcome = await sendInstantReply({
-    db: ctx.db, now: ctx.now, accountId: row.account_id,
+    db: ctx.db, now: ctx.now, clock: ctx.clock, accountId: row.account_id,
     submissionId: match[1]!, ...rest, ...(submittedAt ? { submittedAt: new Date(submittedAt) } : {}),
   });
   if (outcome.kind === "skipped") {

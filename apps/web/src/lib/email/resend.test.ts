@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const sendMock = vi.fn();
 const receivingGet = vi.hoisted(() => vi.fn());
@@ -22,7 +22,9 @@ describe("resendEmailProvider", () => {
       subject: "Hi", body: "plain", html: "<p>rich</p>",
     });
 
-    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({
+    // Read off the first argument: since F-196 Q4 every call also carries a
+    // second, `{ idempotencyKey }`, which `toHaveBeenCalledWith` would reject.
+    expect(sendMock.mock.calls[0]![0]).toEqual(expect.objectContaining({
       text: "plain",
       html: "<p>rich</p>",
     }));
@@ -104,6 +106,156 @@ describe("tags (D-016 item 1)", () => {
     expect(sendMock.mock.calls[0]![0].tags).toEqual(tags);
     await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain" });
     expect("tags" in sendMock.mock.calls[1]![0]).toBe(false);
+  });
+});
+
+/**
+ * F-196 Q4: one rate-limit refusal is waited out, inside a bounded send. Each
+ * attempt is raced against SEND_TIMEOUT_MS (10 s); a 429 asking for at most
+ * RATE_LIMIT_MAX_WAIT_MS (3 s) gets ONE more attempt carrying the SAME
+ * idempotency key, so Resend can refuse to send the message twice. `sleep` is
+ * injected; fake timers only where the timeout itself is under test.
+ */
+describe("one rate-limit retry (F-196 Q4)", () => {
+  const INPUT = { to: "customer@example.com", fromName: "Rio Roofing", subject: "Hi", body: "plain" };
+  const rateLimited = (retryAfter: string | null) => ({
+    data: null,
+    error: { name: "rate_limit_exceeded", statusCode: 429, message: "Too many requests" },
+    headers: retryAfter === null ? {} : { "retry-after": retryAfter },
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("(a) a 429 then success resolves with the second id: the same request, the SAME idempotency key on both attempts, one 1 s wait (mutations: delete the retry → rejects, FAILS; mint the key per attempt → keys differ, FAILS)", async () => {
+    sendMock
+      .mockResolvedValueOnce(rateLimited("1"))
+      .mockResolvedValueOnce({ data: { id: "re_2" }, error: null, headers: {} });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT);
+
+    expect(result).toEqual({ providerMessageId: "re_2" });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[1]![0]).toEqual(sendMock.mock.calls[0]![0]);
+    const first = sendMock.mock.calls[0]![1] as { idempotencyKey?: string };
+    const second = sendMock.mock.calls[1]![1] as { idempotencyKey?: string };
+    expect(typeof first.idempotencyKey).toBe("string");
+    expect(first.idempotencyKey!.length).toBeGreaterThan(0);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("two sends never share a key: the key belongs to one send, not to the provider (mutation: mint it once in the constructor → FAILS)", async () => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, vi.fn().mockResolvedValue(undefined));
+    await provider.send(INPUT);
+    await provider.send(INPUT);
+    const k1 = (sendMock.mock.calls[0]![1] as { idempotencyKey?: string }).idempotencyKey;
+    const k2 = (sendMock.mock.calls[1]![1] as { idempotencyKey?: string }).idempotencyKey;
+    expect(typeof k1).toBe("string");
+    expect(k2).not.toBe(k1);
+  });
+
+  it("(b) two rate-limit refusals reject with Resend's message after exactly 2 calls (mutation: retry twice → 3 calls, FAILS)", async () => {
+    sendMock.mockResolvedValue(rateLimited("1"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT))
+      .rejects.toThrow("Too many requests");
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["daily_quota_exceeded", "monthly_quota_exceeded", "validation_error"])(
+    "(c) %s is not a rate limit: rejects after 1 call, no wait (mutation: retry on any error → 2 calls, FAILS)",
+    async (name) => {
+      sendMock.mockResolvedValue({ data: null, error: { name, statusCode: 429, message: `refused: ${name}` }, headers: { "retry-after": "1" } });
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT))
+        .rejects.toThrow(`refused: ${name}`);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
+
+  it("(d) a rate limit asking for 30 s is not waited for: rejects after 1 call, no wait (mutation: ignore the null → sleeps, FAILS)", async () => {
+    sendMock.mockResolvedValue(rateLimited("30"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT))
+      .rejects.toThrow("Too many requests");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  // (a) cannot tell the header from the default (both are 1 s), so this one
+  // asks for 2 s: the wait has to come from the header the SDK lowercased.
+  it("the wait is the one the header asks for, read off the SDK's lowercased key (mutation: read \"Retry-After\" → the 1 s default, FAILS)", async () => {
+    sendMock
+      .mockResolvedValueOnce(rateLimited("2"))
+      .mockResolvedValueOnce({ data: { id: "re_4" }, error: null, headers: {} });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT);
+    expect(sleep).toHaveBeenCalledWith(2_000);
+  });
+
+  it("a 429 with no retry-after header waits the 1 s default", async () => {
+    sendMock
+      .mockResolvedValueOnce({ ...rateLimited(null), headers: null })
+      .mockResolvedValueOnce({ data: { id: "re_3" }, error: null, headers: {} });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(resendEmailProvider("re_test", "crm@bis-rgv.com", undefined, sleep).send(INPUT))
+      .resolves.toEqual({ providerMessageId: "re_3" });
+    expect(sleep).toHaveBeenCalledWith(1_000);
+  });
+
+  it("(e) an attempt that never answers rejects at 10 s, not at 9.999 s (mutation: drop the race → never settles, the test times out, FAILS)", async () => {
+    vi.useFakeTimers();
+    sendMock.mockReturnValue(new Promise(() => {}));
+    let outcome: "pending" | "resolved" | Error = "pending";
+    const pending = resendEmailProvider("re_test", "crm@bis-rgv.com").send(INPUT);
+    pending.then(() => { outcome = "resolved"; }, (e: Error) => { outcome = e; });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(outcome).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as unknown as Error).message).toBe("resend did not answer within 10 s");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Dropping the `.catch` ALONE cannot fail this (probed): Promise.race already
+  // subscribes to the attempt. What does fail it is the plausible rewrite of
+  // the race by hand that subscribes only to the attempt's success.
+  it("an abandoned attempt that rejects later is never an unhandled rejection (mutation: a hand-rolled race, `sent.then(resolve)` + the timer's reject → FAILS)", async () => {
+    vi.useFakeTimers();
+    let rejectLate!: (e: Error) => void;
+    sendMock.mockReturnValue(new Promise((_r, reject) => { rejectLate = reject; }));
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const pending = resendEmailProvider("re_test", "crm@bis-rgv.com").send(INPUT);
+      const assertion = expect(pending).rejects.toThrow("resend did not answer within 10 s");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+      rejectLate(new Error("socket hang up"));
+      vi.useRealTimers();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("the timer is cleared on the success path, so no 10 s timer holds the function open (mutation: drop the clearTimeout → FAILS)", async () => {
+    vi.useFakeTimers();
+    await resendEmailProvider("re_test", "crm@bis-rgv.com").send(INPUT);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

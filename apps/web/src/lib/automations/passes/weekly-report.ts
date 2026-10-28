@@ -6,16 +6,20 @@ import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
 import { inMondayBand, lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
-import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS } from "../caps";
+import {
+  WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS, WEEKLY_REPORT_MAX_RECIPIENTS,
+  REPORT_EMAIL_WORST_CASE_MS, WEEKLY_REPORT_ACCOUNT_MARGIN_MS, WEEKLY_REPORT_ACCOUNT_END_MS,
+} from "../caps";
 import type { Pass } from "../context";
 
 /**
  * The client's Monday-morning email: how last week went, in the account's own
  * zone. Per account, in this order, each refusal counted under its own name:
  *   unresolvable zone → outside the Monday 08:00-11:00 local band → already
- *   stamped for the week that just ended → tick cap → tick budget →
- *   compute both weeks' numbers → send, ONE message PER RECIPIENT → stamp
- *   once at least one recipient received it.
+ *   stamped for the week that just ended → tick cap → tick budget → the
+ *   account's sends fit the pass route (F-196) → compute both weeks' numbers
+ *   → send, ONE message PER RECIPIENT (at most WEEKLY_REPORT_MAX_RECIPIENTS)
+ *   → stamp once at least one recipient received it.
  *
  * `listAccountsDueWeeklyReport` already filters server-side to accounts with
  * at least one `report_emails` entry, so an unconfigured account is never a
@@ -43,9 +47,11 @@ export const weeklyClientReportPass: Pass = {
     // narrower: it makes WHICH not-yet-stamped accounts get this tick's
     // limited attempts deterministic, rather than left to an unstable scan
     // order that could favour a different subset by accident tick to tick.
+    // Before the due read, so the fit check below counts it (F-196).
+    const startedAt = Date.now();
     const due = await listAccountsDueWeeklyReport(ctx.db);
     let attemptsThisTick = 0;
-    const startedAt = Date.now();
+    let recipientsOverCap = 0;
 
     for (const row of due) {
       const zone = resolveAccountZone(row.accountTimezone);
@@ -85,11 +91,29 @@ export const weeklyClientReportPass: Pass = {
       // usage report has one for Stripe's SDK, so this account may run
       // somewhat past the budget rather than guess at a margin with no
       // evidence behind it. Left for the next tick, same as a capped one.
-      if (Date.now() - startedAt >= WEEKLY_REPORT_BUDGET_MS) {
+      //
+      // FIT (F-196, caps.ts): and only if EVERY recipient's send, at its
+      // worst, still ends inside the pass route's 90 s, so the function is
+      // never killed between one recipient and the stamp. Once per account,
+      // never per recipient: an account half-sent and left unstamped would
+      // mail everyone already sent again next tick.
+      const recipients = row.reportEmails.slice(0, WEEKLY_REPORT_MAX_RECIPIENTS);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= WEEKLY_REPORT_BUDGET_MS
+        || elapsed + recipients.length * REPORT_EMAIL_WORST_CASE_MS + WEEKLY_REPORT_ACCOUNT_MARGIN_MS > WEEKLY_REPORT_ACCOUNT_END_MS) {
         c.skippedBudget++;
         continue;
       }
       attemptsThisTick++;
+      if (row.reportEmails.length > recipients.length) {
+        // Saved before the cap (the Settings save refuses more now): sent to
+        // the first ones, never skipped, and said out loud.
+        recipientsOverCap += row.reportEmails.length - recipients.length;
+        console.error(
+          `weekly report for account ${row.accountId}: ${row.reportEmails.length} recipients saved, `
+          + `sending to the first ${recipients.length} — trim the list on Settings`,
+        );
+      }
 
       try {
         // WINDOW: the week that just ended, plus the week before it for the
@@ -141,7 +165,7 @@ export const weeklyClientReportPass: Pass = {
         // `await` loop threw on the first bad address and every later
         // recipient silently heard nothing about the lead.
         let anySent = false;
-        for (const to of row.reportEmails) {
+        for (const to of recipients) {
           try {
             await ctx.email.send({ accountId: row.accountId, kind: "operator.weekly_report", to, fromName: brand.name, replyTo, subject, body: text, html });
             c.sent++;
@@ -184,6 +208,7 @@ export const weeklyClientReportPass: Pass = {
       }
     }
 
-    return c;
+    // Only when it happened, so a normal tick's counters keep their shape.
+    return recipientsOverCap > 0 ? { ...c, recipientsOverCap } : c;
   },
 };

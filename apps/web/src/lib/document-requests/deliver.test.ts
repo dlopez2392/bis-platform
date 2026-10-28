@@ -567,6 +567,16 @@ describe("releaseDocumentRequest", () => {
     expect(h.createMessage).toHaveBeenCalledWith(db, ACCT, expect.objectContaining({ channel: "sms" }), ACTOR);
   });
 
+  it.each(["text", "email"] as const)("F-196: a %s release hands the gate the send's own instant (ctx.clock), not the tick's now, so the hours are judged when it goes (mutation: attempt without the clock → the gate gets NOW, FAILS)", async (channel) => {
+    const sendAt = new Date(NOW.getTime() + 7 * 60_000);
+    const row = heldRow({ channel: channel === "text" ? "sms" : "email", payload: { channel, actorId: ACTOR } });
+    expect(await releaseDocumentRequest({ ...ctx, clock: () => sendAt }, row)).toBe("sent");
+    const req = channel === "text"
+      ? (h.sendSms.mock.calls[0] as [SupabaseClient, SmsRequest])[1]
+      : (h.sendEmail.mock.calls[0] as [EmailRequest])[0];
+    expect(req.now?.toISOString()).toBe(sendAt.toISOString());
+  });
+
   it("8. the email channel releases by email", async () => {
     expect(await releaseDocumentRequest(ctx, heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } }))).toBe("sent");
     expect(h.sendEmail).toHaveBeenCalledTimes(1);

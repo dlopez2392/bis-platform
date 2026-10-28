@@ -357,6 +357,14 @@ describe("releaseTextback — the 08:00 send of a call missed overnight", () => 
     expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: "They stopped texts from this business" })]);
   });
 
+  it("F-196: the release judges the hours at the send's own instant (ctx.clock), not the tick's now: a tick at 20:55 reached at 21:03 is held, never texted (mutation: prepareTextback without the clock → sent, FAILS)", async () => {
+    const tick = new Date("2026-10-08T01:55:00Z");    // 20:55 CDT, Wed
+    const sendAt = new Date("2026-10-08T02:03:00Z");  // 21:03 CDT
+    expect(await releaseTextback({ ...ctx(tick), clock: () => sendAt }, held())).toBe("held");
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(logWrites().at(-1)).toMatchObject({ status: "held", subjectKey: "call:call1" });
+  });
+
   it("a subject or payload it cannot read leaves the queue as 'No longer due' (mutation: re-run with a guessed id → FAILS)", async () => {
     expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ subject_key: "booking:x" }))).toBe("skipped");
     expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ payload: { callerNumber: 5 } }))).toBe("skipped");

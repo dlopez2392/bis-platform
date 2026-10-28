@@ -7,7 +7,7 @@ vi.mock("@/lib/consent/email-gate", () => emailGate);
 const dbMocks = vi.hoisted(() => ({ loadClosureSnapshot: vi.fn(), listBusinessStatusChanges: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
-import { buildPassContext, runPasses } from "./harness";
+import { buildPassContext, runPass, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
 
 function ctx(): PassContext {
@@ -60,6 +60,29 @@ describe("buildPassContext — texts go through the send gate, bound to the tick
     const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
     expect(gate.smsSenderFor).toHaveBeenCalledWith(db);
     expect(c.sms).toBe(bound);
+  });
+});
+
+describe("buildPassContext — the send's own clock (F-196)", () => {
+  it("ctx.clock reads the wall clock at each call, not the tick's now (mutation: clock: () => input.now → FAILS)", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const tickNow = new Date("2026-09-09T14:00:00Z");
+      vi.setSystemTime(new Date("2026-09-09T14:07:00Z"));
+      const c = buildPassContext({ db: {} as never, now: tickNow, origin: "https://app.example.com" });
+      expect(c.clock!().toISOString()).toBe("2026-09-09T14:07:00.000Z");
+      vi.setSystemTime(new Date("2026-09-09T14:09:00Z"));
+      expect(c.clock!().toISOString()).toBe("2026-09-09T14:09:00.000Z");
+      expect(c.now).toBe(tickNow);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an injected clock is the one the context carries", () => {
+    const clock = () => new Date("2030-01-01T00:00:00Z");
+    const c = buildPassContext({ db: {} as never, now: new Date(), origin: "https://app.example.com", clock });
+    expect(c.clock).toBe(clock);
   });
 });
 
@@ -133,5 +156,16 @@ describe("runPasses — the operational floor's heartbeats (spec §1)", () => {
     const mk = (key: string): Pass => ({ key, run: async () => { order.push(`run:${key}`); return {}; } });
     await runPasses([mk("a"), mk("b")], ctx(), beat);
     expect(order).toEqual(["run:a", "beat:cron.pass.a", "run:b", "beat:cron.pass.b", "beat:cron.tick"]);
+  });
+});
+
+describe("runPass — one pass in its own invocation (F-196: the pass route's unit)", () => {
+  it("runPass runs one pass and writes cron.pass.<key>, never cron.tick (mutation: make runPass call runPasses([pass], ctx, beat) -> cron.tick appears, FAILS)", async () => {
+    const beats: [string, unknown][] = [];
+    const beat = async (_c: PassContext, key: string, outcome: unknown) => { beats.push([key, outcome]); };
+    const a: Pass = { key: "a", run: async () => ({ sent: 4 }) };
+
+    await expect(runPass(a, ctx(), beat)).resolves.toEqual({ sent: 4 });
+    expect(beats).toEqual([["cron.pass.a", { ok: true }]]);
   });
 });

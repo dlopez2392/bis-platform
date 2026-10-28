@@ -44,6 +44,15 @@ export type PassContext = {
    *  own account whenever the subject carries `appointmentAt`, so a closure that covers the appointment
    *  holds the send. Required here; optional on HoldContext, where its absence holds (SD7). */
   closures: ClosureLoader;
+  /** F-196: the wall clock at the moment of a SEND, for the sending-hours
+   *  check only (holdOrSend, and the SMS gate through sendAutomationSms).
+   *  Every due window still reads `now`, so one tick keeps one now for its
+   *  windows. Under fan-out a pass can start minutes after the tick's now (a
+   *  pass route accepts a now up to 900 s old), and a text judged at that
+   *  now could go out after 21:00. buildPassContext always sets it to the
+   *  real clock; it is optional only so a hand-built context (a test, the
+   *  inline instant reply, whose now IS the moment) falls back to `now`. */
+  clock?: () => Date;
 };
 
 /** Per-pass counters, reported verbatim in the cron's JSON under the pass key. */

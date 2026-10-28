@@ -67,6 +67,26 @@ describe("holdOrSend: the fixed hours", () => {
     })]);
   });
 
+  it("F-196: the hours are judged at the SEND's instant (ctx.clock), never the tick's now: a tick at 20:55 whose text is reached at 21:03 is held (mutation: judge the hours at ctx.now → sent, FAILS)", async () => {
+    // Under fan-out a pass starts up to ~8 minutes after the tick's now (a
+    // pass route accepts a now up to 900 s old), so the tick's instant can be
+    // inside the hours while the send itself is not.
+    const send = vi.fn(async () => {});
+    const tickNow = new Date("2026-09-22T01:55:00Z");   // 20:55 CDT, Mon Sept 21
+    const sendAt = new Date("2026-09-22T02:03:00Z");    // 21:03 CDT
+    expect(await holdOrSend({ db: {} as never, now: tickNow, clock: () => sendAt }, subject(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: END })]);
+  });
+
+  it("F-196: and the reverse, so it is the clock that decides: a tick at 07:58 whose text is reached at 08:02 sends", async () => {
+    const send = vi.fn(async () => {});
+    const tickNow = new Date("2026-09-22T12:58:00Z");   // 07:58 CDT
+    const sendAt = new Date("2026-09-22T13:02:00Z");    // 08:02 CDT
+    expect(await holdOrSend({ db: {} as never, now: tickNow, clock: () => sendAt }, subject(), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("an SMS subject's hours are its KIND's: a marketing text waits for Sunday noon while an automated one goes (mutation: read the automated rule for every sms kind → FAILS)", async () => {
     const send = vi.fn(async () => {});
     expect(await holdOrSend(ctx(SUNDAY_10), subject({ source: "review_request", smsKind: "automation.review_request" }), send)).toBe("held");
