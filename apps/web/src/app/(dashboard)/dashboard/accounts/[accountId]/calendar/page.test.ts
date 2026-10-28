@@ -17,6 +17,14 @@ vi.mock("./bookings-list", () => ({ BookingsList: (props: unknown) => bookingsLi
 const closedDaysCardMock = vi.fn((_props: unknown) => null);
 vi.mock("./closed-days-card", () => ({ ClosedDaysCard: (props: unknown) => closedDaysCardMock(props) }));
 vi.mock("./embed-snippet", () => ({ EmbedSnippet: () => null }));
+// F-048 part 2: the "Bookings on your phone" card ("use client", hooks) and its server read and actions.
+const feedCardMock = vi.fn((_props: unknown) => null);
+vi.mock("./feed-card", () => ({ FeedCard: (props: unknown) => feedCardMock(props) }));
+const feedViewMock = vi.hoisted(() => vi.fn(async (_a: unknown): Promise<unknown> => ({ kind: "none" as const })));
+vi.mock("./feed-card-data", () => ({ loadFeedCardView: (a: unknown) => feedViewMock(a) }));
+vi.mock("./feed-actions", () => ({
+  makeFeedLinkAction: vi.fn(), replaceFeedLinkAction: vi.fn(), turnOffFeedLinkAction: vi.fn(), undoFeedLinkAction: vi.fn(),
+}));
 vi.mock("./actions", () => ({
   updateCalendarSettingsAction: vi.fn(),
   setBookingStatusAction: vi.fn(),
@@ -398,5 +406,58 @@ describe("CalendarPage — the Closed days card's fix-round props", () => {
       vi.unstubAllEnvs();
     }
     expect(props().pseudo).toBe(true);
+  });
+});
+
+describe("CalendarPage — the phone calendar card (F-048 part 2)", () => {
+  beforeEach(() => {
+    dbMocks.getOrCreateCalendar.mockReset().mockResolvedValue(CALENDAR);
+    dbMocks.listCalendarBookings.mockReset().mockResolvedValue([]);
+    dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
+    dbMocks.listClosureAppointmentsForRanges.mockReset().mockResolvedValue([]);
+    dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
+    dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
+    feedCardMock.mockClear();
+    feedViewMock.mockClear();
+    authState.canManage = true;
+    authState.isAgency = true;
+    authState.role = null;
+  });
+
+  it("every role gets it once: Owner, Staff, Technician and the agency (D1; mutation: gate it on canManage → FAILS)", async () => {
+    for (const s of [
+      { isAgency: false, role: "owner" as const, canManage: true },
+      { isAgency: false, role: "staff" as const, canManage: false },
+      { isAgency: false, role: "technician" as const, canManage: false },
+      { isAgency: true, role: null, canManage: true },
+    ]) {
+      Object.assign(authState, s);
+      feedCardMock.mockClear();
+      await render();
+      expect(feedCardMock, JSON.stringify(s)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("second account: the view is read for the ROUTE's account and the caller's own Clerk id (mutation: pass a fixed id → FAILS)", async () => {
+    Object.assign(authState, { isAgency: false, role: "technician", canManage: false });
+    await render();
+    expect(feedViewMock).toHaveBeenLastCalledWith({
+      accountId: "a1", clerkUserId: "user_1", isAgency: false, role: "technician", origin: "https://app.example.com",
+    });
+    await renderForAccount("a2");
+    expect(feedViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: "a2", clerkUserId: "user_1" }));
+  });
+
+  it("the view it returns is the view the card gets, with the page's locale", async () => {
+    const view = { kind: "live", url: "https://x/cal/t.ics", webcal: "webcal://x/cal/t.ics", lastFetchedAt: null, technician: false };
+    feedViewMock.mockResolvedValueOnce(view);
+    // A client Owner on a Spanish account: the page resolves es, and the card speaks it.
+    Object.assign(authState, { isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    await render();
+    const props = feedCardMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.view).toBe(view);
+    expect(props.locale).toBe("es");
+    for (const k of ["make", "replace", "turnOff", "undo"]) expect(typeof props[k], k).toBe("function");
   });
 });

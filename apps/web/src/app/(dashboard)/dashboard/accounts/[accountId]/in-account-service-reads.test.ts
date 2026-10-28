@@ -78,6 +78,10 @@ const ALLOWED: Record<string, Reason> = {
   // closure To-do and the hold bump, never the insert/delete themselves (dbForRequest, the client-role
   // grant 0097 gives `authenticated`).
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/closed-days-actions.ts": "configuration",
+  // F-048 part 2: the person's own calendar link (0104 grants calendar_feeds to service_role alone). Every read
+  // and write is keyed by readPersonId(route account, the caller's own Clerk id), after requireAccountAccess.
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts": "proven-target",
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card-data.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",

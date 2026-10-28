@@ -71,7 +71,10 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/forms": ["lead form", "intake"],
   // "closed days"/"holiday"/"vacation"/"días cerrados"/"feriado"/"vacaciones" added S-47d (spec 5.6.3):
   // the Closed days card.
-  "/calendar": ["booking", "availability", "hours", "closed days", "holiday", "vacation", "días cerrados", "feriado", "vacaciones"],
+  // "phone calendar"/"subscribe"/"ical"/"ics"/"iphone"/"google calendar"/"outlook"/"calendario del teléfono"/
+  // "suscribirse" added F-048 part 2: the Bookings on your phone card.
+  "/calendar": ["booking", "availability", "hours", "closed days", "holiday", "vacation", "días cerrados", "feriado", "vacaciones",
+    "phone calendar", "subscribe", "ical", "ics", "iphone", "google calendar", "outlook", "calendario del teléfono", "suscribirse"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
   // "hours"/"prices"/"services"/"horario"/"precios" added S-47c (spec 5.7): the Business hours and
