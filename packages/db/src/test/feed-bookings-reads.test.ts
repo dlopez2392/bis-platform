@@ -52,6 +52,15 @@ describe("rescheduleRoots — one appointment's identity, in batches", () => {
     expect(roots.get("x")).toEqual({ rootId: "x", depth: 0 });
     expect(calls.filter((c) => c.table === "bookings")).toHaveLength(2);
   });
+  it("two rows on one chain share each hop's query (mutation: walk each row on its own → 4 queries, FAILS)", async () => {
+    const { db, calls } = fake({ byId: {
+      b2: { id: "b2", rescheduled_from_id: "b1", account_id: "A" },
+      b1: { id: "b1", rescheduled_from_id: null, account_id: "A" },
+    } });
+    const roots = await rescheduleRoots(db, "A", [{ id: "b3", rescheduled_from_id: "b2" }, { id: "b4", rescheduled_from_id: "b2" }]);
+    expect([roots.get("b3"), roots.get("b4")]).toEqual([{ rootId: "b1", depth: 2 }, { rootId: "b1", depth: 2 }]);
+    expect(calls.map((c) => c.filters.find((f) => f[0] === "in")?.[2])).toEqual([["b2"], ["b1"]]);
+  });
   it("never follows a parent outside the account: that row is left out (mutation: drop .eq(account_id) on the hop → FAILS)", async () => {
     const { db, calls } = fake({ byId: { other: { id: "other", rescheduled_from_id: null, account_id: "B" } } });
     const roots = await rescheduleRoots(db, "A", [{ id: "b9", rescheduled_from_id: "other" }]);
