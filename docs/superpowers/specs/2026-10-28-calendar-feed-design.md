@@ -394,6 +394,21 @@ revoked_at = now() where revoked_at is null`". The optional Vercel Firewall rule
 
 ## 8. Open questions for the owner
 
+**Decided by the owner, 2026-10-28, all three as recommended:**
+
+| # | Decision |
+|---|---|
+| D1 | Everyone on the team gets a link (Owner, Staff, Technician). A Technician's feed carries only the bookings of customers assigned to them; the agency gets none. |
+| D2 | A separate secret, `CALENDAR_FEED_SECRET`, set by the owner in Vercel Production and Preview (different values). |
+| D3 | No video join link in the event. It stays in the booking email and on the Calendar page. |
+
+The plan (`docs/superpowers/plans/2026-10-28-calendar-feed.md`, "Deviations from the spec") corrects four
+details of this spec against the source: three database functions instead of five, a fixed hourly window,
+no `schema-grants-guard.test.ts` edit, and no use of `lib/http/retry-after.ts`.
+
+The questions as they were asked:
+
+
 1. **Who gets a link: everyone on the team, or Owners only at first?** *Recommendation: everyone.*
    Staff see the whole calendar, and a Technician sees only the customers assigned to them. That is the
    same fence the app already keeps, and a technician's phone is where "what's my next job" is most
