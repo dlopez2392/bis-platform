@@ -223,9 +223,16 @@ async function handleInbound(
     // back (logged as the customer's act) — not a STOP/START/HELP, a Telnyx autoresponse or a stop phrase
     // (consent.kind), not a phone's auto-reply, not a shared number's holding record. Runs on every delivery
     // (idempotent: an active contact answers false), inside the filing try and BEFORE the message, so a
-    // failure on the first filing files nothing and Telnyx's retry redoes the whole text.
+    // failure on the first filing files nothing and Telnyx's retry redoes the whole text. On a REPEAT delivery
+    // the text is already filed and the consent step below is what the retry is for, so a failed restore there
+    // is logged and never skips it (final review I3).
     if (!shared && consent.kind === "none" && !looksAutomaticText(text)) {
-      await restoreContactOnSign(db, accountId, contact.id, "text");
+      try {
+        await restoreContactOnSign(db, accountId, contact.id, "text");
+      } catch (e) {
+        if (firstFiling) throw e;
+        log("could not bring an archived contact back on a retried delivery; the consent step still runs", accountId, loggableError(e));
+      }
     }
     if (firstFiling) {
       await createMessage(db, accountId, {

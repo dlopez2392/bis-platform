@@ -225,6 +225,18 @@ describe("YES/NO, the phrase list, the grant", () => {
     expect(writes()).toEqual([["granted", "inbound_text", "if_empty"]]);
     expect(db.createMessage).toHaveBeenCalledTimes(1);
   });
+
+  // Contact archive, final review I3: on a REPEAT delivery the text is already filed, and the consent step is
+  // what the retry is for. A restore that fails there is logged, never allowed to skip the grant.
+  it("a failed restore on a retried delivery still records the first-text grant (mutation: rethrow on every delivery -> FAILS)", async () => {
+    db.findMessageByProviderId.mockResolvedValue({ id: "in_1" });
+    db.restoreContactOnSign.mockRejectedValue(new Error("restoreContactOnSign failed: down"));
+    const res = await POST(text("see you Tuesday"));
+    expect(res.status).toBe(200);
+    expect(db.restoreContactOnSign).toHaveBeenCalledTimes(1);
+    expect(db.createMessage).not.toHaveBeenCalled();
+    expect(writes()).toEqual([["granted", "inbound_text", "if_empty"]]);
+  });
 });
 
 describe("the alert phone (review R2-I5, plan G10)", () => {

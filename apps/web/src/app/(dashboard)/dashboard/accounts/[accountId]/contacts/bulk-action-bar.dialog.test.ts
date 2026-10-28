@@ -29,7 +29,7 @@ const noop = () => {};
 function render(over: Partial<Props>): string {
   return renderToStaticMarkup(createElement(DeleteDialogBody, {
     count: 3, typed: "", onTyped: noop, files: { status: "ready", count: 0 }, blockers: { status: "loading" },
-    view: "active", canArchive: true, locale: "en", onCancel: noop, onArchiveInstead: noop, onDelete: noop,
+    view: "active", canArchive: true, paused: false, locale: "en", onCancel: noop, onArchiveInstead: noop, onDelete: noop,
     ...over,
   } as Props));
 }
@@ -94,6 +94,13 @@ describe("the bulk delete dialog, rendered (spec §5.4; Task 10 review)", () => 
     const html = render({ blockers: { status: "error" }, typed: "3" });
     expect(renderedText(html)).toContain(m["contacts.delete.blockersFailed"]);
     expect(buttons(html).find((b) => b.text === m["bulk.delete"])?.disabled).toBe(true);
+  });
+
+  it("a paused account: Delete stays off at the right number, and the dialog says why (final review M3; mutation: ignore paused -> FAILS)", () => {
+    const html = render({ blockers: ready([]), typed: "3", paused: true });
+    expect(buttons(html).find((b) => b.text === m["bulk.delete"])?.disabled).toBe(true);
+    expect(html).toContain(m["contacts.delete.paused"]);
+    expect(buttons(render({ blockers: ready([]), typed: "3" })).find((b) => b.text === m["bulk.delete"])?.disabled).toBe(false);
   });
 
   it("Spanish throughout", () => {

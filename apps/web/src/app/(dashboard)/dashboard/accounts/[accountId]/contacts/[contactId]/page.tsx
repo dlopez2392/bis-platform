@@ -407,7 +407,8 @@ export default async function ContactDetailPage({
                 <ArchiveControls accountId={accountId} contactId={contactId} label={name}
                   contact={{ first_name: contact.first_name ?? null, last_name: contact.last_name ?? null, email: contact.email ?? null, phone: contact.phone ?? null }}
                   archived={archived}
-                  canArchive={seesWholeAccount(access)} canDelete={access.canManage} timezone={zone.zone} variant="page" />
+                  canArchive={seesWholeAccount(access)} canDelete={access.canManage} timezone={zone.zone} variant="page"
+                  paused={accountPaused} />
               } />
             {/* Under the header, never beside the name: a sentence on the name's line would squeeze it at 375px. */}
             <ArchivedBanner archived={archived} timezone={zone.zone} variant="page" locale={locale} />

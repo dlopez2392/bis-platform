@@ -278,7 +278,7 @@ What a match does is decided per caller (§4).
 | To do, per account and agency-wide | `ACCT/tasks/page.tsx:166-175`, `apps/web/src/app/(dashboard)/dashboard/work/page.tsx:157-165` | **Not hidden.** Select `archived_at`; the contact's name gains the word "Archived" (§6). Hiding a To-do would hide work silently. Staff close it or restore the contact. |
 | Inbox and search | `listConversations` (`messaging.ts:646`), `searchConversations` (`:913`) | **Owner decision, 2026-10-28 (review I8): an archived contact's thread leaves the inbox and search ONLY while nothing in it is unread.** A customer's words are never hidden. A junk caller's thread holds only our outbound text-back (unread 0), so it disappears. Both filter `inbox_visible` (§3.1 step 10). Search filters in its messages read, BEFORE its five-thread cap (review M2). |
 | Unread badge | `sumUnreadCount` (`:629`) | **Unchanged.** Every thread with unread messages is visible by the rule above, so the badge already counts exactly what the inbox shows. |
-| Record page and drawer | `getContact`, `contacts.ts:955-960` | **Unchanged.** A deep link still opens an archived contact, which shows the archived banner (§6). |
+| Record page and drawer | `getContact`, `contacts.ts:955-960` | **Unchanged.** A deep link still opens an archived contact, which shows the archived banner (§6). The drawer reads "archived" from the list's row; a `?peek=` link to a contact not on this page has no row, so the drawer's summary route answers `header.archivedAt` off its same `getContact` read (corrected 2026-10-28, final review M2). |
 | Weekly report and dashboard metrics | `weeklyMetrics`, `apps/web/src/lib/reports/weekly-metrics.ts:165-191` | **Unchanged.** They count events (answered calls, lead instants, bookings, visitors), not people. A report already sent must not change after the fact, and archiving a hang-up does not un-answer the call. |
 | Calls log and calls search | `searchCalls`, the calls page | **Unchanged.** A call is a fact of the phone line, and the calls log must reconcile with "Calls answered". |
 
@@ -301,10 +301,10 @@ the second is visible and costs a click.
 | A call Sofía answered that ended booked, lead or message (`isMeaningful`, `apps/web/src/lib/voice/finish-call.ts:166-170`), on the contact `resolveContactId` returns (`:350`; used at `:599`) | finish-call | `call` |
 | A booking Sofía made (`book_appointment`, `apps/web/src/lib/voice/tools/registry.ts:453`, contact at `:569`/`:590`) | registry | `booking` |
 | A booking on the public page (`apps/web/src/app/b/[publicId]/actions.ts:305`) | booking page | `booking` |
-| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP, a stop phrase) or Telnyx's own autoresponse, **and unless it reads as a phone's auto-reply** (`looksAutomaticText`: a CLOSED English and Spanish phrase list matched on word boundaries, such as "I'm driving", "this number cannot receive texts", "estoy manejando" or "respuesta automática"; review I7, owner decision). A robocaller's number that answers our text-back automatically stays archived. | SMS inbound route, INSIDE the filing try, BEFORE the message is written (re-review). There a failure files nothing and answers 503, and Telnyx's retry files the whole text, its unread included. After the write, the retry would skip the unread bump. It runs on every delivery, idempotently. | `text` |
+| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP, a stop phrase) or Telnyx's own autoresponse, **and unless it reads as a phone's auto-reply** (`looksAutomaticText`: CLOSED English and Spanish phrase lists matched on word boundaries; review I7, owner decision). A phone's own status phrase ("I'm driving", "out of office", "estoy manejando", "respuesta automática") counts only at the START of the text, where a phone's reply puts it, so a real reply that mentions one ("Sorry I missed you, I'm driving. Can we book Tuesday?") still brings the contact back; a carrier's wording ("this number cannot receive texts") counts anywhere (corrected 2026-10-28, final review I2). A robocaller's number that answers our text-back automatically stays archived. | SMS inbound route, INSIDE the filing try, BEFORE the message is written (re-review). There a failure files nothing and answers 503, and Telnyx's retry files the whole text, its unread included. After the write, the retry would skip the unread bump. It runs on every delivery, idempotently. | `text` |
 | An inbound email filed by the pipeline as the customer's (not a teammate's forward, not a stop, not a duplicate) | `apps/web/src/lib/email/inbound/pipeline.ts` (`resumeExisting`), **never** `file.ts`: `fileHeldEmailAction` (`conversations/inbound-actions.ts:149`) also calls `fileInboundEmail`, and a teammate's manual File is a staff act, not the customer's (review I6). Automatic mail never gets this far: `classifyAutomatic` drops it before filing (`pipeline.ts:200-211`). | `email` |
 | A form submission linked to the contact | `apps/web/src/lib/forms/enrich.ts:108` | `form` |
-| A web chat lead | `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` (its `createContact`) | `chat` |
+| A web chat lead | `apps/web/src/lib/forms/enrich.ts`, which the concierge's turn route (`apps/web/src/app/api/concierge/[publicId]/turn/route.ts`) calls for a chat lead (corrected 2026-10-28: the route has no restore of its own) | `chat` |
 
 **Never restores:**
 
@@ -619,8 +619,8 @@ first and the mutation cannot fail. Restore-on-sign: a meaningful call on an arc
 
 **Sign sites (behaviour tests in each site's existing test file, not a source grep: a grep is satisfied
 by a comment):** SMS inbound restores on a plain text and NOT on STOP (mutation: drop the consent-class
-check). The booking page, form enrich, concierge and inbound email each restore (mutation: delete the
-call in that file).
+check). The booking page, form enrich (which the concierge's chat lead goes through, sign `chat`) and the
+inbound email pipeline each restore (mutation: delete the call in that file).
 
 **Web (`bulk-action-bar.test.ts`, `actions.test.ts`, `page.test.ts`, record and drawer tests,
 `messages.test.ts`):** Archive's Undo restores exactly the ids this archive changed, not ones already
@@ -679,8 +679,8 @@ Tiers follow the speed process (tier each task). Within a wave, no two tasks tou
   `apps/web/src/lib/voice/tools/registry.ts`, `apps/web/src/lib/voice/tools/registry.test.ts`.
 - **T7, medium, bis-crm**: restore on sign for every other site (§4.2 rows 3-7). Files:
   `apps/web/src/app/api/sms/inbound/route.ts` (+ `route.test.ts`), `apps/web/src/app/b/[publicId]/actions.ts`
-  (+ test), `apps/web/src/lib/forms/enrich.ts` (+ test), `apps/web/src/app/api/concierge/[publicId]/turn/route.ts`
-  (+ test), `apps/web/src/lib/email/inbound/file.ts` (+ test).
+  (+ test), `apps/web/src/lib/forms/enrich.ts` (+ test; the concierge's chat lead restores through it),
+  `apps/web/src/lib/email/inbound/pipeline.ts` (+ test; never `file.ts`, review I6).
 - **T8, medium, bis-crm**: list, bulk bar and actions (§4.1, §5.4, §6.1, §6.3). Files: `ACCT/contacts/actions.ts`
   (+ `actions.test.ts`), `ACCT/contacts/bulk-action-bar.tsx` (+ test), `ACCT/contacts/page.tsx` (+ `page.test.ts`),
   `ACCT/contacts/contacts-table.tsx` (+ test), `ACCT/contacts/add-contact-dialog.tsx` (+ test),

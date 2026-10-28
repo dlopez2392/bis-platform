@@ -22,7 +22,7 @@ describe("looksAutomaticText", () => {
     ["estoy manejando", "Estoy manejando, le contesto luego"],
     ["estoy conduciendo", "Estoy conduciendo ahora"],
     ["respuesta automatica", "Respuesta automática: volvemos el lunes"],
-    ["mensaje automatico", "Este es un mensaje automático."],
+    ["mensaje automatico", "Mensaje automático: no conteste a este número."],
     ["no puede recibir mensajes", "Este número no puede recibir mensajes"],
     ["este numero no recibe", "Este número no recibe textos."],
     ["fuera de la oficina", "Fuera de la oficina hasta el lunes"],
@@ -39,11 +39,21 @@ describe("looksAutomaticText", () => {
     "Send him driving directions",
     "Tim driving over now",
     "autoreplying is broken",
+    // Final review I2: a real reply that MENTIONS a phone-status phrase is the customer. Those phrases count
+    // only where a phone's own reply puts them, at the start; carrier wording still counts anywhere.
+    "Hi, I'll be out of office Friday, can you come Monday to fix the AC?",
+    "Can you come today? Estoy manejando ahora…",
+    "Is your auto reply working? I need a quote…",
+    "Sorry I missed you, I'm driving. Can we book Tuesday?",
   ])("%j is the customer, not an auto-reply (mutation: match the single word 'driving' or 'auto' → FAILS; drop the word-boundary padding → 'Send him driving directions' FAILS)", (body) => {
     expect(looksAutomaticText(body)).toBe(false);
   });
 
   it.each([
+    // iOS Driving Focus's own reply.
+    "I'm driving with Driving Focus turned on. I'll see your message when I get where I'm going.",
+    // Carrier wording counts anywhere in the text.
+    "Sorry! The person you are trying to reach cannot receive text messages at this time.",
     "I'm driving.",
     "I’m driving",
     "Auto-Reply: back Monday",

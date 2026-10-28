@@ -292,3 +292,15 @@ describe("the Archived view through the table (plan Task 10)", () => {
     expect(html).toContain('data-contact-row="c0"');
   });
 });
+
+// Final review M3: a paused account refuses every delete, so the flag reaches both delete dialogs. No DOM
+// renderer for this wiring (the dialogs portal; the page renders client components), so it is read.
+describe("the table hands both delete dialogs the paused flag (final review M3)", () => {
+  it("BulkActionBar and ContactDrawer get paused={paused}", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
+    expect(src.match(/<BulkActionBar\b[\s\S]*?\/>/)?.[0]).toContain("paused={paused}");
+    expect(src.match(/<ContactDrawer\b[\s\S]*?\/>/)?.[0]).toContain("paused={paused}");
+  });
+});

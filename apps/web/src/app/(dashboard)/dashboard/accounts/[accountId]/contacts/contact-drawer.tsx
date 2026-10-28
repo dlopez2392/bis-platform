@@ -92,7 +92,7 @@ type SectionState = "loading" | "ready" | "error";
  */
 export function ContactDrawer({
   accountId, row, onClose, canAssign = false, members = [], viewerId = null, returnFocusRowId = null,
-  canArchive = false, canDelete = false, timezone = "UTC",
+  canArchive = false, canDelete = false, timezone = "UTC", paused = false, onGone,
 }: {
   accountId: string;
   row: ContactRow | null;
@@ -113,6 +113,11 @@ export function ContactDrawer({
   canDelete?: boolean;
   /** The account's resolved zone: the archived line's date and the Archive toast's appointment date. */
   timezone?: string;
+  /** The account is paused (billingVerdictFor): Delete stays off, and the dialog says why (final review M3). */
+  paused?: boolean;
+  /** The drawer's own Archive, Restore or Delete took its contact off the list: the table closes it and points
+   *  focus at the next row (final review M5). Absent, they close it like Esc. */
+  onGone?: () => void;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -184,8 +189,10 @@ export function ContactDrawer({
   const who = body && body.who.status === "ready" ? body.who : null;
   const fieldsRow = row ? drawerFieldsRow(row, load) : null;
   const headerName = body?.header.name ?? (row ? contactDisplayName(row) : "");
-  // The list's own row says whether it is archived (listContacts reads archived_at); a `?peek=` stub does not know.
-  const archived = row?.archived_at ? { at: row.archived_at, byLabel: null } : null;
+  // The list's own row says whether it is archived (listContacts reads archived_at); a `?peek=` stub does not
+  // know, so the summary body's header says it (final review M2).
+  const archivedAt = row?.archived_at ?? body?.header.archivedAt ?? null;
+  const archived = archivedAt ? { at: archivedAt, byLabel: null } : null;
   // The who section's one error. A `?peek=` stub whose fields never arrived (the whole drawer's
   // error, or a `who` the parser refused) shows it in place of the fields, and it is not said twice.
   const whoError = (
@@ -234,7 +241,8 @@ export function ContactDrawer({
                           drawer; each one that moves the contact off the list it was opened from closes it. */}
                       <ArchiveControls accountId={accountId} contactId={row.id} label={headerName}
                         contact={fieldsRow ?? row} archived={archived}
-                        canArchive={canArchive} canDelete={canDelete} timezone={timezone} variant="drawer" onGone={onClose} />
+                        canArchive={canArchive} canDelete={canDelete} timezone={timezone} variant="drawer" onGone={onGone ?? onClose}
+                        paused={paused} />
                       <Link href={fullHref} aria-label={tx("drawer.openFull")}
                         // mr-8 clears the Sheet's absolutely placed close button (sheet.tsx:84).
                         className="mr-8 inline-flex min-h-11 items-center rounded-[var(--radius-ctl)] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">

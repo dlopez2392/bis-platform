@@ -5209,6 +5209,9 @@ export const m = {
   "contacts.delete.someKeptOne": "1 of these has a history with you and will be kept.",
   "contacts.delete.someKeptOne.es": "1 de estos tiene un historial con usted y se conservará.",
   // Task 10 review: when nothing in the selection can go, the dialog is not titled "Delete 3 contacts?".
+  // Final review M3: a paused account refuses every delete, so both delete dialogs say so and keep Delete off.
+  "contacts.delete.paused": "Nothing can be deleted while this account is paused.",
+  "contacts.delete.paused.es": "No se puede borrar nada mientras la cuenta está en pausa.",
   "contacts.delete.noneTitle": "These can't be deleted",
   "contacts.delete.noneTitle.es": "No se pueden borrar",
   "contacts.delete.noneTitleOne": "This contact can't be deleted",
@@ -5404,6 +5407,8 @@ export const m = {
   "record.facts.openDealsOne.es": "1 oportunidad abierta",
   "styleguide.recordKit": "Record kit",
   "styleguide.recordKit.es": "Ficha del cliente",
+  "styleguide.contactArchive": "Contact archive",
+  "styleguide.contactArchive.es": "Archivo de contactos",
   // S-03 part 1 (1a), continued (spec §10.1). record.nextUp.booking stands in for the calendar
   // name the schema has not got (plan Task 1).
   "record.activity.failed": "Couldn't load the activity.",
@@ -5471,8 +5476,8 @@ export const m = {
   "timeline.cameBack.text.es": "volvió: le envió un mensaje",
   "timeline.cameBack.email": "came back: sent you an email",
   "timeline.cameBack.email.es": "volvió: le envió un correo",
-  "timeline.cameBack.call": "came back: called and talked with Sofía",
-  "timeline.cameBack.call.es": "volvió: llamó y habló con Sofía",
+  "timeline.cameBack.call": "came back: called and talked with {persona}",
+  "timeline.cameBack.call.es": "volvió: llamó y habló con {persona}",
   "timeline.cameBack.booking": "came back: booked an appointment",
   "timeline.cameBack.booking.es": "volvió: hizo una cita",
   "timeline.cameBack.form": "came back: filled out your form",

@@ -1323,8 +1323,10 @@ export const RESTORE_SIGNS = ["text", "email", "call", "booking", "form", "chat"
 export type RestoreSign = (typeof RESTORE_SIGNS)[number];
 /** Owner ruling Q1 (2026-10-28): the customer's own act brings an archived contact back to the list, with a
  *  "came back" row. The SERVICE client (0103 grants execute to service_role only). True when it restored.
- *  THROWS on a failure: every caller wraps it in its own try, so a restore never costs the message, call,
- *  booking or form it rides on. */
+ *  THROWS on a failure, and each caller decides. Every caller but one contains it in its own try, so a restore
+ *  never costs the call, booking, form, chat or email it rides on. The SMS webhook deliberately rethrows on a FIRST filing (503, nothing filed, and
+ *  Telnyx's retry redoes the whole text, restore included); on a repeat delivery it logs and goes on, so the
+ *  consent step still runs. */
 export async function restoreContactOnSign(
   serviceDb: SupabaseClient, accountId: string, contactId: string, sign: RestoreSign,
 ): Promise<boolean> {

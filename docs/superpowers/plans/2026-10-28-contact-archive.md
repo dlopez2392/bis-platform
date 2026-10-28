@@ -1558,7 +1558,7 @@ The concierge files run to prove they need no change: their tests mock `enrich` 
 const PHRASES = [
   "i'm driving", "im driving", "i am driving", "driving right now", "do not disturb while driving",
   "this number cannot receive", "this number can't receive", "this number does not accept", "cannot receive text messages",
-  "auto-reply", "auto reply", "autoreply", "automatic reply", "this is an automated message", "out of office",
+  "auto reply", "autoreply", "automatic reply", "this is an automated message", "out of office",
   "estoy manejando", "estoy conduciendo", "respuesta automatica", "mensaje automatico", "no puede recibir mensajes",
   "este numero no recibe", "fuera de la oficina",
 ] as const;
@@ -1910,6 +1910,7 @@ export async function contactDeleteBlockersAction(
 - **The archived match in Add contact** (was T10 Step 6). Today a dedupe hit on an archived contact answers `{ kind: "existing" }`, and the dialog links to that contact (`ACCT/contacts/actions.ts:51-99`, `add-contact-dialog.tsx:114-120`). The record page then shows the archived banner with Restore (T11), so the link still lands somewhere honest. Its copy key `contacts.add.existingArchived` was dropped from T3.
 - **The agency dashboard's contact total** (`apps/web/src/app/(dashboard)/dashboard/page.tsx:20`, was half of T12). Until it lands, that agency-only tile counts archived contacts, while the account's own list and total (T4) do not. The ledger records the gap.
 - **Out of this plan, its own PR:** Sofía never stores a placeholder name (spec §7).
+- **Revoking `authenticated`'s table DELETE on `contacts`** (final review M7). Every delete now goes through `delete_internal_contacts`, so the direct grant is no longer needed; it is left in place because 0103 is frozen and on its way to bis-ci. A later migration revokes it, with the grants tests (`server-only-writes-grants.test.ts`) updated beside it.
 
 ---
 

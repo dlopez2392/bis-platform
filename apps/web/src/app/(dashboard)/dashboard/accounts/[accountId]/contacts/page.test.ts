@@ -20,6 +20,11 @@ vi.mock("@/lib/auth", () => ({
 // already do — same stub, same reason (person-prefs pulls in @/lib/auth and
 // Clerk, neither available under a plain vitest render).
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
+// Final review M3: the layout's cached billing verdict, so both delete dialogs know a paused account.
+const verdictPaused = vi.hoisted(() => ({ on: false }));
+vi.mock("@/lib/billing/standing-read", () => ({
+  billingVerdictFor: async () => ({ paused: verdictPaused.on, voice: true, concierge: true, forward: true, cause: null, pausedAt: null }),
+}));
 
 // D-009's search-form describe block below renders the WHOLE page (the
 // hidden sort/dir fields live in page.tsx's own JSX, not in a pure
@@ -791,5 +796,19 @@ describe("the Archived view (?view=archived)", () => {
     requireAccountAccessMock.mockResolvedValueOnce(TECH);
     await render({});
     expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ view: "active", canArchive: false }));
+  });
+});
+
+describe("a paused account (final review M3)", () => {
+  it("the table learns the account is paused, so both delete dialogs keep Delete off (mutation: pass paused false -> FAILS)", async () => {
+    contactsTableMock.mockClear();
+    verdictPaused.on = true;
+    try {
+      renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+      expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: true }));
+    } finally { verdictPaused.on = false; }
+    contactsTableMock.mockClear();
+    renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: false }));
   });
 });

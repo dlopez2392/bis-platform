@@ -208,7 +208,8 @@ function phrase(
       const key = a.action === "archived" ? "timeline.archived"
         : a.author_kind === "customer" ? (`timeline.cameBack.${a.sign}` as MessageKey)
           : "timeline.restored";
-      return { verb: tr.text(key), status: null, detail: null };
+      // The account's own AI persona (else Sofía), as every other AI-facing row on the timeline names it.
+      return { verb: tr.text(key, { persona }), status: null, detail: null };
     }
   }
 }

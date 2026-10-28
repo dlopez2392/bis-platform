@@ -7,7 +7,7 @@ const ROW = { key: "booking-b1", kind: "booking", mark: { kind: "customer", labe
   excerpt: { text: "Gate code 4411", lang: "", done: false } } as const;
 const GOOD: DrawerSummary = {
   locale: "en",
-  header: { name: "Maria Garcia", subtitle: "García household", subtitleHref: "/dashboard/accounts/a1/groups/g1", actions: [
+  header: { name: "Maria Garcia", subtitle: "García household", subtitleHref: "/dashboard/accounts/a1/groups/g1", archivedAt: null, actions: [
     { id: "call", label: "Call", href: "tel:+19565550100", ariaLabel: "Call Maria Garcia", primary: true, external: false },
     { id: "email", label: "Email", href: "/dashboard/accounts/a1/contacts/c1#compose-email", primary: false, external: false },
   ] },
@@ -23,6 +23,19 @@ const GOOD: DrawerSummary = {
 const clone = (): Record<string, unknown> => JSON.parse(JSON.stringify(GOOD));
 
 describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section at a time", () => {
+  // Contact archive, final review M2: a `?peek=` stub has no list row to say it is archived, so the body does.
+  it("the header carries archivedAt through; an older body without it reads not archived; a non-string is a malformed header (mutation: drop archivedAt from parseHeader -> FAILS)", () => {
+    const archived = clone();
+    (archived.header as Record<string, unknown>).archivedAt = "2026-10-20T15:00:00Z";
+    expect(parseDrawerSummary(archived)!.header.archivedAt).toBe("2026-10-20T15:00:00Z");
+    const older = clone();
+    delete (older.header as Record<string, unknown>).archivedAt;
+    expect(parseDrawerSummary(older)!.header.archivedAt).toBeNull();
+    const bad = clone();
+    (bad.header as Record<string, unknown>).archivedAt = 42;
+    expect(parseDrawerSummary(bad)).toBeNull();
+  });
+
   it("a good body parses to itself, ready everywhere (mutation: drop a field from any section's parse -> FAILS)", () => {
     expect(parseDrawerSummary(clone())).toEqual({ ...GOOD, who: { status: "ready", ...GOOD.who } });
   });

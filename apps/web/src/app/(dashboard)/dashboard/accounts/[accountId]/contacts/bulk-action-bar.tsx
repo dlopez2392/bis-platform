@@ -390,7 +390,7 @@ export function announceDeleteResult(
  * Archive instead, and in the Archived view, where they are archived already, it offers nothing.
  */
 export function DeleteDialogBody({
-  count, typed, onTyped, files, blockers, view, canArchive, locale, onCancel, onArchiveInstead, onDelete,
+  count, typed, onTyped, files, blockers, view, canArchive, locale, onCancel, onArchiveInstead, onDelete, paused = false,
 }: {
   /** The selection's size. */
   count: number;
@@ -404,6 +404,8 @@ export function DeleteDialogBody({
   onCancel: () => void;
   onArchiveInstead: () => void;
   onDelete: () => void;
+  /** A paused account refuses every delete (final review M3): Delete stays off and the dialog says why. */
+  paused?: boolean;
 }) {
   const deletable = deletableCount(count, blockers);
   const none = blockers.status === "ready" && deletable === 0;
@@ -420,6 +422,7 @@ export function DeleteDialogBody({
         <DialogDescription>{body}</DialogDescription>
         {none ? null : <DeleteKeptLine state={blockers} locale={locale} />}
         {blockers.status === "ready" && !none ? <DeleteFilesLine state={files} locale={locale} /> : null}
+        {paused && !none ? <p data-delete-paused className="text-sm text-muted-foreground">{t(m, "contacts.delete.paused", locale)}</p> : null}
       </DialogHeader>
       {none ? null : (
         <Input
@@ -445,7 +448,7 @@ export function DeleteDialogBody({
         ) : (
           <Button
             variant="destructive"
-            disabled={!canConfirmDelete(typed, count, files, blockers)}
+            disabled={paused || !canConfirmDelete(typed, count, files, blockers)}
             onClick={onDelete}
           >
             {copy.confirm}
@@ -458,7 +461,7 @@ export function DeleteDialogBody({
 
 export function BulkActionBar({
   accountId, selectedIds, existingTags, canDelete, onDone, canAssign = false, members = [],
-  view, canArchive, timezone,
+  view, canArchive, timezone, paused = false,
 }: {
   accountId: string;
   selectedIds: string[];
@@ -480,6 +483,8 @@ export function BulkActionBar({
   canArchive: boolean;
   /** The account's resolved zone: the Archive toast's appointment date reads in it. */
   timezone: string;
+  /** The account is paused (billingVerdictFor): the delete dialog keeps Delete off and says why (final review M3). */
+  paused?: boolean;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -673,6 +678,7 @@ export function BulkActionBar({
               onCancel={closeConfirm}
               onArchiveInstead={() => { closeConfirm(); void archiveSelected(accountId, [...selectedIds], onDone, timezone, locale); }}
               onDelete={() => void doDelete()}
+              paused={paused}
             />
           </DialogContent>
         </Dialog>

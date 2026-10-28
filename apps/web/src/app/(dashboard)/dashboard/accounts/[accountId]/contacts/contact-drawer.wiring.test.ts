@@ -75,7 +75,7 @@ const ROW: ContactRow = {
 
 const GOOD = {
   locale: "en",
-  header: { name: "Maria Garcia", subtitle: null, subtitleHref: null, actions: [
+  header: { name: "Maria Garcia", subtitle: null, subtitleHref: null, archivedAt: null, actions: [
     { id: "call", label: "Call", href: "tel:+15512345678", ariaLabel: "Call Maria Garcia", primary: true, external: false },
   ] },
   facts: { status: "error", text: "Couldn't load the summary." },
@@ -836,5 +836,31 @@ describe("ContactDrawer: Archive, Restore and Delete… in the header (contact a
     expect(drawerEl).toMatch(/canArchive=\{canArchive\}/);
     expect(drawerEl).toMatch(/canDelete=\{canDelete\}/);
     expect(drawerEl).toMatch(/timezone=\{timezone\}/);
+  });
+});
+
+// Contact archive, final review M2: a `?peek=` stub's row knows nothing of archive, so the drawer falls back
+// to the summary body's own header. No DOM renderer here (this file's header), so the wiring is read.
+describe("the drawer reads archived from the row, else from the body (final review M2)", () => {
+  it("row?.archived_at ?? body?.header.archivedAt (mutation: read the row only -> FAILS)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./contact-drawer.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("const archivedAt = row?.archived_at ?? body?.header.archivedAt ?? null;");
+    expect(src).toContain("const archived = archivedAt ? { at: archivedAt, byLabel: null } : null;");
+  });
+});
+
+// Final review M3: a paused account refuses every delete, so the flag reaches both delete dialogs. No DOM
+// renderer for this wiring (the dialogs portal; the page renders client components), so it is read.
+describe("the drawer hands ArchiveControls the paused flag (final review M3)", () => {
+  it("paused={paused}", () => {
+    const src = readFileSync(fileURLToPath(new URL("./contact-drawer.tsx", import.meta.url)), "utf8");
+    expect(src.match(/<ArchiveControls\b[\s\S]*?\/>/)?.[0]).toContain("paused={paused}");
+  });
+});
+
+describe("the drawer's ArchiveControls close it through onGone (final review M5)", () => {
+  it("onGone={onGone ?? onClose}, so the table can point focus at the next row", () => {
+    const src = readFileSync(fileURLToPath(new URL("./contact-drawer.tsx", import.meta.url)), "utf8");
+    expect(src.match(/<ArchiveControls\b[\s\S]*?\/>/)?.[0]).toContain("onGone={onGone ?? onClose}");
   });
 });

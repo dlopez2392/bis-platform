@@ -19,6 +19,7 @@ import { seesWholeAccount } from "@/lib/auth-role";
 import { cn } from "@/lib/utils";
 import { renderZone } from "@/lib/zone";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { makeTr, type Tr } from "@/lib/record/copy";
@@ -193,7 +194,7 @@ export default async function ContactsPage({
   const sort = parseSort(rawSort);
   const dir = parseDir(rawDir);
 
-  const [rows, total, tags, account, prefs] = await Promise.all([
+  const [rows, total, tags, account, prefs, verdict] = await Promise.all([
     listContacts(db, accountId, {
       search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir }, assignee: assign.assignee, archived,
     }),
@@ -207,6 +208,9 @@ export default async function ContactsPage({
     // scoped page already does.
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
     getPersonPrefs(),
+    // Final review M3: the layout's cached verdict (no read of its own), so both delete dialogs know a
+    // paused account refuses the delete and keep Delete off.
+    billingVerdictFor(accountId),
   ]);
   if (account.error) {
     console.error(`contacts list: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -362,6 +366,7 @@ export default async function ContactsPage({
               canDelete={canManage}
               view={view}
               canArchive={wholeAccount}
+              paused={verdict.paused}
               who={assign.who}
               canAssign={assign.canAssign}
               members={assign.members}

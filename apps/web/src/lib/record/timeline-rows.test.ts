@@ -456,6 +456,14 @@ describe("an archive/restore row's phrase (contact archive, spec §6.2)", () => 
     expect(r!.mark).toEqual({ kind: "customer", label: "Customer" });
     expect(rows([archiveEntry("restored", "customer", "call")])[0]!.verb).toBe("came back: called and talked with Sofía");
   });
+  it("a call that brought them back names the account's own AI persona, not a fixed Sofía (final review M6; mutation: drop { persona } -> FAILS)", () => {
+    const withPersona = (locale: "en" | "es") => ({
+      zone: "America/Chicago", tr: makeTr(locale), author: { viewerId: null, names: {}, personaName: "Rosa", tr: makeTr(locale) },
+    });
+    const entry = archiveEntry("restored", "customer", "call");
+    expect(timelineRows([entry], withPersona("en"))[0]!.verb).toBe("came back: called and talked with Rosa");
+    expect(timelineRows([entry], withPersona("es"))[0]!.verb).toBe("volvió: llamó y habló con Rosa");
+  });
   it("in Spanish (mutation: build labels from m[...] -> English, FAILS)", () => {
     expect(rows([archiveEntry("archived", "person")], "es")[0]!.verb).toBe("archivó este contacto");
     expect(rows([archiveEntry("restored", "customer", "booking")], "es")[0]!.verb).toBe("volvió: hizo una cita");

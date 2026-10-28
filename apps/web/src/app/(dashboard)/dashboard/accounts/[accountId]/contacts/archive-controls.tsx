@@ -194,9 +194,11 @@ export async function deleteOne(
 
 /** The delete dialog's words for one contact. Rendered inside the dialog; exported so each state's words are
  *  testable without a DOM. */
-export function DeleteOneBody({ view, files, label, name, digits, typed, onTyped, locale }: {
+export function DeleteOneBody({ view, files, label, name, digits, typed, onTyped, locale, paused = false }: {
   view: DeleteOneView; files: FilesState; label: string; name: string | null; digits: string | null;
   typed: string; onTyped: (next: string) => void; locale: Locale;
+  /** A paused account refuses every delete (final review M3): the dialog says so, and Delete stays off. */
+  paused?: boolean;
 }) {
   const title = t(m, "contacts.delete.oneTitle", locale, { name: label });
   const body = name !== null
@@ -221,6 +223,7 @@ export function DeleteOneBody({ view, files, label, name, digits, typed, onTyped
           <>
             <DialogDescription data-delete-one="deletable" className="break-words">{body}</DialogDescription>
             <DeleteFilesLine state={files} locale={locale} />
+            {paused ? <p data-delete-paused className="text-sm text-muted-foreground">{t(m, "contacts.delete.paused", locale)}</p> : null}
           </>
         )}
       </DialogHeader>
@@ -230,6 +233,41 @@ export function DeleteOneBody({ view, files, label, name, digits, typed, onTyped
       ) : null}
     </>
   );
+}
+
+/** The record's delete dialog footer (final review M8: rendered in a test). Cancel; then, for a blocked contact,
+ *  "Archive instead" (the bulk dialog's own key, so both dialogs say it the same way) unless it is archived
+ *  already; else the destructive Delete, on only with the typed name and never on a paused account (M3). */
+export function DeleteOneFooter({ view, archived, canArchive, canConfirm, paused, locale, onCancel, onArchiveInstead, onDelete }: {
+  view: DeleteOneView; archived: boolean; canArchive: boolean; canConfirm: boolean; paused: boolean; locale: Locale;
+  onCancel: () => void; onArchiveInstead: () => void; onDelete: () => void;
+}) {
+  return (
+    <DialogFooter>
+      <Button type="button" variant="outline" onClick={onCancel}>{t(m, "common.cancel", locale)}</Button>
+      {view === "blocked" ? (
+        // Archive-only (spec §5.4): the way out it offers, when there is one. No word "delete" here.
+        canArchive && !archived ? (
+          <Button type="button" variant="outline" data-archive-action="archive-instead" onClick={onArchiveInstead}>
+            <Archive className="size-4" aria-hidden />
+            {t(m, "contacts.delete.archiveInstead", locale)}
+          </Button>
+        ) : null
+      ) : (
+        <Button type="button" variant="destructive" disabled={!canConfirm || paused} onClick={onDelete}>
+          {t(m, "record.delete", locale)}
+        </Button>
+      )}
+    </DialogFooter>
+  );
+}
+
+/** A second press while the first is still answering is ignored (final review M9). A ref, not state: two quick
+ *  clicks share one render. Never `disabled` while running instead: a disabled button drops focus. */
+export async function runOnce(running: { current: boolean }, fn: () => Promise<void>): Promise<void> {
+  if (running.current) return;
+  running.current = true;
+  try { await fn(); } finally { running.current = false; }
 }
 
 /** The archived state (rule 3): a dot and the word, which opens the line. When, in the account's zone, and by
@@ -257,7 +295,7 @@ export function ArchivedBanner({ archived, timezone, variant, locale }: {
  * pseudo-locale's +35%; from the small breakpoint up the page shows the words.
  */
 export function ArchiveControls({
-  accountId, contactId, label, contact, archived, canArchive, canDelete, timezone, variant, onGone,
+  accountId, contactId, label, contact, archived, canArchive, canDelete, timezone, variant, onGone, paused = false,
 }: {
   accountId: string; contactId: string;
   /** The name the header shows (contactDisplayName): toasts and the dialog's title. */
@@ -275,6 +313,8 @@ export function ArchiveControls({
   variant: "page" | "drawer";
   /** The drawer: the contact leaves the list it was opened from (archive, restore, delete). */
   onGone?: () => void;
+  /** The account is paused (billingVerdictFor): Delete stays off and the dialog says why (final review M3). */
+  paused?: boolean;
 }) {
   const router = useRouter();
   const locale = useLocale();
@@ -291,11 +331,7 @@ export function ArchiveControls({
   const labelClass = variant === "drawer" ? "sr-only" : "sr-only sm:not-sr-only";
   const buttonClass = cn("min-h-11 min-w-11 md:min-h-8 md:min-w-8", variant === "page" && "sm:px-3");
 
-  async function run(fn: () => Promise<void>) {
-    if (running.current) return;
-    running.current = true;
-    try { await fn(); } finally { running.current = false; }
-  }
+  const run = (fn: () => Promise<void>) => runOnce(running, fn);
   const archive = () => run(() => archiveOne(accountId, contactId, label, { timezone, locale, onDone: changed, onUndone: () => router.refresh() }));
   const restore = () => run(() => restoreOne(accountId, contactId, label, { locale, onDone: changed, onUndone: () => router.refresh() }));
 
@@ -310,13 +346,14 @@ export function ArchiveControls({
     void readOneDelete(accountId, contactId).then(settle);
   }
 
-  async function confirmDelete() {
+  // Through `run`, like Archive and Restore: a double click sends one delete (final review M9).
+  const confirmDelete = () => run(async () => {
     const gone = variant === "drawer" ? () => onGone?.() : () => router.push(`/dashboard/accounts/${accountId}/contacts`);
     const next = await deleteOne(accountId, contactId, blockers, {
       locale, timezone, view: archived ? "archived" : "active", onGone: () => { setOpen(false); gone(); },
     });
     if (next === "blocked") setBlockers({ status: "ready", kept: [contactId] });
-  }
+  });
 
   const view = deleteOneView(blockers, contactId);
   const filesReady = files.status === "ready";
@@ -355,24 +392,13 @@ export function ArchiveControls({
           {/* Portaled to the body, outside the page's lang wrapper. */}
           <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
             <DeleteOneBody view={view} files={files} label={label} name={name} digits={phoneLast4}
-              typed={typed} onTyped={setTyped} locale={locale} />
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => openDelete(false)}>{t(m, "common.cancel", locale)}</Button>
-              {view === "blocked" ? (
-                // Archive-only (spec §5.4): the way out it offers, when there is one. No word "delete" here.
-                canArchive && !archived ? (
-                  <Button type="button" variant="outline" data-archive-action="archive-instead"
-                    onClick={() => { openDelete(false); void archive(); }}>
-                    <Archive className="size-4" aria-hidden />
-                    {t(m, "record.archive", locale)}
-                  </Button>
-                ) : null
-              ) : (
-                <Button type="button" variant="destructive" disabled={!canConfirm} onClick={() => void confirmDelete()}>
-                  {t(m, "record.delete", locale)}
-                </Button>
-              )}
-            </DialogFooter>
+              typed={typed} onTyped={setTyped} locale={locale} paused={paused} />
+            <DeleteOneFooter view={view} archived={archived !== null} canArchive={canArchive} canConfirm={canConfirm}
+              locale={locale}
+              onCancel={() => openDelete(false)}
+              onArchiveInstead={() => { openDelete(false); void archive(); }}
+              onDelete={() => void confirmDelete()}
+              paused={paused} />
           </DialogContent>
         </Dialog>
       ) : null}

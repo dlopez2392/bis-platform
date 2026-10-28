@@ -30,7 +30,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 const {
   ArchiveControls, ArchivedBanner, DeleteOneBody, archiveOne, restoreOne, confirmTyped, deleteConfirmToken,
-  deleteOne, readOneDelete, lastFourDigits,
+  deleteOne, readOneDelete, lastFourDigits, DeleteOneFooter, runOnce,
 } = await import("./archive-controls");
 type Props = ComponentProps<typeof ArchiveControls>;
 
@@ -387,5 +387,65 @@ describe("ArchivedBanner: the archived state is a dot plus a word (rule 3)", () 
 
   it("not archived, no banner", () => {
     expect(banner({ archived: null })).toBe("");
+  });
+});
+
+// Final review M3 / M8 / M9: the record's delete dialog footer, rendered; a paused account; one delete at a time.
+describe("DeleteOneFooter and the paused account (final review M3, M8)", () => {
+  const footer = (over: Partial<ComponentProps<typeof DeleteOneFooter>> = {}) => renderToStaticMarkup(createElement(Dialog, { open: true },
+    createElement(DeleteOneFooter, {
+      view: "deletable", archived: false, canArchive: true, canConfirm: true, paused: false, locale: "en",
+      onCancel: () => {}, onArchiveInstead: () => {}, onDelete: () => {}, ...over,
+    })));
+  const buttons = (html: string) => [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
+    .map((b) => ({ text: renderedText(b[2]!).trim(), disabled: /\sdisabled=""/.test(b[1]!) }));
+
+  it("a blocked contact's way out reads the same words as the bulk dialog's, one key for both (M8; mutation: record.archive -> FAILS)", () => {
+    expect(buttons(footer({ view: "blocked" })).map((b) => b.text)).toEqual([m["common.cancel"], m["contacts.delete.archiveInstead"]]);
+    expect(buttons(footer({ view: "blocked", locale: "es" })).map((b) => b.text)).toContain(
+      (m as Record<string, string>)["contacts.delete.archiveInstead.es"]);
+    // Archived already: nothing offers to archive it again.
+    expect(buttons(footer({ view: "blocked", archived: true })).map((b) => b.text)).toEqual([m["common.cancel"]]);
+  });
+
+  it("Delete is enabled by the typed name, and stays off on a paused account whatever is typed (M3; mutation: ignore paused -> FAILS)", () => {
+    expect(buttons(footer()).find((b) => b.text === m["record.delete"])?.disabled).toBe(false);
+    expect(buttons(footer({ paused: true })).find((b) => b.text === m["record.delete"])?.disabled).toBe(true);
+    expect(buttons(footer({ canConfirm: false })).find((b) => b.text === m["record.delete"])?.disabled).toBe(true);
+  });
+
+  it("the body says why on a paused account, in both languages (M3; mutation: drop the line -> FAILS)", () => {
+    const body = (paused: boolean, locale: "en" | "es" = "en") => renderedText(renderToStaticMarkup(createElement(Dialog, { open: true },
+      createElement(DeleteOneBody, {
+        view: "deletable", files: { status: "ready", count: 0 }, label: "Ana", name: "Ana", digits: null,
+        typed: "", onTyped: () => {}, locale, paused,
+      }))));
+    expect(body(true)).toContain(m["contacts.delete.paused"]);
+    expect(body(true, "es")).toContain("No se puede borrar nada mientras la cuenta está en pausa.");
+    expect(body(false)).not.toContain(m["contacts.delete.paused"]);
+  });
+});
+
+describe("one press at a time (final review M9)", () => {
+  it("runOnce ignores a second call while the first is still answering, then runs the next (mutation: drop the guard -> FAILS)", async () => {
+    const running = { current: false };
+    let release!: () => void;
+    const fn = vi.fn(() => new Promise<void>((r) => { release = r; }));
+    const first = runOnce(running, fn);
+    const second = runOnce(running, fn);
+    expect(fn).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    await runOnce(running, async () => {});
+    expect(running.current).toBe(false);
+  });
+
+  it("Delete for good goes through the same guard as Archive and Restore, so a double click sends one delete", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./archive-controls.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("const confirmDelete = () => run(async () => {");
+    expect(src).toMatch(/<DeleteOneFooter\b[\s\S]{0,600}?paused=\{paused\}/);
+    expect(src).toMatch(/<DeleteOneBody\b[\s\S]{0,300}?paused=\{paused\}/);
   });
 });

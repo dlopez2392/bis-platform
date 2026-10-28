@@ -1590,3 +1590,14 @@ describe("ContactDetailPage: Archive, Restore and the archived banner (contact a
     expect(renderedText(header(html))).toContain("Restaurar");
   });
 });
+
+// Final review M3: a paused account refuses every delete, so the flag reaches both delete dialogs. No DOM
+// renderer for this wiring (the dialogs portal; the page renders client components), so it is read.
+describe("the record page hands ArchiveControls the paused flag (final review M3)", () => {
+  it("paused={accountPaused}, the page's one billingVerdictFor read", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+    expect(src.match(/<ArchiveControls\b[\s\S]*?\/>/)?.[0]).toContain("paused={accountPaused}");
+  });
+});

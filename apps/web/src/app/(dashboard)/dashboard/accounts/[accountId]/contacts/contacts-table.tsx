@@ -20,6 +20,7 @@ import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
+import { focusAfterBar, nextRowId } from "@/lib/contacts/drawer-focus";
 import { withWho, type Who } from "@/lib/assign/who";
 import { withView, type ContactsView } from "@/lib/contacts/view";
 import type { AssignMember } from "@/lib/assign/view";
@@ -103,6 +104,7 @@ export function ContactsTable({
   viewerId = null,
   view = "active",
   canArchive = false,
+  paused = false,
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -140,6 +142,8 @@ export function ContactsTable({
   view?: ContactsView;
   /** Owners, Staff and the agency archive and restore (seesWholeAccount); false (the default) never. */
   canArchive?: boolean;
+  /** The account is paused (billingVerdictFor): both delete dialogs keep Delete off (final review M3). */
+  paused?: boolean;
 }) {
   const router = useRouter();
   // F-085 follow-up (Task B): the page wraps this table in a LocaleProvider
@@ -155,6 +159,8 @@ export function ContactsTable({
   const [remembered, setRemembered] = useState<ContactRow | null>(null);
   const found = peekId ? rows.find((r) => r.id === peekId) : undefined;
   if (found && found !== remembered) setRemembered(found);
+  // The row focus goes to when the drawer closed because its contact left the list (final review M5).
+  const [afterGone, setAfterGone] = useState<string | null>(null);
   // Which column's header button should regain focus once THIS click's
   // navigation lands — a ref, not state, because setting it must not itself
   // trigger a render; it only needs to survive until the effect below runs
@@ -191,6 +197,25 @@ export function ContactsTable({
     router.push(sortHref(accountId, { key: sort, dir }, key, q, who, view), { scroll: false });
   }
 
+  // Final review M5: Archive, Restore, Delete, a tag or Clear selection empty the selection, and the bar (with the
+  // button that had focus) unmounts; focus moves to the select-all box once the bar has gone.
+  function clearSelection() {
+    setSelected(new Set());
+    requestAnimationFrame(() => focusAfterBar());
+  }
+
+  // The drawer's own Archive, Restore or Delete: its contact leaves the list, so the drawer gives focus to the
+  // row after it (or before it, for the last row) rather than to a row that is about to go.
+  function drawerGone() {
+    if (peekId) setAfterGone(nextRowId(rowIds, peekId));
+    close();
+  }
+
+  function openRow(id: string) {
+    setAfterGone(null);
+    open(id);
+  }
+
   function toggleRow(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -210,20 +235,22 @@ export function ContactsTable({
         selectedIds={[...selected]}
         existingTags={existingTags}
         canDelete={canDelete}
-        onDone={() => setSelected(new Set())}
+        onDone={clearSelection}
         canAssign={canAssign}
         members={members}
         view={view}
         canArchive={canArchive}
         timezone={timezone}
+        paused={paused}
       />
-      <Table>
+      <Table data-contacts-table tabIndex={-1} className="focus-visible:outline-none">
         <TableHeader>
           <TableRow>
             <TableHead className="w-10" onClick={(e) => e.stopPropagation()}>
               <Checkbox
                 checked={selectionState === "all" ? true : selectionState === "some" ? "indeterminate" : false}
                 onCheckedChange={() => setSelected((s) => togglePageSelection(s, rowIds))}
+                data-select-page
                 aria-label={t(m, "bulk.selectPage", locale)}
               />
             </TableHead>
@@ -267,10 +294,10 @@ export function ContactsTable({
                 tabIndex={0}
                 data-contact-row={c.id}
                 aria-label={name}
-                onClick={() => open(c.id)}
+                onClick={() => openRow(c.id)}
                 onKeyDown={(e) => {
                   if (e.target !== e.currentTarget) return; // typing in a child — not row nav
-                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(c.id); }
+                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(c.id); }
                   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                     e.preventDefault();
                     const sibling = e.key === "ArrowDown"
@@ -325,7 +352,8 @@ export function ContactsTable({
         onClose={close}
         // The remembered row, not peekId: it outlives the close, and Radix
         // asks where focus goes only after the peek has gone (drawer-focus.ts).
-        returnFocusRowId={remembered?.id ?? null}
+        returnFocusRowId={afterGone ?? remembered?.id ?? null}
+        onGone={drawerGone}
         canAssign={canAssign}
         members={members}
         viewerId={viewerId}
@@ -333,6 +361,7 @@ export function ContactsTable({
         canArchive={canArchive}
         canDelete={canDelete}
         timezone={timezone}
+        paused={paused}
       />
     </ListPanel>
   );

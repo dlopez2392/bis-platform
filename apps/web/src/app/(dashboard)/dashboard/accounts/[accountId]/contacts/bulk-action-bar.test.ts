@@ -765,3 +765,11 @@ describe("what the delete says about the ones it kept (spec §5.4, plan Task 10)
     expect(toasts.error).not.toHaveBeenCalled();
   });
 });
+
+// Final review M3: a paused account refuses every delete, so the flag reaches both delete dialogs. No DOM
+// renderer for this wiring (the dialogs portal; the page renders client components), so it is read.
+describe("the bar hands its delete dialog the paused flag (final review M3)", () => {
+  it("DeleteDialogBody gets paused={paused}", () => {
+    expect(BAR_SRC).toMatch(/<DeleteDialogBody\b[\s\S]{0,700}?paused=\{paused\}/);
+  });
+});
