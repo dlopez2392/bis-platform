@@ -64,4 +64,17 @@ describe("design foundation: base rules", () => {
     expect(globals).toMatch(/:focus-visible/);
     expect(globals).toMatch(/prefers-reduced-motion/);
   });
+
+  // 2026-10-28: a design check read the To do list's Done button as "3px
+  // outline, currentColor". That is the CSS initial value (outline-width
+  // `medium`, outline-color `auto`) of an outline whose style is `none` —
+  // Tailwind's `outline-none` on an unfocused button — so nothing paints.
+  // What paints on keyboard focus is this un-layered rule, so its colour is
+  // pinned to the focus-ring token here: a bare `outline: 2px solid` would
+  // be the currentColor defect for real.
+  it("the global :focus-visible outline paints the --ring token, never currentColor", () => {
+    const rule = globals.match(/(?:^|\n):focus-visible\s*\{([^}]*)\}/);
+    expect(rule, "un-layered :focus-visible rule not found").not.toBeNull();
+    expect(rule![1]).toMatch(/outline:\s*2px solid var\(--ring\);/);
+  });
 });
