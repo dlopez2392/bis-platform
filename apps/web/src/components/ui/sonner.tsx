@@ -33,6 +33,49 @@ import {
 
 const TOAST_ACTION_SELECTOR = "[data-action]"
 
+// Status is a SHAPE first (rule 3): a ticked circle, an octagon, a triangle,
+// an "i" — the toast's own message is the word. Each type then tints only its
+// icon, from the status tokens (classNames below).
+export const TOAST_ICONS = {
+  success: <CircleCheckIcon className="size-4" />,
+  info: <InfoIcon className="size-4" />,
+  warning: <TriangleAlertIcon className="size-4" />,
+  error: <OctagonXIcon className="size-4" />,
+  loading: <Loader2Icon className="size-4 animate-spin" />,
+}
+
+// Sonner injects its stylesheet UN-layered at runtime, so in its styled mode
+// every rule it sets (system-font stack, richColors' library greens and reds,
+// a 4px inverted action button, a hard-coded description grey, a grey drop
+// shadow) outranks any Tailwind utility. `unstyled` drops all of those and
+// keeps only its positioning, stacking and swipe mechanics; everything you
+// see is then drawn here from tokens. (sonner-style.test.ts)
+export const TOAST_OPTIONS = {
+  unstyled: true,
+  classNames: {
+    // An overlay card: the glass-overlay surface, the --line-strong edge,
+    // the 12px card radius. Geist is set on the toast itself because Sonner
+    // sets its system stack on the list, and a declaration on the element
+    // beats an inherited one. `w-[var(--width)]` is Sonner's own 356px; its
+    // phone rule (un-layered) still widens the toast below 600px.
+    toast:
+      "flex w-[var(--width)] items-center gap-2 rounded-[var(--radius-card)] border border-[var(--line-strong)] glass-overlay p-4 font-sans text-[13px] [&[data-front=false][data-expanded=false]>*]:opacity-0",
+    icon: "flex size-4 shrink-0 items-center justify-center text-[var(--text-2)]",
+    content: "flex min-w-0 flex-1 flex-col gap-0.5",
+    title: "font-medium leading-normal",
+    // `!`: Sonner's `[data-sonner-theme=dark] [data-description]` colour rule
+    // applies even unstyled, and an un-layered rule beats a layered one.
+    description: "leading-snug text-[var(--text-2)]!",
+    actionButton:
+      "ml-auto inline-flex h-7 shrink-0 cursor-pointer items-center rounded-[var(--radius-ctl)] px-2.5 text-xs font-medium text-primary transition-colors hover:bg-[var(--surface-3)]",
+    cancelButton:
+      "inline-flex h-7 shrink-0 cursor-pointer items-center rounded-[var(--radius-ctl)] px-2.5 text-xs font-medium text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]",
+    success: "[&_[data-icon]]:text-[var(--good)]",
+    error: "[&_[data-icon]]:text-[var(--crit)]",
+    warning: "[&_[data-icon]]:text-[var(--warn)]",
+  },
+} satisfies ToasterProps["toastOptions"]
+
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
   // Sonner's own root — the <section aria-live="polite"> it forwards `ref`
@@ -258,28 +301,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
         // toast inside it is absolutely positioned — so only the toasts' own
         // boxes ever take a click.
         className="toaster group pointer-events-auto"
-        icons={{
-          success: <CircleCheckIcon className="size-4" />,
-          info: <InfoIcon className="size-4" />,
-          warning: <TriangleAlertIcon className="size-4" />,
-          error: <OctagonXIcon className="size-4" />,
-          loading: <Loader2Icon className="size-4 animate-spin" />,
-        }}
-        toastOptions={{
-          className: "glass-overlay",
-          // sonner's own [data-sonner-toast][data-styled=true] rule (specificity
-          // 0,2,0) outranks .glass-overlay's box-shadow, so its grey blur shadow
-          // would survive the utility. An inline style wins over both.
-          style: { boxShadow: "var(--shadow-overlay)" },
-        }}
-        style={
-          {
-            "--normal-bg": "var(--popover)",
-            "--normal-text": "var(--popover-foreground)",
-            "--normal-border": "var(--line-strong)",
-            "--border-radius": "var(--radius)",
-          } as React.CSSProperties
-        }
+        icons={TOAST_ICONS}
+        toastOptions={TOAST_OPTIONS}
         {...props}
       />
     </>
