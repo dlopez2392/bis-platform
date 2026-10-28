@@ -1924,6 +1924,124 @@ describe("F-048: moveBooking, a customer's move in place", () => {
 });
 
 /**
+ * Sofía's reschedule race (the follow-up from #294's review): the phone
+ * receptionist's `reschedule_appointment` moves a booking with `moveBooking`,
+ * as "voice"/"ai". While the caller is on the line, the business can cancel
+ * that same booking on the Calendar page (queuing the customer's cancel
+ * notice under the cancel's version), or mark it completed or no-show. The
+ * move must then be refused with nothing left behind, and the business's
+ * write left exactly as it was: its version unmoved, so its notice still
+ * claims. Forced, not hoped for: the business's write runs just before the
+ * move's insert is awaited.
+ */
+describe("Sofía's reschedule against a business change mid-call (moveBooking as voice/ai)", () => {
+  const at = (day: string, hh: number) => new Date(`2029-10-${day}T${String(hh).padStart(2, "0")}:00:00Z`);
+  /** `db`, but `action` runs once, right before the first `bookings` insert is awaited. */
+  const raceBeforeInsert = (db: SupabaseClient, action: () => Promise<unknown>): { client: SupabaseClient; fired: () => boolean } => {
+    let ran = false;
+    const wrap = <T extends object>(builder: T): T => {
+      const proxy: T = new Proxy(builder, {
+        get(target, prop) {
+          if (prop === "then") {
+            return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => (async () => {
+              if (!ran) { ran = true; await action(); }
+            })().then(() => (target as unknown as PromiseLike<unknown>).then(res, rej), rej);
+          }
+          const v = Reflect.get(target, prop, target);
+          if (typeof v !== "function") return v;
+          return (...args: unknown[]) => {
+            const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+            return r === target ? proxy : (typeof r === "object" && r !== null ? wrap(r as object) : r);
+          };
+        },
+      });
+      return proxy;
+    };
+    const client = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== "from") return Reflect.get(target, prop, target);
+        return (table: string) => {
+          const qb = target.from(table);
+          if (table !== "bookings") return qb;
+          return new Proxy(qb, {
+            get(t, p) {
+              const v = Reflect.get(t, p, t);
+              if (p === "insert") return (...a: unknown[]) => wrap((v as (...x: unknown[]) => object).apply(t, a));
+              return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+            },
+          });
+        };
+      },
+    }) as SupabaseClient;
+    return { client, fired: () => ran };
+  };
+  const rowOf = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("bookings").select("status, updated_at").eq("id", id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data as { status: string; updated_at: string } | null;
+  };
+  const replacements = async (db: SupabaseClient, oldId: string) => {
+    const { count, error } = await db.from("bookings").select("id", { count: "exact", head: true }).eq("rescheduled_from_id", oldId);
+    if (error) throw new Error(error.message);
+    return count;
+  };
+  const createdEvents = async (db: SupabaseClient, accountId: string) => {
+    const { count, error } = await db.from("events").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("type", "booking.created");
+    if (error) throw new Error(error.message);
+    return count;
+  };
+  const setup = async (db: SupabaseClient, accountId: string, day: string) => {
+    const cal = await getOrCreateCalendar(db, accountId, "user_test");
+    const { id: contactId } = await createContact(db, accountId, { firstName: "Caller" }, "user_test");
+    return createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at(day, 15), endsAt: at(day, 16) }, "voice", "ai");
+  };
+
+  it("the business cancels on the Calendar page mid-call: the move is refused, its replacement is gone with no booking.created, and the owner's cancel keeps its version so its notice still claims (mutation: drop moveBooking's status guard on the cancel -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const old = await setup(db, accountId, "02");
+      let version = "";
+      // The Calendar page's own cancel write (cancel-notice.ts): conditional on booked, its updatedAt the notice's version.
+      const race = raceBeforeInsert(db, async () => {
+        ({ updatedAt: version } = await setBookingStatus(db, accountId, old.id, "cancelled", "user_test", "user", { onlyFrom: "booked" }));
+      });
+      await expect(moveBooking(race.client, accountId, old.id, { startsAt: at("03", 15), endsAt: at("03", 16) }, "voice", "ai"))
+        .rejects.toThrow(BookingNotMovableError);
+      expect(race.fired(), "the race was forced").toBe(true);
+      expect(await replacements(db, old.id), "no held slot, nothing reads as a move").toBe(0);
+      expect(await createdEvents(db, accountId), "only the original booking was ever 'created'").toBe(1);
+      const row = await rowOf(db, old.id);
+      expect(row!.status).toBe("cancelled");
+      expect(new Date(row!.updated_at).getTime(), "the owner's version, untouched").toBe(new Date(version).getTime());
+      expect(await claimCancelNotice(db, accountId, old.id, version), "the owner's notice still claims").toBe(true);
+    });
+  });
+
+  it.each(["completed", "no_show"] as const)("the booking is marked %s mid-call: the move is refused and the outcome stands (mutation: drop moveBooking's status guard on the cancel -> FAILS)", async (outcome) => {
+    await withTestAccount(async (db, accountId) => {
+      const old = await setup(db, accountId, outcome === "completed" ? "04" : "05");
+      const race = raceBeforeInsert(db, () => setBookingStatus(db, accountId, old.id, outcome, "user_test"));
+      await expect(moveBooking(race.client, accountId, old.id, { startsAt: at("06", 15), endsAt: at("06", 16) }, "voice", "ai"))
+        .rejects.toThrow(BookingNotMovableError);
+      expect(race.fired(), "the race was forced").toBe(true);
+      expect((await rowOf(db, old.id))!.status).toBe(outcome);
+      expect(await replacements(db, old.id)).toBe(0);
+    });
+  });
+
+  it("an undisturbed move answers the old row's cancel stamp to the microsecond, the version the voice act records (mutation: answer a fresh Date -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const old = await setup(db, accountId, "07");
+      const moved = await moveBooking(db, accountId, old.id, { startsAt: at("08", 15), endsAt: at("08", 16) }, "voice", "ai");
+      const row = await rowOf(db, old.id);
+      expect(row!.status).toBe("cancelled");
+      expect(typeof moved.cancelledAt).toBe("string");
+      expect(sameMicroInstant(row!.updated_at, moved.cancelledAt)).toBe(true);
+    });
+  });
+});
+
+/**
  * Fix round 3 (m2): a move recognises its own cancel by the `updated_at` it
  * stamped. Milliseconds are not unique enough (two tabs can cancel in the
  * same ms), so the stamp carries random microseconds — timestamptz keeps

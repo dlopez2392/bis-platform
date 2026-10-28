@@ -15,6 +15,9 @@ const dbMocks = vi.hoisted(() => ({
   listContactsOnNumber: vi.fn(), findUpcomingBookingForContact: vi.fn(),
   createContact: vi.fn(), createBooking: vi.fn(),
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
+  // reschedule_appointment's one write: book the new range, then cancel the old ONLY IF still booked,
+  // taking the new row back out when it is not (packages/db booking.ts; its races are pinned there).
+  moveBooking: vi.fn(),
   fillContactBlanksReport: vi.fn(), getContact: vi.fn(),
   insertAiActs: vi.fn(),
   markHandoffRequested: vi.fn(),
@@ -749,13 +752,11 @@ describe("reschedule / cancel", () => {
     sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
   });
 
-  it("reschedule books the new slot BEFORE cancelling the old", async () => {
-    const calls: string[] = [];
+  it("reschedule moves the booking in ONE moveBooking (the new slot first, the old cancelled only if still booked), as the AI", async () => {
     computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
     dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
-    dbMocks.createBooking.mockImplementation(async () => { calls.push("book"); return { id: "new1", cancelToken: "t" }; });
-    dbMocks.setBookingStatus.mockImplementation(async () => { calls.push("cancel"); return { updatedAt: "2027-05-31T09:00:00.000Z" }; });
+    dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     const { state, result } = await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
@@ -763,30 +764,17 @@ describe("reschedule / cancel", () => {
     // ISO with the wrong offset and "fixed" a correct booking an hour
     // forward. The result now hands it the spoken time directly.
     expect((result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
-    expect(calls).toEqual(["book", "cancel"]);
-    // The AI did this, not a signed-in user.
-    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
+    // The AI did this, not a signed-in user; the old booking's own id, the NEW range.
+    expect(dbMocks.moveBooking).toHaveBeenCalledTimes(1);
+    expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "old1",
+      { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z"), meetingUrl: undefined }, "voice", "ai");
+    // Never the unguarded pair the race came from (#294 follow-up).
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     // The replacement is the old booking's contact's (call 42ed4822 follow-up; mutation: drop contactId -> FAILS).
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked", contactId: "ct1" });
     expect(state.served).toEqual(["rescheduled"]);
-  });
-  // D-035: the new row names the one it replaces, so the dashboard, the
-  // Monday report and the agency roll-up (all `listBookingCreationsBetween`)
-  // stop counting a reschedule as one more booking.
-  it("D-035: the replacement booking carries rescheduledFromId = the booking it replaces (mutation: drop it → FAILS)", async () => {
-    computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
-    dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
-      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
-    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
-    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
-    const { result } = await runTool(owns(), ctx, "reschedule_appointment",
-      { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
-    expect(result).toMatchObject({ ok: true, bookingId: "new1" });
-    expect(dbMocks.createBooking).toHaveBeenCalledTimes(1);
-    expect(dbMocks.createBooking.mock.calls[0]![2]).toMatchObject({ rescheduledFromId: "old1" });
-    // The SAME id the reschedule then cancels.
-    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
   });
   it("D-028 review: reschedule asks the submit-time rule for the requested instant — a free start that the CURRENT list no longer carries is still taken (mutation: back to list membership → FAILS)", async () => {
     const wantedSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
@@ -794,13 +782,140 @@ describe("reschedule / cancel", () => {
     bookableSlotMock.mockResolvedValue(wantedSlot); // ...but 14:00 is still free
     dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
-    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
-    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     const { result } = await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     expect(bookableSlotMock.mock.calls[0]![4]).toEqual(wantedSlot.startsAt);
   });
+
+  /**
+   * The #294 follow-up: Sofía read the booking as booked, and while the caller
+   * waited the business cancelled it on the Calendar page (its customer notice
+   * queued under that cancel's version), or marked it completed or no-show.
+   * moveBooking's cancel is conditional on booked, so it refuses and takes the
+   * new booking back out (BookingNotMovableError). The tool must then tell the
+   * model the truth and do NOTHING that follows a move: no act, no customer
+   * email, no staff alert, no thread line, no call state.
+   */
+  describe("the booking changed under the call (the #294 follow-up)", () => {
+    const BOOKED = { id: "old1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" };
+    const ARGS = { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" };
+    const OVERTAKEN_FULL = "That appointment was changed a moment ago and is no longer booked, so it was NOT moved and no new time was booked. "
+      + "Do not tell them it was moved. Apologize, say it looks like that appointment was just changed, "
+      + "then offer to find them a new time with check_availability and book it with book_appointment, or offer to take a message with take_message.";
+    // Everything a move would set off is observable here: a call row (acts), staff addresses, a contact email.
+    const watched: ToolContext = { ...ctx, callRowId: "call-1",
+      calendar: { ...ctx.calendar, notify_emails: ["owner@biz.example"] } as unknown as CalendarRow };
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
+      dbMocks.getContact.mockResolvedValue({ ...OWNER, email: "ana@example.com" });
+      dbMocks.insertAiActs.mockResolvedValue(undefined);
+    });
+    function expectNothingFollowed() {
+      expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(gated()).toEqual([]);
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+      // The tool never writes the booking rows itself: moveBooking took its own replacement back.
+      expect(dbMocks.createBooking).not.toHaveBeenCalled();
+      expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    }
+
+    it.each(["cancelled", "completed", "no_show", "gone"] as const)(
+      "re-read %s: refused truthfully, nothing recorded, emailed, alerted or threaded, state untouched (mutation: no catch → FAILS; record the act before the move → FAILS)",
+      async (now) => {
+        const { BookingNotMovableError } = await import("@bis/db");
+        dbMocks.getBookingById.mockResolvedValueOnce(BOOKED)
+          .mockResolvedValueOnce(now === "gone" ? null : { ...BOOKED, status: now });
+        dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+        const pre = owns();
+        const { state, result } = await runTool(pre, watched, "reschedule_appointment", ARGS);
+        expect(result).toEqual({ ok: false, error: OVERTAKEN_FULL });
+        expect(state).toBe(pre);
+        expect(dbMocks.moveBooking).toHaveBeenCalledTimes(1);
+        // The re-read is this account's and this booking's.
+        expect(dbMocks.getBookingById).toHaveBeenCalledTimes(2);
+        expect(dbMocks.getBookingById.mock.calls[1]).toEqual([{}, "a1", "old1"]);
+        expectNothingFollowed();
+      });
+
+    it("the refusal carries nothing of the booking: no time, no name, no id", async () => {
+      const { BookingNotMovableError } = await import("@bis/db");
+      dbMocks.getBookingById.mockResolvedValueOnce(BOOKED).mockResolvedValueOnce({ ...BOOKED, status: "cancelled" });
+      dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+      const { result } = await runTool(owns(), watched, "reschedule_appointment", ARGS);
+      const error = String((result as { error: string }).error);
+      for (const detail of ["old1", "Ana", "Ruiz", "ana@example.com", "9:00", "Jun 1", "Jun 2", "2027"]) {
+        expect(error).not.toContain(detail);
+      }
+    });
+
+    it("on an Always-take-a-message line the refusal never offers book_appointment, a tool the session does not hold (mutation: one sentence for both modes → FAILS)", async () => {
+      const { BookingNotMovableError } = await import("@bis/db");
+      const manage: ToolContext = { ...watched,
+        profile: { booking_enabled: true, after_hours: "message_only" } as unknown as VoiceProfileRow };
+      dbMocks.getBookingById.mockResolvedValueOnce(BOOKED).mockResolvedValueOnce({ ...BOOKED, status: "cancelled" });
+      dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+      const { result } = await runTool(owns(), manage, "reschedule_appointment", ARGS);
+      expect(result).toEqual({ ok: false, error:
+        "That appointment was changed a moment ago and is no longer booked, so it was NOT moved and no new time was booked. "
+        + "Do not tell them it was moved. Apologize, say it looks like that appointment was just changed, "
+        + "then offer to take a message with take_message." });
+      expectNothingFollowed();
+    });
+
+    it("with a person to hand to, the refusal offers the transfer, the same nextStep every refusal uses", async () => {
+      const { BookingNotMovableError } = await import("@bis/db");
+      const handoff: ToolContext = { ...watched, handoffTarget: { available: true, to: "+19565550123" } as ToolContext["handoffTarget"] };
+      dbMocks.getBookingById.mockResolvedValueOnce(BOOKED).mockResolvedValueOnce({ ...BOOKED, status: "completed" });
+      dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+      const { result } = await runTool(owns(), handoff, "reschedule_appointment", ARGS);
+      expect(String((result as { error: string }).error)).toMatch(
+        /book it with book_appointment, or offer to put them through to someone on the team with transfer_to_human\.$/);
+    });
+
+    it("refused while the re-read says STILL booked: not dressed up as a change, the error propagates and nothing follows (mutation: answer every refusal as changed → FAILS)", async () => {
+      const { BookingNotMovableError } = await import("@bis/db");
+      dbMocks.getBookingById.mockResolvedValue(BOOKED);
+      const refusal = new BookingNotMovableError();
+      dbMocks.moveBooking.mockRejectedValue(refusal);
+      await expect(runTool(owns(), watched, "reschedule_appointment", ARGS)).rejects.toBe(refusal);
+      expectNothingFollowed();
+    });
+
+    it("a move that failed outright (moveBooking's plain Error, its rollback already done) propagates unread, and nothing follows", async () => {
+      dbMocks.getBookingById.mockResolvedValue(BOOKED);
+      dbMocks.moveBooking.mockRejectedValue(new Error("moveBooking: cannot tell whether old1 was cancelled; rolled back"));
+      await expect(runTool(owns(), watched, "reschedule_appointment", ARGS)).rejects.toThrow("rolled back");
+      expect(dbMocks.getBookingById).toHaveBeenCalledTimes(1);
+      expectNothingFollowed();
+    });
+
+    it("a re-read that fails is loud: its error propagates, nothing follows", async () => {
+      const { BookingNotMovableError } = await import("@bis/db");
+      dbMocks.getBookingById.mockResolvedValueOnce(BOOKED).mockRejectedValueOnce(new Error("getBookingById failed: db blip"));
+      dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+      await expect(runTool(owns(), watched, "reschedule_appointment", ARGS)).rejects.toThrow("db blip");
+      expectNothingFollowed();
+    });
+
+    it("a taken slot still answers as before and is never re-read (moveBooking wrote nothing)", async () => {
+      const { SlotTakenError } = await import("@bis/db");
+      dbMocks.getBookingById.mockResolvedValue(BOOKED);
+      dbMocks.moveBooking.mockRejectedValue(new SlotTakenError());
+      const pre = owns();
+      const { state, result } = await runTool(pre, watched, "reschedule_appointment", ARGS);
+      expect(result).toEqual({ ok: false, slotTaken: true, error: "that time was just taken" });
+      expect(state).toBe(pre);
+      expect(dbMocks.getBookingById).toHaveBeenCalledTimes(1);
+      expectNothingFollowed();
+    });
+  });
+
   it("cancel marks status and mirrors", async () => {
     dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",
       starts_at: "2027-06-01T14:00:00Z", ends_at: "x", status: "booked" });
@@ -870,8 +985,7 @@ describe("reschedule / cancel", () => {
     computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
     dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
       starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
-    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
-    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     await runTool(owns(), ctx, "reschedule_appointment",
       { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(meetingProviderMock).not.toHaveBeenCalled();
@@ -896,8 +1010,7 @@ describe("reschedule / cancel", () => {
         starts_at: "2027-06-01T14:00:00Z", ends_at: oldEndsAt.toISOString(),
         status: "booked", meeting_url: "https://video.example/OLD-room",
       });
-      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
-      dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+      dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     });
 
     it("mints a NEW room sized to the NEW slot's endsAt and passes its url into the new booking", async () => {
@@ -913,7 +1026,7 @@ describe("reschedule / cancel", () => {
       // Never the old row's ends_at, and never the old row's url copied forward.
       expect(createMeetingRoom).not.toHaveBeenCalledWith(
         expect.objectContaining({ endsAt: oldEndsAt }));
-      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "old1",
         expect.objectContaining({ meetingUrl: "https://video.example/new-room" }), "voice", "ai");
     });
 
@@ -929,7 +1042,7 @@ describe("reschedule / cancel", () => {
       errSpy.mockRestore();
       expect(loggedUrl).toBe(false);
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
-      expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "old1",
         expect.objectContaining({ meetingUrl: undefined }), "voice", "ai");
     });
   });
@@ -944,8 +1057,7 @@ describe("reschedule / cancel", () => {
       computeAllSlotsMock.mockResolvedValue([newSlot]);
       dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
         starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
-      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok99" });
-      dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+      dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok99", cancelledAt: "2027-05-31T09:00:00.000123Z" });
       dbMocks.getContact.mockResolvedValue({
         id: "ct1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", phone: "+19562921696",
       });
@@ -1046,6 +1158,7 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: false, error: expect.any(String) });
       expect(result).not.toHaveProperty("bookingId");
       expect(state).toBe(pre);
+      expect(dbMocks.moveBooking).not.toHaveBeenCalled();
       expect(dbMocks.createBooking).not.toHaveBeenCalled();
       expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
       expect(computeAllSlotsMock).not.toHaveBeenCalled();
@@ -1081,11 +1194,13 @@ describe("reschedule / cancel", () => {
       dbMocks.getBookingById.mockResolvedValue(ROW);
       dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
       dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+      dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
       createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/r" });
       meetingProviderMock.mockReturnValue({ createMeetingRoom });
     });
 
     function expectNothingWritten() {
+      expect(dbMocks.moveBooking).not.toHaveBeenCalled();
       expect(dbMocks.createBooking).not.toHaveBeenCalled();
       expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
       expect(computeAllSlotsMock).not.toHaveBeenCalled();
@@ -1146,8 +1261,7 @@ describe("reschedule / cancel", () => {
       const { result } = await runTool(owns("ct2"), ctx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
-      expect(dbMocks.createBooking).toHaveBeenCalled();
-      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+      expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "b1", expect.any(Object), "voice", "ai");
     });
 
     it("withheld caller ID: a booking NOT made on this call cannot be cancelled", async () => {
@@ -1247,8 +1361,10 @@ describe("reschedule / cancel", () => {
     beforeEach(() => {
       computeAllSlotsMock.mockResolvedValue([newSlot]);
       dbMocks.getBookingById.mockResolvedValue(ROW);
+      // createBooking: the fresh booking in the consent-kinds test below; the cancel's own write; the move's.
       dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
       dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+      dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok", cancelledAt: "2027-05-31T09:00:00.000123Z" });
       dbMocks.getContact.mockResolvedValue({ ...OWNER, email: "ana@example.com" });
     });
 
@@ -1687,6 +1803,7 @@ describe("runTool refuses the booking tools the line does not offer", () => {
     expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled(); expect(dbMocks.findUpcomingBookingForContact).not.toHaveBeenCalled();
     expect(dbMocks.getBookingById).not.toHaveBeenCalled();
     expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    expect(dbMocks.moveBooking).not.toHaveBeenCalled();
   });
 });
 
@@ -1701,7 +1818,10 @@ describe("Sofía's acts (item 8c)", () => {
   const CALLERS_OWN = { id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696" };
   // An exact, odd instant: the version must be THIS value, never a fresh clock read.
   const CANCEL_VERSION = "2027-05-31T09:15:42.123Z";
-  const VOICE = { actor: "voice", callId: "call-1", chatId: null } as const;
+  // A move's cancel stamp carries microseconds (moveStamp); a different value again, so the act's version
+  // can only be the move's own answer, never the cancel tool's or a clock read.
+  const MOVE_VERSION = "2027-05-31T09:15:42.123456Z";
+  const VOICE ={ actor: "voice", callId: "call-1", chatId: null } as const;
   const BOOK_ARGS = { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true };
 
   beforeEach(() => {
@@ -1734,7 +1854,7 @@ describe("Sofía's acts (item 8c)", () => {
       } },
     { label: "reschedule_appointment", name: "reschedule_appointment",
       args: { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" },
-      setup: () => { dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" }); } },
+      setup: () => { dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok", cancelledAt: MOVE_VERSION }); } },
     { label: "cancel_appointment", name: "cancel_appointment", args: { bookingId: "b1" }, setup: () => {} },
   ];
 
@@ -1790,24 +1910,42 @@ describe("Sofía's acts (item 8c)", () => {
     expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
   });
 
-  it("a reschedule is ONE booking_rescheduled act carrying the cancel's own updatedAt as its version, never a booking_created (mutation: record new Date().toISOString() -> FAILS)", async () => {
-    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
+  it("a reschedule is ONE booking_rescheduled act carrying the move's own cancel stamp as its version, never a booking_created (mutation: record new Date().toISOString() -> FAILS)", async () => {
+    dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok", cancelledAt: MOVE_VERSION });
     const { result } = await runTool(owns(), callCtx, "reschedule_appointment",
       { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(result).toMatchObject({ ok: true, bookingId: "new1" });
     expect(inserted()).toEqual([[{
       ...VOICE, kind: "booking_rescheduled", contactId: "ct1",
       target: { bookingId: "new1", fromBookingId: "b1" },
-      before: { startsAt: "2027-06-01T14:00:00Z", endsAt: "2027-06-01T15:00:00Z", version: CANCEL_VERSION },
+      before: { startsAt: "2027-06-01T14:00:00Z", endsAt: "2027-06-01T15:00:00Z", version: MOVE_VERSION },
       after: { startsAt: "2027-06-02T14:00:00.000Z", endsAt: "2027-06-02T15:00:00.000Z" },
     }]]);
   });
 
   it("a reschedule whose new slot was just taken records nothing: nothing changed", async () => {
     const { SlotTakenError } = await import("@bis/db");
-    dbMocks.createBooking.mockRejectedValue(new SlotTakenError());
+    dbMocks.moveBooking.mockRejectedValue(new SlotTakenError());
     await runTool(owns(), callCtx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
     expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+  });
+
+  it("a reschedule the business overtook (the booking cancelled under the call) records nothing: nothing changed", async () => {
+    const { BookingNotMovableError } = await import("@bis/db");
+    dbMocks.getBookingById.mockResolvedValueOnce(ROW).mockResolvedValueOnce({ ...ROW, status: "cancelled" });
+    dbMocks.moveBooking.mockRejectedValue(new BookingNotMovableError());
+    const { result } = await runTool(owns(), callCtx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
+    expect(result).toMatchObject({ ok: false });
+    expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+  });
+
+  it("the move's act is recorded AFTER the move and BEFORE the work that follows it", async () => {
+    const order: string[] = [];
+    dbMocks.moveBooking.mockImplementation(async () => { order.push("move"); return { id: "new1", cancelToken: "newtok", cancelledAt: MOVE_VERSION }; });
+    dbMocks.insertAiActs.mockImplementation(async () => { order.push("record"); });
+    dbMocks.ensureConversation.mockImplementation(async () => { order.push("thread"); return { id: "cv1", created: false }; });
+    await runTool(owns(), callCtx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" });
+    expect(order).toEqual(["move", "record", "thread"]);
   });
 
   it("a cancel is ONE booking_cancelled act: the old times before, the cancel's updatedAt after", async () => {
@@ -1899,8 +2037,8 @@ describe("§7: a booking change with no staff address says so (G1)", () => {
     computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
     dbMocks.getBookingById.mockResolvedValue(ROW);
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19562921696" });
-    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
     dbMocks.createMessage.mockResolvedValue({ id: "msg1" });
     sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
@@ -2021,7 +2159,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19565550100" });
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
     computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
-    dbMocks.createBooking.mockResolvedValue({ id: "bk2", cancelToken: "t2" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "bk2", cancelToken: "t2", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     const cases = [["cancel_appointment", { bookingId: "b1" }], ["reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" }]] as const;
     expect(cases).toHaveLength(2);
     for (const [name, args] of cases) {
@@ -2029,7 +2167,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     }
     expect(dbMocks.getContact).toHaveBeenCalledTimes(2);
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
-    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    expect(dbMocks.moveBooking).not.toHaveBeenCalled();
   });
 
   it("a found result confirmed by the caller ID alone (one contact) carries no note", async () => {
@@ -2063,12 +2201,14 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
     // Resolved BEFORE the LOCKED assertions, so a mutant that writes fails on an assertion, not on a missing mock.
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "bk2", cancelToken: "t2", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
     dbMocks.createMessage.mockResolvedValue({ id: "m1" });
     expect((await runTool(locked, ctx, "find_my_booking", {})).result).toEqual(LOCKED);
     expect((await runTool(locked, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual(LOCKED);
     expect((await runTool(locked, ctx, "reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" })).result).toEqual(LOCKED);
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.moveBooking).not.toHaveBeenCalled();
     const madeHere = { ...locked, bookings: [{ id: "b1", contactName: "Ana", startsAt: "x", endsAt: "y", status: "booked" as const }] };
     expect((await runTool(madeHere, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual({ ok: true });
   });
@@ -2084,7 +2224,8 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
     dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
-    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" }).mockResolvedValueOnce({ id: "bk2", cancelToken: "t2" });
+    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" });
+    dbMocks.moveBooking.mockResolvedValueOnce({ id: "bk2", cancelToken: "t2", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     const booked = await runTool(locked, ctx, "book_appointment", { startsAt: slot.startsAt.toISOString(), name: "Ana Prueba", emailDeclined: true });
     expect(booked.result).toMatchObject({ ok: true, bookingId: "bk1" });
     const msg = await runTool(booked.state, ctx, "take_message", { body: "Please call me", name: "Ana Prueba" });
@@ -2125,6 +2266,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
     // Resolved, so a mutant that writes fails on the assertions below, not on a missing mock.
     dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.moveBooking.mockResolvedValue({ id: "bk2", cancelToken: "t2", cancelledAt: "2027-05-31T09:00:00.000123Z" });
     const cases = [["cancel_appointment", { bookingId: "b1" }], ["reschedule_appointment", { bookingId: "b1", startsAt: "2027-06-02T14:00:00.000Z" }]] as const;
     expect(cases).toHaveLength(2);
     for (const [name, args] of cases) {
@@ -2132,7 +2274,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     }
     expect(dbMocks.getContact).toHaveBeenCalledTimes(2);
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
-    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    expect(dbMocks.moveBooking).not.toHaveBeenCalled();
   });
 
   it("a rung-1 confirmation on an insurance call cannot move the booking (P7; mutation: ignore the rung -> FAILS)", async () => {

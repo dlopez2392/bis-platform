@@ -791,12 +791,17 @@ export class BookingNotMovableError extends Error {
  * The new row gets its own cancel token (the old row's now opens a cancelled
  * booking), and `rescheduleChain` gives its calendar file the old row's UID
  * with the next SEQUENCE, so the event a customer saved is updated.
+ *
+ * `cancelledAt` is the stamp OUR cancel wrote on the old row: its version, as
+ * `setBookingStatus`'s `updatedAt` is a cancel's. The phone receptionist's
+ * reschedule records it on its act, the key 0091's Undo restores against;
+ * reading the row afterwards could read someone else's later write.
  */
 export async function moveBooking(
   db: SupabaseClient, accountId: string, bookingId: string,
   to: { startsAt: Date; endsAt: Date; meetingUrl?: string; ipHash?: string },
   actorId: string, actorType: ActorType = "user",
-): Promise<{ id: string; cancelToken: string }> {
+): Promise<{ id: string; cancelToken: string; cancelledAt: string }> {
   const { data, error } = await db.from("bookings")
     .select("id, calendar_id, contact_id, note, booker_timezone, status")
     .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
@@ -896,7 +901,7 @@ export async function moveBooking(
     { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
   await emitLogged(db, accountId, "booking.status_changed", actorId,
     { bookingId: old.id, status: "cancelled" }, actorType);
-  return { id: newId, cancelToken };
+  return { id: newId, cancelToken, cancelledAt: ourStamp };
 }
 
 /**
