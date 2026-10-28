@@ -308,6 +308,9 @@ export function ContactsTable({
         accountId={accountId}
         row={peekRow(rows, peekId, remembered)}
         onClose={close}
+        // The remembered row, not peekId: it outlives the close, and Radix
+        // asks where focus goes only after the peek has gone (drawer-focus.ts).
+        returnFocusRowId={remembered?.id ?? null}
         canAssign={canAssign}
         members={members}
         viewerId={viewerId}

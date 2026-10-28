@@ -30,6 +30,7 @@ import { emailLoadFrom, type EmailLoad } from "@/lib/consent/email-row";
 import { textsLoadFrom, type TextsLoad } from "@/lib/consent/texts-row";
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
+import { returnFocusToRow } from "@/lib/contacts/drawer-focus";
 import { drawerFieldsRow, drawerLoadFrom, drawerSummaryUrl, type DrawerLoad, type ParsedDrawerSummary } from "@/lib/contacts/drawer-summary";
 import type { RecentRowView } from "@/lib/record/recent-rows";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
@@ -86,7 +87,7 @@ type SectionState = "loading" | "ready" | "error";
  * without blanking the others (C3). Every read-only word comes from the route in ONE locale (C1).
  */
 export function ContactDrawer({
-  accountId, row, onClose, canAssign = false, members = [], viewerId = null,
+  accountId, row, onClose, canAssign = false, members = [], viewerId = null, returnFocusRowId = null,
 }: {
   accountId: string;
   row: ContactRow | null;
@@ -97,6 +98,9 @@ export function ContactDrawer({
   members?: AssignMember[];
   /** The viewer's own person here: "You" on a read-only line only for their own customer. */
   viewerId?: string | null;
+  /** The row to give focus back to on close (lib/contacts/drawer-focus.ts). The table's, not
+   *  `row?.id`: by the time Radix calls onCloseAutoFocus, `row` is already null. */
+  returnFocusRowId?: string | null;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -184,6 +188,7 @@ export function ContactDrawer({
         side="right"
         className="w-full sm:max-w-md"
         closeLabel={tx("drawer.close")}
+        onCloseAutoFocus={(e) => returnFocusToRow(e, returnFocusRowId)}
         // Radix's own Escape listener sits on `document` with `{capture: true}` and runs BEFORE any
         // bubble-phase `onKeyDown` on a field inside this sheet — including InlineField's own Escape
         // handler, which only means to cancel the field being edited. preventDefault here stops

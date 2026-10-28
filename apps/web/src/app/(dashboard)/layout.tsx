@@ -145,7 +145,7 @@ export default async function RootLayout({
                 anyone whose session already has one. */}
             <ActivateSoleOrganization />
             {children}
-            <Toaster richColors position="bottom-right" />
+            <Toaster position="bottom-right" />
           </ThemeProvider>
         </body>
       </html>

@@ -212,8 +212,26 @@ describe("ZoneNote — the reader's language (F-085 follow-ups)", () => {
     expect(html).not.toContain("Las horas");
   });
 
-  it("the guessed-zone warning, still English, is marked lang=\"en\" (mutation: drop lang from the Notice -> FAILS)", () => {
+  // 2026-10-28: the warnings have Spanish twins now, so the Notice carries
+  // the reader's language instead of the temporary lang="en".
+  it("the guessed-zone warning reads Spanish on a Spanish page, marked lang=\"es\" (mutation: keep m[...] / lang=\"en\" -> FAILS)", () => {
     const html = renderLocale(FROM_AGENCY, "es");
+    expect(html).toMatch(/<div[^>]*lang="es"[^>]*>[^<]*Esta empresa no tiene zona horaria propia/);
+    expect(plain(html)).toContain("Todavía no hay un campo para esto en Ajustes");
+    expect(plain(html)).not.toContain("This company");
+  });
+
+  it("the client's and the account-less warnings read Spanish too", () => {
+    const client = plain(renderToStaticMarkup(createElement(ZoneNote, { zone: FROM_FALLBACK, isAgency: false, locale: "es" })));
+    expect(client).toContain("Su zona horaria necesita corregirse");
+    const agencyFallback = plain(renderLocale(FROM_FALLBACK, "es"));
+    expect(agencyFallback).toContain("Ni esta empresa ni la agencia tienen una zona horaria válida");
+    const accountless = plain(renderToStaticMarkup(createElement(ZoneNote, { zone: FROM_FALLBACK, isAgency: true, accountless: true, locale: "es" })));
+    expect(accountless).toContain("La agencia tampoco tiene una zona horaria válida");
+  });
+
+  it("with no locale the warning is still English and says so (lang=\"en\")", () => {
+    const html = renderLocale(FROM_AGENCY);
     expect(html).toMatch(/<div[^>]*lang="en"[^>]*>[^<]*This company has no timezone of its own/);
   });
 });

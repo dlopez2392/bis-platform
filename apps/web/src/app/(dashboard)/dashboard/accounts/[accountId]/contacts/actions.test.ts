@@ -617,6 +617,18 @@ describe("createContactAction (D-013)", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
   });
 
+  // 2026-10-28: the refusals were English strings rendered as-is on a list
+  // that reads Spanish. Each now names its key, which the dialog renders in
+  // the reader's language; `error` stays the English line.
+  it.each([
+    ["an all-blank submission", {}, "contacts.add.blank"],
+    ["a malformed email", { firstName: "Jo", email: "not-an-email" }, "contacts.add.badEmail"],
+    ["a malformed phone", { firstName: "Jo", phone: "call after 5" }, "contacts.add.badPhone"],
+  ] as const)("names %s's refusal by key, the English line unchanged (mutation: drop errorKey -> FAILS)", async (_, fields, key) => {
+    const r = await createContactAction("a1", addForm(fields));
+    expect(r).toEqual({ kind: "invalid", error: m[key], errorKey: key });
+  });
+
   it("a name alone is enough — email/phone are not required", async () => {
     dbMocks.createContact.mockResolvedValueOnce({ existing: false, id: "new1" });
     const r = await createContactAction("a1", addForm({ firstName: "Jo" }));

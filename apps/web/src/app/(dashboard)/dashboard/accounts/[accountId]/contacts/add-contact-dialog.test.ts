@@ -103,6 +103,24 @@ describe("AddContactDialog (D-013)", () => {
     expect(openState.set).not.toHaveBeenCalledWith(false);
   });
 
+  it("a keyed refusal is toasted in the reader's language (2026-10-28; mutation: toast result.error regardless -> FAILS)", async () => {
+    readerLocale = "es";
+    const action = vi.fn(async (): Promise<CreateContactResult> =>
+      ({ kind: "invalid", error: m["contacts.add.blank"], errorKey: "contacts.add.blank" }));
+    mount(action);
+    await capturedRun!(emptyForm(), fakeFormEl);
+    expect(toastError).toHaveBeenCalledWith("Agregue un nombre, un correo electrónico o un número de teléfono.");
+  });
+
+  it("each of the three refusals has its Spanish twin, in usted", () => {
+    const cat = m as Record<string, string>;
+    expect([cat["contacts.add.blank.es"], cat["contacts.add.badEmail.es"], cat["contacts.add.badPhone.es"]]).toEqual([
+      "Agregue un nombre, un correo electrónico o un número de teléfono.",
+      "Eso no parece una dirección de correo electrónico.",
+      "Eso no parece un número de teléfono.",
+    ]);
+  });
+
   it("on a 'created' result, closes the dialog and clears any prior existing-contact state", async () => {
     const action = vi.fn(async (): Promise<CreateContactResult> => ({ kind: "created" }));
     const { openState, existingState } = mount(action);

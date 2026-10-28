@@ -105,11 +105,16 @@ describe("overlays float on --surface-overlay (opaque-over-scroll rule)", () => 
     expect(row).not.toMatch(/glass|blur/);
   });
 
-  it("toasts are overlays with the strong line and the overlay shadow inline (sonner's own rule outranks the utility)", () => {
+  // Retargeted 2026-10-28: toasts run Sonner `unstyled`, so its styled-mode
+  // grey shadow no longer exists to outrank .glass-overlay's
+  // --shadow-overlay, and the inline boxShadow that fought it went with it.
+  // The full token set is pinned in sonner-style.test.ts.
+  it("toasts are overlays with the strong line, and Sonner's styled mode is off so the overlay shadow wins", () => {
     const t = src("./sonner.tsx");
-    expect(t).toContain('"--normal-border": "var(--line-strong)"');
-    expect(t).toContain('className: "glass-overlay"');
-    expect(t).toContain('boxShadow: "var(--shadow-overlay)"');
+    expect(t).toMatch(/toast:\s*\n?\s*"[^"]*\bglass-overlay\b[^"]*"/);
+    expect(t).toMatch(/toast:\s*\n?\s*"[^"]*border-\[var\(--line-strong\)\][^"]*"/);
+    expect(t).toMatch(/unstyled: true/);
+    expect(t).not.toMatch(/boxShadow:/);
   });
 });
 

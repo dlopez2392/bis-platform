@@ -62,6 +62,7 @@ import { HeldEmailsDemo } from "./held-emails-demo";
 import { NeverLogDemo } from "./never-log-demo";
 import { ForwardingDemo } from "./forwarding-demo";
 import { WebchatDemo } from "./webchat-demo";
+import { ToastDemo } from "./toast-demo";
 import { RecordDemo } from "./record-demo";
 import { AiActsDemo } from "./ai-acts-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -992,14 +993,17 @@ export default async function StyleguidePage({
           </div>
         </Section>
 
+        <Section title={t(m, "styleguide.toasts", "en")} file="components/ui/sonner.tsx">
+          <ToastDemo />
+        </Section>
+
         <Separator />
         <p className="max-w-prose text-xs text-muted-foreground">
           Interactive components with their own state — the contact drawer
           (…/contacts/contact-drawer.tsx), InlineField
           (components/inline-field.tsx), the bulk-action bar
-          (…/contacts/bulk-action-bar.tsx), the command palette
-          (components/command-palette.tsx) and toasts (components/ui/sonner.tsx)
-          — are exercised on their own screens and in the e2e suite rather than
+          (…/contacts/bulk-action-bar.tsx) and the command palette
+          (components/command-palette.tsx) — are exercised on their own screens and in the e2e suite rather than
           re-mounted here with invented data that could drift from the real
           thing.
         </p>

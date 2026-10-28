@@ -23,7 +23,7 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      className={cn("[&_tr]:border-b [&_tr]:border-[var(--row-line)]", className)}
       {...props}
     />
   )
@@ -44,7 +44,7 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
     <tfoot
       data-slot="table-footer"
       className={cn(
-        "border-t bg-muted/50 font-medium [&>tr]:last:border-b-0",
+        "border-t border-[var(--row-line)] bg-muted/50 font-medium [&>tr]:last:border-b-0",
         className
       )}
       {...props}
@@ -56,8 +56,10 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
     <tr
       data-slot="table-row"
+      // The rule's colour is named: this app has no `* { border-color }`
+      // base rule, so a bare `border-b` paints currentColor (border-colour.test.ts).
       className={cn(
-        "border-b transition-colors hover:bg-[var(--surface-3)] has-aria-expanded:bg-[var(--surface-3)] data-[state=selected]:bg-[var(--accent-dim)]",
+        "border-b border-[var(--row-line)] transition-colors hover:bg-[var(--surface-3)] has-aria-expanded:bg-[var(--surface-3)] data-[state=selected]:bg-[var(--accent-dim)]",
         className
       )}
       {...props}

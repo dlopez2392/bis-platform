@@ -42,7 +42,9 @@ import { setBookingStatusAction } from "../calendar/actions";
  *  read), so a server action never has to resolve a locale. `error` stays the English line for any
  *  caller that reads only that. A failure forwarded from elsewhere (closeOutBooking's calendar action)
  *  carries no key and is shown as it came. */
-export type WorkActionErrorKey = "work.actionFailed" | "todo.consent.decideFirst";
+export type WorkActionErrorKey =
+  | "work.actionFailed" | "todo.consent.decideFirst"
+  | "calendar.bookings.statusUpdateFailed" | "calendar.bookings.notStartedYet";
 export type ActionResult = { ok: true } | { ok: false; error: string; errorKey?: WorkActionErrorKey };
 
 /** The one failure every action below reports on its own (each fails the same honest way). */
@@ -174,9 +176,18 @@ export async function closeOutBooking(
   accountId: string, bookingId: string, status: "completed" | "no_show",
 ): Promise<ActionResult> {
   const result = await setBookingStatusAction(accountId, bookingId, status);
-  if (result.ok) revalidatePath(tasksPath(accountId));
-  return result;
+  if (result.ok) {
+    revalidatePath(tasksPath(accountId));
+    return result;
+  }
+  // 2026-10-28: the calendar action words its failures in English only; the two it can return are
+  // named here by key so the To do renders them in the reader's language. Anything else is still
+  // forwarded as it came.
+  const errorKey = CALENDAR_CLOSE_OUT_KEYS.find((k) => m[k] === result.error);
+  return errorKey ? { ...result, errorKey } : result;
 }
+
+const CALENDAR_CLOSE_OUT_KEYS = ["calendar.bookings.statusUpdateFailed", "calendar.bookings.notStartedYet"] as const;
 
 /**
  * The stale-hold path (review R3-I1, and fix round 1 item 1): a hold's To-do
