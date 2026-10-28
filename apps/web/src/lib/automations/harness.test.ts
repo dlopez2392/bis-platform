@@ -7,7 +7,7 @@ vi.mock("@/lib/consent/email-gate", () => emailGate);
 const dbMocks = vi.hoisted(() => ({ loadClosureSnapshot: vi.fn(), listBusinessStatusChanges: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
-import { buildPassContext, runPasses } from "./harness";
+import { buildPassContext, runPass, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
 
 function ctx(): PassContext {
@@ -133,5 +133,16 @@ describe("runPasses — the operational floor's heartbeats (spec §1)", () => {
     const mk = (key: string): Pass => ({ key, run: async () => { order.push(`run:${key}`); return {}; } });
     await runPasses([mk("a"), mk("b")], ctx(), beat);
     expect(order).toEqual(["run:a", "beat:cron.pass.a", "run:b", "beat:cron.pass.b", "beat:cron.tick"]);
+  });
+});
+
+describe("runPass — one pass in its own invocation (F-196: the pass route's unit)", () => {
+  it("runPass runs one pass and writes cron.pass.<key>, never cron.tick (mutation: make runPass call runPasses([pass], ctx, beat) -> cron.tick appears, FAILS)", async () => {
+    const beats: [string, unknown][] = [];
+    const beat = async (_c: PassContext, key: string, outcome: unknown) => { beats.push([key, outcome]); };
+    const a: Pass = { key: "a", run: async () => ({ sent: 4 }) };
+
+    await expect(runPass(a, ctx(), beat)).resolves.toEqual({ sent: 4 });
+    expect(beats).toEqual([["cron.pass.a", { ok: true }]]);
   });
 });

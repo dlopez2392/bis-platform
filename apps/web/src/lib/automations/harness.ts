@@ -34,24 +34,36 @@ export async function runPasses(
   passes: readonly Pass[], ctx: PassContext, beat: HeartbeatWriter = defaultBeat,
 ): Promise<Record<string, PassCounters>> {
   const results: Record<string, PassCounters> = {};
-  for (const pass of passes) {
-    let outcome: HeartbeatOutcome = { ok: true };
-    try {
-      results[pass.key] = await pass.run(ctx);
-    } catch (e) {
-      results[pass.key] = { errored: 1 };
-      outcome = { ok: false, error: String(e) };
-      console.error(`automation pass ${pass.key} failed outright: ${String(e)}`);
-    }
-    // AFTER the pass and OUTSIDE its try: a heartbeat is a record of what the
-    // pass did, so it can never be the reason a pass failed. Awaited, in
-    // order, so the alert pass (registered last) reads this tick's rows.
-    await safeBeat(beat, ctx, `cron.pass.${pass.key}`, outcome);
-  }
+  for (const pass of passes) results[pass.key] = await runPass(pass, ctx, beat);
   // The tick completed. `/api/ops/health` reads this one row: no completed
   // tick for 45 minutes is what the hourly GitHub check alerts on.
   await safeBeat(beat, ctx, "cron.tick", { ok: true });
   return results;
+}
+
+/**
+ * One pass, isolated: the loop body of `runPasses`, and the whole of what a
+ * fan-out pass route runs (F-196). A pass that rejects outright is reported as
+ * `{ errored: 1 }`; then its own `cron.pass.<key>` heartbeat. Never `cron.tick`:
+ * under fan-out the dispatcher writes that once, after every node is decided.
+ */
+export async function runPass(
+  pass: Pass, ctx: PassContext, beat: HeartbeatWriter = defaultBeat,
+): Promise<PassCounters> {
+  let counters: PassCounters;
+  let outcome: HeartbeatOutcome = { ok: true };
+  try {
+    counters = await pass.run(ctx);
+  } catch (e) {
+    counters = { errored: 1 };
+    outcome = { ok: false, error: String(e) };
+    console.error(`automation pass ${pass.key} failed outright: ${String(e)}`);
+  }
+  // AFTER the pass and OUTSIDE its try: a heartbeat is a record of what the
+  // pass did, so it can never be the reason a pass failed. Awaited, in
+  // order, so the alert pass (registered last) reads this tick's rows.
+  await safeBeat(beat, ctx, `cron.pass.${pass.key}`, outcome);
+  return counters;
 }
 
 /**

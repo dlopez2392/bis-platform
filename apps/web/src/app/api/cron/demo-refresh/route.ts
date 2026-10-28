@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { cronAuthorized } from "@/lib/automations/cron-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -26,15 +26,10 @@ const REPO = "dlopez2392/bis-platform";
 const WORKFLOW = "seed-demo.yml";
 
 export async function GET(req: Request): Promise<Response> {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return new Response(null, { status: 503 });
-
-  // Constant-time compare, as the reminders route does.
-  const got = Buffer.from(req.headers.get("authorization") ?? "");
-  const want = Buffer.from(`Bearer ${secret}`);
-  if (got.length !== want.length || !timingSafeEqual(got, want)) {
-    return new Response(null, { status: 401 });
-  }
+  // The one cron auth helper (constant-time compare, length first).
+  const auth = cronAuthorized(req);
+  if (auth === "unset") return new Response(null, { status: 503 });
+  if (auth === "denied") return new Response(null, { status: 401 });
 
   const token = process.env.DEMO_REFRESH_GITHUB_TOKEN;
   if (!token) return Response.json({ dispatched: false, reason: "token unset" }, { status: 503 });
