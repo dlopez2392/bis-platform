@@ -43,10 +43,17 @@ watched clean for a couple of ticks.
    separate deploy.
 2. Dry run: a local fan-out run against bis-ci (`next dev`, with
    `CRON_SECRET`, `CRON_FANOUT=1` and `APP_ORIGIN=http://localhost:3000` set
-   for that one shell only — never in an `.env*` file). Call the dispatcher
-   and expect a 200 with all 21 keys (the 20 passes plus the queue's own
-   drain), a fresh `cron.pass.<key>` row per key on bis-ci, a fresh
-   `cron.tick`, and `jobs.dead`/`jobs.backlog` both ok. Enqueue one
+   for that one shell only — never in an `.env*` file). Under `next dev`
+   both providers are the fakes unless `EMAIL_DEV_REDIRECT_TO` or
+   `SMS_DEV_REDIRECT_TO` is set, so first confirm, BY NAME ONLY, that
+   neither is in `apps/web/.env.local` (never print a value):
+   `grep -c "^EMAIL_DEV_REDIRECT_TO=\|^SMS_DEV_REDIRECT_TO=" apps/web/.env.local`
+   must answer `0`. Setting them blank in the shell would only unset them
+   and let the file's value load. Call the dispatcher and expect a 200 whose
+   JSON is the `reminders` pass's counters at the top level plus 20 nested
+   keys (the 19 other passes and `jobsDrain`), the same shape as today's
+   single tick; a fresh `cron.pass.<key>` row for each of the 21 keys on
+   bis-ci, a fresh `cron.tick`, and `jobs.dead`/`jobs.backlog` both ok. Enqueue one
    throwaway `platform.ping` row by SQL and run the dispatcher again: the
    row ends up `succeeded`. Delete it. Check first that no `screenshots.yml`
    run is using the same seeded account.
@@ -91,12 +98,18 @@ delete from jobs where id = '<id>' and state = 'dead';
 
 ## 6. What `jobs.dead` and `jobs.backlog` mean
 
-Two heartbeats the drain pass writes every tick, read by `/api/ops/health`
-and the alert email the same as any `cron.pass.*` key:
-- `jobs.dead` fails while any job is `dead` — it clears on its own the next
-  tick after every dead job is requeued or discarded (section 5).
-- `jobs.backlog` fails when the queue is falling behind (a growing count of
-  due-but-unclaimed rows) — it clears on its own once the drain catches up.
+Two heartbeats the drain pass writes every tick, read by the ops alert pass
+(`opsWatch`). Unlike a `cron.pass.*` key, which alerts at two failures in a
+row, each alerts on its FIRST failure, as a webhook key does. (`/api/ops/health`
+does not read them; it watches `cron.tick` and the scanner only.)
+- `jobs.dead` fails while any job is `dead`, naming each kind and its count
+  ("2 jobs gave up: calendar.push (2)"; past 1000 dead rows it says "1000 or
+  more" rather than a count). It clears on its own the next tick after every
+  dead job is requeued or discarded (section 5).
+- `jobs.backlog` fails when the oldest due job (`queued` or `retrying`, its
+  `run_after` passed) has waited more than 60 minutes, and the alert names
+  that job's kind ("the oldest waiting job (calendar.push) has waited 61
+  minutes"). It clears on its own once the drain catches up.
 
 Once alerted, either keeps re-alerting every six hours until it clears, by
 design (the owner's Q3 decision) — that repeat is the point, not a bug.
@@ -106,7 +119,16 @@ design (the owner's Q3 decision) — that repeat is the point, not a bug.
 `sweep_jobs` (run from the drain pass) deletes `succeeded` rows after 7
 days and `dead` rows after 30.
 
-## 8. Rollback
+## 8. Before the merge: 0102 on production
+
+0102 must be on production BEFORE the PR merges, not after: the daily demo
+re-seed's `deleteAccountCascade` walks `ACCOUNT_OWNED_TABLES`, which names
+`jobs` from the first deploy, so a production without the table fails that
+re-seed. Order: bis-ci (the `ci-project-setup.yml` workflow), then
+production, then the parity check (`docs/runbooks/ci-supabase-project.md`),
+then merge.
+
+## 9. Rollback
 
 **Fast:** unset `CRON_FANOUT` and redeploy. The single tick returns exactly
 as it is today; jobs already in the table wait, harmlessly, with no

@@ -4,7 +4,7 @@ import { RELEASERS } from "./passes/release-held";
 import type { HeartbeatOutcome } from "./harness";
 import {
   PLAN, JOBS_DRAIN_KEY, JOBS_DRAIN_MAX_S, PASS_ROUTE_MAX_S, ANSWER_GRACE_S,
-  fanoutEnabled, longestPathS, runFanout, httpInvoke,
+  fanoutEnabled, longestPathS, runFanout, httpInvoke, HEARTBEAT_WRITE_TIMEOUT_MS,
   type Answer, type Invoke, type FanoutBeat, type PlanNode,
 } from "./fanout";
 
@@ -343,6 +343,48 @@ describe("runFanout — the dispatcher's own heartbeats", () => {
     expect(h.invoked("usageReport")).toBe(true);
     expect(h.invoked("opsWatch")).toBe(true);
     await h.run;
+  });
+
+  it("10c. a heartbeat write that never returns is given up after HEARTBEAT_WRITE_TIMEOUT_MS (10 s), logged, and the tick goes on: the regardless nodes start and cron.tick is reached (mutation: await the beat without the race -> the tick never ends, FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const never = new Promise<void>(() => {});
+      const h = harness({
+        answers: { weeklyAgencyReport: { status: 504, counters: null } },
+        beatHold: { "cron.pass.weeklyAgencyReport": never, "cron.tick": never },
+      });
+      await flush();
+      expect(h.invoked("usageReport")).toBe(false);
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_WRITE_TIMEOUT_MS - 1);
+      expect(h.invoked("usageReport")).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(h.invoked("usageReport")).toBe(true);
+      expect(h.invoked("opsWatch")).toBe(true);
+      await flush();
+      expect(h.events).toContain("beat:cron.tick");
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_WRITE_TIMEOUT_MS);
+      const results = await h.run;
+      expect(results.opsWatch).toEqual(OK.counters);
+      expect(HEARTBEAT_WRITE_TIMEOUT_MS).toBe(10_000);
+      const logged = err.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((l) => l.includes("cron.pass.weeklyAgencyReport") && l.includes("10000 ms"))).toBe(true);
+      expect(logged.some((l) => l.includes("cron.tick") && l.includes("10000 ms"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("10d. a beat that lands in time leaves no timer behind", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const h = harness({ answers: { siteTraffic: { status: 504, counters: null } } });
+      await h.run;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("11. cron.tick is written once, after opsWatch answers (mutation: write it before awaiting the last node -> FAILS)", async () => {

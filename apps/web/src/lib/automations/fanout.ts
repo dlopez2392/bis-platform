@@ -30,6 +30,13 @@ export const ANSWER_GRACE_S = 5;
 /** Headroom the dispatcher keeps beyond the plan's longest path. */
 export const DISPATCH_SLACK_S = 20;
 export const JOBS_DRAIN_KEY = "jobsDrain";
+/**
+ * The longest the dispatcher waits on one heartbeat write before giving it up
+ * (logged). recordHeartbeat never throws, but a hung connection could still
+ * hold a node from ever counting as done, and with it every `regardless` node
+ * and `cron.tick`. A write given up may still land late; that is harmless.
+ */
+export const HEARTBEAT_WRITE_TIMEOUT_MS = 10_000;
 
 /**
  * When a node may start, given how its predecessors ended:
@@ -211,10 +218,17 @@ export async function runFanout(input: {
   const inFlight = new Map<string, Promise<void>>();
 
   const safeBeat = async (key: string, outcome: HeartbeatOutcome): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const gaveUp = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), HEARTBEAT_WRITE_TIMEOUT_MS);
+    });
     try {
-      await beat(key, outcome);
+      const r = await Promise.race([beat(key, outcome), gaveUp]);
+      if (r === "timeout") console.error(`heartbeat ${key} not written: no answer within ${HEARTBEAT_WRITE_TIMEOUT_MS} ms`);
     } catch (e) {
       console.error(`heartbeat ${key} not written: ${String(e)}`);
+    } finally {
+      clearTimeout(timer);
     }
   };
 

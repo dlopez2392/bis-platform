@@ -140,6 +140,16 @@ describe("jobsDrainPass — the drain (spec section 9)", () => {
     expect(db.retryJob).toHaveBeenCalledWith(ctxDb, expect.anything(), new Date(T0 + 5 * MIN).toISOString(), "rate limited", expect.any(String));
   });
 
+  it.each([
+    ["NaN", Number.NaN],
+    ["a negative wait", -5 * MIN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("5a. a RetryJobAfter of %s is not a wait: the retry falls back to the curve, 15 minutes out (mutation: use afterMs unchecked → FAILS)", async (_label, afterMs) => {
+    queue(row({ attempts: 1, max_attempts: 3 }));
+    await drain(handler(async () => { throw new RetryJobAfter(afterMs, "odd header"); })).run(ctx);
+    expect(db.retryJob).toHaveBeenCalledWith(ctxDb, expect.anything(), new Date(T0 + 15 * MIN).toISOString(), "odd header", expect.any(String));
+  });
+
   it("5b. a handler's own backoff is the curve a retry follows", async () => {
     queue(row({ attempts: 2, max_attempts: 3 }));
     await drain(handler(async () => { throw new Error("x"); }, { backoff: { baseMs: MIN, capMs: 60 * MIN } })).run(ctx);

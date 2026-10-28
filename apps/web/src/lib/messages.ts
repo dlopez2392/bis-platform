@@ -1107,7 +1107,9 @@ export const m = {
   // precise name to disambiguate from. The Label stays sr-only so the text
   // still renders on screen exactly once.
   "settings.weeklyReport": "Weekly report",
-  "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas.",
+  // F-196: {max} is WEEKLY_REPORT_MAX_RECIPIENTS (lib/automations/caps.ts), filled by the card.
+  "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas. Up to {max} addresses.",
+  "settings.weeklyReportHint.es": "Quién recibe los números del lunes. Separa las direcciones con comas. Hasta {max} direcciones.",
   "settings.weeklyReportSaved": "Saved. The next report goes out Monday morning.",
   "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
   // F-196: the weekly report goes to at most WEEKLY_REPORT_MAX_RECIPIENTS

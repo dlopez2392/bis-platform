@@ -129,9 +129,12 @@ async function runOne(
     if (e instanceof PermanentJobError || job.attempts >= job.max_attempts) {
       return (await killJob(ctx.db, fence, message, at())) ? "dead" : "vanished";
     }
+    // A wait the handler read that is not a finite, non-negative number (a
+    // NaN from a malformed header would make an Invalid Date and throw out of
+    // the drain) is no wait at all: the backoff curve decides.
+    const asked = e instanceof RetryJobAfter && Number.isFinite(e.afterMs) && e.afterMs >= 0 ? e.afterMs : undefined;
     const runAfter = nextRunAfter({
-      attempt: job.attempts, now: new Date(clock()), backoff,
-      retryAfterMs: e instanceof RetryJobAfter ? e.afterMs : undefined, random,
+      attempt: job.attempts, now: new Date(clock()), backoff, retryAfterMs: asked, random,
     });
     return (await retryJob(ctx.db, fence, runAfter.toISOString(), message, at())) ? "retried" : "vanished";
   };
