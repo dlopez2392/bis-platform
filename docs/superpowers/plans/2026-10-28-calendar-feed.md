@@ -27,20 +27,23 @@
 
 ## Deviations from the spec (the source wins)
 
-1. **Three database functions, not five.** Making a link is one INSERT (the partial unique index refuses a second live row with 23505) and turning it off is one UPDATE, so both go through PostgREST. Replace, restore and claim need atomicity, so they are functions.
+1. **Four database functions, not five.** Making a link is one INSERT (the partial unique index refuses a second live row with 23505), so it goes through PostgREST. Replace, restore and claim need atomicity. Turn-off (`revoke_calendar_feed`) is a function so that `revoked_at` is the DATABASE's `now()`, the same clock restore compares against, never the app server's `new Date()` (review M4).
 2. **`schema-grants-guard.test.ts` is NOT edited.** Its `EXPECTED_WRITES` (`:65-112`) lists only what `authenticated` may write; a table with every client privilege revoked needs no entry, and the guard already fails by name if the revoke is forgotten. The new `calendar-feeds-schema.test.ts` pins SELECT, EXECUTE and service_role, which the guard does not check (`jobs-schema.test.ts:21-23`'s reason).
 3. **`lib/http/retry-after.ts` is not used.** It PARSES an incoming `Retry-After` (`:24-30`); the route WRITES its own, in whole seconds, from the claim's `retry_after_seconds`.
 4. **Fixed window, stamped on every fetch.** The claim already writes the row for the counter, so a once-a-minute throttle on `last_fetched_at` would save nothing.
 5. **`accounts.status = 'archived'` answers 404** (`0001_tenancy.sql:26`'s status column, which the spec missed). `paused` keeps serving, as a billing pause does.
 6. **No `TRANSP` line.** RFC 5545 §3.8.2.7 makes OPAQUE the VEVENT default, and adding it to the shared builder would change `bookingIcs`'s pinned output.
 7. **No events emitted.** A person's own calendar link is not news on any record's timeline, and nothing reads such an event (YAGNI).
+9. **No loading skeleton for the card** (spec 5.1's Loading row; review M7). The card's view is read inside the Calendar page's own server render (`page.tsx`, beside the other reads) and arrives with the page, so the card itself never has a loading moment. The page has no `loading.tsx` of its own today; the card adds none.
+10. **Turn off, Make a new link and Undo are allowed during a billing pause; Make my link is not** (coordinator decision on review I3). The three are protective: a leaked link must be closable while the account is read-only. Each passes `{ duringPause: "allow" }` to its own awaited `requireAccountAccess` in the action body, sits on `READ_ONLY_ALLOWED` with a reason, and does not revalidate (`lib/billing/read-only.test.ts:276-310`); the card's handlers already call `router.refresh()`.
+11. **"Last checked" is stamped by the claim, BEFORE the bookings are read** (review M3). A fetch that then fails (500) still counts as a check, so the card says when the calendar last ASKED, not when it last received a good copy.
 8. **Archived contacts' bookings stay in the feed.** A booking is a real appointment, and 0103 brings a contact back on a booking anyway. Nothing here may name `contacts.archived_at`: the column does not exist on this branch until 0103 merges.
 
 ## File map
 
 | File | Task | Responsibility |
 |---|---|---|
-| `packages/db/supabase/migrations/0104_calendar_feeds.sql` (new) | T1 | Table, two indexes, composite FK to memberships, RLS, grants, three functions, rollback |
+| `packages/db/supabase/migrations/0104_calendar_feeds.sql` (new) | T1 | Table, two indexes, composite FK to memberships, RLS, grants, four functions, rollback |
 | `packages/db/src/test/calendar-feeds-schema.test.ts` (new) | T1 | Live (CI only): grants, EXECUTE, cascade, claim, replace, restore, second account |
 | `packages/db/src/account-teardown.ts` | T1 | `"calendar_feeds"` on `ACCOUNT_OWNED_TABLES` |
 | scratchpad `cf-t1/pg17-cf.sh`, `cf-t1/probe-0104.sql` (new, outside the repo) | T1 | PG17 replica build and the 0104 probes |
@@ -49,7 +52,7 @@
 | `apps/web/src/lib/booking/feed-strings.ts` (+`.test.ts`) (new) | T2 | EN/ES words inside the feed |
 | `apps/web/src/lib/booking/feed-content.ts` (+`.test.ts`) (new) | T2 | Rows → events (first name, dedupe, kind), → the VCALENDAR |
 | `apps/web/src/lib/booking/feed-token.ts` (+`.test.ts`) (new) | T2 | Derive, hash, shape, URL helpers |
-| `packages/db/src/calendar-feeds.ts` (new) | T3 | Typed wrappers for the table and the three functions |
+| `packages/db/src/calendar-feeds.ts` (new) | T3 | Typed wrappers for the table and the four functions |
 | `packages/db/src/booking.ts` | T3 | `rescheduleRoots`, `listFeedBookings` |
 | `packages/db/src/index.ts` | T3 | Additive exports |
 | `packages/db/src/test/feed-bookings-reads.test.ts` (new) | T3 | Fake client, runs locally |
@@ -73,7 +76,7 @@
 |---|---|---|
 | 1 | T1 (high, bis-db-schema), T2 (medium, bis-booking) | — |
 | 2 | T3 (high, bis-booking) | T1's function names and columns |
-| 3 | T4 (high, bis-booking), T5 (medium, bis-frontend) | T2, T3 |
+| 3 | T4 (high, bis-booking), T5 (medium, bis-frontend) | T2, T3. One worktree: T4 runs `pnpm --filter web typecheck` and `in-account-service-reads.test.ts` only AFTER T5 has committed (review M6), and neither task stages the other's files. |
 | 4 | T6 (medium, bis-e2e-qa) | T4, T5; 0104 on bis-ci |
 
 ---
@@ -94,6 +97,7 @@
   - `public.claim_calendar_feed_fetch(p_token_hash text, p_max integer, p_window_seconds integer) returns jsonb`. It answers `{"status":"not_found"}`, `{"status":"rate_limited","retry_after_seconds":int}` or `{"status":"ok","feed_id","account_id","user_id","role","user_language"}`.
   - `public.replace_calendar_feed(p_account_id uuid, p_user_id uuid, p_new_id uuid, p_new_hash text, p_created_by text) returns jsonb`. It answers `{"status":"none"}` or `{"status":"ok","previous_id","revoked_at"}`.
   - `public.restore_calendar_feed(p_account_id uuid, p_user_id uuid, p_feed_id uuid, p_revoked_at timestamptz, p_replacement_id uuid, p_max_age_seconds integer) returns text`, which is `'restored'` or `'changed'`.
+  - `public.revoke_calendar_feed(p_account_id uuid, p_user_id uuid) returns jsonb`. It answers `{"status":"none"}` or `{"status":"ok","feed_id","revoked_at"}`, with `revoked_at` the database's `now()`.
 
 - [ ] **Step 1: Build the PG17 replica (pre = 0001–0102 + 0103).** Write `cf-t1/pg17-cf.sh`. It uses port **55741** and its own data dir, so it never touches contacts-archive's replica on 55731:
 
@@ -158,11 +162,13 @@ insert into accounts (id, agency_id, clerk_org_id, name, client_access_enabled) 
 insert into users (id, clerk_user_id, email, language) values
   ('bbbbbbbb-0000-4000-8000-000000000001', 'user_cf_owner', 'o@example.com', 'es'),
   ('bbbbbbbb-0000-4000-8000-000000000002', 'user_cf_tech',  't@example.com', null),
-  ('bbbbbbbb-0000-4000-8000-000000000003', 'user_cf_b',     'b@example.com', null);
+  ('bbbbbbbb-0000-4000-8000-000000000003', 'user_cf_b',     'b@example.com', null),
+  ('bbbbbbbb-0000-4000-8000-000000000004', 'user_cf_staff', 's@example.com', null);
 insert into memberships (user_id, scope, account_id, role) values
   ('bbbbbbbb-0000-4000-8000-000000000001', 'account', 'aaaaaaaa-0000-4000-8000-000000000001', 'owner'),
   ('bbbbbbbb-0000-4000-8000-000000000002', 'account', 'aaaaaaaa-0000-4000-8000-000000000001', 'technician'),
-  ('bbbbbbbb-0000-4000-8000-000000000003', 'account', 'aaaaaaaa-0000-4000-8000-000000000002', 'owner');
+  ('bbbbbbbb-0000-4000-8000-000000000003', 'account', 'aaaaaaaa-0000-4000-8000-000000000002', 'owner'),
+  ('bbbbbbbb-0000-4000-8000-000000000004', 'account', 'aaaaaaaa-0000-4000-8000-000000000001', 'staff');  -- A's member with no link (review I1)
 insert into calendar_feeds (id, account_id, user_id, token_hash, created_by) values
   ('cccccccc-0000-4000-8000-000000000001', 'aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000001', repeat('a', 64), 'user_cf_owner'),
   ('cccccccc-0000-4000-8000-000000000002', 'aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000002', repeat('b', 64), 'user_cf_tech'),
@@ -175,6 +181,8 @@ do $$ begin  -- P1 grants: no client privilege of any kind; service_role holds w
      or has_function_privilege('authenticated', 'public.claim_calendar_feed_fetch(text, integer, integer)', 'EXECUTE')
      or has_function_privilege('anon', 'public.replace_calendar_feed(uuid, uuid, uuid, text, text)', 'EXECUTE')
      or has_function_privilege('authenticated', 'public.restore_calendar_feed(uuid, uuid, uuid, timestamptz, uuid, integer)', 'EXECUTE')
+     or has_function_privilege('authenticated', 'public.revoke_calendar_feed(uuid, uuid)', 'EXECUTE')
+     or not has_function_privilege('service_role', 'public.revoke_calendar_feed(uuid, uuid)', 'EXECUTE')
      or not has_function_privilege('service_role', 'public.claim_calendar_feed_fetch(text, integer, integer)', 'EXECUTE')
   then raise exception 'PROBE P1 FAILED: grants'; end if;
   if not (select relrowsecurity from pg_class where oid = 'public.calendar_feeds'::regclass) then raise exception 'PROBE P1 FAILED: rls off'; end if;
@@ -252,18 +260,49 @@ do $$ declare r jsonb; v text; begin  -- P6 replace, then Undo; a late or forged
   raise notice 'PROBE P6 ok';
 end $$;
 
+do $$ declare r jsonb; v text; begin  -- P6b turn off on the database clock; a SAME-ACCOUNT member cannot restore someone else's link (review I1)
+  insert into calendar_feeds (id, account_id, user_id, token_hash, created_by) values
+    ('cccccccc-0000-4000-8000-0000000000b1', 'aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000001', repeat('3', 64), 'user_cf_owner');
+  r := public.revoke_calendar_feed('aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000001');
+  if r->>'status' <> 'ok' or r->>'feed_id' <> 'cccccccc-0000-4000-8000-0000000000b1'
+     or (r->>'revoked_at')::timestamptz <> now() then raise exception 'PROBE P6b FAILED revoke: %', r; end if;
+  v := public.restore_calendar_feed('aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000004',
+    'cccccccc-0000-4000-8000-0000000000b1', (r->>'revoked_at')::timestamptz, null, 30);
+  if v <> 'changed' or (select revoked_at from calendar_feeds where id = 'cccccccc-0000-4000-8000-0000000000b1') is null
+  then raise exception 'PROBE P6b FAILED same-account forged restore: %', v; end if;
+  v := public.restore_calendar_feed('aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000001',
+    'cccccccc-0000-4000-8000-0000000000b1', (r->>'revoked_at')::timestamptz, null, 30);
+  if v <> 'restored' then raise exception 'PROBE P6b FAILED owner restore: %', v; end if;
+  if public.revoke_calendar_feed('aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000004')->>'status' <> 'none'
+  then raise exception 'PROBE P6b FAILED revoke with nothing live'; end if;
+  raise notice 'PROBE P6b ok';
+end $$;
+
 do $$ begin  -- P7 leaving the team takes every link with it
   delete from memberships where account_id = 'aaaaaaaa-0000-4000-8000-000000000001' and user_id = 'bbbbbbbb-0000-4000-8000-000000000002';
   if exists (select 1 from calendar_feeds where user_id = 'bbbbbbbb-0000-4000-8000-000000000002') then raise exception 'PROBE P7 FAILED cascade'; end if;
   raise notice 'PROBE P7 ok';
 end $$;
 
--- P8 PG17 plans (read by eye; expected index names in the report)
+-- P8 PG17 plans (read by eye; expected index names in the report). Every value is a LITERAL: a volatile
+-- call such as gen_random_uuid() is never an index condition, and PG17.6 then shows a seq scan whatever the
+-- indexes (review I2, measured at 200k rows). enable_seqscan off makes the probe answer "CAN this index serve
+-- the query", which is the question on a fixture this small; a seq scan in the output is a FAILED probe.
+set local enable_seqscan = off;
 explain (costs off) select * from calendar_feeds where token_hash = repeat('a', 64) and revoked_at is null;
 explain (costs off) delete from calendar_feeds where account_id = 'aaaaaaaa-0000-4000-8000-000000000001' and user_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+-- the window, Owner/Staff shape
 explain (costs off) select b.id from bookings b join contacts c on c.account_id = b.account_id and c.id = b.contact_id
-  where b.account_id = 'aaaaaaaa-0000-4000-8000-000000000001' and b.calendar_id = gen_random_uuid()
-    and b.status in ('booked', 'completed', 'no_show') and b.starts_at >= now() and b.starts_at < now() + interval '180 days'
+  where b.account_id = 'aaaaaaaa-0000-4000-8000-000000000001' and b.calendar_id = 'dddddddd-0000-4000-8000-000000000001'
+    and b.status in ('booked', 'completed', 'no_show')
+    and b.starts_at >= '2026-11-01T00:00:00Z' and b.starts_at < '2027-05-01T00:00:00Z'
+  order by b.starts_at limit 1501;
+-- the window, Technician shape (PostgREST's contacts!inner filter on assigned_to)
+explain (costs off) select b.id from bookings b join contacts c on c.account_id = b.account_id and c.id = b.contact_id
+  where b.account_id = 'aaaaaaaa-0000-4000-8000-000000000001' and b.calendar_id = 'dddddddd-0000-4000-8000-000000000001'
+    and b.status in ('booked', 'completed', 'no_show')
+    and b.starts_at >= '2026-11-01T00:00:00Z' and b.starts_at < '2027-05-01T00:00:00Z'
+    and c.assigned_to = 'bbbbbbbb-0000-4000-8000-000000000002'
   order by b.starts_at limit 1501;
 rollback;
 ```
@@ -282,7 +321,7 @@ rollback;
 -- and stores only sha256(token) (token_hash). One LIVE row per person per account (calendar_feeds_one_live).
 -- The composite FK to memberships (account_id, user_id) (0066's memberships_account_user_key) cascades:
 -- a person removed from the team, a deleted user and a deleted account take every link with them.
--- Three functions, EXECUTE service_role only, security definer, search_path '':
+-- Four functions, EXECUTE service_role only, security definer, search_path '':
 --   claim_calendar_feed_fetch: under a row lock, re-proves the link on every fetch (not revoked; a CURRENT
 --     account membership, whose role it returns; client access on; the account not archived), counts the
 --     fetch in a fixed window (p_max per p_window_seconds) and stamps last_fetched_at. Every refusal but the
@@ -290,6 +329,8 @@ rollback;
 --   replace_calendar_feed: revokes the live link and inserts its successor in one transaction.
 --   restore_calendar_feed: the Undo of a turn-off or a replace, inside p_max_age_seconds, only for the row's
 --     own person and only while nothing newer is live.
+--   revoke_calendar_feed: turns the person's live link off and answers the DATABASE's now() as its version,
+--     the clock restore compares against.
 -- WHO READS AND WRITES. Server code only (0053's pattern): RLS on with no policy, every client privilege
 -- revoked. The card reads its own person's row through serviceDb() after requireAccountAccess.
 --
@@ -298,6 +339,7 @@ rollback;
 -- deploy, so the migration goes BEFORE the code.
 --
 -- Rollback (by hand, in this order; revert the app first):
+--   drop function public.revoke_calendar_feed(uuid, uuid);
 --   drop function public.restore_calendar_feed(uuid, uuid, uuid, timestamptz, uuid, integer);
 --   drop function public.replace_calendar_feed(uuid, uuid, uuid, text, text);
 --   drop function public.claim_calendar_feed_fetch(text, integer, integer);
@@ -421,21 +463,37 @@ begin
   return 'restored';
 end $$;
 
+create function public.revoke_calendar_feed(p_account_id uuid, p_user_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_id uuid; v_revoked timestamptz;
+begin
+  if p_account_id is null or p_user_id is null then
+    raise exception 'revoke_calendar_feed: a required argument is null' using errcode = '22004';
+  end if;
+  update public.calendar_feeds set revoked_at = now()
+   where account_id = p_account_id and user_id = p_user_id and revoked_at is null
+   returning id, revoked_at into v_id, v_revoked;
+  if not found then return jsonb_build_object('status', 'none'); end if;
+  return jsonb_build_object('status', 'ok', 'feed_id', v_id, 'revoked_at', v_revoked);
+end $$;
+
+revoke all on function public.revoke_calendar_feed(uuid, uuid) from public, anon, authenticated, service_role;
 revoke all on function public.claim_calendar_feed_fetch(text, integer, integer) from public, anon, authenticated, service_role;
 revoke all on function public.replace_calendar_feed(uuid, uuid, uuid, text, text) from public, anon, authenticated, service_role;
 revoke all on function public.restore_calendar_feed(uuid, uuid, uuid, timestamptz, uuid, integer) from public, anon, authenticated, service_role;
 grant execute on function public.claim_calendar_feed_fetch(text, integer, integer) to service_role;
 grant execute on function public.replace_calendar_feed(uuid, uuid, uuid, text, text) to service_role;
 grant execute on function public.restore_calendar_feed(uuid, uuid, uuid, timestamptz, uuid, integer) to service_role;
+grant execute on function public.revoke_calendar_feed(uuid, uuid) to service_role;
 ```
 
-- [ ] **Step 5: Green on `post`.** Run `sh …/pg17-cf.sh post` and then `sh …/pg17-cf.sh probe post`. Expected: `probe-post.exit` is `0`, `probe-post.txt` holds `PROBE P1 ok` through `PROBE P7 ok`, and P8 names `calendar_feeds_token_hash_key` for the lookup, `calendar_feeds_by_member` for the delete and `bookings_by_calendar` for the window. If the window plan does not use `bookings_by_calendar`, report it rather than adding an index.
+- [ ] **Step 5: Green on `post`.** Run `sh …/pg17-cf.sh post` and then `sh …/pg17-cf.sh probe post`. Expected: `probe-post.exit` is `0`, `probe-post.txt` holds `PROBE P1 ok` through `PROBE P7 ok` (with `PROBE P6b ok`), and P8 names `calendar_feeds_token_hash_key` for the lookup, `calendar_feeds_by_member` for the delete, and `bookings_by_calendar` for BOTH window shapes. In the Technician shape the contacts side may use `contacts_account_assigned` (0068) or the primary key; paste whichever it shows. A `Seq Scan` on any of the five is a failure: report it rather than adding an index.
 
 - [ ] **Step 6: Add `"calendar_feeds"` to `ACCOUNT_OWNED_TABLES`** (`account-teardown.ts`, directly after `"jobs",` at :24, with the comment `// F-048 part 2 (0104): calendar links (cascade with their membership too).`). It must come before `"calls", "bookings"` and must not displace the first two entries, which `jobs-schema.test.ts:434` pins.
 
-- [ ] **Step 7: Write `calendar-feeds-schema.test.ts`** (live, CI only). Use `withRollback` and `actAs` from `./db` (`db.ts:4`, `:22`) and seed the way `jobs-schema.test.ts:46-51` does. The cases mirror P1–P7, each in a separate `it`, plus `case 8: calendar_feeds is on ACCOUNT_OWNED_TABLES (probe: remove "calendar_feeds" -> FAILS)`. Also add one positive control: as `authenticated` with a member's claims (`actAsMember`, `db.ts:33`), `select * from calendar_feeds` raises 42501. Do NOT run this file locally.
+- [ ] **Step 7: Write `calendar-feeds-schema.test.ts`** (live, CI only). Use `withRollback` and `actAs` from `./db` (`db.ts:4`, `:22`) and seed the way `jobs-schema.test.ts:46-51` does. The cases mirror P1–P7 and P6b, each in a separate `it`, plus `case 8: calendar_feeds is on ACCOUNT_OWNED_TABLES (probe: remove "calendar_feeds" -> FAILS)`. Also add one positive control: as `authenticated` with a member's claims (`actAsMember`, `db.ts:33`), `select * from calendar_feeds` raises 42501. Do NOT run this file locally.
 
-- [ ] **Step 8: Commit.** `git add packages/db/supabase/migrations/0104_calendar_feeds.sql packages/db/src/test/calendar-feeds-schema.test.ts packages/db/src/account-teardown.ts && git commit -m "feat(db): calendar_feeds and its three functions, one private calendar link per person (F-048 part 2, migration 0104)"`
+- [ ] **Step 8: Commit.** `git add packages/db/supabase/migrations/0104_calendar_feeds.sql packages/db/src/test/calendar-feeds-schema.test.ts packages/db/src/account-teardown.ts && git commit -m "feat(db): calendar_feeds and its four functions, one private calendar link per person (F-048 part 2, migration 0104)"`
 
 **Local tests to run:** only the replica (`pg17-cf.sh probe pre` must FAIL; `probe post` must PASS). There is NO local vitest for T1.
 
@@ -447,7 +505,8 @@ grant execute on function public.restore_calendar_feed(uuid, uuid, uuid, timesta
 | M2 | Drop `on delete cascade` from `calendar_feeds_member_fkey` in the copy | P7: psql stops at P7's `delete from memberships` with `violates foreign key constraint "calendar_feeds_member_fkey"` (exit 3) | The FK then refuses the delete. The obvious mutation (`coalesce(v_role in (…), false)` → `true`) CANNOT fail: while the FK cascades, no row can exist without its membership, so no claim ever sees a NULL role. That check is defence in depth, and the cascade is the control this probe tests. |
 | M3 | `fetch_count >= p_max` → `fetch_count > p_max` | `PROBE P4 FAILED 121st` | At count 120 the `>` lets the 121st through. |
 | M4 | Remove `and a.status <> 'archived'` | `PROBE P3 FAILED archived` | The archived account then serves. |
-| M5 | Remove `and user_id = p_user_id` from restore's first select | `PROBE P6 FAILED forged restore` | B's person then finds A's row by id and restores it. |
+| M5 | Remove `and user_id = p_user_id` from restore's first select | `PROBE P6b FAILED same-account forged restore` | A's staff member (no link of their own) then finds the owner's row by account and id, nothing of theirs is live, and the row is restored. P6's account-B case cannot show this: `account_id = p_account_id` already excludes B (review I1). |
+| M7 | `revoke_calendar_feed`: `set revoked_at = now()` → `set revoked_at = clock_timestamp()` | `PROBE P6b FAILED revoke` | The answer then differs from the transaction's `now()`. This pins that turn-off writes the database's transaction clock, the value restore compares. |
 | M6 | Change the grant to `… to service_role, authenticated` on the claim | `PROBE P1 FAILED: grants` | `has_function_privilege('authenticated', …)` turns true. |
 
 ---
@@ -861,7 +920,7 @@ export function feedToken(feedId: string): string {
 export const feedTokenHash = (token: string): string => tokenHash(token);
 export function feedTokenFromFile(file: string): string | null {
   if (!file.endsWith(SUFFIX)) return null;
-  const token = file.slice(0, -SUFFIX.length);
+  const token = file.replace(/\.ics$/, "");
   return isTokenShape(token) ? token : null;
 }
 export const feedUrl = (origin: string, token: string): string => `${origin.replace(/\/+$/, "")}/cal/${token}${SUFFIX}`;
@@ -885,7 +944,7 @@ export const webcalUrl = (url: string): string => url.replace(/^https?:\/\//, "w
 | M5 | `feedFirstName`: `return Array.from(word)…` → `return whole` | `Maria Lopez → Maria …` | Returns `Maria Lopez`. |
 | M6 | `.replace("{name}", () => name)` → `.replace("{name}", name)` | `a name holding $& is printed as typed…` | `$&` expands to `{name}`, giving `Appointment: {name}x`. |
 | M7 | `feedToken`: `` `calendar-feed:v1:${feedId.toLowerCase()}` `` → `"calendar-feed:v1:"` | `derives a 43-character base64url token from the row id…` | Two ids then give the same token. |
-| M8 | `const SUFFIX = ".ics"` → `const SUFFIX = ""` | `feedTokenFromFile(AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) → null` | A bare token is then accepted. Deleting only the `endsWith` line CANNOT fail: `slice(0, -4)` of a bare 43-character token leaves 39 characters, which fails the shape check anyway. |
+| M8 | `feedTokenFromFile`: delete `if (!file.endsWith(SUFFIX)) return null;` | `feedTokenFromFile(AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) → null` | The strip is `file.replace(/\.ics$/, "")`, a no-op on a bare token, so the bare 43 characters then pass the shape check and come back as a token. (With a `slice(0, -4)` strip this probe could not fail, and `SUFFIX = ""` turns a different row red, because `slice(0, -0)` is `""`: review M1.) |
 
 ---
 
@@ -1158,12 +1217,14 @@ export async function createCalendarFeed(db: SupabaseClient, a: {
   throw new Error(`createCalendarFeed failed: ${error.message}`);
 }
 
+/** Turn off: the database stamps revoked_at with its own now(), the clock restore compares (review M4). */
 export async function revokeCalendarFeed(db: SupabaseClient, accountId: string, userId: string): Promise<{ feedId: string; revokedAt: string } | null> {
-  const { data, error } = await db.from("calendar_feeds").update({ revoked_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("user_id", userId).is("revoked_at", null).select("id, revoked_at");
+  const { data, error } = await db.rpc("revoke_calendar_feed", { p_account_id: accountId, p_user_id: userId });
   if (error) throw new Error(`revokeCalendarFeed failed: ${error.message}`);
-  const row = ((data ?? []) as { id: string; revoked_at: string }[])[0];
-  return row ? { feedId: row.id, revokedAt: row.revoked_at } : null;
+  const r = data as { status?: string; feed_id?: string; revoked_at?: string } | null;
+  if (r?.status === "none") return null;
+  if (r?.status === "ok" && r.feed_id && r.revoked_at) return { feedId: r.feed_id, revokedAt: r.revoked_at };
+  throw new Error(`revokeCalendarFeed: unexpected answer ${JSON.stringify(r)}`);
 }
 
 export async function replaceCalendarFeed(db: SupabaseClient, a: {
@@ -1238,13 +1299,56 @@ export {
   3. **Revoked:** `revokeCalendarFeed` → claim `not_found`; `restoreCalendarFeed` with the returned `revokedAt` → `ok`.
   4. **Unknown hash** → `not_found`.
   5. **Removed member:** delete the membership → `readLiveCalendarFeed` null, claim `not_found`.
-  6. **Technician scope:** a Technician T and customers C1 (assigned to T), C2 (assigned to staff S) and C3 (unassigned). `listFeedBookings(db, A, { technicianUserId: T })` → C1's booking only. After `setContactAssignee` (read the real name from `assignment.ts` before writing) moves C2 to T, it holds C1 and C2.
+  6. **Technician scope:** a Technician T and customers C1 (assigned to T), C2 (assigned to staff S) and C3 (unassigned). `listFeedBookings(db, A, { technicianUserId: T })` → C1's booking only. After `assignContacts(db, A, [C2], T, "user_test")` (`assignment.ts:144`) moves C2 to T, it holds C1 and C2.
   7. **A reschedule keeps the UID:** book, then `moveBooking` twice (`booking.ts:800`; read its signature from the file). `listFeedBookings` returns ONE row for the chain, `rootId` = the first booking, `depth` 2.
   8. `rescheduleRoots` agrees with `rescheduleChain` (`booking.ts:719`) for every row of that chain.
+  9. **One person, two accounts (review I4):** a single user is a member of BOTH A and B, with a link in each. `readLiveCalendarFeed(db, A, u)` returns A's row and `(B, u)` B's. `revokeCalendarFeed(db, A, u)` leaves B's row live (`readLiveCalendarFeed(db, B, u)` unchanged, B's claim `ok`). `replaceCalendarFeed` on A leaves B's row and hash untouched.
 
 - [ ] **Step 8: Typecheck, then commit.** `pnpm --filter web typecheck` (the barrel is consumed by web). Then `git add packages/db/src/calendar-feeds.ts packages/db/src/booking.ts packages/db/src/index.ts packages/db/src/test/feed-bookings-reads.test.ts packages/db/src/test/calendar-feeds.test.ts && git commit -m "feat(booking): the feed's bounded, Technician-fenced booking window and the calendar link wrappers (F-048 part 2)"`
 
 **Bare `vi.mock("@bis/db", () => ({` factories:** T3 adds exports and changes no existing importer. Run `grep -rln 'vi.mock("@bis/db", () => ({' apps/web/src | xargs grep -l "lib/booking/calendar-feed\|feed-card-data\|feed-actions"`. It must print nothing; if it prints a file, add the new names to that factory in the task that introduces the import.
+
+**Second-account case that runs locally (review I4).** Append to `feed-bookings-reads.test.ts`:
+
+```ts
+import { readLiveCalendarFeed, revokeCalendarFeed, replaceCalendarFeed, restoreCalendarFeed } from "../calendar-feeds";
+
+/** Records every filter and every rpc argument; answers nothing. */
+function feedsFake() {
+  const filters: [string, string, unknown][] = [];
+  const rpcs: [string, Record<string, unknown>][] = [];
+  const b: Record<string, unknown> = {};
+  const add = (op: string) => (col: string, v: unknown) => { filters.push([op, col, v]); return b; };
+  Object.assign(b, { select: () => b, eq: add("eq"), is: add("is"), maybeSingle: async () => ({ data: null, error: null }) });
+  const db = {
+    from: () => b,
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      rpcs.push([fn, args]);
+      return { data: fn === "restore_calendar_feed" ? "changed" : { status: "none" }, error: null };
+    },
+  } as unknown as SupabaseClient;
+  return { db, filters, rpcs };
+}
+
+describe("calendar link wrappers are scoped to the account they are given (second account, review I4)", () => {
+  it("readLiveCalendarFeed filters by THIS account and person, live rows only (mutation: drop .eq(account_id) → FAILS)", async () => {
+    const { db, filters } = feedsFake();
+    await readLiveCalendarFeed(db, "acc-B", "u1");
+    expect(filters).toEqual(expect.arrayContaining([["eq", "account_id", "acc-B"], ["eq", "user_id", "u1"], ["is", "revoked_at", null]]));
+  });
+  it("revoke, replace and restore pass THIS account to the database (mutation: send a fixed account → FAILS)", async () => {
+    const { db, rpcs } = feedsFake();
+    await revokeCalendarFeed(db, "acc-B", "u1");
+    await replaceCalendarFeed(db, { accountId: "acc-B", userId: "u1", newId: "n1", newHash: "h".repeat(64), createdBy: "c" });
+    await restoreCalendarFeed(db, { accountId: "acc-B", userId: "u1", feedId: "f1", revokedAt: "2026-11-01T00:00:00+00:00", replacementId: null });
+    expect(rpcs.map(([fn, a]) => [fn, a.p_account_id, a.p_user_id])).toEqual([
+      ["revoke_calendar_feed", "acc-B", "u1"], ["replace_calendar_feed", "acc-B", "u1"], ["restore_calendar_feed", "acc-B", "u1"],
+    ]);
+  });
+});
+```
+
+Add one probe row to the table below: **M7** `readLiveCalendarFeed`: delete `.eq("account_id", accountId)` → `readLiveCalendarFeed filters by THIS account and person…` turns red, because the recorded filters lose `["eq","account_id","acc-B"]`.
 
 **Local tests to run:** `pnpm --filter @bis/db exec vitest run src/test/feed-bookings-reads.test.ts` (judge by the summary block). `calendar-feeds.test.ts` and `booking.test.ts` are CI-only.
 
@@ -1561,6 +1665,8 @@ The error log prints `e.message`. The loader's own messages name the feed id, an
 - Modify: `…/[accountId]/in-account-service-reads.test.ts:75-81` (two `ALLOWED` lines, kept in path order)
 - Modify: `apps/web/src/lib/messages.ts` (the `calendar.feed.*` keys, right after the existing `calendar.*` block that starts at `:1746`)
 - Modify: `apps/web/src/lib/palette/registry.ts:74`
+- Modify: `apps/web/src/lib/palette/registry.test.ts` (one `it` beside the Closed days one at `:178-184`; review M5)
+- Modify: `apps/web/src/lib/billing/read-only.test.ts` (three `READ_ONLY_ALLOWED` entries, `:148`; review I3)
 
 **Interfaces:**
 - Consumes: T2 `feedSecretConfigured`, `feedToken`, `feedTokenHash`, `feedUrl`, `webcalUrl`; T3 `readLiveCalendarFeed`, `createCalendarFeed`, `replaceCalendarFeed`, `revokeCalendarFeed`, `restoreCalendarFeed`, `CALENDAR_FEED_UNDO_SECONDS`; existing `readPersonId(db, accountId, clerkUserId): Promise<string | null>` (`assignment.ts:51`), `requireAccountAccess(accountId)` → `{ userId, isAgency, role, canManage }` (`auth.ts:55-81`), `formatRelativeTime(iso, locale)` (`lib/format.ts:109`), `makeTr(locale, pseudo)` (`lib/record/copy.ts:15`), `toast` from `sonner`, `Card*` (`components/ui/card`), `Button` (`components/ui/button`, which renders `data-variant`).
@@ -1587,7 +1693,7 @@ The error log prints `e.message`. The loader's own messages name the feed id, an
 | `calendar.feed.private` | Anyone with this link can see your booking times and your customers' first names. Don't share it. | Quien tenga este enlace puede ver las horas de tus citas y el nombre de tus clientes. No lo compartas. |
 | `calendar.feed.window` | Shows the last 30 days and the next six months. | Muestra los últimos 30 días y los próximos seis meses. |
 | `calendar.feed.technician` | Your link shows bookings for the customers assigned to you. | Tu enlace muestra las citas de los clientes asignados a ti. |
-| `calendar.feed.lastChecked` | Your calendar last checked for bookings {when}. | Tu calendario buscó citas por última vez {when}. |
+| `calendar.feed.lastChecked` | Your calendar last asked for your bookings {when}. | Tu calendario pidió tus citas por última vez {when}. |
 | `calendar.feed.neverChecked` | No calendar has used this link yet. Google can take up to a day. | Ningún calendario ha usado este enlace todavía. Google puede tardar hasta un día. |
 | `calendar.feed.stale` | Your link needs to be made again. The old one keeps working until you do. | Tu enlace se tiene que crear de nuevo. El anterior sigue funcionando hasta que lo hagas. |
 | `calendar.feed.agency` | Each person on the business's team makes their own link here. | Cada persona del equipo del negocio crea aquí su propio enlace. |
@@ -1597,7 +1703,7 @@ The error log prints `e.message`. The loader's own messages name the feed id, an
 | `calendar.feed.iphone.title` | iPhone | iPhone |
 | `calendar.feed.iphone.steps` | 1. On your iPhone, open this page and tap Add to iPhone. 2. Tap Subscribe, then Done. To see new bookings sooner, open Settings › Apps › Calendar › Calendar Accounts › Fetch New Data and choose Every 15 Minutes. | 1. En tu iPhone, abre esta página y toca Agregar al iPhone. 2. Toca Suscribirse y luego OK. Para ver antes las citas nuevas, abre Ajustes › Apps › Calendario › Cuentas de calendario › Obtener datos y elige Cada 15 minutos. |
 | `calendar.feed.google.title` | Google Calendar | Google Calendar |
-| `calendar.feed.google.steps` | 1. On a computer, go to calendar.google.com. The phone app can't add it. 2. Next to Other calendars, click +, then From URL. 3. Paste your link and click Add calendar. It shows up on your phone by itself. | 1. En una computadora, entra a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto a Otros calendarios, haz clic en + y luego en Desde URL. 3. Pega tu enlace y haz clic en Agregar calendario. Aparece en tu teléfono solo. |
+| `calendar.feed.google.steps` | 1. On a computer, go to calendar.google.com. The phone app can't add it. 2. Next to Other calendars, click +, then From URL. 3. Paste your link and click Add calendar. It shows up on your phone by itself. | 1. En una computadora, entra a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto a Otros calendarios, haz clic en + y luego en Desde URL. 3. Pega tu enlace y haz clic en Agregar calendario. Aparece solo en tu teléfono. |
 | `calendar.feed.outlook.title` | Outlook | Outlook |
 | `calendar.feed.outlook.steps` | 1. Go to outlook.com and open Calendar. 2. Click Add calendar, then Subscribe from web. 3. Paste your link, give it a name and click Import. | 1. Entra a outlook.com y abre Calendario. 2. Haz clic en Agregar calendario y luego en Suscribirse desde la web. 3. Pega tu enlace, ponle un nombre y haz clic en Importar. |
 | `calendar.feed.slow` | New bookings can take a few hours to show up on Google and Outlook, sometimes a day. The email for each booking still comes right away. | Las citas nuevas pueden tardar unas horas en aparecer en Google y Outlook, a veces un día. El correo de cada cita sigue llegando al momento. |
@@ -1612,7 +1718,7 @@ The error log prints `e.message`. The loader's own messages name the feed id, an
 
 The menu paths in the three `steps` rows are ASSUMPTIONS (spec §5.2). Check each against the vendor's page on the day you build, and record in the report what you checked and when.
 
-Palette: append `"phone calendar", "subscribe", "ical", "ics", "iphone", "google calendar", "outlook", "calendario del teléfono", "suscribirse"` to the `"/calendar"` array at `registry.ts:74`, keeping its comment line above.
+Palette (pinned in `registry.test.ts` by a new `it("finds Calendar by phone calendar, subscribe, iPhone, Google calendar and Outlook, in English and Spanish (mutation: drop one → FAILS)")` that asserts every word below is in the `nav:${BASE}/calendar` entry's keywords, the shape of `:178-184`): append `"phone calendar", "subscribe", "ical", "ics", "iphone", "google calendar", "outlook", "calendario del teléfono", "suscribirse"` to the `"/calendar"` array at `registry.ts:74`, keeping its comment line above.
 
 - [ ] **Step 2: Failing tests.**
 
@@ -1640,7 +1746,8 @@ Palette: append `"phone calendar", "subscribe", "ical", "ics", "iphone", "google
 - exactly ONE `data-variant="default"` button where the state has an action, and none for `agency`, `unavailable` and `error`;
 - the live link's `<input readonly>` holds the URL, and `href="webcal://…"` is present;
 - the technician line appears only with `technician: true`;
-- the Spanish render contains no English key text (`Make my link` is absent under `es`).
+- the Spanish render contains no English key text (`Make my link` is absent under `es`);
+- **(review M9)** `feed-card.tsx` and `feed-card-handlers.ts` import `FeedCardView`, `FeedActionResult` and `FeedUndo` TYPE-ONLY. Read each source with `readFileSync` and assert that it matches `/import type \{[^}]*FeedCardView[^}]*\} from "\.\/feed-card-data"/`, that it does NOT match `/^import (?!type)[^;]*from "\.\/feed-card-data"/m`, and that it does NOT match `/feed-token|node:crypto/`. A value import would pull `node:crypto` and the secret reader into the client bundle (mutation: change `import type` to `import` → FAILS).
 
 - [ ] **Step 3: Run red.** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card-data.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card-handlers.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card.test.ts"`. Expected: four import failures. Paste them.
 
@@ -1714,12 +1821,19 @@ export type FeedActionResult = { ok: true; undo: FeedUndo | null } | { ok: false
 
 type Me = { db: ReturnType<typeof serviceDb>; personId: string; clerkUserId: string };
 
-async function me(accountId: string): Promise<Me | null> {
-  const { userId, isAgency } = await requireAccountAccess(accountId);
+/** The signed-in person's users.id in THIS account, or null for the agency or a non-member. No guard of its own:
+ *  each action calls requireAccountAccess itself, so the pause option is visible in the action's body. */
+async function person(accountId: string, clerkUserId: string, isAgency: boolean): Promise<Me | null> {
   if (isAgency) return null;
   const db = serviceDb();
-  const personId = await readPersonId(db, accountId, userId);
-  return personId ? { db, personId, clerkUserId: userId } : null;
+  const personId = await readPersonId(db, accountId, clerkUserId);
+  return personId ? { db, personId, clerkUserId } : null;
+}
+
+/** Make my link: an ordinary write, refused during a pause (the default guard). */
+async function me(accountId: string): Promise<Me | null> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  return person(accountId, userId, isAgency);
 }
 
 const done = (accountId: string, undo: FeedUndo | null): FeedActionResult => {
@@ -1742,39 +1856,48 @@ export async function makeFeedLinkAction(accountId: string): Promise<FeedActionR
   } catch (e) { return fail("make", e); }
 }
 
+// The three PROTECTIVE actions below stay open during a billing pause (coordinator decision on review I3): a
+// leaked link must be closable while the account is read-only. Each passes the option to its OWN awaited
+// guard in its body, and none revalidates (lib/billing/read-only.test.ts:276-310 pins both); the card's
+// handlers refresh the page instead.
+
 export async function replaceFeedLinkAction(accountId: string): Promise<FeedActionResult> {
   if (!feedSecretConfigured()) return { ok: false, error: "calendar.feed.error.unavailable" };
   try {
-    const who = await me(accountId);
+    const { userId, isAgency } = await requireAccountAccess(accountId, { duringPause: "allow" });
+    const who = await person(accountId, userId, isAgency);
     if (!who) return { ok: false, error: "calendar.feed.error.notMember" };
     const newId = randomUUID();
-    const r = await replaceCalendarFeed(who.db, { accountId, userId: who.personId, newId, newHash: feedTokenHash(feedToken(newId)), createdBy: who.clerkUserId });
+    const newHash = feedTokenHash(feedToken(newId));
+    const r = await replaceCalendarFeed(who.db, { accountId, userId: who.personId, newId, newHash, createdBy: who.clerkUserId });
     if (r.status === "none") {
-      await createCalendarFeed(who.db, { accountId, userId: who.personId, id: newId, tokenHash: feedTokenHash(feedToken(newId)), createdBy: who.clerkUserId });
-      return done(accountId, null);
+      await createCalendarFeed(who.db, { accountId, userId: who.personId, id: newId, tokenHash: newHash, createdBy: who.clerkUserId });
+      return { ok: true, undo: null };
     }
-    return done(accountId, { feedId: r.previousId, revokedAt: r.revokedAt, replacementId: newId });
+    return { ok: true, undo: { feedId: r.previousId, revokedAt: r.revokedAt, replacementId: newId } };
   } catch (e) { return fail("replace", e); }
 }
 
 export async function turnOffFeedLinkAction(accountId: string): Promise<FeedActionResult> {
   try {
-    const who = await me(accountId);
+    const { userId, isAgency } = await requireAccountAccess(accountId, { duringPause: "allow" });
+    const who = await person(accountId, userId, isAgency);
     if (!who) return { ok: false, error: "calendar.feed.error.notMember" };
     const r = await revokeCalendarFeed(who.db, accountId, who.personId);
-    return done(accountId, r ? { feedId: r.feedId, revokedAt: r.revokedAt, replacementId: null } : null);
+    return { ok: true, undo: r ? { feedId: r.feedId, revokedAt: r.revokedAt, replacementId: null } : null };
   } catch (e) { return fail("turn off", e); }
 }
 
 export async function undoFeedLinkAction(accountId: string, undo: FeedUndo): Promise<FeedActionResult> {
   try {
-    const who = await me(accountId);
+    const { userId, isAgency } = await requireAccountAccess(accountId, { duringPause: "allow" });
+    const who = await person(accountId, userId, isAgency);
     if (!who) return { ok: false, error: "calendar.feed.error.notMember" };
     const r = await restoreCalendarFeed(who.db, {
       accountId, userId: who.personId, feedId: undo.feedId, revokedAt: undo.revokedAt, replacementId: undo.replacementId,
     });
     if (r === "changed") return { ok: false, error: "calendar.feed.error.undoLate" };
-    return done(accountId, null);
+    return { ok: true, undo: null };
   } catch (e) { return fail("undo", e); }
 }
 ```
@@ -1886,6 +2009,19 @@ Add a new `describe("CalendarPage — the phone calendar card (F-048 part 2)")` 
 
 `feedCardMock.mockClear()` and `feedViewMock.mockClear()` go in the existing `beforeEach`.
 
+- [ ] **Step 9b: `read-only.test.ts` (review I3).** Add to `READ_ONLY_ALLOWED` (`:148`), each key exactly `file#function`:
+
+```ts
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#turnOffFeedLinkAction":
+    "turning off the person's own calendar link: protective, a leaked link must be closable while paused",
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#replaceFeedLinkAction":
+    "replacing the person's own calendar link: protective, it ends a leaked link and issues its successor",
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#undoFeedLinkAction":
+    "the Undo of a turn-off or a replace, inside 30 seconds: restores exactly the link the person just had",
+```
+
+`makeFeedLinkAction` is NOT added: it stays refused during a pause. `feed-actions.test.ts` gains one case: the three protective actions call `requireAccountAccess` with `{ duringPause: "allow" }`, and `makeFeedLinkAction` with no option (mutation: drop the option from `turnOffFeedLinkAction` → FAILS here, and `read-only.test.ts`'s `THE ALLOW-LIST…` fails by name too).
+
 - [ ] **Step 10: `in-account-service-reads.test.ts`.** Add, in path order, next to `:75-81`:
 
 ```ts
@@ -1895,7 +2031,7 @@ Add a new `describe("CalendarPage — the phone calendar card (F-048 part 2)")` 
 
 Then check that `feed-card.tsx` and `feed-card-handlers.ts` name no service getter. They must not appear in the test's failure list.
 
-- [ ] **Step 11: Run green.** Run the Step 3 command, plus `…/calendar/page.test.ts`, `…/[accountId]/in-account-service-reads.test.ts`, `src/lib/messages.test.ts`, `src/lib/i18n/ratchet.test.ts` and `src/lib/palette` (the palette's own tests, by directory). Expected: all pass; paste each summary. Then `pnpm --filter web typecheck`.
+- [ ] **Step 11: Run green.** Run the Step 3 command, plus `…/calendar/page.test.ts`, `…/[accountId]/in-account-service-reads.test.ts`, `src/lib/messages.test.ts`, `src/lib/i18n/ratchet.test.ts`, `src/lib/billing/read-only.test.ts` and `src/lib/palette/registry.test.ts`. Expected: all pass; paste each summary. Then `pnpm --filter web typecheck`.
 
 - [ ] **Step 12: Commit.** `git add` every file in this task's Files list by explicit path, then `git commit -m "feat(booking): the Bookings on your phone card, make, copy, replace and turn off with Undo, in English and Spanish (F-048 part 2)"`
 
@@ -1913,6 +2049,10 @@ Then check that `feed-card.tsx` and `feed-card-handlers.ts` name no service gett
 | M4 | `feed-actions.ts` undo: `userId: who.personId` → `userId: undo.feedId` | actions case 5 | The assertion on the caller's `userId` fails. |
 | M5 | `feed-card.tsx`: give **Make a new link** `variant="default"` | the `feed-card.test.ts` case "exactly ONE primary" for `live` | Two `data-variant="default"`. |
 | M6 | `page.tsx`: `loadFeedCardView({ accountId: "a1", … })` (a literal) | page case 2 | `renderForAccount("a2")` still passes `"a1"`. |
+| M8 | `feed-actions.ts`: in `turnOffFeedLinkAction`, `requireAccountAccess(accountId, { duringPause: "allow" })` → `requireAccountAccess(accountId)` | `read-only.test.ts:276` `THE ALLOW-LIST: the set of (file, function) passing \`duringPause: "allow"\` equals READ_ONLY_ALLOWED…` | The allowed key then has no opt-out in its body, so the scanned set loses it and no longer equals the list. |
+| M9 | `feed-actions.ts`: add `revalidatePath(\`/dashboard/accounts/${accountId}/calendar\`);` before `turnOffFeedLinkAction`'s return | `read-only.test.ts:305` `no allowed action revalidates…` | Its body regex finds `revalidatePath(`. |
+| M10 | `feed-card.tsx`: `import type { FeedCardView }` → `import { FeedCardView }` (with `isolatedModules` off this still compiles) | the review-M9 case in `feed-card.test.ts` | The source regex for a non-type import then matches. |
+| M11 | `registry.ts:74`: drop `"subscribe"` | the new `registry.test.ts` case | `toContain("subscribe")` fails. |
 | M7 | `messages.ts`: delete `calendar.feed.copy.es` | `lib/i18n/ratchet.test.ts:183` `every catalogue key added from today has a Spanish twin unless it is agency-only…` | It names the key with no twin. The `feed-card.test.ts` Spanish render fails too (`Copy link` appears under `es`). |
 
 ---
@@ -1944,17 +2084,18 @@ Then check that `feed-card.tsx` and `feed-card-handlers.ts` name no service gett
 
 ## Orchestrator checklist (in order)
 
-1. **0103 first.** `feat/contacts-archive`'s 0103 is applied to bis-ci (its own `ci-project-setup.yml` run) before anything here.
+1. **0103 first, everywhere.** Contacts archive (#302) is MERGED to `main`, and its 0103 is applied to bis-ci AND to production, before 0104 goes to production. Before the bis-ci push below, merge `main` into `feat/calendar-feed` (merge, never rebase or force-push): this branch predates 0103, and bis-ci's push refuses a branch that is missing a migration already in the remote history, which happened today (review M2).
 2. **0104 to bis-ci.** Dispatch `ci-project-setup.yml` (push-dry-run, then push) from `feat/calendar-feed` after T1 merges into the branch. The e2e job's `ci-migrations-applied.sh` fails, naming 0104, until this is done.
 3. **0104 to production.** MCP `apply_migration` once, name `calendar_feeds`, with the file's exact text (ASCII only, no backslash, so the `\u` escape trap does not apply).
-4. **Parity check** (`docs/runbooks/ci-supabase-project.md`): `calendar_feeds`' columns, the three functions' `pg_get_functiondef` md5 and the grants match between bis-ci and production.
+4. **Parity check** (`docs/runbooks/ci-supabase-project.md`): `calendar_feeds`' columns, the four functions' `pg_get_functiondef` md5 and the grants match between bis-ci and production.
 5. **`CALENDAR_FEED_SECRET`: the owner sets it (exact steps):**
    1. On your computer, run `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` and copy the 43-character line it prints.
    2. Open vercel.com, then the **bis-platform** project (`prj_JAfRdX8D…`), then **Settings**, then **Environment Variables**.
    3. Click **Add New**. Key: `CALENDAR_FEED_SECRET`. Value: the line from step 1. Environments: tick **Production** only. Mark it **Sensitive**. Click **Save**.
    4. Run the command from step 1 AGAIN for a different value, and add `CALENDAR_FEED_SECRET` a second time with Environments **Preview** only. The two must differ.
-   5. Redeploy the latest Production deployment (Deployments, then ⋯, then **Redeploy**). An environment change reaches only new deployments.
-   6. Never paste either value into chat, a file or a ticket. Rotating it later does not end anyone's link; it makes each card ask that person to make a new one.
+   5. Redeploy the latest Production deployment (Deployments, then ⋯, then **Redeploy**). An environment change reaches only new deployments. Do the same for the latest Preview deployment of `feat/calendar-feed` (or push a commit), or Preview keeps showing "not available yet".
+   6. On Preview, a phone or calendar app CANNOT subscribe: Preview sits behind Vercel Authentication, so an iPhone, Google or Outlook fetch gets a 401, and only a signed-in browser opens the link. Test a real subscription on Production. Preview proves only that the card makes, copies and turns off a link, and that a browser download works (review M8).
+   7. Never paste either value into chat, a file or a ticket. Rotating it later does not end anyone's link; it makes each card ask that person to make a new one.
 6. **`.env.example`** (bis-platform lands it), after the `DOCUMENT_LINK_SECRET=` line (`:378`):
    ```
    # Calendar feed links (F-048 part 2). REQUIRED for the Calendar page's "Bookings on your phone" card:

@@ -114,7 +114,7 @@ Revoked rows stay (they are a few bytes and hold no token). They go with the mem
 | Removed from the team | Gone at once | `remove_account_member` deletes the membership (0066:158); the FK cascade deletes every feed row. Re-inviting them makes a new membership and no link. |
 | Role changes (Owner → Technician, say) | Stays, and its scope follows the NEW role at the next fetch | The role is read on every fetch, never stored on the feed (§2.4). |
 | Client access switched off by the agency | 404 while off, back when on | Checked on every fetch, as the sign-in is (`auth.ts:72`). Otherwise the feed would be a door that outlives the switch. |
-| Billing pause (M7a) | Keeps serving | A pause makes the account read-only and never refuses a GET (`auth.ts:44-52`). The bookings stand, and the owner should still see them. |
+| Billing pause (M7a) | Keeps serving; the person can still turn the link off, replace it and Undo, but cannot make a first link | A pause makes the account read-only and never refuses a GET (`auth.ts:44-52`), so the bookings stay visible. Turning off, replacing and Undo are protective (a leaked link must be closable while paused), so their three actions opt out of the pause with `duringPause: "allow"` and sit on `READ_ONLY_ALLOWED` (`lib/billing/read-only.test.ts:148`). Making a first link is an ordinary write and stays refused (coordinator decision, plan review I3). |
 | Account deleted | Gone | FK `on delete cascade` on `account_id`; `calendar_feeds` is added to `ACCOUNT_OWNED_TABLES` before `bookings` (`account-teardown.ts:21-24` pattern). |
 | User row deleted | Gone | memberships cascade from users (0066:40-44), and feeds cascade from memberships. |
 
@@ -297,7 +297,7 @@ teléfono" (DESIGN.md: settings sections are registered). It has ONE primary per
 
 | State | What it shows |
 |---|---|
-| Loading | A skeleton the shape of the card (rule 7). |
+| Loading | None of its own: the view is read in the page's server render and arrives with the page (plan deviation 9). |
 | Empty | "Put every booking on your phone's calendar: iPhone, Google or Outlook. You get your own private link." Primary **Make my link**. / "Pon cada cita en el calendario de tu teléfono: iPhone, Google u Outlook. Tienes tu propio enlace privado." **Crear mi enlace**. |
 | Live | The link in a read-only field. Primary **Copy link** / **Copiar enlace**. Ghost **Add to iPhone** / **Agregar al iPhone** (`webcal://` + host + path; ASSUMPTION: iOS offers Subscribe for a webcal link). Ghost **Make a new link** / **Crear un enlace nuevo** and **Turn off** / **Desactivar**, each run at once with Undo (§2.2). The line "Anyone with this link can see your booking times and your customers' first names. Don't share it." / "Quien tenga este enlace puede ver las horas de tus citas y el nombre de tus clientes. No lo compartas." The line "Shows the last 30 days and the next six months." / "Muestra los últimos 30 días y los próximos seis meses." The instructions (§5.2), closed until tapped. |
 | Live, Technician | Adds: "Your link shows bookings for the customers assigned to you." / "Tu enlace muestra las citas de los clientes asignados a ti." |
@@ -326,7 +326,7 @@ Obtener datos** y elige **Cada 15 minutos**.
 shows up on your phone by itself.
 *ES:* 1. En una computadora, entra a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto
 a **Otros calendarios**, haz clic en **+** y luego en **Desde URL**. 3. Pega tu enlace y haz clic en
-**Agregar calendario**. Aparece en tu teléfono solo.
+**Agregar calendario**. Aparece solo en tu teléfono.
 
 **Outlook.** 1. Go to outlook.com and open **Calendar**. 2. Click **Add calendar**, then **Subscribe from
 web**. 3. Paste your link, give it a name and click **Import**.
@@ -339,9 +339,11 @@ aparecer en Google y Outlook, a veces un día. El correo de cada cita sigue lleg
 
 ### 5.3 Observability: "last checked"
 
-`last_fetched_at`, stamped by the claim function at most once a minute (`… or last_fetched_at < now() -
-interval '1 minute'`), costs nothing beyond the claim's existing row lock. The card says: "Your calendar
-last checked for bookings 12 minutes ago." / "Tu calendario buscó citas por última vez hace 12 minutos."
+`last_fetched_at`, stamped by the claim function on every fetch, costs nothing beyond the claim's existing
+row lock. It is stamped BEFORE the bookings are read, so a fetch that then fails (a 500) still counts: it
+records when a calendar last ASKED, not when it last got a good copy. The card says so in its words: "Your
+calendar last asked for your bookings 12 minutes ago." / "Tu calendario pidió tus citas por última vez hace
+12 minutos."
 Before any fetch: "No calendar has used this link yet. Google can take up to a day." / "Ningún calendario
 ha usado este enlace todavía. Google puede tardar hasta un día." **Deferred:** naming which app fetched,
 from the User-Agent (ASSUMPTION: the vendors' UA strings are stable enough to classify). It is cheap, but
@@ -402,9 +404,11 @@ revoked_at = now() where revoked_at is null`". The optional Vercel Firewall rule
 | D2 | A separate secret, `CALENDAR_FEED_SECRET`, set by the owner in Vercel Production and Preview (different values). |
 | D3 | No video join link in the event. It stays in the booking email and on the Calendar page. |
 
-The plan (`docs/superpowers/plans/2026-10-28-calendar-feed.md`, "Deviations from the spec") corrects four
-details of this spec against the source: three database functions instead of five, a fixed hourly window,
-no `schema-grants-guard.test.ts` edit, and no use of `lib/http/retry-after.ts`.
+The plan (`docs/superpowers/plans/2026-10-28-calendar-feed.md`, "Deviations from the spec") corrects
+details of this spec against the source: four database functions instead of five (turn-off is one, so
+`revoked_at` is the database's clock), a fixed hourly window, no `schema-grants-guard.test.ts` edit, no use
+of `lib/http/retry-after.ts`, an archived account answering 404, no loading skeleton, and the pause rule
+above.
 
 The questions as they were asked:
 
