@@ -35,6 +35,20 @@ export type BookingIcsInput = {
   url?: string;
 };
 
+/** F-048 part 2: one event in the owner's subscribed feed. Same time and text rules as the file above. */
+export type FeedEvent = {
+  uid: string;
+  sequence: number;
+  startsAt: Date;
+  endsAt: Date;
+  /** DTSTAMP: the booking row's updated_at, so the same data gives the same bytes (the route's ETag). */
+  stampedAt: Date;
+  summary: string;
+  description?: string;
+};
+
+const FEED_PRODID = "-//BIS//Booking feed//EN";
+
 const PRODID = "-//BIS//Bookings//EN";
 const UID_DOMAIN = "bookings.bis-rgv.com";
 
@@ -95,31 +109,50 @@ function fold(line: string): string {
   return out.join("\r\n ");
 }
 
-export function bookingIcs(input: BookingIcsInput): string | null {
-  if (!valid(input.startsAt) || !valid(input.endsAt) || !valid(input.stampedAt)) return null;
-  if (input.endsAt.getTime() <= input.startsAt.getTime()) return null;
-  if (!Number.isInteger(input.sequence) || input.sequence < 0) return null;
-  if (!input.uid || /[\r\n]/.test(input.uid)) return null;
-
-  const url = input.url ? uri(input.url) : null;
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    `PRODID:${PRODID}`,
-    "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
+/** One VEVENT's lines, or null when the event is invalid (fails CLOSED). */
+function eventLines(e: FeedEvent & { url?: string }): string[] | null {
+  if (!valid(e.startsAt) || !valid(e.endsAt) || !valid(e.stampedAt)) return null;
+  if (e.endsAt.getTime() <= e.startsAt.getTime()) return null;
+  if (!Number.isInteger(e.sequence) || e.sequence < 0) return null;
+  if (!e.uid || /[\r\n]/.test(e.uid)) return null;
+  const url = e.url ? uri(e.url) : null;
+  return [
     "BEGIN:VEVENT",
-    `UID:${input.uid}`,
-    `SEQUENCE:${input.sequence}`,
-    `DTSTAMP:${utcStamp(input.stampedAt)}`,
-    `DTSTART:${utcStamp(input.startsAt)}`,
-    `DTEND:${utcStamp(input.endsAt)}`,
-    `SUMMARY:${text(input.summary)}`,
-    ...(input.description ? [`DESCRIPTION:${text(input.description)}`] : []),
+    `UID:${e.uid}`,
+    `SEQUENCE:${e.sequence}`,
+    `DTSTAMP:${utcStamp(e.stampedAt)}`,
+    `DTSTART:${utcStamp(e.startsAt)}`,
+    `DTEND:${utcStamp(e.endsAt)}`,
+    `SUMMARY:${text(e.summary)}`,
+    ...(e.description ? [`DESCRIPTION:${text(e.description)}`] : []),
     ...(url ? [`URL:${url}`] : []),
     "STATUS:CONFIRMED",
     "END:VEVENT",
-    "END:VCALENDAR",
   ];
+}
+
+export function bookingIcs(input: BookingIcsInput): string | null {
+  const event = eventLines(input);
+  if (!event) return null;
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", `PRODID:${PRODID}`, "CALSCALE:GREGORIAN", "METHOD:PUBLISH", ...event, "END:VCALENDAR"];
+  return lines.map(fold).join("\r\n") + "\r\n";
+}
+
+/**
+ * F-048 part 2: the subscribed feed. NAME (RFC 7986) and X-WR-CALNAME name it in the person's language;
+ * REFRESH-INTERVAL and X-PUBLISHED-TTL are hints (ASSUMPTION: honoured by some apps, binding on none).
+ * An invalid event is left out; it never sinks the feed. No VTIMEZONE: every time is UTC (header above).
+ */
+export function calendarFeedIcs(input: { name: string; events: readonly FeedEvent[] }): string {
+  const lines = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", `PRODID:${FEED_PRODID}`, "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    `NAME:${text(input.name)}`, `X-WR-CALNAME:${text(input.name)}`,
+    "REFRESH-INTERVAL;VALUE=DURATION:PT15M", "X-PUBLISHED-TTL:PT15M",
+  ];
+  for (const e of input.events) {
+    const v = eventLines(e);
+    if (v) lines.push(...v);
+  }
+  lines.push("END:VCALENDAR");
   return lines.map(fold).join("\r\n") + "\r\n";
 }

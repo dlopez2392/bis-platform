@@ -160,3 +160,45 @@ describe("bookingUid", () => {
     expect(a).toMatch(/^[0-9a-f-]+@[a-z0-9.-]+$/);
   });
 });
+
+import { calendarFeedIcs, type FeedEvent } from "./ics";
+
+const ev = (over: Partial<FeedEvent> = {}): FeedEvent => ({
+  uid: "root-1@bookings.bis-rgv.com", sequence: 0,
+  startsAt: new Date("2026-11-03T15:00:00Z"), endsAt: new Date("2026-11-03T16:00:00Z"),
+  stampedAt: new Date("2026-11-01T12:00:00.123Z"), summary: "Appointment: Maria", ...over,
+});
+
+describe("calendarFeedIcs — the subscribed feed (F-048 part 2)", () => {
+  it("is one VCALENDAR with a NAME and one VEVENT per event, CRLF throughout (mutation: join with \\n → FAILS)", () => {
+    const ics = calendarFeedIcs({ name: "Rio Roofing bookings", events: [ev(), ev({ uid: "root-2@bookings.bis-rgv.com" })] });
+    expect(ics.startsWith("BEGIN:VCALENDAR\r\n")).toBe(true);
+    expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
+    expect(ics.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
+    expect(ics.split("BEGIN:VEVENT").length - 1).toBe(2);
+    expect(ics.split("END:VEVENT").length - 1).toBe(2);
+    expect(unfold(ics)).toEqual(expect.arrayContaining(["NAME:Rio Roofing bookings", "X-WR-CALNAME:Rio Roofing bookings",
+      "REFRESH-INTERVAL;VALUE=DURATION:PT15M", "X-PUBLISHED-TTL:PT15M", "METHOD:PUBLISH"]));
+  });
+
+  it("drops an event with an inverted or NaN time and keeps the rest (mutation: return null for the whole feed → FAILS)", () => {
+    const ics = calendarFeedIcs({ name: "x", events: [ev({ endsAt: new Date("2026-11-03T14:00:00Z") }), ev({ startsAt: new Date(NaN) }), ev({ uid: "ok@bookings.bis-rgv.com" })] });
+    expect(ics.split("BEGIN:VEVENT").length - 1).toBe(1);
+    expect(ics).toContain("UID:ok@bookings.bis-rgv.com");
+  });
+
+  it("escapes a hostile first name and calendar name so neither can add a property (mutation: drop the LF escape → FAILS)", () => {
+    const ics = calendarFeedIcs({ name: "A;B,C\\D\r\nORGANIZER:x", events: [ev({ summary: "Cita: Ñ;o,ñ\\\nATTENDEE:mailto:a@b.co" })] });
+    const lines = unfold(ics);
+    expect(lines.some((l) => l.startsWith("ORGANIZER") || l.startsWith("ATTENDEE"))).toBe(false);
+    expect(lines).toContain("NAME:A\\;B\\,C\\\\D\\nORGANIZER:x");
+  });
+
+  it("keeps every physical line of a 1,800-event feed at or under 75 octets and the whole under 1 MB (mutation: skip fold on the feed path → FAILS)", () => {
+    const name = "Ñ".repeat(40);
+    const events = Array.from({ length: 1800 }, (_, i) => ev({ uid: `${String(i).padStart(36, "0")}@bookings.bis-rgv.com`, summary: `Videollamada: ${name}`, description: `Ver en BIS: https://app.bis-rgv.com/dashboard/accounts/${"a".repeat(36)}/calendar` }));
+    const ics = calendarFeedIcs({ name: `Citas de ${name}`, events });
+    for (const line of ics.split("\r\n")) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(75);
+    expect(Buffer.byteLength(ics, "utf8")).toBeLessThan(1_000_000);
+  });
+});

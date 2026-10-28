@@ -22,6 +22,8 @@ export const ACCOUNT_OWNED_TABLES = [
   "ai_ledger", "account_ai_settings",
   // F-196 (0102): background jobs (cascade too; spec 7 lists it).
   "jobs",
+  // F-048 part 2 (0104): calendar links (cascade with their membership too).
+  "calendar_feeds",
   "site_traffic_breakdown", "site_traffic_daily", "sites",
   // Item 8b-1 (0088): AI suggestions, before calls (call_id and contact_id cascade too; spec 4.1 lists it).
   "proposals",

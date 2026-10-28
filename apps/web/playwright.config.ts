@@ -138,6 +138,16 @@ const SCANNER_PORT = 8399;
  */
 const DOCUMENT_LINK_FIXTURE = "bis_e2e_document_link_fixture_only_0000000000";
 process.env.DOCUMENT_LINK_SECRET = DOCUMENT_LINK_FIXTURE;
+
+/**
+ * The owner's calendar feed (F-048 part 2, calendar-feed.spec.ts). Same fixed
+ * test-literal discipline as DOCUMENT_LINK_FIXTURE above — never a real
+ * secret. It is PINNED, in this process and in the webServer env below, so a
+ * developer's `.env.local` can never change the app server's value: the run
+ * always derives links under this one known literal, whatever the machine holds.
+ */
+const CALENDAR_FEED_FIXTURE = "bis_e2e_calendar_feed_fixture_only_00000000000";
+process.env.CALENDAR_FEED_SECRET = CALENDAR_FEED_FIXTURE;
 const storageOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? fileEnv.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321").origin;
 const SCANNER_SERVERS = [
   {
@@ -262,6 +272,7 @@ export default defineConfig({
         SCANNER_URL: `http://127.0.0.1:${SCANNER_PORT}`,
         SCANNER_SECRET: E2E_SCANNER_SECRET,
         DOCUMENT_LINK_SECRET: DOCUMENT_LINK_FIXTURE,
+        CALENDAR_FEED_SECRET: CALENDAR_FEED_FIXTURE,
       },
       // On the build path this is FALSE on purpose. `reuseExistingServer` will
       // happily adopt whatever is already listening on 3000 — including a dev

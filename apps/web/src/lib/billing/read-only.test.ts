@@ -166,6 +166,14 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
     "read state: writes only the unread counter (opening a thread fires it; refusing it would redirect every open)",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts#cancelNoticeOptionAction":
     "Cancel's notice check: reads the booking's email and suppression state (the cancel itself is refused)",
+  // F-048 part 2 (review I3): the person's own calendar link. Protective, so a leaked link can be closed while
+  // paused; Make my link is NOT here (it stays refused).
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#turnOffFeedLinkAction":
+    "turning off the person's own calendar link: protective, a leaked link must be closable while paused",
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#replaceFeedLinkAction":
+    "replacing the person's own calendar link: protective, it ends a leaked link and issues its successor",
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#undoFeedLinkAction":
+    "the Undo of a turn-off or a replace, inside 30 seconds: restores exactly the link the person just had",
 };
 
 /** The non-GET handlers under app/api/accounts, each with how a paused account is answered. */

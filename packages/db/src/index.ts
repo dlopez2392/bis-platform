@@ -115,6 +115,12 @@ export {
 } from "./booking";
 export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
 export { countContactBookingsMade, listContactUpcomingBookings, countBookingsMadeFor, type UpcomingBooking } from "./booking";
+export { rescheduleRoots, listFeedBookings, FEED_PAST_DAYS, FEED_FUTURE_DAYS, FEED_FUTURE_CAP, FEED_PAST_CAP, type FeedBookingRow } from "./booking";
+export {
+  CALENDAR_FEED_FETCH_MAX, CALENDAR_FEED_FETCH_WINDOW_SECONDS, CALENDAR_FEED_UNDO_SECONDS,
+  readLiveCalendarFeed, createCalendarFeed, revokeCalendarFeed, replaceCalendarFeed, restoreCalendarFeed,
+  claimCalendarFeedFetch, type CalendarFeedRow, type FeedClaim,
+} from "./calendar-feeds";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,

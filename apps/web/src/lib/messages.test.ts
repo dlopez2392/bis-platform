@@ -2266,6 +2266,42 @@ describe("tenant vetting copy (S-53)", () => {
   });
 });
 
+describe("F-048 part 2: the Bookings on your phone card speaks usted (final review I1)", () => {
+  const WANT_ES: Record<string, string> = {
+    "calendar.feed.title.es": "Sus citas en el teléfono",
+    "calendar.feed.empty.es": "Ponga cada cita en el calendario de su teléfono: iPhone, Google u Outlook. Tiene su propio enlace privado.",
+    "calendar.feed.linkLabel.es": "Su enlace privado",
+    "calendar.feed.private.es": "Quien tenga este enlace puede ver las horas de sus citas y el nombre de sus clientes. No lo comparta.",
+    "calendar.feed.technician.es": "Su enlace muestra las citas de los clientes asignados a usted.",
+    "calendar.feed.lastChecked.es": "Su calendario pidió sus citas por última vez {when}.",
+    "calendar.feed.stale.es": "Su enlace se tiene que crear de nuevo. El anterior sigue funcionando hasta que lo haga.",
+    "calendar.feed.loadError.es": "No pudimos cargar su enlace. Inténtelo de nuevo.",
+    "calendar.feed.iphone.steps.es": "1. En su iPhone, abra esta página y toque Agregar al iPhone. 2. Toque Suscribirse y luego OK. Para ver antes las citas nuevas: en Ajustes, abra Calendario y luego Obtener datos.",
+    "calendar.feed.google.steps.es": "1. En una computadora, entre a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto a Otros calendarios, haga clic en + y luego en Desde URL. 3. Pegue su enlace y haga clic en Agregar calendario. Aparece solo en su teléfono.",
+    "calendar.feed.outlook.steps.es": "1. Entre a outlook.com y abra Calendario. 2. Haga clic en Agregar calendario y luego en Suscribirse desde la web. 3. Pegue su enlace, póngale un nombre y haga clic en Importar.",
+    "calendar.feed.toast.restored.es": "Su enlace volvió.",
+    "calendar.feed.error.failed.es": "No se guardó. Inténtelo de nuevo.",
+    "calendar.feed.error.undoLate.es": "Ya no se puede deshacer. Cree un enlace nuevo.",
+  };
+
+  it("has each reviewed Spanish sentence exactly (mutation: restore any tú sentence → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT_ES)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("no calendar.feed.*.es key uses tú (mutation: 'Inténtalo de nuevo' in error.failed.es → FAILS)", () => {
+    const TU = /(?<![\p{L}])(tu|tus|ti|tienes|puedes|pon|ponle|toca|abre|entra|haz|pega|elige|crea un|compartas|hagas|inténtalo)(?![\p{L}])/iu;
+    const keys = Object.keys(m).filter((k) => k.startsWith("calendar.feed.") && k.endsWith(".es"));
+    expect(keys.length).toBeGreaterThan(30);
+    for (const k of keys) expect(TU.test((m as Record<string, string>)[k]!), `${k}: ${(m as Record<string, string>)[k]}`).toBe(false);
+  });
+
+  it("the iPhone steps name only a path anyone can find: Settings, Calendar, Fetch New Data (final review m8)", () => {
+    expect(m["calendar.feed.iphone.steps"]).toBe(
+      "1. On your iPhone, open this page and tap Add to iPhone. 2. Tap Subscribe, then Done. To see new bookings sooner: in Settings, open Calendar, then Fetch New Data.",
+    );
+  });
+});
+
 describe("contact archive copy, English and Spanish (plan Task 3, spec §6)", () => {
   const WANT: Record<string, string> = {
     "bulk.archive": "Archive",

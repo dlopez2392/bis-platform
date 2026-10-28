@@ -18,6 +18,9 @@ import { CalendarSettings } from "./calendar-settings";
 import { BookingsList } from "./bookings-list";
 import { ClosedDaysCard, type ClosedDaysRangeView } from "./closed-days-card";
 import { EmbedSnippet } from "./embed-snippet";
+import { FeedCard } from "./feed-card";
+import { loadFeedCardView } from "./feed-card-data";
+import { makeFeedLinkAction, replaceFeedLinkAction, turnOffFeedLinkAction, undoFeedLinkAction } from "./feed-actions";
 import {
   updateCalendarSettingsAction, setBookingStatusAction, cancelNoticeOptionAction, cancelBookingAction,
   undoCancelBookingAction, keepAppointmentAction,
@@ -86,6 +89,9 @@ export default async function CalendarPage({
   // is actually on (localhost, a preview deploy, production).
   const proto = h.get("x-forwarded-proto") ?? "http";
   const origin = `${proto}://${h.get("host") ?? "localhost:3000"}`;
+
+  // F-048 part 2: the person's own calendar link. Never throws (its own error state).
+  const feedView = await loadFeedCardView({ accountId, clerkUserId: userId, isAgency, role: access.role, origin });
 
   // Named variable, not an inline literal: request-locale-callers.test.ts scans each call's own
   // braces (ai-section.tsx's own comment on why). The explicit `Locale | null` annotation on `language`
@@ -217,7 +223,18 @@ export default async function CalendarPage({
             undoCancelAction={boundUndoCancel}
           />
         </div>
-        <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
+        <div className="space-y-6">
+          <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
+          <FeedCard
+            view={feedView}
+            locale={locale}
+            pseudo={requestPseudoMode({ locale: localeParam })}
+            make={makeFeedLinkAction.bind(null, accountId)}
+            replace={replaceFeedLinkAction.bind(null, accountId)}
+            turnOff={turnOffFeedLinkAction.bind(null, accountId)}
+            undo={undoFeedLinkAction.bind(null, accountId)}
+          />
+        </div>
       </div>
     </>
   );

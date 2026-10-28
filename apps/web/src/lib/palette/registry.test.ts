@@ -184,6 +184,15 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  // F-048 part 2 (review M5): the Bookings on your phone card. Every word, in both languages.
+  it("finds Calendar by phone calendar, subscribe, iPhone, Google calendar and Outlook, in English and Spanish (mutation: drop one → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const calendar = entries.find((e) => e.id === `nav:${BASE}/calendar`)!;
+    for (const word of ["phone calendar", "subscribe", "ical", "ics", "iphone", "google calendar", "outlook", "calendario del teléfono", "suscribirse"]) {
+      expect(calendar.keywords, word).toContain(word);
+    }
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
