@@ -120,6 +120,10 @@ type ArchiveRun = {
   withAppointments: number;
   /** The first call that failed, after which nothing more was sent; null when every call answered. */
   failed: ArchiveFailKey | null;
+  /** Some went and some did not (Task 10 review I2): a call failed after earlier ones changed contacts, or a
+   *  call answered only in part (the server's ContactBatchError). The success line says what changed; the
+   *  partial line says the rest did not. */
+  partial: boolean;
 };
 
 /** Archive or Restore over the whole selection, in calls of MAX_CONTACT_BATCH. A call that fails stops the
@@ -127,7 +131,7 @@ type ArchiveRun = {
 async function runArchive(
   action: typeof archiveContactsAction, accountId: string, ids: readonly string[], onThrow: ArchiveFailKey,
 ): Promise<ArchiveRun> {
-  const run: ArchiveRun = { changedIds: [], nextAppointment: null, withAppointments: 0, failed: null };
+  const run: ArchiveRun = { changedIds: [], nextAppointment: null, withAppointments: 0, failed: null, partial: false };
   for (const chunk of inChunks(ids)) {
     let r: ArchiveActionResult;
     try {
@@ -140,10 +144,19 @@ async function runArchive(
     run.changedIds.push(...r.changedIds);
     run.withAppointments += r.withAppointments;
     if (r.nextAppointment) run.nextAppointment = r.nextAppointment;
+    if (r.partial) { run.partial = true; break; }
   }
+  if (run.failed && run.changedIds.length > 0) run.partial = true;
   // "They still have an appointment on {date}" speaks of ONE customer: only when exactly one changed.
   if (run.changedIds.length !== 1) run.nextAppointment = null;
   return run;
+}
+
+/** The failure a run ends with, in words: nothing changed is the plain failure; some changed is the partial
+ *  line, said AFTER the success line that counts what did change and carries its Undo. */
+function sayRunFailure(run: ArchiveRun, partialKey: "contacts.archive.partial" | "contacts.restore.partial", locale: Locale): void {
+  if (run.partial) toast.error(t(m, partialKey, locale));
+  else if (run.failed) toast.error(t(m, run.failed, locale));
 }
 
 /**
@@ -164,7 +177,7 @@ export async function archiveSelected(
   const description = run.nextAppointment
     ? t(m, "contacts.archive.keepsAppointment", locale, { date: formatDateInZone(run.nextAppointment.startsAt, timezone, locale) })
     : run.withAppointments > 0
-      ? t(m, "contacts.archive.keepsAppointments", locale, { count: run.withAppointments })
+      ? plural(m, "contacts.archive.keepsAppointments", run.withAppointments, locale, { count: run.withAppointments })
       : undefined;
   if (changed.length === 0) { toast.success(message, description ? { description } : undefined); return; }
   toast.success(message, {
@@ -172,9 +185,10 @@ export async function archiveSelected(
     action: {
       label: t(m, "common.undo", locale),
       onClick: () => void runArchive(restoreContactsAction, accountId, changed, "contacts.restore.failed")
-        .then((u) => { if (u.failed) toast.error(t(m, u.failed, locale)); }),
+        .then((u) => sayRunFailure(u, "contacts.restore.partial", locale)),
     },
   });
+  if (run.partial) sayRunFailure(run, "contacts.archive.partial", locale);
 }
 
 /** Restore from the Archived view: the same shape, its Undo archiving exactly what it restored. */
@@ -191,9 +205,10 @@ export async function restoreSelected(
     action: {
       label: t(m, "common.undo", locale),
       onClick: () => void runArchive(archiveContactsAction, accountId, changed, "contacts.archive.failed")
-        .then((u) => { if (u.failed) toast.error(t(m, u.failed, locale)); }),
+        .then((u) => sayRunFailure(u, "contacts.archive.partial", locale)),
     },
   });
+  if (run.partial) sayRunFailure(run, "contacts.restore.partial", locale);
 }
 
 /** Which of the selection the delete would keep (spec §5.4): a contact with a history with the business is
@@ -234,7 +249,7 @@ export function DeleteKeptLine({ state, locale }: { state: BlockersState; locale
   if (state.kept.length === 0) return null;
   return (
     <p data-delete-kept={state.kept.length} className="text-sm text-card-foreground">
-      {t(m, "contacts.delete.someKept", locale, { kept: state.kept.length })}
+      {plural(m, "contacts.delete.someKept", state.kept.length, locale, { kept: state.kept.length })}
     </p>
   );
 }
@@ -334,7 +349,9 @@ export async function deleteInChunks(
  * gets the files-gone line.
  */
 export function announceDeleteResult(
-  r: DeleteResult, locale: Locale, ctx: { accountId: string; timezone: string },
+  // `view` absent is the list. A caller acting on an archived contact passes "archived", so the toast never
+  // offers to archive what is archived already (Task 10 review I1).
+  r: DeleteResult, locale: Locale, ctx: { accountId: string; timezone: string; view?: ContactsView },
 ): void {
   if (!r.ok) {
     toast.error("errorKey" in r && r.errorKey ? t(m, r.errorKey, locale) : r.error);
@@ -344,19 +361,99 @@ export function announceDeleteResult(
     toast.success(plural(m, "bulk.deleted", r.deleted, locale, { count: r.deleted }));
   } else {
     const kept = r.skippedIds;
-    // Each count follows a colon in Spanish, so the line reads at any count: no singular form needed.
-    const message = t(m, "bulk.deletedSkipped", locale, { count: r.deleted, skipped: r.skippedBlocked });
-    toast.success(message, kept.length > 0 ? {
-      action: {
-        label: t(m, "bulk.archiveKept", locale),
-        onClick: () => void archiveSelected(ctx.accountId, kept, () => {}, ctx.timezone, locale),
-      },
-    } : undefined);
+    const params = { count: r.deleted, skipped: r.skippedBlocked };
+    // Task 10 review I1: in the Archived view the kept ones are archived already, so the line says they stay
+    // archived and offers nothing. On the list it offers "Archive them". Picked by the KEPT count (I3).
+    if (ctx.view === "archived") {
+      toast.success(plural(m, "bulk.deletedSkippedArchived", r.skippedBlocked, locale, params));
+    } else {
+      toast.success(plural(m, "bulk.deletedSkipped", r.skippedBlocked, locale, params), kept.length > 0 ? {
+        action: {
+          label: t(m, "bulk.archiveKept", locale),
+          onClick: () => void archiveSelected(ctx.accountId, kept, () => {}, ctx.timezone, locale),
+        },
+      } : undefined);
+    }
   }
   if (r.lateKept > 0) toast.error(t(m, "contacts.delete.filesGoneKept", locale));
   if (r.skippedFiles > 0) {
     toast.error(t(m, "contacts.delete.keptFiles", locale, { count: r.deleted, kept: r.skippedFiles }));
   }
+}
+
+/**
+ * The bulk delete dialog's body (spec §5.4; Task 10 review), its own component so it renders in a test with
+ * the state the bar hands it. While the blockers load: the selection's count, a skeleton kept line, Delete
+ * off. Once read: the title and the typed number are the count that WILL go, the kept line says how many
+ * stay, and the files line counts the files of the ones that go. Nothing deletable: its own title and one
+ * sentence (never "Delete 3 contacts?", and the kept line does not repeat it); on the list it offers
+ * Archive instead, and in the Archived view, where they are archived already, it offers nothing.
+ */
+export function DeleteDialogBody({
+  count, typed, onTyped, files, blockers, view, canArchive, locale, onCancel, onArchiveInstead, onDelete,
+}: {
+  /** The selection's size. */
+  count: number;
+  typed: string;
+  onTyped: (next: string) => void;
+  files: FilesState;
+  blockers: BlockersState;
+  view: ContactsView;
+  canArchive: boolean;
+  locale: Locale;
+  onCancel: () => void;
+  onArchiveInstead: () => void;
+  onDelete: () => void;
+}) {
+  const deletable = deletableCount(count, blockers);
+  const none = blockers.status === "ready" && deletable === 0;
+  const copy = deleteDialogCopy(deletable, locale);
+  const archived = view === "archived";
+  const title = none ? plural(m, "contacts.delete.noneTitle", count, locale) : copy.title;
+  const body = none
+    ? plural(m, archived ? "contacts.delete.noneDeletableArchived" : "contacts.delete.noneDeletable", count, locale)
+    : copy.body;
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{body}</DialogDescription>
+        {none ? null : <DeleteKeptLine state={blockers} locale={locale} />}
+        {blockers.status === "ready" && !none ? <DeleteFilesLine state={files} locale={locale} /> : null}
+      </DialogHeader>
+      {none ? null : (
+        <Input
+          value={typed}
+          onChange={(e) => onTyped(e.target.value)}
+          placeholder={String(deletable)}
+          aria-label={copy.title}
+        />
+      )}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>
+          {copy.cancel}
+        </Button>
+        {none ? (
+          // Archive-only (spec §5.4). No word "delete" here, so the e2e's /delete/i button locators still
+          // find only the Delete pair. Never in the Archived view: they are archived already (review I1).
+          canArchive && !archived ? (
+            <Button variant="outline" data-bulk-action="archive-instead" onClick={onArchiveInstead}>
+              <Archive className="size-3.5" aria-hidden />
+              {t(m, "contacts.delete.archiveInstead", locale)}
+            </Button>
+          ) : null
+        ) : (
+          <Button
+            variant="destructive"
+            disabled={!canConfirmDelete(typed, count, files, blockers)}
+            onClick={onDelete}
+          >
+            {copy.confirm}
+          </Button>
+        )}
+      </DialogFooter>
+    </>
+  );
 }
 
 export function BulkActionBar({
@@ -395,13 +492,8 @@ export function BulkActionBar({
   const locale = useLocale();
   const count = selectedIds.length;
   if (count === 0) return null;
-  const deletable = deletableCount(count, blockers);
-  // Nothing in the selection can go: the dialog says so and offers Archive instead of Delete.
-  const none = blockers.status === "ready" && deletable === 0;
-  // The title and the typed number are the DELETABLE count once the blockers are read (spec §5.4).
-  const copy = deleteDialogCopy(none ? count : deletable, locale);
-  const showFiles = blockers.status === "ready" && !none;
-  const ctx = { accountId, timezone };
+  // The delete's toasts know the view: the Archived view never offers to archive (Task 10 review I1).
+  const ctx = { accountId, timezone, view };
   // plural() picks bulk.selectedOne at one: "1 seleccionado", never "1 seleccionados".
   const selectedText = plural(m, "bulk.selected", count, locale, { count });
 
@@ -564,49 +656,24 @@ export function BulkActionBar({
       </Button>
 
       {canDelete ? (
-        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        // Every way out (Esc, the X, a click outside, Cancel) goes through closeConfirm, so the typed number
+        // never survives into the next opening (review minor).
+        <Dialog open={confirmOpen} onOpenChange={(open) => (open ? setConfirmOpen(true) : closeConfirm())}>
           {/* The menus above and this dialog are portaled to the body, outside the list's lang wrapper. */}
           <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
-            <DialogHeader>
-              <DialogTitle>{copy.title}</DialogTitle>
-              <DialogDescription>
-                {none ? t(m, "contacts.delete.noneDeletable", locale) : copy.body}
-              </DialogDescription>
-              <DeleteKeptLine state={blockers} locale={locale} />
-              {showFiles ? <DeleteFilesLine state={files} locale={locale} /> : null}
-            </DialogHeader>
-            {none ? null : (
-              <Input
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                placeholder={String(deletable)}
-                aria-label={copy.title}
-              />
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={closeConfirm}>
-                {copy.cancel}
-              </Button>
-              {none ? (
-                // Every one has a history with the business: archive-only (spec §5.4). No word "delete"
-                // here, so the e2e's /delete/i button locators still find only the Delete pair.
-                canArchive ? (
-                  <Button variant="outline" data-bulk-action="archive-instead"
-                    onClick={() => { closeConfirm(); void archiveSelected(accountId, [...selectedIds], onDone, timezone, locale); }}>
-                    <Archive className="size-3.5" aria-hidden />
-                    {t(m, "contacts.delete.archiveInstead", locale)}
-                  </Button>
-                ) : null
-              ) : (
-                <Button
-                  variant="destructive"
-                  disabled={!canConfirmDelete(typed, count, files, blockers)}
-                  onClick={() => void doDelete()}
-                >
-                  {copy.confirm}
-                </Button>
-              )}
-            </DialogFooter>
+            <DeleteDialogBody
+              count={count}
+              typed={typed}
+              onTyped={setTyped}
+              files={files}
+              blockers={blockers}
+              view={view}
+              canArchive={canArchive}
+              locale={locale}
+              onCancel={closeConfirm}
+              onArchiveInstead={() => { closeConfirm(); void archiveSelected(accountId, [...selectedIds], onDone, timezone, locale); }}
+              onDelete={() => void doDelete()}
+            />
           </DialogContent>
         </Dialog>
       ) : null}

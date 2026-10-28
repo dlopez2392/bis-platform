@@ -1647,6 +1647,13 @@ export function looksAutomaticText(body: string): boolean {
 - Modify: `ACCT/contacts/contacts-table.tsx` (the `view` prop, threaded to `BulkActionBar` at `:196-205`), `ACCT/contacts/contacts-table.test.ts`
 - Modify: `ACCT/contacts/page.tsx`, `ACCT/contacts/page.test.ts`
 - Modify: `ACCT/contacts/export/route.ts:128` (passes `archived` from `?view=`), `ACCT/contacts/export/route.get.test.ts`
+- Create (fix round): `ACCT/contacts/bulk-action-bar.dialog.test.ts` (renders `DeleteDialogBody` with the dialog primitives as plain elements)
+- Modify (fix round): `apps/web/src/lib/messages.ts` and `apps/web/src/lib/messages.test.ts` (One twins, the Archived view's delete lines, the partial-failure lines, the none title); `apps/web/src/lib/billing/read-only.test.ts` (`READ_ONLY_ALLOWED` gains `archive-actions.ts#contactDeleteBlockersAction`, which passes `duringPause: "allow"`)
+
+**As built (corrected 2026-10-28 after the Task 10 review).** Built at `65df28cb`; the fix round's commit follows it. The line numbers in Steps 3-5 were read at `81fb5ad2` and have moved since; the source wins. Three rules the steps below did not state, now binding:
+- **The Archived view never offers to archive.** Its contacts are archived already. The bar's Delete dialog, when nothing is deletable, shows `contacts.delete.noneDeletableArchived` and no "Archive instead"; `announceDeleteResult` takes the view and shows `bulk.deletedSkippedArchived` with no "Archive them".
+- **A partial Archive or Restore says so.** `ArchiveActionResult`'s ok branch carries `partial?: true` when a `ContactBatchError` ended the write after earlier batches changed contacts; the bar sets the same when a later call of 500 fails. The success toast counts what changed and keeps its Undo; a second, error toast reads `contacts.archive.partial` / `contacts.restore.partial` (no number: which of the rest would have changed is not knowable).
+- **Counts of one read in the singular.** `keepsAppointments`, `someKept` and `bulk.deletedSkipped` (and its Archived twin) go through `plural()` on the count they name; nothing deletable titles the dialog `contacts.delete.noneTitle` rather than "Delete 3 contacts?" and does not repeat the kept line.
 
 **Interfaces:** Produces the three actions in "Shared facts". `bulkDeleteContactsAction`'s ok-result gains `skippedIds` and `lateKept`. `parseView(raw): "active" | "archived"`, `withView(params, view)` and `archivedFilterOf(view)` come from `lib/contacts/view.ts`.
 
@@ -1786,6 +1793,7 @@ export async function contactDeleteBlockersAction(
   - Rule 4: a Technician's bar keeps Add tag, so it is never empty.
   - The delete dialog: `openConfirm` also starts `contactDeleteBlockersAction`, through a second `latestCountSettler` (`:137-142`). A new state, `blockers: { status: "loading" } | { status: "ready"; kept: string[] } | { status: "error" }`. Change `canConfirmDelete(typed, count, files)` to `canConfirmDelete(typed, deletable, files, blockers)`. It is true only when both reads are ready, `deletable > 0` and `typed.trim() === String(deletable)`. `deletable = count - kept.length`. The title uses `deletable` once ready (the selection count while loading). The body line shows `contacts.delete.someKept` when `kept.length > 0`. When `deletable === 0`, show `contacts.delete.noneDeletable` and a ghost `contacts.delete.archiveInstead` button ("Archive", no word "delete") running `archiveSelected` on the selection, with no Delete button. A failed blockers read shows `contacts.delete.blockersFailed` and Delete stays off.
   - `announceDeleteResult`: when `skippedBlocked > 0` the toast is `bulk.deletedSkipped` with action `bulk.archiveKept` → `archiveSelected(accountId, r.skippedIds, …)`. When `lateKept > 0` and files were purged, ALSO show `contacts.delete.filesGoneKept` (an error toast).
+  - **(Review I1.) In `view === "archived"`** neither "Archive instead" nor "Archive them" appears: the contacts are archived already. The none sentence is `contacts.delete.noneDeletableArchived` and the skipped toast `bulk.deletedSkippedArchived`, both saying they stay archived.
 
   Tests in `bulk-action-bar.test.ts`, in the style of the existing `assignSelected`/`announceDeleteResult` tests:
   - `archiveSelected`'s Undo calls `restoreContactsAction` with exactly `changedIds` (mutation: pass the selection → FAILS);

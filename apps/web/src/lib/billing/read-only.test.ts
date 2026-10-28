@@ -154,6 +154,8 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
     "opening a file: reads the version and mints a 120-second signed read URL, writes nothing",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts#countContactDocumentsAction":
     "the delete dialog's file count: one count on the request client (the delete itself is refused)",
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/archive-actions.ts#contactDeleteBlockersAction":
+    "the delete dialog's which-are-kept read: a request-client proof read and the service blockers read, writes nothing (the delete itself is refused)",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts#searchGroupsAction":
     "the Groups card's search: one read on the request client",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/relationship-actions.ts#searchRelatableContactsAction":

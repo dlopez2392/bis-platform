@@ -717,6 +717,14 @@ export const m = {
   // and offers Archive as the next step instead.
   "bulk.deletedSkipped": "Deleted {count} · kept {skipped} that have a history with you. You can archive those instead.",
   "bulk.deletedSkipped.es": "Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Puede archivarlos.",
+  // Task 10 review (count of one): picked by plural() on the KEPT count, so one kept reads in the singular.
+  "bulk.deletedSkippedOne": "Deleted {count} · kept 1 that has a history with you. You can archive it instead.",
+  "bulk.deletedSkippedOne.es": "Contactos borrados: {count} · conservado porque tiene un historial con usted: 1. Puede archivarlo.",
+  // The same line in the Archived view, where the kept ones are already archived: no offer to archive them.
+  "bulk.deletedSkippedArchived": "Deleted {count} · kept {skipped} that have a history with you. They stay archived.",
+  "bulk.deletedSkippedArchived.es": "Contactos borrados: {count} · conservados porque tienen un historial con usted: {skipped}. Siguen archivados.",
+  "bulk.deletedSkippedArchivedOne": "Deleted {count} · kept 1 that has a history with you. It stays archived.",
+  "bulk.deletedSkippedArchivedOne.es": "Contactos borrados: {count} · conservado porque tiene un historial con usted: 1. Sigue archivado.",
   "bulk.archiveKept": "Archive them",
   "bulk.archiveKept.es": "Archivarlos",
 
@@ -5178,10 +5186,19 @@ export const m = {
   "contacts.archive.failed.es": "No se pudo archivar. No cambió nada. Intente de nuevo.",
   "contacts.restore.failed": "Couldn't restore. Nothing changed. Try again.",
   "contacts.restore.failed.es": "No se pudo restaurar. No cambió nada. Intente de nuevo.",
+  // Task 10 review: a big selection goes in several calls, and one can fail after others went. The
+  // success toast counts what changed (with its Undo); this second line says the rest did not. No
+  // number: which of the rest would have changed is not knowable once a call fails.
+  "contacts.archive.partial": "Some of them couldn't be archived. Try again.",
+  "contacts.archive.partial.es": "Algunos no se pudieron archivar. Intente de nuevo.",
+  "contacts.restore.partial": "Some of them couldn't be restored. Try again.",
+  "contacts.restore.partial.es": "Algunos no se pudieron restaurar. Intente de nuevo.",
   "contacts.archive.keepsAppointment": "They still have an appointment on {date}. Its reminders still go.",
   "contacts.archive.keepsAppointment.es": "Todavía tiene una cita el {date}. Sus recordatorios se siguen enviando.",
   "contacts.archive.keepsAppointments": "{count} of them still have appointments. Their reminders still go.",
   "contacts.archive.keepsAppointments.es": "{count} de ellos todavía tienen citas. Sus recordatorios se siguen enviando.",
+  "contacts.archive.keepsAppointmentsOne": "1 of them still has an appointment. Its reminders still go.",
+  "contacts.archive.keepsAppointmentsOne.es": "1 de ellos todavía tiene una cita. Sus recordatorios se siguen enviando.",
   // Review I5/M8 (plan Task 3): a permanent delete never lists WHICH history
   // blocked it — a reason list reads as a form and goes stale as the
   // delete-blocker set (spec §5.1) grows.
@@ -5189,8 +5206,22 @@ export const m = {
   "contacts.delete.archiveOnly.es": "No se puede borrar a {name} porque tiene un historial con usted, y lo conservamos. Mejor archive este contacto: sale de su lista y no se pierde nada.",
   "contacts.delete.someKept": "{kept} of these have a history with you and will be kept.",
   "contacts.delete.someKept.es": "{kept} de estos tienen un historial con usted y se conservarán.",
+  "contacts.delete.someKeptOne": "1 of these has a history with you and will be kept.",
+  "contacts.delete.someKeptOne.es": "1 de estos tiene un historial con usted y se conservará.",
+  // Task 10 review: when nothing in the selection can go, the dialog is not titled "Delete 3 contacts?".
+  "contacts.delete.noneTitle": "These can't be deleted",
+  "contacts.delete.noneTitle.es": "No se pueden borrar",
+  "contacts.delete.noneTitleOne": "This contact can't be deleted",
+  "contacts.delete.noneTitleOne.es": "Este contacto no se puede borrar",
   "contacts.delete.noneDeletable": "None of these can be deleted: they all have a history with you. Archive them instead.",
   "contacts.delete.noneDeletable.es": "Ninguno se puede borrar porque todos tienen un historial con usted. Mejor archívelos.",
+  "contacts.delete.noneDeletableOne": "They have a history with you, so they can't be deleted. Archive them instead.",
+  "contacts.delete.noneDeletableOne.es": "Tiene un historial con usted, así que no se puede borrar. Mejor archívelo.",
+  // The Archived view's twins: these contacts are already archived, so nothing offers to archive them.
+  "contacts.delete.noneDeletableArchived": "None of these can be deleted: they all have a history with you, so they stay archived.",
+  "contacts.delete.noneDeletableArchived.es": "Ninguno se puede borrar porque todos tienen un historial con usted, así que siguen archivados.",
+  "contacts.delete.noneDeletableArchivedOne": "They have a history with you, so they can't be deleted. They stay archived.",
+  "contacts.delete.noneDeletableArchivedOne.es": "Tiene un historial con usted, así que no se puede borrar. Sigue archivado.",
   "contacts.delete.archiveInstead": "Archive instead",
   "contacts.delete.archiveInstead.es": "Archivar",
   "contacts.delete.blockersFailed": "Couldn't check which of these can be deleted. Close this and try again.",

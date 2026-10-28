@@ -14,7 +14,12 @@ import {
 /** What Archive and Restore answer. `changedIds` are exactly the contacts this call changed (never one that
  *  was already archived, or already on the list), so the toast's Undo reverses this call and nothing else. */
 export type ArchiveActionResult =
-  | { ok: true; changedIds: string[]; nextAppointment: { contactId: string; startsAt: string } | null; withAppointments: number }
+  | {
+      ok: true; changedIds: string[]; nextAppointment: { contactId: string; startsAt: string } | null; withAppointments: number;
+      /** Set when a batch failed after earlier ones changed contacts (ContactBatchError): `changedIds` went, the
+       *  rest did not, and the caller says so beside the Undo (Task 10 review I2). Absent on a full answer. */
+      partial?: true;
+    }
   | { ok: false; errorKey: "contacts.archive.failed" | "contacts.restore.failed" };
 
 /** At most this many ids in one `.in()` (review M1): the size contacts.ts's own batches use. */
@@ -53,7 +58,7 @@ export async function archiveContactsAction(accountId: string, contactIds: strin
     const partial = changedBeforeFailure(e);
     if (partial.length === 0) return { ok: false, errorKey: "contacts.archive.failed" };
     revalidatePath(contactsPath(accountId));
-    return { ok: true, changedIds: partial, nextAppointment: null, withAppointments: 0 };
+    return { ok: true, changedIds: partial, nextAppointment: null, withAppointments: 0, partial: true };
   }
   let nextAppointment: { contactId: string; startsAt: string } | null = null;
   let withAppointments = 0;
@@ -91,7 +96,7 @@ export async function restoreContactsAction(accountId: string, contactIds: strin
     const partial = changedBeforeFailure(e);
     if (partial.length === 0) return { ok: false, errorKey: "contacts.restore.failed" };
     revalidatePath(contactsPath(accountId));
-    return { ok: true, changedIds: partial, nextAppointment: null, withAppointments: 0 };
+    return { ok: true, changedIds: partial, nextAppointment: null, withAppointments: 0, partial: true };
   }
 }
 
@@ -102,13 +107,13 @@ export async function restoreContactsAction(accountId: string, contactIds: strin
  * account's contacts, and only those proven ids reach it. A contact absent from `blocked` has nothing in
  * its way. Never an empty answer on a failure: that would read as "nothing blocks".
  *
- * Not usable while the account is paused (no `duringPause` option): the delete it prepares is refused then
- * anyway, and the paused-account allow-list (lib/billing/read-only.test.ts) is not this task's to extend.
+ * Usable while the account is paused, like the file count beside it (lib/billing/read-only.test.ts lists it):
+ * it writes nothing; the delete it prepares is refused then.
  */
 export async function contactDeleteBlockersAction(
   accountId: string, contactIds: string[],
 ): Promise<{ ok: true; blocked: Record<string, DeleteBlockReason[]> } | { ok: false }> {
-  await requireAccountOwner(accountId);
+  await requireAccountOwner(accountId, { duringPause: "allow" });
   if (!okIds(contactIds)) return { ok: false };
   try {
     const ids = contactIds.map((id) => id.toLowerCase());

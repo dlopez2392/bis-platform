@@ -184,7 +184,8 @@ describe("archiveContactsAction: a failure", () => {
     const errors = quietly();
     dbMocks.archiveContacts.mockRejectedValue(new dbMocks.ContactBatchError("archiveContacts failed: timeout", [C1, C2]));
     const r = await archiveContactsAction("a1", [C1, C2, C3]);
-    expect(r).toMatchObject({ ok: true, changedIds: [C1, C2] });
+    // Task 10 review I2: partial, so the bar says the rest did not go (mutation: drop partial -> FAILS).
+    expect(r).toMatchObject({ ok: true, changedIds: [C1, C2], partial: true });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
     errors.mockRestore();
   });
@@ -223,7 +224,7 @@ describe("restoreContactsAction", () => {
   it("a partial batch failure still answers the ids restored; a plain one is contacts.restore.failed", async () => {
     const errors = quietly();
     dbMocks.restoreContacts.mockRejectedValueOnce(new dbMocks.ContactBatchError("restoreContacts failed", [C1]));
-    expect(await restoreContactsAction("a1", [C1, C2])).toMatchObject({ ok: true, changedIds: [C1] });
+    expect(await restoreContactsAction("a1", [C1, C2])).toMatchObject({ ok: true, changedIds: [C1], partial: true });
     dbMocks.restoreContacts.mockRejectedValueOnce(new Error("db down"));
     expect(await restoreContactsAction("a1", [C1])).toEqual({ ok: false, errorKey: "contacts.restore.failed" });
     errors.mockRestore();
@@ -235,7 +236,8 @@ describe("contactDeleteBlockersAction (spec §5.4)", () => {
     const denied = new Error("REDIRECT:/dashboard/accounts/a1/dashboard");
     requireAccountOwner.mockRejectedValueOnce(denied);
     await expect(contactDeleteBlockersAction("a1", [C1])).rejects.toBe(denied);
-    expect(requireAccountOwner).toHaveBeenCalledWith("a1");
+    // Usable while paused, like the file count (lib/billing/read-only.test.ts lists it): the delete it prepares is refused then.
+    expect(requireAccountOwner).toHaveBeenCalledWith("a1", { duringPause: "allow" });
     expect(dbMocks.contactDeleteBlockers).not.toHaveBeenCalled();
     expect(proofReads).toEqual([]);
   });
