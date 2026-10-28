@@ -259,7 +259,7 @@ create table public.jobs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   finished_at timestamptz,
-  constraint jobs_kind_key unique (kind, idempotency_key),
+  constraint jobs_kind_key unique nulls not distinct (kind, account_id, idempotency_key),
   constraint jobs_running_has_lease check ((state = 'running') = (lease_until is not null and claim_token is not null)),
   constraint jobs_finished_has_time check ((state in ('succeeded', 'dead')) = (finished_at is not null))
 );
@@ -276,8 +276,11 @@ create table public.jobs (
   run out before the next drain.
 - **Backoff and attempts.** `attempts` rises at each claim. The next `run_after` is computed in
   TypeScript (§8), where it is a pure function under test.
-- **Idempotency.** `unique (kind, idempotency_key)`. An enqueue that collides returns the existing
-  job and creates nothing. The key de-duplicates for as long as the row is kept (§7, retention):
+- **Idempotency** (amended 2026-10-28 after the plan review). `unique nulls not distinct (kind,
+  account_id, idempotency_key)` (PostgreSQL 15+; bis-ci and production run 17): a key is scoped to
+  its account, so two accounts' identical keys are two jobs, and a platform key (null account)
+  still collides with itself. An enqueue that collides returns the existing job, with its `state`,
+  and creates nothing, so a caller can tell a dead duplicate from a live one. The key de-duplicates for as long as the row is kept (§7, retention):
   after a succeeded row is swept, the same key enqueues new work.
 - **Payload.** Ids and small facts only, at most 8 KB as text. Never an address, a phone number, a
   token or a message body: a dead job's error reaches an email, and payloads are read by hand in
@@ -382,13 +385,15 @@ export type JobPayload<K extends JobKind> = ReturnType<(typeof JOB_HANDLERS)[K][
 export async function enqueue<K extends JobKind>(
   kind: K, payload: JobPayload<K>,
   opts: { idempotencyKey: string; accountId: string | null; runAfter?: Date; db?: SupabaseClient },
-): Promise<{ id: string; created: boolean }>;
+): Promise<{ id: string; created: boolean; state: JobState }>;
 ```
 
 - `enqueue` writes through `serviceDb()` (the table is service-only), copies `maxAttempts` and
   `timeoutMs` from the handler onto the row (so the claim needs no registry), refuses an oversize
-  payload before the insert, and on a key collision reads the existing row back and answers
-  `created: false`. `accountId` is required, null included, so every author decides it. The caller
+  payload before the insert (and maps 0102's own payload CHECK, 23514, to the same refusal: jsonb's
+  text form can be far longer than the JSON, `{"a":1e300}` is 11 bytes as JSON and 308 as
+  `jsonb::text`), and on a key collision reads the existing row back and answers `created: false`
+  with its `state`. `accountId` is required, null included, so every author decides it. The caller
   authorises the work before enqueueing it; `enqueue` checks nothing about who asked.
 - **Backoff** (`backoff.ts`, pure): after failed attempt n, wait `min(base × 2^(n−1), cap)` with ±20%
   jitter; `RetryJobAfter` replaces the computed wait (still capped). With the default base and five
@@ -415,7 +420,8 @@ The drain is a node in the plan, `jobsDrain`, run by the 15-minute tick through 
 in-process fallback never drains (its 300 s is already spent, §3), and no producer exists until a
 later part, whose spec must require fan-out on. Each drain:
 
-1. Loops: stops claiming when `elapsed + JOB_TIMEOUT_MAX_MS > JOBS_DRAIN_BUDGET_MS` (240 s), or after
+1. Loops: stops claiming when `elapsed + JOB_TIMEOUT_MAX_MS > JOBS_DRAIN_BUDGET_MS` (200 s; amended from 240 s, under Node fetch's
+   300 s default headers timeout, an ASSUMPTION), or after
    JOBS_PER_DRAIN (100) claims, or when a claim returns nothing. It claims ONE job per call
    (`claim_jobs(kinds, 1)`), so no claimed job waits on another's lease.
 2. Runs the handler with `AbortSignal.timeout(job.timeout_ms)`, raced against the timeout.
@@ -466,8 +472,10 @@ bis-ci.
 3. CHECKs: a 9 KB payload, a bad state, `max_attempts` 0, `timeout_ms` 61,000, a kind with no dot,
    a 301-character error, `running` without a lease each refused 23514. *Drop the payload CHECK →
    FAILS.*
-4. `unique (kind, idempotency_key)`: the second insert 23505; the same key under another kind is
-   accepted. *Make the key unique alone → the second case FAILS.*
+4. `unique nulls not distinct (kind, account_id, idempotency_key)`: the second platform insert
+   23505; the same key under another kind is accepted; the same key under two accounts is accepted
+   for both. *Make the key unique alone → the second case FAILS; drop `nulls not distinct` → the
+   second platform insert is accepted, FAILS.*
 5. **The claim race**, on two connections (the holder/waiter shape of
    `consent-writes-schema.test.ts:330-350`): two due jobs; the holder claims one inside an open
    transaction; the waiter, `lock_timeout = '300ms'`, claims and gets the OTHER job at once. *Drop
@@ -531,7 +539,10 @@ bis-ci.
    (`docs/runbooks/ci-supabase-project.md`). Additive: the running build never touches it.
 2. **Merge with the switch off.** `CRON_FANOUT` (exactly `"1"` is on, the shape of
    `BILLING_ENFORCE`, `lib/billing/enforce.ts:10-12`) is unset at merge: the dispatcher runs today's
-   in-process tick, and the merged build behaves as today plus a table nobody writes.
+   in-process tick. "Behaves as today" is not literal (amended after the plan review): the
+   in-process tick's ceiling is 800 s, not 300 s, and the providers' 10 s attempt timeout and one
+   rate-limit retry (Q4) are live on every send path, request paths and `after()` callbacks
+   included, from the merge. Otherwise: today's tick plus a table nobody writes. The PR body says so.
 3. **Preview** (bis-ci): set `CRON_FANOUT=1` for Preview, invoke the dispatcher once by hand through
    Preview's protection bypass, and read on bis-ci: a 200 with every key, one fresh `cron.pass.*` row
    per pass, `cron.tick`, the two `jobs.*` rows ok. Enqueue one `platform.ping` and run the dispatcher
