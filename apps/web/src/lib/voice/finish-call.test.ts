@@ -725,10 +725,10 @@ describe("finishCall — missed-call text-back", () => {
    * The call record is worth more than the text. Everything the row needs —
    * contact, conversation, the outbound message row — is written before it;
    * the carrier round trip, which is the slow part and the part that can hang
-   * for ten seconds inside an invocation that can be near its maxDuration,
+   * for up to 23 seconds inside an invocation that can be near its maxDuration,
    * comes after. Not the default case since Pro lifted the voice route's
    * ceiling to 800s against a 240s call cap, but exactly the case whenever
-   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 679s clamp. Pinned
+   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 666s clamp. Pinned
    * so a future reorder cannot quietly put the network call back in front of
    * the durable record.
    */
