@@ -34,6 +34,8 @@ export type ContactRow = {
   phone: string | null;
   company_name: string | null;
   created_at: string;
+  /** Contact archive (0103): set on a row of the Archived view; the drawer shows Restore and the archived line. */
+  archived_at?: string | null;
 };
 
 // A `?peek=` id absent from the current page's rows (deleted, or on another
@@ -327,6 +329,10 @@ export function ContactsTable({
         canAssign={canAssign}
         members={members}
         viewerId={viewerId}
+        // Contact archive (plan Task 11): the drawer's Archive / Restore and Delete…, the same rights as the bar.
+        canArchive={canArchive}
+        canDelete={canDelete}
+        timezone={timezone}
       />
     </ListPanel>
   );

@@ -5,6 +5,7 @@ import type { ContactRow } from "./contacts-table";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderedText } from "@/lib/rendered-text";
 
 /**
  * Pins the drawer's USE of the summary parser (`lib/contacts/drawer-summary.ts`, S-03 part 3):
@@ -62,6 +63,8 @@ vi.mock("./[contactId]/next-up-card", () => ({ NextUpBody: (p: unknown) => { nex
 vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn(), undoInlinePhoneEditAction: vi.fn(), setContactBusinessAction: vi.fn(), undoContactBusinessAction: vi.fn(), setContactLanguageAction: vi.fn(), restoreContactLanguageAction: vi.fn(), keepContactLanguageHintAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
+// Contact archive (plan Task 11): the header's ArchiveControls bind these "use server" actions; nothing runs here.
+vi.mock("./archive-actions", () => ({ archiveContactsAction: vi.fn(), restoreContactsAction: vi.fn(), contactDeleteBlockersAction: vi.fn() }));
 
 const { ContactDrawer } = await import("./contact-drawer");
 
@@ -757,5 +760,81 @@ describe("ContactDrawer: closing gives focus back to the row (2026-10-28)", () =
     (props!.onCloseAutoFocus as (e: unknown) => void)(event);
     expect(rows.map((r) => r.focus.mock.calls.length)).toEqual([0, 1]);
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Contact archive (plan Task 11): the drawer's header carries Archive (Restore once archived) and Delete…,
+ * BEFORE the open-full link, and an archived contact's short banner. Rendered for real (renderToStaticMarkup),
+ * so a dead branch cannot pass.
+ */
+describe("ContactDrawer: Archive, Restore and Delete… in the header (contact archive, plan Task 11)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; });
+  const open = (props: Record<string, unknown>, row: ContactRow = ROW) => {
+    effects.length = 0;
+    states.length = 0;
+    harness.readyFetched = READY;
+    harness.openSheet = true;
+    return renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row, onClose: () => {}, ...props }));
+  };
+  const actionsOf = (html: string) => [...html.matchAll(/data-archive-action="(\w+)"/g)].map((x) => x[1]);
+
+  it("an unauthorised default: with no canArchive or canDelete passed, neither control (mutation: default either to true -> FAILS)", () => {
+    expect(actionsOf(open({}))).toEqual([]);
+  });
+
+  it("an Owner gets Archive and Delete…, beside the name and before the open-full link (mutation: drop the controls -> FAILS)", () => {
+    const html = open({ canArchive: true, canDelete: true, timezone: "America/Chicago" });
+    expect(actionsOf(html)).toEqual(["archive", "delete"]);
+    const nameLine = html.match(/<div data-record-name-line[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(nameLine.indexOf('data-archive-action="archive"')).toBeGreaterThan(-1);
+    expect(nameLine.indexOf('data-archive-action="delete"')).toBeLessThan(nameLine.indexOf('aria-label="Open full record"'));
+    // The link keeps the room the Sheet's close button needs (sheet.tsx).
+    expect(html).toMatch(/<a [^>]*aria-label="Open full record"[^>]*class="[^"]*\bmr-8\b/);
+  });
+
+  it("Staff archive but never delete; a Technician gets neither (owner ruling Q3)", () => {
+    expect(actionsOf(open({ canArchive: true, canDelete: false }))).toEqual(["archive"]);
+    expect(actionsOf(open({ canArchive: false, canDelete: false }))).toEqual([]);
+  });
+
+  it("an archived row (the Archived view) offers Restore and says when, in the account's zone, dot and word (mutation: ignore archived_at -> FAILS)", () => {
+    const html = open({ canArchive: true, canDelete: true, timezone: "America/Chicago" }, { ...ROW, archived_at: "2026-10-28T03:30:00Z" });
+    expect(actionsOf(html)).toEqual(["restore", "delete"]);
+    expect(html).toMatch(/data-archived-banner[\s\S]*?data-status-dot/);
+    expect(renderedText(html)).toContain("Archived Oct 27, 2026. Their calls and texts are kept.");
+    expect(open({ canArchive: true })).not.toContain("data-archived-banner");
+  });
+
+  it("the controls close the drawer when the contact leaves the list (onGone = onClose), in the drawer's variant (mutation: no onGone -> FAILS)", async () => {
+    const { RecordHeader } = await import("@/components/record/record-header");
+    const { ArchiveControls } = await import("./archive-controls");
+    effects.length = 0;
+    states.length = 0;
+    harness.readyFetched = READY;
+    harness.openSheet = true;
+    const onClose = () => {};
+    const found: { type: unknown; props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown): void => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
+      found.push(el);
+      walk(el.props.children);
+      walk(el.props.trailing);
+    };
+    walk(ContactDrawer({ accountId: "a1", row: ROW, onClose, canArchive: true, canDelete: true, timezone: "America/Chicago" }));
+    expect(found.some((e) => e.type === RecordHeader)).toBe(true);
+    const controls = found.find((e) => e.type === ArchiveControls);
+    expect(controls?.props).toMatchObject({ variant: "drawer", onGone: onClose, canArchive: true, canDelete: true, timezone: "America/Chicago", contactId: "c1" });
+  });
+
+  it("the table hands the drawer canArchive, canDelete and the account's zone (mutation: drop any -> FAILS)", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const table = readFileSync(path.join(here, "contacts-table.tsx"), "utf8");
+    const drawerEl = table.match(/<ContactDrawer[\s\S]*?\/>/)?.[0] ?? "";
+    expect(drawerEl).toMatch(/canArchive=\{canArchive\}/);
+    expect(drawerEl).toMatch(/canDelete=\{canDelete\}/);
+    expect(drawerEl).toMatch(/timezone=\{timezone\}/);
   });
 });
