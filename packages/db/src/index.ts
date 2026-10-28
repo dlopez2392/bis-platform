@@ -408,3 +408,10 @@ export {
   stampAiActUndone, clearAiActUndone, markAiActNotified,
   type AiBookingUndoOutcome, type AiContactUndoOutcome,
 } from "./ai-acts";
+
+// F-196: the background job queue (migration 0102 `public.jobs`), claimed with leases and a dead letter. See ./jobs.ts.
+export {
+  insertJob, claimJob, completeJob, retryJob, killJob, sweepJobs, deadJobCounts, oldestDueJob,
+  JOB_ERROR_MAX_CHARS, boundJobError, JobPayloadTooLarge,
+  type JobState, type JobRow, type NewJob, type JobFence,
+} from "./jobs";
