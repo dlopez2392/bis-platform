@@ -159,7 +159,10 @@ against the request client first, as `deleteContacts` does today (`contacts.ts:1
 
 **8. `public.delete_internal_contacts(p_account_id uuid, p_contact_ids uuid[]) returns uuid[]`.**
 SECURITY DEFINER, executable by `authenticated` and `service_role`. It keeps the DATABASE's Owner check
-(review I9, 2026-10-28): it refuses (42501) unless the caller is an Owner of this account
+(review I9, 2026-10-28), written as `if not coalesce(<the whole test>, false)`. The outer coalesce is
+load-bearing (re-review Critical): `app.current_account_id()` is NULL when client access is off
+(`0008_client_access.sql:13-18`), while `is_account_owner` stays true (`0066:52-66`). Without it the test is
+NULL, and `IF NULL` never raises. It refuses (42501) unless the caller is an Owner of this account
 (`app.is_account_owner(p_account_id)`, `0066_staff_and_roles.sql:63-66`, the agency included, with the 0066
 policy's own `p_account_id = app.current_account_id()` term), or server code with a `service_role` JWT.
 PostgREST verifies the token before it sets `request.jwt.claims`, so a client cannot claim that role. The
@@ -189,7 +192,12 @@ are a minority. Measure with `explain` on the replica before adding a partial in
 **10. The inbox column (owner decision 2026-10-28, review I8).**
 `conversations.contact_archived boolean not null default false` follows the contact:
 - an AFTER UPDATE OF `archived_at` trigger on contacts (definer) sets it on that contact's conversation;
-- a BEFORE INSERT OR UPDATE OF `contact_id` trigger on conversations (definer) sets it from the contact.
+- a BEFORE INSERT OR UPDATE trigger on conversations (definer) re-derives it from the contact on EVERY
+  write, so a value left stale by a concurrent archive heals at the conversation's next touch.
+
+Adding the STORED generated column rewrites `conversations` under ACCESS EXCLUSIVE, which briefly blocks
+inbound filing. The plan's T1 measures the rewrite on the replica. The orchestrator reads production's row
+count at apply time and applies off-peak above 100,000 rows.
 
 `conversations.inbox_visible boolean generated always as (not contact_archived or unread_count > 0) stored`
 is the one column the inbox and search filter on. A PostgREST `or` cannot span a conversation column and an
@@ -270,7 +278,7 @@ the second is visible and costs a click.
 | A call Sofía answered that ended booked, lead or message (`isMeaningful`, `apps/web/src/lib/voice/finish-call.ts:166-170`), on the contact `resolveContactId` returns (`:350`; used at `:599`) | finish-call | `call` |
 | A booking Sofía made (`book_appointment`, `apps/web/src/lib/voice/tools/registry.ts:453`, contact at `:569`/`:590`) | registry | `booking` |
 | A booking on the public page (`apps/web/src/app/b/[publicId]/actions.ts:305`) | booking page | `booking` |
-| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP, a stop phrase) or Telnyx's own autoresponse, **and unless it reads as a phone's auto-reply** (`looksAutomaticText`: a CLOSED English and Spanish phrase list, such as "I'm driving", "this number cannot receive texts", "estoy manejando" or "respuesta automática"; review I7, owner decision). A robocaller's number that answers our text-back automatically stays archived. | SMS inbound route, INSIDE the filing try, right after the message is written and before the unread bump (review I8). There a failure is a 503 that Telnyx retries, never a 200 that loses it. It runs on every delivery, idempotently. | `text` |
+| An inbound text, unless `classifyInbound` (`apps/web/src/app/api/sms/inbound/route.ts:333`) marks it as a consent change (`CHANGES_CONSENT`, `:49`: STOP, START, HELP, a stop phrase) or Telnyx's own autoresponse, **and unless it reads as a phone's auto-reply** (`looksAutomaticText`: a CLOSED English and Spanish phrase list matched on word boundaries, such as "I'm driving", "this number cannot receive texts", "estoy manejando" or "respuesta automática"; review I7, owner decision). A robocaller's number that answers our text-back automatically stays archived. | SMS inbound route, INSIDE the filing try, BEFORE the message is written (re-review). There a failure files nothing and answers 503, and Telnyx's retry files the whole text, its unread included. After the write, the retry would skip the unread bump. It runs on every delivery, idempotently. | `text` |
 | An inbound email filed by the pipeline as the customer's (not a teammate's forward, not a stop, not a duplicate) | `apps/web/src/lib/email/inbound/pipeline.ts` (`resumeExisting`), **never** `file.ts`: `fileHeldEmailAction` (`conversations/inbound-actions.ts:149`) also calls `fileInboundEmail`, and a teammate's manual File is a staff act, not the customer's (review I6). Automatic mail never gets this far: `classifyAutomatic` drops it before filing (`pipeline.ts:200-211`). | `email` |
 | A form submission linked to the contact | `apps/web/src/lib/forms/enrich.ts:108` | `form` |
 | A web chat lead | `apps/web/src/app/api/concierge/[publicId]/turn/route.ts` (its `createContact`) | `chat` |

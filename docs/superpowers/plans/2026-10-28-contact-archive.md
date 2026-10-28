@@ -410,6 +410,20 @@ describe("0103: delete_internal_contacts keeps the database's Owner check (revie
       expect(r.d).toEqual([idA]);
     }));
 
+  it("an Owner of an account whose client access is OFF is refused 42501 (re-review Critical; mutation: drop the outer coalesce -> FAILS)", () =>
+    withRollback(async (c) => {
+      // current_account_id() is NULL here (0008:13-18) while is_account_owner is still true (0066:52-66): the
+      // expression is NULL, and only the outer coalesce turns that into a refusal.
+      const a = await seedAccount(c, "accessoff");
+      const id = await contact(c, a.accountId);
+      await actAsOwner(c);
+      await c.query("update public.accounts set client_access_enabled = false where id = $1", [a.accountId]);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      expect((await refusal(c, "select public.delete_internal_contacts($1, array[$2]::uuid[])", [a.accountId, id]))?.code).toBe("42501");
+      await actAsOwner(c);
+      expect((await c.query("select 1 from public.contacts where id = $1", [id])).rowCount).toBe(1);
+    }));
+
   it("server code (a service_role JWT) may call it: the e2e cleanup and the live suites do (mutation: drop the service_role term -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "svcdel");
@@ -504,6 +518,21 @@ describe("0103: conversations.contact_archived and inbox_visible", () => {
       expect((await c.query("select contact_archived from public.conversations where id = $1", [cv])).rows[0]).toEqual({ contact_archived: true });
     }));
 
+  it("a stale contact_archived heals on the conversation's next update (mutation: trigger only `of contact_id` -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "heal");
+      const id = await contact(c, a.accountId);
+      const cv = await conversation(c, a.accountId, id);
+      await actAsOwner(c);
+      // Simulate the race: the contact is archived, the conversation row still says false.
+      await c.query("alter table public.conversations disable trigger conversations_contact_archived");
+      await c.query("update public.contacts set archived_at = now() where id = $1", [id]);
+      await c.query("update public.conversations set contact_archived = false where id = $1", [cv]);
+      await c.query("alter table public.conversations enable trigger conversations_contact_archived");
+      await c.query("update public.conversations set last_message_at = now() where id = $1", [cv]);
+      expect((await c.query("select contact_archived from public.conversations where id = $1", [cv])).rows[0]).toEqual({ contact_archived: true });
+    }));
+
   it("authenticated cannot write contact_archived (mutation: grant update (contact_archived) -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [p] } = await c.query(
@@ -521,6 +550,7 @@ Expected: every test FAILS. The first failing line reads `column "archived_at" o
 
 - [ ] **Step 4: Write the migration.** Create `packages/db/supabase/migrations/0103_contact_archive.sql`. ASCII only, no backslash, every dollar sign part of a `$$` pair (the 0098 rule, `0098_shared_number_holding.sql:58`). The header follows 0098's sections (WHY / WHAT / GRANTS / SEARCH PATHS / LOCKS AND COST / LOAD-BEARING / ROLLBACK), stating:
   - GRANTS: one column grant, `update (archived_at)` to authenticated. `EXPECTED_WRITES` and the two contacts column-grant pins (`contacts-marketing-optout-schema.test.ts:69-72`, `server-only-writes-grants.test.ts:130-133`) gain it. The client-write digest does NOT change (`proposals-drop.test.ts:94-98` counts table privileges only). `delete_internal_contacts` is executable by authenticated and keeps its own Owner check. Six definers are added to `EXPECTED_DEFINERS` (23 -> 29, or 0102's count + 6).
+  - LOCKS AND COST: the contacts columns are catalogue-only. Adding the STORED generated column `conversations.inbox_visible` REWRITES `conversations` and its indexes under ACCESS EXCLUSIVE. For the length of the rewrite every inbound text, email and call filing on every account waits, as do the inbox reads. The SMS route answers 503 if it times out, and Telnyx retries. The size is not measured against production here. An estimate: a rewrite of narrow rows runs at roughly tens of thousands of rows per second, so a table in the low thousands of rows takes well under a second. Step 5 MEASURES it on the replica with 50,000 synthetic conversations; put that number in the header. The orchestrator reads `select count(*), pg_size_pretty(pg_total_relation_size('public.conversations')) from public.conversations` on production at apply time. Above 100,000 rows, apply off-peak. `lock_timeout` 5s bounds only the wait to take the lock, not the rewrite.
   - LOAD-BEARING: the app after this file names `archived_at` in `COLS` and every list read, so it merges only after this file is on production.
 
 ```sql
@@ -686,9 +716,16 @@ declare
   v_id uuid;
   v_deleted uuid[] := '{}';
 begin
-  if not (coalesce(app.jwt() ->> 'role', '') = 'service_role'
-          or coalesce(app.is_agency(), false)
-          or (p_account_id = app.current_account_id() and coalesce(app.is_account_owner(p_account_id), false))) then
+  -- The OUTER coalesce is load-bearing (re-review Critical, proven on PG18): app.current_account_id() is NULL when
+  -- the account's client access is off or the token names no org (0008_client_access.sql:13-18), while
+  -- is_account_owner keys on the token's sub alone (0066:52-66) and stays true. Without it the test is
+  -- `not (false or false or (NULL and true))` = NULL, and IF NULL never raises: it would fail OPEN.
+  if not coalesce(
+       coalesce(app.jwt() ->> 'role', '') = 'service_role'
+       or coalesce(app.is_agency(), false)
+       or (coalesce(p_account_id = app.current_account_id(), false)
+           and coalesce(app.is_account_owner(p_account_id), false)),
+       false) then
     raise exception 'delete_internal_contacts: Owners only' using errcode = '42501';
   end if;
   if p_contact_ids is null or pg_catalog.cardinality(p_contact_ids) > 500 then
@@ -753,13 +790,16 @@ begin
   return new;
 end $$;
 revoke all on function app.conversation_contact_archived() from public, anon, authenticated;
-create trigger conversations_contact_archived before insert or update of contact_id on public.conversations
+-- On EVERY insert and update, not only `of contact_id` (re-review minor): an archive that commits while a
+-- conversation row is being written can leave contact_archived stale, and re-deriving it on each touch (every
+-- message bumps last_message_at, every read clears unread) heals it at the next write. One PK lookup per write.
+create trigger conversations_contact_archived before insert or update on public.conversations
   for each row execute function app.conversation_contact_archived();
 ```
 
 ROLLBACK in the header, in order: drop triggers `conversations_contact_archived` and `contacts_archive_to_conversations` and their two functions; drop the conversations columns `inbox_visible` then `contact_archived`; drop index `contacts_account_archived_created`; drop the three public functions; drop trigger `contacts_archive_log` and function `app.contacts_archive_log()`; drop trigger `contacts_archive_stamp` and function `app.contacts_archive_stamp()`; drop table `public.contact_archive_log`; `revoke update (archived_at) on public.contacts from authenticated`; drop constraint `contacts_archived_by_needs_at`; drop both columns.
 
-- [ ] **Step 5: Apply to `post` and run green.**
+- [ ] **Step 5: Apply to `post` and run green.** Before applying, also measure the rewrite (LOCKS AND COST): in a copy `create database rw template pre`, insert 50,000 conversations across seeded contacts, then time `psql -p 55434 -d rw -1 -f …0103_contact_archive.sql` (`\timing` or `Measure-Command`). Paste the duration into the migration header and your report.
 Run: `psql -p 55434 -d post -1 -v ON_ERROR_STOP=1 -f supabase/migrations/0103_contact_archive.sql`, then the Step 3 command against `post`.
 Expected: all pass. Paste vitest's summary line.
 
@@ -790,6 +830,7 @@ Run all four files on `post` (green) and the two guard files on `pre` (red: `exp
 | `grant insert on public.contact_archive_log to authenticated` | "authenticated holds no write privilege on the log" (the privilege read; an insert attempt could not fail, review I1) |
 | delete fn: delete the Owner `if not (…)` block | "a Staff member's call is refused" |
 | delete fn: drop `p_account_id = app.current_account_id() and` | "an Owner of ANOTHER account is refused" |
+| delete fn: drop the OUTER `coalesce(…, false)` (keep the inner ones) | "an Owner of an account whose client access is OFF is refused" (the NULL path; re-review Critical) |
 | delete fn: drop the `service_role` term | "server code (a service_role JWT) may call it" |
 | blockers: drop the `or x.conversation_id in (…)` term | the calls case (b) |
 | drop trigger `contacts_archive_to_conversations` | "archiving and restoring a contact flips its conversations' contact_archived" |
@@ -1458,7 +1499,7 @@ Define `const CREATED_CONTACT_ID` at the top of the new `describe` as the id the
 
 **Files:**
 - Create: `apps/web/src/lib/contacts/automatic-text.ts`, `apps/web/src/lib/contacts/automatic-text.test.ts`
-- Modify: `apps/web/src/app/api/sms/inbound/route.ts` (inside the filing `try`, after the `if (firstFiling) { await createMessage(…) }` block, `:219-229`)
+- Modify: `apps/web/src/app/api/sms/inbound/route.ts` (inside the filing `try`, between `ensureConversation` `:219` and `if (firstFiling) { await createMessage(…) }` `:220-229`)
 - Modify: `apps/web/src/app/api/sms/inbound/route.test.ts` (mock `:35`), `apps/web/src/app/api/sms/inbound/route.consent.test.ts` (mock `:22`)
 - Modify: `apps/web/src/app/b/[publicId]/actions.ts` (after the language-signal block `:374-382`), `apps/web/src/app/b/[publicId]/actions.test.ts` (mock `:105`)
 - Modify: `apps/web/src/lib/forms/enrich.ts` (after the language-signal try `:121-131`), `apps/web/src/lib/forms/enrich.test.ts` (mock `:12`), `apps/web/src/app/f/[publicId]/actions.test.ts` (mock `:64`, stub only)
@@ -1488,19 +1529,25 @@ const PHRASES = [
   "estoy manejando", "estoy conduciendo", "respuesta automatica", "mensaje automatico", "no puede recibir mensajes",
   "este numero no recibe", "fuera de la oficina",
 ] as const;
-const norm = (s: string) => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
+/** Lower case, accents off, curly quotes straight, and every run of characters that is not a letter, digit or
+ *  apostrophe turned into ONE space ("auto-reply" -> "auto reply"), padded, so a phrase matches only on WORD
+ *  boundaries (re-review minor): "Send him driving directions" must not match "im driving". */
+const norm = (s: string) => ` ${s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[’`]/g, "'")
+  .replace(/[^a-z0-9']+/g, " ").trim()} `;
+const NORMED = [...new Set(PHRASES.map(norm))];
 export function looksAutomaticText(body: string): boolean {
   const b = norm(body);
-  return PHRASES.some((p) => b.includes(p));
+  return NORMED.some((p) => b.includes(p));
 }
 ```
 
   Tests both ways:
   - `it.each` over one real example per phrase → true (mutation: drop a phrase → its case FAILS).
-  - `it.each(["Yes please send the quote", "Test", "Can you come Tuesday?", "Gracias, ¿pueden venir el martes?", "Stop by anytime"])` → false (mutation: match a single word like "driving" or "auto" → FAILS).
+  - `it.each(["Yes please send the quote", "Test", "Can you come Tuesday?", "Gracias, ¿pueden venir el martes?", "Stop by anytime", "Send him driving directions", "Tim driving over now", "autoreplying is broken"])` → false. Mutations: match a single word like "driving" or "auto" → FAILS. Drop the word-boundary padding (plain `includes` on the raw text) → "Send him driving directions" FAILS (re-review minor).
+  - Positive punctuation cases: "I'm driving." and "Auto-Reply: back Monday" → true (mutation: stop normalising punctuation → FAILS).
 
 - [ ] **Step 2: Failing tests, one per site:**
-  - **SMS** (`route.test.ts`). A plain inbound text on a non-shared number calls `restoreContactOnSign(db, accountId, contactId, "text")`. It is called BEFORE `incrementUnreadCount`; assert with `mock.invocationCallOrder` (review I8; mutation: move it after the unread bump → FAILS). It runs on a RETRY delivery too, the one where `firstFiling` is false (mutation: put it inside `if (firstFiling)` → FAILS). It is not called for STOP, START, HELP, a Telnyx autoresponse or a stop phrase (`consent.kind !== "none"`), for "I'm driving, will reply later" (`looksAutomaticText`), or on a shared number. Mutations: drop each condition → its case FAILS. A failing restore is a `FilingFailed` (503) on the first filing, so Telnyx retries; assert the 503.
+  - **SMS** (`route.test.ts`). A plain inbound text on a non-shared number calls `restoreContactOnSign(db, accountId, contactId, "text")`. It is called BEFORE `createMessage`; assert with `mock.invocationCallOrder` against `createMessage` (re-review Important; mutation: move it after `createMessage` → FAILS). It runs on a RETRY delivery too, the one where `firstFiling` is false (mutation: put it inside `if (firstFiling)` → FAILS). It is not called for STOP, START, HELP, a Telnyx autoresponse or a stop phrase (`consent.kind !== "none"`), for "I'm driving, will reply later" (`looksAutomaticText`), or on a shared number. Mutations: drop each condition → its case FAILS. A failing restore is a `FilingFailed` (503) on the first filing, so Telnyx retries; assert the 503.
   - **Booking page** (`actions.test.ts`): a successful booking restores with `"booking"`. A slot-taken booking restores nobody (mutation: restore before `createBooking` → FAILS).
   - **Forms** (`enrich.test.ts`): a form submission restores with `"form"`, and a web chat lead (`webchat: { chatId }`) with `"chat"` (mutation: always `"form"` → FAILS). A failing restore still records the conversation and the alert.
   - **Email** (`pipeline.test.ts`):
@@ -1515,7 +1562,11 @@ export function looksAutomaticText(body: string): boolean {
   - **f/actions.test.ts**: add the stub only, and assert nothing new. The file must stay green.
 - [ ] **Step 3: Run red.** Paste one line per site.
 - [ ] **Step 4: Implement.**
-  - **SMS**, INSIDE the filing `try`, right after the `if (firstFiling) { await createMessage(…) }` block and before the `catch`. That is before `incrementUnreadCount` (`:240`), which runs outside the try: if the bump threw after a restore placed below it, the route would answer 200 and Telnyx would never retry. Inside the try, a failed restore is `FilingFailed` (503), and Telnyx's retry runs it again. It is idempotent: an active contact answers false.
+  - **SMS**, INSIDE the filing `try`, right after `conversation = await ensureConversation(…)` and BEFORE `if (firstFiling) { await createMessage(…) }`. Two reasons:
+    - Placed after the unread bump (`:240`, outside the try), a failing bump would leave the route answering 200, and Telnyx would never retry.
+    - Placed after `createMessage` (re-review Important), a failed restore would answer 503, but the retry sees `firstFiling` false (the message is filed), and the unread bump inside `if (firstFiling)` never runs. The text would sit unread-less on a thread that may be hidden.
+
+    Before `createMessage`, a failed restore files nothing: a 503, and the retry files the whole thing. It is idempotent (an active contact answers false), so it also runs harmlessly on retries.
 
 ```ts
     // Contact archive, owner ruling Q1 and review I7/I8: the customer's own text brings an archived contact back —
