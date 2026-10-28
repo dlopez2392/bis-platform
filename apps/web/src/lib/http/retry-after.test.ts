@@ -43,6 +43,23 @@ describe("rateLimitWaitMs", () => {
     expect(rateLimitWaitMs("soon", NOW)).toBe(1_000);
   });
 
+  // Date.parse is lenient: V8 reads "1.5" as a day in 2001 and "-1" as 2001
+  // too, so anything not shaped like an HTTP-date must never reach it, or a
+  // malformed header becomes a 0 ms wait instead of the 1 s default.
+  it("a fractional value is not delta-seconds and not a date: the 1 s default, never 0 (mutation: Date.parse on every non-digit value → \"1.5\" is a 2001 date, 0 ms, FAILS)", () => {
+    expect(rateLimitWaitMs("1.5", NOW)).toBe(1_000);
+    expect(rateLimitWaitMs("-1", NOW)).toBe(1_000);
+  });
+
+  it("junk that only looks like a date is the default too (mutation: accept any value with a weekday prefix → \"Wed, 1\" parses, FAILS)", () => {
+    expect(rateLimitWaitMs("Wed, 1", NOW)).toBe(1_000);
+    expect(rateLimitWaitMs("12abc", NOW)).toBe(1_000);
+  });
+
+  it("the obsolete RFC 850 date form is still read (RFC 9110 §5.6.7: a recipient MUST accept it)", () => {
+    expect(rateLimitWaitMs("Wednesday, 28-Oct-26 12:00:02 GMT", NOW)).toBe(2_000);
+  });
+
   it("exactly the cap is still waited for", () => {
     expect(rateLimitWaitMs("3", NOW)).toBe(3_000);
     expect(rateLimitWaitMs(new Date(NOW + 3_000).toUTCString(), NOW)).toBe(3_000);

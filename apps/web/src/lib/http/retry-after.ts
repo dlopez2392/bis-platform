@@ -26,13 +26,22 @@ export const RATE_LIMIT_MAX_WAIT_MS = 3_000;
  * (RFC 9110 §10.2.3: delta-seconds or an HTTP-date). A date already past is
  * 0. Anything unreadable is the default. `null` means the wait exceeds
  * RATE_LIMIT_MAX_WAIT_MS: do not retry.
+ *
+ * Only a value SHAPED like an HTTP-date reaches `Date.parse`, because V8's
+ * parser is lenient: it reads "1.5" and "-1" as days in 2001, which would turn
+ * a malformed header into a 0 ms wait instead of the default. The shape is
+ * IMF-fixdate ("Wed, 28 Oct 2026 12:00:02 GMT") or the obsolete RFC 850 form
+ * ("Wednesday, 28-Oct-26 12:00:02 GMT"). The asctime form carries no zone and
+ * V8 would read it as local time, so it gets the default.
  */
+const HTTP_DATE = /^[A-Za-z]{3,9}, \d{2}[ -][A-Za-z]{3}[ -]\d{2,4} \d{2}:\d{2}:\d{2} GMT$/;
+
 export function rateLimitWaitMs(header: string | null | undefined, nowMs: number): number | null {
   const value = header?.trim() ?? "";
   let ms = RATE_LIMIT_DEFAULT_WAIT_MS;
   if (/^\d+$/.test(value)) {
     ms = Number(value) * 1_000;
-  } else if (value) {
+  } else if (HTTP_DATE.test(value)) {
     const at = Date.parse(value);
     if (!Number.isNaN(at)) ms = Math.max(0, at - nowMs);
   }
