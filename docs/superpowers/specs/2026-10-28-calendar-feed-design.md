@@ -87,7 +87,9 @@ nothing without the key, and the key alone gives you nothing without a row id.
 Why the route needs no key: it looks the token up BY HASH, as the share does (`public-share.ts:29-33`).
 Rotating the secret therefore does not end any link. It only means the card can no longer re-derive a
 link whose hash no longer matches, and the card shows "Make a new link" for it (§5.1). To end every link
-at once, revoke the rows (the runbook line in §7).
+at once, revoke the rows (the runbook line in §7). Removing the secret (or setting it shorter than 32
+characters) stops EVERY link: the route fails closed before any read, answers each fetch with the same 404,
+and logs `CALENDAR_FEED_SECRET` by name, never its value (final review m3).
 
 **One feed per person per account** is the partial unique index. Membership is unique per
 `(account_id, user_id)` (0066:39), and that same key is what the FK references, so no new constraint is
@@ -121,7 +123,7 @@ Revoked rows stay (they are a few bytes and hold no token). They go with the mem
 ### 2.4 Re-proved on every fetch, in one round trip
 
 `claim_calendar_feed_fetch(p_token_hash text, p_max int, p_window_seconds int) returns jsonb`, security
-definer, `search_path = ''`, EXECUTE for `service_role` only (0085:143-144's grant shape). Under
+invoker, `search_path = pg_catalog, pg_temp` (0096's rule, as 0104 ships it), EXECUTE for `service_role` only (0085:143-144's grant shape). Under
 `for update` on the feed row it checks, and answers `not_found` on the FIRST failure:
 
 1. a row with this hash exists and `revoked_at is null`;
@@ -151,9 +153,10 @@ RLS on, no policy. `revoke all on calendar_feeds from anon, authenticated`; `gra
 delete … to service_role`. This is 0053's server-only pattern and 0085:93-95's shape. The card reads
 through server code after `requireAccountAccess`, keyed by the caller's OWN user id. No client token ever
 reads this table, because nothing on it is anyone else's business. `schema-grants-guard.test.ts`'s
-`EXPECTED_WRITES` (:65) gains the table, service_role only. The functions are `claim_calendar_feed_fetch`,
-`create_calendar_feed`, `replace_calendar_feed`, `revoke_calendar_feed` and `restore_calendar_feed`, all
-EXECUTE `service_role` only.
+`EXPECTED_WRITES` (:65) gains the table, service_role only. The FOUR functions are `claim_calendar_feed_fetch`,
+`replace_calendar_feed`, `revoke_calendar_feed` and `restore_calendar_feed`, all EXECUTE `service_role`
+only. Making a link is a plain INSERT through PostgREST (the partial unique index refuses a second live
+row), so there is no `create_calendar_feed` (plan deviation 1).
 
 ## 3. The route
 
@@ -174,7 +177,7 @@ Answer, in order:
    a turned-off one, a removed person and an account with access off are indistinguishable, so nobody
    learns whether a token ever existed. Each costs one indexed lookup. The 404 is
    `Cache-Control: no-store`, `X-Robots-Tag: noindex`, as `ics/[token]/route.ts:25-27` does.
-3. `rate_limited`: **429** with `Retry-After` (`lib/http/retry-after.ts`).
+3. `rate_limited`: **429** with `Retry-After`, in whole seconds, from the claim's `retry_after_seconds`.
 4. A read throws: **500** `no-store`, logged with the feed id and never the token
    (`ics/[token]/route.ts:51-53`'s shape). ASSUMPTION: a subscriber keeps its last good copy on an error.
 5. **200**, with:
@@ -292,18 +295,18 @@ The module contract allows "one settings section" or "a card on" an existing sur
 top-level surface. The card goes on the Calendar page because every role reaches that page:
 `requireAccountAccess` (`calendar/page.tsx:55`) and the Technician nav (`nav-groups.ts:117`). The owner-only
 settings form is hidden from Staff (`page.tsx:51-54`), so the card sits OUTSIDE that form. Each person sees
-only their own link. The card registers in the ⌘K palette as "Bookings on your phone" / "Tus citas en el
+only their own link. The card registers in the ⌘K palette as "Bookings on your phone" / "Sus citas en el
 teléfono" (DESIGN.md: settings sections are registered). It has ONE primary per state, by rule 8.
 
 | State | What it shows |
 |---|---|
 | Loading | None of its own: the view is read in the page's server render and arrives with the page (plan deviation 9). |
-| Empty | "Put every booking on your phone's calendar: iPhone, Google or Outlook. You get your own private link." Primary **Make my link**. / "Pon cada cita en el calendario de tu teléfono: iPhone, Google u Outlook. Tienes tu propio enlace privado." **Crear mi enlace**. |
-| Live | The link in a read-only field. Primary **Copy link** / **Copiar enlace**. Ghost **Add to iPhone** / **Agregar al iPhone** (`webcal://` + host + path; ASSUMPTION: iOS offers Subscribe for a webcal link). Ghost **Make a new link** / **Crear un enlace nuevo** and **Turn off** / **Desactivar**, each run at once with Undo (§2.2). The line "Anyone with this link can see your booking times and your customers' first names. Don't share it." / "Quien tenga este enlace puede ver las horas de tus citas y el nombre de tus clientes. No lo compartas." The line "Shows the last 30 days and the next six months." / "Muestra los últimos 30 días y los próximos seis meses." The instructions (§5.2), closed until tapped. |
-| Live, Technician | Adds: "Your link shows bookings for the customers assigned to you." / "Tu enlace muestra las citas de los clientes asignados a ti." |
-| Link can't be shown again | The secret changed (§2.1): "Your link needs to be made again. The old one keeps working until you do." / "Tu enlace se tiene que crear de nuevo. El anterior sigue funcionando hasta que lo hagas." Primary **Make a new link**. |
+| Empty | "Put every booking on your phone's calendar: iPhone, Google or Outlook. You get your own private link." Primary **Make my link**. / "Ponga cada cita en el calendario de su teléfono: iPhone, Google u Outlook. Tiene su propio enlace privado." **Crear mi enlace**. |
+| Live | The link in a read-only field. Primary **Copy link** / **Copiar enlace**. Ghost **Add to iPhone** / **Agregar al iPhone** (`webcal://` + host + path; ASSUMPTION: iOS offers Subscribe for a webcal link). Ghost **Make a new link** / **Crear un enlace nuevo** and **Turn off** / **Desactivar**, each run at once with Undo (§2.2). The line "Anyone with this link can see your booking times and your customers' first names. Don't share it." / "Quien tenga este enlace puede ver las horas de sus citas y el nombre de sus clientes. No lo comparta." The line "Shows the last 30 days and the next six months." / "Muestra los últimos 30 días y los próximos seis meses." The instructions (§5.2), closed until tapped. |
+| Live, Technician | Adds: "Your link shows bookings for the customers assigned to you." / "Su enlace muestra las citas de los clientes asignados a usted." |
+| Link can't be shown again | The secret changed (§2.1): "Your link needs to be made again. The old one keeps working until you do." / "Su enlace se tiene que crear de nuevo. El anterior sigue funcionando hasta que lo haga." Primary **Make a new link**. |
 | Agency | "Each person on the business's team makes their own link here." / "Cada persona del equipo del negocio crea aquí su propio enlace." No button. |
-| Error | "We couldn't load your link. Try again." / "No pudimos cargar tu enlace. Inténtalo de nuevo." The card's own boundary, so the page stands (rule 5). |
+| Error | "We couldn't load your link. Try again." / "No pudimos cargar su enlace. Inténtelo de nuevo." Ghost **Try again** / **Reintentar** re-reads the page. The card's own boundary, so the page stands (rule 5). |
 | Not set up | No `CALENDAR_FEED_SECRET`: "Phone calendars aren't available yet." / "Los calendarios del teléfono aún no están disponibles." No button. |
 
 Toasts: "New link made. Your old link stopped working." / "Enlace nuevo creado. El anterior dejó de
@@ -311,27 +314,29 @@ funcionar." with **Undo** / **Deshacer**, and "Link turned off." / "Enlace desac
 
 ### 5.2 Instructions, both languages (the 7 AM read)
 
+Spanish is **usted**, as the rest of the app's UI is (final review I1).
+
 The menu paths are ASSUMPTIONS. The build checks each one against the vendor's page that day and files any
 correction as a copy change. The "from a computer" fact and the refresh times are the roadmap's.
 
 **iPhone.** 1. On your iPhone, open this page and tap **Add to iPhone**. 2. Tap **Subscribe**, then
-**Done**. To see new bookings sooner, open **Settings › Apps › Calendar › Calendar Accounts › Fetch New
-Data** and choose **Every 15 Minutes**.
-*ES:* 1. En tu iPhone, abre esta página y toca **Agregar al iPhone**. 2. Toca **Suscribirse** y luego
-**OK**. Para ver antes las citas nuevas, abre **Ajustes › Apps › Calendario › Cuentas de calendario ›
-Obtener datos** y elige **Cada 15 minutos**.
+**Done**. To see new bookings sooner: in **Settings**, open **Calendar**, then **Fetch New Data**. (Final
+review m8: nobody could verify the full menu path on the build day, so the step names only what anyone can
+find.)
+*ES:* 1. En su iPhone, abra esta página y toque **Agregar al iPhone**. 2. Toque **Suscribirse** y luego
+**OK**. Para ver antes las citas nuevas: en **Ajustes**, abra **Calendario** y luego **Obtener datos**.
 
 **Google Calendar.** 1. On a computer, go to calendar.google.com. The phone app can't add it. 2. Next to
 **Other calendars**, click **+**, then **From URL**. 3. Paste your link and click **Add calendar**. It
 shows up on your phone by itself.
-*ES:* 1. En una computadora, entra a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto
-a **Otros calendarios**, haz clic en **+** y luego en **Desde URL**. 3. Pega tu enlace y haz clic en
-**Agregar calendario**. Aparece solo en tu teléfono.
+*ES:* 1. En una computadora, entre a calendar.google.com. La app del teléfono no puede agregarlo. 2. Junto
+a **Otros calendarios**, haga clic en **+** y luego en **Desde URL**. 3. Pegue su enlace y haga clic en
+**Agregar calendario**. Aparece solo en su teléfono.
 
 **Outlook.** 1. Go to outlook.com and open **Calendar**. 2. Click **Add calendar**, then **Subscribe from
 web**. 3. Paste your link, give it a name and click **Import**.
-*ES:* 1. Entra a outlook.com y abre **Calendario**. 2. Haz clic en **Agregar calendario** y luego en
-**Suscribirse desde la web**. 3. Pega tu enlace, ponle un nombre y haz clic en **Importar**.
+*ES:* 1. Entre a outlook.com y abra **Calendario**. 2. Haga clic en **Agregar calendario** y luego en
+**Suscribirse desde la web**. 3. Pegue su enlace, póngale un nombre y haga clic en **Importar**.
 
 **Below all three:** "New bookings can take a few hours to show up on Google and Outlook, sometimes a
 day. The email for each booking still comes right away." / "Las citas nuevas pueden tardar unas horas en
@@ -371,7 +376,7 @@ not count.
 | 13 | Status set | A booked, a completed and a no-show row appear (the no-show with its lead word). A cancelled row with no successor is absent. | Drop `no_show` from the filter. |
 | 14 | Rate limit (db) | The 121st fetch in the hour is `rate_limited`, then `ok` once the window passes. `p_max < 1` raises (0085:113-115's guard). | `>` for `>=` at the boundary. |
 | 15 | Proxy (`proxy.test.ts`) | `/cal/<43 chars>.ics` is not matched by the Clerk matcher. | Remove the `.*\\..*` clause. |
-| 16 | Grants (`schema-grants-guard.test.ts`, `calendar-feeds-grants.test.ts`) | `anon` and `authenticated` can neither read nor write the table, and only service_role executes the five functions. | Grant `select` to authenticated. |
+| 16 | Grants (`schema-grants-guard.test.ts`, `calendar-feeds-grants.test.ts`) | `anon` and `authenticated` can neither read nor write the table, and only service_role executes the four functions. | Grant `select` to authenticated. |
 | 17 | Copy guards (`feed-strings.test.ts`, `messages.test.ts`) | EN/ES parity; `INTERNAL_MILESTONE`; no `{{`; no arrows. | Put "F-048" in a string. |
 | 18 | e2e (`apps/web/e2e/calendar-feed.spec.ts`) | On the PER-RUN FIXTURE ACCOUNT only: make a link, fetch it with the request API, the fixture booking is in it, turn off, 404, Undo, 200. Never `Test Client One`. | — (bis-e2e-qa runs it). |
 
@@ -381,9 +386,9 @@ Tiers follow the speed process: per task, high = security or schema.
 
 | # | Wave | Tier | Owner | Files (disjoint within a wave) | What |
 |---|---|---|---|---|---|
-| T1 | 1 | high | bis-db-schema | `packages/db/supabase/migrations/0104_calendar_feeds.sql`; `packages/db/src/test/calendar-feeds-grants.test.ts` (new); `packages/db/src/test/schema-grants-guard.test.ts`; `packages/db/src/account-teardown.ts` | §2's table, index, FKs, five functions, grants and rollback block. Grants tests pre and post on the local PG18 replica. Apply order: bis-ci after 0103, then production, then parity (orchestrator). |
+| T1 | 1 | high | bis-db-schema | `packages/db/supabase/migrations/0104_calendar_feeds.sql`; `packages/db/src/test/calendar-feeds-grants.test.ts` (new); `packages/db/src/test/schema-grants-guard.test.ts`; `packages/db/src/account-teardown.ts` | §2's table, index, FKs, four functions, grants and rollback block (four functions; deviation 1). Grants tests pre and post on the local PG18 replica. Apply order: bis-ci after 0103, then production, then parity (orchestrator). |
 | T2 | 1 | medium | bis-booking | `apps/web/src/lib/booking/ics.ts`; `apps/web/src/lib/booking/ics.test.ts`; `apps/web/src/lib/booking/feed-content.ts` (new); `apps/web/src/lib/booking/feed-content.test.ts` (new); `apps/web/src/lib/booking/feed-strings.ts` (new); `apps/web/src/lib/booking/feed-strings.test.ts` (new) | Pure: split the builder (§4.1), events from rows (§4.2-4.4). Tests 6, 7, 11, 12, 13 (pure half), 17. |
-| T3 | 2 | high | bis-booking | `packages/db/src/calendar-feeds.ts` (new); `packages/db/src/booking.ts` (`rescheduleRoots`, `listFeedBookings`); `packages/db/src/index.ts` (additive exports); `packages/db/src/test/calendar-feeds.test.ts` (new); `packages/db/src/test/booking.test.ts` | Typed wrappers for the five functions; the bounded two-query window with the Technician filter. Tests 2, 3, 4, 5, 8, 9, 14. |
+| T3 | 2 | high | bis-booking | `packages/db/src/calendar-feeds.ts` (new); `packages/db/src/booking.ts` (`rescheduleRoots`, `listFeedBookings`); `packages/db/src/index.ts` (additive exports); `packages/db/src/test/calendar-feeds.test.ts` (new); `packages/db/src/test/booking.test.ts` | Typed wrappers for the four functions and the INSERT; the bounded two-query window with the Technician filter. Tests 2, 3, 4, 5, 8, 9, 14. |
 | T4 | 3 | high | bis-booking | `apps/web/src/lib/booking/feed-token.ts` (new); `apps/web/src/lib/booking/feed-token.test.ts` (new); `apps/web/src/lib/booking/calendar-feed.ts` (new, takes a client); `apps/web/src/lib/booking/calendar-feed.test.ts` (new); `apps/web/src/app/cal/[file]/route.ts` (new); `apps/web/src/app/cal/[file]/route.test.ts` (new); `apps/web/src/proxy.test.ts` (one case) | Token derivation, the loader, the route (§3). Tests 1, 3 (route), 5 (loader), 10, 15. |
 | T5 | 3 | medium | bis-frontend | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-card.tsx` (new); `…/calendar/feed-card.test.ts` (new); `…/calendar/feed-actions.ts` (new); `…/calendar/feed-actions.test.ts` (new); `…/calendar/page.tsx`; `…/[accountId]/in-account-service-reads.test.ts` (one entry, reason `proven-target`: every read is keyed by the caller's own user id); `apps/web/src/lib/messages.ts` (`calendar.feed.*`, additive); `apps/web/src/lib/palette/registry.ts` (one line) | §5. The actions call T3 and T4's `feed-token.ts`; they never import the route. |
 | T6 | 4 | medium | bis-e2e-qa | `apps/web/e2e/calendar-feed.spec.ts` (new) | Test 18 on the per-run fixture account. |

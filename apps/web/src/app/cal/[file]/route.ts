@@ -22,7 +22,11 @@ const NOT_FOUND = () => new Response("Not found", {
 type Ctx = { params: Promise<{ file: string }> };
 
 async function answer(req: Request, { params }: Ctx, withBody: boolean): Promise<Response> {
-  if (!feedSecretConfigured()) return NOT_FOUND();
+  if (!feedSecretConfigured()) {
+    // By NAME only, never its value: without it every link answers 404 (spec 2.1), so say why where it shows.
+    console.error("calendar feed: CALENDAR_FEED_SECRET is missing or shorter than 32 characters; every calendar link answers 404");
+    return NOT_FOUND();
+  }
   const { file } = await params;
   const token = feedTokenFromFile(file);
   if (!token) return NOT_FOUND();
@@ -50,7 +54,7 @@ async function answer(req: Request, { params }: Ctx, withBody: boolean): Promise
     return new Response(withBody ? r.body : null, { status: 200, headers });
   } catch (e) {
     console.error(`calendar feed: read failed: ${e instanceof Error ? e.message : String(e)}`);
-    return new Response("Something went wrong", { status: 500, headers: { "Cache-Control": "no-store" } });
+    return new Response("Something went wrong", { status: 500, headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } });
   }
 }
 

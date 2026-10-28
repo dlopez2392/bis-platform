@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { rescheduleRoots, listFeedBookings, FEED_FUTURE_CAP } from "../booking";
+import { rescheduleRoots, listFeedBookings, FEED_FUTURE_CAP, FEED_PAST_CAP } from "../booking";
 import {
   readLiveCalendarFeed, revokeCalendarFeed, replaceCalendarFeed, restoreCalendarFeed, claimCalendarFeedFetch,
   CALENDAR_FEED_FETCH_MAX, CALENDAR_FEED_FETCH_WINDOW_SECONDS, CALENDAR_FEED_UNDO_SECONDS,
@@ -69,6 +69,34 @@ describe("rescheduleRoots — one appointment's identity, in batches", () => {
   });
 });
 
+describe("rescheduleRoots — a hop's batches run together (final review m6)", () => {
+  it("issues every batch of one hop before any answers (mutation: await each batch in turn → FAILS)", async () => {
+    let started = 0;
+    const release: (() => void)[] = [];
+    const db = {
+      from() {
+        const b: Record<string, unknown> = {};
+        Object.assign(b, {
+          select: () => b, eq: () => b, in: () => b, limit: () => b,
+          then: (res: (v: unknown) => unknown) => {
+            started++;
+            return new Promise<void>((r) => release.push(r)).then(() => res({ data: [], error: null }));
+          },
+        });
+        return b;
+      },
+    } as unknown as SupabaseClient;
+    // 201 distinct parents: two batches (ROOT_BATCH = 200) on the first hop.
+    const rows = Array.from({ length: 201 }, (_, i) => ({ id: `r${i}`, rescheduled_from_id: `p${i}` }));
+    const done = rescheduleRoots(db, "A", rows);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(started).toBe(2);
+    release.forEach((r) => r());
+    const roots = await done;
+    expect(roots.size).toBe(0);   // every parent unreadable: each row left out, never a wrong root
+  });
+});
+
 describe("listFeedBookings — the bounded window", () => {
   const CAL = { id: "cal-A", meeting_type: "phone" };
   const raw = (id: string) => ({ id, status: "booked", starts_at: "2026-11-03T15:00:00Z", ends_at: "2026-11-03T16:00:00Z",
@@ -109,7 +137,16 @@ describe("listFeedBookings — the bounded window", () => {
   });
   it("no calendar yet is an empty feed, not an error", async () => {
     const { db } = fake({ calendar: null });
-    expect(await listFeedBookings(db, "A", { now: new Date(), technicianUserId: null })).toEqual({ meetingType: "in_person", rows: [], truncated: false });
+    expect(await listFeedBookings(db, "A", { now: new Date(), technicianUserId: null })).toEqual({ meetingType: "in_person", rows: [], truncated: false, capped: { upcoming: false, past: false } });
+  });
+  it("says WHICH cap was hit, so the log can name it (final review m4; mutation: report the upcoming cap for both → FAILS)", async () => {
+    // The fake answers both window queries with the same rows: between the two caps, only the past one is hit.
+    const between = Array.from({ length: FEED_PAST_CAP + 1 }, (_, i) => raw(`p${i}`));
+    const { db } = fake({ calendar: CAL, window: between });
+    expect((await listFeedBookings(db, "A", { now: new Date(), technicianUserId: null })).capped).toEqual({ upcoming: false, past: true });
+    const many = Array.from({ length: FEED_FUTURE_CAP + 1 }, (_, i) => raw(`b${i}`));
+    const both = fake({ calendar: CAL, window: many });
+    expect((await listFeedBookings(both.db, "A", { now: new Date(), technicianUserId: null })).capped).toEqual({ upcoming: true, past: true });
   });
   it("says truncated past the cap (mutation: drop the +1 probe row → FAILS)", async () => {
     const many = Array.from({ length: FEED_FUTURE_CAP + 1 }, (_, i) => raw(`b${i}`));

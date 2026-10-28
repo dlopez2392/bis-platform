@@ -142,9 +142,9 @@ process.env.DOCUMENT_LINK_SECRET = DOCUMENT_LINK_FIXTURE;
 /**
  * The owner's calendar feed (F-048 part 2, calendar-feed.spec.ts). Same fixed
  * test-literal discipline as DOCUMENT_LINK_FIXTURE above — never a real
- * secret — and set on the runner's own env too, so a developer's
- * `.env.local` value can never make the runner's `feedToken` (the spec)
- * disagree with the app server's (below) about the derived token.
+ * secret. It is PINNED, in this process and in the webServer env below, so a
+ * developer's `.env.local` can never change the app server's value: the run
+ * always derives links under this one known literal, whatever the machine holds.
  */
 const CALENDAR_FEED_FIXTURE = "bis_e2e_calendar_feed_fixture_only_00000000000";
 process.env.CALENDAR_FEED_SECRET = CALENDAR_FEED_FIXTURE;

@@ -2049,11 +2049,11 @@ Then check that `feed-card.tsx` and `feed-card-handlers.ts` name no service gett
 | M4 | `feed-actions.ts` undo: `userId: who.personId` → `userId: undo.feedId` | actions case 5 | The assertion on the caller's `userId` fails. |
 | M5 | `feed-card.tsx`: give **Make a new link** `variant="default"` | the `feed-card.test.ts` case "exactly ONE primary" for `live` | Two `data-variant="default"`. |
 | M6 | `page.tsx`: `loadFeedCardView({ accountId: "a1", … })` (a literal) | page case 2 | `renderForAccount("a2")` still passes `"a1"`. |
-| M8 | `feed-actions.ts`: in `turnOffFeedLinkAction`, `requireAccountAccess(accountId, { duringPause: "allow" })` → `requireAccountAccess(accountId)` | `read-only.test.ts:276` `THE ALLOW-LIST: the set of (file, function) passing \`duringPause: "allow"\` equals READ_ONLY_ALLOWED…` | The allowed key then has no opt-out in its body, so the scanned set loses it and no longer equals the list. |
-| M9 | `feed-actions.ts`: add `revalidatePath(\`/dashboard/accounts/${accountId}/calendar\`);` before `turnOffFeedLinkAction`'s return | `read-only.test.ts:305` `no allowed action revalidates…` | Its body regex finds `revalidatePath(`. |
+| M7 | `messages.ts`: delete `calendar.feed.copy.es` | `lib/i18n/ratchet.test.ts:183` `every catalogue key added from today has a Spanish twin unless it is agency-only…` | It names the key with no twin. The `feed-card.test.ts` Spanish render fails too (`Copy link` appears under `es`). |
+| M8 | `feed-actions.ts`: in `turnOffFeedLinkAction`, `requireAccountAccess(accountId, { duringPause: "allow" })` → `requireAccountAccess(accountId)` | `read-only.test.ts:284` (`:276` when the plan was written, before T5's three entries) `THE ALLOW-LIST: the set of (file, function) passing \`duringPause: "allow"\` equals READ_ONLY_ALLOWED…` | The allowed key then has no opt-out in its body, so the scanned set loses it and no longer equals the list. |
+| M9 | `feed-actions.ts`: add `revalidatePath(\`/dashboard/accounts/${accountId}/calendar\`);` before `turnOffFeedLinkAction`'s return | `read-only.test.ts:313` (was `:305`) `no allowed action revalidates…` | Its body regex finds `revalidatePath(`. |
 | M10 | `feed-card.tsx`: `import type { FeedCardView }` → `import { FeedCardView }` (with `isolatedModules` off this still compiles) | the review-M9 case in `feed-card.test.ts` | The source regex for a non-type import then matches. |
 | M11 | `registry.ts:74`: drop `"subscribe"` | the new `registry.test.ts` case | `toContain("subscribe")` fails. |
-| M7 | `messages.ts`: delete `calendar.feed.copy.es` | `lib/i18n/ratchet.test.ts:183` `every catalogue key added from today has a Spanish twin unless it is agency-only…` | It names the key with no twin. The `feed-card.test.ts` Spanish render fails too (`Copy link` appears under `es`). |
 
 ---
 

@@ -114,6 +114,19 @@ describe("FeedCard — the live link", () => {
   });
 });
 
+describe("FeedCard — the error state can be retried (final review m10)", () => {
+  it("offers one ghost Try again in the error state only, and it re-reads the page (mutation: drop the button → FAILS)", () => {
+    const html = render({ kind: "error" });
+    const buttons = [...html.matchAll(/<button[^>]*data-variant="(\w+)"[^>]*>([\s\S]*?)<\/button>/g)].map((x) => [x[1], renderedText(x[2]!)]);
+    expect(buttons).toEqual([["ghost", m["calendar.feed.retry"]]]);
+    expect(renderedText(render({ kind: "error" }, "es"))).toContain(m["calendar.feed.retry.es"]);
+    for (const v of ALL.filter((x) => x.kind !== "error")) expect(renderedText(render(v)), v.kind).not.toContain(m["calendar.feed.retry"]);
+    // What it does: the button's own onClick is the router refresh (a static render cannot click it).
+    const src = readFileSync(join(__dirname, "feed-card.tsx"), "utf8");
+    expect(src).toMatch(/onClick=\{refresh\}[^>]*>\{tr\.text\("calendar\.feed\.retry"\)\}/);
+  });
+});
+
 describe("FeedCard — Spanish", () => {
   it("no English sentence of the card appears under es, in any state (mutation: delete calendar.feed.copy.es → FAILS)", () => {
     const en = Object.entries(m).filter(([k]) => k.startsWith("calendar.feed.") && !k.endsWith(".es"))

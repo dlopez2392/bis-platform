@@ -75,6 +75,24 @@ describe("GET /cal/[file] — the owner's calendar feed", () => {
     expect(JSON.stringify(err.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(err.mock.calls)).not.toContain(SECRET);
   });
+  it("a missing or short secret is logged by NAME, never by value (final review m3; mutation: drop the log → FAILS)", async () => {
+    for (const value of [undefined, "x".repeat(31)]) {
+      vi.stubEnv("CALENDAR_FEED_SECRET", value);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      err.mockClear();
+      expect((await call(`${TOKEN}.ics`)).status).toBe(404);
+      const logged = JSON.stringify(err.mock.calls);
+      expect(logged).toContain("CALENDAR_FEED_SECRET");
+      expect(logged).not.toContain("x".repeat(31));
+      expect(logged).not.toContain(TOKEN);
+    }
+  });
+  it("the 500 is noindex too (final review m5; mutation: drop the header → FAILS)", async () => {
+    m.load.mockRejectedValue(new Error("db down"));
+    const r = await call(`${TOKEN}.ics`);
+    expect(r.status).toBe(500);
+    expect(r.headers.get("x-robots-tag")).toBe("noindex");
+  });
   it("HEAD answers GET's status and headers with no body", async () => {
     m.load.mockResolvedValue({ kind: "ok", body: "X", feedId: "f1" });
     const r = await call(`${TOKEN}.ics`, {}, HEAD);

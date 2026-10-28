@@ -58,7 +58,13 @@ export function FeedCard({ view, locale, pseudo = false, make, replace, turnOff,
       <CardContent className="space-y-4 text-sm">
         {view.kind === "agency" ? <p className={muted}>{tr.text("calendar.feed.agency")}</p> : null}
         {view.kind === "unavailable" ? <p className={muted}>{tr.text("calendar.feed.unavailable")}</p> : null}
-        {view.kind === "error" ? <p className={muted}>{tr.text("calendar.feed.loadError")}</p> : null}
+        {view.kind === "error" ? (
+          <>
+            <p className={muted}>{tr.text("calendar.feed.loadError")}</p>
+            {/* Ghost, not primary: re-reading the page is not a decision this card makes (rule 8). */}
+            <Button type="button" variant="ghost" onClick={refresh}>{tr.text("calendar.feed.retry")}</Button>
+          </>
+        ) : null}
 
         {view.kind === "none" ? (
           <>

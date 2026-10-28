@@ -246,11 +246,17 @@ describe("0104 claim_calendar_feed_fetch (P2-P4)", () => {
       expect((await claim(c, s.ownerHash)).status).toBe(status);
     }));
 
-  it("case 3: every not_found is the same answer, with nothing else in it", () =>
+  // Final review m7: EVERY refusal is the same bare answer, so nobody can tell an unknown link from a closed one.
+  const refusals: { name: string; sql: string | null; hash: "owner" | "unknown" }[] = [
+    ...closed.filter((x) => x.status === "not_found").map((x) => ({ name: x.name, sql: x.sql, hash: "owner" as const })),
+    { name: "a hash nobody holds", sql: null, hash: "unknown" },
+    { name: "a deleted membership (the link goes with it)", sql: "delete from memberships where account_id = $1 and user_id = $2", hash: "owner" },
+  ];
+  it.each(refusals)("case 3: $name is exactly { status: not_found }, with nothing else in it", ({ sql, hash }) =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await c.query("update accounts set status = 'archived' where id = $1", [s.a]);
-      expect(await claim(c, s.ownerHash)).toEqual({ status: "not_found" });
+      if (sql) await c.query(sql, sql.includes("$2") ? [s.a, s.owner] : [s.a]);
+      expect(await claim(c, hash === "owner" ? s.ownerHash : hex())).toEqual({ status: "not_found" });
     }));
 
   it("case 4: the 120th fetch in a window is served, the 121st is rate_limited with the whole hour left (probe M3: `>=` -> `>` -> FAILS)", () =>

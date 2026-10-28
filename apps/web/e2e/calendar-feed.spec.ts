@@ -139,7 +139,7 @@ test.describe("F-048 part 2: the calendar feed, on the fixture account", () => {
 
       // --- Step 7: the Spanish card title, the e2e QA locale override ---
       await page.goto(`/dashboard/accounts/${fixture.accountId}/calendar?locale=es`);
-      await expect(page.locator("[data-feed-card]").getByText("Tus citas en el teléfono")).toBeVisible();
+      await expect(page.locator("[data-feed-card]").getByText("Sus citas en el teléfono")).toBeVisible();
     } finally {
       // Reset any per-person feed state this run created, rather than leaving it
       // for auth.teardown's end-of-run account cascade — a same-run retry of

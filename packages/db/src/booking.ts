@@ -758,10 +758,14 @@ export async function rescheduleRoots(
     const want = [...new Set([...parent.values()])]
       .filter((p): p is string => p !== null && !parent.has(p) && !missingForever.has(p));
     if (want.length === 0) break;
-    for (let i = 0; i < want.length; i += ROOT_BATCH) {
-      const ids = want.slice(i, i + ROOT_BATCH);
-      const { data, error } = await db.from("bookings").select("id, rescheduled_from_id")
-        .eq("account_id", accountId).in("id", ids).limit(ids.length);
+    // One hop's batches go out together (final review m6); the hops themselves stay in order, because each
+    // hop's ids are the parents the previous one found.
+    const batches: string[][] = [];
+    for (let i = 0; i < want.length; i += ROOT_BATCH) batches.push(want.slice(i, i + ROOT_BATCH));
+    const answers = await Promise.all(batches.map((ids) => db.from("bookings").select("id, rescheduled_from_id")
+      .eq("account_id", accountId).in("id", ids).limit(ids.length)));
+    for (const [n, { data, error }] of answers.entries()) {
+      const ids = batches[n]!;
       if (error) throw new Error(`rescheduleRoots failed: ${error.message}`);
       const got = new Set<string>();
       for (const r of (data ?? []) as { id: string; rescheduled_from_id: string | null }[]) {
@@ -812,11 +816,15 @@ type FeedRaw = {
  */
 export async function listFeedBookings(
   db: SupabaseClient, accountId: string, o: { now: Date; technicianUserId: string | null },
-): Promise<{ meetingType: "in_person" | "phone" | "video"; rows: FeedBookingRow[]; truncated: boolean }> {
+): Promise<{
+  meetingType: "in_person" | "phone" | "video"; rows: FeedBookingRow[]; truncated: boolean;
+  /** Which cap cut rows: more than FEED_FUTURE_CAP upcoming, or more than FEED_PAST_CAP past (the route logs it). */
+  capped: { upcoming: boolean; past: boolean };
+}> {
   const { data: cal, error: calErr } = await db.from("calendars").select("id, meeting_type")
     .eq("account_id", accountId).maybeSingle();
   if (calErr) throw new Error(`listFeedBookings: calendar read failed: ${calErr.message}`);
-  if (!cal) return { meetingType: "in_person", rows: [], truncated: false };
+  if (!cal) return { meetingType: "in_person", rows: [], truncated: false, capped: { upcoming: false, past: false } };
   const c = cal as { id: string; meeting_type: "in_person" | "phone" | "video" };
   const nowIso = o.now.toISOString();
   const fromIso = new Date(o.now.getTime() - FEED_PAST_DAYS * FEED_DAY_MS).toISOString();
@@ -836,7 +844,11 @@ export async function listFeedBookings(
   if (past.error) throw new Error(`listFeedBookings: past read failed: ${past.error.message}`);
   const upRows = (up.data ?? []) as unknown as FeedRaw[];
   const pastRows = (past.data ?? []) as unknown as FeedRaw[];
-  const truncated = upRows.length > FEED_FUTURE_CAP || pastRows.length > FEED_PAST_CAP;
+  const capped = { upcoming: upRows.length > FEED_FUTURE_CAP, past: pastRows.length > FEED_PAST_CAP };
+  const truncated = capped.upcoming || capped.past;
+  // Order: past rows newest first, then upcoming oldest first (each query's own order, so each cap keeps the
+  // rows nearest today). Nothing downstream relies on it: feedEvents (apps/web lib/booking/feed-content.ts)
+  // re-sorts the events by start.
   const raw = [...pastRows.slice(0, FEED_PAST_CAP), ...upRows.slice(0, FEED_FUTURE_CAP)];
   const roots = await rescheduleRoots(db, accountId, raw);
   const rows = raw.flatMap((r): FeedBookingRow[] => {
@@ -845,7 +857,7 @@ export async function listFeedBookings(
     return [{ id: r.id, status: r.status, starts_at: r.starts_at, ends_at: r.ends_at, updated_at: r.updated_at,
       created_at: r.created_at, first_name: r.contacts?.first_name ?? null, rootId: chain.rootId, depth: chain.depth }];
   });
-  return { meetingType: c.meeting_type, rows, truncated };
+  return { meetingType: c.meeting_type, rows, truncated, capped };
 }
 
 /** F-048: a move refused because the booking is not (or is no longer) a live

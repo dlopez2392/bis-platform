@@ -72,6 +72,7 @@ import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { t } from "@/lib/i18n/t";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
+import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
 import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
 import {
@@ -940,6 +941,13 @@ export default async function StyleguidePage({
               billing link, where it applies. Built by the real
               billingCardView from fixture rows (billing-card-states.tsx). */}
           <BillingCardStates />
+        </Section>
+
+        <Section title={FEED_CARD_SECTION} file="accounts/[accountId]/calendar/feed-card.tsx">
+          {/* F-048 part 2: the person's own calendar link, every state. One primary per state (rule 8): Make my
+              link, Copy link, or Make a new link; agency, not set up and error have none (error offers a ghost
+              Try again). The long link scrolls inside its Input at 375px. */}
+          <FeedCardStates />
         </Section>
 
         <Section title="Settings cards that stream (loading)" file="accounts/[accountId]/settings/page.tsx">
