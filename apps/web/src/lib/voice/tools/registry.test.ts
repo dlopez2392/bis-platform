@@ -1821,7 +1821,7 @@ describe("Sofía's acts (item 8c)", () => {
   // A move's cancel stamp carries microseconds (moveStamp); a different value again, so the act's version
   // can only be the move's own answer, never the cancel tool's or a clock read.
   const MOVE_VERSION = "2027-05-31T09:15:42.123456Z";
-  const VOICE ={ actor: "voice", callId: "call-1", chatId: null } as const;
+  const VOICE = { actor: "voice", callId: "call-1", chatId: null } as const;
   const BOOK_ARGS = { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true };
 
   beforeEach(() => {

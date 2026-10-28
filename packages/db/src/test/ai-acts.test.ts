@@ -9,7 +9,7 @@ import {
   insertAiActs, getAiAct, listContactAiActs, undoAiBookingAct,
 } from "../ai-acts";
 import { createContact } from "../contacts";
-import { getOrCreateCalendar, createBooking, setBookingStatus } from "../booking";
+import { getOrCreateCalendar, createBooking, setBookingStatus, moveBooking } from "../booking";
 import type { NewAiAct } from "../ai-act-rules";
 
 const NOW = new Date("2026-10-19T10:00:00.000Z");
@@ -155,6 +155,72 @@ describe("ai-acts accessors", () => {
       // the undoer's own ("user_undoer") must be absent, since nothing moved.
       const byUndoer = (await eventsFor(db, accountId, "booking.status_changed")).filter((e) => e.actor_id === "user_undoer");
       expect(byUndoer).toHaveLength(0);
+    });
+  });
+
+  /**
+   * Sofía's reschedule (registry.ts) moves through moveBooking and records its booking_rescheduled act
+   * with `version: moved.cancelledAt`, the stamp moveBooking's cancel wrote. That stamp carries
+   * microseconds (moveStamp), and 0091 restores the old booking only where
+   * `updated_at = (before->>'version')::timestamptz`, exactly. So the stamp must reach the act unrounded:
+   * the probe proves the real value undoes, and the control proves a millisecond-rounded one cannot.
+   */
+  describe("undoAiBookingAct on a reschedule moved by moveBooking (Sofía's reschedule race follow-up)", () => {
+    // `day` keeps a retried setup clear of the earlier one's live booking (the no-overlap rule).
+    const moveAsSofia = async (db: SupabaseClient, accountId: string, day = 0) => {
+      const callId = await seedCall(db, accountId);
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const start = new Date(Date.now() + (48 + day * 72) * HOUR);
+      const old = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: start, endsAt: new Date(start.getTime() + HOUR) }, "voice", "ai");
+      const to = { startsAt: new Date(start.getTime() + 24 * HOUR), endsAt: new Date(start.getTime() + 25 * HOUR) };
+      const moved = await moveBooking(db, accountId, old.id, to, "voice", "ai");
+      const record = async (version: string): Promise<string> => {
+        await insertAiActs(db, accountId, [{
+          kind: "booking_rescheduled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: moved.id, fromBookingId: old.id },
+          before: { startsAt: start.toISOString(), endsAt: new Date(start.getTime() + HOUR).toISOString(), version },
+          after: { startsAt: to.startsAt.toISOString(), endsAt: to.endsAt.toISOString() },
+        }]);
+        const { data: acts } = await db.from("ai_acts").select("id").eq("account_id", accountId);
+        return (acts as { id: string }[])[0]!.id;
+      };
+      return { old, moved, record };
+    };
+    const statusOf = async (db: SupabaseClient, id: string) => {
+      const { data, error } = await db.from("bookings").select("status").eq("id", id).maybeSingle();
+      expect(error, `bookings read failed: ${error?.message}`).toBeNull();
+      return (data as { status: string } | null)?.status ?? null;
+    };
+
+    it("P1: the act carrying moved.cancelledAt as its version undoes: the old booking is booked again and the new row is gone", async () => {
+      await withTestAccount(async (db, accountId) => {
+        const { old, moved, record } = await moveAsSofia(db, accountId);
+        const actId = await record(moved.cancelledAt);
+        expect(await undoAiBookingAct(db, accountId, actId, "user_undoer", new Date())).toBe("undone");
+        expect(await statusOf(db, old.id)).toBe("booked");
+        expect(await statusOf(db, moved.id)).toBeNull();
+      });
+    });
+
+    it("control: the same act with its version cut to milliseconds (new Date(cancelledAt).toISOString()) is 'changed', and nothing moves", async () => {
+      await withTestAccount(async (db, accountId) => {
+        // moveStamp's three random microsecond digits are "000" one time in 1000, and then the rounded
+        // value IS the stamp; move again until it is not, so the control can never pass vacuously.
+        let setup = await moveAsSofia(db, accountId);
+        for (let i = 1; i <= 3 && /\.\d{3}000Z$/.test(setup.moved.cancelledAt); i++) {
+          setup = await moveAsSofia(db, accountId, i);
+        }
+        const { old, moved, record } = setup;
+        const rounded = new Date(moved.cancelledAt).toISOString();
+        expect(rounded, "the rounded version differs from the stamp").not.toBe(moved.cancelledAt);
+        expect(rounded.slice(0, 23), "and only below the millisecond").toBe(moved.cancelledAt.slice(0, 23));
+        const actId = await record(rounded);
+        expect(await undoAiBookingAct(db, accountId, actId, "user_undoer", new Date())).toBe("changed");
+        expect(await statusOf(db, old.id)).toBe("cancelled");
+        expect(await statusOf(db, moved.id)).toBe("booked");
+      });
     });
   });
 });
