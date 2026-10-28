@@ -8,7 +8,11 @@ import { renderedText } from "@/lib/rendered-text";
 // Dialog portals its content and renders nothing in a static render, so the primitives become plain elements
 // here, each marked, and the body is rendered with the state the bar would hand it.
 vi.mock("@/components/ui/dialog", () => {
-  const el = (tag: string, mark: string) => ({ children }: { children?: ReactNode }) => createElement(tag, { [mark]: "" }, children);
+  const el = (tag: string, mark: string) => {
+    const Marked = ({ children }: { children?: ReactNode }) => createElement(tag, { [mark]: "" }, children);
+    Marked.displayName = `Marked(${mark})`;
+    return Marked;
+  };
   return {
     Dialog: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
     DialogContent: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
