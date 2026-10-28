@@ -141,13 +141,27 @@ export async function sweepJobs(db: SupabaseClient, limit: number): Promise<numb
   return Number(data);
 }
 
-/** How many dead-lettered jobs sit under each kind right now (ops-watch's backlog signal). */
-export async function deadJobCounts(db: SupabaseClient): Promise<Record<string, number>> {
-  const { data, error } = await db.from("jobs").select("kind").eq("state", "dead").limit(1000);
+/**
+ * How many dead-lettered jobs sit under each kind right now (ops-watch's
+ * backlog signal). 0102 carries no count-by-kind RPC, so this reads at
+ * most `DEAD_JOB_COUNT_CAP` unordered rows and groups them in TS: past
+ * that cap a per-kind count would silently go wrong (more dead rows exist
+ * than were read), so hitting the cap is reported explicitly as
+ * `truncated: true` rather than folded into a number that looks exact.
+ * A caller that alerts on `counts` should say "<cap> or more" when
+ * `truncated` is true, never a bare count.
+ */
+export const DEAD_JOB_COUNT_CAP = 1000;
+
+export type DeadJobCounts = { counts: Record<string, number>; truncated: boolean };
+
+export async function deadJobCounts(db: SupabaseClient): Promise<DeadJobCounts> {
+  const { data, error } = await db.from("jobs").select("kind").eq("state", "dead").limit(DEAD_JOB_COUNT_CAP);
   if (error) throw new Error(`deadJobCounts failed: ${error.message}`);
+  const rows = (data ?? []) as { kind: string }[];
   const counts: Record<string, number> = {};
-  for (const row of (data ?? []) as { kind: string }[]) counts[row.kind] = (counts[row.kind] ?? 0) + 1;
-  return counts;
+  for (const row of rows) counts[row.kind] = (counts[row.kind] ?? 0) + 1;
+  return { counts, truncated: rows.length >= DEAD_JOB_COUNT_CAP };
 }
 
 /** The earliest due `queued`/`retrying` row across the whole table, as of `nowIso` — or null when nothing is due yet. */

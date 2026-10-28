@@ -38,7 +38,8 @@ describe("jobs.ts: insertJob", () => {
      "(mutation: drop the 23505 branch -> the second call throws, FAILS)", async () => {
     const db = serviceDb();
     const key = `dup-${RUN}`;
-    const runAfter = soon();
+    // Due by a minute, so clock skew between this runner and the DB server can never make the claim below see it as not-yet-due.
+    const runAfter = soon(-60_000);
 
     const first = await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: key, payload: { n: 1 }, runAfter, maxAttempts: 3, timeoutMs: 5000 });
     expect(first).toEqual({ id: expect.any(String), created: true, state: "queued" });
@@ -97,13 +98,16 @@ describe("jobs.ts: claimJob and the three finishers", () => {
      "(mutation: drop .eq('claim_token', ...) -> the wrong-token call returns true, FAILS)", async () => {
     const db = serviceDb();
     const key = `complete-${RUN}`;
-    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: key, payload: {}, runAfter: soon(), maxAttempts: 3, timeoutMs: 5000 });
+    // Due by a minute (not soon(0)): clock skew between this runner and the DB server must not hide the row from the claim below.
+    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: key, payload: {}, runAfter: soon(-60_000), maxAttempts: 3, timeoutMs: 5000 });
 
     const claimed = await claimJob(db, [KIND]);
     expect(claimed).not.toBeNull();
     const fence = { id: claimed!.id, claimToken: claimed!.claim_token! };
 
-    expect(await completeJob(db, { id: fence.id, claimToken: "not-the-real-token" }, soon())).toBe(false);
+    // A well-formed but WRONG uuid: claim_token is a uuid column, so a non-uuid string here would die on
+    // PostgREST's cast (22P02) instead of exercising the fence itself (opus review, relationships.test.ts:61-62).
+    expect(await completeJob(db, { id: fence.id, claimToken: randomUUID() }, soon())).toBe(false);
     const stillRunning = (await db.from("jobs").select("state").eq("id", fence.id).single()).data as { state: string };
     expect(stillRunning.state).toBe("running");
 
@@ -120,11 +124,12 @@ describe("jobs.ts: claimJob and the three finishers", () => {
   it("retryJob truncates last_error to 300 characters, moves run_after and clears the lease " +
      "(mutation: write error unbounded -> the CHECK refuses with 23514, FAILS)", async () => {
     const db = serviceDb();
-    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: `retry-${RUN}`, payload: {}, runAfter: soon(), maxAttempts: 3, timeoutMs: 5000 });
+    // Due by a minute: clock skew between this runner and the DB server must not hide the row from the claim below.
+    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: `retry-${RUN}`, payload: {}, runAfter: soon(-60_000), maxAttempts: 3, timeoutMs: 5000 });
 
     const claimed = await claimJob(db, [KIND]);
     const fence = { id: claimed!.id, claimToken: claimed!.claim_token! };
-    const runAfter = soon(60_000);
+    const runAfter = soon(60 * 60_000);
     const atIso = soon();
 
     expect(await retryJob(db, fence, runAfter, "x".repeat(400), atIso)).toBe(true);
@@ -140,7 +145,8 @@ describe("jobs.ts: claimJob and the three finishers", () => {
 
   it("killJob marks a row dead with finished_at and last_error set", async () => {
     const db = serviceDb();
-    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: `kill-${RUN}`, payload: {}, runAfter: soon(), maxAttempts: 1, timeoutMs: 5000 });
+    // Due by a minute: clock skew between this runner and the DB server must not hide the row from the claim below.
+    await insertJob(db, { kind: KIND, accountId: null, idempotencyKey: `kill-${RUN}`, payload: {}, runAfter: soon(-60_000), maxAttempts: 1, timeoutMs: 5000 });
 
     const claimed = await claimJob(db, [KIND]);
     const fence = { id: claimed!.id, claimToken: claimed!.claim_token! };
@@ -156,10 +162,12 @@ describe("jobs.ts: claimJob and the three finishers", () => {
 });
 
 describe("jobs.ts: the reads", () => {
-  it("deadJobCounts counts this run's dead rows under its own kind (two: the killed duplicate above and the killJob case)", async () => {
+  it("deadJobCounts counts this run's dead rows under its own kind (two: the killed duplicate above and the killJob case), " +
+     "and reports whether the read hit its row cap", async () => {
     const db = serviceDb();
-    const counts = await deadJobCounts(db);
+    const { counts, truncated } = await deadJobCounts(db);
     expect(counts[KIND]).toBe(2);
+    expect(typeof truncated).toBe("boolean");
   });
 
   it("oldestDueJob is the earliest due queued/retrying row across the whole table, as of the moment given " +
