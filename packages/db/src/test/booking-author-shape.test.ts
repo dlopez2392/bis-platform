@@ -66,6 +66,27 @@ describe("moveBooking sends its author (S-03 1b, no database)", () => {
   });
 });
 
+describe("moveBooking answers its own cancel's version (Sofía's reschedule race, no database)", () => {
+  // The phone receptionist's reschedule records ONE act whose version is the old row's cancel stamp,
+  // the compare-and-swap key 0091's Undo restores against. moveBooking stamps that cancel itself, so it
+  // must hand the stamp back: a re-read after the fact could read someone else's later write.
+  it("cancelledAt is exactly the updated_at its conditional cancel wrote (mutation: answer new Date().toISOString() -> FAILS)", async () => {
+    const { db, calls } = fakeDb({
+      bookings: [
+        { data: { id: "old1", calendar_id: "cal1", contact_id: "c1", note: null, booker_timezone: null, status: "booked" }, error: null },
+        { data: { id: "new1" }, error: null },
+        { data: [{ id: "old1" }], error: null },
+      ],
+    });
+    const moved = await moveBooking(db, "a1", "old1", { startsAt: input.startsAt, endsAt: input.endsAt }, "voice", "ai");
+    const cancel = calls.find((c) => c.table === "bookings" && c.op === "update")?.args[0] as { status: string; updated_at: string };
+    expect(cancel.status).toBe("cancelled");
+    expect(moved.cancelledAt).toBe(cancel.updated_at);
+    // The stamp carries microseconds (moveStamp), so it is not a plain millisecond ISO a fresh Date would make.
+    expect(moved.cancelledAt).toMatch(/\.\d{6}Z$/);
+  });
+});
+
 describe("listContactBookings' page read (S-03 1b, spec §6, no database)", () => {
   const row = (id: string, from: string | null) => ({
     id, created_at: "2027-05-01T10:00:00+00:00", starts_at: "2027-05-03T15:00:00+00:00", status: "booked",

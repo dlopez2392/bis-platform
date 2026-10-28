@@ -3,7 +3,7 @@ import {
   serviceDb,
   findUpcomingBookingForContact,
   createContact, fillContactBlanksReport, getContact,
-  createBooking, SlotTakenError, setBookingStatus, getBookingById,
+  createBooking, SlotTakenError, setBookingStatus, getBookingById, moveBooking, BookingNotMovableError,
   markHandoffRequested,
   ensureConversation, createMessage, incrementUnreadCount,
   recordLanguageSignal,
@@ -28,7 +28,7 @@ import {
   withServed, withTransferred,
 } from "../call-state";
 import { detectCallerLanguage, clearCallerLanguageNow } from "../language";
-import { bookingMode } from "../booking-mode";
+import { bookingMode, type BookingMode } from "../booking-mode";
 import { recordActs, recordAct, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { HandoffTarget } from "../handoff";
@@ -95,6 +95,23 @@ function nextStep(ctx: ToolContext): string {
   return ctx.handoffTarget.available
     ? "offer to put them through to someone on the team with transfer_to_human"
     : "offer to take a message with take_message";
+}
+
+/**
+ * reschedule_appointment found the booking no longer booked when it went to
+ * move it: while the caller was on the line the business cancelled it on the
+ * Calendar page, or marked it completed or no-show (or the customer's own
+ * link changed it). Nothing was moved and no new time is held. The model must
+ * not say it was moved; it may offer a fresh booking only where the session
+ * holds book_appointment (`bookingMode` "full"; "manage" lines take a message).
+ */
+function rescheduleOvertaken(ctx: ToolContext, mode: BookingMode): ToolResult {
+  const offer = mode === "full"
+    ? `offer to find them a new time with check_availability and book it with book_appointment, or ${nextStep(ctx)}`
+    : nextStep(ctx);
+  return { ok: false, error:
+    "That appointment was changed a moment ago and is no longer booked, so it was NOT moved and no new time was booked. "
+    + `Do not tell them it was moved. Apologize, say it looks like that appointment was just changed, then ${offer}.` };
 }
 
 /** The contact fields the booking tools read. `getContact` is untyped. */
@@ -736,23 +753,41 @@ export async function runTool(
         }
       }
 
-      // Book the NEW slot first — never leave the caller with nothing.
-      // D-035: the new row names the one it replaces (the same id cancelled
-      // just below), so every "bookings" count leaves the reschedule out.
-      let newId: string; let newCancelToken: string;
+      // ONE move (`moveBooking`, packages/db): the NEW slot is booked first —
+      // never leave the caller with nothing — naming the one it replaces
+      // (D-035, so every "bookings" count leaves the reschedule out); then
+      // the old booking is cancelled ONLY IF it is still booked, stamped as
+      // this move's own. The #294 follow-up: this used to be createBooking
+      // then an unconditional setBookingStatus, so a Calendar-page Cancel
+      // landing while the caller waited was cancelled AGAIN, its version
+      // moved on, and the owner's queued customer notice lost its claim: the
+      // customer got "moved" for an appointment the business had just
+      // cancelled, and never the cancel notice. A completed or no-show
+      // booking was overwritten the same way. Now such a move is refused
+      // and its new booking taken back out (deleted, never cancelled, and
+      // no booking.created written for it), so no slot is held and nothing
+      // below runs: no act, no customer email, no staff alert, no thread
+      // line. A refusal is told apart by one re-read, as cancel_appointment's
+      // is: no longer booked answers the caller truthfully; still booked (an
+      // unclear write moveBooking already rolled back) throws, as does
+      // anything else.
+      let newId: string; let newCancelToken: string; let cancelledAt: string;
       try {
-        ({ id: newId, cancelToken: newCancelToken } = await createBooking(ctx.db, ctx.accountId, {
-          calendarId: old.calendar_id, contactId: old.contact_id,
-          startsAt: slot.startsAt, endsAt: slot.endsAt,
-          meetingUrl, rescheduledFromId: bookingId,
-        }, "voice", "ai"));
+        ({ id: newId, cancelToken: newCancelToken, cancelledAt } = await moveBooking(ctx.db, ctx.accountId, bookingId,
+          { startsAt: slot.startsAt, endsAt: slot.endsAt, meetingUrl }, "voice", "ai"));
       } catch (e) {
         if (e instanceof SlotTakenError) return { state, result: { ok: false, slotTaken: true, error: "that time was just taken" } };
+        if (e instanceof BookingNotMovableError) {
+          const current = await getBookingById(ctx.db, ctx.accountId, bookingId);
+          if (!current || current.status !== "booked") {
+            console.warn(`voice reschedule ${bookingId}: no longer booked when moved (${current?.status ?? "gone"}); nothing moved`);
+            return { state, result: rescheduleOvertaken(ctx, mode) };
+          }
+        }
         throw e;
       }
-      const { updatedAt: cancelledAt } = await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
       // Item 8c: ONE act for the move (the new row is not also a `booking_created`), its version the
-      // old booking's cancel stamp exactly: the compare-and-swap key its Undo restores against.
+      // old booking's cancel stamp exactly (moveBooking's own): the compare-and-swap key its Undo restores against.
       await recordAct(ctx.db, ctx.accountId, {
         ...voiceSource(ctx.callRowId), kind: "booking_rescheduled", contactId: old.contact_id,
         target: { bookingId: newId, fromBookingId: bookingId },
