@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi } from "vitest";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
@@ -824,8 +824,8 @@ describe("bulk contact ops", () => {
         account_id: accountId, contact_id: blocked.id, pipeline_id: pipe!.id,
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
-      const r = await deleteContacts(db, accountId, [free.id, blocked.id]);
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0 });
+      const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [blocked.id], lateKept: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
       expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
     }));
@@ -834,7 +834,7 @@ describe("bulk contact ops", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
       await addTagToContact(db, accountId, c.id, "temp");
-      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"]);
+      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db });
       expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
     }));
 
@@ -953,9 +953,9 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
       const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
       const seen: string[][] = [];
-      const r = await deleteContacts(db, accountId, [keep, go], { beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      const r = await deleteContacts(db, accountId, [keep, go], { serviceDb: db, beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
       expect(seen).toEqual([[keep, go].sort()]);
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, keep)).not.toBeNull();
       expect(await getContact(db, accountId, go)).toBeNull();
     }));
@@ -973,11 +973,11 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
           ? { from: () => ({ remove: async (paths: string[]) => { removed.push(...paths); return { data: [], error: null }; } }) }
           : Reflect.get(t, p, t)) }) as SupabaseClient;
         const seen: string[][] = [];
-        const res = await deleteContacts(db, accountA, [bContact], { beforeDelete: async (ids) => {
+        const res = await deleteContacts(db, accountA, [bContact], { serviceDb: db, beforeDelete: async (ids) => {
           seen.push([...ids]);
           return (await purgeContactDocuments(svc, accountA, ids, "user_owner")).keptContacts;
         } });
-        expect(res).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0 });
+        expect(res).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(seen).toEqual([]);
         expect(removed).toEqual([]);
         expect(await getDocument(dbB, accountB, bDoc)).not.toBeNull();
@@ -987,20 +987,38 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
         expect(ev).toEqual([]);
       })));
 
-  it("without the purge, a contact with a document is NOT deleted: the FK refuses the statement (the backstop; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+  it("without the purge, a contact with a document is NOT deleted: the FK keeps that one contact and it comes back as lateKept (the backstop; 0103 catches the FK per contact, so it no longer throws; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
       await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
-      await expect(deleteContacts(db, accountId, [c])).rejects.toThrow(/documents_contact_fkey|foreign key/);
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 1 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
+    }));
+
+  it("a contact with only a call row is blocked (calls are SET NULL, so before 0103 the delete orphaned the call) (mutation: drop the 'calls' exists -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Caller" }, "user_t")).id;
+      const free = (await createContact(db, accountId, { firstName: "Never called" }, "user_t")).id;
+      const num = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      if (num.error) throw num.error;
+      const call = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.data.id, contact_id: c }).select("id").single();
+      if (call.error) throw call.error;
+      const r = await deleteContacts(db, accountId, [c, free], { serviceDb: db });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
+      expect(await getContact(db, accountId, c)).not.toBeNull();
+      expect(await getContact(db, accountId, free)).toBeNull();
+      const { data: still, error } = await db.from("calls").select("contact_id").eq("account_id", accountId).eq("id", call.data.id).single();
+      if (error) throw error;
+      expect(still.contact_id).toBe(c);
     }));
 });
 
 /**
  * S-06 part 2 (owner ruling 2026-10-17): a conversation with nothing in it no longer blocks a delete.
- * Before the ruling the record page made one on view; old empty ones remain. 0053: no client deletes
- * a conversation, so the caller hands the SERVICE client as `conversationsDb`; without it every
- * conversation still blocks, as before. Here the suite's own client plays both parts.
+ * Before the ruling the record page made one on view; old empty ones remain. Since 0103 the blockers are
+ * read on the SERVICE client (`serviceDb`, required) and delete_internal_contacts removes an internal-only
+ * contact's note-only messages and empty conversations with it. Here the suite's own client plays both parts.
  */
 describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
   const convs = async (db: SupabaseClient, accountId: string, contactId: string) => {
@@ -1013,8 +1031,8 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Viewed" }, "user_t")).id;
       await ensureReplyToken(db, accountId, c, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, c)).toBeNull();
       expect(await convs(db, accountId, c)).toEqual([]);
     }));
@@ -1024,8 +1042,8 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const c = (await createContact(db, accountId, { firstName: "Talked" }, "user_t")).id;
       const conv = await ensureConversation(db, accountId, c, "user_t");
       await createMessage(db, accountId, { conversationId: conv.id, channel: "email", direction: "outbound", body: "hi" }, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
-      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
       expect(await convs(db, accountId, c)).toHaveLength(1);
       const { data: msgs, error } = await db.from("messages").select("id").eq("account_id", accountId).eq("conversation_id", conv.id);
@@ -1043,21 +1061,12 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" }, attachmentCount: 0,
         status: "held", holdReason: "unverified", decidedBy: null, receivedAt: new Date().toISOString(),
       });
-      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
-      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await convs(db, accountId, c)).toHaveLength(1);
     }));
 
-  it("without conversationsDb an empty conversation still blocks, as before (mutation: delete empties on the request client -> FAILS)", () =>
-    withTestAccount(async (db, accountId) => {
-      const c = (await createContact(db, accountId, { firstName: "Old caller" }, "user_t")).id;
-      await ensureConversation(db, accountId, c, "user_t");
-      const r = await deleteContacts(db, accountId, [c]);
-      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
-      expect(await convs(db, accountId, c)).toHaveLength(1);
-    }));
-
-  it("a deal blocks the CONTACT and its conversation, token and all — delete_empty_conversations never runs for it; the purge-kept one has no such reason and its empty shell still goes (owner ruling 2026-10-17, SECOND review fix: delete_empty_conversations runs only on contacts otherwise deletable — ours and not blocked by a deal/booking — never on the raw candidate batch, because an empty conversation with nothing but a reply token on it is exactly what exists once a teammate clicks \"Get forwarding address\" on a customer who then turns out to be blocked; mutation: call delete_empty_conversations before the opportunities/bookings blockers are known -> dealt's conversation AND its reply token are gone, FAILS)", () =>
+  it("a deal blocks the contact, and its conversation and reply token are untouched; the purge-kept contact keeps its conversation too, and only the one that goes takes its empty conversation with it (mutation: send the purge-kept id to delete_internal_contacts -> kept's conversation is gone, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const dealt = (await createContact(db, accountId, { firstName: "Dealt" }, "user_t")).id;
       const kept = (await createContact(db, accountId, { firstName: "Kept" }, "user_t")).id;
@@ -1075,21 +1084,20 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         account_id: accountId, contact_id: dealt, pipeline_id: pipe!.id, stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
       if (o.error) throw o.error;
-      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { conversationsDb: db, beforeDelete: async () => [kept] });
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1 });
+      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1, skippedIds: [dealt], lateKept: 0 });
       // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept).
       expect(await getContact(db, accountId, dealt)).not.toBeNull();
       expect(await getContact(db, accountId, kept)).not.toBeNull();
       expect(await getContact(db, accountId, gone)).toBeNull();
       expect(await convs(db, accountId, gone)).toEqual([]);
-      // dealt was blocked BEFORE delete_empty_conversations ever ran for it: the conversation, and
-      // the reply token already sitting on it, are untouched.
+      // dealt was blocked before anything ran for it: the conversation, and the reply token already
+      // sitting on it, are untouched.
       expect(await convs(db, accountId, dealt)).toHaveLength(1);
       expect(await readReplyToken(db, accountId, dealt)).toEqual({ token: dealtToken });
-      // kept has no such reason: the opportunities/bookings check never blocked kept, so
-      // delete_empty_conversations ran for kept too (before beforeDelete decided to keep the
-      // contact for its files) and its empty shell is gone, same as before this second fix.
-      expect(await convs(db, accountId, kept)).toEqual([]);
+      // kept: beforeDelete kept it for its files, so delete_internal_contacts never saw it, and its
+      // conversation stays (before 0103, delete_empty_conversations had already removed it).
+      expect(await convs(db, accountId, kept)).toHaveLength(1);
     }));
 
   it("another account's customer and its empty conversation are never touched (defence in depth: the request-client contacts proof AND the account filter on the conversations read AND on their delete each stop it alone, so no single mutation fails this; the probe drops all three -> FAILS)", () =>
@@ -1097,8 +1105,8 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       withTestAccount(async (db, accountA) => {
         const b = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
         await ensureConversation(dbB, accountB, b, "user_t");
-        const r = await deleteContacts(db, accountA, [b], { conversationsDb: db });
-        expect(r).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0 });
+        const r = await deleteContacts(db, accountA, [b], { serviceDb: db });
+        expect(r).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(await getContact(dbB, accountB, b)).not.toBeNull();
         expect(await convs(dbB, accountB, b)).toHaveLength(1);
       })));
@@ -1144,10 +1152,10 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       await createMessage(db, accountId, { conversationId: quietConvId, channel: "sms", direction: "outbound", body: "hi" }, "user_t");
       const beforeDeleteIds: string[][] = [];
       const r = await deleteContacts(db, accountId, [chatty, quiet], {
-        conversationsDb: db,
+        serviceDb: db,
         beforeDelete: async (ids) => { beforeDeleteIds.push([...ids].sort()); return []; },
       });
-      expect(r).toEqual({ deleted: 0, skippedBlocked: 2, skippedFiles: 0 });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 2, skippedFiles: 0, skippedIds: [chatty, quiet], lateKept: 0 });
       expect(beforeDeleteIds).toEqual([]);
       expect(await getContact(db, accountId, chatty)).not.toBeNull();
       expect(await getContact(db, accountId, quiet)).not.toBeNull();

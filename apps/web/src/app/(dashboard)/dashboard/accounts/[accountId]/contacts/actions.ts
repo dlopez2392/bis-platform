@@ -498,9 +498,10 @@ export async function bulkDeleteContactsAction(
   let purged = 0;
   try {
     const r = await deleteContacts(await dbForRequest(), accountId, contactIds, {
-      // S-06 part 2 (owner ruling 2026-10-17): a customer's EMPTY conversation no longer blocks; it is
-      // read and removed on the service client (0053), only for the ids the request client proved.
-      conversationsDb: serviceDb(),
+      // 0103: what blocks a delete for good is read on the service client (contact_delete_blockers is
+      // service_role only), only for the ids the request client proved; the delete itself runs on the
+      // request client, so the database's own Owner check decides.
+      serviceDb: serviceDb(),
       beforeDelete: async (deletable) => {
         const p = await purgeContactDocuments(serviceDb(), accountId, deletable, userId);
         purged = p.purgedDocuments;

@@ -154,9 +154,9 @@ describe("updateContactFieldAction", () => {
 
 describe("bulkDeleteContactsAction", () => {
   it("passes through honest counts", async () => {
-    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["z"], lateKept: 0 });
     const r = await bulkDeleteContactsAction("a1", ["x", "y", "z"]);
-    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
+    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["z"], lateKept: 0 });
   });
   it("returns ok:false instead of throwing when the db op throws", async () => {
     dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
@@ -196,11 +196,11 @@ describe("bulkDeleteContactsAction", () => {
     await bulkDeleteContactsAction("a1", ["x"]);
     expect(dbMocks.deleteContacts.mock.calls[0]![0]).toBe(REQUEST);
   });
-  it("S-06 part 2: deleteContacts gets the SERVICE client as conversationsDb, so a customer's EMPTY conversation stops blocking (0053: no client deletes a conversation; mutation: drop conversationsDb -> FAILS)", async () => {
+  it("0103: deleteContacts gets the SERVICE client as serviceDb, for the blockers read only (contact_delete_blockers is service_role only; mutation: pass the request client as serviceDb -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
     await bulkDeleteContactsAction("a1", ["x"]);
-    expect((dbMocks.deleteContacts.mock.calls.at(-1)![3] as { conversationsDb?: unknown }).conversationsDb).toBe(SERVICE);
+    expect((dbMocks.deleteContacts.mock.calls.at(-1)![3] as { serviceDb?: unknown }).serviceDb).toBe(SERVICE);
   });
   it("a purge that throws fails the whole delete, never a silent success (mutation: catch the purge's throw and return [] -> FAILS)", async () => {
     dbMocks.purgeContactDocuments.mockRejectedValue(new Error("db down"));

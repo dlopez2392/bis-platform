@@ -75,8 +75,10 @@ export type CreateContactInput = ContactInput & {
 // comes from.
 // `holds_shared_number` (0098, S-47e E8): a shared number's holding record. The record page redirects it to
 // its thread, and the group actions refuse it, off the SAME row (spec 5.12.3, 5.12.4).
+// `archived_at`/`archived_by` (0103, contact archive): the record's banner and the drawer read whether, when and by
+// whom a contact was archived off the SAME row.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id, holds_shared_number";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id, holds_shared_number, archived_at, archived_by";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -891,6 +893,14 @@ function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
   return withAssigneeOn(q, assignee, "assigned_to");
 }
 
+/** Contact archive (0103; owner rulings 2026-10-28). One rule for the list's rows and its header total, as
+ *  withAssignee is: "exclude" (the list, search, pickers, export) or "only" (the Archived view). */
+export type ArchivedFilter = "exclude" | "only";
+function withArchived<T>(q: T, archived: ArchivedFilter | undefined): T {
+  const f = q as unknown as { is: (c: string, v: null) => T; not: (c: string, op: string, v: null) => T };
+  return archived === "only" ? f.not("archived_at", "is", null) : f.is("archived_at", null);
+}
+
 function withSearch<T>(q: T, search?: string): T {
   const s = search ? sanitizeSearchTerm(search) : undefined;
   if (!s) return q;
@@ -905,7 +915,10 @@ function withSearch<T>(q: T, search?: string): T {
 
 export async function listContacts(
   db: SupabaseClient, accountId: string,
-  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort; assignee?: AssigneeFilter } = {},
+  opts: {
+    search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort; assignee?: AssigneeFilter;
+    archived?: ArchivedFilter;
+  } = {},
 ) {
   const sort: ContactSort = opts.sort ?? { key: "created", dir: "desc" };
   const column = SORT_COLUMN[sort.key];
@@ -925,6 +938,7 @@ export async function listContacts(
     .limit(opts.limit ?? 50);
   q = withSearch(q, opts.search);
   q = withAssignee(q, opts.assignee);
+  q = withArchived(q, opts.archived);
   if (opts.before) {
     const { v, id } = opts.before;
     const cmp = ascending ? "gt" : "lt";
@@ -1015,13 +1029,16 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
  * caption counts what the filter matches, not the whole account.
  */
 export async function countContacts(
-  db: SupabaseClient, accountId: string, opts: { search?: string; assignee?: AssigneeFilter } = {},
+  db: SupabaseClient, accountId: string,
+  opts: { search?: string; assignee?: AssigneeFilter; archived?: ArchivedFilter } = {},
 ): Promise<number> {
   // S-47e: the same holding skip as listContacts, so the header total and the rows agree.
   let q = db.from("contacts").select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("holds_shared_number", false);
   q = withSearch(q, opts.search);
   q = withAssignee(q, opts.assignee);
+  // 0103: the same archive rule as listContacts, so the header total and the rows agree in both views.
+  q = withArchived(q, opts.archived);
   const { count, error } = await q;
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   if (count === null) throw new Error("countContacts failed: no count returned");
@@ -1151,119 +1168,165 @@ export async function listTags(
   return (data ?? []) as { id: string; name: string }[];
 }
 
+/** At most this many contacts in one archive, restore, blockers read or delete: 0103's own cap on
+ *  contact_delete_blockers and delete_internal_contacts (between 0 and 500 ids), applied to all four so the
+ *  bulk bar's selection limit is one number. Refused BEFORE any query. */
+export const MAX_CONTACT_BATCH = 500;
+function capBatch(ids: readonly string[], fn: string): void {
+  if (ids.length > MAX_CONTACT_BATCH) throw new Error(`${fn}: at most ${MAX_CONTACT_BATCH} contacts at once`);
+}
+/** At most this many ids in one `.in()` (review M1): TAG_LOOKUP_BATCH_SIZE's limit (see its own comment), the
+ *  size assignment.ts's ASSIGN_IN_BATCH_SIZE settled on too. RPC arguments travel in the body and are not
+ *  split. */
+function inBatches<T>(ids: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < ids.length; i += TAG_LOOKUP_BATCH_SIZE) out.push(ids.slice(i, i + TAG_LOOKUP_BATCH_SIZE));
+  return out;
+}
+
 /**
- * Bulk delete with skip-blocked semantics. opportunities.contact_id and
- * conversations.contact_id are NO ACTION FKs, and bookings.contact_id is
- * `on delete restrict` BY DESIGN (0017) — a single unfiltered
- * `delete … in (…)` would abort the whole batch on one linked contact.
- * So: pre-read which ids have any blocking child, delete only the rest in
- * one statement, and report both counts honestly. contact_tags/notes/tasks
- * cascade; form_submissions and calls set-null (schema, not our concern
- * here). Deliberately NO event emit: `contact.deleted` is not a curated
- * ledger type and the ledger fails closed on unknown types.
- * `documents (account_id, contact_id)` is NO ACTION (0077): a contact's files
- * are purged by `beforeDelete` first (objects, then rows; owner ruling
- * 2026-10-13), and the FK refuses the delete of any contact a purge did not
- * clear, so no stored object is ever stranded. Documents never BLOCK: they
- * are not in the pre-read below.
+ * Delete for good, internal-only contacts (0103; spec §5; owner rulings 2026-10-28). A contact any customer
+ * fact touches (a non-note message, an inbound email, a call, a form, a consent event, a sent automation, a
+ * booking or a deal; `DELETE_BLOCK_REASONS`) is never deleted: it is archive-only, and it comes back in
+ * `skippedIds`. Calls, forms, consent and sent automations block for the first time: their FKs are SET NULL,
+ * so the old direct delete orphaned them rather than stopping. Deliberately NO event emit: `contact.deleted`
+ * is not a curated ledger type and the ledger fails closed on unknown types.
  *
- * S-06 part 2 (owner ruling 2026-10-17): an EMPTY conversation (no message and no inbound email; the
- * record page made one on view before the ruling, and a forwarding address can make one) no longer
- * blocks. 0053 gives no client a delete on conversations, so the caller passes the SERVICE client as
- * `conversationsDb`, and the empty ones are cleared through `delete_empty_conversations` (migration
- * 0083 section 3) — the database's own check-then-delete, now TWO statements internally (lock and
- * wait, then a fresh-snapshot delete; re-review found a single-statement DELETE's NOT EXISTS checks
- * can miss a row that committed while the delete was blocked on that very row's lock). That ordering
- * is load-bearing, not stylistic: review found the prior shape (read every messages/inbound_emails
- * row for the whole batch on the request client, THEN delete) unsafe two ways. CRITICAL: PostgREST
- * caps a read at `max_rows` (1000); a talked-to customer whose messages alone cross that cap was
- * judged empty, `beforeDelete` ran (the irreversible documents purge), and only then did the
- * conversations delete hit `messages_conversation_id_fkey` and throw — the files were already gone,
- * the customer was not. Reproduced on the replica (a 1001-message customer and a 1-message customer,
- * both supposedly "chatty" but misjudged by the truncated read). IMPORTANT: `inbound_emails.
- * conversation_id` is ON DELETE CASCADE (0082:93-94), so a held email arriving in the GAP between a
- * separate check and a separate delete would be silently destroyed — see 0083 section 3's own
- * comment for how the function itself closes that gap now. Without `conversationsDb` every
- * conversation still blocks, exactly as before this ruling.
+ * The order (spec §5.3) is load-bearing:
+ * 1. The proof (review I1): only ids THIS client reads as this account's contacts go on. The ids come from the
+ *    browser, and `beforeDelete` hands them to a service-role purge, so a filter there alone is not enough; on
+ *    a request client RLS decides this read.
+ * 2. `contact_delete_blockers` on `opts.serviceDb` (0103 step 7: service_role only, and definer, so a reason
+ *    the caller's RLS hid can never read as no reason). One row per blocked contact, so 500 ids fit max_rows,
+ *    and no messages row is ever read into this process (the 1001-message shape that misjudged a talked-to
+ *    customer as empty before 0083 cannot recur).
+ * 3. `beforeDelete` (the document vault's purge, 0077; owner ruling 2026-10-13: a customer's files go with
+ *    them) runs on the unblocked ids ONLY, after every knowable blocker has been read. It is irreversible.
+ *    The ids it could not clear are kept (`skippedFiles`).
+ * 4. `delete_internal_contacts` on `db`, the REQUEST client, so 0103's Owner check decides (review I9): an
+ *    Owner of this account, the agency, or a service_role JWT. It locks the contacts and their
+ *    conversations, re-reads the blockers inside the lock, and deletes each contact in its own
+ *    subtransaction with its note-only messages and its now-empty conversations. It answers the ids it
+ *    deleted; an id it did not delete is `lateKept`.
  *
- * SECOND review fix (2026-10-17, this call's own order): `delete_empty_conversations` runs ONLY on
- * the contacts that are otherwise deletable — ours, and not blocked by opportunities/bookings —
- * never on the raw request batch. A contact that a deal or a booking blocks keeps its own
- * conversation (and the reply token on it) exactly as it was: the owner's ruling made an empty
- * conversation with nothing but a reply token on it exist precisely when a teammate clicked "Get
- * forwarding address" on a customer's record — sweeping that address out from under a BLOCKED
- * contact (one that is staying, by definition) would destroy an address a teammate may already have
- * copied and saved, for no reason tied to the contact actually going anywhere. Whatever conversation
- * survives the cleanup (because it had a message or an inbound email, the contact was already
- * blocked, or `conversationsDb` was not given) is read and blocked exactly like opportunities/
- * bookings. `conversations.contact_id` is a plain (NO ACTION) FK, same as opportunities/bookings: if
- * a NEW conversation is created for a `go` contact in the gap between THAT read and the final
- * `contacts` delete below (the record page, a forwarding address, or an inbound email can all make
- * one), that one row's FK violation aborts the whole batch delete and `deleteContacts` throws — no
- * customer is half-deleted and no conversation is silently lost, but the caller sees every contact
- * in that call fail together, same as the pre-existing race on opportunities/bookings.
- *
- * ACCEPTED (re-review, not narrowed further): `beforeDelete`'s own "kept" outcome — a customer
- * `purgeContactDocuments` could not fully clear ("files could not be cleared") — is NOT knowable
- * before `beforeDelete` actually runs (it depends on a runtime storage-removal result, not
- * anything this function could pre-read), and `delete_empty_conversations` has, by this point,
- * already run for that contact (it was never blocked by opportunities/bookings). So a customer
- * `beforeDelete` ends up keeping for files reasons has ALSO lost their empty conversation and any
- * reply token on it, same as a customer who actually goes. Narrowing this would mean calling
- * `beforeDelete` BEFORE the cleanup, which would also run the irreversible purge on contacts the
- * conversation-emptiness check has not yet filtered — a strictly worse trade. Opportunities and
- * bookings are the only blockers knowable before the purge runs; a files-kept customer's lost
- * token is accepted.
+ * ACCEPTED residual (spec §5.3, not narrowed further): a contact that becomes blocked between step 2 and the
+ * lock in step 4 (a text arrives), or keeps a file the purge left behind (documents_contact_fkey, NO ACTION,
+ * caught per contact), is KEPT by step 4, and its files are already gone. It is counted in `lateKept` and
+ * listed in `skippedIds`; the caller's `contacts.delete.filesGoneKept` line says exactly that. Narrowing it
+ * would mean purging inside the lock, holding the contacts' row locks across a storage round trip.
+ * `delete_empty_conversations` (0083) is no longer called here; a later migration drops it.
  */
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
   opts: {
-    /** Runs on the deletable ids (blocked ones already removed) BEFORE any contact row is deleted; answers
-     *  the ids it could not clear, which are then kept. The document vault's purge (0077, deviation 2). */
+    /** The SERVICE client, for the blockers read only (0103 step 7, service_role only). The delete itself runs on
+     *  `db`, the request client, so 0103's Owner check in delete_internal_contacts decides (review I9). */
+    serviceDb: SupabaseClient;
+    /** Runs on the deletable ids BEFORE any contact row is deleted; answers the ids it could not clear. The
+     *  document vault's purge (0077). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
-    /** The SERVICE client that may run delete_empty_conversations (see above). */
-    conversationsDb?: SupabaseClient;
-  } = {},
-): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }> {
-  if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0, skippedFiles: 0 };
-  const blocked = new Set<string>();
-  for (const table of ["opportunities", "bookings"] as const) {
-    const { data, error } = await db.from(table).select("contact_id")
-      .eq("account_id", accountId).in("contact_id", contactIds);
-    if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
-    for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
+  },
+): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number; skippedIds: string[]; lateKept: number }> {
+  capBatch(contactIds, "deleteContacts");
+  const none = { deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [] as string[], lateKept: 0 };
+  if (contactIds.length === 0) return none;
+  const unique = [...new Set(contactIds)];
+  // Step 1, the proof (review I1): only ids this client READS as this account's contacts go on.
+  const ourSet = new Set<string>();
+  for (const batch of inBatches(unique)) {
+    const { data: mine, error: mineError } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).in("id", batch);
+    if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
+    for (const r of mine ?? []) ourSet.add(r.id as string);
   }
-  // The proof (review I1): only ids this client READS as this account's contacts go on. The ids come
-  // from the browser, and beforeDelete hands them to a service-role purge, so a filter there alone is
-  // not enough; on a request client RLS decides this read too.
-  const { data: mine, error: mineError } = await db.from("contacts").select("id")
-    .eq("account_id", accountId).in("id", contactIds);
-  if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
-  const ours = new Set((mine ?? []).map((r) => r.id as string));
-  // Otherwise deletable: ours, and not already blocked by a deal or a booking. ONLY these ever
-  // reach delete_empty_conversations — a blocked contact's conversation (and any reply token on
-  // it) is never touched by this call, because that contact is staying either way.
-  const otherwiseDeletable = contactIds.filter((id) => ours.has(id) && !blocked.has(id));
-  if (opts.conversationsDb && otherwiseDeletable.length > 0) {
-    const { error: emptyError } = await opts.conversationsDb
-      .rpc("delete_empty_conversations", { p_account_id: accountId, p_contact_ids: otherwiseDeletable });
-    if (emptyError) throw new Error(`deleteContacts delete_empty_conversations failed: ${emptyError.message}`);
-  }
-  // Conversations: whatever is left (because it had a message or an inbound email, the contact was
-  // already blocked above, or conversationsDb was not given) still blocks, same as opportunities/
-  // bookings — the cleanup above either removed it or proved it is not empty.
-  const { data: convRows, error: convError } = await db.from("conversations").select("contact_id")
-    .eq("account_id", accountId).in("contact_id", contactIds);
-  if (convError) throw new Error(`deleteContacts conversations pre-read failed: ${convError.message}`);
-  for (const r of convRows ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
-  const deletable = contactIds.filter((id) => ours.has(id) && !blocked.has(id));
+  const ours = unique.filter((id) => ourSet.has(id));
+  if (ours.length === 0) return none;
+  // Step 2: every knowable blocker, before anything irreversible runs.
+  const blockers = await contactDeleteBlockers(opts.serviceDb, accountId, ours);
+  const blocked = ours.filter((id) => blockers.has(id));
+  const deletable = ours.filter((id) => !blockers.has(id));
+  // Step 3: the purge, on the unblocked ids only.
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));
-  if (go.length === 0) return { deleted: 0, skippedBlocked: blocked.size, skippedFiles: kept.size };
-  const { data, error } = await db.from("contacts").delete()
-    .eq("account_id", accountId).in("id", go).select("id");
+  if (go.length === 0) return { ...none, skippedBlocked: blocked.length, skippedFiles: kept.size, skippedIds: blocked };
+  // Step 4: on the REQUEST client, so the database's own Owner check decides.
+  const { data, error } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go });
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
-  return { deleted: (data ?? []).length, skippedBlocked: blocked.size, skippedFiles: kept.size };
+  const deleted = new Set((data ?? []) as string[]);
+  // Blocked between the read and the lock (a text arrived), or a file the purge left: kept by the database.
+  const late = go.filter((id) => !deleted.has(id));
+  return {
+    deleted: deleted.size, skippedBlocked: blocked.length + late.length, skippedFiles: kept.size,
+    skippedIds: [...blocked, ...late], lateKept: late.length,
+  };
+}
+
+/** Archive (0103): the request client, so RLS and the stamp trigger decide who may and who did (the trigger
+ *  refuses a Technician and a shared number's holding record). Only rows that CHANGE come back, so an Undo
+ *  restores exactly these and never one that was archived before (D-007's rule). */
+export async function archiveContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[],
+): Promise<{ changedIds: string[] }> {
+  capBatch(contactIds, "archiveContacts");
+  const changedIds: string[] = [];
+  for (const batch of inBatches(contactIds)) {
+    const { data, error } = await db.from("contacts").update({ archived_at: new Date().toISOString() })
+      .eq("account_id", accountId).in("id", batch)
+      .eq("holds_shared_number", false).is("archived_at", null)
+      .select("id");
+    if (error) throw new Error(`archiveContacts failed: ${error.message}`);
+    changedIds.push(...(data ?? []).map((r) => r.id as string));
+  }
+  return { changedIds };
+}
+
+/** Restore by hand (the Archived view, the record's banner, an Archive's Undo). Same shape as archiveContacts:
+ *  only rows that were archived change, and only those come back. */
+export async function restoreContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[],
+): Promise<{ changedIds: string[] }> {
+  capBatch(contactIds, "restoreContacts");
+  const changedIds: string[] = [];
+  for (const batch of inBatches(contactIds)) {
+    const { data, error } = await db.from("contacts").update({ archived_at: null })
+      .eq("account_id", accountId).in("id", batch).not("archived_at", "is", null)
+      .select("id");
+    if (error) throw new Error(`restoreContacts failed: ${error.message}`);
+    changedIds.push(...(data ?? []).map((r) => r.id as string));
+  }
+  return { changedIds };
+}
+
+export const RESTORE_SIGNS = ["text", "email", "call", "booking", "form", "chat"] as const;
+export type RestoreSign = (typeof RESTORE_SIGNS)[number];
+/** Owner ruling Q1 (2026-10-28): the customer's own act brings an archived contact back to the list, with a
+ *  "came back" row. The SERVICE client (0103 grants execute to service_role only). True when it restored.
+ *  THROWS on a failure: every caller wraps it in its own try, so a restore never costs the message, call,
+ *  booking or form it rides on. */
+export async function restoreContactOnSign(
+  serviceDb: SupabaseClient, accountId: string, contactId: string, sign: RestoreSign,
+): Promise<boolean> {
+  const { data, error } = await serviceDb.rpc("restore_contact_on_sign",
+    { p_account_id: accountId, p_contact_id: contactId, p_sign: sign });
+  if (error) throw new Error(`restoreContactOnSign failed: ${error.message}`);
+  return data === true;
+}
+
+export const DELETE_BLOCK_REASONS = ["messages", "inbound_email", "calls", "forms", "consent", "automations", "bookings", "deals"] as const;
+export type DeleteBlockReason = (typeof DELETE_BLOCK_REASONS)[number];
+/** What keeps each contact from being deleted for good (spec §5.1), on the SERVICE client, for ids the caller
+ *  already proved on its own client. One row per blocked contact (0103 step 7), so the answer fits max_rows.
+ *  A contact with nothing in its way is absent from the map. */
+export async function contactDeleteBlockers(
+  serviceDb: SupabaseClient, accountId: string, contactIds: string[],
+): Promise<Map<string, DeleteBlockReason[]>> {
+  capBatch(contactIds, "contactDeleteBlockers");
+  const out = new Map<string, DeleteBlockReason[]>();
+  if (contactIds.length === 0) return out;
+  const { data, error } = await serviceDb.rpc("contact_delete_blockers", { p_account_id: accountId, p_contact_ids: contactIds });
+  if (error) throw new Error(`contactDeleteBlockers failed: ${error.message}`);
+  for (const r of (data ?? []) as { contact_id: string; reasons: DeleteBlockReason[] }[]) out.set(r.contact_id, r.reasons);
+  return out;
 }
 
 /**

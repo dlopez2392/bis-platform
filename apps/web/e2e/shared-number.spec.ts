@@ -133,7 +133,7 @@ test.afterAll(async () => {
       fail(`shared-number e2e cleanup: reading/deleting conversations failed: ${String(e)}`);
     }
     try {
-      const result = await deleteContacts(svc, accountId, ids, { conversationsDb: svc });
+      const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc });
       if (result.deleted !== ids.length) {
         fail(`shared-number e2e cleanup: deleteContacts deleted ${result.deleted} of ${ids.length} `
           + `(skippedBlocked ${result.skippedBlocked}, skippedFiles ${result.skippedFiles})`);
