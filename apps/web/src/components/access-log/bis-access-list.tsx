@@ -11,9 +11,10 @@ import type { VisitRowView } from "@/lib/access-log/view";
 /**
  * F-118 part 1 (spec 6.2): one visit per `<li>`, newest first (the page's own order — this component
  * never re-sorts). The label is the Label role; the when line carries tabular-nums; the summary is one
- * sentence. A row with items gets a ghost toggle that expands its items list in place: no row-as-link
- * (these rows are not navigable records, rule 3 does not apply — status is not what this list shows),
- * only its ITEMS link, through `next/link`, and a gone item is plain text, never a link.
+ * sentence. A row with items gets a ghost toggle that expands its items list in place. The row is not
+ * a click target: rule 4's whole-row target and the record-views drawer are for rows that ARE records,
+ * and a visit is not one — it opens no drawer and has no page of its own. Only its ITEMS link, through
+ * `next/link`, and a gone item is plain text, never a link.
  */
 function BisAccessRow({ row }: { row: VisitRowView }) {
   const locale = useLocale();

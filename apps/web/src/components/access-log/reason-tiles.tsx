@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
  * posts `startVisitAction` directly with no client-side state. Copies `components/choice-tiles.tsx:52-58`'s
  * token recipe on a `<button>` instead of a radio `<label>` — `--surface-2` at rest, `--surface-3` on
  * hover over 150ms, `--line`/`--line-strong`, `--radius-ctl`, `min-h-11`, the `--ring-glow` focus ring.
- * All four tiles are the same size and none is primary (rule 8: a choice of four, no default).
+ * All four tiles are the same size and none is primary (rule 8 as amended 2026-10-29: a chooser of
+ * mutually exclusive single-step actions carries no primary). The label wraps inside the tile
+ * (`min-w-0 break-words`, choice-tiles.tsx's own span) so a long or pseudo-locale label never overflows.
  */
 export function ReasonTiles({
   legend, options,
@@ -33,7 +35,7 @@ export function ReasonTiles({
               "outline-none focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)] focus-visible:border-[var(--accent)]",
             )}
           >
-            {option.label}
+            <span className="min-w-0 break-words">{option.label}</span>
           </button>
         ))}
       </div>
