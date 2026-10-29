@@ -267,6 +267,17 @@ describe("contacts CSV export route: the access log (F-118 part 1)", () => {
     expect(noteOpenedApi.mock.invocationCallOrder[0]!).toBeLessThan(listContacts.mock.invocationCallOrder[0]!);
   });
 
+  it("spec 4.3: a client's export issues no count and no note, and still streams the file (mutation: count unconditionally -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    listContacts.mockResolvedValueOnce([]);
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    await text(res);
+    expect(countContacts).not.toHaveBeenCalled();
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+    expect(listContacts).toHaveBeenCalledTimes(1);
+  });
+
   it("noteOpenedApi -> false (the visit ended in between) answers the same 409, and listContacts never runs (mutation: ignore the answer -> FAILS)", async () => {
     noteOpenedApi.mockResolvedValue(false);
     const res = await GET(req(), ctx());

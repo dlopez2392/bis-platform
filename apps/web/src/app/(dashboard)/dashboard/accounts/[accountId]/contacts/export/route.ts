@@ -120,9 +120,12 @@ export async function GET(
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
 
   // F-118 part 1 (plan C1): the route streams, so the count of what it is about to send is read first, on the
-  // export's own filters, and the download is logged before a single row leaves (owner ruling 4).
-  const total = await countContacts(db, accountId, { search: q, archived });
-  if (!(await noteOpenedApi(access, accountId, { kind: "customer_list_export", itemCount: total }))) return exportEnded();
+  // export's own filters, and the download is logged before a single row leaves (owner ruling 4). Only the
+  // agency is logged, so only the agency pays for the count: a client's export adds no query (spec 4.3).
+  if (access.isAgency) {
+    const total = await countContacts(db, accountId, { search: q, archived });
+    if (!(await noteOpenedApi(access, accountId, { kind: "customer_list_export", itemCount: total }))) return exportEnded();
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
