@@ -106,17 +106,17 @@ export function BisAccessDemo() {
       <LocaleProvider locale="es">
         <div lang="es" data-bis-access-demo="es" className="grid w-full gap-6 lg:grid-cols-2">
           <div className="space-y-2">
-            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{TILES_CAPTION} · es</p>
+            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{`${TILES_CAPTION} · es`}</p>
             <form onSubmit={(e) => e.preventDefault()}>
               <ReasonTiles legend={m["accessLog.enter.legend.es"]} options={REASON_OPTIONS_ES} />
             </form>
           </div>
           <div className="space-y-2">
-            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{LIST_CAPTION} · es</p>
+            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{`${LIST_CAPTION} · es`}</p>
             <BisAccessList rows={ROWS_ES} />
           </div>
           <div className="space-y-2">
-            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{ERROR_CAPTION} · es</p>
+            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{`${ERROR_CAPTION} · es`}</p>
             <BisAccessError />
           </div>
         </div>
