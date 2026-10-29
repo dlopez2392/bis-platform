@@ -143,8 +143,9 @@ The tile posts `startVisitAction(accountId, reason, to)`: `requireAgency()`; `re
 or refuse; `accountId` a UUID of an existing account; `start_agency_visit` (§5.3) returns the live visit
 if one exists (a double tap or a second tab makes no second visit) or a new one; then `redirect(to)`.
 
-**`to`** is accepted only when it matches `^/dashboard/accounts/<the same accountId>(/|\?|$)` and contains
-no `//` or `\`; anything else goes to the account's home (`accountHome`, `lib/auth.ts:128-130`). The
+**`to`** is accepted only when it matches `^/dashboard/accounts/<the same accountId>(/|\?|$)`, contains
+no `//` or `\`, and has no `.` or `..` path segment, encoded (`%2e`, `%2E`) or not, and no encoded `/` or
+`\` inside a segment (T3 review minor 2: `/dashboard/accounts/A/../B` would resolve into account B); anything else goes to the account's home (`accountHome`, `lib/auth.ts:128-130`). The
 gate learns the path from a request header the proxy sets: `proxy.ts:5-7` adds `x-bis-path`
 (pathname + search) for `/dashboard/accounts/*` requests. ASSUMPTION: a request header set by returning
 `NextResponse.next({ request: { headers } })` from `clerkMiddleware`'s handler reaches `headers()` in

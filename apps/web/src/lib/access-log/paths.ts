@@ -26,13 +26,29 @@ function hasControl(s: string): boolean {
 }
 
 /**
+ * Every path segment (the part before `?`), percent-decoded, is a plain name: never `.` or `..` (a browser
+ * resolves `%2e%2e` as `..` too), never an encoded `/` or `\`, and never a malformed escape.
+ */
+function plainSegments(raw: string): boolean {
+  const q = raw.indexOf("?");
+  for (const seg of (q === -1 ? raw : raw.slice(0, q)).split("/")) {
+    let name: string;
+    try { name = decodeURIComponent(seg); } catch { return false; }
+    if (name === "." || name === ".." || name.includes("/") || name.includes("\\")) return false;
+  }
+  return true;
+}
+
+/**
  * `raw` when it is a path inside THIS account and nothing else; null otherwise. The id is compared without
  * case (a UUID may arrive in either), and it must end at a segment boundary, so account `A` never admits
- * `/dashboard/accounts/AB`. No `//` and no `\` anywhere: either could turn a path into another origin.
+ * `/dashboard/accounts/AB`. No `//` and no `\` anywhere: either could turn a path into another origin. No
+ * dot segment, encoded or not (T3 review minor 2): `/dashboard/accounts/A/../B` would resolve into account B.
  */
 export function safeReturnPath(raw: unknown, accountId: string): string | null {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_PATH) return null;
   if (raw.includes("//") || raw.includes("\\") || hasControl(raw)) return null;
+  if (!plainSegments(raw)) return null;
   const prefix = `/dashboard/accounts/${accountId}`.toLowerCase();
   const lower = raw.toLowerCase();
   if (!lower.startsWith(prefix)) return null;

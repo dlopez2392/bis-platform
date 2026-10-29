@@ -52,7 +52,9 @@ export async function actorNameFor(clerkUserId: string): Promise<string | null> 
  */
 export async function startVisitForCaller(accountId: string, reason: AgencyVisitReason): Promise<string | null> {
   const { userId } = await requireAgency();
-  const { sessionId } = await auth();
+  const { sessionId, actor } = await auth();
+  // T3 review minor 3 (owner ruling 5): a session signed in AS someone else never starts a visit in their name.
+  if (actor) redirect("/no-access?reason=none");
   if (!sessionId) redirect("/sign-in");
   if (!isAgencyVisitReason(reason) || !isUuid(accountId)) return null;
   const name = await actorNameFor(userId);

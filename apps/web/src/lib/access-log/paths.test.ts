@@ -56,6 +56,24 @@ describe("safeReturnPath: a path inside THIS account, and nothing else", () => {
     expect(safeReturnPath("/dashboard/accounts/A?x=\\y", "A")).toBeNull();
   });
   it.each([
+    ["a .. segment climbing into another account", "/dashboard/accounts/A/../B/contacts"],
+    ["encoded .. segments climbing out of the account (review minor 2)", "/dashboard/accounts/A/%2e%2e/%2e%2e/%2e%2e/sign-out"],
+    ["an upper-case encoded .. segment", "/dashboard/accounts/A/%2E%2E/B"],
+    ["a half-encoded .. segment", "/dashboard/accounts/A/.%2e/B"],
+    ["a trailing .. segment", "/dashboard/accounts/A/x/.."],
+    ["a . segment", "/dashboard/accounts/A/./contacts"],
+    ["an encoded . segment", "/dashboard/accounts/A/%2e/contacts"],
+    ["an encoded slash inside a segment", "/dashboard/accounts/A/..%2fB/contacts"],
+    ["a malformed escape", "/dashboard/accounts/A/%E0%A4%A"],
+  ])("refuses a dot segment: %s (mutation: drop the segment check -> FAILS)", (_label, raw) => {
+    expect(safeReturnPath(raw, "A")).toBeNull();
+  });
+  it("dots in a name or in the query are not segments, and stay accepted (mutation: check the query too -> FAILS)", () => {
+    for (const raw of ["/dashboard/accounts/A/contacts?q=..", "/dashboard/accounts/A/contacts?q=%2e%2e/x", "/dashboard/accounts/A/contacts?back=/..", "/dashboard/accounts/A/files/v1.2..3"]) {
+      expect(safeReturnPath(raw, "A")).toBe(raw);
+    }
+  });
+  it.each([
     ["a protocol-relative URL", "//evil.example"],
     ["an absolute URL", "https://evil.example/dashboard/accounts/A"],
     ["a doubled slash inside the account", "/dashboard/accounts/A//x"],

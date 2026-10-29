@@ -140,7 +140,7 @@ describe("agencyVisitMissing (the customer-list download's 409, review m5)", () 
  * 9. The carve-out pin (review m4): the VALUE, not the property name. Every string-literal node whose text
  * is "not-required" (a literal TYPE's string included) in the app's non-test source. Comments are trivia
  * and never become nodes. A name check would miss `const skip = "not-required"` passed later, or a spread;
- * this cannot. lib/auth.ts holds the option's type and its one comparison; lib/proposals/actions.ts holds
+ * this catches literal uses (a template literal or forwarded options can still dodge it; Task 11's walk). lib/auth.ts holds the option's type and its one comparison; lib/proposals/actions.ts holds
  * the ONE use: run(), whose four actions /dashboard/work binds across every account (owner ruling 3, C11).
  */
 const SRC = fileURLToPath(new URL("../../", import.meta.url));

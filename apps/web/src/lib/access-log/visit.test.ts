@@ -121,6 +121,12 @@ describe("startVisitForCaller", () => {
     expect(readAgencyActorName).not.toHaveBeenCalled();
     expect(startAgencyVisit).not.toHaveBeenCalled();
   });
+  it("a session signed in AS someone else (Clerk actor) starts nothing in anyone's name (T3 review minor 3; mutation: drop the actor check -> FAILS)", async () => {
+    authMock.mockResolvedValue({ userId: ME, sessionId: "sess_1", actor: { sub: "user_staff" } });
+    await expect(startVisitForCaller(A, "setup")).rejects.toThrow("REDIRECT:/no-access?reason=none");
+    expect(readAgencyActorName).not.toHaveBeenCalled();
+    expect(startAgencyVisit).not.toHaveBeenCalled();
+  });
   it("no session id sends the person to sign in, with nothing started", async () => {
     authMock.mockResolvedValue({ userId: ME, sessionId: null });
     await expect(startVisitForCaller(A, "setup")).rejects.toThrow("REDIRECT:/sign-in");
