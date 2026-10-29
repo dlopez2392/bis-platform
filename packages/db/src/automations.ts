@@ -1743,6 +1743,8 @@ export async function getDueReactivationById(
     .eq("id", contactId).is("reactivation_sent_at", null)
     // Contact archive (0103), owner ruling Q2: archived means no new conversation. In the QUERY, never after the page: a bounded page full of archived rows would starve the rest.
     .is("archived_at", null)
+    // 0106 (F-006): a merged-away record's address is not a customer to check in with; its held release answers gone (the kept record has its own).
+    .is("merged_into", null)
     .not("email", "is", null).maybeSingle();
   if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
   if (!contact) return { due: null, why: "gone" };
