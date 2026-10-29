@@ -1,5 +1,5 @@
 import { clerkSetup } from "@clerk/testing/playwright";
-import { test as setup } from "@playwright/test";
+import { test as setup, expect } from "@playwright/test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -9,6 +9,9 @@ import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 import { refuseProduction } from "./fixtures/production-guard";
 import { saveSignedInState } from "./fixtures/session-state";
 import { createAgencyUser, setActiveOrganization, signInWithTicket } from "./fixtures/clerk-identities";
+import { lookupSeededAccountId } from "./fixtures/seeded";
+import { SEEDED_ACCOUNT_NAME } from "./support";
+import { m } from "../src/lib/messages";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -436,4 +439,40 @@ setup("authenticate as technician user", async ({ page }) => {
   await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/tasks$/);
 
   await saveSignedInState(page.context(), TECHNICIAN_AUTH_FILE);
+});
+
+// F-118 part 1: every surface inside an account now gates on a live agency
+// visit (lib/access-log/gate.ts) — the agency session above would otherwise
+// meet the chooser (/dashboard/enter/<id>) the first time ANY spec after this
+// one opens either account it uses. This test gives a reason ONCE, for the
+// shared agency session, on BOTH accounts agency specs enter: the per-run
+// client fixture and the seeded `Test Client One`. A visit is live for two
+// hours from here (AGENCY_VISIT_HOURS); a local run slower than that meets
+// the chooser late, which is the gate working, not a bug in this fixture.
+//
+// Registered LAST: it needs the client fixture file the "authenticate as
+// client user" test above writes, and it must run after every other setup
+// test so the two-hour clock starts as late as possible relative to the
+// specs that spend it.
+//
+// Two other ways agency specs enter an account need no visit here:
+// blueprints.spec.ts and vetting.spec.ts each CREATE a company mid-spec, and
+// its creator's own Setup visit starts with it (dashboard/accounts/actions.ts,
+// plan Task 5 step 4); access-log.spec.ts signs the agency in again on
+// purpose, specifically to meet the chooser with a session that has none.
+setup("agency gives a reason for the fixture account and Test Client One", async ({ browser }) => {
+  const fixture = JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf8")) as { accountId: string };
+  const seeded = await lookupSeededAccountId(serviceDb(), SEEDED_ACCOUNT_NAME);
+  const ctx = await browser.newContext({ storageState: AUTH_FILE });
+  try {
+    const page = await ctx.newPage();
+    for (const id of [fixture.accountId, seeded]) {
+      await page.goto(`/dashboard/accounts/${id}/dashboard`);
+      await expect(page).toHaveURL(new RegExp(`/dashboard/enter/${id}`));
+      await page.getByRole("button", { name: m["accessLog.reason.setup"], exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${id}/dashboard$`));
+    }
+  } finally {
+    await ctx.close();
+  }
 });

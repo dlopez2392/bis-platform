@@ -1,4 +1,10 @@
 import { test, expect } from "./fixtures/test";
+import { readClientFixture } from "./support";
+
+/** For a RegExp built from the fixture's own name (contact-detail.spec.ts's own helper). */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 test("sidebar collapse persists across reload", async ({ page }) => {
   await page.goto("/dashboard/accounts");
@@ -16,10 +22,25 @@ test("sidebar collapse persists across reload", async ({ page }) => {
 });
 
 test("account switcher navigates into a company", async ({ page }) => {
+  // F-118 part 1 (review I4): the first (newest) option in a shared project
+  // can be ANY company, including one this agency session has given no
+  // reason for yet — the gate would then leave the click on the chooser
+  // instead of /contacts. Read at run time, as access-log.spec.ts does: the
+  // "setup" project writes this file before any spec runs, and its own
+  // agency-visit setup test (auth.setup.ts) already gave the per-run fixture
+  // a reason, so picking it BY NAME keeps this spec testing the switcher,
+  // never the gate.
+  const fixture = readClientFixture();
+  if (!fixture) {
+    throw new Error(
+      "account switcher spec: no client fixture at e2e/.auth/client-fixture.json — " +
+      "the \"setup\" project did not run. Run the full suite: pnpm --filter web test:e2e.",
+    );
+  }
   await page.goto("/dashboard/accounts");
   await page.getByRole("button", { name: "Switch company" }).click();
-  const first = page.getByRole("option").first();
-  await first.click();
+  const option = page.getByRole("option", { name: new RegExp(escapeRegExp(fixture.companyName)) });
+  await option.click();
   await expect(page).toHaveURL(/\/dashboard\/accounts\/[^/]+\/contacts/);
 });
 
