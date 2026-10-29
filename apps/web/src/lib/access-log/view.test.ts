@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AccessLogCounts, AccessLogItem, AccessLogPage, AccessLogVisit } from "@bis/db";
 import { makeTr } from "@/lib/record/copy";
+import { encodeCursor } from "@/lib/cursor";
 import {
   buildVisitRows, encodeAccessCursor, parseAccessCursor, visitSpan, visitSummary, type AccessLogNames,
 } from "./view";
@@ -248,7 +249,7 @@ describe("buildVisitRows: every item kind, its own text, href and label", () => 
 });
 
 describe("access cursor: round-trips, garbage and undefined read as no cursor", () => {
-  it("encode then parse returns the same startedAt and id (mutation: accept a null v as a valid cursor -> FAILS)", () => {
+  it("encode then parse returns the same startedAt and id", () => {
     const visit: AccessLogVisit = {
       id: "11111111-1111-1111-1111-111111111111", actorName: "Dan Lopez", reason: "billing",
       startedAt: "2026-10-29T19:10:00.123456Z", endedAt: null, counts: ZERO, itemTotal: 0, items: [],
@@ -260,5 +261,10 @@ describe("access cursor: round-trips, garbage and undefined read as no cursor", 
   it("garbage and undefined both read as no cursor, never a thrown error", () => {
     expect(parseAccessCursor("not-a-real-cursor")).toBeNull();
     expect(parseAccessCursor(undefined)).toBeNull();
+  });
+
+  it("a hand-crafted cursor whose v is itself null is invalid, never passed through (mutation: accept a null v as a valid cursor -> FAILS)", () => {
+    const nullV = encodeCursor({ v: null, id: "11111111-1111-1111-1111-111111111111" });
+    expect(parseAccessCursor(nullV)).toBeNull();
   });
 });
