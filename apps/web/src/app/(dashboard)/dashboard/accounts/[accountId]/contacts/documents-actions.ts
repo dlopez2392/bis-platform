@@ -1,6 +1,8 @@
 "use server";
 
+import { unstable_rethrow } from "next/navigation";
 import { requireAccountAccess } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
@@ -229,7 +231,7 @@ export async function getDocumentUrlAction(
   accountId: string, versionId: string, mode: "view" | "download",
 ): Promise<{ ok: true; url: string; contentType: DocumentContentType } | DocFail> {
   // M7a PR-4 (plan G11): opening a file writes nothing, so it stays usable while the account is paused.
-  await requireAccountAccess(accountId, { duringPause: "allow" });
+  const access = await requireAccountAccess(accountId, { duringPause: "allow" });
   if (!isUuid(versionId) || (mode !== "view" && mode !== "download")) return fail(REFUSED);
   try {
     const db = await dbForRequest();
@@ -247,8 +249,12 @@ export async function getDocumentUrlAction(
     if (r.status === "pending") return fail("documents.error.scanning");
     if (r.status === "removed") return fail("documents.error.removed");
     if (r.status !== "ok") return fail("documents.error.fileNotFound");
+    // F-118 part 1 (spec 4.1, review m6): the file is really opening now, so the log is written BEFORE
+    // the minted URL leaves — "download" here is the EFFECTIVE one (Word/Excel always download).
+    await noteOpened(access, accountId, { kind: download ? "document_download" : "document_view", recordId: doc.id });
     return { ok: true, url: r.url, contentType: version.content_type };
   } catch (e) {
+    unstable_rethrow(e);
     log("url", accountId, e);
     return fail("documents.error.open");
   }

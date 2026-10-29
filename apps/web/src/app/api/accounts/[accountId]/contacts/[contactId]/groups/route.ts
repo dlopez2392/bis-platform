@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, listContactGroups, type ContactGroup } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { loggableError } from "@/lib/loggable-error";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -22,6 +23,8 @@ export async function GET(
     // RLS-scoped: the contact read IS the authorisation (the texts route's rule).
     const db = await dbForRequest();
     if (!(await getContact(db, accountId, contactId))) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves.
+    if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
     const body: GroupsResponse = { groups: await listContactGroups(db, accountId, contactId) };
     return NextResponse.json(body);
   } catch (e) {

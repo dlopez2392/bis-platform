@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const access = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: access }));
+const noteOpenedApi = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi }));
 const accountRead = vi.hoisted(() => vi.fn());
 const accountFilters = vi.hoisted(() => [] as [string, unknown][]);
 /** The request client: a sentinel by identity, which also answers the account's zone read. */
@@ -46,6 +48,7 @@ const noAuthor = (row: Record<string, unknown>) => { const copy = { ...row }; de
 
 beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false, role: "owner", canManage: true });
+  noteOpenedApi.mockReset().mockResolvedValue(true);
   readGroup.mockReset().mockResolvedValue(GROUP);
   listGroupPlaces.mockReset().mockResolvedValue({ groups: [], places: [PLACE], placeCount: 1, equipment: [UNIT], equipmentCount: 1 });
   accountRead.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago" }, error: null });
@@ -129,6 +132,32 @@ describe("GET …/groups/[groupId]/places (S-03 part 2, C12: the group's own Pro
   it("an unreadable group read is a 500 too, never a 404 that would read as 'not yours' (mutation: catch only the places read -> FAILS)", async () => {
     readGroup.mockRejectedValueOnce(new Error("readGroup failed: boom"));
     expect((await GET(new Request("https://x.test"), params())).status).toBe(500);
+    expect(listGroupPlaces).not.toHaveBeenCalled();
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this card is logged", () => {
+  beforeEach(() => { access.mockResolvedValue({ userId: "u", isAgency: true, role: "owner", canManage: true }); });
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await GET(new Request("https://x.test"), params());
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u", isAgency: true, role: "owner", canManage: true }, A, { kind: "group", recordId: GR });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    readGroup.mockResolvedValueOnce(null);
+    expect((await GET(new Request("https://x.test"), params())).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await GET(new Request("https://x.test"), params());
+    expect(res.status).toBe(404);
+    expect(listGroupPlaces).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await GET(new Request("https://x.test"), params()).then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
     expect(listGroupPlaces).not.toHaveBeenCalled();
   });
 });

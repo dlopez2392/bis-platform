@@ -77,7 +77,7 @@ describe.each(ACTIONS)("%s", (name, run, spy, args) => {
     "(mutation: requireAccountAccess after dbForRequest -> FAILS)", async () => {
     await run();
     expect(order).toEqual(["requireAccountAccess", "dbForRequest", "from:accounts", "getPersonPrefs", "serviceDb", name.replace("Action", "").replace("editAccept", "accept")]);
-    expect(vi.mocked(requireAccountAccess)).toHaveBeenCalledWith("A");
+    expect(vi.mocked(requireAccountAccess)).toHaveBeenCalledWith("A", { agencyVisit: "not-required" });
   });
 
   it("hands the decision the REQUEST client as db and the SERVICE client as writer (mutation: swap them -> FAILS)", async () => {

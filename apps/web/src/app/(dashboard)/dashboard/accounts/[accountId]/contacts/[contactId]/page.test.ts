@@ -144,6 +144,12 @@ const renderZone = vi.fn(async (z: string | undefined) => (z
   : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
 vi.mock("@/lib/zone", () => ({ renderZone: (z: string | undefined) => renderZone(z) }));
 
+// F-118 part 1 (plan Task 7): the ONE access-log write this page makes, after getContact proved the
+// contact and after the holding redirect. Reset and re-armed in beforeEach so a rejection from one case
+// never leaks into the next.
+const noteOpenedMock = vi.fn(async (..._a: unknown[]): Promise<void> => undefined);
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpenedMock(...a) }));
+
 const resolveSmsSenderMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ ok: false, reason: "a2p_not_approved" }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => resolveSmsSenderMock(...a) }));
 
@@ -247,6 +253,13 @@ const CONTACT = {
   language: null, language_source: null, language_set_at: null,
   last_language_signal: null, last_language_signal_source: null, last_language_signal_at: null, language_hint_kept_at: null,
 };
+
+// F-118 part 1: re-armed before EVERY test in this file, regardless of which describe's own beforeEach
+// also runs, so a case that makes noteOpened reject never leaks its rejection into the next test.
+beforeEach(() => {
+  noteOpenedMock.mockReset();
+  noteOpenedMock.mockResolvedValue(undefined);
+});
 
 async function render(search: Record<string, string> = {}) {
   const el = await ContactDetailPage({ params: Promise.resolve({ accountId: "acct1", contactId: "ct1" }), searchParams: Promise.resolve(search) });
@@ -1599,5 +1612,44 @@ describe("the record page hands ArchiveControls the paused flag (final review M3
     const { fileURLToPath } = await import("node:url");
     const src = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
     expect(src.match(/<ArchiveControls\b[\s\S]*?\/>/)?.[0]).toContain("paused={accountPaused && !access.isAgency}");
+  });
+});
+
+/**
+ * F-118 part 1 (plan Task 7; spec 4.1): the contact page's own access-log write, AFTER getContact has
+ * proven the record and after the holding redirect — never before, never for a holding record, and
+ * never swallowed.
+ */
+describe("the contact page logs BIS's open (F-118 part 1)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("calls noteOpened with the access the guard returned, this account and the contact kind/id (mutation: pass a different kind or id -> FAILS)", async () => {
+    await render();
+    expect(noteOpenedMock).toHaveBeenCalledWith(
+      { userId: "u1", isAgency: true, role: null, canManage: true }, "acct1", { kind: "contact", recordId: "ct1" });
+  });
+
+  it("a contact the caller cannot see 404s and never calls noteOpened (mutation: log before getContact -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(null);
+    await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  it("a shared number's holding record redirects to its thread and never calls noteOpened; its conversation logs it instead (mutation: log before the holding check -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, holds_shared_number: true });
+    findConversationForContactMock.mockResolvedValue("cv9");
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  it("a rejected noteOpened rejects the page, with no markup rendered (mutation: swallow it -> FAILS)", async () => {
+    noteOpenedMock.mockRejectedValue(new Error("no live visit"));
+    await expect(render()).rejects.toThrow("no live visit");
   });
 });

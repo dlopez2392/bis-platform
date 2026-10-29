@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, listDocumentRequirements } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
@@ -23,6 +24,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   const db = await dbForRequest(); // RLS-scoped: never the service client here
   try {
     if (!(await getContact(db, accountId, contactId))) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves.
+    if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
     const { today } = await documentsClock(db, accountId);
     const body: RequirementsResponse = { items: await listDocumentRequirements(db, accountId, contactId, today) };
     return NextResponse.json(body);

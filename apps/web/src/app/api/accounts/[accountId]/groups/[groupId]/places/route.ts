@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readGroup, listGroupPlaces } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
@@ -32,6 +33,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   try {
     const group = await readGroup(db, accountId, groupId);
     if (!group) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves.
+    if (!(await noteOpenedApi(access, accountId, { kind: "group", recordId: groupId }))) return NextResponse.json({}, { status: 404 });
     const [read, today] = await Promise.all([listGroupPlaces(db, accountId, groupId), accountToday(db, accountId)]);
     const body: PlacesResponse = {
       subject: { id: groupId, firstName: null, lastName: null },

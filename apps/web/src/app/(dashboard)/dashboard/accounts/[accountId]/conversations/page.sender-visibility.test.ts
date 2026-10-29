@@ -29,6 +29,9 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
 }));
+// F-118 part 1 (Task 9): the one logger a record surface calls, resolving — this file's
+// isAgency: true fixture would otherwise reach Clerk's real `auth()`.
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: async () => {} }));
 // The notice is a "use client" component with its own server action imports; same mocks
 // message-thread.test.ts and inbound-notice.test.ts already need for the same reason.
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));

@@ -1,7 +1,9 @@
 "use server";
 
 import { headers } from "next/headers";
+import { unstable_rethrow } from "next/navigation";
 import { requireAccountAccess } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getDocument, listReadyVersionScans, shareableVersion, createDocumentShare, revokeDocumentShares, restoreDocumentShares,
@@ -59,6 +61,9 @@ export async function createDocumentShareAction(accountId: string, documentId: s
     if (pick.kind !== "clean") return fail(pick.kind === "pending" ? "documents.error.scanning" : "documents.error.removed");
     const origin = originFrom(await headers());
     if (!origin) return fail(FAILED);
+    // F-118 part 1 (spec 4.1, review I1): a share link opens the file with no sign-in, so MAKING one
+    // is a file open — logged BEFORE the token is minted, never after the write.
+    await noteOpened(access, accountId, { kind: "document_share", recordId: doc.id });
     const token = newShareToken();
     const r = await createDocumentShare(serviceDb(), {
       accountId, documentId: doc.id, versionId: pick.versionId, tokenHash: tokenHash(token), createdBy: access.userId,
@@ -68,6 +73,7 @@ export async function createDocumentShareAction(accountId: string, documentId: s
     if (r.status !== "ok") return fail(REFUSED);
     return { ok: true, url: shareUrl(origin, token) };
   } catch (e) {
+    unstable_rethrow(e);
     log("create", accountId, e, docId);
     return fail(FAILED);
   }

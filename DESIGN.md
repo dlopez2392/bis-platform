@@ -137,6 +137,15 @@ they re-resolve against the accent each element inherits.
    other's change, it marks the other out of date with that reason in
    words, so nothing is written twice. A flat suggestion row inside a record
    card has no primary at all.
+   **Amended 2026-10-29 (F-118 part 1, owner approved):** a chooser of
+   mutually exclusive single-step actions, where pressing one commits at
+   once and none is more correct than another, carries no primary. The
+   agency's reason-for-entry tiles (Setup, Support request, Fixing a
+   problem, Billing) are the first: every tile is the same weight, on the
+   ChoiceTiles token recipe, as a direct submit button, and a ghost Back
+   sits beside them. The rule-8 test still binds: no two tiles write the
+   same field, because each starts the visit with its own reason, so each
+   tile is its own decision rather than a second primary on one.
 9. Client-customer surfaces (booking page, forms, emails) always carry the
    client's logo + brand color from the theming engine. **Login is the one
    exception and carries the platform's mark and accent instead** — nobody is

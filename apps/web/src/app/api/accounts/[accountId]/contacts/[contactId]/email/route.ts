@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { loggableError } from "@/lib/loggable-error";
@@ -25,6 +26,9 @@ export async function GET(
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
+  // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves. Outside the try below, so
+  // a rejected write answers this route's own 500 rather than the ledger's 500 (fail closed, never masked).
+  if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
   // F-085 (spec §7.3): consent is keyed by ADDRESS and a STOP can be tied to
   // no contact, so the ledger is read through the ledger client — only now,
   // for this proven contact's own address. Inside the try: a missing service

@@ -16,6 +16,9 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "u1", isAgency: false, role: "owner", canManage: true }),
 }));
+// F-118 part 1 (Task 9): the one logger a record surface calls. A client (isAgency false here)
+// is never logged, but the module still imports Clerk's `auth()`, so every page*.test.ts needs this.
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: async () => {} }));
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 vi.mock("./inbound-actions", () => ({ undoReplyStopAction: vi.fn(), stopEmailsFromReplyAction: vi.fn() }));
 

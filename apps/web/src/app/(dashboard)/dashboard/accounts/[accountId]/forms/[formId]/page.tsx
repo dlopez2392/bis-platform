@@ -7,6 +7,7 @@ import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
 import { saveFormAction, republishFormAction } from "../actions";
 import { requireNotTechnician } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 
@@ -18,7 +19,7 @@ export default async function FormEditorPage({
   const { accountId, formId } = await params;
   // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
   // to To do; everyone the [accountId] layout admitted passes straight on.
-  await requireNotTechnician(accountId);
+  const access = await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const form = await getForm(db, accountId, formId);
   if (!form) notFound();
@@ -45,6 +46,9 @@ export default async function FormEditorPage({
     // throw: one cosmetic date column must not take the editor down, same
     // reasoning as the contacts list's own read (D-010).
     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    // F-118 part 1 (spec 4.1, ruling 4): this form's answers are a record; the access-log write runs
+    // beside the page's other reads, after getForm has proven the form.
+    noteOpened(access, accountId, { kind: "form_answers", recordId: form.id }),
   ]);
   if (account.error) {
     console.error(`forms editor: account ${accountId} timezone read failed: ${account.error.message}`);

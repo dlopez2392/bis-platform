@@ -26,6 +26,9 @@ vi.mock("@bis/db", async (importOriginal) => {
 });
 const scanVersion = vi.fn();
 vi.mock("@/lib/documents/scan-version", () => ({ scanVersion: (...a: unknown[]) => scanVersion(...a) }));
+// F-118 part 1 (plan Task 7, review m6): the ONE access-log write a file open makes.
+const noteOpened = vi.fn(async (..._a: unknown[]): Promise<void> => undefined);
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpened(...a) }));
 const A = await import("./documents-actions");
 
 const ACC = "44444444-4444-4444-8444-444444444444";
@@ -239,6 +242,71 @@ describe("getDocumentUrlAction (spec 5.1)", () => {
     db.getDocumentVersion.mockResolvedValue({ ...readyVersion("application/pdf"), status: "uploading" });
     expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
     expect(db.signedDocumentReadUrl).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-118 part 1 (plan Task 7, review m6; spec 4.1): a file open is logged once the mint has answered
+ * "ok", and BEFORE the URL leaves — never for a pending/removed/not-found file, never twice, never
+ * after the URL is already on its way back.
+ */
+describe("getDocumentUrlAction logs the open (F-118 part 1, review m6)", () => {
+  it("a clean PDF logs document_view for view and document_download for download (mutation: swap the kinds -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
+    await A.getDocumentUrlAction(ACC, V, "view");
+    expect(noteOpened).toHaveBeenCalledWith(OWNER, ACC, { kind: "document_view", recordId: D });
+    noteOpened.mockClear();
+    await A.getDocumentUrlAction(ACC, V, "download");
+    expect(noteOpened).toHaveBeenCalledWith(OWNER, ACC, { kind: "document_download", recordId: D });
+  });
+
+  it("'view' on a Word file logs document_download, because that is what happens (mutation: log mode instead of the effective download -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: 1, status: "ready", original_name: null, created_at: "x", scan_status: "clean",
+      content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
+    await A.getDocumentUrlAction(ACC, V, "view");
+    expect(noteOpened).toHaveBeenCalledWith(OWNER, ACC, { kind: "document_download", recordId: D });
+  });
+
+  it("the order is mint, then note, then the URL leaves, recorded through both mocks (mutation: note before the mint -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
+    const r = await A.getDocumentUrlAction(ACC, V, "view");
+    expect(r).toMatchObject({ ok: true, url: "https://x/sign" });
+    expect(db.signedDocumentReadUrl.mock.invocationCallOrder[0]!).toBeLessThan(noteOpened.mock.invocationCallOrder[0]!);
+  });
+
+  it.each([
+    ["pending", { status: "pending" }, "documents.error.scanning"],
+    ["removed", { status: "removed" }, "documents.error.removed"],
+    ["not_found", { status: "not_found" }, "documents.error.fileNotFound"],
+  ])("the mint answering %s returns its existing failure key and makes NO note (mutation: note before the mint -> the pending case FAILS)", async (_l, answer, error) => {
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.signedDocumentReadUrl.mockResolvedValueOnce(answer);
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error });
+    expect(noteOpened).not.toHaveBeenCalled();
+  });
+
+  it("a version the reader cannot see makes no note either (mutation: note before the version read -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue(null);
+    await A.getDocumentUrlAction(ACC, V, "view");
+    expect(noteOpened).not.toHaveBeenCalled();
+  });
+
+  it("with the mint ok and the note rejecting, the action fails and the minted URL never leaves (mutation: return the URL first -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
+    noteOpened.mockRejectedValueOnce(new Error("write failed"));
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.open" });
+  });
+
+  it("a note that throws Next's redirect digest REJECTS the action with that error (mutation: drop unstable_rethrow -> FAILS)", async () => {
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
+    const redirect = Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;replace;/dashboard/enter/A;307;" });
+    noteOpened.mockRejectedValueOnce(redirect);
+    await expect(A.getDocumentUrlAction(ACC, V, "view")).rejects.toBe(redirect);
   });
 });
 

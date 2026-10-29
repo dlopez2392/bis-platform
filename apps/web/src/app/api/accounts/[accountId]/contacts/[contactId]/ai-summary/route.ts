@@ -3,6 +3,7 @@ import {
   aiGateCheck, claimRecordSummary, getContact, getRecordSummary, releaseRecordSummaryLease, saveRecordSummary, serviceDb,
 } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -52,6 +53,9 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
     return failed("contact read", e);
   }
   if (!contact) return NextResponse.json({}, { status: 404 });
+  // F-118 part 1 (plan Task 6): logged after the proof, OUTSIDE the inputs' own try/catch, so a rejected
+  // write answers this route's own 500 (fail closed) rather than the inputs' { state: "failed" } 200.
+  if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
 
   // The QA override the card forwards from the page URL; ignored outside BIS_I18N_QA.
   const localeParam = new URL(req.url).searchParams.get("locale") ?? undefined;
