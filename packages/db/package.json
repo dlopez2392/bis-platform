@@ -14,7 +14,8 @@
     "./proposal-rules": "./src/proposal-rules.ts",
     "./ai-act-rules": "./src/ai-act-rules.ts",
     "./never-log-rules": "./src/never-log-rules.ts",
-    "./webchat-plan": "./src/webchat-plan.ts"
+    "./webchat-plan": "./src/webchat-plan.ts",
+    "./dedupe-keys": "./src/dedupe-keys.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

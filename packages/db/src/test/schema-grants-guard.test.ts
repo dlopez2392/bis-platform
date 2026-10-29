@@ -76,7 +76,8 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]).sort(),
   "authenticated checklist_items": IUD,
   "authenticated closed_days": ["DELETE", "INSERT(account_id)", "INSERT(ends_on)", "INSERT(reason)", "INSERT(starts_on)"],
-  "authenticated contact_duplicate_flags": IUD,
+  // 0106 (F-006): writes left with the two definers; the four-column insert stays for the TypeScript writers.
+  "authenticated contact_duplicate_flags": ["INSERT(account_id)", "INSERT(contact_a)", "INSERT(contact_b)", "INSERT(reason)"],
   "authenticated contact_relationships": insertDeleteAndUpdate([
     "contact_can_pick_up", "contact_form", "contact_is_emergency", "related_can_pick_up", "related_form",
     "related_is_emergency", "updated_at",

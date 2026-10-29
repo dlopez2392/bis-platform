@@ -624,7 +624,7 @@ describe("0103: delete_internal_contacts, what it deletes and what it keeps", ()
 });
 
 describe("0103: the delete's foreign-key lookups each have an index of their own (production is Postgres 17: no skip scan)", () => {
-  it("every single-column foreign key into contacts or conversations has a valid index leading on its column, except three older ones named here (mutation: drop calls_conversation_id -> FAILS naming it)", () =>
+  it("every single-column foreign key into contacts or conversations has a valid index leading on its column (mutation: drop calls_conversation_id -> FAILS naming it)", () =>
     withRollback(async (c) => {
       // A contact delete checks or clears each of these by its column alone (`where col = $1`). On Postgres 17 an
       // index leading on account_id cannot serve that lookup, so it reads the whole table once per deleted row.
@@ -638,9 +638,8 @@ describe("0103: the delete's foreign-key lookups each have an index of their own
                where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1] and i.indisvalid
                  and (i.indpred is null or pg_get_expr(i.indpred, i.indrelid) = '(' || quote_ident(a.attname) || ' IS NOT NULL)'))
           order by 1`);
-      // Older than 0103 and outside its brief, reported in its fix round: every contact delete since they were
-      // made has read them whole (tasks 0003, contact_duplicate_flags 0033). Small tables today.
-      expect(rows.map((r) => r.fk)).toEqual(["contact_duplicate_flags.contact_a", "contact_duplicate_flags.contact_b", "tasks.contact_id"]);
+      // 0106 (F-006) indexed contact_duplicate_flags.contact_a and .contact_b and tasks.contact_id: none is left.
+      expect(rows.map((r) => r.fk)).toEqual([]);
     }));
 });
 

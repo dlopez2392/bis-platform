@@ -39,7 +39,8 @@ export const ACCOUNT_OWNED_TABLES = [
   "document_share_downloads", "document_shares", "documents", "opportunities", "pipeline_stages", "pipelines", "custom_fields",
   "custom_values", "tags", "equipment", "places", "contact_relationships", "client_group_members", "client_groups",
   // 0103: the archive history (cascades with its contact; listed so the list stays the whole account's tables).
-  "contact_archive_log", "contacts",
+  // 0106: the merge log, before contacts (it cascades with its contacts too; flags.merge_id is set null).
+  "contact_merges", "contact_archive_log", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;
 

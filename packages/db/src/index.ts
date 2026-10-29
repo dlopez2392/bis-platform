@@ -29,6 +29,7 @@ export { archiveContacts, restoreContacts, restoreContactOnSign, contactDeleteBl
 export { restoreContactFieldIf, lastFieldEditor } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { emailKey } from "./contacts";
+export { nameFold, nameKey, phoneNational, phoneFamily, reasonStrength, reasonLabel, DUPLICATE_REASON_STRENGTH, MERGE_UNDO_DAYS, type PhoneFamily, type ReasonLabel } from "./dedupe-keys";
 export { recordLanguageSignal, setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple, LANGUAGE_SOURCES,
          type ContactLanguage, type LanguageSource, type LanguageSignalSource, type LanguageTriple } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
