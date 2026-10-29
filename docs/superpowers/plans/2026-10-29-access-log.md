@@ -1468,12 +1468,13 @@ export async function startVisitAction(accountId: string, to: string | null, for
   - `<form action={startVisitAction.bind(null, accountId, to)}><ReasonTiles legend=… options=… /></form>`, then the notice, then the Back link (ghost, `buttonVariants({ variant: "ghost", size: "sm" })`).
   - Keep it to one column, `max-w-xl`. Tokens only.
 
-- [ ] **Step 4: A created or adopted company starts a Setup visit (C10).** In `dashboard/accounts/actions.ts`, just before each `redirect` (`:146` and `:225`), add the block below. It runs AFTER the account exists and BEFORE the redirect into it; a failed start still redirects, and the gate then shows the chooser.
+- [ ] **Step 4: A created or adopted company starts a Setup visit (C10).** In `dashboard/accounts/actions.ts`, just before each `redirect` (`:146` and `:225`), add the block below. It runs AFTER the account exists and BEFORE the redirect into it; a failed start still redirects, and the gate then shows the chooser. The catch rethrows Next's own redirect first (`unstable_rethrow`, imported beside `redirect`): a redirect from inside is not a failure and must reach the framework. It logs through `loggableError` (`@/lib/loggable-error`), never `String(e)`, so an address in a provider's message never lands in a log (final review round).
 
 ```ts
   // F-118 part 1 (plan C10): the creator's reason is Setup; without it this redirect would meet the chooser.
   await startVisitForCaller(id, "setup").catch((e: unknown) => {
-    console.error(`account ${id}: starting the creator's Setup visit failed, the chooser will ask: ${String(e)}`);
+    unstable_rethrow(e); // Next's own redirect is not a failure; it must reach the framework.
+    console.error(`account ${id}: starting the creator's Setup visit failed, the chooser will ask: ${loggableError(e)}`);
   });
 ```
 

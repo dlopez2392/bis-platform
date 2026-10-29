@@ -16,7 +16,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * stubbed to an object nothing dereferences.
  */
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+// The real unstable_rethrow (review: the Setup-visit catch must let Next's own redirect through), the
+// redirect itself still a spy.
+vi.mock("next/navigation", async (importOriginal) => ({ ...(await importOriginal<object>()), redirect: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({ createAccount: vi.fn(), applyBlueprint: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -333,6 +335,41 @@ describe("F-118 part 1 (plan C10): a created or adopted company starts its creat
     visitMocks.startVisitForCaller.mockRejectedValue(new Error("agency_visits insert failed"));
     await adoptOrphanOrgAction(CLERK_ORG_ID, tz());
     expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/settings#client-access");
+    errorSpy.mockRestore();
+  });
+
+  /** A real Next redirect error, thrown by the real `redirect` (the module's own is a spy here). */
+  const realRedirectError = async (): Promise<unknown> => {
+    const real = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+    try { real.redirect("/dashboard/enter/acct_1"); } catch (e) { return e; }
+    throw new Error("the real redirect did not throw");
+  };
+
+  it.each([
+    ["createClientAccount", () => createClientAccount(form())],
+    ["adoptOrphanOrgAction", () => adoptOrphanOrgAction(CLERK_ORG_ID, tz())],
+  ] as const)("%s: a redirect thrown from inside starting the Setup visit propagates, never swallowed as a failure (mutation: drop unstable_rethrow -> FAILS)", async (_n, run) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy.mockClear();
+    const redirectError = await realRedirectError();
+    visitMocks.startVisitForCaller.mockRejectedValue(redirectError);
+    await expect(run()).rejects.toBe(redirectError);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it.each([
+    ["createClientAccount", () => createClientAccount(form())],
+    ["adoptOrphanOrgAction", () => adoptOrphanOrgAction(CLERK_ORG_ID, tz())],
+  ] as const)("%s: a failed Setup visit is logged through loggableError, never with an address in it (mutation: log String(e) -> FAILS)", async (_n, run) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy.mockClear();
+    visitMocks.startVisitForCaller.mockRejectedValue(new Error("insert refused for owner@rio-roofing.test"));
+    await run();
+    const line = errorSpy.mock.calls.map((c) => c.join(" ")).find((l) => l.includes("Setup visit"));
+    expect(line).toContain("Error: insert refused for [email]");
+    expect(line).not.toContain("owner@rio-roofing.test");
     errorSpy.mockRestore();
   });
 });
