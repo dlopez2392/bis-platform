@@ -203,3 +203,14 @@ describe("BisAccessSection: the reads", () => {
     expect(html).not.toContain("/dashboard/accounts/A/");
   });
 });
+
+describe("BisAccessFrame: lang", () => {
+  it("the section states its own language: lang=\"es\" for a Spanish account, lang=\"en\" otherwise (mutation: drop lang -> FAILS)", async () => {
+    const { BisAccessFrame } = await import("./bis-access-frame");
+    const frame = (locale: "en" | "es") => renderToStaticMarkup(createElement(
+      LocaleProvider, { locale } as Parameters<typeof LocaleProvider>[0], createElement(BisAccessFrame, null),
+    ));
+    expect(frame("es")).toMatch(/<section[^>]*\blang="es"/);
+    expect(frame("en")).toMatch(/<section[^>]*\blang="en"/);
+  });
+});

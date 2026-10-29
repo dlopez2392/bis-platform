@@ -14,7 +14,7 @@ import { m } from "@/lib/messages";
 export function BisAccessFrame({ children }: { children?: ReactNode }) {
   const locale = useLocale();
   return (
-    <section id="bis-access" aria-labelledby="bis-access-title" className="mt-8 space-y-3">
+    <section id="bis-access" lang={locale} aria-labelledby="bis-access-title" className="mt-8 space-y-3">
       <h2 id="bis-access-title" className="text-base font-semibold">{t(m, "accessLog.title", locale)}</h2>
       <p className="text-sm text-[var(--text-2)]">{t(m, "accessLog.intro", locale)}</p>
       <p className="text-xs text-[var(--text-3)]">{t(m, "accessLog.note.automatic", locale)}</p>
