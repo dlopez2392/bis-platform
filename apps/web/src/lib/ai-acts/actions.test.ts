@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   access: { userId: "user_me", isAgency: false, role: "owner", canManage: true } as Record<string, unknown>,
   canSee: true, outcome: "undone" as string, restore: "restored" as string,
   contact: { id: "c1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", language: "es" } as Record<string, unknown> | null,
+  /** 0106 (F-006, Task 6): followMerge's default is identity (no merge in play); cases override it. */
+  followTo: undefined as string | undefined,
 }));
 const REQUEST = vi.hoisted(() => ({ tag: "request" }));
 const SERVICE = vi.hoisted(() => ({ tag: "service" }));
@@ -46,6 +48,12 @@ vi.mock("@bis/db", () => ({
   stampAiActUndone: step("stampAiActUndone", true),
   clearAiActUndone: step("clearAiActUndone", true),
   markAiActNotified: step("markAiActNotified"),
+  // 0106 (F-006, Task 6): identity by default (state.followTo unset); a case names a merge target.
+  followMerge: vi.fn(async (db: unknown, _accountId: string, contactId: string) => {
+    const client = db && typeof db === "object" && "tag" in (db as object) ? `(${(db as { tag: string }).tag})` : "";
+    order.push(`followMerge${client}`);
+    return state.followTo ?? contactId;
+  }),
 }));
 
 import { revalidatePath } from "next/cache";
@@ -70,6 +78,7 @@ beforeEach(() => {
   state.outcome = "undone";
   state.restore = "restored";
   state.contact = { id: "c1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", language: "es" };
+  state.followTo = undefined;
 });
 
 describe("undoAiActAction: what is proven before anything is written", () => {
@@ -148,7 +157,20 @@ describe("undoAiActAction: a field", () => {
     state.act = filled;
     expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
     expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", "ana@example.com", null, "user_me");
-    expect(order).toEqual(["requireAccountAccess", "getAiAct(request)", "restoreContactFieldIf(request)", "stampAiActUndone(service)"]);
+    expect(order).toEqual(["requireAccountAccess", "getAiAct(request)", "followMerge(request)", "restoreContactFieldIf(request)", "stampAiActUndone(service)"]);
+  });
+  it("0106 (owner ruling D8): an act on a now-merged-away record restores and revalidates the KEPT record, not the tombstone (mutation: pass act.contactId straight through -> FAILS)", async () => {
+    state.act = filled;
+    state.followTo = "K";
+    expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
+    expect(bis.followMerge).toHaveBeenCalledWith(REQUEST, "A", "c1");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", "ana@example.com", null, "user_me");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/A/contacts/K");
+  });
+  it("a booking undo never calls followMerge (mutation: resolve unconditionally -> FAILS)", async () => {
+    state.act = booked;
+    await undoAiActAction("A", "act1", { notify: false });
+    expect(bis.followMerge).not.toHaveBeenCalled();
   });
   it("review M-2: the stamp throwing AFTER the restore answers ok (the value is back) and logs the act id (mutation: let it throw -> FAILS)", async () => {
     state.act = filled;
@@ -205,6 +227,14 @@ describe("redoAiFieldFillAction", () => {
       vi.mocked(bis.clearAiActUndone).mockRejectedValueOnce(new Error("ai_acts down"));
       expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
     } finally { errors.mockRestore(); }
+  });
+  it("0106 (owner ruling D8): the redo puts Sofía's value back on the KEPT record when the act named a now-merged-away one (mutation: pass act.contactId straight through -> FAILS)", async () => {
+    state.act = undone;
+    state.followTo = "K";
+    expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
+    expect(bis.followMerge).toHaveBeenCalledWith(REQUEST, "A", "c1");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", null, "ana@example.com", "user_me");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/A/contacts/K");
   });
   it("an act not undone answers changed; one undone by someone else answers notAvailable; neither writes", async () => {
     state.act = filled;

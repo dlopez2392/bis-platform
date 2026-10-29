@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import {
-  clearAiActUndone, getAiAct, getContact, markAiActNotified, restoreContactFieldIf, serviceDb, stampAiActUndone,
-  undoAiBookingAct, undoAiContactCreated, type AiBookingUndoOutcome,
+  clearAiActUndone, followMerge, getAiAct, getContact, markAiActNotified, restoreContactFieldIf, serviceDb,
+  stampAiActUndone, undoAiBookingAct, undoAiContactCreated, type AiBookingUndoOutcome,
 } from "@bis/db";
 import type { AiAct } from "@bis/db/ai-act-rules";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
@@ -74,10 +74,20 @@ export async function undoAiActAction(
     return undoContact(accountId, act, input.typedName ?? "");
   }
   try {
-    const result = act.kind === "contact_field_filled"
-      ? await undoField(accountId, act, access.userId)
-      : await undoBooking(accountId, act, access.userId, input.notify === true);
-    if (result.ok) revalidate([recordPath(accountId, act.contactId)], accountId, actId);
+    // 0106 (F-006, owner ruling D8): a field act may still name a now-merged-away record; resolved ONCE,
+    // on the request client, so the restore and the revalidated path land on the kept record. A booking
+    // act is never resolved: its contactId is only ever used to revalidate, and a booking undo's own
+    // proof (callerCanSee) already runs on the booking ids, not the contact.
+    let target = act.contactId;
+    let result: UndoResult;
+    if (act.kind === "contact_field_filled") {
+      const db = await dbForRequest();
+      target = await followMerge(db, accountId, act.contactId);
+      result = await undoField(db, accountId, act, access.userId, target);
+    } else {
+      result = await undoBooking(accountId, act, access.userId, input.notify === true);
+    }
+    if (result.ok) revalidate([recordPath(accountId, target)], accountId, actId);
     return result;
   } catch (e) {
     log("undo failed", accountId, actId, e);
@@ -123,10 +133,12 @@ async function undoBooking(
 }
 
 async function undoField(
-  accountId: string, act: Extract<AiAct, { kind: "contact_field_filled" }>, userId: string,
+  db: Awaited<ReturnType<typeof dbForRequest>>, accountId: string,
+  act: Extract<AiAct, { kind: "contact_field_filled" }>, userId: string, target: string,
 ): Promise<UndoResult> {
-  // The compare-and-swap on the request client: the field must still hold exactly her value.
-  const r = await restoreContactFieldIf(await dbForRequest(), accountId, act.contactId, act.target.field, act.after.value, act.before.value, userId);
+  // The compare-and-swap on the request client: the field must still hold exactly her value. `target` is
+  // the act's contactId already resolved past a merge (0106, owner ruling D8).
+  const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.after.value, act.before.value, userId);
   if (r === "changed") return { ok: false, reason: "changed" };
   // The value is back: a stamp that fails now is logged by id, never reported as a failed Undo (review M-2).
   try {
@@ -170,7 +182,10 @@ export async function redoAiFieldFillAction(accountId: string, actId: string): P
     if (!act || act.kind !== "contact_field_filled") return { ok: false, reason: "notAvailable" };
     if (!act.undoneAt) return { ok: false, reason: "changed" };
     if (act.undoneBy !== access.userId) return { ok: false, reason: "notAvailable" };
-    const r = await restoreContactFieldIf(db, accountId, act.contactId, act.target.field, act.before.value, act.after.value, access.userId);
+    // 0106 (F-006, owner ruling D8): resolved ONCE, so the redo and the revalidated path land on the
+    // same kept record as a later Undo would.
+    const target = await followMerge(db, accountId, act.contactId);
+    const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.before.value, act.after.value, access.userId);
     if (r === "changed") return { ok: false, reason: "changed" };
     // Sofía's value is back: a failed clear is logged by id, never reported as a failed redo (review M-2's twin).
     try {
@@ -180,7 +195,7 @@ export async function redoAiFieldFillAction(accountId: string, actId: string): P
     } catch (e) {
       log("field redone but its stamp not cleared", accountId, actId, e);
     }
-    revalidate([recordPath(accountId, act.contactId)], accountId, actId);
+    revalidate([recordPath(accountId, target)], accountId, actId);
     return { ok: true };
   } catch (e) {
     log("redo failed", accountId, actId, e);
