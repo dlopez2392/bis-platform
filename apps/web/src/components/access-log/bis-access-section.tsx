@@ -4,7 +4,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { dbForRequest } from "@/lib/db";
 import { loggableError } from "@/lib/loggable-error";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import { renderZone } from "@/lib/zone";
@@ -36,7 +36,7 @@ type Result =
  * head" idiom `ACCT/conversations/page.tsx` uses for its own pager.
  */
 export async function BisAccessSection(
-  { accountId, isAgency, before }: { accountId: string; isAgency: boolean; before?: string },
+  { accountId, isAgency, before, qaLocale }: { accountId: string; isAgency: boolean; before?: string; qaLocale?: string },
 ) {
   const base = `/dashboard/accounts/${accountId}`;
   let result: Result;
@@ -51,8 +51,9 @@ export async function BisAccessSection(
     // A named variable, not an inline literal (house style; request-locale-callers.test.ts's shape,
     // though this file is under components/ and outside that scanner's app/ scope).
     const accountLanguage = { language: accountRow?.language ?? null };
-    const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
-    const tr = makeTr(locale);
+    // `qaLocale` is the page's own `?locale=` (the QA override, off in production): documents/page.tsx's shape.
+    const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: qaLocale });
+    const tr = makeTr(locale, requestPseudoMode({ locale: qaLocale }));
     const zone = await renderZone(accountRow?.timezone ?? undefined);
     const cursor = parseAccessCursor(before);
     const page = await readAccessLogPage(db, accountId, cursor, ACCESS_LOG_PAGE_SIZE);

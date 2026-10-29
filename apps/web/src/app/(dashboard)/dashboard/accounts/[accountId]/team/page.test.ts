@@ -49,7 +49,7 @@ function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   const el = node as ReactElement<Record<string, unknown>>;
   return [el, ...all(el.props.children as ReactNode)];
 }
-const page = (searchParams?: { accessBefore?: string }) =>
+const page = (searchParams?: { accessBefore?: string; locale?: string }) =>
   TeamPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve(searchParams ?? {}) });
 
 beforeEach(() => {
@@ -127,5 +127,13 @@ describe("the Team page: BIS access (F-118 part 1)", () => {
     const boundary = all(frame.props.children as ReactNode).find((e) => e.type === Suspense)!;
     const child = boundary.props.children as ReactElement<Record<string, unknown>>;
     expect(child.props.before).toBe("CURSOR123");
+  });
+
+  it("threads the request's ?locale= (the QA override) to the section, as documents/page.tsx does (mutation: drop it -> FAILS)", async () => {
+    const els = all(await page({ locale: "pseudo" }));
+    const frame = els.find((e) => e.type === BisAccessFrame)!;
+    const boundary = all(frame.props.children as ReactNode).find((e) => e.type === Suspense)!;
+    const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+    expect(child.props.qaLocale).toBe("pseudo");
   });
 });

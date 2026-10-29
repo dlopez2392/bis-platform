@@ -9,7 +9,7 @@ import { safeReturnPath } from "@/lib/access-log/paths";
 import { agencyVisitOk } from "@/lib/access-log/gate";
 import { lastVisitEndedRecently } from "@/lib/access-log/visit";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { makeTr } from "@/lib/record/copy";
 import type { MessageKey } from "@/lib/messages";
 import { PageHeader } from "@/components/page-header";
@@ -39,10 +39,10 @@ const REASON_LABEL_KEY = {
  */
 export default async function EnterPage({ params, searchParams }: {
   params: Promise<{ accountId: string }>;
-  searchParams?: Promise<{ to?: string }>;
+  searchParams?: Promise<{ to?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { to: toParam } = (await searchParams) ?? {};
+  const { to: toParam, locale: qaLocale } = (await searchParams) ?? {};
   const { userId } = await requireAgency();
   if (!isUuid(accountId)) notFound();
   const back = safeReturnPath(toParam, accountId);
@@ -63,9 +63,9 @@ export default async function EnterPage({ params, searchParams }: {
   if (!account) notFound();
 
   // The agency's own session, never the account's `language` (request-locale.ts owner decision 1):
-  // isOperator true, account null.
-  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language });
-  const tr = makeTr(locale);
+  // isOperator true, account null. `?locale=` is the QA override (off in production), documents/page.tsx's shape.
+  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: qaLocale });
+  const tr = makeTr(locale, requestPseudoMode({ locale: qaLocale }));
 
   return (
     <div lang={locale}>

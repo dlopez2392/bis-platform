@@ -64,10 +64,10 @@ const { default: EnterPage } = await import("./page");
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
 
-const page = (accountId = A, to?: string) =>
+const page = (accountId = A, to?: string, extra: { locale?: string } = {}) =>
   EnterPage({
     params: Promise.resolve({ accountId }),
-    searchParams: Promise.resolve(to === undefined ? {} : { to }),
+    searchParams: Promise.resolve({ ...(to === undefined ? {} : { to }), ...extra }),
   }).then(renderToStaticMarkup);
 
 const redirectUrl = async (p: Promise<unknown>): Promise<string> => {
@@ -158,6 +158,21 @@ describe("the chooser — what it renders", () => {
     const text = renderedText(html);
     expect(text).toContain("¿Por qué abre E2E Co?");
     expect(text).toContain("Solicitud de ayuda");
+  });
+
+  it("the QA override: ?locale=es renders Spanish with lang=es, ?locale=pseudo renders the pseudo-locale (mutation: drop the search param from requestLocale or makeTr -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const es = await page(A, undefined, { locale: "es" });
+      expect(es).toContain('lang="es"');
+      expect(renderedText(es)).toContain("¿Por qué abre E2E Co?");
+      const pseudo = renderedText(await page(A, undefined, { locale: "pseudo" }));
+      expect(pseudo).not.toContain("Why are you opening E2E Co?");
+      expect(pseudo).not.toContain("Back to accounts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("renders no primary button: four equal tiles and a ghost Back link (rule 8) (mutation: give a tile the primary treatment -> FAILS)", async () => {

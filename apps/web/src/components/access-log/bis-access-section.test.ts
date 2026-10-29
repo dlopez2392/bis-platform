@@ -163,6 +163,26 @@ describe("BisAccessSection: Spanish", () => {
   });
 });
 
+describe("BisAccessSection: the QA override", () => {
+  it("qaLocale \"es\" renders Spanish for an English account and \"pseudo\" renders the pseudo-locale (mutation: ignore qaLocale -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      fx.readAccessLogPage.mockResolvedValue(PAGE3);
+      const at = async (qaLocale: string) => renderedText(renderToStaticMarkup(createElement(
+        LocaleProvider, { locale: "en" } as Parameters<typeof LocaleProvider>[0],
+        await BisAccessSection({ accountId: "A", isAgency: false, qaLocale }),
+      )));
+      expect(await at("es")).toContain("3 visitas");
+      const pseudo = await at("pseudo");
+      expect(pseudo).not.toContain("3 visits");
+      expect(pseudo).not.toContain("3 visitas");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("BisAccessSection: the zone", () => {
   it("renders a visit's `when` in the ACCOUNT's resolved zone (Honolulu), not UTC's calendar day (mutation: pass \"UTC\" to buildVisitRows's ctx.zone -> FAILS)", async () => {
     const v = visit("66666666-6666-4666-8666-666666666666", { startedAt: "2026-10-29T08:00:00Z" });

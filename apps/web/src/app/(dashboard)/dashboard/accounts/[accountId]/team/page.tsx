@@ -40,11 +40,11 @@ export default async function TeamPage({
   params, searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams?: Promise<{ accessBefore?: string }>;
+  searchParams?: Promise<{ accessBefore?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
   const { isAgency } = await requireAccountOwner(accountId);
-  const { accessBefore } = (await searchParams) ?? {};
+  const { accessBefore, locale } = (await searchParams) ?? {};
   return (
     <>
       <PageHeader title={m["team.title"]} subtitle={m["team.page.subtitle"]} />
@@ -54,7 +54,7 @@ export default async function TeamPage({
         </Suspense>
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
-            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} />
+            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={locale} />
           </Suspense>
         </BisAccessFrame>
       </div>
