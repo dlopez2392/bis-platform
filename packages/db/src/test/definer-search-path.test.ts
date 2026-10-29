@@ -22,8 +22,9 @@ import { withRollback, actAsOwner } from "./db";
  * RED BEFORE APPLY: every case except the armed controls inside the probes. GREEN AFTER APPLY: all of them.
  */
 
-/** The 32 SECURITY DEFINER functions in public and app at 0106 part A (0103's 29, 0104 and 0105 add none, 0106 part A
- *  adds three: app.contacts_flag_pairs, public.dismiss_duplicate_pair, public.undismiss_duplicate_pair), with their
+/** The 36 SECURITY DEFINER functions in public and app at 0106 (0103's 29, 0104 and 0105 add none, 0106 part A
+ *  adds three: app.contacts_flag_pairs, public.dismiss_duplicate_pair, public.undismiss_duplicate_pair; part B adds
+ *  four: app.follow_merge, app.follow_merge_related, public.merge_contacts, public.undo_contact_merge), with their
  *  whole proconfig after it. (0103's 29: 0098's 23, 0099-0102 add none, 0103 adds six.) */
 const PG_CATALOG_PG_TEMP = ["search_path=pg_catalog, pg_temp"];
 const EXPECTED_DEFINERS: Record<string, string[]> = {
@@ -35,6 +36,8 @@ const EXPECTED_DEFINERS: Record<string, string[]> = {
   "app.conversations_follow_contact_archive()": PG_CATALOG_PG_TEMP,
   "app.current_account_id()": ["search_path=public, pg_temp"],
   "app.current_user_id()": PG_CATALOG_PG_TEMP,
+  "app.follow_merge()": PG_CATALOG_PG_TEMP,
+  "app.follow_merge_related()": PG_CATALOG_PG_TEMP,
   "app.is_account_owner(uuid)": PG_CATALOG_PG_TEMP,
   "app.is_technician(uuid)": PG_CATALOG_PG_TEMP,
   "app.my_client_group_ids()": PG_CATALOG_PG_TEMP,
@@ -54,12 +57,14 @@ const EXPECTED_DEFINERS: Record<string, string[]> = {
   // 0096 changes only the search_path key: the 2s lock_timeout from 0095 stays, in its place.
   "public.ensure_knowledge_snapshot(uuid,jsonb)": ["search_path=pg_catalog, pg_temp", "lock_timeout=2s"],
   "public.mark_document_version_ready(uuid,uuid,uuid,bigint,text)": PG_CATALOG_PG_TEMP,
+  "public.merge_contacts(uuid,uuid,uuid,jsonb,jsonb,text)": PG_CATALOG_PG_TEMP,
   "public.move_holding_thread(uuid,uuid,uuid,text,bigint)": PG_CATALOG_PG_TEMP,
   "public.record_event(uuid,text,jsonb)": PG_CATALOG_PG_TEMP,
   "public.reserve_document_version(uuid,uuid,bigint,text,text,text)": PG_CATALOG_PG_TEMP,
   "public.restore_contact_on_sign(uuid,uuid,text)": PG_CATALOG_PG_TEMP,
   "public.save_voice_knowledge(uuid,text,jsonb,jsonb,integer)": PG_CATALOG_PG_TEMP,
   "public.undismiss_duplicate_pair(uuid,uuid,text)": PG_CATALOG_PG_TEMP,
+  "public.undo_contact_merge(uuid,bigint,text)": PG_CATALOG_PG_TEMP,
 };
 
 /** A signature built from the catalog, so it reads the same whatever the session's search_path is. */
@@ -71,12 +76,12 @@ const searchPathOf = (cfg: string[] | null) => cfg?.find((c) => c.startsWith("se
 const endsWithPgTemp = (path: string | undefined) => path !== undefined && path.split(",").map((s) => s.trim()).at(-1) === "pg_temp";
 
 describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
-  it("the definers in public and app are exactly these 32, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
+  it("the definers in public and app are exactly these 36, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows).toHaveLength(32);
+      expect(rows).toHaveLength(36);
       expect(Object.fromEntries(rows.map((r) => [r.sig, r.proconfig]))).toEqual(EXPECTED_DEFINERS);
     }));
 
@@ -85,7 +90,7 @@ describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows.length).toBeGreaterThanOrEqual(32); // not vacuous
+      expect(rows.length).toBeGreaterThanOrEqual(36); // not vacuous
       const offenders = rows.filter((r) => !endsWithPgTemp(searchPathOf(r.proconfig))).map((r) => `${r.sig}: ${String(r.proconfig)}`);
       expect(offenders).toEqual([]);
     }));

@@ -58,12 +58,17 @@ describe("0090: the bridge is dropped (spec 4.6)", () => {
 });
 
 describe("0090: proposals is untouched (spec 4.6)", () => {
-  it("proposals keeps its one trigger, its two policies and its six indexes, by name and shape (mutation: drop index proposals_call_idx in 0090 -> FAILS)", () =>
+  it("proposals keeps its own trigger (plus 0106's insert-only follow_merge), its two policies and its six indexes, by name and shape (mutation: drop index proposals_call_idx in 0090 -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows: triggers } = await c.query(
         `select tgname, tgfoid::regprocedure::text as fn from pg_trigger
           where tgrelid = 'public.proposals'::regclass and not tgisinternal order by tgname`);
-      expect(triggers).toEqual([{ tgname: "proposals_proposed_is_fixed", fn: "app.proposals_proposed_is_fixed()" }]);
+      // 0106 part B adds proposals_follow_merge (BEFORE INSERT only: a new suggestion naming a merged-away contact
+      // lands on the kept one; the fixed-column trigger below still refuses every update).
+      expect(triggers).toEqual([
+        { tgname: "proposals_follow_merge", fn: "app.follow_merge()" },
+        { tgname: "proposals_proposed_is_fixed", fn: "app.proposals_proposed_is_fixed()" },
+      ]);
 
       const { rows: policies } = await c.query(
         `select policyname, permissive, cmd, roles::text as roles from pg_policies
