@@ -29,6 +29,7 @@ import { composerStateLine } from "@/lib/consent/composer-state";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
@@ -85,7 +86,8 @@ export default async function CallDetailPage({
   // BOTH audiences, exactly as the list is: this is the client's own business
   // data — what their receptionist said to their caller — not agency work
   // about the client.
-  const { isAgency, userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { isAgency, userId } = access;
   const db = await dbForRequest();
 
   const [call, account, prefs] = await Promise.all([
@@ -104,6 +106,11 @@ export default async function CallDetailPage({
   // another tenant comes back null and lands here — a 404, not a 403, which
   // is the same answer an id that never existed gets.
   if (!call) notFound();
+
+  // F-118 part 1 (spec 4.1): the call page is a record surface, so BIS's own open of it is written to
+  // the account's access log here — after the call is proven to exist in this account, and before any
+  // of it leaves the server. A client never reaches this call (noteOpened returns at once for them).
+  await noteOpened(access, accountId, { kind: "call", recordId: call.id });
 
   // Same resolver as the list this page is reached from (lib/zone.ts). It
   // has to be: a client clicks a row showing one date and must not land on a
