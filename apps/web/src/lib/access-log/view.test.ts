@@ -150,6 +150,25 @@ describe("buildVisitRows: every item kind, its own text, href and label", () => 
 
   const page: AccessLogPage = { total: 1, hasOlder: false, visits: [visitA] };
 
+  it("a call or conversation with no customer (contactId null) reads callNoName / conversationNoName and still links, in English and Spanish (mutation: always use the named key -> FAILS)", () => {
+    const noName: AccessLogNames = {
+      ...EMPTY_NAMES,
+      calls: new Map([["call_anon", { contactId: null, startedAt: "2026-10-28T20:04:00Z" }]]),
+      conversations: new Map([["conv_anon", { contactId: null }]]),
+    };
+    const v: AccessLogVisit = {
+      ...visitA, id: "visit_anon", counts: { ...ZERO, call: 1, conversation: 1 }, itemTotal: 2,
+      items: [item({ kind: "call", recordId: "call_anon" }), item({ kind: "conversation", recordId: "conv_anon" })],
+    };
+    const one: AccessLogPage = { total: 1, hasOlder: false, visits: [v] };
+    const [en] = buildVisitRows(one, noName, { tr: trEn, zone: ZONE, base: BASE });
+    expect(en!.items.map((i) => i.text)).toEqual(["Call · Oct 28, 2026, 3:04 PM", "Conversation"]);
+    expect(en!.items.map((i) => i.href)).toEqual([`${BASE}/calls/call_anon`, `${BASE}/conversations?c=conv_anon`]);
+    const [es] = buildVisitRows(one, noName, { tr: trEs, zone: ZONE, base: BASE });
+    expect(es!.items.map((i) => i.text)[0]).toMatch(/^Llamada · /);
+    expect(es!.items.map((i) => i.text)[1]).toBe("Conversación");
+  });
+
   it("each item's text and href come from its own kind, the gone/trashed/archived suffixes apply, and a group's label follows ITS OWN kind (mutations: drop the archived suffix -> FAILS; ignore kind for a group -> FAILS)", () => {
     const [row] = buildVisitRows(page, names, { tr: trEn, zone: ZONE, base: BASE });
     expect(row!.label).toBe("Dan Lopez · Support request");
@@ -266,5 +285,12 @@ describe("access cursor: round-trips, garbage and undefined read as no cursor", 
   it("a hand-crafted cursor whose v is itself null is invalid, never passed through (mutation: accept a null v as a valid cursor -> FAILS)", () => {
     const nullV = encodeCursor({ v: null, id: "11111111-1111-1111-1111-111111111111" });
     expect(parseAccessCursor(nullV)).toBeNull();
+  });
+
+  it("a hand-crafted cursor whose v is not a timestamp reads as page one (mutation: drop the Date.parse check -> FAILS)", () => {
+    const id = "11111111-1111-1111-1111-111111111111";
+    expect(parseAccessCursor(encodeCursor({ v: "garbage", id }))).toBeNull();
+    expect(parseAccessCursor(encodeCursor({ v: "", id }))).toBeNull();
+    expect(parseAccessCursor(encodeCursor({ v: "2026-10-29T19:10:00Z", id }))).toEqual({ startedAt: "2026-10-29T19:10:00Z", id });
   });
 });

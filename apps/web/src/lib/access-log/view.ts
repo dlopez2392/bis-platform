@@ -89,11 +89,11 @@ export function encodeAccessCursor(v: AccessLogVisit): string {
   return encodeCursor({ v: v.startedAt, id: v.id });
 }
 
-/** `null` for garbage, `undefined`, or a cursor whose `v` is itself null (a visit's `startedAt` is never
- *  null, so that shape can only be a hand-edited URL). */
+/** `null` for garbage, `undefined`, or a cursor whose `v` is null or not a timestamp (a visit's `startedAt`
+ *  is always one, so either shape can only be a hand-edited URL, and it reads as page one). */
 export function parseAccessCursor(raw: string | undefined): AccessLogCursor | null {
   const c = parseCursor(raw);
-  if (!c || c.v === null) return null;
+  if (!c || c.v === null || !Number.isFinite(Date.parse(c.v))) return null;
   return { startedAt: c.v, id: c.id };
 }
 
