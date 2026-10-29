@@ -226,7 +226,11 @@ mistyped or foreign id leaves nothing.
    only other app caller of the mint (a customer's share link, not BIS).
 4. It enumerates every exported server action in the account-scoped "use server" files, with the same
    enumeration as `lib/billing/read-only.test.ts:131-245`. It pins each action as a record read (which must
-   log) or not a record, with its reason. It also requires a reason for every other file under `app/` that
+   log) or not a record, with its reason. The enumeration covers the whole of `src/` (final review M1): every
+   "use server" file under the account roots, every "use server" file anywhere in `src/` that calls a guard
+   (`components/` included), and every function anywhere in `src/` whose body opens with a "use server"
+   directive (an inline server action, keyed by its name, the const holding it, or its line); each must be
+   classified or the walk fails naming it. It also requires a reason for every other file under `app/` that
    calls a guard (review I2). Entry files are matched by `^(page|route|layout|template|default)\.[jt]sx?$`.
 5. It requires each logger call to be unfakeable (review I3). `noteOpened` must be directly awaited, or be
    an element of an array literal passed straight to an awaited `Promise.all`. It is never the receiver of
@@ -412,6 +416,10 @@ by one (review I5). Then the other two: BIS's three cross-account lists
 or the owner role), which bypasses the app, is not in this log, and is not bound by its grants (§11 C8).
 The exact replacement text goes to the owner with the final report, not into this public repo.
 
+One limit is known and out of this part's scope: `requireAgency()` (the agency's own pages outside an
+account, and the guard the chooser itself runs) does not refuse a session carrying Clerk's `act` claim, as
+`requireAccountAccess` and `apiAccountAccess` do (§2.4). It is tracked for F-137.
+
 ## 8. Tests and mutation probes
 
 Each probe must make the named test fail BY NAME (working rule 2). Rules from the lane lessons that bind
@@ -432,7 +440,7 @@ tests are proven by CI verify or on a local PG18 replica with its own port; any 
 | 8 | `start_agency_visit` is idempotent (same file) | Two calls inside the window return the same id; after the window, a new id. | Remove the "return the live one" branch. |
 | 9 | The gate (`lib/auth.test.ts` or `lib/access-log/gate.test.ts`, mocking `auth()` and the RPC) | Agency with no live visit → redirect to `/dashboard/enter/<id>?to=<x-bis-path>`; with one → returns as today; a client never calls the RPC; `apiAccountAccess` agency with no visit → null; an RPC error throws. | Return early for the agency before the visit check (the no-visit page and api cases fail); call the RPC for clients (spy count fails). |
 | 10 | `noteOpened` (`lib/access-log/note.test.ts`) | Client access → no RPC; agency `ok` → resolves; `no_visit` → redirect (page) / null (api); RPC error → throws. | Swallow the error and return (fail-open test fails). |
-| 11 | Route guard (`ACCT/access-log-routes.test.ts`, new) | §4.2's five assertions (entries, the file and share orders and the mint's callers, the importer allowlist, every server action and guarded file classified, every logger call unskippable). Fixture self-tests: an unclassified `page.tsx` or `layout.tsx` fails; a `record` file whose only `noteOpened` is in a comment fails; `void`, `.catch`, `.then`, unawaited and un-negated logger calls fail. | Delete `noteOpened` from `ACCT/calls/[callId]/page.tsx` (fails naming that file); move the file action's note above the mint; `void` the call page's note; export a new action from `contacts/[contactId]/actions.ts`. |
+| 11 | Route guard (`ACCT/access-log-routes.test.ts`, new) | §4.2's five assertions (entries, the file and share orders and the mint's callers, the importer allowlist, every server action and guarded file classified, every logger call unskippable). Fixture self-tests: an unclassified `page.tsx` or `layout.tsx` fails; a `record` file whose only `noteOpened` is in a comment fails; `void`, `.catch`, `.then`, unawaited and un-negated logger calls fail. | Delete `noteOpened` from `ACCT/calls/[callId]/page.tsx` (fails naming that file); move the file action's note above the mint; `void` the call page's note; export a new action from `contacts/[contactId]/actions.ts`. Final review M1: a guard-calling "use server" file under `components/`, and an inline "use server" function on a list page, each fail naming the key. Final review M2: `noteOpened({ isAgency: false }, …)` on the call page fails naming the line (the logger's first argument must be one `const` in the call's own function holding a guard call's answer; fixture self-tests refuse a literal, a held literal, a parameter, a `let`, an outer function's binding, a shadowed name, a spread and a look-alike call). |
 | 12 | `to` validation (`dashboard/enter/actions.test.ts`) | Accepts `/dashboard/accounts/<id>/contacts/<c>?x=1`; refuses `//evil.example`, `/dashboard/accounts/<other id>/…`, `/dashboard/accounts/<id>\\evil`, `https://…`; refuses an unknown reason before any RPC. | Drop the same-account check. |
 | 13 | Reader view (`lib/access-log/view.test.ts`) | Counts and plurals in both languages ("1 customer", "4 customers", "1 cliente", "4 clientes"); the order of kinds; view+download of one file counts as 1 file; each "later deleted", archived and trash wording; a visit's span in `Pacific/Honolulu` for an instant that is a different calendar day in Chicago (the machine's zone). | Always plural; render in the machine's zone. |
 | 14 | Copy guards (`messages.test.ts`) | EN/ES parity for `accessLog.*`, `INTERNAL_MILESTONE`, no `{{`, no arrows. | Put "F-118" in a string. |
@@ -458,7 +466,9 @@ Tiers per the speed process; high = security or schema.
 **Apply order.** 0105 is additive, but the build that ships with it calls its functions on every agency
 request, so: final review passes the migration → bis-ci (`ci-project-setup.yml`; CI's e2e check needs it,
 and Vercel Preview of this branch runs on bis-ci) → production BEFORE the merge deploy → parity check →
-merge. The old build ignores the new tables, so applying early is safe.
+merge. The old build ignores the new tables, so applying early is safe. CI's e2e job cannot pass until
+0105 is in bis-ci's history (`ci-migrations-applied.sh` fails naming it), so a red e2e before the apply is
+expected; after the apply, read e2e's check run FOR THE HEAD SHA, never a run from before it.
 
 **Findings for the ledger (not fixed here).** Every local e2e run and screenshot capture on bis-ci will
 write visits into Test Client One's log that can never be deleted, only carried away with the account;
