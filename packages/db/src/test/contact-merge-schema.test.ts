@@ -542,6 +542,14 @@ describe("0106 part B: refusals and who", () => {
       await c.query("update public.contacts set reactivation_sent_at = now() where id = $1", [o]);
       expect((await merge(c, a, k, o, {}, seen)).status).toBe("stale");
     }));
+  it("stale (4): K's first name changed after the preview (T3 review I3; mutation: check only O's fingerprint -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { a, k, o } = await pairOf(c, "rst4");
+      const seen = await seenOf(c, a, k, o);
+      await c.query("update public.contacts set first_name = 'Keeper' where id = $1", [k]);
+      expect((await merge(c, a, k, o, {}, seen)).status).toBe("stale");
+      expect((await contactRow(c, o)).merged_into).toBeNull();
+    }));
 
   const who = async (c: Client, label: string) => {
     const { a, k, o } = await pairOf(c, label);
@@ -910,6 +918,24 @@ describe("0106 part B: Undo", () => {
       expect((await undo(c, s, m2.mergeId!)).status).toBe("undone");
       expect(await flagOf(c, s.accountId, k2, o2)).toMatchObject({ reason: "same_phone", merge_id: null });
     }));
+
+  it("a removed membership comes back even when its group's primary contact was handed on since, without the flag (T3 review I2; mutation: a bare on conflict do nothing -> O's membership is gone, FAILS)", () =>
+    withRollback(async (c) => {
+      const { a, k, o } = await pairOf(c, "uslot");
+      const y = await person(c, a.accountId, { first: "Yola" });
+      const g = await group(c, a, "business", "Acme");
+      const km = await membership(c, a, g, k);
+      const om = await membership(c, a, g, o, { primaryContact: true });
+      const m = await merge(c, a, k, o);
+      // The merge gave K the flag; staff hand it to Y before anyone undoes.
+      await c.query("update public.client_group_members set is_primary_contact = false where id = $1", [km]);
+      const ym = await membership(c, a, g, y, { primaryContact: true });
+      expect((await undo(c, a, m.mergeId!)).status).toBe("undone");
+      const { rows } = await c.query<{ id: string; contact_id: string; pc: boolean }>(
+        "select id::text, contact_id::text, is_primary_contact as pc from public.client_group_members where client_group_id = $1 order by id", [g]);
+      expect(rows).toEqual([{ id: km, contact_id: k, pc: false }, { id: om, contact_id: o, pc: false }, { id: ym, contact_id: y, pc: true }]
+        .sort((x, z) => (x.id < z.id ? -1 : 1)));
+    }));
 });
 
 describe("0106 part B: the backstop (app.follow_merge, spec 7.2)", () => {
@@ -1120,4 +1146,81 @@ describe("0106 part B: the backstop takes no lock the foreign key did not", () =
         await Promise.all([setup.end(), holder.end(), updater.end()]);
       }
     });
+});
+
+/** A committed seed on three connections, removed in finally (the race tests above, generalised for review I1). */
+type Race = { setup: Pg; holder: Pg; writer: Pg; accountId: string; contact: (first: string) => Promise<string> };
+async function committed(label: string, body: (r: Race) => Promise<void>) {
+  const url = process.env.SUPABASE_DB_URL!;
+  const connect = async () => { const p = new Pg({ connectionString: url, connectionTimeoutMillis: 10_000 }); await p.connect(); return p; };
+  const setup = await connect(), holder = await connect(), writer = await connect();
+  let agencyId = "", accountId = "";
+  try {
+    agencyId = (await setup.query("insert into public.agencies (name) values ('Chain') returning id")).rows[0].id;
+    accountId = (await setup.query("insert into public.accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Chain') returning id",
+      [agencyId, `org_test_merge_${label}_${RUN}`])).rows[0].id;
+    const contact = async (first: string) =>
+      (await setup.query("insert into public.contacts (account_id, first_name, author_kind) values ($1, $2, 'person') returning id", [accountId, first])).rows[0].id as string;
+    await body({ setup, holder, writer, accountId, contact });
+  } finally {
+    await holder.query("rollback").catch(() => undefined);
+    if (accountId) {
+      for (const t of ACCOUNT_OWNED_TABLES) await setup.query(`delete from public.${t} where account_id = $1`, [accountId]);
+      await setup.query("delete from public.accounts where id = $1", [accountId]);
+    }
+    if (agencyId) await setup.query("delete from public.agencies where id = $1", [agencyId]);
+    await Promise.all([setup.end(), holder.end(), writer.end()]);
+  }
+}
+async function serviceTx(p: Pg) {
+  await p.query("begin");
+  await p.query("set local role service_role");
+  await p.query(`select set_config('request.jwt.claims', '{"role":"service_role"}', true)`);
+}
+/** merge_contacts as the service role on `p`, committed or left open. */
+async function svcMerge(p: Pg, accountId: string, keep: string, other: string, commit: boolean): Promise<number> {
+  const seen = (await p.query("select public.contact_merge_preview($1, $2, $3) -> 'seen' as s", [accountId, keep, other])).rows[0].s;
+  await serviceTx(p);
+  const r = (await p.query("select public.merge_contacts($1, $2, $3, '{}'::jsonb, $4::jsonb, 'race') as r", [accountId, keep, other, JSON.stringify(seen)])).rows[0].r;
+  expect(r.status).toBe("merged");
+  if (commit) await p.query("commit");
+  return r.mergeId as number;
+}
+function lateTask(writer: Pg, accountId: string, contact: string) {
+  const out = { settled: false, p: null as unknown as Promise<{ rows: { contact_id: string }[] }> };
+  out.p = writer.query("insert into public.tasks (account_id, contact_id, title) values ($1, $2, 'late') returning contact_id", [accountId, contact])
+    .finally(() => { out.settled = true; });
+  return out;
+}
+
+describe("0106 part B: a write naming an older tombstone while a merge or an Undo runs (T3 review I1)", () => {
+  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))(
+    "T was merged into O; while O is merged into K, a task naming T waits and lands on K (mutation: follow one hop -> it lands on the tombstone O, FAILS)",
+    () => committed("chain", async ({ setup, holder, writer, accountId, contact }) => {
+      const t = await contact("Tee"), o = await contact("Other"), k = await contact("Keep");
+      await svcMerge(setup, accountId, o, t, true);
+      await svcMerge(holder, accountId, k, o, false);
+      const late = lateTask(writer, accountId, t);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(late.settled, "the task waits on the merge").toBe(false);
+      await holder.query("commit");
+      expect((await late.p).rows[0]!.contact_id).toBe(k);
+    }));
+
+  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))(
+    "T was merged into O and O into K; while that Undo runs, a task naming T waits and lands on O, where T points again (mutation: walk once -> it lands on K, which T no longer points to, FAILS)",
+    () => committed("unchain", async ({ setup, holder, writer, accountId, contact }) => {
+      const t = await contact("Tee"), o = await contact("Other"), k = await contact("Keep");
+      await svcMerge(setup, accountId, o, t, true);
+      const m2 = await svcMerge(setup, accountId, k, o, true);
+      expect((await setup.query("select merged_into from public.contacts where id = $1", [t])).rows[0].merged_into, "the control: T was flattened to K").toBe(k);
+      await serviceTx(holder);
+      expect((await holder.query("select public.undo_contact_merge($1, $2, 'race') ->> 'status' as s", [accountId, m2])).rows[0].s).toBe("undone");
+      const late = lateTask(writer, accountId, t);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(late.settled, "the task waits on the Undo").toBe(false);
+      await holder.query("commit");
+      expect((await late.p).rows[0]!.contact_id).toBe(o);
+      expect((await setup.query("select merged_into from public.contacts where id = $1", [t])).rows[0].merged_into).toBe(o);
+    }));
 });

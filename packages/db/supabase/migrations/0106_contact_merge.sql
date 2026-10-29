@@ -44,13 +44,14 @@
 --   public.ai_contact_held_by: 0092's body plus the reason 'contact_merges' (the same rule).
 --
 -- WHAT (part B, sections 14-19).
---   app.merge_side, app.merge_push: two small helpers, owner only.
+--   app.merge_side, app.merge_push, app.merge_target: three small helpers, owner only.
 --   app.merge_fields_of(contacts): the merge's one field list as jsonb (keep_before, keep_after, the preview's
 --     fields, and through md5 the stale fingerprint), pinned to UTC so a timestamp prints the same in every session.
 --   app.follow_merge(), app.follow_merge_related(): DEFINER trigger functions; 19 triggers (15 insert-or-update-of-
 --     contact_id, 3 insert-only on the fixed tables ai_acts, proposals and consent_events, and one on
---     contact_relationships.related_contact_id) land a write that names a tombstone on the kept record, reading the
---     pointer FOR KEY SHARE (the foreign key's own lock) so a write racing a merge waits for it.
+--     contact_relationships.related_contact_id) land a write that names a tombstone on the kept record, walking the
+--     pointer through app.merge_target until it ends, every read FOR KEY SHARE (the foreign key's own lock), so a
+--     write racing a merge or an Undo waits for it and lands where the pointer ends once it commits.
 --   public.merge_contacts(...): DEFINER; who, lock, refuse, tombstone, flags, fields, rows, log (section 16).
 --   public.undo_contact_merge(...): DEFINER; the tombstone cleared first, then exactly the recorded rows back.
 --   public.contact_merge_preview(...): INVOKER; the compare screen's counts, fields and fingerprints.
@@ -71,7 +72,8 @@
 -- Three definers join EXPECTED_DEFINERS in definer-search-path.test.ts (29 -> 32): app.contacts_flag_pairs,
 -- public.dismiss_duplicate_pair, public.undismiss_duplicate_pair.
 -- Part B: merge_contacts, undo_contact_merge and contact_merge_preview EXECUTE for authenticated and service_role;
--- app.merge_fields_of the same (the preview calls it as the invoker); app.merge_side and app.merge_push the owner only;
+-- app.merge_fields_of the same (the preview calls it as the invoker); app.merge_side, app.merge_push and
+-- app.merge_target the owner only;
 -- the two follow functions lose PUBLIC, anon and authenticated. Four definers join EXPECTED_DEFINERS (32 -> 36):
 -- app.follow_merge, app.follow_merge_related, public.merge_contacts, public.undo_contact_merge.
 --
@@ -108,7 +110,7 @@
 --     contact_relationships, contact_tags, conversations, document_requests, document_requirement_skips, documents,
 --     form_submissions, notes, opportunities, places, tasks, ai_acts, proposals, consent_events;
 --   drop trigger contact_relationships_follow_merge_related on public.contact_relationships;
---   drop function app.follow_merge(), app.follow_merge_related();
+--   drop function app.follow_merge(), app.follow_merge_related(), app.merge_target(uuid);
 --   drop function public.contact_merge_preview(uuid, uuid, uuid), public.undo_contact_merge(uuid, bigint, text),
 --     public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, text);
 --   drop function app.merge_fields_of(public.contacts), app.merge_push(jsonb, text, jsonb), app.merge_side(text, text, text);
@@ -776,46 +778,68 @@ $$;
 revoke all on function app.merge_fields_of(public.contacts) from public, anon;
 grant execute on function app.merge_fields_of(public.contacts) to authenticated, service_role;
 
--- 15. The backstop (spec 7.2; correction 12): a write that names a tombstone lands on the kept record. DEFINER, so
---     the pointer is read whatever the writer's RLS sees (a Technician assigned to the kept record cannot see the
---     tombstone). One primary-key read per write, locked (plan review I2): a write that began before a merge
---     committed waits on the merge's row lock and then reads the COMMITTED pointer; an unlocked read saw the
---     pre-merge snapshot and the write landed on the hidden record.
+-- 15. The backstop (spec 7.2; correction 12): a write that names a tombstone lands on the record it now belongs to.
+--     DEFINER, so the pointer is read whatever the writer's RLS sees (a Technician assigned to the kept record cannot
+--     see the tombstone). Every read is locked (plan review I2): a write that began before a merge committed waits on
+--     the merge's row lock and then reads the COMMITTED pointer; an unlocked read saw the pre-merge snapshot and the
+--     write landed on the hidden record.
 --     FOR KEY SHARE, not the plan's FOR SHARE (T3, measured on PostgreSQL 17.6): it is the lock the foreign-key check
 --     on the same row already takes, so the backstop adds no lock conflict 0106 did not have before. FOR SHARE also
 --     conflicts with a plain UPDATE of the contact: with it, an open transaction that had inserted a task naming a
 --     contact made an update of that contact's name wait (lock_timeout 1s hit), and two writers that each insert a row
 --     naming a contact and then update it could deadlock; with FOR KEY SHARE that update took 16 ms, as with the
---     foreign key alone (17 ms). FOR KEY SHARE waits only for FOR UPDATE, so it serialises with a merge because the
---     pointer is written ONLY under FOR UPDATE: merge_contacts and undo_contact_merge lock both contacts FOR UPDATE
---     before they touch merged_into (section 16, LOCK CHOICE). contact-merge-schema.test.ts pins both halves.
+--     foreign key alone (17 ms).
+--     FOR KEY SHARE waits only for FOR UPDATE. merge_contacts and undo_contact_merge hold FOR UPDATE on the two records
+--     they join or part, but they re-point OLDER tombstones (the chain flattened, and un-flattened by Undo) with plain
+--     updates, which FOR KEY SHARE does not wait for (T3 review I1). So app.merge_target walks the pointer until it
+--     ends (at most four hops), every read locked: a write naming T, merged into O earlier, while O is being merged
+--     into K reads T -> O, waits on O's FOR UPDATE, then reads O -> K. And when the start was a tombstone it walks
+--     again from the start, with a fresh snapshot, until two walks end on the same record: a write naming T while an
+--     Undo of O -> K runs reads T -> K, waits on K, finds K live, then the second walk reads the committed T -> O and
+--     the write lands on O, the record T points to now, not on K. A live contact costs one read, as before.
 --     A redirected insert that collides with a row the kept record already has (an active skip of the same
 --     category, a membership of the same group) answers 23505, and nothing is written: each caller already reports a
 --     duplicate or a failure (plan review m8b). A tag upsert (insert ... on conflict do nothing) is a no-op, because
 --     ON CONFLICT is judged on the redirected row. Both are pinned in contact-merge-schema.test.ts.
+create function app.merge_target(p_id uuid) returns uuid
+language plpgsql volatile set search_path = pg_catalog, pg_temp as $$
+declare
+  v_at uuid;
+  v_to uuid;
+  v_end uuid;
+  v_hops integer;
+begin
+  if p_id is null then
+    return null;
+  end if;
+  for w in 1..3 loop
+    v_at := p_id;
+    v_hops := 0;
+    for i in 1..4 loop
+      select k.merged_into into v_to from public.contacts k where k.id = v_at for key share;
+      exit when v_to is null;
+      v_at := v_to;
+      v_hops := v_hops + 1;
+    end loop;
+    exit when v_hops = 0 or v_at is not distinct from v_end;
+    v_end := v_at;
+  end loop;
+  return v_at;
+end $$;
+revoke all on function app.merge_target(uuid) from public, anon, authenticated, service_role;
 create function app.follow_merge() returns trigger
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare
-  v_to uuid;
 begin
   if new.contact_id is not null then
-    select k.merged_into into v_to from public.contacts k where k.id = new.contact_id for key share;
-    if v_to is not null then
-      new.contact_id := v_to;
-    end if;
+    new.contact_id := app.merge_target(new.contact_id);
   end if;
   return new;
 end $$;
 create function app.follow_merge_related() returns trigger
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
-declare
-  v_to uuid;
 begin
   if new.related_contact_id is not null then
-    select k.merged_into into v_to from public.contacts k where k.id = new.related_contact_id for key share;
-    if v_to is not null then
-      new.related_contact_id := v_to;
-    end if;
+    new.related_contact_id := app.merge_target(new.related_contact_id);
   end if;
   return new;
 end $$;
@@ -850,8 +874,9 @@ create trigger contact_relationships_follow_merge_related before insert or updat
 --     back the foreign-key check of every write naming either record from a table with no follow_merge trigger (the
 --     flag trigger of a contact inserted elsewhere, record_summaries, contact_archive_log). That keeps the before and
 --     after read of the kept record's flags below exact: a pair another session files for the kept record cannot
---     commit between the two reads and be claimed (and removed by Undo) as the merge's own. Every writer of
---     merged_into (this function and undo_contact_merge) must take this lock first.
+--     commit between the two reads and be claimed (and removed by Undo) as the merge's own. The older tombstones the
+--     flatten re-points are NOT locked FOR UPDATE (a writer holding one of them while it waits on the other record
+--     would deadlock with this function): app.merge_target walks through them to a record this function does lock.
 create function public.merge_contacts(
   p_account_id uuid, p_keep uuid, p_other uuid, p_choices jsonb, p_seen jsonb, p_actor text default null)
 returns jsonb
@@ -1347,10 +1372,20 @@ begin
        set is_billing = (e ->> 'is_billing')::boolean, is_primary_contact = (e ->> 'is_primary_contact')::boolean
      where account_id = p_account_id and id = (e ->> 'id')::uuid;
   end loop;
-  insert into public.client_group_members
-  select (pg_catalog.jsonb_populate_record(null::public.client_group_members, x.v)).*
+  -- A removed membership always comes back (T3 review I2: a bare on conflict do nothing let the one-primary-contact
+  -- index swallow it). When someone took its group's primary contact, or its contact's main group, since the merge,
+  -- it comes back without that flag: the later decision stands.
+  insert into public.client_group_members (id, account_id, client_group_id, contact_id, role, is_primary, is_billing,
+                                           created_at, is_primary_contact)
+  select m.id, m.account_id, m.client_group_id, m.contact_id, m.role,
+         m.is_primary and not exists (select 1 from public.client_group_members x
+                                       where x.contact_id = m.contact_id and x.is_primary),
+         m.is_billing, m.created_at,
+         m.is_primary_contact and not exists (select 1 from public.client_group_members x
+                                               where x.client_group_id = m.client_group_id and x.is_primary_contact)
     from pg_catalog.jsonb_array_elements(coalesce(g.removed -> 'client_group_members', '[]'::jsonb)) as x(v)
-  on conflict do nothing;
+   cross join lateral pg_catalog.jsonb_populate_record(null::public.client_group_members, x.v) as m
+  on conflict (id) do nothing;
   update public.client_group_members set contact_id = g.other_id
    where account_id = p_account_id and contact_id = g.keep_id
      and id::text in (select pg_catalog.jsonb_array_elements_text(coalesce(g.moved -> 'client_group_members', '[]'::jsonb)));
@@ -1516,6 +1551,6 @@ comment on function public.contact_merge_preview(uuid, uuid, uuid) is
 comment on function app.merge_fields_of(public.contacts) is
   'The merge''s one field list (0106): keep_before, keep_after, the preview''s fields and, through md5, the stale fingerprint. Pinned to UTC so a timestamp prints the same in every session.';
 comment on function app.follow_merge() is
-  'The backstop (0106): a write that names a merged-away contact lands on the record it was merged into. The pointer is read FOR KEY SHARE, the foreign key''s own lock, which waits for a merge (merge_contacts and undo_contact_merge write merged_into only under FOR UPDATE).';
+  'The backstop (0106): a write that names a merged-away contact lands on the record it was merged into. The pointer is walked by app.merge_target until it ends, every read FOR KEY SHARE (the foreign key''s own lock), so a write racing a merge or an Undo waits for it and lands where the pointer ends.';
 comment on column public.contact_merges.other_reply_token is
   'The merged-away thread''s reply token when it was live (0106): replies to email sent before the merge still find the kept thread through it (findReplyThread). Never readable by a signed-in member.';

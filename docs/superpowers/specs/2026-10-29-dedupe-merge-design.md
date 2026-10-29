@@ -326,7 +326,10 @@ Order matters, and a test pins it (section 9):
    exactly the recorded message, call and inbound-email ids that still sit on the kept thread. Hand back
    `unread_handed`, at most what the kept thread still has unread (`move_holding_thread`'s rule, `MIG/0098:199-211`).
 4. Move back every recorded row key still pointing at the kept record. Re-insert every removed snapshot
-   `on conflict do nothing`.
+   `on conflict do nothing`. **Amended 2026-10-29 (T3 review I2):** a removed group membership always comes back. If
+   someone made another member its group's primary contact (or gave the other record another main group) since the
+   merge, it comes back without that flag, so the later decision stands; a bare `on conflict do nothing` let the
+   one-primary-contact index drop the membership silently.
 5. Restore each field on the kept record **only where its value still equals `keep_after`** (compare and restore,
    as `restoreContactFieldIf` does, `contacts.ts:726`). A field someone edited since keeps the edit, and the answer
    names it.
@@ -413,7 +416,7 @@ and the screen lists what the rules will do in one line ("Also keeps: the email 
 | `assigned_to` | Choice when both are assigned to different people; otherwise whoever holds it |
 | `language`, `language_source`, `language_set_at` (`MIG/0076_customer_language.sql:57-59`) | One fact (DESIGN.md, A customer's language). If one side is blank, take the other's fact with its source and time. If both differ: a staff-set language beats a customer's sign; else the EARLIER sign stands ("never overwritten by a later sign"). It is shown as a choice anyway, with the rule's answer preselected |
 | `marketing_email_opted_out_at` (`MIG/0049`) | The earliest non-null value. An opt-out on either record holds |
-| `dnd` (jsonb) | Each channel set on either side stays set. The more careful answer wins |
+| `dnd` (jsonb) | The kept record's, unless it is empty, then the other's. (Amended 2026-10-29: `dnd` is dead, no reader or writer since `MIG/0049:41-48`, correction 17, so the per-channel union this row first described was not built.) |
 | `reactivation_sent_at` (`MIG/0047`) | The later value, so the reactivation pass does not ask twice |
 | `archived_at`, `archived_by` | Archived only if BOTH were. If the kept record was archived and the other was not, the merge restores it, and writes a `restored` row to `contact_archive_log` with the merging person as author |
 | `source`, `attribution`, `author_kind`, `author_id`, `created_at` | The kept record's. The other's values live on the tombstone and in `keep_before`'s companion snapshot |
@@ -550,9 +553,17 @@ Trigger `app.follow_merge()`: SECURITY DEFINER, `BEFORE INSERT OR UPDATE OF <con
 that row is a tombstone it rewrites the column to `merged_into`. It is two static functions, one per column name
 (`contact_id`, `related_contact_id`; §14). On `ai_acts`, `proposals` and `consent_events` it fires on INSERT only:
 their fixed-column triggers already refuse updates, and a new row is not history yet. It costs one primary-key read
-per write, and that read is `for share` (amended 2026-10-29, plan review I2): a write that began before a merge
-committed waits on the merge's row lock and then reads the COMMITTED pointer. Read without a lock, it saw the
-pre-merge snapshot, and the write landed on the hidden record. A redirected insert that collides with a row the kept
+per write naming a live record, and every read is locked (amended 2026-10-29, plan review I2): a write that began
+before a merge committed waits on the merge's row lock and then reads the COMMITTED pointer. Read without a lock, it
+saw the pre-merge snapshot, and the write landed on the hidden record. **Amended again 2026-10-29 (T3 and its review
+I1):** the lock is `for key share`, the foreign key's own lock, not `for share`, which also blocked every plain update
+of the contact behind any open insert naming it (measured: a 1 s lock timeout, against 16 ms). And the pointer is
+FOLLOWED UNTIL NULL (`app.merge_target`, at most four hops): the merge and its Undo hold `for update` on the two records
+they join or part, but re-point older tombstones (the chain flattened, then un-flattened) with plain updates that
+`for key share` does not wait for, so a write naming an older tombstone T reads T's old pointer and waits on the next
+record instead. When the start is a tombstone the walk runs again from the start until two walks end on the same
+record, so a write naming T during an Undo lands where T points once the Undo commits, not on the record it pointed to
+before. A redirected insert that collides with a row the kept
 record already has answers 23505 (a skip, a membership), which each caller already reports; a tag upsert is a no-op,
 because ON CONFLICT is judged on the redirected row (plan review m8b).
 
@@ -566,8 +577,8 @@ is the backstop, not the fix.
 - **A text** whose route resolved the other record just before the merge. Its message insert takes a key-share
   lock on the other thread, which the merge holds `for update` (4.4 step 2), so the insert waits. (Corrected
   2026-10-29, plan review I2: this holds for `messages`, whose key is the THREAD, which the merge locks and then
-  deletes. A write keyed by the CONTACT, a task or a call row, is held back by `follow_merge`'s `for share` read
-  instead, 7.2.) If the merge
+  deletes. A write keyed by the CONTACT, a task or a call row, is held back by `follow_merge`'s locked walk of the
+  pointer instead, `for key share`, following it until null, 7.2.) If the merge
   removed that thread, the insert then fails its foreign key. On a first filing that is `FilingFailed`, a 503
   (`route.ts:180-192`, `:200-213`). Telnyx retries, and the retry resolves to the kept record. **ASSUMPTION:**
   Telnyx retries a 503 at least once. The route already relies on this (`route.ts:180-182`); the plan does not
@@ -874,7 +885,8 @@ and found two Important and six minor defects. Each is fixed in the plan and, wh
 
 - **I1:** the flag re-file runs before the field update, and flags the trigger files for the kept record during the
   merge are recorded for Undo (4.4, order note).
-- **I2:** `follow_merge` reads the pointer `for share` (7.2, 7.3).
+- **I2:** `follow_merge` reads the pointer under a lock (7.2, 7.3); since T3 and its review, `for key share`, following
+  the pointer until null.
 - **m3:** `stale` by fingerprint (4.4 step 3).
 - **m4:** the who-check's account term has its own test: an Owner of A whose token names org B.
 - **m5:** `app.open_duplicate_pairs` takes the contact filter, the cursor and the limit as parameters (a function that
