@@ -1292,6 +1292,7 @@ Write it in full, plus: "K has no thread: one is created and O's rows move to it
 - marketing opt-out is the earliest; `reactivation_sent_at` the latest.
 - archive: K archived, O not → K is active and `contact_archive_log` has one `restored` row by the merging person (mutation: keep K's archive). Both archived → K stays archived.
 - `keep_before`/`keep_after` hold exactly `app.merge_fields_of`'s keys.
+- **the fingerprint does not depend on the session's time zone** (plan-review minor, noted for T3 by T1 on 2026-10-29): for an unchanged row with `archived_at` set, `md5(app.merge_fields_of(row)::text)` read after `set local timezone = 'America/Chicago'` equals the one read under `UTC`, and `contact_merge_preview`'s `seen` read in a Chicago session merges (not `stale`) when sent back from a UTC session (mutation: drop `set timezone = 'UTC'` from `app.merge_fields_of` -> FAILS). Evidence (T1's PG17 replica): `to_jsonb('2026-10-29T12:00:00Z'::timestamptz)` prints `"2026-10-29T07:00:00-05:00"` in a Chicago session and `"2026-10-29T12:00:00+00:00"` in a UTC one, and a function declared `set timezone = 'UTC'` prints the latter in both.
 
 **Refusals and who**: `same`; `not_found` (O in account B, merged under A: second account); `holding`; `already_merged` (O already a tombstone; mutation: drop the check → FAILS); `stale`, three cases: (1) O's `first_name` changed between `seenOf` and the merge; (2) **a write that never stamps `updated_at`**, as `assignment.ts:339` does: `update public.contacts set assigned_to = <a member's users.id> where id = O` with `updated_at` untouched (review m3; mutation: compare `updated_at` instead of the fingerprint → this case merges, FAILS); (3) `reactivation_sent_at` set the same way (`automations.ts:1855`'s shape). Mutation for all three: drop the check. A Technician is refused 42501; an Owner with client access off is refused 42501 (the NULL path, through `app.may_merge`); an Owner of A whose token names org B is refused 42501 (T1's seed shape; review m4); Staff succeeds; service role with `p_actor` succeeds and `merged_by = p_actor`; service role without `p_actor` is 22023.
 
@@ -1360,7 +1361,7 @@ it("an insert naming O while a merge holds its transaction waits, then lands on 
 });
 ```
 
-  Without the fix the insert also waits (its foreign-key check meets the merge's row lock), which is why the assertion that discriminates is WHERE it lands, not that it waited. Run the file with vitest's default isolation; this case must not share a connection with any `withRollback` case.
+  Whether the insert waits without the fix depends on the merge's lock on O, not on `follow_merge` (corrected 2026-10-29 by T1, measured on its PG17 replica with part A applied, a committed K and O, and one transaction holding both rows and updating O's `merged_into`): with section 16's `for update` the insert DOES wait, in its foreign-key check (`SELECT 1 FROM ONLY "public"."contacts" x WHERE "id" = $1 FOR KEY SHARE OF x` hit `statement_timeout` 3 s); with `for no key update` it does NOT wait (it returned in 24 ms naming O). So with the merge as written, `settled === false` holds with or without the fix, and the assertion that discriminates is WHERE it lands (on K, not O). Keep both assertions; if section 16 ever moves to `for no key update`, the wait assertion becomes the one the fix alone satisfies. Run the file with vitest's default isolation; this case must not share a connection with any `withRollback` case.
 - **a late insert that collides with a row K already has (review m8b, documented):** after the merge, (a) `insert into public.contact_tags (contact_id, tag_id, account_id) values (O, <a tag K has>, A) on conflict (contact_id, tag_id) do nothing` (the shape `addTagToContact`'s upsert sends, `contacts.ts:1004-1006`) succeeds and leaves one row on K: ON CONFLICT is judged on the redirected row; (b) an active `insurance` skip inserted naming O when K already has one answers 23505 through `refusal()`. (b) is the designed answer: each such caller already reports a duplicate or a failure, and nothing is written. Say so in the trigger's comment.
 - **every foreign-key table into contacts is accounted for by the merge (review m6):**
 
@@ -1445,10 +1446,11 @@ revoke all on function app.merge_push(jsonb, text, jsonb) from public, anon, aut
 
 -- The merge's ONE field list, as jsonb: keep_before, keep_after, the preview's fields, and (through md5) the
 -- fingerprint stale compares (plan review m3: assignment.ts:339, contacts.ts:1295,1313,1540, automations.ts:1855 and
--- 0076:107 write contacts without stamping updated_at). STABLE, not immutable: to_jsonb prints a timestamptz in the
--- session's TimeZone, and the preview and the merge both run through PostgREST, whose sessions are UTC.
+-- 0076:107 write contacts without stamping updated_at). STABLE, not immutable. to_jsonb prints a timestamptz in the
+-- session's TimeZone, so the function pins it to UTC (plan-review minor, 2026-10-29): a fingerprint read in a session
+-- that is not UTC (psql, a script, any caller outside PostgREST) must equal the one the merge computes.
 create function app.merge_fields_of(p_row public.contacts) returns jsonb
-language sql stable parallel safe set search_path = pg_catalog, pg_temp as $$
+language sql stable parallel safe set search_path = pg_catalog, pg_temp set timezone = 'UTC' as $$
   select coalesce(pg_catalog.jsonb_object_agg(e.key, e.value), '{}'::jsonb)
     from pg_catalog.jsonb_each(pg_catalog.to_jsonb(p_row)) as e
    where e.key = any (array['first_name', 'last_name', 'email', 'phone', 'phone_country_unconfirmed', 'assigned_to',
@@ -1904,6 +1906,7 @@ grant execute on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, 
 | merge: drop the `v_flags_before` record loop | the Flags case, I1 second shape (a phantom after Undo) |
 | merge: compare `(p_seen ->> 'keep')::timestamptz` with `k.updated_at` as before | `stale` case (2), the write that never stamps `updated_at` |
 | `app.follow_merge`: drop `for share` | "an insert naming O while a merge holds its transaction waits, then lands on K" |
+| `app.merge_fields_of`: drop `set timezone = 'UTC'` | "the fingerprint does not depend on the session's time zone" |
 | add `'tags'` (any word) to `c_moves` | "every table with a foreign key into contacts is accounted for" (the literal no longer equals C_MOVES) |
 | merge: set `messages.updated_at = now()` again | add the assertion to "everything comes back": a moved message's `updated_at` equals its pre-merge value after merge AND after Undo (review m8a) |
 | undo: restore every field unconditionally | "an edit after the merge is kept" |
