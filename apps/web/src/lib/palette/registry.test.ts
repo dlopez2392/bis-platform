@@ -365,6 +365,30 @@ describe("filterEntries", () => {
     expect(buildPaletteEntries(BASE, true, false).some((e) => e.id === "nav:required-documents")).toBe(false);
     expect(buildPaletteEntries(BASE, true, false).some((e) => e.id === "settings:required-documents")).toBe(true);
   });
+
+  // F-118 part 1 (plan Task 10; spec 6.1, owner ruling 9): the Team page's
+  // own "BIS access" section — readable by a client Owner and by the
+  // agency, never by Staff or a Technician (requireAccountOwner itself
+  // keeps both off the Team page regardless of this entry).
+  it("nav:bis-access opens the Team page's BIS access section for an Owner and for the agency; Staff, a Technician and the top level (no account) get none (mutations: drop `isAgency ||` -> the agency case FAILS; drop the guard entirely -> the Staff case FAILS)", () => {
+    const owner = buildPaletteEntries(BASE, false, true);
+    expect(owner).toContainEqual(
+      expect.objectContaining({ id: "nav:bis-access", href: `${BASE}/team#bis-access`, agencyOnly: false, group: "navigation" }),
+    );
+    const agency = buildPaletteEntries(BASE, true, false);
+    expect(agency).toContainEqual(
+      expect.objectContaining({ id: "nav:bis-access", href: `${BASE}/team#bis-access`, agencyOnly: false, group: "navigation" }),
+    );
+    expect(buildPaletteEntries(BASE, false, false).some((e) => e.id === "nav:bis-access")).toBe(false);
+    expect(buildPaletteEntries(BASE, false, false, true).some((e) => e.id === "nav:bis-access")).toBe(false);
+    expect(buildPaletteEntries(null, true, false).some((e) => e.id === "nav:bis-access")).toBe(false);
+  });
+
+  it("nav:bis-access is findable by its own words, in English and Spanish, for an Owner (mutation: drop a keyword -> FAILS)", () => {
+    const owner = buildPaletteEntries(BASE, false, true);
+    expect(filterEntries(owner, "visitas").some((e) => e.id === "nav:bis-access")).toBe(true);
+    expect(filterEntries(owner, "who looked").some((e) => e.id === "nav:bis-access")).toBe(true);
+  });
 });
 
 // F-085 part 1 (spec §9): the ⌘K index leaves out every route a Technician
