@@ -6,8 +6,18 @@ import { NAME_CHUNK, resolveAccessLogNames } from "./names";
  * F-118 part 1 (plan Task 4, step 3). A fake client that records every `from(table).select(cols)
  * .eq(col, val).in(col, ids)` it was asked for, and answers per table — the `view-reads.test.ts` shape.
  */
-type Answer = { data?: unknown[]; error?: { message: string } };
+/** `rows` (instead of `data`) makes the stand-in APPLY the read's eq / in / is filters to those rows, the way
+ *  PostgREST would (`ai-summary-inputs.test.ts`'s `applyFilters`), so a second account's row with a matching id
+ *  is answered only when the read forgot its account fence. */
+type Answer = { data?: unknown[]; rows?: Record<string, unknown>[]; error?: { message: string } };
 type Read = { table: string; cols: string; eq: [string, unknown][]; in: [string, unknown[]][]; is: [string, unknown][] };
+
+function applyFilters(rows: Record<string, unknown>[], read: Read): Record<string, unknown>[] {
+  return rows.filter((row) =>
+    read.eq.every(([col, v]) => !(col in row) || row[col] === v)
+    && read.is.every(([col, v]) => !(col in row) || row[col] === v)
+    && read.in.every(([col, vs]) => !(col in row) || vs.includes(row[col])));
+}
 
 function fakeDb(answers: Partial<Record<string, Answer | ((read: Read) => Answer)>>) {
   const reads: Read[] = [];
@@ -18,7 +28,8 @@ function fakeDb(answers: Partial<Record<string, Answer | ((read: Read) => Answer
       const settle = async () => {
         const a = answers[table];
         const res = typeof a === "function" ? a(read) : (a ?? { data: [] });
-        return { data: res.data ?? null, error: res.error ?? null };
+        const data = res.rows ? applyFilters(res.rows, read) : res.data;
+        return { data: data ?? null, error: res.error ?? null };
       };
       const chain = {
         select(cols: string) { read.cols = cols; return chain; },
@@ -46,20 +57,41 @@ const pageOf = (items: AccessLogItem[]): AccessLogPage => ({
 const A = "11111111-1111-1111-1111-111111111111";
 
 describe("resolveAccessLogNames", () => {
-  it("every one of the six reads carries .eq('account_id', A) (mutation: drop it from any one read -> FAILS naming the table)", async () => {
+  it("only THIS account's rows are resolved: a second account's row with a matching id never is, in any of the six tables (agency RLS is not account-scoped, so .eq('account_id') is the only fence; mutation: drop it -> FAILS naming the table)", async () => {
     const page = pageOf([
-      item({ kind: "contact", recordId: "c1" }),
-      item({ kind: "group", recordId: "g1" }),
-      item({ kind: "call", recordId: "call1" }),
-      item({ kind: "conversation", recordId: "conv1" }),
-      item({ kind: "document_view", recordId: "doc1" }),
-      item({ kind: "form_answers", recordId: "form1" }),
+      item({ kind: "contact", recordId: "c_mine" }), item({ kind: "contact", recordId: "c_other" }),
+      item({ kind: "group", recordId: "g_mine" }), item({ kind: "group", recordId: "g_other" }),
+      item({ kind: "call", recordId: "call_mine" }), item({ kind: "call", recordId: "call_other" }),
+      item({ kind: "conversation", recordId: "conv_mine" }), item({ kind: "conversation", recordId: "conv_other" }),
+      item({ kind: "document_view", recordId: "doc_mine" }), item({ kind: "document_view", recordId: "doc_other" }),
+      item({ kind: "form_answers", recordId: "form_mine" }), item({ kind: "form_answers", recordId: "form_other" }),
     ]);
-    const { db, reads } = fakeDb({});
-    await resolveAccessLogNames(db, A, page);
-    const byTable = new Map(reads.map((r) => [r.table, r]));
-    for (const table of ["contacts", "client_groups", "calls", "conversations", "documents", "forms"]) {
-      expect(byTable.get(table)?.eq, table).toEqual([["account_id", A]]);
+    const B = "22222222-2222-2222-2222-222222222222";
+    const doc = { title: "W-9", deleted_at: null, contact_id: null, client_group_id: null };
+    const { db } = fakeDb({
+      contacts: { rows: [
+        { account_id: A, id: "c_mine", first_name: "Ana", last_name: "Ruiz", archived_at: null },
+        { account_id: B, id: "c_other", first_name: "Other", last_name: "Person", archived_at: null },
+      ] },
+      client_groups: { rows: [
+        { account_id: A, id: "g_mine", name: "The Smiths", kind: "household" },
+        { account_id: B, id: "g_other", name: "Other House", kind: "household" },
+      ] },
+      calls: { rows: [
+        { account_id: A, id: "call_mine", started_at: "2026-10-28T20:04:00Z", contact_id: null },
+        { account_id: B, id: "call_other", started_at: "2026-10-28T20:04:00Z", contact_id: null },
+      ] },
+      conversations: { rows: [{ account_id: A, id: "conv_mine", contact_id: null }, { account_id: B, id: "conv_other", contact_id: null }] },
+      documents: { rows: [{ account_id: A, id: "doc_mine", ...doc }, { account_id: B, id: "doc_other", ...doc }] },
+      forms: { rows: [{ account_id: A, id: "form_mine", name: "Contact us" }, { account_id: B, id: "form_other", name: "Other form" }] },
+    });
+    const names = await resolveAccessLogNames(db, A, page);
+    const tables = {
+      contacts: names.contacts, client_groups: names.groups, calls: names.calls,
+      conversations: names.conversations, documents: names.documents, forms: names.forms,
+    };
+    for (const [table, map] of Object.entries(tables)) {
+      expect([...map.keys()].map((k) => k.replace(/^[a-z]+_/, "")), table).toEqual(["mine"]);
     }
   });
 
