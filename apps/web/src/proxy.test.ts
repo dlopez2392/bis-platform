@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
+import ts from "typescript";
 import { config } from "./proxy";
 
 describe("proxy.ts — the unsubscribe surfaces stay public (spec §4.3, E2)", () => {
@@ -41,5 +42,33 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
 
   it("only the six trees are carved out — a dashboard path that merely starts with one of their letters still runs", () => {
     for (const path of ["/calendar", "/forms", "/billing", "/users", "/dx", "/sx", "/support"]) expect(runs(path)).toBe(true);
+  });
+});
+
+/**
+ * F-118 part 1 (spec 3.2): the proxy hands the reason gate the in-account path the person asked for, in the
+ * x-bis-path request header. clerkMiddleware cannot run under vitest, so this reads proxy.ts's real syntax
+ * tree (comments are trivia and never become nodes): a CALL of accountPathOf, and a `.set(…)` whose first
+ * argument is the identifier BIS_PATH_HEADER. The e2e deep link (Task 12) is the behavioural proof.
+ */
+describe("proxy.ts — the x-bis-path header (F-118 part 1, spec 3.2)", () => {
+  it("calls accountPathOf and sets BIS_PATH_HEADER on the request headers (mutation: delete the headers.set line -> FAILS)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./proxy.ts", import.meta.url)), "utf8");
+    const sf = ts.createSourceFile("proxy.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let callsAccountPathOf = false;
+    let setsHeader = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression;
+        if (ts.isIdentifier(callee) && callee.text === "accountPathOf") callsAccountPathOf = true;
+        if (ts.isPropertyAccessExpression(callee) && callee.name.text === "set") {
+          const first = node.arguments[0];
+          if (first && ts.isIdentifier(first) && first.text === "BIS_PATH_HEADER") setsHeader = true;
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect({ callsAccountPathOf, setsHeader }).toEqual({ callsAccountPathOf: true, setsHeader: true });
   });
 });

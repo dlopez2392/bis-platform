@@ -6,17 +6,21 @@ const ensureAccountRole = vi.fn();
 const readStoredRole = vi.fn();
 // M7a PR-4 (plan G11): the read-only guard reads the request's headers and the billing standing.
 const readBillingStanding = vi.fn();
+// F-118 part 1 (spec 3.1): the agency branch reads its live visit.
+const agencyVisitLive = vi.fn();
 const requestHeaders = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 
 vi.mock("@clerk/nextjs/server", () => ({ auth: () => authMock() }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => { throw new Error("REDIRECT:" + url); },
+  notFound: () => { throw new Error("NOT_FOUND"); },
 }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers(requestHeaders.value) }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({ service: true }),
   getAccountByOrgId: (...a: unknown[]) => getAccountByOrgId(...a),
   readBillingStanding: (...a: unknown[]) => readBillingStanding(...a),
+  agencyVisitLive: (...a: unknown[]) => agencyVisitLive(...a),
 }));
 vi.mock("./team/ensure-role", () => ({
   ensureAccountRole: (...a: unknown[]) => ensureAccountRole(...a),
@@ -24,7 +28,7 @@ vi.mock("./team/ensure-role", () => ({
 }));
 
 import {
-  requireAccountAccess, requireAccountOwner, requireAgencyOnlyAccountAccess, requireNotTechnician, accountHome,
+  apiAccountAccess, requireAccountAccess, requireAccountOwner, requireAgencyOnlyAccountAccess, requireNotTechnician, accountHome,
   seesWholeAccount,
 } from "./auth";
 
@@ -33,10 +37,10 @@ const OTHER = "22222222-2222-4222-8222-222222222222";
 const IN_FLIGHT = Promise.resolve("in-flight" as const);
 
 function asAgency() {
-  authMock.mockResolvedValue({ userId: "user_agency", sessionClaims: { app_role: "agency_admin", org_id: "org_agency" } });
+  authMock.mockResolvedValue({ userId: "user_agency", sessionId: "sess_1", sessionClaims: { app_role: "agency_admin", org_id: "org_agency" } });
 }
 function asClient(role: "owner" | "staff" | "technician" | null) {
-  authMock.mockResolvedValue({ userId: "user_client", sessionClaims: { org_id: "org_client" } });
+  authMock.mockResolvedValue({ userId: "user_client", sessionId: "sess_c", sessionClaims: { org_id: "org_client" } });
   getAccountByOrgId.mockResolvedValue({ id: OWN, client_access_enabled: true });
   ensureAccountRole.mockResolvedValue(role);
 }
@@ -45,6 +49,8 @@ beforeEach(() => {
   authMock.mockReset(); getAccountByOrgId.mockReset(); ensureAccountRole.mockReset(); readStoredRole.mockReset();
   readStoredRole.mockReturnValue(IN_FLIGHT);
   readBillingStanding.mockReset();
+  agencyVisitLive.mockReset();
+  agencyVisitLive.mockResolvedValue("visit_1");
   requestHeaders.value = {};
   vi.unstubAllEnvs();
 });
@@ -56,13 +62,15 @@ describe("requireAccountAccess carries the caller's role (spec §7)", () => {
     expect(ensureAccountRole).not.toHaveBeenCalled();
     expect(readStoredRole).not.toHaveBeenCalled();
   });
-  it("client Owner may manage", async () => {
+  it("client Owner may manage, and never reads a visit (F-118 mutation: read the visit before the branch -> FAILS)", async () => {
     asClient("owner");
     expect(await requireAccountAccess(OWN)).toEqual({ userId: "user_client", isAgency: false, role: "owner", canManage: true });
+    expect(agencyVisitLive).not.toHaveBeenCalled();
   });
-  it("client Staff may not manage (mutation: canManage = role !== null -> FAILS)", async () => {
+  it("client Staff may not manage, and never reads a visit (mutation: canManage = role !== null -> FAILS)", async () => {
     asClient("staff");
     expect(await requireAccountAccess(OWN)).toEqual({ userId: "user_client", isAgency: false, role: "staff", canManage: false });
+    expect(agencyVisitLive).not.toHaveBeenCalled();
   });
   it("asks the fallback about the account it judged, the session's org and user, handing over the read already in flight (mutation: swap args, or drop the in-flight read -> FAILS)", async () => {
     asClient("staff");
@@ -83,6 +91,7 @@ describe("requireAccountAccess carries the caller's role (spec §7)", () => {
     asClient("owner");
     await expect(requireAccountAccess(OTHER)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/dashboard`);
     expect(ensureAccountRole).not.toHaveBeenCalled();
+    expect(agencyVisitLive).not.toHaveBeenCalled();
   });
   it("client access off still redirects to /no-access?reason=off, before any Clerk call or write", async () => {
     asClient("owner");
@@ -256,5 +265,98 @@ describe("a paused account is read-only for a client's server actions (plan G11)
     readBillingStanding.mockReset();
     expect(await requireAccountAccess(OWN)).toMatchObject({ isAgency: false, role: "owner" });
     expect(readBillingStanding).not.toHaveBeenCalled();
+  });
+});
+
+// F-118 part 1 (spec 3.1, 2.4): the agency enters an account only on a live visit, chosen with a reason, and no
+// session signed in AS someone else (Clerk's act claim, `actor` on auth()) enters at all.
+describe("the reason gate in the agency branch (F-118 part 1, spec 3.1)", () => {
+  it("with a live visit the agency gets exactly today's value, the visit read for this account, person and session", async () => {
+    asAgency();
+    expect(await requireAccountAccess(OWN)).toEqual({ userId: "user_agency", isAgency: true, role: null, canManage: true });
+    expect(agencyVisitLive).toHaveBeenCalledWith({ service: true }, OWN, { clerkUserId: "user_agency", sessionId: "sess_1" });
+  });
+
+  it("with no visit the agency is sent to the chooser carrying the path it asked for (mutation: return for the agency before the visit check -> FAILS)", async () => {
+    asAgency();
+    agencyVisitLive.mockResolvedValue(null);
+    requestHeaders.value = { "x-bis-path": `/dashboard/accounts/${OWN}/contacts` };
+    await expect(requireAccountAccess(OWN)).rejects.toThrow(
+      `REDIRECT:/dashboard/enter/${OWN}?to=%2Fdashboard%2Faccounts%2F${OWN}%2Fcontacts`);
+  });
+
+  it("the guards built on it inherit the gate", async () => {
+    asAgency();
+    agencyVisitLive.mockResolvedValue(null);
+    await expect(requireAccountOwner(OWN)).rejects.toThrow(`REDIRECT:/dashboard/enter/${OWN}`);
+    await expect(requireNotTechnician(OWN)).rejects.toThrow(`REDIRECT:/dashboard/enter/${OWN}`);
+    await expect(requireAgencyOnlyAccountAccess(OWN)).rejects.toThrow(`REDIRECT:/dashboard/enter/${OWN}`);
+  });
+
+  it("{ agencyVisit: \"not-required\" } reads no visit and returns the agency value (the work list's carve-out, C11)", async () => {
+    asAgency();
+    agencyVisitLive.mockResolvedValue(null);
+    expect(await requireAccountAccess(OWN, { agencyVisit: "not-required" })).toEqual({ userId: "user_agency", isAgency: true, role: null, canManage: true });
+    expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+
+  it("a failed visit read rejects with that error (owner ruling 4: fail closed)", async () => {
+    asAgency();
+    const boom = new Error("agencyVisitLive failed: down");
+    agencyVisitLive.mockRejectedValue(boom);
+    await expect(requireAccountAccess(OWN)).rejects.toBe(boom);
+  });
+
+  it("a non-UUID account id is a 404 for the agency, with no read (plan C12)", async () => {
+    asAgency();
+    await expect(requireAccountAccess("foo")).rejects.toThrow("NOT_FOUND");
+    expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+
+  it("apiAccountAccess: the agency with a visit gets its value, without one null, and a non-UUID id null with no read", async () => {
+    asAgency();
+    expect(await apiAccountAccess(OWN)).toEqual({ userId: "user_agency", isAgency: true });
+    expect(agencyVisitLive).toHaveBeenCalledWith({ service: true }, OWN, { clerkUserId: "user_agency", sessionId: "sess_1" });
+    agencyVisitLive.mockResolvedValue(null);
+    expect(await apiAccountAccess(OWN)).toBeNull();
+    agencyVisitLive.mockClear();
+    expect(await apiAccountAccess("foo")).toBeNull();
+    expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+
+  it("apiAccountAccess: a failed visit read rejects, never null-as-allowed or null-as-refused", async () => {
+    asAgency();
+    agencyVisitLive.mockRejectedValue(new Error("down"));
+    await expect(apiAccountAccess(OWN)).rejects.toThrow("down");
+  });
+
+  it("apiAccountAccess: a client never reads a visit", async () => {
+    asClient("owner");
+    expect(await apiAccountAccess(OWN)).toEqual({ userId: "user_client", isAgency: false });
+    expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+});
+
+describe("a session signed in as someone else is refused (owner ruling 5, spec 2.4)", () => {
+  const ACTOR = { sub: "user_staff" };
+  it("a client session carrying actor goes to /no-access?reason=none before the account read (mutation: drop the actor check -> FAILS)", async () => {
+    asClient("owner");
+    authMock.mockResolvedValue({ userId: "user_client", sessionId: "sess_c", sessionClaims: { org_id: "org_client" }, actor: ACTOR });
+    await expect(requireAccountAccess(OWN)).rejects.toThrow("REDIRECT:/no-access?reason=none");
+    expect(getAccountByOrgId).not.toHaveBeenCalled();
+  });
+  it("an agency session carrying actor goes there too, with no visit read (mutation: drop the actor check -> FAILS)", async () => {
+    authMock.mockResolvedValue({ userId: "user_agency", sessionId: "sess_1", sessionClaims: { app_role: "agency_admin" }, actor: ACTOR });
+    await expect(requireAccountAccess(OWN)).rejects.toThrow("REDIRECT:/no-access?reason=none");
+    expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+  it("apiAccountAccess answers null for both (mutation: drop the actor check -> FAILS)", async () => {
+    asClient("owner");
+    authMock.mockResolvedValue({ userId: "user_client", sessionId: "sess_c", sessionClaims: { org_id: "org_client" }, actor: ACTOR });
+    expect(await apiAccountAccess(OWN)).toBeNull();
+    authMock.mockResolvedValue({ userId: "user_agency", sessionId: "sess_1", sessionClaims: { app_role: "agency_admin" }, actor: ACTOR });
+    expect(await apiAccountAccess(OWN)).toBeNull();
+    expect(getAccountByOrgId).not.toHaveBeenCalled();
+    expect(agencyVisitLive).not.toHaveBeenCalled();
   });
 });

@@ -38,7 +38,8 @@ async function run<R extends Answer>(
   decide: (deps: DecideDeps) => Promise<R>,
 ): Promise<Exclude<R, { target: DecisionTarget }> | Omit<Extract<R, { ok: true }>, "target"> | { ok: false; error: string }> {
   // Outside the try: its redirect() is a thrown signal Next must see, never a "didn't go through".
-  const access = await requireAccountAccess(accountId);
+  // F-118 part 1: /dashboard/work binds these four for every account and is not gated (owner ruling 3, plan C11).
+  const access = await requireAccountAccess(accountId, { agencyVisit: "not-required" });
   let tr: Tr = makeTr("en");
   let outcome: R;
   try {

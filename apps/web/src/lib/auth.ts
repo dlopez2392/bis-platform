@@ -4,6 +4,7 @@ import { serviceDb, getAccountByOrgId, type AccountRole } from "@bis/db";
 import { ensureAccountRole, readStoredRole } from "./team/ensure-role";
 import { seesWholeAccount } from "./auth-role";
 import { refuseActionWhilePaused } from "./billing/read-only";
+import { requireAgencyVisit, agencyVisitOk } from "./access-log/gate";
 
 export { seesWholeAccount };
 
@@ -22,11 +23,17 @@ export type AccessOptions = {
    *  for billing (it only reads, or it is how the client pays). Every use is
    *  pinned, with its reason, by lib/billing/read-only.test.ts. */
   duringPause?: "allow";
+  /** F-118 part 1 (spec 11, C11): ONLY lib/proposals/actions.ts's run(), whose four actions /dashboard/work
+   *  binds across every account (owner ruling 3: that page is not gated). gate.test.ts pins the one use. */
+  agencyVisit?: "not-required";
 };
 
 /**
  * Allows the agency admin into any account, and a client into exactly one —
- * their own, and only while its client access is on.
+ * their own, and only while its client access is on. The agency is admitted
+ * only on a live visit, chosen with a reason, and is otherwise sent to the
+ * chooser (F-118 part 1, spec 3.1); a session carrying Clerk's act claim is
+ * refused for everyone (owner ruling 5).
  *
  * Uses serviceDb deliberately: this runs BEFORE we trust the caller, so it
  * must be able to see the account row in order to judge it.
@@ -55,12 +62,18 @@ export type AccessOptions = {
 export async function requireAccountAccess(
   accountId: string, opts: AccessOptions = {},
 ): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
-  const { userId, sessionClaims } = await auth();
+  const { userId, sessionId, sessionClaims, actor } = await auth();
   if (!userId) redirect("/sign-in");
+  // F-118 part 1 (owner ruling 5): a session signed in AS someone else (Clerk's act claim, `actor` on auth())
+  // would look like that person here and be logged nowhere. BIS's only way in is the agency path, with a reason.
+  if (actor) redirect("/no-access?reason=none");
   const claims = sessionClaims as AppClaims;
 
-  // The agency never gets a client membership (plan deviation 6).
-  if (claims.app_role === "agency_admin") return { userId, isAgency: true, role: null, canManage: true };
+  // The agency never gets a client membership (plan deviation 6). F-118: a live visit first (spec 3.1).
+  if (claims.app_role === "agency_admin") {
+    if (opts.agencyVisit !== "not-required") await requireAgencyVisit(accountId, userId, sessionId);
+    return { userId, isAgency: true, role: null, canManage: true };
+  }
 
   if (!claims.org_id) redirect("/no-access?reason=none");
   // Started now, beside the account read, so the role costs no round-trip of
@@ -194,15 +207,19 @@ export async function resolveClientAccount(): Promise<{ id: string; name: string
  * null instead of redirecting — the caller answers 404 (never 403/401
  * with substance: don't confirm to a wrong-tenant caller that the
  * resource exists). Client callers get access to exactly their own
- * account, like the page variant.
+ * account, like the page variant. The agency gets null with no live visit
+ * here (F-118 part 1, spec 3.1), and a session carrying Clerk's act claim
+ * gets null (owner ruling 5).
  */
 export async function apiAccountAccess(
   accountId: string,
 ): Promise<{ userId: string; isAgency: boolean } | null> {
-  const { userId, sessionClaims } = await auth();
-  if (!userId) return null;
+  const { userId, sessionId, sessionClaims, actor } = await auth();
+  if (!userId || actor) return null;
   const claims = sessionClaims as AppClaims;
-  if (claims.app_role === "agency_admin") return { userId, isAgency: true };
+  if (claims.app_role === "agency_admin") {
+    return (await agencyVisitOk(accountId, userId, sessionId)) ? { userId, isAgency: true } : null;
+  }
   if (!claims.org_id) return null;
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
   if (!account || !account.client_access_enabled) return null;

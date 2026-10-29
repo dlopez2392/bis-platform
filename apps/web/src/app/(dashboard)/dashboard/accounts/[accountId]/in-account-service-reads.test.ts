@@ -178,6 +178,12 @@ const ALLOWED: Record<string, Reason> = {
   // the consent state after that proof.
   "app/api/accounts/[accountId]/contacts/[contactId]/document-requests/route.ts": "proven-target",
   "app/api/accounts/[accountId]/groups/[groupId]/document-requests/route.ts": "proven-target",
+  // F-118 part 1: the agency's live-visit read inside requireAccountAccess; service_role only (0105).
+  "lib/access-log/gate.ts": "before-trust",
+  // F-118 part 1: writes the open only after the surface's own request-client proof, keyed by the caller's own session.
+  "lib/access-log/note.ts": "proven-target",
+  // F-118 part 1: requireAgency first; starts the caller's own visit and reads their own name.
+  "lib/access-log/visit.ts": "agency-only",
   // item 8c: the Undo of one of Sofía's acts. The act is read on the request client first (getAiAct: RLS and
   // 0091's Technician fence), then each booking it names (callerCanSee), the field's own compare-and-swap or
   // the contact row, all on the request client; only then 0091's two functions, the act's stamp and the
