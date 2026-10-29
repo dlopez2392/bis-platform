@@ -305,6 +305,32 @@ describe("0106: the database files every pair (app.contacts_flag_pairs)", () => 
       expect(await pairs(c, a.accountId)).toEqual([pair(dos, tres, "same_phone")]);
     }));
 
+  // Review m3: the two cases above insert the holder or the tombstone FIRST, so only the match side's filter is
+  // tested. Written AFTER a person, the record is the trigger's own new row, which only the WHEN clause skips.
+  it("a holding record written after a person on its number files no pair; a person after it does (review m3; mutation: drop `not new.holds_shared_number` from the trigger's WHEN -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "t12b");
+      const x = await person(c, a.accountId, { first: "Ana", phone: "+19565550118" });
+      await actAsOwner(c);
+      await c.query("insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', '+19565550118', true, 'person')", [a.accountId]);
+      const y = await person(c, a.accountId, { first: "Bea", phone: "+19565550118" });
+      expect(await pairs(c, a.accountId)).toEqual([pair(x, y, "same_phone")]);
+    }));
+
+  it("a record written as a tombstone after a person on its number files no pair; a person after it does (review m3; mutation: drop `new.merged_into is null` from the trigger's WHEN -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "t13b");
+      const x = await person(c, a.accountId, { first: "Ana", phone: "+19565550119" });
+      const kept = await person(c, a.accountId, { first: "Kept", phone: "+19565550195" });
+      await actAsOwner(c);
+      // Server code may write a row that is already a tombstone (the guard limits only a signed-in session).
+      await c.query(
+        "insert into public.contacts (account_id, first_name, phone, merged_into, merged_at, author_kind) values ($1, 'Gone', '+19565550119', $2, now(), 'person')",
+        [a.accountId, kept]);
+      const y = await person(c, a.accountId, { first: "Bea", phone: "+19565550119" });
+      expect(await pairs(c, a.accountId)).toEqual([pair(x, y, "same_phone")]);
+    }));
+
   it("at most 20 per write: the 23rd contact on one number gets exactly 20 rows (mutation: drop `limit 20` -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "t14");
@@ -560,6 +586,54 @@ describe("0106: the list functions and dismissal", () => {
       expect(await dismiss(c, a.accountId, f, "svc")).toBe("dismissed");
       await actAsOwner(c);
       expect((await c.query("select dismissed_by from public.contact_duplicate_flags where id = $1", [f])).rows).toEqual([{ dismissed_by: "svc" }]);
+    }));
+});
+
+describe("0106: the second account, where app.may_merge passes and only the account term or the policy refuses (review I1, I2)", () => {
+  /** A's Owner signed in to A, and B's open pair (B's flag id). */
+  async function twoAccounts(c: Client, label: string) {
+    const a = await seedAccount(c, `${label}a`);
+    const b = await seedAccount(c, `${label}b`);
+    const x = await person(c, b.accountId, { first: "Uno", phone: "+19565550179" });
+    const y = await person(c, b.accountId, { first: "Dos", phone: "+19565550179" });
+    const fB = await flagOf(c, b.accountId, x, y);
+    const ownerA = await member(c, a, "owner");
+    return { a, b, fB, ownerA };
+  }
+  const flagState = async (c: Client, f: string) => {
+    await actAsOwner(c);
+    return (await c.query("select dismissed_at is null as open, dismissed_by from public.contact_duplicate_flags where id = $1", [f])).rows[0];
+  };
+
+  it("dismiss: A's Owner passing B's flag id under A gets not_found and B's pair stays open (I1; mutation: drop `f.account_id = p_account_id` from dismiss_duplicate_pair's update -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { a, fB, ownerA } = await twoAccounts(c, "i1d");
+      await signIn(c, a, ownerA.sub);
+      expect(await dismiss(c, a.accountId, fB)).toBe("not_found");
+      expect(await flagState(c, fB)).toEqual({ open: true, dismissed_by: null });
+    }));
+
+  it("undismiss: A's Owner passing B's dismissed flag id under A gets not_found and B's dismissal stands (I1; mutation: drop `f.account_id = p_account_id` from undismiss_duplicate_pair's update -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { a, fB, ownerA } = await twoAccounts(c, "i1u");
+      await actAsOwner(c);
+      await c.query("update public.contact_duplicate_flags set dismissed_at = now(), dismissed_by = 'user_b' where id = $1", [fB]);
+      await signIn(c, a, ownerA.sub);
+      expect(await undismiss(c, a.accountId, fB)).toBe("not_found");
+      expect(await flagState(c, fB)).toEqual({ open: false, dismissed_by: "user_b" });
+    }));
+
+  it("the flag table read: A's Owner selecting B's rows directly reads none; B's Owner reads them (I2; mutation: contact_duplicate_flags_member_read using (true) -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { a, b, fB, ownerA } = await twoAccounts(c, "i2");
+      const ownerB = await member(c, b, "owner");
+      const rowsOf = async (accountId: string) =>
+        (await c.query<{ id: string }>("select id from public.contact_duplicate_flags where account_id = $1", [accountId])).rows.map((r) => r.id);
+      // The control: B's own Owner reads B's pair.
+      await signIn(c, b, ownerB.sub);
+      expect(await rowsOf(b.accountId)).toEqual([fB]);
+      await signIn(c, a, ownerA.sub);
+      expect(await rowsOf(b.accountId)).toEqual([]);
     }));
 });
 
