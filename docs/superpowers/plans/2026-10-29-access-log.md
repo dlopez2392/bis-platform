@@ -17,7 +17,7 @@
 - The worktree is `C:\Users\danlo\bis-platform\.claude\worktrees\access-log` on branch `feat/access-log`. It has no `node_modules`: the orchestrator runs `pnpm install --frozen-lockfile --prefer-offline` ONCE before dispatching anyone. No agent runs `pnpm install`.
 - Migration number **0105** (`0105_access_log.sql`). 0104 is the newest on `main` (`ab4aee71`). No other branch holds a 0105 (`git log --all -- '*0105*'` was empty on 2026-10-29). **No agent applies 0105 anywhere.** The orchestrator applies it, in the order in Task 13.
 - **No `@bis/db` vitest runs locally against bis-ci until 0105 is on bis-ci.** That includes mock-only files whenever Supabase credentials are in scope, because the package's global setup sweeps for every invocation. This worktree has no `packages/db/.env` and no `apps/web/.env.local` (checked 2026-10-29). Never create one. Never export `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or a bis-ci `SUPABASE_DB_URL` in a shell. Before ANY `@bis/db` run, check `env | grep -c '^\(NEXT_PUBLIC_SUPABASE_URL\|SUPABASE_SERVICE_ROLE_KEY\)='` prints `0`. With that, `packages/db/src/test/global-setup.ts:31-33` skips the sweep.
-- Local `@bis/db` runs are exactly one of two kinds: `withRollback` files against a local replica (`SUPABASE_DB_URL=postgresql://postgres@localhost:<your port>/post`), or pure and fake-client files. Files built on `withTestAccount` (`*-live.test.ts`) are proven ONLY by CI `verify`, which builds its own stack from the branch's migrations. The same rule holds for the three live web tests (`apps/web/src/app/f/[publicId]/actions.returning-lead.test.ts`, `ACCT/calls/[callId]/actions.test.ts`, `weekly-metrics.live.test.ts`): never run them locally on this branch.
+- Local `@bis/db` runs are exactly one of three kinds: `withRollback` files against a local replica (`SUPABASE_DB_URL=postgresql://postgres@localhost:<your port>/post`); T1's `access-log-concurrency.test.ts` against that same replica (it commits and cleans up, so it is never pointed at bis-ci); or pure and fake-client files. Files built on `withTestAccount` (`*-live.test.ts`) are proven ONLY by CI `verify`, which builds its own stack from the branch's migrations. The same rule holds for the three live web tests (`apps/web/src/app/f/[publicId]/actions.returning-lead.test.ts`, `ACCT/calls/[callId]/actions.test.ts`, `weekly-metrics.live.test.ts`): never run them locally on this branch.
 - Replica recipe: memory `bis-local-db-replica`, and the script in Task 1 Step 1. Use PostgreSQL **17.6** from `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\88d51cd6-6c5b-4497-af8a-63647f233ba6\scratchpad\ca-t1\pg17\pgsql\bin\` while it exists. Otherwise use PG18 at `C:\Program Files\PostgreSQL\18\bin`, and make no cost claim from PG18 (its skip scan hides PG17 plans). `initdb -E UTF8 --locale=C --locale-provider=icu --icu-locale=en-US`, `alter database … set timezone to 'UTC'`. Use your own port and your own scratch directory. Stop your replica when done.
 - Commands from the worktree root. Web: `pnpm --filter web exec vitest run <paths>`. Db: `pnpm --filter @bis/db exec vitest run <paths>`. Judge a db run by vitest's summary block, never the exit code: it prints a trailing `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL`. When an exit code matters, write it to a file with nothing after the command. Every lane also runs `pnpm --filter web lint` and `pnpm --filter web typecheck` (whole package, cheap) before reporting.
 - **Never** run `pnpm check`, `pnpm --filter web build` or Playwright. Those are the orchestrator's, one at a time. Only bis-e2e-qa writes Playwright specs, and only the orchestrator runs them.
@@ -48,8 +48,31 @@ These are the spec's §11 corrections, C1–C19, with the evidence behind each:
 15. **C15.** The "ended" hint compares the newest visit start, read on the service client, with the app's clock.
 16. **C16.** The setup project gets a fifth setup test, and `e2e/fixtures/entry-guards.test.ts:125-133` pins the names. `access-log.spec.ts` signs the agency in again to get a session with no visit.
 17. **C17.** `x-bis-path` drops `_rsc`.
-18. **C18.** 40 files under the two trees: 19 records, 21 not-records (listed in Task 11).
+18. **C18.** 41 entry files under the two trees (40 pages and routes, plus `ACCT/layout.tsx`): 19 records, 22 not-records (listed in Task 11). Task 11 also pins all 197 server actions (C21).
 19. **C19.** The window's edge is exact under the transaction's fixed `now()`.
+
+Review fixes (2026-10-29, coordinator; evidence lines read at `13079bec`):
+
+22. **C20, share links (I1).** `createDocumentShareAction` (`ACCT/contacts/document-shares-actions.ts:49-71`) mints a `/s/<token>` link after a request-client read. `lib/document-shares/public-share.ts:130` then reads the file for whoever holds the link, with no sign-in and no log. It gets a new kind, `document_share`, written before `newShareToken()` (`:62`). The kind joins 0105's check, the file count, the copy (`accessLog.item.fileShared`), Task 7 and Task 11's lists.
+23. **C21, the walk's coverage (I2, I3).** Task 11 now pins:
+    - every exported action in the 41 account-scoped `"use server"` files (195, the scope `lib/billing/read-only.test.ts:131-245` audits) and `dashboard/blueprints/actions.ts` (2);
+    - every `layout`, `template` and `default` file;
+    - every other guarded file under `app/` (one: `ACCT/settings/ai-section.tsx:22`).
+
+    It also refuses any logger call that is `void`, `.catch`ed or `.then`ed, unawaited, or not `if (!(await noteOpenedApi(…))) return …`. Task 6 gains its case 4: a rejecting logger means a status `>= 500` and no data read.
+24. **C22, lists are part of the visit (I5, orchestrator decision).** A third note on the Owner's section, and a third limit in the trust pack.
+25. **I4, `e2e/shell.spec.ts:18-24`.** It clicked the switcher's first (newest) company. It now picks the fixture by name. Task 12 Step 1's description of how specs enter accounts was wrong; it now lists all four ways.
+26. **C23, column SELECT (m3).** `authenticated` reads only `id, account_id, actor_kind, actor_name, reason, started_at` of `agency_visits`, so an Owner cannot read BIS staff's Clerk user or session ids. `access_log_page` reads only those columns.
+27. **C24, the export never saves the chooser (m5).** `agencyVisitMissing` answers 409 `text/plain` (no `Content-Disposition`) before any guard can redirect, and the export logs with `noteOpenedApi` (`false` gives the same 409). I picked the route-side check over a link-side one: a plain `<a download>` cannot ask first without becoming a client component, and the route is the place every download passes.
+28. **C25, files logged only when they open (m6).** `getDocumentUrlAction` mints, checks `ok`, logs, then returns the URL (`documents-actions.ts:245-250`). A pending or removed file logs nothing. A failed write drops the URL before it leaves.
+29. **m1, the advisory lock.** A two-connection test (`access-log-concurrency.test.ts`) proves that the second start waits and gets the first visit. One connection could not see `pg_advisory_xact_lock_shared`.
+30. **m2, M10.** The probe drops BOTH the index and the on-conflict clause; only that yields the wrong output. Either one alone yields an error.
+31. **m4, the carve-out pin** pins the `"not-required"` string literal (files and count), not a property name.
+32. **m7.** `lib/billing/read-only.test.ts:139-147,153-154`'s reason text now says that the agency's file open writes its access-log row.
+33. **m8.** `visitSpan` names both zones across the repeated autumn hour.
+34. **m9.** Task 12 opens the drawer again (spec test 15), and asserts that the customer is still listed once.
+35. **m10.** `messages.ts`'s `} as const;` is at `:6391`.
+36. **m11.** Spec §3.1 names `captureBlueprintAction` and `settings/billing-actions.ts` as configuration-only (`requireAgency`) and ungated, and Task 11's action map says why.
 
 Two more choices of my own, not spec corrections:
 
@@ -61,7 +84,8 @@ Two more choices of my own, not spec corrections:
 | File | Task | Responsibility |
 |---|---|---|
 | `packages/db/supabase/migrations/0105_access_log.sql` (new) | T1 | Two tables, indexes, RLS, grants, four functions, the window helper, rollback |
-| `packages/db/src/test/access-log-schema.test.ts` (new) | T1 | `withRollback`: grants, append-only, RLS, window, functions, page, cascade, pins |
+| `packages/db/src/test/access-log-schema.test.ts` (new) | T1 | `withRollback`: grants (column SELECT too), append-only, RLS, window, functions, page, cascade, pins |
+| `packages/db/src/test/access-log-concurrency.test.ts` (new) | T1 | Two connections: concurrent starts make one visit (the advisory lock) |
 | `packages/db/src/access-log.ts` (new) | T1 | Constants, types, typed wrappers, `parseAccessLogPage` |
 | `packages/db/src/test/access-log-wrappers.test.ts` (new) | T1 | Fake client: argument mapping, errors, shape parsing |
 | `packages/db/src/test/access-log-live.test.ts` (new) | T1 | `withTestAccount`, CI only: wrappers through PostgREST, teardown leaves nothing |
@@ -84,11 +108,13 @@ Two more choices of my own, not spec corrections:
 | `apps/web/src/app/(dashboard)/dashboard/accounts/actions.ts` (+`.test.ts`) | T5 | A created or adopted company starts a Setup visit |
 | `API/contacts/[contactId]/{summary,ai-summary,document-requests,document-requirements,documents,email,groups,places,relationships,texts}/route.ts`, `API/groups/[groupId]/{document-requests,documents,places}/route.ts`, and their 15 test files | T6 | `noteOpenedApi` after each proof |
 | `ACCT/contacts/[contactId]/page.tsx`, `ACCT/groups/[groupId]/page.tsx`, `ACCT/contacts/documents-actions.ts`, `ACCT/forms/[formId]/page.tsx`, `ACCT/contacts/export/route.ts`, `ACCT/contacts/page.tsx`, their tests, and `ACCT/forms/[formId]/page.test.ts` (new) | T7 | `noteOpened` on the CRM pages, the file action and the export; Export becomes an anchor |
+| `ACCT/contacts/document-shares-actions.ts` (+`.test.ts`) | T7 | `noteOpened` before a share link's token (review I1) |
+| `apps/web/src/lib/billing/read-only.test.ts` (reason text only) | T7 | review m7 |
 | `ACCT/calls/[callId]/page.tsx`, `ACCT/calls/[callId]/page.test.ts` | T8 | `noteOpened` on the call page |
 | `ACCT/conversations/page.tsx` and its seven `page*.test.ts` files | T9 | `noteOpened` on an opened thread |
 | `ACCT/team/page.tsx` (+`page.test.ts`), `apps/web/src/components/access-log/bis-access-section.tsx` (+test) (new), `apps/web/src/lib/palette/registry.ts` (+`registry.test.ts`) | T10 | The Team section and `nav:bis-access` |
-| `ACCT/access-log-routes.test.ts` (new) | T11 | The route walk and the import allowlist |
-| `apps/web/e2e/auth.setup.ts`, `apps/web/e2e/fixtures/entry-guards.test.ts`, `apps/web/e2e/access-log.spec.ts` (new), `apps/web/screenshots/capture.spec.ts` | T12 | Setup visits, the deep-link and Owner-read spec, the capture's visit |
+| `ACCT/access-log-routes.test.ts` (new) | T11 | The walk over entries, server actions and guarded files; the logger-call shape rules; the import allowlist |
+| `apps/web/e2e/auth.setup.ts`, `apps/web/e2e/fixtures/entry-guards.test.ts`, `apps/web/e2e/access-log.spec.ts` (new), `apps/web/screenshots/capture.spec.ts`, `apps/web/e2e/shell.spec.ts` | T12 | Setup visits, the deep-link and Owner-read spec, the capture's visit |
 
 ## Task list and waves
 
@@ -120,7 +146,7 @@ Two more choices of my own, not spec corrections:
 export const AGENCY_VISIT_REASONS = ["setup", "support", "fix", "billing"] as const;
 export type AgencyVisitReason = (typeof AGENCY_VISIT_REASONS)[number];
 export function isAgencyVisitReason(v: unknown): v is AgencyVisitReason;
-export const ACCESS_LOG_KINDS = ["contact", "group", "call", "conversation", "document_view", "document_download", "form_answers", "customer_list_export"] as const;
+export const ACCESS_LOG_KINDS = ["contact", "group", "call", "conversation", "document_view", "document_download", "document_share", "form_answers", "customer_list_export"] as const;
 export type AccessLogKind = (typeof ACCESS_LOG_KINDS)[number];
 export type OpenedRef =
   | { kind: Exclude<AccessLogKind, "customer_list_export">; recordId: string }
@@ -158,6 +184,7 @@ export function enterHref(accountId: string, to: string | null): string;
 // gate.ts
 export function requireAgencyVisit(accountId: string, clerkUserId: string, sessionId: string | null | undefined): Promise<void>; // redirects or notFound()s
 export function agencyVisitOk(accountId: string, clerkUserId: string, sessionId: string | null | undefined): Promise<boolean>;
+export function agencyVisitMissing(accountId: string): Promise<boolean>; // true only for an agency session with no live visit here (the export's 409, review m5)
 // note.ts
 export type NoteAccess = { isAgency: boolean };
 export function noteOpened(access: NoteAccess, accountId: string, ref: OpenedRef): Promise<void>;     // no visit: redirect to the chooser
@@ -202,9 +229,9 @@ export function BisAccessSkeleton(): JSX.Element;                               
 export function BisAccessError(): JSX.Element;                                     // "use client"; ghost Try again, router.refresh()
 ```
 
-### The 40 files the route walk classifies (C18)
+### The entry files the route walk classifies (C18): 41, the 40 below plus `ACCT/layout.tsx` (not a record)
 
-**Records (19).** Each must call `noteOpened` (pages, the export) or `noteOpenedApi` (routes):
+**Records (19).** Each must call `noteOpened` (pages) or `noteOpenedApi` (routes, and the export since review m5):
 `ACCT/contacts/[contactId]/page.tsx`, `ACCT/groups/[groupId]/page.tsx`, `ACCT/calls/[callId]/page.tsx`, `ACCT/conversations/page.tsx`, `ACCT/forms/[formId]/page.tsx`, `ACCT/contacts/export/route.ts`, and the 13 routes `API/contacts/[contactId]/{ai-summary,document-requests,document-requirements,documents,email,groups,places,relationships,summary,texts}/route.ts` and `API/groups/[groupId]/{document-requests,documents,places}/route.ts`.
 
 **Not records (21), with the reason the walk records:** `activity` (list), `automations` (settings), `billing` (settings), `branding` (settings), `calendar` (list), `calls` (list), `checklist` (agency work about the client), `contacts/import` (writes, shows no stored record), `contacts` (list), `dashboard` (totals), `documents` (list; opening a file is logged by the file action), `forms` (list), `pipeline` (list), `settings` (settings), `setup` (settings), `tasks` (list), `team` (settings; this section lives here), `voice/knowledge/[version]` (the business's own facts), `voice` (settings), `website` (settings), and `API/search/route.ts` (returns names like a list; opening a result is logged).
@@ -237,6 +264,7 @@ export function BisAccessError(): JSX.Element;                                  
 **Files:**
 - Create: `packages/db/supabase/migrations/0105_access_log.sql`
 - Create: `packages/db/src/test/access-log-schema.test.ts` (withRollback; replica and CI)
+- Create: `packages/db/src/test/access-log-concurrency.test.ts` (two real connections; commits and cleans up; replica and CI, never bis-ci)
 - Create: `packages/db/src/access-log.ts`
 - Create: `packages/db/src/test/access-log-wrappers.test.ts` (fake client; local)
 - Create: `packages/db/src/test/access-log-live.test.ts` (withTestAccount; CI only)
@@ -324,7 +352,7 @@ Then these `describe` blocks, each `it` wrapped in `withRollback(async (c) => { 
 
 ```ts
 describe("0105: grants make both tables append-only", () => {
-  it("table privileges: authenticated and service_role SELECT, nothing else for any role, MAINTAIN included (mutation: drop service_role from the revoke-all line -> FAILS)", () =>
+  it("table privileges: authenticated SELECT on the items only, service_role SELECT on both, nothing else for any role, MAINTAIN included (mutations: drop service_role from the revoke-all line -> FAILS; `grant select on public.agency_visits to authenticated` -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select r, t, p from unnest(array['anon','authenticated','service_role']) r
@@ -333,10 +361,24 @@ describe("0105: grants make both tables append-only", () => {
           where has_table_privilege(r, t, p) order by 1, 2, 3`);
       expect(rows).toEqual([
         { r: "authenticated", t: "public.agency_visit_items", p: "SELECT" },
-        { r: "authenticated", t: "public.agency_visits", p: "SELECT" },
         { r: "service_role", t: "public.agency_visit_items", p: "SELECT" },
         { r: "service_role", t: "public.agency_visits", p: "SELECT" },
       ]);
+    }));
+
+  it("column SELECT: authenticated reads exactly six columns of agency_visits, never the Clerk user or session id (review m3; mutation: add actor_clerk_user_id to the column grant -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select a.attname as col from pg_attribute a
+          where a.attrelid = 'public.agency_visits'::regclass and a.attnum > 0 and not a.attisdropped
+            and has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT') order by 1`);
+      expect(rows.map((r: { col: string }) => r.col)).toEqual(["account_id", "actor_kind", "actor_name", "id", "reason", "started_at"]);
+      // And it bites: an Owner of the account asking for the actor's Clerk id is refused 42501 (not zero rows).
+      const a = await seedAccount(c, "cols");
+      await visitAt(c, a.accountId, "1 minute");
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      expect((await refusal(c, "select actor_clerk_user_id from public.agency_visits where account_id = $1", [a.accountId]))?.code).toBe("42501");
+      expect((await c.query("select actor_name from public.agency_visits where account_id = $1", [a.accountId])).rowCount).toBe(1);
     }));
 
   it("column INSERT: service_role on exactly these ten columns, so started_at and first_opened_at stay the database's clock (mutation: add started_at to the grant -> FAILS)", () =>
@@ -473,7 +515,7 @@ describe("0105: start_agency_visit", () => {
 });
 
 describe("0105: note_agency_open", () => {
-  it("one row per record per visit; two records two rows; every export its own row; a new visit logs the same record again (mutation: drop agency_visit_items_once or its on-conflict clause -> FAILS)", () =>
+  it("one row per record per visit; two records two rows; every export its own row; a new visit logs the same record again (mutation: drop agency_visit_items_once AND its on-conflict clause -> FAILS with 2 rows)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "once");
       await start(c, a.accountId);
@@ -543,7 +585,7 @@ describe("0105: who may call what", () => {
 });
 
 describe("0105: access_log_page", () => {
-  it("newest first, limit + 1 rows, the real total, counts with a file counted once across view and download, ended_at, items newest first and capped at 100, and the cursor (mutations: count(distinct record_id) -> count(*) FAILS; drop the item limit FAILS; `<` -> `<=` FAILS; `limit p_limit + 1` -> `limit p_limit` FAILS)", () =>
+  it("newest first, limit + 1 rows, the real total, counts with a file counted once across view, download and share, ended_at, items newest first and capped at 100, and the cursor (mutations: count(distinct record_id) -> count(*) FAILS; drop the item limit FAILS; `<` -> `<=` FAILS; `limit p_limit + 1` -> `limit p_limit` FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "page");
       const b = await seedAccount(c, "pageB");
@@ -551,10 +593,11 @@ describe("0105: access_log_page", () => {
       const oldest = await visitAt(c, a.accountId, "3 hours", { session: "s1" });
       const middle = await visitAt(c, a.accountId, "2 hours", { session: "s2" });
       const newest = await visitAt(c, a.accountId, "1 hour", { session: "s3" });
-      const d1 = await uuid(c); const d2 = await uuid(c); const x = await uuid(c);
+      const d1 = await uuid(c); const d2 = await uuid(c); const d3 = await uuid(c); const x = await uuid(c);
       await itemAt(c, newest, a.accountId, "document_view", d1, "50 minutes");
       await itemAt(c, newest, a.accountId, "document_download", d1, "49 minutes");
       await itemAt(c, newest, a.accountId, "document_view", d2, "48 minutes");
+      await itemAt(c, newest, a.accountId, "document_share", d3, "47 minutes 30 seconds");   // d3 only shared: still a file opened
       await itemAt(c, newest, a.accountId, "contact", x, "47 minutes");
       await itemAt(c, newest, a.accountId, "customer_list_export", null, "46 minutes", 12);
       await actAsOwner(c);
@@ -568,7 +611,7 @@ describe("0105: access_log_page", () => {
       const p1 = await page(null, 2);
       expect(p1.total).toBe(3);
       expect(p1.visits.map((v: { id: string }) => v.id)).toEqual([newest, middle, oldest]);
-      expect(p1.visits[0].counts).toEqual({ contact: 1, group: 0, call: 0, conversation: 0, file: 2, form_answers: 0, customer_list_export: 1 });
+      expect(p1.visits[0].counts).toEqual({ contact: 1, group: 0, call: 0, conversation: 0, file: 3, form_answers: 0, customer_list_export: 1 });
       expect(p1.visits[0].items[0]).toMatchObject({ kind: "customer_list_export", record_id: null, item_count: 12 });
       expect(p1.visits[0].ended_at).not.toBeNull();
       expect(p1.visits[1].items).toHaveLength(100);
@@ -620,6 +663,59 @@ describe("0105: the account's own delete carries the log away", () => {
 
 The pure cases import `../access-log`. Create that file now with only `export const AGENCY_VISIT_HOURS = 2;` (Step 4 fills in the rest), so the red in Step 3 is the database's red and not an import error.
 
+- [ ] **Step 2b: The two-connection concurrency test (review m1).** A one-connection test cannot see the advisory lock: weakening it to `pg_advisory_xact_lock_shared` left every case above green. Create `packages/db/src/test/access-log-concurrency.test.ts`. It COMMITS its own setup, because a second connection cannot see the first one's uncommitted rows, and it deletes everything in `finally`. It runs on the replica and in CI verify (both throwaway databases), never on bis-ci:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { Client } from "pg";
+import "dotenv/config";
+
+/**
+ * 0105: start_agency_visit's advisory lock makes two simultaneous starts for one person, session and account
+ * into ONE visit. Two real connections; the first holds its transaction open with the lock and its
+ * uncommitted visit, so the second must WAIT, then see that visit once the first commits. Commits its own
+ * account and agency (a second connection cannot see uncommitted rows) and deletes both in finally; the
+ * account's delete cascades the visit away.
+ */
+const url = () => process.env.SUPABASE_DB_URL!;
+const connect = async () => { const c = new Client({ connectionString: url(), connectionTimeoutMillis: 10_000 }); await c.connect(); return c; };
+const START = "select public.start_agency_visit($1, 'user_race', 'Race', 'sess_race', 'support') as id";
+
+describe("0105: concurrent starts", () => {
+  it("two concurrent starts for one person, session and account make ONE visit; the second waits for the first (mutation: pg_advisory_xact_lock -> pg_advisory_xact_lock_shared FAILS)", async () => {
+    const admin = await connect();
+    const c1 = await connect();
+    const c2 = await connect();
+    let accountId: string | null = null;
+    let agencyId: string | null = null;
+    try {
+      agencyId = (await admin.query<{ id: string }>("insert into public.agencies (name) values ('Race') returning id")).rows[0]!.id;
+      accountId = (await admin.query<{ id: string }>(
+        "insert into public.accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Race') returning id",
+        [agencyId, `org_race_${Math.random().toString(36).slice(2, 10)}`])).rows[0]!.id;
+      await c1.query("begin"); await c1.query("set local role service_role");
+      const first = (await c1.query<{ id: string }>(START, [accountId])).rows[0]!.id;    // holds the lock; its row is uncommitted
+      await c2.query("begin"); await c2.query("set local role service_role");
+      const second = c2.query<{ id: string }>(START, [accountId]);
+      const raced = await Promise.race([second.then(() => "finished"), new Promise((r) => setTimeout(() => r("waiting"), 750))]);
+      expect(raced).toBe("waiting");
+      await c1.query("commit");
+      expect((await second).rows[0]!.id).toBe(first);
+      await c2.query("commit");
+      expect((await admin.query("select 1 from public.agency_visits where account_id = $1", [accountId])).rowCount).toBe(1);
+    } finally {
+      await c1.query("rollback").catch(() => undefined);
+      await c2.query("rollback").catch(() => undefined);
+      if (accountId) await admin.query("delete from public.accounts where id = $1", [accountId]);
+      if (agencyId) await admin.query("delete from public.agencies where id = $1", [agencyId]);
+      await Promise.all([c1.end(), c2.end(), admin.end()]);
+    }
+  });
+});
+```
+
+  Read the `accounts` insert's other NOT NULL columns off `0001_tenancy.sql` before running, and add any the table needs; the source wins. Under M22, `raced` is `"finished"` and the visit count is 2, so both assertions are red.
+
 - [ ] **Step 3: Run it on `pre`. Every database case must fail.** `cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55851/pre pnpm exec vitest run src/test/access-log-schema.test.ts > "$D/vt-pre.txt" 2>&1; echo $? > "$D/vt-pre.exit"` (with `D=SCRATCH/al-t1`). Paste the summary line and one red line (expected: `function public.start_agency_visit(...) does not exist` / `relation "public.agency_visits" does not exist`). The three pure cases pass on `pre`, and that is correct.
 
 - [ ] **Step 4: Write the migration and the wrappers.** Create `packages/db/supabase/migrations/0105_access_log.sql`. It must be ASCII only, with no backslash anywhere:
@@ -643,6 +739,8 @@ The pure cases import `../access-log`. Create that file now with only `export co
 -- (the trust pack says so).
 -- WHO READS. authenticated, under RLS: the agency, or this account's Owner while client access is on
 -- (0066's expression, each call in an InitPlan). Staff, Technicians and every other account read nothing.
+-- Column SELECT on agency_visits: id, account_id, actor_kind, actor_name, reason, started_at only, so an Owner
+-- never reads BIS staff's Clerk user or session ids; service_role reads every column (the gate needs them).
 -- FUNCTIONS. All SECURITY INVOKER, set search_path = pg_catalog, pg_temp (0096's rule), names schema-
 -- qualified; EXECUTE revoked from public, anon, authenticated and service_role by name (0043's lesson), then
 -- granted: start_agency_visit, agency_visit_live, note_agency_open and app.agency_visit_window to
@@ -692,8 +790,8 @@ create table public.agency_visit_items (
   visit_id uuid not null,
   account_id uuid not null,
   kind text not null constraint agency_visit_items_kind_check check (kind in (
-    'contact', 'group', 'call', 'conversation', 'document_view', 'document_download', 'form_answers',
-    'customer_list_export')),
+    'contact', 'group', 'call', 'conversation', 'document_view', 'document_download', 'document_share',
+    'form_answers', 'customer_list_export')),
   record_id uuid,
   item_count integer constraint agency_visit_items_item_count_check check (item_count is null or item_count >= 0),
   first_opened_at timestamptz not null default now(),
@@ -720,7 +818,10 @@ create policy agency_visit_items_read on public.agency_visit_items for select to
              and (select app.is_account_owner(app.current_account_id()))));
 
 revoke all on public.agency_visits, public.agency_visit_items from anon, authenticated, service_role;
-grant select on public.agency_visits, public.agency_visit_items to authenticated, service_role;
+-- An Owner reads who, why and when, never BIS staff's Clerk user or session id (review m3): column SELECT.
+grant select (id, account_id, actor_kind, actor_name, reason, started_at) on public.agency_visits to authenticated;
+grant select on public.agency_visit_items to authenticated;
+grant select on public.agency_visits, public.agency_visit_items to service_role;
 grant insert (account_id, actor_clerk_user_id, actor_name, clerk_session_id, reason)
   on public.agency_visits to service_role;
 grant insert (visit_id, account_id, kind, record_id, item_count)
@@ -806,7 +907,7 @@ begin
           'group', count(*) filter (where i.kind = 'group'),
           'call', count(*) filter (where i.kind = 'call'),
           'conversation', count(*) filter (where i.kind = 'conversation'),
-          'file', count(distinct i.record_id) filter (where i.kind in ('document_view', 'document_download')),
+          'file', count(distinct i.record_id) filter (where i.kind in ('document_view', 'document_download', 'document_share')),
           'form_answers', count(*) filter (where i.kind = 'form_answers'),
           'customer_list_export', count(*) filter (where i.kind = 'customer_list_export'))
         from public.agency_visit_items i where i.visit_id = v.id),
@@ -850,7 +951,7 @@ Then fill in `packages/db/src/access-log.ts` with the "Interfaces produced by T1
 
 Add the barrel block to `index.ts`. In `account-teardown.ts`, append to the comment block after `:46` a paragraph that begins "`agency_visits` and `agency_visit_items` (0105) are deliberately not on that list either, for consent_events' reason: …". It names the append-only grants and the cascade, and points at `access-log-schema.test.ts`'s pure case.
 
-- [ ] **Step 5: Run on `post`. Everything must pass.** `sh pg-al.sh post`, then the Step 3 command against `/post`. Paste the summary line (expected `Tests  N passed (N)` with N = the file's case count, 0 failed). Also run the three neighbours that must NOT move, on `post`: `src/test/schema-grants-guard.test.ts src/test/definer-search-path.test.ts src/test/consent-ledger-schema.test.ts`. Paste their summary.
+- [ ] **Step 5: Run on `post`. Everything must pass.** `sh pg-al.sh post`, then the Step 3 command against `/post`. Paste the summary line (expected `Tests  N passed (N)` with N = the file's case count, 0 failed), and the same for `src/test/access-log-concurrency.test.ts` on `post` (it is red on `pre`: the function does not exist). Also run the three neighbours that must NOT move, on `post`: `src/test/schema-grants-guard.test.ts src/test/definer-search-path.test.ts src/test/consent-ledger-schema.test.ts`. Paste their summary.
 
 - [ ] **Step 6: Mutation probes, each on `post` from a mutated COPY of 0105** (`$D/mutants/M<n>.sql`, applied with `sh pg-al.sh post $D/mutants/M<n>.sql`). Each must turn the test NAMED in its row red. Paste the red line for each:
 
@@ -865,7 +966,7 @@ Add the barrel block to `index.ts`. In `account-teardown.ts`, append to the comm
 | M7 | `interval '3 hours'` in the window | window edge, AND the pure AGENCY_VISIT_HOURS pin |
 | M8 | drop `and v.clerk_session_id = p_session` | another session… |
 | M9 | in `start_agency_visit`, delete the `if v_id is not null then return v_id; end if;` line | start twice |
-| M10 | delete the `on conflict … do nothing` clause | one row per record |
+| M10 | drop BOTH `agency_visit_items_once` and the `on conflict … do nothing` clause, so a repeat note inserts a second row (the wrong OUTPUT). Dropping only one of them makes the second note ERROR instead (42P10 without the index, 23505 without the clause), which also reds the test but is not the wrong-output proof | one row per record |
 | M11 | `agency_visit_live`: drop `and v.account_id = p_account_id` | another session… (account case) AND no_visit across accounts |
 | M12 | `count(distinct i.record_id)` to `count(i.record_id)` | access_log_page |
 | M13 | drop `limit 100` | access_log_page |
@@ -874,6 +975,11 @@ Add the barrel block to `index.ts`. In `account-teardown.ts`, append to the comm
 | M16 | visits `on delete cascade` to `on delete restrict` | account delete |
 | M17 | remove `public, ` from the `start_agency_visit` revoke | EXECUTE |
 | M18 | drop `nullif(pg_catalog.btrim(p_actor_name), '')` (insert `p_actor_name`) | blank name |
+| M19 | drop `'document_share'` from the `file` count filter | access_log_page (file 2, not 3) |
+| M20 | `grant select (…, actor_clerk_user_id) on public.agency_visits to authenticated` | column SELECT |
+| M21 | `grant select on public.agency_visits to authenticated` (table-level) | table privileges, AND column SELECT |
+| M22 | `pg_advisory_xact_lock` to `pg_advisory_xact_lock_shared` | concurrent starts (Step 2b) |
+| M23 | drop `'document_share'` from `agency_visit_items_kind_check` | access_log_page (its share insert is refused 23514) |
 
 M11 may also turn other cases red. That is fine, as long as the NAMED case is among them. If a row stays green, do NOT accept it: find out why and substitute a mutation that can fail, then say so in the report (working rule 2).
 
@@ -893,7 +999,7 @@ M11 may also turn other cases red. That is fine, as long as the NAMED case is am
 
 - [ ] **Step 8b (report only, no assertion): write cost on the PG17 replica.** On `post`, as the table owner, insert 20,000 visits and 200,000 items for one account. Then `explain (analyze, buffers)` one `note_agency_open` (as `set role service_role`) and one `agency_visit_live`. Paste both execution times and check for `Index Searches: N>1`; there should be none on PG17. Skip this step on PG18.
 
-- [ ] **Step 9: Typecheck and commit.** Run `pnpm --filter @bis/db exec tsc --noEmit -p .` (or the package's `typecheck` script if it has one), then stop the replica (`sh pg-al.sh stop`). Commit the seven paths: `feat(db): migration 0105, an append-only log of BIS's visits to an account and the records each opened (F-118 part 1)`.
+- [ ] **Step 9: Typecheck and commit.** Run `pnpm --filter @bis/db exec tsc --noEmit -p .` (or the package's `typecheck` script if it has one), then stop the replica (`sh pg-al.sh stop`). Commit the eight paths: `feat(db): migration 0105, an append-only log of BIS's visits to an account and the records each opened (F-118 part 1)`.
 
 ---
 
@@ -902,7 +1008,7 @@ M11 may also turn other cases red. That is fine, as long as the NAMED case is am
 **Tier:** low · **Owner:** bis-frontend · **Wave:** 1
 
 **Files:**
-- Modify: `apps/web/src/lib/messages.ts` (one block, at the end before `} as const;` at `:6390`, under a `// F-118 part 1: the reason chooser and the Owner's BIS access section.` comment)
+- Modify: `apps/web/src/lib/messages.ts` (one block, at the end before `} as const;` at `:6391` (review m10), under a `// F-118 part 1: the reason chooser and the Owner's BIS access section.` comment)
 - Modify: `apps/web/src/lib/messages.test.ts` (one new `describe`)
 
 **Interfaces:** Produces the keys below. T4, T5 and T10 read them, by these exact names.
@@ -934,6 +1040,9 @@ describe("the BIS access copy (F-118 part 1)", () => {
     expect(m["accessLog.note.agencyLists"]).toContain("open work, screened calls and phone numbers");
     expect(m["accessLog.note.agencyLists.es"]).toContain("el trabajo pendiente, las llamadas filtradas y los números de teléfono");
     expect(m["accessLog.enter.ended.es"]).toBe("Su última visita aquí terminó al cabo de 2 horas.");
+    // Review I5 (orchestrator decision, consistent with ruling 2): lists are part of the visit, not listed one by one.
+    expect(m["accessLog.note.lists"]).toBe("Lists inside your account, like your customers, inbox and calls, are part of the visit and aren't listed one by one.");
+    expect(m["accessLog.note.lists.es"]).toBe("Las listas dentro de su cuenta, como sus clientes, la bandeja de entrada y las llamadas, forman parte de la visita y no aparecen una por una.");
   });
 });
 ```
@@ -947,6 +1056,7 @@ describe("the BIS access copy (F-118 part 1)", () => {
 | `accessLog.title` | BIS access | Acceso de BIS |
 | `accessLog.intro` | Each time someone at BIS opens your account, they must choose why first. Every customer, call, conversation and file they open is listed here. These entries can't be changed or deleted from BIS or from your account. | Cada vez que alguien de BIS abre su cuenta, primero tiene que elegir por qué. Aquí aparece cada cliente, llamada, conversación y archivo que abre. Estas entradas no se pueden cambiar ni borrar desde BIS ni desde su cuenta. |
 | `accessLog.note.automatic` | This list shows people at BIS. Automatic work, like Sofía answering a call or a reminder going out, isn't a person looking and isn't listed. | Esta lista muestra a personas de BIS. El trabajo automático, como Sofía al contestar una llamada o el envío de un recordatorio, no es una persona mirando y no aparece aquí. |
+| `accessLog.note.lists` | Lists inside your account, like your customers, inbox and calls, are part of the visit and aren't listed one by one. | Las listas dentro de su cuenta, como sus clientes, la bandeja de entrada y las llamadas, forman parte de la visita y no aparecen una por una. |
 | `accessLog.note.agencyLists` | BIS also has a few lists that show every business at once: open work, screened calls and phone numbers. Looking at those lists, or deciding one of Sofía's suggestions from the work list, doesn't open your account, so it isn't listed here. Opening a customer, call or conversation from them is. | BIS también tiene algunas listas que muestran todos los negocios a la vez: el trabajo pendiente, las llamadas filtradas y los números de teléfono. Ver esas listas, o decidir una sugerencia de Sofía desde la lista de trabajo, no abre su cuenta, así que no aparece aquí. Abrir desde ellas un cliente, una llamada o una conversación sí aparece. |
 | `accessLog.empty` | BIS hasn't opened your account yet. When someone does, you'll see who, when, why and what they opened. | BIS todavía no ha abierto su cuenta. Cuando alguien lo haga, verá quién, cuándo, por qué y qué abrió. |
 | `accessLog.error` | We couldn't load BIS's visits. Try again. | No pudimos cargar las visitas de BIS. Inténtelo de nuevo. |
@@ -975,6 +1085,7 @@ describe("the BIS access copy (F-118 part 1)", () => {
 | `accessLog.item.conversationNoName` | Conversation | Conversación |
 | `accessLog.item.fileViewed` | File · {title} · viewed | Archivo · {title} · visto |
 | `accessLog.item.fileDownloaded` | File · {title} · downloaded | Archivo · {title} · descargado |
+| `accessLog.item.fileShared` | File · {title} · shared | Archivo · {title} · compartido |
 | `accessLog.item.form` | Form answers · {name} | Respuestas del formulario · {name} |
 | `accessLog.item.export` / `…exportOne` | Downloaded your customer list ({count} customers) / Downloaded your customer list (1 customer) | Descargó su lista de clientes ({count} clientes) / Descargó su lista de clientes (1 cliente) |
 | `accessLog.name.archived` | {name} (archived) | {name} (archivado) |
@@ -984,6 +1095,7 @@ describe("the BIS access copy (F-118 part 1)", () => {
 | `accessLog.gone.file` | A file that was later deleted for good | Un archivo que se eliminó para siempre después |
 | `accessLog.gone.other` | A record that was later deleted | Un registro que se eliminó después |
 | `accessLog.more` | and {count} more | y {count} más |
+| `accessLog.exportEnded` | Your visit to this account has ended, so nothing was downloaded. Open the account again, choose why, then download the list. | Su visita a esta cuenta terminó, así que no se descargó nada. Vuelva a abrir la cuenta, elija por qué y luego descargue la lista. |
 | `accessLog.enter.heading` | Why are you opening {name}? | ¿Por qué abre {name}? |
 | `accessLog.enter.legend` | Choose a reason | Elija un motivo |
 | `accessLog.enter.notice` | The business's Owners can see each visit, its reason and everything you open. | Los dueños del negocio pueden ver cada visita, su motivo y todo lo que abra. |
@@ -1053,7 +1165,7 @@ export function enterHref(accountId: string, to: string | null): string {
 }
 ```
 
-- [ ] **Step 2: `gate.ts`, test first.** `gate.test.ts` mocks `@bis/db` (`serviceDb`, `agencyVisitLive`), `next/headers` (a settable `Headers`) and `next/navigation` (`redirect` and `notFound` both throw tagged errors). Cases:
+- [ ] **Step 2: `gate.ts`, test first.** `gate.test.ts` mocks `@bis/db` (`serviceDb`, `agencyVisitLive`), `@clerk/nextjs/server` (`auth`, for case 10), `next/headers` (a settable `Headers`) and `next/navigation` (`redirect` and `notFound` both throw tagged errors). Cases:
   1. A live visit resolves with no redirect, and `agencyVisitLive` gets `(svc, A, { clerkUserId: "user_agency", sessionId: "sess_1" })`.
   2. No visit, with `x-bis-path` set to a same-account path, redirects to `enterHref(A, that path)`.
   3. No visit and no header redirects to `/dashboard/enter/A`.
@@ -1062,10 +1174,12 @@ export function enterHref(accountId: string, to: string | null): string {
   6. `notFound()` for `"foo"`, with `agencyVisitLive` never called.
   7. No `sessionId` redirects to `/sign-in`, with no RPC.
   8. `agencyVisitOk` returns true or false, throws on an RPC error, and is false with no RPC for a non-UUID id.
-  9. **The carve-out pin.** An AST walk over `apps/web/src` (non-test `.ts`/`.tsx`, the `typescript` package as in `lib/documents/read-gate.test.ts:28-64`) collects every `PropertyAssignment` named `agencyVisit`. It expects exactly one, in `lib/proposals/actions.ts`, initialised to the string literal `"not-required"`. Mutation, in a COPY: add `{ agencyVisit: "not-required" }` to `ACCT/contacts/[contactId]/page.tsx:94`, and the case FAILS naming that file.
+  9. **The carve-out pin (review m4: the VALUE, not the property name).** An AST walk over `apps/web/src` (non-test `.ts`/`.tsx`, the `typescript` package as in `lib/documents/read-gate.test.ts:28-64`) collects every string-literal node (`ts.isStringLiteralLike`, which includes a literal TYPE's string) whose text is `"not-required"`. The files holding one must be exactly `lib/auth.ts` (the option's type and its one comparison) and `lib/proposals/actions.ts`, and `lib/proposals/actions.ts` must hold exactly ONE. A name check would miss `const skip = "not-required"; requireAccountAccess(id, { agencyVisit: skip })` or a spread, and this cannot. Mutations, in a COPY: add `{ agencyVisit: "not-required" }` to `ACCT/contacts/[contactId]/page.tsx:94` (FAILS naming that file); put `const v = "not-required" as const;` in `lib/record/loaders.ts` and pass `{ agencyVisit: v }` from there (FAILS naming that file).
+  10. **`agencyVisitMissing`** (Clerk's `auth` mocked): a client session gives `false` with no RPC; an agency session with a live visit gives `false`; with none it gives `true`; with no `sessionId` it gives `true`; a non-UUID id gives `false` with no RPC (the guard's own 404 answers it); an RPC rejection rejects. Mutation: answer `false` for the agency on no visit, FAILS.
 
 ```ts
 import { cache } from "react";
+import { auth } from "@clerk/nextjs/server";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { serviceDb, agencyVisitLive } from "@bis/db";
@@ -1091,6 +1205,15 @@ export async function requireAgencyVisit(accountId: string, clerkUserId: string,
 export async function agencyVisitOk(accountId: string, clerkUserId: string, sessionId: string | null | undefined): Promise<boolean> {
   if (!sessionId || !isUuid(accountId)) return false;
   return (await liveVisit(accountId, clerkUserId, sessionId)) !== null;
+}
+
+/** Review m5: for a response that must never be a redirect (the customer-list download). True only for an
+ *  agency session with no live visit for this account; everyone else is left to the route's own guard. */
+export async function agencyVisitMissing(accountId: string): Promise<boolean> {
+  const { userId, sessionId, sessionClaims } = await auth();
+  if (!userId || (sessionClaims as { app_role?: string } | null)?.app_role !== "agency_admin") return false;
+  if (!isUuid(accountId)) return false;
+  return !(await agencyVisitOk(accountId, userId, sessionId));
 }
 ```
 
@@ -1245,12 +1368,12 @@ export default clerkMiddleware(async (auth, req) => {
   - `visitSummary` with counts `{ contact: 4, call: 1, file: 1 }` gives "Opened 4 customers, 1 call and 1 file." and, in Spanish, "Abrió 4 clientes, 1 llamada y 1 archivo." `{ contact: 1 }` gives "Opened 1 customer." / "Abrió 1 cliente." Mutation: always plural, FAILS.
   - The kinds come in the spec's order (customers, households or businesses, calls, conversations, files, form answers) whatever order the counts arrive in. Mutation: `Object.keys(counts)` order, FAILS.
   - Exports produce their own sentence: `{ contact: 2, customer_list_export: 1 }` gives "Opened 2 customers. Downloaded your customer list."; `{ customer_list_export: 2 }` gives "Downloaded your customer list 2 times."; all zeroes give the "Didn't open…" sentence.
-  - `visitSpan` in `Pacific/Honolulu` for `2026-10-30T08:30:00Z`–`2026-10-30T08:45:00Z` gives text shaped like `"Oct 29, 2026, 10:30 PM–10:45 PM"`, containing **Oct 29**. Assert the day, not the exact string, because ICU's spacing varies. The same instants in `America/Chicago` contain **Oct 30**. That is two zones with opposite days, and the machine zone (Chicago) cannot be the fixture's. A visit with no end shows its start only. A span that crosses midnight names both days. Mutations: render in the machine's zone (Honolulu FAILS); always "start–end" (no-end FAILS).
+  - `visitSpan` in `Pacific/Honolulu` for `2026-10-30T08:30:00Z`–`2026-10-30T08:45:00Z` gives text shaped like `"Oct 29, 2026, 10:30 PM–10:45 PM"`, containing **Oct 29**. Assert the day, not the exact string, because ICU's spacing varies. The same instants in `America/Chicago` contain **Oct 30**. That is two zones with opposite days, and the machine zone (Chicago) cannot be the fixture's. A visit with no end shows its start only. A span that crosses midnight names both days. **Review m8, the repeated autumn hour:** `America/Chicago`, `2026-11-01T06:30:00Z`–`2026-11-01T07:20:00Z` is 1:30 AM CDT to 1:20 AM CST. The span must carry BOTH zone names (assert it contains `CDT` and `CST` in English, and in Spanish that the two clocks carry two DIFFERENT zone labels). An end must never read as earlier than its start with nothing to say why. Implementation: compare the two instants' offsets (`Intl.DateTimeFormat(…, { timeZone, timeZoneName: "shortOffset" })`), and when they differ, render each clock with `timeZoneName: "short"`. Mutations: render in the machine's zone (Honolulu FAILS); always "start–end" (no-end FAILS); drop the offset check (the Chicago fall-back case FAILS).
   - `buildVisitRows`, with one visit holding one of every kind, gives:
     - each item's text from its key;
     - the household or business label chosen by `kind`;
     - an archived customer as "Maria Lopez (archived)" / "(archivado)", and a trashed file as "Insurance card (in the trash)";
-    - "viewed" or "downloaded" by kind;
+    - "viewed", "downloaded" or "shared" by kind (`document_share` uses `accessLog.item.fileShared`, linking to the record's `?document=` like the other two; review I1);
     - a missing contact as `gone.customer` with `href: null`, a missing group as `gone.group`, a missing document as `gone.file`, a missing call, conversation or form as `gone.other`;
     - the hrefs `${base}/contacts/<id>`, `${base}/groups/<id>`, `${base}/calls/<id>`, `${base}/conversations?c=<id>`, `${base}/contacts/<rid>?document=<id>` (`${base}/groups/<rid>?document=<id>` for a group's file) and `${base}/forms/<id>`, and the export with `href: null`;
     - the label `"Dan Lopez · Support request"`, and with `actorName: null` `"Someone at BIS · …"` / `"Alguien de BIS · …"`;
@@ -1273,14 +1396,14 @@ export default clerkMiddleware(async (auth, req) => {
 
 - [ ] **Step 4: The components, red first.** `access-log-components.test.ts` uses `renderToStaticMarkup` with `createElement` (the `account-name-fields.test.ts:2-3,28` shape), inside `LocaleProvider` for the client ones, and decodes text through `lib/rendered-text.ts`. Cases:
   - `ReasonTiles` renders four `<button type="submit" name="reason" value="setup|support|fix|billing">` in that order, a `<legend>`, and no element using the primary variant's class (`bg-primary`). Mutation: `type="button"`, FAILS.
-  - `BisAccessFrame` renders `id="bis-access"`, the title, the intro, the automatic note and the agency-lists note in English, and all of them in Spanish under `LocaleProvider locale="es"`. Mutation: drop the agency-lists `<p>` (ruling 3), FAILS in both languages.
+  - `BisAccessFrame` renders `id="bis-access"`, the title, the intro, the automatic note, the lists note (review I5) and the agency-lists note in English, and all of them in Spanish under `LocaleProvider locale="es"`. Mutations: drop the agency-lists `<p>` (ruling 3), FAILS in both languages; drop the lists `<p>` (I5), FAILS in both languages.
   - `BisAccessList` with two rows renders each `data-bis-access-visit`, its label, its `when` with `tabular-nums`, its summary, and a ghost `button` with `aria-expanded="false"` and `aria-controls` naming the items list's id. That list is `hidden`, its links are `<a href>` for linked items and plain text for gone ones, and the `more` line appears. A row with no items renders no button.
   - `BisAccessSkeleton` renders three row skeletons and the sr-only loading text, and no spinner.
   - `BisAccessError` renders the error sentence and a ghost "Try again" button.
 
   Implementation notes:
   - `ReasonTiles` is a server-safe component (no `"use client"`). Its tiles copy `components/choice-tiles.tsx:52-58`'s token recipe (`--surface-2` at rest, `--surface-3` on hover over 150ms, `--line`/`--line-strong`, `--radius-ctl`, `min-h-11`, the `--ring-glow` focus ring) on a `<button>`. The grid is `sm:grid-cols-2`, all four tiles are the same size, and there is no primary.
-  - `BisAccessFrame` (`"use client"`) renders `<section id="bis-access" aria-labelledby="bis-access-title" className="mt-8 space-y-3">`, an `h2` (UI role, `text-base font-semibold`), the intro (`text-sm text-[var(--text-2)]`), the two notes (`text-xs text-[var(--text-3)]`), then `{children}`. Strings come from `t(m, key, useLocale())`.
+  - `BisAccessFrame` (`"use client"`) renders `<section id="bis-access" aria-labelledby="bis-access-title" className="mt-8 space-y-3">`, an `h2` (UI role, `text-base font-semibold`), the intro (`text-sm text-[var(--text-2)]`), the three notes in order (automatic work, lists inside the account, the agency-wide lists; `text-xs text-[var(--text-3)]`), then `{children}`. Strings come from `t(m, key, useLocale())`.
   - `BisAccessList` (`"use client"`) is a `<ul>` of `<li data-bis-access-visit={id}>`. The label uses the Label role (`font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--text-3)]`). The when line is `tabular-nums text-sm`. The summary is `text-sm`. The toggle is a ghost `Button` (`components/ui/button`), with item links through `next/link`. There is no checkbox, no status colour, and no row-as-link (the rows are not navigable records; only items link).
   - Every string comes from the catalogue, so the i18n ratchet stays at 0 for these files. The `" · "` and `"–"` separators carry no letters.
 
@@ -1395,10 +1518,11 @@ const noteOpenedApi = vi.fn(async () => true);
 vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...(a as [])) }));
 ```
 
-  Reset it in `beforeEach` with `mockReset()` and `mockResolvedValue(true)` (`clearAllMocks` keeps implementations, the memory's shape). In each `route.test.ts`, make the guard mock return an AGENCY value (`{ userId: "user_agency", isAgency: true }`) for these three new cases:
+  Reset it in `beforeEach` with `mockReset()` and `mockResolvedValue(true)` (`clearAllMocks` keeps implementations, the memory's shape). In each `route.test.ts`, make the guard mock return an AGENCY value (`{ userId: "user_agency", isAgency: true }`) for these four new cases:
   1. **Logged after the proof:** `noteOpenedApi` is called once with `(that same access object, A, ref)`, where `ref` is this route's row from the table. Mutations: delete the call (FAILS); hard-code `{ isAgency: false }` as the first argument (FAILS).
   2. **A 404 logs nothing:** with `getContact` / `readGroup` resolving `null`, the answer is 404 and `noteOpenedApi` was never called. Mutation: move the call above the proof, FAILS.
   3. **No visit, no data:** with `noteOpenedApi` resolving `false`, the answer is 404 and this route's FIRST data read after the proof was never called. That read is `listRecordDocuments` for documents, `listContactPlaces` for places, `loadSummary` for summary, and so on; name it in the test. Mutation: ignore the `false`, FAILS.
+  4. **The write fails, nothing leaves (review I3, ruling 4):** with `noteOpenedApi` REJECTING, the route answers a status `>= 500`, and that same first data read was never called. Compute the status as `await GET(…).then((r) => r.status, () => 500)`. A route whose proof sits inside its own `try` answers its own 500; one without lets Next turn the rejection into a 500, which the `() => 500` stands for. Assert both the status and the unread data, so a route that swallowed the rejection and answered 200 or 404 fails. Mutation: wrap the call in `try { … } catch { /* go on */ }`, FAILS on the data read.
 
   The two `.reads.test.ts` files only gain the mock (resolving `true`), so they keep passing. Run red and paste one red line per route.
 
@@ -1416,7 +1540,7 @@ vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => no
 
 ---
 
-### Task 7: The contact and group pages, file opens, form answers and the export log; Export is an anchor
+### Task 7: The contact and group pages, file opens and shares, form answers and the export log; Export is an anchor
 
 **Tier:** medium · **Owner:** bis-crm · **Wave:** 3
 
@@ -1424,59 +1548,90 @@ vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => no
 - Modify: `ACCT/contacts/[contactId]/page.tsx` (`:94-110`), `ACCT/contacts/[contactId]/page.test.ts`
 - Modify: `ACCT/groups/[groupId]/page.tsx` (`:76-94`), `ACCT/groups/[groupId]/page.test.ts`
 - Modify: `ACCT/contacts/documents-actions.ts` (`:228-256`), `ACCT/contacts/documents-actions.test.ts`
+- Modify: `ACCT/contacts/document-shares-actions.ts` (`:49-77`), `ACCT/contacts/document-shares-actions.test.ts` (review I1)
 - Modify: `ACCT/forms/[formId]/page.tsx` (`:21-48`); Create: `ACCT/forms/[formId]/page.test.ts`
 - Modify: `ACCT/contacts/export/route.ts` (`:76-104`), `ACCT/contacts/export/route.get.test.ts` (and `route.test.ts` if its mocks need the new modules)
 - Modify: `ACCT/contacts/page.tsx` (`:281-287`), `ACCT/contacts/page.test.ts`
+- Modify: `apps/web/src/lib/billing/read-only.test.ts:139-147` and `:153-154` (reason text only, review m7)
 
-**Interfaces:** Consumes `noteOpened` (T3) and `countContacts` (`packages/db/src/contacts.ts:1031`).
+**Interfaces:** Consumes `noteOpened`, `noteOpenedApi` and `agencyVisitMissing` (T3), the copy key `accessLog.exportEnded` (T2), and `countContacts` (`packages/db/src/contacts.ts:1031`).
 
-- [ ] **Step 1: Red first, every file.** Mock `@/lib/access-log/note` with `noteOpened: vi.fn(async () => undefined)` in each test file, reset in `beforeEach`, with the surface's guard mock returning an agency access. Cases:
+**The one shape every call takes** (Task 11 enforces it):
+- `noteOpened` is directly awaited (`await noteOpened(…);`), or it is an element of the array literal handed straight to an awaited `Promise.all`.
+- It is never `.catch`ed or `.then`ed, and never behind `void`.
+- `noteOpenedApi` appears only as `if (!(await noteOpenedApi(…))) return …;`.
+
+- [ ] **Step 1: Red first, every file.** Mock `@/lib/access-log/note` with `noteOpened: vi.fn(async () => undefined)` (and `noteOpenedApi: vi.fn(async () => true)` where the surface uses it) in each test file. Reset with `mockReset()` and re-arm in `beforeEach`, and have the surface's guard mock return an AGENCY access. Cases:
   - **Contact page.**
     - `noteOpened` gets `(access, A, { kind: "contact", recordId: CONTACT.id })`.
     - `getContact` → `null` gives `notFound` and no call.
     - The shared-number holding record (`holds_shared_number: true`) redirects and makes NO call; its conversation logs it.
-    - A rejected `noteOpened` rejects the page, with no markup. Mutation: `.catch(() => undefined)` on it, FAILS.
-  - **Group page.** The same three: called with `{ kind: "group", recordId: group.id }`, `readGroup` → `null` makes no call, and a rejection rejects.
-  - **File action** (`getDocumentUrlAction`).
-    - `mode: "view"` on a PDF logs `document_view`, and `"download"` logs `document_download`.
+    - A rejected `noteOpened` rejects the page, with no markup.
+  - **Group page.** The same three: the call carries `{ kind: "group", recordId: group.id }`, `readGroup` → `null` makes no call, and a rejection rejects.
+  - **File action** (`getDocumentUrlAction`), review m6.
+    - A clean file in `mode: "view"` (PDF) logs `document_view`, and in `"download"` logs `document_download`.
     - `"view"` on a Word file (an `OFFICE_TYPES` content type) logs `document_download`, because that is what happens (`:242`). Mutation: log `mode` instead of the effective `download`, and this FAILS.
-    - The ORDER is `["noteOpened", "signedDocumentReadUrl"]`, recorded through both mocks. Mutation: move the note after the mint, FAILS.
-    - A rejected note returns `fail("documents.error.open")`, and `signedDocumentReadUrl` is never called.
-    - A note that throws Next's redirect (an `Error` whose `digest` is `"NEXT_REDIRECT;replace;/dashboard/enter/A;307;"`) REJECTS the action with that error. Mutation: drop `unstable_rethrow`, and it FAILS, because the catch turns the redirect into `documents.error.open`.
+    - The ORDER is `["signedDocumentReadUrl", "noteOpened"]`, recorded through both mocks, and the answer carries the URL.
+    - The mint answering `pending`, `removed` or `not_found` returns its existing failure key and makes NO note. Mutation: note before the mint, and the pending case FAILS.
+    - With the mint `ok` and the note rejecting, the action returns `fail("documents.error.open")` with NO `url` in the result. The minted URL never leaves. Mutation: return the URL first, FAILS.
+    - A note that throws Next's redirect (an `Error` whose `digest` is `"NEXT_REDIRECT;replace;/dashboard/enter/A;307;"`) REJECTS the action with that error. Mutation: drop `unstable_rethrow`, FAILS.
     - A version that is not found makes no note.
-  - **Form page** (new `page.test.ts`). Copy the mock set from `ACCT/calls/[callId]/page.test.ts:19-130` and adapt: `requireNotTechnician` returns an agency access, plus `getForm`, `listSubmissions`, `listCustomFields`, `findConciergeDestinationName`, `next/headers` and the accounts read.
-    - It is called with `{ kind: "form_answers", recordId: FORM.id }`.
+  - **Share action** (`createDocumentShareAction`), review I1.
+    - A clean, visible file: `noteOpened` gets `(access, A, { kind: "document_share", recordId: doc.id })` BEFORE `newShareToken` and `createDocumentShare`. Record the order through the three mocks (mock `@/lib/document-shares/share-token`'s `newShareToken`). Mutation: note after `createDocumentShare`, FAILS.
+    - A trashed file, a pending or removed version, a refused proof, and an Owners-only file for Staff all return their existing key with NO note.
+    - A rejected note returns `fail("documents.share.failed")`, and neither `newShareToken` nor `createDocumentShare` ran.
+    - A redirect digest from the note rejects the action (`unstable_rethrow`).
+  - **Form page** (new `page.test.ts`). Copy the mock set from `ACCT/calls/[callId]/page.test.ts:19-130` and adapt it: `requireNotTechnician` returns an agency access, plus `getForm`, `listSubmissions`, `listCustomFields`, `findConciergeDestinationName`, `next/headers` and the accounts read.
+    - `noteOpened` is called with `{ kind: "form_answers", recordId: FORM.id }`.
     - `getForm` → `null` gives `notFound` with no call.
     - A rejection rejects.
-  - **Export route** (`route.get.test.ts`).
-    - Requests with `rsc: 1`, and with `next-router-prefetch: 1`, answer 204 with an empty body, and NONE of `requireAccountOwner`, `countContacts`, `noteOpened` or `listContacts` runs. Mutation: drop the check, and both FAIL.
+  - **Export route** (`route.get.test.ts`). Mock `@/lib/access-log/gate`'s `agencyVisitMissing` and the note module's `noteOpenedApi`.
+    - Requests carrying `rsc: 1` or `next-router-prefetch: 1` answer 204 with an empty body. NONE of `agencyVisitMissing`, `requireAccountOwner`, `countContacts`, `noteOpenedApi` or `listContacts` runs. Mutation: drop the check, and both FAIL.
+    - **Review m5:** `agencyVisitMissing` → `true` answers **409**, `Content-Type: text/plain; charset=utf-8`, `Cache-Control: no-store`, NO `Content-Disposition`, and the body `m["accessLog.exportEnded"]`. `requireAccountOwner` never runs, so nothing can redirect a download link to the chooser's HTML. Mutation: drop the check, and the test sees the guard's redirect instead, so it FAILS.
     - A normal request calls `countContacts(db, A, { search: q, archived })` with the SAME `q` and `archived` the stream's `listContacts` gets. Mutation: drop `search`, FAILS.
-    - Then `noteOpened(access, A, { kind: "customer_list_export", itemCount: <the count> })`, BEFORE the first `listContacts`. Record the order and read the body to completion.
-    - A rejected note rejects the GET, and `listContacts` is never called.
+    - Then `noteOpenedApi(access, A, { kind: "customer_list_export", itemCount: <the count> })` runs BEFORE the first `listContacts`. Record the order and read the body to completion.
+    - `noteOpenedApi` → `false` (the visit ended in between) answers the same 409, and `listContacts` is never called.
+    - A rejected note rejects the GET (Next's 500), and `listContacts` is never called.
   - **List page** (`page.test.ts`). The Export control is `<a … download …>` carrying `data-export-link` and the same href `buildExportHref` builds. Mutation: put back `<Link>` without `download`, FAILS on the attribute.
 
 - [ ] **Step 2: The edits.**
-  - **Contact page:** append `noteOpened(access, accountId, { kind: "contact", recordId: contact.id })` as the LAST element of the `Promise.all` at `:110`. It is not destructured; put a one-line comment above it citing spec 4.1 and ruling 4. It sits after the holding redirect (`:100-103`), so a holding record is never logged as a customer.
+  - **Contact page:** append `noteOpened(access, accountId, { kind: "contact", recordId: contact.id })` as the LAST element of the array literal in the `Promise.all` at `:110`. It is not destructured. Put a one-line comment above it citing spec 4.1 and ruling 4. It sits after the holding redirect (`:100-103`).
   - **Group page:** `:94` becomes `const [activity] = await Promise.all([loadGroupActivity(db, accountId, group.id), noteOpened(access, accountId, { kind: "group", recordId: group.id })]);`.
-  - **File action:**
-    - `:232` captures `const access = await requireAccountAccess(accountId, { duringPause: "allow" });`. The `duringPause` text is unchanged, so `read-only.test.ts` stays green.
-    - After `:242`'s `download`, add `await noteOpened(access, accountId, { kind: download ? "document_download" : "document_view", recordId: doc.id });`.
-    - The `catch` at `:252` starts with `unstable_rethrow(e);` (imported from `next/navigation`, the house use at `create-account-feedback.ts:1,33`).
-  - **Form page:** `:21` captures `const access = await requireNotTechnician(accountId);`, and `noteOpened(access, accountId, { kind: "form_answers", recordId: form.id })` is appended to the `Promise.all` at `:39`. `technician-guards.test.ts` still finds `requireNotTechnician` (run it).
-  - **Export route:** first line of `GET`: `if (req.headers.get("rsc") !== null || req.headers.get("next-router-prefetch") !== null) return new Response(null, { status: 204 });`, with a comment citing plan C2. Then `:93` captures `const access = await requireAccountOwner(accountId);`, and after `:103`'s `db`:
+  - **File action** (m6: log once the file is really opening, and before the URL leaves):
+    - `:232` captures `const access = await requireAccountAccess(accountId, { duringPause: "allow" });`.
+    - After `:249`'s `if (r.status !== "ok") return …` and BEFORE the `return { ok: true, url … }` at `:250`, add `await noteOpened(access, accountId, { kind: download ? "document_download" : "document_view", recordId: doc.id });`.
+    - The `catch` at `:251` starts with `unstable_rethrow(e);` (from `next/navigation`, the house use at `create-account-feedback.ts:1,33`).
+  - **Share action** (I1):
+    - After the `origin` check (`:60-61`) and BEFORE `const token = newShareToken();` (`:62`), add `await noteOpened(access, accountId, { kind: "document_share", recordId: doc.id });`, with a comment: a share link opens the file with no sign-in, so making one is a file open (spec 4.1).
+    - The `catch` at `:70` starts with `unstable_rethrow(e);`.
+    - A share that `createDocumentShare` then withdraws (`"changed"`) still leaves its row. That is conservative: the person tried to share the file they had just read.
+  - **Form page:** `:21` captures `const access = await requireNotTechnician(accountId);`, and `noteOpened(access, accountId, { kind: "form_answers", recordId: form.id })` is appended to the array in the `Promise.all` at `:39`. `technician-guards.test.ts` still finds `requireNotTechnician` (run it).
+  - **Export route.** `GET` begins:
+
+```ts
+  // F-118 part 1 (plan C2): a Link's prefetch or RSC fetch of this URL must neither read nor log.
+  if (req.headers.get("rsc") !== null || req.headers.get("next-router-prefetch") !== null) return new Response(null, { status: 204 });
+  // Review m5: a download link must never save the chooser's HTML as the file. An agency person whose visit
+  // ended is told so in plain text, BEFORE any guard can redirect.
+  if (await agencyVisitMissing(accountId)) return exportEnded();
+```
+
+    Then `:93` captures `const access = await requireAccountOwner(accountId);`, and after `:103`'s `db`:
 
 ```ts
   // F-118 part 1 (plan C1): the route streams, so the count of what it is about to send is read first, on the
   // export's own filters, and the download is logged before a single row leaves (owner ruling 4).
   const total = await countContacts(db, accountId, { search: q, archived });
-  await noteOpened(access, accountId, { kind: "customer_list_export", itemCount: total });
+  if (!(await noteOpenedApi(access, accountId, { kind: "customer_list_export", itemCount: total }))) return exportEnded();
 ```
 
-  - **List page `:281-287`:** replace the `<Link>` with `<a href={buildExportHref(base, q, sort, dir, view)} download data-export-link className={…same…}>`. Keep the comment that says why: a Link prefetches, and its RSC fetch would run the handler.
+    `exportEnded()` is a module-private helper: `new Response(m["accessLog.exportEnded"], { status: 409, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } })`. The text is English: it is the agency's own message, and the export filename already uses `m` directly (`:178`).
+  - **List page `:281-287`:** replace the `<Link>` with `<a href={buildExportHref(base, q, sort, dir, view)} download data-export-link className={…same…}>`. Keep a comment saying why: a Link prefetches, and its RSC fetch would run the handler.
+  - **`lib/billing/read-only.test.ts` (m7, text only):** in the header comment at `:139-147`, after "these are the ones that write nothing", add "(an agency person's open of a file also writes its one access-log row, F-118; that row is not business data and no client action writes it)". The reason for `…documents-actions.ts#getDocumentUrlAction` (`:153-154`) becomes "opening a file: mints a 120-second signed read URL; writes nothing for a client (for the agency, one access-log row, F-118)". Change no key and no assertion.
 
 - [ ] **Step 3: Run.** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" "src/app/(dashboard)/dashboard/accounts/[accountId]/groups" "src/app/(dashboard)/dashboard/accounts/[accountId]/forms" "src/app/(dashboard)/dashboard/accounts/[accountId]/technician-guards.test.ts" src/lib/billing/read-only.test.ts src/lib/documents/read-gate.test.ts src/lib/consent/scans.test.ts`, then typecheck and lint. Paste the summaries, then every probe's red line.
 
-- [ ] **Step 4: Commit** the paths: `feat(contacts): the customer and household pages, a file's view or download, a form's answers and the customer list download log BIS's open; Export is a plain download link (F-118 part 1)`.
+- [ ] **Step 4: Commit** the paths: `feat(contacts): the customer and household pages, a file's view, download or share link, a form's answers and the customer list download log BIS's open; Export is a plain download link (F-118 part 1)`.
 
 ---
 
@@ -1582,13 +1737,20 @@ vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => no
 
 ---
 
-### Task 11: The route walk, so no page or route goes unclassified
+### Task 11: The route walk: every entry, action and guarded file classified, and every logger call unskippable
 
 **Tier:** medium · **Owner:** bis-platform · **Wave:** 4 (after T6–T9 are committed, so it starts green)
 
 **Files:** Create `ACCT/access-log-routes.test.ts`.
 
-- [ ] **Step 1: Write the test.** Use `typescript`'s AST, never a regex over text: comments are never nodes (`lib/documents/read-gate.test.ts:6-26`).
+**What it pins** (spec §4.2 items 1–5, review I2 and I3):
+- **Entries.** Every file under the two trees whose name matches `^(page|route|layout|template|default)\.[jt]sx?$` is classified. At `13079bec` that is 41 files: 19 records and 22 not-records, the 21 in "Shared facts" plus `ACCT/layout.tsx`.
+- **Actions.** Every exported server action in an account-scoped `"use server"` file (`ACCT/**` and `lib/**`, the scope `lib/billing/read-only.test.ts:131-245` audits) is classified, and so is every `"use server"` file anywhere under `app/` that calls a guard. At `13079bec` that is 195 actions in 41 files, plus the two in `dashboard/blueprints/actions.ts`. Two are records, `getDocumentUrlAction` and `createDocumentShareAction`; every other one is classified as not a record, with its reason.
+- **Other guarded files.** Every other non-test file under `app/` with a real call to a guard (`requireAccountAccess`, `requireAccountOwner`, `requireAgencyOnlyAccountAccess`, `requireNotTechnician`, `apiAccountAccess`) carries a reason. At `13079bec` there is one: `ACCT/settings/ai-section.tsx`.
+- **The shape of every logger call.** Fail-closed must not be fakeable by the caller.
+- **Order:** for files, the mint, then the note, then the URL; for shares, the note before the token. The mint has exactly two app callers. The importers of the logger form an allowlist, and the public trees are off limits.
+
+- [ ] **Step 1: Write the test.** Use `typescript`'s AST throughout, never a regex over text: comments are never nodes (`lib/documents/read-gate.test.ts:6-26`).
 
 ```ts
 import { describe, it, expect, afterAll } from "vitest";
@@ -1598,17 +1760,22 @@ import { join, relative, sep } from "node:path";
 import ts from "typescript";
 
 /**
- * F-118 part 1 (spec 4.2): every page and route under the two account trees is classified. A RECORD must call
- * the one logger in real code; anything else states why it is not a record. A new file in neither list fails BY
- * NAME, so a new record surface cannot ship without someone deciding. Plus: the file action logs before it
- * mints; the mint has exactly two app callers; the logger has exactly these importers; and no public, cron,
- * webhook or voice tree imports any access-log module (spec 2.2).
+ * F-118 part 1 (spec 4.2; plan Task 11; review I2, I3). Every way into an account's records is classified:
+ * the entry files of the two account trees, every exported server action in an account-scoped "use server"
+ * file, and every other file under app/ that calls a guard. A RECORD must call the one logger in real code,
+ * in a shape that cannot fail open. Anything else states why it is not a record. A new file, action or
+ * guarded file in no list fails BY NAME.
  */
 const SRC = join(__dirname, "../../../../..");                 // apps/web/src
-const ROOTS = ["app/(dashboard)/dashboard/accounts/[accountId]", "app/api/accounts"];
 const A = "app/(dashboard)/dashboard/accounts/[accountId]";
 const API = "app/api/accounts/[accountId]";
+const ENTRY_ROOTS = [A, "app/api/accounts"];
+const ACTION_ROOTS = [A, "lib"];
+const ENTRY_RE = /^(page|route|layout|template|default)\.[jt]sx?$/;
+const GUARDS = new Set(["requireAccountAccess", "requireAccountOwner", "requireAgencyOnlyAccountAccess", "requireNotTechnician", "apiAccountAccess"]);
 const rel = (p: string, base = SRC) => relative(base, p).split(sep).join("/");
+
+/* ---------- the lists ---------- */
 
 const RECORD: Record<string, "noteOpened" | "noteOpenedApi"> = {
   [`${A}/contacts/[contactId]/page.tsx`]: "noteOpened",
@@ -1616,34 +1783,119 @@ const RECORD: Record<string, "noteOpened" | "noteOpenedApi"> = {
   [`${A}/calls/[callId]/page.tsx`]: "noteOpened",
   [`${A}/conversations/page.tsx`]: "noteOpened",
   [`${A}/forms/[formId]/page.tsx`]: "noteOpened",
-  [`${A}/contacts/export/route.ts`]: "noteOpened",
+  [`${A}/contacts/export/route.ts`]: "noteOpenedApi",   // review m5: a 409, never a redirect, on a download
   ...Object.fromEntries(["ai-summary", "document-requests", "document-requirements", "documents", "email", "groups", "places",
     "relationships", "summary", "texts"].map((r) => [`${API}/contacts/[contactId]/${r}/route.ts`, "noteOpenedApi" as const])),
   ...Object.fromEntries(["document-requests", "documents", "places"].map((r) => [`${API}/groups/[groupId]/${r}/route.ts`, "noteOpenedApi" as const])),
 };
+const LIST = "a list (owner ruling 2)";
+const SETTINGS = "settings";
 const NOT_A_RECORD: Record<string, string> = {
-  [`${A}/activity/page.tsx`]: "a list (ruling 2)",
-  [`${A}/automations/page.tsx`]: "settings",
-  [`${A}/billing/page.tsx`]: "settings",
-  [`${A}/branding/page.tsx`]: "settings",
-  [`${A}/calendar/page.tsx`]: "a list (ruling 2)",
-  [`${A}/calls/page.tsx`]: "a list (ruling 2)",
+  [`${A}/layout.tsx`]: "the account's chrome (name, language, billing banner); the gate runs here too",
+  [`${A}/activity/page.tsx`]: LIST, [`${A}/calendar/page.tsx`]: LIST, [`${A}/calls/page.tsx`]: LIST,
+  [`${A}/contacts/page.tsx`]: `${LIST}; its drawer's routes are records`, [`${A}/forms/page.tsx`]: LIST,
+  [`${A}/pipeline/page.tsx`]: LIST, [`${A}/tasks/page.tsx`]: LIST,
+  [`${A}/documents/page.tsx`]: `${LIST}; opening a file is logged by getDocumentUrlAction`,
+  [`${A}/automations/page.tsx`]: SETTINGS, [`${A}/billing/page.tsx`]: SETTINGS, [`${A}/branding/page.tsx`]: SETTINGS,
+  [`${A}/settings/page.tsx`]: SETTINGS, [`${A}/setup/page.tsx`]: SETTINGS, [`${A}/voice/page.tsx`]: SETTINGS,
+  [`${A}/website/page.tsx`]: SETTINGS,
+  [`${A}/team/page.tsx`]: `${SETTINGS}; the BIS access section lives here`,
   [`${A}/checklist/page.tsx`]: "agency work about the client, not a client record",
   [`${A}/contacts/import/page.tsx`]: "writes rows; shows no stored record",
-  [`${A}/contacts/page.tsx`]: "a list (ruling 2); its drawer's routes are records",
   [`${A}/dashboard/page.tsx`]: "totals",
-  [`${A}/documents/page.tsx`]: "a list (ruling 2); opening a file is logged by getDocumentUrlAction",
-  [`${A}/forms/page.tsx`]: "a list (ruling 2)",
-  [`${A}/pipeline/page.tsx`]: "a list (ruling 2)",
-  [`${A}/settings/page.tsx`]: "settings",
-  [`${A}/setup/page.tsx`]: "settings",
-  [`${A}/tasks/page.tsx`]: "a list (ruling 2)",
-  [`${A}/team/page.tsx`]: "settings; the BIS access section lives here",
   [`${A}/voice/knowledge/[version]/page.tsx`]: "the business's own facts, not a customer's",
-  [`${A}/voice/page.tsx`]: "settings",
-  [`${A}/website/page.tsx`]: "settings",
   [`${API}/search/route.ts`]: "returns names like a list; opening a result opens a logged record",
 };
+
+const RECORD_ACTIONS: Record<string, "noteOpened"> = {
+  [`${A}/contacts/documents-actions.ts#getDocumentUrlAction`]: "noteOpened",
+  [`${A}/contacts/document-shares-actions.ts#createDocumentShareAction`]: "noteOpened",   // review I1
+};
+const W = "a write; its reads prove the target and return nothing a logged page has not already shown";
+const AG = "agency settings (requireAgency or requireAgencyOnlyAccountAccess); no customer record";
+const CFG = "the account's or a person's configuration; no customer record";
+const FIND = "returns names or counts like a list (owner ruling 2); opening a result opens a logged record";
+const each = (file: string, names: string[], why: string) => Object.fromEntries(names.map((n) => [`${file}#${n}`, why]));
+const NOT_A_RECORD_ACTIONS: Record<string, string> = {
+  ...each(`${A}/automations/actions.ts`, ["saveReviewRequestAction", "saveNoShowNudgeAction", "saveReferralAskAction",
+    "saveReactivationAction", "saveQuoteFollowupAction", "saveSmsReminderAction", "saveAppointmentConfirmAction", "saveInstantReplyAction"], AG),
+  ...each(`${A}/billing/actions.ts`, ["openBillingPortalAction"], "the Stripe portal; no customer record"),
+  ...each(`${A}/branding/actions.ts`, ["setBrandingAction", "removeBrandLogoAction", "restoreBrandLogoAction"], CFG),
+  ...each(`${A}/business-status-actions.ts`, ["setBusinessStatusAction", "undoBusinessStatusAction"], CFG),
+  ...each(`${A}/calendar/actions.ts`, ["updateCalendarSettingsAction"], CFG),
+  ...each(`${A}/calendar/actions.ts`, ["setBookingStatusAction", "cancelBookingAction", "keepAppointmentAction", "undoCancelBookingAction"], W),
+  ...each(`${A}/calendar/actions.ts`, ["cancelNoticeOptionAction"], "Cancel's notice check, from the calendar (a list, owner ruling 2)"),
+  ...each(`${A}/calendar/closed-days-actions.ts`, ["addClosedDayAction", "removeClosedDayAction"], CFG),
+  ...each(`${A}/calendar/feed-actions.ts`, ["makeFeedLinkAction", "replaceFeedLinkAction", "turnOffFeedLinkAction", "undoFeedLinkAction"], CFG),
+  ...each(`${A}/checklist/actions.ts`, ["setChecklistItemAction", "setA2pRegistrationAction", "addChecklistItemAction"], AG),
+  ...each(`${A}/contacts/[contactId]/actions.ts`, ["updateContactAction", "addTagAction", "removeTagAction", "addNoteAction", "addTaskAction", "completeTaskAction"], W),
+  ...each(`${A}/contacts/[contactId]/forwarding-actions.ts`, ["getForwardingAddressAction"], "the record's forwarding address, on the record page that logged the customer"),
+  ...each(`${A}/contacts/actions.ts`, ["createContactAction", "assignContactsAction", "undoAssignContactsAction", "setContactBusinessAction",
+    "undoContactBusinessAction", "setContactLanguageAction", "restoreContactLanguageAction", "keepContactLanguageHintAction",
+    "updateContactFieldAction", "bulkAddTagAction", "bulkRemoveTagAction", "bulkDeleteContactsAction", "setPhoneCountryAction",
+    "undoPhoneCountryAction", "undoInlinePhoneEditAction"], W),
+  ...each(`${A}/contacts/actions.ts`, ["countContactDocumentsAction"], FIND),
+  ...each(`${A}/contacts/archive-actions.ts`, ["archiveContactsAction", "restoreContactsAction"], W),
+  ...each(`${A}/contacts/archive-actions.ts`, ["contactDeleteBlockersAction"], FIND),
+  ...each(`${A}/contacts/document-requests-actions.ts`, ["createDocumentRequestAction", "revokeDocumentRequestAction", "undoRevokeDocumentRequestAction"], W),
+  ...each(`${A}/contacts/document-requests-actions.ts`, ["documentRequestLinkAction"], "the customer's upload link; returns no stored record content"),
+  ...each(`${A}/contacts/document-requirements-actions.ts`, ["skipDocumentRequirementAction", "undoSkipDocumentRequirementAction",
+    "unskipDocumentRequirementAction", "undoUnskipDocumentRequirementAction"], W),
+  ...each(`${A}/contacts/document-shares-actions.ts`, ["stopSharingAction", "undoStopSharingAction"], W),
+  ...each(`${A}/contacts/documents-actions.ts`, ["startDocumentUploadAction", "startDocumentVersionUploadAction", "finishDocumentUploadAction",
+    "abandonDocumentUploadAction", "updateDocumentFieldAction", "undoDocumentFieldAction", "setOwnersOnlyAction", "undoOwnersOnlyAction",
+    "trashDocumentAction", "restoreDocumentAction", "purgeDocumentAction"], W),
+  ...each(`${A}/contacts/email-actions.ts`, ["stopEmailsAction", "undoStopEmailsAction", "resumeEmailsAction"], W),
+  ...each(`${A}/contacts/groups-actions.ts`, ["createGroupAction", "addToGroupAction", "setRoleAction", "setBillingAction", "makePrimaryAction",
+    "removeMembershipAction", "restoreMembershipAction", "renameGroupAction", "setBillingAddressAction", "setGroupPrimaryContactAction"], W),
+  ...each(`${A}/contacts/groups-actions.ts`, ["searchGroupsAction"], FIND),
+  ...each(`${A}/contacts/import/actions.ts`, ["importContactsBatchAction"], W),
+  ...each(`${A}/contacts/places-actions.ts`, ["addPlaceAction", "updatePlaceFieldAction", "setPlaceOwnerAction", "removePlaceAction",
+    "undoRemovePlaceAction", "setPlaceArchivedAction", "addEquipmentAction", "replaceEquipmentAction", "updateEquipmentFieldAction",
+    "removeEquipmentAction", "undoRemoveEquipmentAction"], W),
+  ...each(`${A}/contacts/relationship-actions.ts`, ["addRelationshipAction", "setRelationshipAction", "undoSetRelationshipAction",
+    "removeRelationshipAction", "undoRemoveRelationshipAction"], W),
+  ...each(`${A}/contacts/relationship-actions.ts`, ["searchRelatableContactsAction"], FIND),
+  ...each(`${A}/contacts/texts-actions.ts`, ["stopTextsAction", "undoStopTextsAction", "resumeTextsAction", "confirmStopAction",
+    "notAStopAction", "undoHoldDecisionAction"], W),
+  ...each(`${A}/conversations/actions.ts`, ["sendEmailAction", "sendSmsAction", "moveHoldingThreadAction", "undoMoveHoldingThreadAction"], W),
+  ...each(`${A}/conversations/actions.ts`, ["markConversationReadAction"], "read state on a thread whose page logged it"),
+  ...each(`${A}/conversations/inbound-actions.ts`, ["undoReplyStopAction", "stopEmailsFromReplyAction", "fileHeldEmailAction",
+    "dismissHeldEmailAction", "undoHeldEmailAction"], W),
+  ...each(`${A}/documents/required-documents-actions.ts`, ["undoRequiredDocumentsAction"], CFG),
+  ...each(`${A}/forms/actions.ts`, ["createFormAction", "saveFormAction", "republishFormAction"], "the form's own settings; its answers are the logged page"),
+  ...each(`${A}/never-log-actions.ts`, ["addNeverLogAction", "removeNeverLogAction"], CFG),
+  ...each(`${A}/pipeline/actions.ts`, ["createOpportunityAction", "moveOppToStageAction", "updateOpportunityAction"], W),
+  ...each(`${A}/settings/actions.ts`, ["createFieldAction", "setClientAccessAction", "setFromEmailAction", "setReportEmailsAction",
+    "setAccountLanguageAction", "setAlertPhoneAction", "startAlertPhoneVerificationAction", "confirmAlertPhoneVerificationAction",
+    "setInboundModeAction", "checkInboundDnsAction"], AG),
+  ...each(`${A}/settings/actions.ts`, ["upsertValueAction"], W),
+  ...each(`${A}/settings/ai-actions.ts`, ["saveAccountAiAction", "undoAccountAiAction", "setGlobalAiAction"], AG),
+  // Spec 3.1 (review m11): requireAgency() alone, not behind the visit; billing configuration only.
+  ...each(`${A}/settings/billing-actions.ts`, ["sendBillingLinkAction", "markComplimentaryAction", "removeComplimentaryAction",
+    "liftPauseAction", "undoLiftPauseAction", "changePlanAction"], AG),
+  ...each(`${A}/settings/document-requirements-actions.ts`, ["setRequiredDocumentCategoriesAction"], CFG),
+  ...each(`${A}/settings/trade-actions.ts`, ["setTradeAction"], AG),
+  ...each(`${A}/setup/actions.ts`, ["setSetupTickAction", "goLiveAction", "renameAccountAction"], AG),
+  ...each(`${A}/shell-actions.ts`, ["getShellSnapshot"], "the shell's counts and status; no record"),
+  ...each(`${A}/tasks/actions.ts`, ["completeWorkTask", "reopenWorkTask", "dismissToTask", "closeOutBooking", "confirmStopFromTask",
+    "notAStopFromTask", "undoHoldDecisionFromTask", "setTaskAssigneeAction"], W),
+  ...each(`${A}/team/actions.ts`, ["inviteTeamMemberAction", "setTeamRoleAction", "setTeamLanguageAction", "removeTeamMemberAction",
+    "undoRemoveTeamMemberAction", "revokeTeamInvitationAction", "undoRevokeTeamInvitationAction"], "the team, not customers"),
+  ...each(`${A}/voice/actions.ts`, ["saveVoiceProfileAction", "saveBusinessHoursAction", "saveServicesAction", "assignNumberAction",
+    "moveNumberAction", "setNumberStatusAction", "setTransferPhoneAction", "enableConciergeAction", "disableConciergeAction", "setForwardCallsAction"], AG),
+  ...each(`${A}/website/actions.ts`, ["saveSiteAction", "unlinkSiteAction", "testSiteConnectionAction"], AG),
+  ...each("lib/ai-acts/actions.ts", ["undoAiActAction", "redoAiFieldFillAction"], W),
+  ...each("lib/proposals/actions.ts", ["acceptSuggestionAction", "editAcceptSuggestionAction", "discardSuggestionAction", "undoSuggestionAction"],
+    `${W}; from /dashboard/work these run with no visit (owner ruling 3, plan C11)`),
+  // Spec 3.1 (review m11): captureBlueprintAction is requireAgency() alone and copies configuration.
+  ...each("app/(dashboard)/dashboard/blueprints/actions.ts", ["captureBlueprintAction", "applyBlueprintAction"], AG),
+};
+const OTHER_GUARDED: Record<string, string> = {
+  [`${A}/settings/ai-section.tsx`]: "the Settings page's AI card, after Settings' own guard; agency settings",
+};
+
+/* ---------- the AST helpers ---------- */
 
 function walk(dir: string, keep: (name: string) => boolean, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -1653,40 +1905,107 @@ function walk(dir: string, keep: (name: string) => boolean, out: string[] = []):
   }
   return out;
 }
-const isEntry = (n: string) => n === "page.tsx" || n === "route.ts";
 const isSource = (n: string) => /\.(ts|tsx)$/.test(n) && !/\.test\.(ts|tsx)$/.test(n);
-const parse = (p: string) => ts.createSourceFile(p, readFileSync(p, "utf8"), ts.ScriptTarget.Latest, true,
-  p.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-/** Positions of real calls to `name` (an identifier callee), anywhere in `node`. */
-function callsTo(node: ts.Node, name: string): number[] {
-  const at: number[] = [];
+const parsed = new Map<string, ts.SourceFile>();
+const parse = (p: string) => {
+  let sf = parsed.get(p);
+  if (!sf) {
+    sf = ts.createSourceFile(p, readFileSync(p, "utf8"), ts.ScriptTarget.Latest, true, p.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    parsed.set(p, sf);
+  }
+  return sf;
+};
+/** Every real call to `name` (an identifier callee) under `node`. */
+function calls(node: ts.Node, name: string): ts.CallExpression[] {
+  const out: ts.CallExpression[] = [];
   const visit = (n: ts.Node) => {
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === name) at.push(n.getStart());
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === name) out.push(n);
     ts.forEachChild(n, visit);
   };
   visit(node);
-  return at;
+  return out;
 }
-const importsFrom = (sf: ts.SourceFile) => sf.statements.filter(ts.isImportDeclaration)
-  .map((d) => (d.moduleSpecifier as ts.StringLiteral).text);
+const callsAny = (node: ts.Node, names: ReadonlySet<string>) => [...names].some((n) => calls(node, n).length > 0);
+const importsFrom = (sf: ts.SourceFile) => sf.statements.filter(ts.isImportDeclaration).map((d) => (d.moduleSpecifier as ts.StringLiteral).text);
+const isUseServer = (sf: ts.SourceFile) => {
+  const first = sf.statements[0];
+  return !!first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use server";
+};
+/** Every exported function of a file: `export async function f` and `export const f = async (...) => …`. */
+function exportedFunctions(sf: ts.SourceFile): { name: string; node: ts.Node }[] {
+  const out: { name: string; node: ts.Node }[] = [];
+  for (const s of sf.statements) {
+    const exported = ts.canHaveModifiers(s) && ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (!exported) continue;
+    if (ts.isFunctionDeclaration(s) && s.name) out.push({ name: s.name.text, node: s });
+    if (ts.isVariableStatement(s)) for (const d of s.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) {
+        out.push({ name: d.name.text, node: d.initializer });
+      }
+    }
+  }
+  return out;
+}
+const unwrap = (n: ts.Node): ts.Node => (ts.isParenthesizedExpression(n) ? unwrap(n.parent) : n);
+/**
+ * Review I3: a logger call a caller could skip is refused. noteOpened must be `await noteOpened(…)` as a
+ * statement or in an expression, or an element of an array literal that is the argument of a `Promise.all`
+ * call that is itself directly awaited. noteOpenedApi must be `if (!(await noteOpenedApi(…))) return …`.
+ * Anything else (void, .catch, .then, an unawaited value, an un-negated if, a branch that does not return)
+ * is reported with its line.
+ */
+export function badLoggerCalls(sf: ts.SourceFile): string[] {
+  const bad: string[] = [];
+  const at = (n: ts.Node) => `${sf.fileName}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
+  for (const c of calls(sf, "noteOpened")) {
+    const p = unwrap(c.parent);
+    const awaited = ts.isAwaitExpression(p);
+    const inAll = ts.isArrayLiteralExpression(p) && ts.isCallExpression(p.parent) && p.parent.arguments[0] === p
+      && ts.isPropertyAccessExpression(p.parent.expression) && ts.isIdentifier(p.parent.expression.expression)
+      && p.parent.expression.expression.text === "Promise" && p.parent.expression.name.text === "all"
+      && ts.isAwaitExpression(unwrap(p.parent.parent));
+    if (!awaited && !inAll) bad.push(`${at(c)} noteOpened is neither awaited nor in an awaited Promise.all`);
+  }
+  for (const c of calls(sf, "noteOpenedApi")) {
+    const aw = unwrap(c.parent);
+    const not = ts.isAwaitExpression(aw) ? unwrap(aw.parent) : null;
+    const iff = not && ts.isPrefixUnaryExpression(not) && not.operator === ts.SyntaxKind.ExclamationToken ? unwrap(not.parent) : null;
+    const ok = !!iff && ts.isIfStatement(iff) && !iff.elseStatement
+      && (ts.isReturnStatement(iff.thenStatement)
+        || (ts.isBlock(iff.thenStatement) && iff.thenStatement.statements.length > 0 && ts.isReturnStatement(iff.thenStatement.statements[0]!)));
+    if (!ok) bad.push(`${at(c)} noteOpenedApi is not \`if (!(await noteOpenedApi(…))) return …\``);
+  }
+  return bad;
+}
 
-export function unclassified(base: string, roots: readonly string[], known: ReadonlySet<string>): string[] {
-  return roots.flatMap((r) => walk(join(base, r), isEntry)).map((p) => rel(p, base)).filter((f) => !known.has(f)).sort();
+export function unclassifiedEntries(base: string, roots: readonly string[], known: ReadonlySet<string>): string[] {
+  return roots.flatMap((r) => walk(join(base, r), (n) => ENTRY_RE.test(n))).map((p) => rel(p, base)).filter((f) => !known.has(f)).sort();
 }
 export function missingLogger(base: string, record: Readonly<Record<string, string>>): string[] {
-  return Object.entries(record).filter(([f, fn]) => callsTo(parse(join(base, f)), fn).length === 0).map(([f]) => f).sort();
+  return Object.entries(record).filter(([f, fn]) => calls(parse(join(base, f)), fn).length === 0).map(([f]) => f).sort();
+}
+/** Every `file#action` in scope: "use server" files under ACTION_ROOTS, plus any "use server" file under app/ calling a guard. */
+function actionKeys(base: string): { key: string; node: ts.Node }[] {
+  const files = walk(join(base, "app"), isSource).concat(walk(join(base, "lib"), isSource))
+    .filter((p) => isUseServer(parse(p)))
+    .filter((p) => ACTION_ROOTS.some((r) => rel(p, base).startsWith(`${r}/`)) || callsAny(parse(p), GUARDS));
+  return files.flatMap((p) => exportedFunctions(parse(p)).map((f) => ({ key: `${rel(p, base)}#${f.name}`, node: f.node })));
 }
 
-describe("every page and route in the account trees is classified (spec 4.2)", () => {
+/* ---------- the cases ---------- */
+
+describe("every entry file in the account trees is classified (spec 4.2 item 1)", () => {
   const known = new Set([...Object.keys(RECORD), ...Object.keys(NOT_A_RECORD)]);
-  it("walks a real tree (positive control: more than 30 files)", () => {
-    expect(ROOTS.flatMap((r) => walk(join(SRC, r), isEntry)).length).toBeGreaterThan(30);
+  it("walks a real tree (positive control: more than 30 entry files, and it finds the account layout)", () => {
+    const all = ENTRY_ROOTS.flatMap((r) => walk(join(SRC, r), (n) => ENTRY_RE.test(n))).map((p) => rel(p));
+    expect(all.length).toBeGreaterThan(30);
+    expect(all).toContain(`${A}/layout.tsx`);
   });
-  it("no unclassified page.tsx or route.ts (mutation: add ACCT/zzprobe/page.tsx -> FAILS naming it)", () => {
-    expect(unclassified(SRC, ROOTS, known)).toEqual([]);
+  it("no unclassified page, route, layout, template or default (mutation: add ACCT/zzprobe/page.tsx, or ACCT/zzprobe/layout.tsx -> FAILS naming it)", () => {
+    expect(unclassifiedEntries(SRC, ENTRY_ROOTS, known)).toEqual([]);
   });
   it("no stale entry, and no file in both lists", () => {
-    const now = new Set(ROOTS.flatMap((r) => walk(join(SRC, r), isEntry)).map((p) => rel(p)));
+    const now = new Set(ENTRY_ROOTS.flatMap((r) => walk(join(SRC, r), (n) => ENTRY_RE.test(n))).map((p) => rel(p)));
     expect([...known].filter((f) => !now.has(f))).toEqual([]);
     expect(Object.keys(RECORD).filter((f) => f in NOT_A_RECORD)).toEqual([]);
   });
@@ -1694,74 +2013,164 @@ describe("every page and route in the account trees is classified (spec 4.2)", (
     expect(missingLogger(SRC, RECORD)).toEqual([]);
     for (const f of Object.keys(RECORD)) expect(importsFrom(parse(join(SRC, f))), f).toContain("@/lib/access-log/note");
   });
-  it("no not-a-record file calls the logger (the list stays honest)", () => {
+  it("no not-a-record entry calls the logger (the list stays honest)", () => {
     for (const f of Object.keys(NOT_A_RECORD)) {
       const sf = parse(join(SRC, f));
-      expect([...callsTo(sf, "noteOpened"), ...callsTo(sf, "noteOpenedApi")], f).toEqual([]);
+      expect([...calls(sf, "noteOpened"), ...calls(sf, "noteOpenedApi")].length, f).toBe(0);
     }
   });
 });
 
-describe("files: logged before the URL is minted, and only two app callers mint (spec 4.2)", () => {
-  it("getDocumentUrlAction calls noteOpened once, before signedDocumentReadUrl (mutation: move the note after the mint -> FAILS)", () => {
-    const sf = parse(join(SRC, `${A}/contacts/documents-actions.ts`));
-    const fn = sf.statements.find((s): s is ts.FunctionDeclaration => ts.isFunctionDeclaration(s) && s.name?.text === "getDocumentUrlAction");
-    expect(fn).toBeDefined();
-    const notes = callsTo(fn!, "noteOpened");
-    const mints = callsTo(fn!, "signedDocumentReadUrl");
-    expect([notes.length, mints.length]).toEqual([1, 1]);
-    expect(notes[0]!).toBeLessThan(mints[0]!);
+describe("every server action and every guarded file is classified (spec 4.2 item 4, review I2)", () => {
+  const keys = actionKeys(SRC);
+  it("enumerates a real set (positive control: more than 150 actions, getDocumentUrlAction among them)", () => {
+    expect(keys.length).toBeGreaterThan(150);
+    expect(keys.map((k) => k.key)).toContain(`${A}/contacts/documents-actions.ts#getDocumentUrlAction`);
+  });
+  it("no unclassified action (mutation: export a new async function from contacts/[contactId]/actions.ts -> FAILS naming it)", () => {
+    const known = new Set([...Object.keys(RECORD_ACTIONS), ...Object.keys(NOT_A_RECORD_ACTIONS)]);
+    expect(keys.map((k) => k.key).filter((k) => !known.has(k)).sort()).toEqual([]);
+  });
+  it("no stale action, and none in both lists", () => {
+    const now = new Set(keys.map((k) => k.key));
+    expect([...Object.keys(RECORD_ACTIONS), ...Object.keys(NOT_A_RECORD_ACTIONS)].filter((k) => !now.has(k))).toEqual([]);
+    expect(Object.keys(RECORD_ACTIONS).filter((k) => k in NOT_A_RECORD_ACTIONS)).toEqual([]);
+  });
+  it("every record action calls noteOpened inside its own body; no other action does (mutation: delete the note from createDocumentShareAction -> FAILS)", () => {
+    for (const { key, node } of keys) {
+      const n = calls(node, "noteOpened").length;
+      if (key in RECORD_ACTIONS) expect(n, key).toBeGreaterThan(0);
+      else expect(n, key).toBe(0);
+    }
+  });
+  it("every other file under app/ that calls a guard has a reason (mutation: call requireAccountAccess from a new app/ component -> FAILS naming it)", () => {
+    const entries = new Set([...Object.keys(RECORD), ...Object.keys(NOT_A_RECORD)]);
+    const actionFiles = new Set(keys.map((k) => k.key.split("#")[0]!));
+    const guarded = walk(join(SRC, "app"), isSource).filter((p) => callsAny(parse(p), GUARDS)).map((p) => rel(p))
+      .filter((f) => !entries.has(f) && !actionFiles.has(f));
+    expect(guarded.sort()).toEqual(Object.keys(OTHER_GUARDED).sort());
+  });
+});
+
+describe("every logger call is unskippable (spec 4.2 item 5, review I3)", () => {
+  it("no void, .catch, .then, unawaited, un-negated or non-returning logger call anywhere in the app (mutation: `void noteOpened(...)` on the call page, or `.catch(() => {})` on the contact page's -> FAILS naming the line)", () => {
+    const users = walk(SRC, isSource).filter((p) => calls(parse(p), "noteOpened").length + calls(parse(p), "noteOpenedApi").length > 0);
+    expect(users.length).toBeGreaterThan(15);   // positive control: it checked the real callers
+    expect(users.flatMap((p) => badLoggerCalls(parse(p))).map((s) => s.replace(SRC, ""))).toEqual([]);
+  });
+});
+
+describe("files: logged once really opening, before the URL leaves; shares logged before the token (spec 4.2 item 2)", () => {
+  const fn = (file: string, name: string) => {
+    const sf = parse(join(SRC, file));
+    const f = sf.statements.find((s): s is ts.FunctionDeclaration => ts.isFunctionDeclaration(s) && s.name?.text === name);
+    expect(f, name).toBeDefined();
+    return f!;
+  };
+  it("getDocumentUrlAction: the mint, then the note, then the return that carries the URL (mutations: note before the mint -> FAILS; return the URL before the note -> FAILS)", () => {
+    const f = fn(`${A}/contacts/documents-actions.ts`, "getDocumentUrlAction");
+    const mint = calls(f, "signedDocumentReadUrl");
+    const note = calls(f, "noteOpened");
+    expect([mint.length, note.length]).toEqual([1, 1]);
+    const urlReturns: number[] = [];
+    const visit = (n: ts.Node) => {
+      if (ts.isReturnStatement(n) && n.expression && ts.isObjectLiteralExpression(n.expression)
+        && n.expression.properties.some((p) => p.name && ts.isIdentifier(p.name) && p.name.text === "url")) urlReturns.push(n.getStart());
+      ts.forEachChild(n, visit);
+    };
+    visit(f);
+    expect(urlReturns).toHaveLength(1);
+    expect(mint[0]!.getStart()).toBeLessThan(note[0]!.getStart());
+    expect(note[0]!.getStart()).toBeLessThan(urlReturns[0]!);
+  });
+  it("createDocumentShareAction: the note before newShareToken (mutation: move it after createDocumentShare -> FAILS)", () => {
+    const f = fn(`${A}/contacts/document-shares-actions.ts`, "createDocumentShareAction");
+    const note = calls(f, "noteOpened");
+    const token = calls(f, "newShareToken");
+    expect([note.length, token.length]).toEqual([1, 1]);
+    expect(note[0]!.getStart()).toBeLessThan(token[0]!.getStart());
   });
   it("the read-URL mint has exactly two app callers: the file action and a customer's share link (mutation: call it from a third file -> FAILS)", () => {
-    const callers = walk(SRC, isSource).filter((p) => callsTo(parse(p), "signedDocumentReadUrl").length > 0).map((p) => rel(p)).sort();
+    const callers = walk(SRC, isSource).filter((p) => calls(parse(p), "signedDocumentReadUrl").length > 0).map((p) => rel(p)).sort();
     expect(callers).toEqual([`${A}/contacts/documents-actions.ts`, "lib/document-shares/public-share.ts"]);
   });
 });
 
-describe("who may reach the logger (spec 2.2)", () => {
+describe("who may reach the logger (spec 2.2, spec 4.2 item 3)", () => {
   const all = walk(SRC, isSource).map((p) => ({ f: rel(p), imports: importsFrom(parse(p)) }));
-  it("the importers of @/lib/access-log/note are exactly the records and the file action (mutation: import it into lib/automations/fanout.ts -> FAILS)", () => {
+  it("the importers of @/lib/access-log/note are exactly the records and the two record actions' files (mutation: import it into lib/automations/fanout.ts -> FAILS)", () => {
     expect(all.filter((x) => x.imports.includes("@/lib/access-log/note")).map((x) => x.f).sort())
-      .toEqual([...Object.keys(RECORD), `${A}/contacts/documents-actions.ts`].sort());
+      .toEqual([...Object.keys(RECORD), `${A}/contacts/documents-actions.ts`, `${A}/contacts/document-shares-actions.ts`].sort());
   });
   it("no public, cron, webhook or voice tree imports any access-log module", () => {
     const PUBLIC = ["app/api/cron/", "app/api/webhooks/", "app/api/voice/", "app/api/sms/", "app/api/concierge/", "app/api/d/",
       "app/api/s/", "app/api/unsubscribe/", "app/api/ops/", "app/b/", "app/c/", "app/f/", "app/u/", "app/d/", "app/s/", "app/cal/",
       "lib/automations/", "lib/voice/"];
-    const bad = all.filter((x) => PUBLIC.some((p) => x.f.startsWith(p)) && x.imports.some((i) => /access-log/.test(i)));
-    expect(bad.map((x) => x.f)).toEqual([]);
+    expect(all.filter((x) => PUBLIC.some((p) => x.f.startsWith(p)) && x.imports.some((i) => /access-log/.test(i))).map((x) => x.f)).toEqual([]);
   });
 });
 
-describe("the walk itself (self-test on a throwaway tree)", () => {
+describe("the walk itself (self-tests on a throwaway tree)", () => {
   const base = mkdtempSync(join(tmpdir(), "access-log-routes-"));
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const put = (f: string, body: string) => { mkdirSync(join(base, f, ".."), { recursive: true }); writeFileSync(join(base, f), body); };
+  const IMPORT = "import { noteOpened, noteOpenedApi } from \"@/lib/access-log/note\";\n";
+  const REF = "{ isAgency: true }, \"a\", { kind: \"call\", recordId: \"b\" }";
   put("app/x/[accountId]/known/page.tsx", "export default function P() { return null; }\n");
   put("app/x/[accountId]/new/page.tsx", "export default function P() { return null; }\n");
+  put("app/x/[accountId]/new/layout.tsx", "export default function L({ children }: { children: unknown }) { return children; }\n");
   put("app/x/[accountId]/rec/page.tsx", "// noteOpened(access, a, ref) is mentioned only here\nconst s = \"noteOpened(\";\nexport default function P() { return s; }\n");
-  put("app/x/[accountId]/ok/page.tsx", "import { noteOpened } from \"@/lib/access-log/note\";\nexport default async function P() { await noteOpened({ isAgency: true }, \"a\", { kind: \"call\", recordId: \"b\" }); return null; }\n");
-  it("reports an unclassified page by name", () => {
-    expect(unclassified(base, ["app/x"], new Set(["app/x/[accountId]/known/page.tsx", "app/x/[accountId]/rec/page.tsx", "app/x/[accountId]/ok/page.tsx"])))
-      .toEqual(["app/x/[accountId]/new/page.tsx"]);
+  put("app/x/[accountId]/ok/page.tsx", `${IMPORT}export default async function P() { await noteOpened(${REF}); const [x] = await Promise.all([Promise.resolve(1), noteOpened(${REF})]); return x; }\n`);
+  const SHAPES: Record<string, string> = {
+    "void.ts": `${IMPORT}export async function f() { void noteOpened(${REF}); }\n`,
+    "catch.ts": `${IMPORT}export async function f() { await noteOpened(${REF}).catch(() => undefined); }\n`,
+    "then.ts": `${IMPORT}export async function f() { noteOpened(${REF}).then(() => 1); }\n`,
+    "unawaited.ts": `${IMPORT}export async function f() { const p = noteOpened(${REF}); return p; }\n`,
+    "all-caught.ts": `${IMPORT}export async function f() { await Promise.all([noteOpened(${REF})]).catch(() => []); }\n`,
+    "api-unnegated.ts": `${IMPORT}export async function f() { if (await noteOpenedApi(${REF})) return 1; return 2; }\n`,
+    "api-no-return.ts": `${IMPORT}export async function f() { if (!(await noteOpenedApi(${REF}))) console.log("x"); return 1; }\n`,
+    "api-ignored.ts": `${IMPORT}export async function f() { await noteOpenedApi(${REF}); return 1; }\n`,
+  };
+  for (const [n, b] of Object.entries(SHAPES)) put(`lib/shapes/${n}`, b);
+  put("lib/shapes/api-ok.ts", `${IMPORT}export async function f() { if (!(await noteOpenedApi(${REF}))) return 404; return 200; }\n`);
+  it("reports an unclassified page AND an unclassified layout by name", () => {
+    expect(unclassifiedEntries(base, ["app/x"], new Set(["app/x/[accountId]/known/page.tsx", "app/x/[accountId]/rec/page.tsx", "app/x/[accountId]/ok/page.tsx"])))
+      .toEqual(["app/x/[accountId]/new/layout.tsx", "app/x/[accountId]/new/page.tsx"]);
   });
   it("a record whose only noteOpened is in a comment or a string is reported; a real call is not", () => {
     expect(missingLogger(base, { "app/x/[accountId]/rec/page.tsx": "noteOpened", "app/x/[accountId]/ok/page.tsx": "noteOpened" }))
       .toEqual(["app/x/[accountId]/rec/page.tsx"]);
   });
+  it.each(Object.keys(SHAPES))("the shape check refuses %s", (n) => {
+    expect(badLoggerCalls(parse(join(base, "lib/shapes", n))).length).toBeGreaterThan(0);
+  });
+  it("the shape check accepts the two good shapes (an awaited call, an element of an awaited Promise.all) and the good API shape", () => {
+    expect(badLoggerCalls(parse(join(base, "app/x/[accountId]/ok/page.tsx")))).toEqual([]);
+    expect(badLoggerCalls(parse(join(base, "lib/shapes/api-ok.ts")))).toEqual([]);
+  });
 });
 ```
 
-- [ ] **Step 2: Run it green.** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/access-log-routes.test.ts"`. Paste the summary. If a file reports, the plan's 19/21 count was wrong or a wave-3 task missed a surface: STOP and report which, and do not edit the lists to make it pass.
-- [ ] **Step 3: Probes, in your own detached worktree** (`git worktree add --detach HEAD SCRATCH/al-t11/wt`, run `pnpm install --frozen-lockfile --prefer-offline` once there, and remove it with `git worktree remove --force` when done). Each probe below must fail BY NAME:
+  Notes for the implementer:
+  - `unwrap` climbs out of parentheses, so `if (!(await noteOpenedApi(…)))` walks call → await → `!` → if. Read it against the self-tests before trusting it.
+  - If the TypeScript API names differ in the installed `typescript` (for example `ts.canHaveModifiers` / `ts.getModifiers`, TS ≥ 4.8), adapt to the installed version and say so in your report.
+  - **The action lists are the plan's reading at `13079bec`.** If the walk finds an action, entry or guarded file the plan did not list, STOP and report it with your proposed class and reason. Never add it silently, and never delete a list entry to make the suite pass.
+
+- [ ] **Step 2: Run it green.** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/access-log-routes.test.ts"`. Paste the summary.
+- [ ] **Step 3: Probes, in your own detached worktree.** Set it up with `git worktree add --detach HEAD SCRATCH/al-t11/wt`, run `pnpm install --frozen-lockfile --prefer-offline` once there, and remove it with `git worktree remove --force` when done. Each probe must fail BY NAME:
   - (a) delete the `noteOpened` line from `calls/[callId]/page.tsx`;
-  - (b) move the file action's note below the mint;
-  - (c) create `ACCT/zzprobe/page.tsx`;
+  - (b) move the file action's note above the mint, and separately below the URL return;
+  - (c) create `ACCT/zzprobe/page.tsx`, and separately `ACCT/zzprobe/layout.tsx`;
   - (d) import `noteOpened` into `lib/automations/fanout.ts`;
-  - (e) replace the call in `conversations/page.tsx` with a comment that names it.
+  - (e) replace the call in `conversations/page.tsx` with a comment that names it;
+  - (f) add `export async function peekAction() {}` to `ACCT/contacts/[contactId]/actions.ts`;
+  - (g) prefix the call page's note with `void` (and drop its `await`);
+  - (h) add `.catch(() => undefined)` to the group page's `Promise.all`;
+  - (i) in one API route, turn `if (!(await noteOpenedApi(…))) return …` into `await noteOpenedApi(…);`;
+  - (j) call `requireAccountAccess` from a new `ACCT/zzprobe/helper.tsx`.
 
   Paste each red line.
-- [ ] **Step 4: Commit** the one path: `test(auth): every page and route in the account trees is classified as a record that logs or not a record, by name (F-118 part 1)`.
+- [ ] **Step 4: Commit** the one path: `test(auth): every entry, server action and guarded file in the account trees is classified, and every access-log call is awaited where it cannot fail open (F-118 part 1)`.
 
 ---
 
@@ -1774,8 +2183,15 @@ describe("the walk itself (self-test on a throwaway tree)", () => {
 - Modify: `apps/web/e2e/fixtures/entry-guards.test.ts:125-133` (the names list)
 - Create: `apps/web/e2e/access-log.spec.ts`
 - Modify: `apps/web/screenshots/capture.spec.ts:216-230` (give the demo account a reason before the first capture)
+- Modify: `apps/web/e2e/shell.spec.ts:18-24` (review I4: pick the fixture company by name)
 
-- [ ] **Step 1: The fifth setup test.** Every agency spec enters the fixture account or Test Client One. With the gate, each would now meet the chooser. One setup test gives both accounts a reason for the shared agency session. A visit lasts two hours, so a local run longer than that meets the chooser late, and that is the gate working (the report says so). CI runs in about nine minutes.
+- [ ] **Step 1: The fifth setup test.** Agency specs enter accounts in four ways, read from the specs at `13079bec`:
+  - Most enter the per-run fixture account or Test Client One (`openAccountByName(page, SEEDED_ACCOUNT_NAME)` in nine specs, and direct `goto`s on the fixture's id). This setup test gives both of them a reason, for the shared agency session.
+  - `blueprints.spec.ts:95-109` and `vetting.spec.ts:100-104` create a company. Its creator's Setup visit starts with it (C10, Task 5 Step 4), so neither spec changes.
+  - `shell.spec.ts:18-24` opens the switcher and clicks the FIRST option, which is whatever company is newest on the project. Step 2b changes it to pick the fixture company by name.
+  - `access-log.spec.ts` (Step 2) signs in again on purpose, to meet the chooser.
+
+  A visit lasts two hours, so a local run longer than that meets the chooser late. That is the gate working, and the report says so. CI runs in about nine minutes.
 
 ```ts
 // F-118 part 1: the agency's session gives a reason ONCE for the two accounts the agency specs enter, so every
@@ -1804,14 +2220,16 @@ setup("agency gives a reason for the fixture account and Test Client One", async
   1. **A new agency session:** `browser.newContext()` with NO storage state, `clerkSetup()`, `signInWithTicket(page, await clerkClient(), agency.clerkUserId)` and `setActiveOrganization(page, agency.clerkOrgId)`. Both come from `e2e/.auth/agency-fixture.json` (`auth.setup.ts:100-105`). A new sign-in is a new session with no visit.
   2. **The deep link:** `page.goto(`/dashboard/accounts/${accountId}/contacts/${contactId}`)`. Expect the URL to match `/dashboard/enter/<accountId>?to=` and the heading to be `m["accessLog.enter.heading"]` with `{name}` = `companyName`. Expect `getByText(contactName)` to have count 0: the chooser shows NOT the customer.
   3. Click `m["accessLog.reason.support"]`. Expect the URL to END with the contact path. That is the `x-bis-path` round trip, spec §3.2's ASSUMPTION, proven here. Then expect `recordPage(page)` (`support.ts:131-140`) to show `contactName`.
-  4. **No download from a prefetch (C2):** `goto` the contacts list, `hover()` the `m["contacts.export"]` link, `waitForLoadState("networkidle")`, and close this context.
-  5. **The Owner reads it:** `browser.newContext({ storageState: "e2e/.auth/client-state.json" })`, `goto …/team#bis-access`. Locate `section#bis-access [data-bis-access-visit]` filtered by `hasText: m["accessLog.reason.support"]` and expect count 1. Expect it to contain `"E2E Agency"` (the per-run agency's Clerk name, `auth.setup.ts:97`) and the sentence "Opened 1 customer." (`m["accessLog.summary.opened"]` with `{list}` = `m["accessLog.count.customersOne"]`). Click `m["accessLog.show"]` and expect a link named `m["accessLog.item.customer"]` with `{name}` = `contactName`. Expect `section#bis-access` NOT to contain `m["accessLog.summary.downloadsOne"]`; its positive control is the "Opened 1 customer." assertion just above.
-  6. **Staff cannot read it:** `browser.newContext({ storageState: "e2e/.auth/staff-state.json" })`, `goto …/team`, and expect the URL NOT to end in `/team` (`staff-roles.spec.ts:150-155` shows the redirect).
+  4. **The drawer (spec test 15, review m9):** `goto` the contacts list. Click the fixture contact's row (`getByRole("row").filter({ hasText: contactName })`, the `contacts-drawer.spec.ts:434` shape), wait for the drawer's summary request to answer (`waitForResponse` on `/api/accounts/<accountId>/contacts/<contactId>/summary` with status 200), and close it with Esc. The drawer and its cards opened the SAME customer in the same visit, so step 5 must still show ONE customer. That is the "once per record per visit" rule, end to end.
+  5. **No download from a prefetch (C2):** `hover()` the `m["contacts.export"]` link, `waitForLoadState("networkidle")`, and close this context.
+  6. **The Owner reads it:** `browser.newContext({ storageState: "e2e/.auth/client-state.json" })`, `goto …/team#bis-access`. Locate `section#bis-access [data-bis-access-visit]` filtered by `hasText: m["accessLog.reason.support"]` and expect count 1. Expect it to contain `"E2E Agency"` (the per-run agency's Clerk name, `auth.setup.ts:97`) and the sentence "Opened 1 customer." (`m["accessLog.summary.opened"]` with `{list}` = `m["accessLog.count.customersOne"]`). Click `m["accessLog.show"]` and expect exactly ONE link named `m["accessLog.item.customer"]` with `{name}` = `contactName` (the page and the drawer, logged once). Expect `section#bis-access` NOT to contain `m["accessLog.summary.downloadsOne"]`; its positive control is the "Opened 1 customer." assertion just above. Also expect the frame's lists line (`m["accessLog.note.lists"]`) and agency-lists line to be visible (rulings 2 and 3, review I5).
+  7. **Staff cannot read it:** `browser.newContext({ storageState: "e2e/.auth/staff-state.json" })`, `goto …/team`, and expect the URL NOT to end in `/team` (`staff-roles.spec.ts:150-155` shows the redirect).
 
   Close every context in a `finally`. The spec creates no named rows, so `fixture-names.test.ts` needs no entry. Confirm that by running `pnpm --filter web exec vitest run e2e/fixtures`.
+- [ ] **Step 2b: `shell.spec.ts` (review I4).** At `:21-22`, the switcher's `getByRole("option").first()` becomes `getByRole("option", { name: new RegExp(escapeRegExp(fixture.companyName)) })`, reading the fixture at run time as Step 2 does. With the gate, the newest company on a shared project can be one this session never gave a reason for, which would leave the URL on the chooser. The assertion at `:23` (the URL reaches `/contacts`) stays as it is. Read the switcher's option markup first (`components/account-switcher.tsx`) to confirm that the option's accessible name contains the company name. If it does not, match on whatever the option shows and say so.
 - [ ] **Step 3: The capture.** In `capture.spec.ts`, right after the first `page.goto(…/dashboard)` at `:229`, add one helper call, `await enterOnce(page, demo.accountId)`. If the URL matches `/dashboard/enter/`, it clicks `m["accessLog.reason.setup"]` and waits for `/dashboard$`. Define it in the same file with a doc comment (F-118: the capture's agency session gives the demo account a reason; the demo's log keeps ids only). The capture runs on bis-ci (`screenshots.yml`), so it works only after 0105 is there.
-- [ ] **Step 4: The orchestrator runs the suite** (Task 13, step 4). Paste the spec lines from the run (a pass, or the first failure with `gh run view --log-failed` for CI). Probe, in the orchestrator's slot and on a COPY branch only: put back `<Link>` on Export and remove the route's RSC check. Step 2.5's `not.toContain` must then FAIL. If it stays green, the prefetch never reached the handler, and the anchor and the 204 are belt and braces; say so in the report.
-- [ ] **Step 5: Commit** the four paths: `test(e2e): the agency gives a reason once per run; a deep link meets the chooser and lands where it pointed; the Owner reads the visit on Team (F-118 part 1)`.
+- [ ] **Step 4: The orchestrator runs the suite** (Task 13, step 4). Paste the spec lines from the run (a pass, or the first failure with `gh run view --log-failed` for CI). Probe, in the orchestrator's slot and on a COPY branch only: put back `<Link>` on Export and remove the route's RSC check. Step 2.6's `not.toContain` must then FAIL. If it stays green, the prefetch never reached the handler, and the anchor and the 204 are belt and braces; say so in the report.
+- [ ] **Step 5: Commit** the five paths: `test(e2e): the agency gives a reason once per run; a deep link meets the chooser and lands where it pointed; the Owner reads the visit on Team; the switcher test picks the fixture by name (F-118 part 1)`.
 
 ---
 
@@ -1822,14 +2240,16 @@ setup("agency gives a reason for the fixture account and Test Client One", async
 - [ ] **Step 1: Whole-branch review.** bis-reviewer on opus, in its OWN detached worktree at the branch head (with its own `pnpm install --frozen-lockfile --prefer-offline`, removed with `git worktree remove --force`), and its own replica port 55852 for 0105. The brief says, in its own words, "never git checkout, never git stash, never amend; probe in your worktree only". It must re-run:
   - every T1 mutation on the replica, plus three of its own;
   - T3's gate and note probes;
-  - T11's five probes;
+  - T11's ten probes, (a) to (j);
   - one second-account probe per new read: `newestAgencyVisitStart` without its account filter; `resolveAccessLogNames` without `.eq("account_id")` on documents; `note_agency_open` looking the visit up without the account.
 
-  It answers for each owner ruling, 1 to 9, with a file:line that implements it. It also answers four questions:
+  It answers for each owner ruling, 1 to 9, with a file:line that implements it. It also answers six questions:
   - Can any record's data reach the browser before its note settles?
   - Can a client ever reach the RPC?
   - Can `to` ever leave the account?
   - Does every `noteOpened` sit after its proof?
+  - Is there any way to a file's bytes (a view, a download, a share link, a version) or a customer's fields that Task 11's action and entry lists class as "not a record" and that should log?
+  - Can a download link ever save HTML?
 
 - [ ] **Step 2: Design review.** bis-design-reviewer covers the chooser and the BIS access section:
   - dark and light (the `.dark` class), the blur fallback, English, Spanish and the pseudo-locale;
@@ -1892,8 +2312,9 @@ select md5(string_agg(x, '|' order by x)) from (
 7. Task 13, steps 1–7. 0105 goes to bis-ci, then production, then the parity check, then the merge. **Never** apply it before the final review has passed it unchanged.
 8. **Owner, after the deploy:** approve the trust-pack sentences, which go in the owner's private document and never in this repo. Their content must cover:
    - What is now true: a reason is chosen before BIS enters; Owners read a log of each visit and everything opened, on the Team page; the log is append-only for every app role; it is kept for the life of the account.
-   - Limit one (ruling 3): BIS's three lists that cover every business at once (open work, including deciding a suggestion from it; screened calls; phone numbers) are not gated or logged, and anything opened from them is.
-   - Limit two (ruling 6): maintenance straight on the database (the Supabase dashboard, or SQL with the service key or the owner role) bypasses the app, is not in this log, and is not bound by its grants.
+   - Limit one (ruling 2, review I5): lists inside the account (the customer list, the inbox, calls and the rest) are part of a visit and are not listed one by one; every record opened from them is.
+   - Limit two (ruling 3): BIS's three lists that cover every business at once (open work, including deciding a suggestion from it; screened calls; phone numbers) are not gated or logged, and anything opened from them is.
+   - Limit three (ruling 6): maintenance straight on the database (the Supabase dashboard, or SQL with the service key or the owner role) bypasses the app, is not in this log, and is not bound by its grants.
 
    The orchestrator drafts the exact wording in the final report, not in a file.
 9. **Owner, later:** create the production Clerk instance (unchanged, already pending). Note that every agency person's name in the log is a snapshot taken when the visit starts: a later name change in Clerk does not rewrite old visits.
@@ -1922,7 +2343,9 @@ select md5(string_agg(x, '|' order by x)) from (
   - `palette.spec.ts:85,111,135,151,168`: no query matches the new entry.
 - **Placeholders.** None. Where a test copies an existing helper (`seedAccount`, the fake-client shape, the forms page's mock set), the plan names the file and lines to copy. That is deliberate: those inserts carry columns this plan did not read, and the source wins.
 - **Probes checked for "can it fail".**
-  - T1 M10: the probe was rewritten from "drop the index" to "delete the on-conflict clause". Dropping only the index makes the function ERROR, which also reds the test, but a delete-the-clause probe produces the wrong OUTPUT the memory asks for.
+  - T1 M10 (corrected after review m2): only dropping BOTH the unique index and the on-conflict clause produces the wrong OUTPUT (two rows). Dropping the index alone makes the function error (42P10, no arbiter for the ON CONFLICT), and dropping the clause alone makes the repeat note error (23505). Both of those red the test too, but by crashing, which is not the proof the memory asks for. The first draft claimed the clause alone gave the wrong output; it gives 23505.
+  - T1 M22 (review m1) needs two connections; Step 2b supplies them.
+  - T1 M19: the page fixture holds a SHARE-ONLY document (d3), so dropping `document_share` from the file count changes the number. A viewed-and-shared document would have hidden it.
   - T1 M11 fails two cases; the named one is among them.
   - T3 Step 2 case 4 (header for another account) and T5 Step 1 (B `to`) are separate layers, each probed separately, so neither masks the other.
   - T7's Word-file case exists because "log `mode`" would otherwise survive.

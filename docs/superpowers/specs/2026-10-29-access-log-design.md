@@ -112,6 +112,12 @@ The links (accounts list, switcher, palette, emails) do not change. Any route in
 gate, which is the point: a link cannot forget it. Settings and the checklist are behind it too (they
 read client data, and "Setup" is one of the reasons).
 
+Two agency writes sit in the account tree but are NOT behind the visit. They guard with
+`requireAgency()` alone and touch configuration, never a customer record (review m11):
+`captureBlueprintAction` (`dashboard/blueprints/actions.ts:8-19`, which copies an account's setup into a
+blueprint) and every action in `ACCT/settings/billing-actions.ts` (`:91-249`: billing links, complimentary
+status, the pause and the plan). The route walk's action map pins both as configuration (plan Task 11).
+
 The live-visit read is one RPC, wrapped in React `cache()` per `(accountId)` so the layout, the page and
 the shell share it within a request. A failed read throws (fail closed); the page's error boundary shows.
 
@@ -178,9 +184,10 @@ One row per record per visit, the first time it is opened in that visit:
 | `group` | the household or business page and its cards | `ACCT/groups/[groupId]/page.tsx` after `readGroup` (:80-81); each `API/groups/[groupId]/*` route |
 | `call` | the call page | `ACCT/calls/[callId]/page.tsx` after `getCall` (:106) |
 | `conversation` | the inbox with `?c=` resolving to a thread | `ACCT/conversations/page.tsx`, once the selected thread is resolved (:276-283) |
-| `document_view`, `document_download` | opening or downloading a file (record id = the document, not the version) | `getDocumentUrlAction` (`ACCT/contacts/documents-actions.ts:228-258`), after the request-client proof and BEFORE `signedDocumentReadUrl` mints |
+| `document_view`, `document_download` | opening or downloading a file (record id = the document, not the version) | `getDocumentUrlAction` (`ACCT/contacts/documents-actions.ts:228-258`): AFTER `signedDocumentReadUrl` answered `ok` and BEFORE the URL is returned. A pending or removed file opens nothing and logs nothing. A failed write discards the minted URL, so it never leaves the server (review m6) |
+| `document_share` | making a share link for a file (record id = the document) | `createDocumentShareAction` (`ACCT/contacts/document-shares-actions.ts:49-77`), after the request-client proof and the clean-version pick, BEFORE the token is made. A `/s/<token>` link opens the file with no sign-in, so without this row the agency could read any file through a link of its own and leave nothing (review I1) |
 | `form_answers` | a form's page, which lists its answers (record id = the form) | `ACCT/forms/[formId]/page.tsx` after `getForm` (:23-24) |
-| `customer_list_export` | downloading the customer list (no record id; `item_count` = the rows matching the export's filters when it starts, from `countContacts`) | `ACCT/contacts/export/route.ts` after `requireAccountOwner` and the count, BEFORE the stream starts (the route streams, so "rows sent" is known only after the data has left, §11 C1); every export is its own row |
+| `customer_list_export` | downloading the customer list (no record id; `item_count` = the rows matching the export's filters when it starts, from `countContacts`) | `ACCT/contacts/export/route.ts` after `requireAccountOwner` and the count, BEFORE the stream starts (the route streams, so "rows sent" is known only after the data has left, §11 C1). Every export is its own row. The route uses `noteOpenedApi`. An agency person with no live visit gets a 409 plain-text answer before any guard can redirect, so a download link never saves the chooser's HTML as the file (review m5) |
 
 Not logged: lists, settings, the palette search (`API/search`, which returns names like a list; opening a
 result opens the record, which is logged), the knowledge snapshot. Open question 2 covers lists.
@@ -212,11 +219,20 @@ mistyped or foreign id leaves nothing.
    one pinned map: `record` (must call `noteOpened` or `noteOpenedApi` in real code, not a comment) or
    `not-a-record` with its reason in words. A new file in neither fails BY NAME ("unclassified route:
    …"), so a new record page cannot ship without someone deciding.
-2. It asserts that `getDocumentUrlAction` calls `noteOpened` before `signedDocumentReadUrl` (AST order
-   within the function body), and that `lib/document-shares/public-share.ts` is the only other app caller
-   of the mint (a customer's share link, not BIS).
-3. It asserts that the importers of `lib/access-log/note` are exactly the record files and the file
-   action (an allowlist), and that nothing under the public, cron, webhook and voice trees
+2. It asserts three orders within function bodies (AST): `getDocumentUrlAction` calls
+   `signedDocumentReadUrl`, then `noteOpened`, then returns the URL; `createDocumentShareAction` calls
+   `noteOpened` before `newShareToken`. It also asserts that `lib/document-shares/public-share.ts` is the
+   only other app caller of the mint (a customer's share link, not BIS).
+4. It enumerates every exported server action in the account-scoped "use server" files, with the same
+   enumeration as `lib/billing/read-only.test.ts:131-245`. It pins each action as a record read (which must
+   log) or not a record, with its reason. It also requires a reason for every other file under `app/` that
+   calls a guard (review I2). Entry files are matched by `^(page|route|layout|template|default)\.[jt]sx?$`.
+5. It requires each logger call to be unfakeable (review I3). `noteOpened` must be directly awaited, or be
+   an element of an array literal passed straight to an awaited `Promise.all`. It is never the receiver of
+   `.catch`/`.then` and never behind `void`. `noteOpenedApi` appears only as
+   `if (!(await noteOpenedApi(…))) return …`.
+3. It asserts that the importers of `lib/access-log/note` are exactly the record files, the file action
+   and the share action (an allowlist), and that nothing under the public, cron, webhook and voice trees
    (`app/api/{cron,webhooks,voice,sms,concierge,d,s,unsubscribe,ops}`, `app/{b,c,f,u,d,s,cal}`,
    `lib/automations`, `lib/voice`) imports any `lib/access-log` module (§2.2's rule, pinned). There is
    no `lib/jobs`; the job runner lives in `lib/automations/jobs` (§11 C7).
@@ -256,7 +272,8 @@ agency_visit_items
   account_id uuid not null              -- tied to the account THROUGH the visit (§11 C5)
   foreign key (visit_id, account_id) references agency_visits (id, account_id) on delete cascade
   kind text not null check (kind in ('contact', 'group', 'call', 'conversation', 'document_view',
-                                     'document_download', 'form_answers', 'customer_list_export'))
+                                     'document_download', 'document_share', 'form_answers',
+                                     'customer_list_export'))
   record_id uuid                       -- NO foreign key: the log outlives the record (§6.2)
   item_count integer check (item_count >= 0)
   first_opened_at timestamptz not null default now()
@@ -276,7 +293,10 @@ later (F-122's "delete me") leaves an id and no name, and `contacts`' foreign-ke
 
 ```
 revoke all on public.agency_visits, public.agency_visit_items from anon, authenticated, service_role;
-grant select on both to authenticated;                    -- RLS decides which rows
+grant select (id, account_id, actor_kind, actor_name, reason, started_at) on agency_visits to authenticated;
+                                     -- RLS decides which rows. The column list keeps BIS staff's Clerk user
+                                     -- and session ids out of an Owner's reach (review m3).
+grant select on agency_visit_items to authenticated;
 grant select on both to service_role;
 grant insert (account_id, actor_clerk_user_id, actor_name, clerk_session_id, reason) on agency_visits to service_role;
 grant insert (visit_id, account_id, kind, record_id, item_count) on agency_visit_items to service_role;
@@ -339,14 +359,16 @@ Opened 4 customers, 1 call and 1 file.          [Show what was opened]   (ghost,
 ```
 
 - Times in the account's zone (`accounts.timezone`, `0001_tenancy.sql:26`), the date once, the span as
-  start–end; a visit with no items shows its start only.
+  start–end; a visit with no items shows its start only. When the zone's offset changes inside the span
+  (the autumn hour that repeats), each clock carries its zone name ("1:30 AM CDT–1:20 AM CST"). An end
+  then never reads as earlier than its start (review m8).
 - The summary counts in this order: customers, households or businesses, calls, conversations, files, form
   answers, customer list downloads. Words, never icons alone; singular and plural in both languages.
   Nothing opened: "Didn't open any customer, call, conversation or file." / "No abrió ningún cliente,
   llamada, conversación ni archivo."
 - Expanded, one row per item, newest first, each a link to the record while it exists: "Customer · Maria
   Lopez", "Business · Rio Roofing", "Call · Maria Lopez · Oct 28, 3:04 PM", "Conversation · Maria Lopez",
-  "File · Insurance card · viewed" / "downloaded", "Form answers · Contact us", "Downloaded your customer
+  "File · Insurance card · viewed" / "downloaded" / "shared", "Form answers · Contact us", "Downloaded your customer
   list (212 customers)". More than 100: "and 37 more" / "y 37 más", no link.
 - **Names are resolved when the Owner reads, through the Owner's own RLS** (contacts, client_groups,
   calls with their contact, conversations with their contact, documents including trashed ones, forms).
@@ -370,7 +392,7 @@ Opened 4 customers, 1 call and 1 file.          [Show what was opened]   (ghost,
 | Empty | "BIS hasn't opened your account yet. When someone does, you'll see who, when, why and what they opened." / "BIS todavía no ha abierto su cuenta. Cuando alguien lo haga, verá quién, cuándo, por qué y qué abrió." No button: nothing the Owner does causes an entry. |
 | Loaded | Visits newest first, 20 a page, a real total in the header ("12 visits"/"12 visitas"; a NULL head count throws, never shows 0), exactly one pager, "Older" / "Anteriores" and "Newer" / "Recientes" with `?accessBefore=` (named so it cannot collide with another card's `?before=`). |
 | Error | "We couldn't load BIS's visits. Try again." / "No pudimos cargar las visitas de BIS. Inténtelo de nuevo." Ghost **Try again** / **Reintentar**. The Team card above stands (its own boundary). |
-| Note (always, small) | "This list shows people at BIS. Automatic work, like Sofía answering a call or a reminder going out, isn't a person looking and isn't listed." / "Esta lista muestra a personas de BIS. El trabajo automático, como Sofía al contestar una llamada o el envío de un recordatorio, no es una persona mirando y no aparece aquí." Plus the agency-lists line (ruling 3, required): "BIS also has a few lists that show every business at once: open work, screened calls and phone numbers. Looking at those lists, or deciding one of Sofía's suggestions from the work list, doesn't open your account, so it isn't listed here. Opening a customer, call or conversation from them is." / "BIS también tiene algunas listas que muestran todos los negocios a la vez: el trabajo pendiente, las llamadas filtradas y los números de teléfono. Ver esas listas, o decidir una sugerencia de Sofía desde la lista de trabajo, no abre su cuenta, así que no aparece aquí. Abrir desde ellas un cliente, una llamada o una conversación sí aparece." |
+| Note (always, small) | "This list shows people at BIS. Automatic work, like Sofía answering a call or a reminder going out, isn't a person looking and isn't listed." / "Esta lista muestra a personas de BIS. El trabajo automático, como Sofía al contestar una llamada o el envío de un recordatorio, no es una persona mirando y no aparece aquí." Plus the lists line (orchestrator decision, review I5, consistent with ruling 2): "Lists inside your account, like your customers, inbox and calls, are part of the visit and aren't listed one by one." / "Las listas dentro de su cuenta, como sus clientes, la bandeja de entrada y las llamadas, forman parte de la visita y no aparecen una por una." Plus the agency-lists line (ruling 3, required): "BIS also has a few lists that show every business at once: open work, screened calls and phone numbers. Looking at those lists, or deciding one of Sofía's suggestions from the work list, doesn't open your account, so it isn't listed here. Opening a customer, call or conversation from them is." / "BIS también tiene algunas listas que muestran todos los negocios a la vez: el trabajo pendiente, las llamadas filtradas y los números de teléfono. Ver esas listas, o decidir una sugerencia de Sofía desde la lista de trabajo, no abre su cuenta, así que no aparece aquí. Abrir desde ellas un cliente, una llamada o una conversación sí aparece." |
 
 No primary button anywhere in the section (rule 8 allows none). No status colours: a reason is not a
 status. Usted throughout (the app UI's register, as in `2026-10-28-calendar-feed-design.md` §5.2). Every string goes in `messages.ts` under
@@ -381,7 +403,9 @@ status. Usted throughout (the app UI's register, as in `2026-10-28-calendar-feed
 The trust pack draft (private, outside this repo) says BIS's access is not logged yet. After this ships
 to production, and only then, its sentences change from "planned, not built" to what is built: a reason
 before entry, a log the firm's Owners read on the Team page, append-only in the database, kept for the
-life of the account. Two limits must be stated with it (rulings 3 and 6): BIS's three cross-account lists
+life of the account. Three limits must be stated with it (rulings 2, 3 and 6). First, lists inside the
+account (the customer list, the inbox, the calls and the rest) are part of a visit and are not listed one
+by one (review I5). Then the other two: BIS's three cross-account lists
 (the work list, including deciding a suggestion from it, the screened-calls list and the numbers page;
 §2.3), and maintenance access straight to the database (the Supabase dashboard or SQL with the service key
 or the owner role), which bypasses the app, is not in this log, and is not bound by its grants (§11 C8).
@@ -397,7 +421,7 @@ tests are proven by CI verify or on a local PG18 replica with its own port; any 
 
 | # | Test (file) | It proves | Mutation that must fail it |
 |---|---|---|---|
-| 1 | Grants (`packages/db/src/test/access-log-schema.test.ts`, new; `schema-grants-guard.test.ts`) | `anon` holds nothing; `authenticated` SELECT only; `service_role` SELECT and column INSERT only; no role holds UPDATE, DELETE or TRUNCATE (read from `information_schema.role_table_grants` and `column_privileges`, 0054's test shape). | Drop `service_role` from the `revoke all` line (the default ACL hands it DELETE back). |
+| 1 | Grants (`packages/db/src/test/access-log-schema.test.ts`, new; `schema-grants-guard.test.ts`) | `anon` holds nothing; `authenticated` SELECT only, and on `agency_visits` only the six columns that are not BIS staff's Clerk ids (review m3); `service_role` SELECT and column INSERT only; no role holds UPDATE, DELETE or TRUNCATE (read from `information_schema.role_table_grants` and `column_privileges`, 0054's test shape). | Drop `service_role` from the `revoke all` line (the default ACL hands it DELETE back). |
 | 2 | Append-only, live (same file) | As service_role: `update agency_visits set reason = …` and `delete from agency_visit_items …` both raise `42501`. Inserting with an explicit `started_at` raises `42501`. | `grant update (reason) on agency_visits to service_role`. |
 | 3 | Cascade and teardown (same file; `withTestAccount`'s own teardown is `deleteAccountCascade`, `packages/db/src/test/fixtures.ts:147`) | `deleteAccountCascade` on an account with a visit and items succeeds and leaves no row in either table; a SECOND account's visit survives. | Add `agency_visits` to `ACCOUNT_OWNED_TABLES` (teardown throws `42501`). |
 | 4 | Read policy (same file, JWT-claims GUC) | Owner of A reads A's visits; Staff of A, Technician of A, Owner of B read zero of A's rows; the agency reads both; A's Owner with client access off reads zero. | Policy `account_id = app.current_account_id()` with the owner clause dropped (Staff test fails); drop the account clause (B's Owner test fails). |
@@ -407,7 +431,7 @@ tests are proven by CI verify or on a local PG18 replica with its own port; any 
 | 8 | `start_agency_visit` is idempotent (same file) | Two calls inside the window return the same id; after the window, a new id. | Remove the "return the live one" branch. |
 | 9 | The gate (`lib/auth.test.ts` or `lib/access-log/gate.test.ts`, mocking `auth()` and the RPC) | Agency with no live visit → redirect to `/dashboard/enter/<id>?to=<x-bis-path>`; with one → returns as today; a client never calls the RPC; `apiAccountAccess` agency with no visit → null; an RPC error throws. | Return early for the agency before the visit check (the no-visit page and api cases fail); call the RPC for clients (spy count fails). |
 | 10 | `noteOpened` (`lib/access-log/note.test.ts`) | Client access → no RPC; agency `ok` → resolves; `no_visit` → redirect (page) / null (api); RPC error → throws. | Swallow the error and return (fail-open test fails). |
-| 11 | Route guard (`ACCT/access-log-routes.test.ts`, new) | §4.2's three assertions. Fixture self-tests: a temp tree with an unclassified `page.tsx` fails; a `record` file whose only `noteOpened` is in a comment fails. | Delete `noteOpened` from `ACCT/calls/[callId]/page.tsx` (fails naming that file); move the file-action note after the mint. |
+| 11 | Route guard (`ACCT/access-log-routes.test.ts`, new) | §4.2's five assertions (entries, the file and share orders and the mint's callers, the importer allowlist, every server action and guarded file classified, every logger call unskippable). Fixture self-tests: an unclassified `page.tsx` or `layout.tsx` fails; a `record` file whose only `noteOpened` is in a comment fails; `void`, `.catch`, `.then`, unawaited and un-negated logger calls fail. | Delete `noteOpened` from `ACCT/calls/[callId]/page.tsx` (fails naming that file); move the file action's note above the mint; `void` the call page's note; export a new action from `contacts/[contactId]/actions.ts`. |
 | 12 | `to` validation (`dashboard/enter/actions.test.ts`) | Accepts `/dashboard/accounts/<id>/contacts/<c>?x=1`; refuses `//evil.example`, `/dashboard/accounts/<other id>/…`, `/dashboard/accounts/<id>\\evil`, `https://…`; refuses an unknown reason before any RPC. | Drop the same-account check. |
 | 13 | Reader view (`lib/access-log/view.test.ts`) | Counts and plurals in both languages ("1 customer", "4 customers", "1 cliente", "4 clientes"); the order of kinds; view+download of one file counts as 1 file; each "later deleted", archived and trash wording; a visit's span in `Pacific/Honolulu` for an instant that is a different calendar day in Chicago (the machine's zone). | Always plural; render in the machine's zone. |
 | 14 | Copy guards (`messages.test.ts`) | EN/ES parity for `accessLog.*`, `INTERNAL_MILESTONE`, no `{{`, no arrows. | Put "F-118" in a string. |
@@ -507,7 +531,20 @@ the evidence line for each.
   Test Client One. `e2e/fixtures/entry-guards.test.ts` pins the names of the setup tests. The access-log
   spec signs the agency in AGAIN, which makes a new session with no visit, to see the chooser.
 - **C17** `x-bis-path` drops Next's internal `_rsc` query parameter.
-- **C18** The route walk classifies 40 files: 19 records and 21 not-records, counted from the tree at
-  `13079bec`.
+- **C18** The route walk classifies 41 entry files: 40 pages and routes, plus the account layout. 19 are
+  records and 22 are not, counted from the tree at `13079bec`. It also pins every server action (C21).
 - **C19** The window's edge is testable exactly: `now()` is fixed inside a transaction, so a visit started
   exactly two hours earlier is NOT live (strict `>`).
+- **C20 (review I1)** A share link reads a file with no sign-in, so making one is a file open. It gets
+  a new kind, `document_share`, logged before the token is made (§4.1).
+- **C21 (review I2, I3)** The route walk also pins every server action, every guarded file under `app/`,
+  and every `layout`, `template` and `default` file. It refuses any logger call a caller could quietly skip
+  (§4.2 items 4 and 5).
+- **C22 (review I5)** The Owner's note and the trust pack say that lists inside the account are part of
+  the visit and are not listed one by one (§6.3, §7).
+- **C23 (review m3)** `authenticated` reads six columns of `agency_visits`, never the Clerk user or
+  session id (§5.2).
+- **C24 (review m5)** The export answers 409 in plain text to an agency person with no live visit (§4.1).
+- **C25 (review m6)** A file is logged only once the mint answered ready, and before the URL leaves (§4.1).
+- **C26 (review m8)** A span across the repeated autumn hour names both zones (§6.2).
+- **C27 (review m11)** Two agency actions in the tree are configuration-only and not gated (§3.1).
