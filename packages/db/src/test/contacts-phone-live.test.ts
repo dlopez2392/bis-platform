@@ -29,7 +29,9 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const [a, b] = [us.id, mx.id].sort();
       const pairFlags = (await db.from("contact_duplicate_flags").select("reason")
         .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
-      expect(pairFlags).toEqual([{ reason: "phone_country_twin" }]);
+      // 0106: the database files this pair AT the second insert, by phone_national — a different
+      // family on each side, so its reason is same_digits, not the TypeScript twin reason.
+      expect(pairFlags).toEqual([{ reason: "same_digits" }]);
     });
   });
 
@@ -46,11 +48,12 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const [a, b] = [mx.id, us.id].sort();
       const pairFlags = (await db.from("contact_duplicate_flags").select("reason")
         .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
-      expect(pairFlags).toEqual([{ reason: "phone_country_twin" }]);
+      // 0106: same as the direct order, filed by the database at the second insert.
+      expect(pairFlags).toEqual([{ reason: "same_digits" }]);
     });
   });
 
-  it("setContactPhoneCountry writes phone and flag together only while the phone is unchanged, and flags a twin (mutation: drop the expectedPhone guard → 'updated', FAILS; mutation: drop the pick's flagDuplicatePair → no flag, FAILS)", async () => {
+  it("setContactPhoneCountry writes phone and flag together only while the phone is unchanged (mutation: drop the expectedPhone guard → 'updated', FAILS; 0106: the database files the pair AT the twin's own insert, before the pick ever runs — not the TypeScript pick's own flagDuplicatePair, which can no longer be the thing that fails this test, since the pair already exists by the time it runs)", async () => {
     await withTestAccount(async (db, accountId) => {
       const flagged = await createContact(db, accountId, { firstName: "Flag", phone: "55 1234 5678" }, "user_test");
       // The twin goes in DIRECTLY, not through createContact: createContact's
@@ -67,9 +70,10 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const [a, b] = [flagged.id, twin.id].sort();
       const pairFlags = async () => (await db.from("contact_duplicate_flags").select("reason")
         .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
-      // Nothing flags the pair before the pick, so whatever is there after it,
-      // the pick wrote.
-      expect(await pairFlags()).toEqual([]);
+      // 0106: the twin's own raw insert above shares `flagged`'s phone_national (same ten digits), under
+      // the OTHER family (mx vs flagged's ambiguous-read-as-+1), so the database's own trigger files the
+      // pair at once, reason same_digits — before the pick below ever runs.
+      expect(await pairFlags()).toEqual([{ reason: "same_digits" }]);
 
       expect(await setContactPhoneCountry(db, accountId, flagged.id,
         { expectedPhone: "+19999999999", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("changed");
@@ -80,7 +84,11 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const { data } = await db.from("contacts").select("phone, phone_country_unconfirmed").eq("id", flagged.id).single();
       expect(data).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 
-      expect(await pairFlags()).toEqual([{ reason: "phone_country_pick" }]);
+      // The pick's own flagDuplicatePair insert meets the pair already on file (23505, swallowed): the
+      // SAME single row from before the pick, unchanged. (Plan correction 6: dropping the pick's own
+      // flagDuplicatePair call can no longer fail this test, since the database already filed the pair
+      // before the pick ever ran — that mutation is retired here, not substituted, per the task brief.)
+      expect(await pairFlags()).toEqual([{ reason: "same_digits" }]);
     });
   });
 });

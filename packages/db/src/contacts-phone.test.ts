@@ -115,6 +115,9 @@ function memoryDb(contacts: Row[]) {
   // `.eq("holds_shared_number", false)` (T17 review I2): a seeded or inserted row without the column carries the
   // default, exactly as Postgres would store it. A test that seeds `holds_shared_number: true` keeps it.
   for (const r of contacts) if (!("holds_shared_number" in r)) r.holds_shared_number = false;
+  // 0106's merged_into is nullable, and several reads now filter `.is("merged_into", null)` (Task 4): a seeded
+  // row without the column is a real, un-merged contact, exactly as a fresh insert would read.
+  for (const r of contacts) if (!("merged_into" in r)) r.merged_into = null;
   const tables: { contacts: Row[]; contact_duplicate_flags: Row[]; events: Row[]; tags: Row[] } & Record<string, Row[]> =
     { contacts, contact_duplicate_flags: [], events: [], tags: [] };
   let nextId = 1;
@@ -131,6 +134,7 @@ function memoryDb(contacts: Row[]) {
       const q = {
         select: () => q,
         eq: (k: string, v: unknown) => { filters.push([k, v]); return q; },
+        is: (k: string, v: unknown) => { filters.push([k, v]); return q; },
         neq: (k: string, v: unknown) => { filters.push([`!${k}`, v]); return q; },
         in: (k: string, vals: unknown[]) => { filters.push([k, vals]); return q; },
         order: () => readTerminal(),
@@ -145,6 +149,7 @@ function memoryDb(contacts: Row[]) {
           if (table === "contacts") {
             stored.phone_key = stored.phone ? phoneDigits(String(stored.phone)) : null;
             if (!("holds_shared_number" in stored)) stored.holds_shared_number = false;
+            if (!("merged_into" in stored)) stored.merged_into = null;
           }
           tables[table]!.push(stored);
           const done = Promise.resolve({ data: null, error: null });
@@ -527,7 +532,7 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
         if (call === 2) {
           return {
             select: () => ({
-              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }) }),
+              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ is: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }) }) }),
             }),
           };
         }
@@ -552,7 +557,7 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
         if (call === 2) {
           return {
             select: () => ({
-              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) }) }) }) }),
+              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ is: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) }) }) }) }) }),
             }),
           };
         }

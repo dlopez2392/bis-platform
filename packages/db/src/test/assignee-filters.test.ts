@@ -205,7 +205,7 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       expect(data!.assigned_to).toBeNull();
     }));
 
-  it("flagMatchesOf: a shared phone writes one hidden_match pair; a second call is the designed no-op and returns 0", () =>
+  it("a shared phone is filed by the database at insert; flagMatchesOf finds it filed and writes nothing (0106: the trigger beats flagMatchesOf to the pair, reason same_phone, so both calls return 0)", () =>
     withAssigneeAccount(async (db, accountId) => {
       const { data: c1, error: e1 } = await db.from("contacts")
         .insert({ account_id: accountId, first_name: "One", phone: "+19565550133" }).select("id").single();
@@ -214,12 +214,12 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
         .insert({ account_id: accountId, first_name: "Two", phone: "+19565550133" }).select("id").single();
       if (e2) throw e2;
 
-      expect(await flagMatchesOf(db, accountId, c2!.id)).toBe(1);
+      expect(await flagMatchesOf(db, accountId, c2!.id)).toBe(0);
       const { data: flags, error: fErr } = await db.from("contact_duplicate_flags")
         .select("contact_a, contact_b, reason").eq("account_id", accountId);
       if (fErr) throw fErr;
       expect(flags).toHaveLength(1);
-      expect(flags![0]!.reason).toBe("hidden_match");
+      expect(flags![0]!.reason).toBe("same_phone");
       expect([flags![0]!.contact_a, flags![0]!.contact_b].sort()).toEqual([c1!.id, c2!.id].sort());
 
       expect(await flagMatchesOf(db, accountId, c2!.id)).toBe(0);

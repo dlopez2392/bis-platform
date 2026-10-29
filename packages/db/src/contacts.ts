@@ -77,8 +77,10 @@ export type CreateContactInput = ContactInput & {
 // its thread, and the group actions refuse it, off the SAME row (spec 5.12.3, 5.12.4).
 // `archived_at`/`archived_by` (0103, contact archive): the record's banner and the drawer read whether, when and by
 // whom a contact was archived off the SAME row.
+// `merged_into` (0106, F-006): the record page and the drawer redirect a merged-away record to the kept one off
+// the SAME row.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id, holds_shared_number, archived_at, archived_by";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id, holds_shared_number, archived_at, archived_by, merged_into";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -268,6 +270,9 @@ type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; co
  *      `ilike`: `.eq("email_key", …)` has no pattern grammar at all, so `%` and
  *      `_` are literal characters by construction rather than by escaping. The
  *      tests that pinned that behaviour are unchanged and still pass.
+ *
+ * 0106: a merged-away record keeps its phone and email (owner ruling D8), so a hit on it answers the kept
+ * record; the one-hop pointer is all there is, because 0106 flattens chains.
  */
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
@@ -280,18 +285,18 @@ async function findDuplicate(
 
   const eKey = email ? emailKey(email) : "";
   if (eKey) {
-    const { data, error } = await db.from("contacts").select("id")
+    const { data, error } = await db.from("contacts").select("id, merged_into")
       .eq("account_id", accountId).eq("email_key", eKey).limit(1);
     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
-    if (data && data.length > 0) result.emailMatch = data[0]!.id as string;
+    if (data && data.length > 0) result.emailMatch = (data[0]!.merged_into as string | null) ?? (data[0]!.id as string);
   }
 
   const pKey = phone ? phoneKeyOf(phone) : "";
   if (pKey) {
-    const { data, error } = await db.from("contacts").select("id")
+    const { data, error } = await db.from("contacts").select("id, merged_into")
       .eq("account_id", accountId).eq("holds_shared_number", false).eq("phone_key", pKey).limit(1);
     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
-    if (data && data.length > 0) result.phoneMatch = data[0]!.id as string;
+    if (data && data.length > 0) result.phoneMatch = (data[0]!.merged_into as string | null) ?? (data[0]!.id as string);
 
     // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
     // as "899 922 1234" keys 8999221234 while its +52 reading keys
@@ -354,14 +359,14 @@ async function findDuplicate(
       legacyKeys = [`52${pKey}`, `521${pKey}`];
     }
     if (legacyTenDigits) {
-      const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
+      const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone, merged_into")
         .eq("account_id", accountId).eq("holds_shared_number", false).in("phone_key", legacyKeys).limit(10);
       if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
-      const hits = (bare ?? []) as { id: string; phone: string | null }[];
+      const hits = (bare ?? []) as { id: string; phone: string | null; merged_into: string | null }[];
       const bareHit = hits.find((h) =>
         h.phone !== null && (hasNoCountryMarker(h.phone) || normalisePhone(h.phone)?.e164 === `+${pKey}`));
-      if (bareHit) result.phoneMatch = bareHit.id;
-      else if (hits[0]) result.countryTwin = hits[0].id;
+      if (bareHit) result.phoneMatch = bareHit.merged_into ?? bareHit.id;
+      else if (hits[0]) result.countryTwin = hits[0]!.merged_into ?? hits[0]!.id;
     }
   }
 
@@ -416,7 +421,7 @@ async function flagDuplicatesAfterWrite(
   if (typeof written.email === "string" && written.email) {
     const eKey = emailKey(written.email);
     const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("email_key", eKey).neq("id", contactId).limit(1);
+      .eq("account_id", accountId).eq("email_key", eKey).neq("id", contactId).is("merged_into", null).limit(1);
     if (twinErr) {
       console.error(`contact duplicate check (email) for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
     } else {
@@ -426,9 +431,10 @@ async function flagDuplicatesAfterWrite(
   }
   if (typeof written.phone === "string" && written.phone) {
     // S-47e (spec 5.12.3): no duplicate flag ever pairs a household member with the number's holding record.
+    // 0106: nor a merged-away record — it is never a fresh duplicate, only a hit the earlier reads already resolved.
     const { data: twins, error: twinErr } = await db.from("contacts").select("id")
       .eq("account_id", accountId).eq("holds_shared_number", false)
-      .eq("phone_key", phoneDigits(written.phone)).neq("id", contactId).limit(1);
+      .eq("phone_key", phoneDigits(written.phone)).neq("id", contactId).is("merged_into", null).limit(1);
     if (twinErr) {
       console.error(`contact duplicate check (phone) for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
     } else {
@@ -533,9 +539,12 @@ export async function flagMatchesOf(db: SupabaseClient, accountId: string, conta
     me.phone_key ? `phone_key.eq.${quoteFilterValue(String(me.phone_key))}` : null,
   ].filter((v): v is string => v !== null);
   if (ors.length === 0) return 0;
-  // S-47e (spec 5.12.3): a shared number's holding record is nobody's duplicate.
+  // S-47e (spec 5.12.3): a shared number's holding record is nobody's duplicate. 0106: nor is a merged-away
+  // record — a hit on one is for the record it points at to find on its own account, not for this Technician's
+  // new contact to be paired against a hidden pointer.
   const { data: hits, error: hErr } = await db.from("contacts").select("id")
-    .eq("account_id", accountId).eq("holds_shared_number", false).neq("id", contactId).or(ors.join(",")).limit(20);
+    .eq("account_id", accountId).eq("holds_shared_number", false).neq("id", contactId)
+    .is("merged_into", null).or(ors.join(",")).limit(20);
   if (hErr) throw new Error(`flagMatchesOf lookup failed: ${hErr.message}`);
   let written = 0;
   for (const h of (hits ?? []) as { id: string }[]) {
@@ -633,15 +642,23 @@ const COLUMN_FIELD: Readonly<Record<string, ContactFieldName>> = {
  * E.164 for a phone, never the raw input the caller passed).
  */
 export async function fillContactBlanksReport(
-  db: SupabaseClient, accountId: string, contactId: string,
+  db: SupabaseClient, accountId: string, requestedId: string,
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
   actorId: string, actorType: ActorType = "user",
 ): Promise<{
   fields: string[]; flagged: boolean;
   prior: Partial<Record<ContactFieldName, string | null>>; written: Partial<Record<ContactFieldName, string>>;
 }> {
-  const row = await getContact(db, accountId, contactId);
+  let contactId = requestedId;
+  let row = await getContact(db, accountId, contactId);
   if (!row) throw new Error("fillContactBlanks: no such contact");
+  // 0106 (owner ruling D8): a call that ends after its customer was merged still fills the record that
+  // merge kept — the one-hop pointer is all there is, because 0106 flattens chains.
+  if (row.merged_into) {
+    contactId = row.merged_into;
+    row = await getContact(db, accountId, contactId);
+    if (!row) throw new Error("fillContactBlanks: no such contact");
+  }
   const blank = (v: unknown) => v == null || String(v).trim() === "";
 
   const patch: Record<string, unknown> = {};
@@ -894,11 +911,15 @@ function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
 }
 
 /** Contact archive (0103; owner rulings 2026-10-28). One rule for the list's rows and its header total, as
- *  withAssignee is: "exclude" (the list, search, pickers, export) or "only" (the Archived view). */
+ *  withAssignee is: "exclude" (the list, search, pickers, export) or "only" (the Archived view) — and never
+ *  a merged-away record (0106), in either view. */
 export type ArchivedFilter = "exclude" | "only";
 function withArchived<T>(q: T, archived: ArchivedFilter | undefined): T {
-  const f = q as unknown as { is: (c: string, v: null) => T; not: (c: string, op: string, v: null) => T };
-  return archived === "only" ? f.not("archived_at", "is", null) : f.is("archived_at", null);
+  const f = q as unknown as {
+    is: (c: string, v: null) => T & { is: (c: string, v: null) => T };
+    not: (c: string, op: string, v: null) => T & { is: (c: string, v: null) => T };
+  };
+  return (archived === "only" ? f.not("archived_at", "is", null) : f.is("archived_at", null)).is("merged_into", null);
 }
 
 function withSearch<T>(q: T, search?: string): T {
@@ -1336,7 +1357,7 @@ export async function restoreContactOnSign(
   return data === true;
 }
 
-export const DELETE_BLOCK_REASONS = ["messages", "inbound_email", "calls", "forms", "consent", "automations", "bookings", "deals"] as const;
+export const DELETE_BLOCK_REASONS = ["messages", "inbound_email", "calls", "forms", "consent", "automations", "bookings", "deals", "merges"] as const;
 export type DeleteBlockReason = (typeof DELETE_BLOCK_REASONS)[number];
 /** What keeps each contact from being deleted for good (spec §5.1), on the SERVICE client, for ids the caller
  *  already proved on its own client. One row per blocked contact (0103 step 7), so the answer fits max_rows.
@@ -1400,9 +1421,11 @@ export async function setContactPhoneCountry(
   // can restore a null phone — the first-fill case, undone).
   if (input.phone !== null) {
     // S-47e (spec 5.12.3; Task 4 review I1): a shared number's holding record is never a pick's twin.
+    // 0106: nor is a merged-away record — the database's own trigger already filed this pair the moment
+    // the phone column above was written, if there was anything to file.
     const { data: twins, error: twinErr } = await db.from("contacts").select("id")
       .eq("account_id", accountId).eq("holds_shared_number", false)
-      .eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
+      .eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).is("merged_into", null).limit(1);
     // The phone is written: a failure from here on is logged, never thrown
     // (a throw would report a failed pick that succeeded; review R3-M11).
     const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;
