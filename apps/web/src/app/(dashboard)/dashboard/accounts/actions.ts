@@ -4,6 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAgency } from "@/lib/auth";
+import { startVisitForCaller } from "@/lib/access-log/visit";
 import { serviceDb, createAccount, applyBlueprint, assertUsableZone, isTestOrgId } from "@bis/db";
 import { m } from "@/lib/messages";
 import { checkTradeChoice } from "@/lib/vetting/trades";
@@ -138,6 +139,10 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   }
 
   revalidatePath("/dashboard/accounts");
+  // F-118 part 1 (plan C10): the creator's reason is Setup; without it this redirect would meet the chooser.
+  await startVisitForCaller(id, "setup").catch((e: unknown) => {
+    console.error(`account ${id}: starting the creator's Setup visit failed, the chooser will ask: ${String(e)}`);
+  });
   // The setup wizard, not the checklist: a brand-new account has nothing on
   // it, and the wizard is the surface that says — from live rows rather than
   // from a list of reminders — what is missing and where to go and do it.
@@ -219,6 +224,10 @@ export async function adoptOrphanOrgAction(
   }
 
   revalidatePath("/dashboard/accounts");
+  // F-118 part 1 (plan C10): the creator's reason is Setup; without it this redirect would meet the chooser.
+  await startVisitForCaller(id, "setup").catch((e: unknown) => {
+    console.error(`account ${id}: starting the creator's Setup visit failed, the chooser will ask: ${String(e)}`);
+  });
   // To the Client access card, not setup: the account is born with client
   // access OFF (the column default), so the people already invited still
   // cannot sign in until it is turned on — the step the dialog's hint names.
