@@ -61,8 +61,12 @@ const held = vi.hoisted(() => ({
     contactId: string; contactFirstName: string | null; contactLastName: string | null;
   }[],
 }));
+// F-118 part 1 (Task 9): a ?c= not on the current page falls back to this read;
+// defaults to resolving nothing so the existing fixtures (which never need it) are unaffected.
+const getConversationSummaryMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
+  getConversationSummary: (...a: unknown[]) => getConversationSummaryMock(...a),
   readPersonId: async () => null,
   listMessages: async () => [],
   // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
@@ -75,6 +79,10 @@ vi.mock("@bis/db", () => ({
   getContact: async () => null,
   getVoiceProfile: async () => null,
 }));
+// F-118 part 1 (Task 9): the one logger a record surface calls — controllable here so this file's
+// own describe block can assert what it was called with, and make it reject.
+const noteOpenedMock = vi.fn(async (..._a: unknown[]): Promise<void> => {});
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpenedMock(...a) }));
 
 const { default: ConversationsPage } = await import("./page");
 
@@ -115,6 +123,8 @@ beforeEach(() => {
   held.listThrows = false;
   held.mode = "off";
   held.items = [];
+  getConversationSummaryMock.mockReset().mockResolvedValue(null);
+  noteOpenedMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("ConversationsPage — Task 12: the 'Needs a look' filter and its list", () => {
@@ -219,5 +229,50 @@ describe("ConversationsPage in Spanish (requestLocale; F-085 follow-up, Task B)"
     expect(markup).toMatch(/<div lang="es"/);
     expect(markup).toContain(`>${m["nav.conversations.es"]}<`);
     expect(markup).toContain(m["conversations.pickThread.es"]);
+  });
+});
+
+// F-118 part 1 (spec §4.1; plan Task 9): opening a thread in the inbox is a record open. The guard
+// here already returns an agency access (`isAgency: true`).
+describe("ConversationsPage logs BIS's open of a resolved thread (F-118 part 1)", () => {
+  it("1. a ?c= found on the current page is logged with the thread's own id, after it resolves (mutation: log c before it resolves -> FAILS)", async () => {
+    await ConversationsPage(route("convo1"));
+    expect(noteOpenedMock).toHaveBeenCalledTimes(1);
+    expect(noteOpenedMock).toHaveBeenCalledWith(
+      { userId: "u1", isAgency: true, role: null, canManage: true },
+      "acct1",
+      { kind: "conversation", recordId: "convo1" },
+    );
+  });
+
+  it("2. a ?c= found only by getConversationSummary (not on the current page) is logged too", async () => {
+    getConversationSummaryMock.mockResolvedValueOnce({
+      id: "off-page", contactId: "contactX", contactFirstName: "Off", contactLastName: "Page",
+      lastMessageAt: "2026-09-01T00:00:00Z", lastMessagePreview: "old thread", unreadCount: 0,
+    });
+    await ConversationsPage(route("off-page"));
+    expect(noteOpenedMock).toHaveBeenCalledWith(expect.anything(), "acct1", { kind: "conversation", recordId: "off-page" });
+  });
+
+  it("3. a ?c= that resolves to nothing (not on the page, and getConversationSummary finds none) makes no call (mutation: log c before it resolves -> FAILS)", async () => {
+    getConversationSummaryMock.mockResolvedValueOnce(null);
+    await ConversationsPage(route("missing"));
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  it("4. a request with no ?c= at all makes no call", async () => {
+    await ConversationsPage(route(undefined));
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+    expect(getConversationSummaryMock).not.toHaveBeenCalled();
+  });
+
+  it("5. a rejecting log rejects the page (owner ruling 4: fail closed)", async () => {
+    noteOpenedMock.mockRejectedValueOnce(new Error("log failed"));
+    await expect(ConversationsPage(route("convo1"))).rejects.toThrow("log failed");
+  });
+
+  it("6. ?view=held makes no call: no thread is resolved on that branch", async () => {
+    await ConversationsPage(heldRoute("held"));
+    expect(noteOpenedMock).not.toHaveBeenCalled();
   });
 });

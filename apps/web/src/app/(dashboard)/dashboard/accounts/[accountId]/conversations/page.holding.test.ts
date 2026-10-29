@@ -25,6 +25,9 @@ const authFixture = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => authFixture,
 }));
+// F-118 part 1 (Task 9): the one logger a record surface calls, resolving — this file's
+// `authFixture` can carry `isAgency: true`, which would otherwise reach Clerk's real `auth()`.
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: async () => {} }));
 
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({

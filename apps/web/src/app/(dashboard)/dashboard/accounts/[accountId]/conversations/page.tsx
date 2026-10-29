@@ -19,6 +19,7 @@ import { renderZone } from "@/lib/zone";
 import { cn } from "@/lib/utils";
 import { parseCursor, encodeCursor } from "@/lib/cursor";
 import { requireAccountAccess } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
 import { withWho } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
@@ -282,7 +283,11 @@ export default async function ConversationsPage({
     ? (conversations.find((conversation) => conversation.id === c)
       ?? (await getConversationSummary(db, accountId, c)) ?? undefined)
     : undefined;
-  const messages = active ? await listMessages(db, accountId, active.id) : [];
+  // F-118 part 1 (spec 4.1): opening a thread is a record open; the thread's own read and the log run side by side,
+  // and nothing renders until both have settled (owner ruling 4).
+  const [messages] = active
+    ? await Promise.all([listMessages(db, accountId, active.id), noteOpened(access, accountId, { kind: "conversation", recordId: active.id })])
+    : [[] as Awaited<ReturnType<typeof listMessages>>];
   // S-06 part 2 (spec §1, G4): who on the team forwarded a filed forward. One read, on the REQUEST
   // client, so RLS decides who this reader may name; an id it does not answer for — and a failed
   // read, which costs only the names, never the thread — reads "someone on the team".

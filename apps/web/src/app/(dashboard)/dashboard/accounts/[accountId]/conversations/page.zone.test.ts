@@ -25,6 +25,9 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
 }));
+// F-118 part 1 (Task 9): the one logger a record surface calls, resolving — this file's
+// isAgency: true fixture would otherwise reach Clerk's real `auth()`.
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: async () => {} }));
 
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago" }, error: null }));
