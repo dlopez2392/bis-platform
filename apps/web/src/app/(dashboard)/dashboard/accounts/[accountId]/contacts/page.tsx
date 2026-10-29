@@ -278,13 +278,17 @@ export default async function ContactsPage({
               </Link>
             ) : null}
             {canManage ? (
-              <Link
+              // F-118 part 1 (plan Task 7): a Link prefetches and its RSC fetch would run the export
+              // route's own handler — a plain anchor with `download` never does either.
+              <a
                 href={buildExportHref(base, q, sort, dir, view)}
+                download
+                data-export-link
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
               >
                 <Download className="size-4" aria-hidden />
                 {tr.text("contacts.export")}
-              </Link>
+              </a>
             ) : null}
             {/* Import and Add contact add to the list, so the Archived view offers neither. */}
             {view === "active" && wholeAccount ? (

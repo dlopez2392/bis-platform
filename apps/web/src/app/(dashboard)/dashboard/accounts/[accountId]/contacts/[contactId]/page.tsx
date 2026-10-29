@@ -54,6 +54,7 @@ import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
+import { noteOpened } from "@/lib/access-log/note";
 import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 import { loadForwardingView } from "@/lib/email/inbound/forwarding-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
@@ -150,6 +151,10 @@ export default async function ContactDetailPage({
     // Item 8b-2 (spec 5.3): What's next's "Waiting for you", this customer's pending suggestions on the
     // request client (RLS decides). Never throws: a failure is the section's own error line.
     loadWaitingSuggestions(db, accountId, contactId, now),
+    // F-118 part 1 (spec 4.1, ruling 4): the ONE access-log write for this record, after getContact and
+    // the holding redirect above. Not destructured: a client is never logged (noteOpened returns at
+    // once), and the agency's write throws on failure, which rejects this Promise.all like any other read.
+    noteOpened(access, accountId, { kind: "contact", recordId: contact.id }),
   ]);
   // The email composer's read (consent spec §6, choice 22). Never throws.
   const emailRecipient = await emailRecipientState(ledger, accountId, contact);

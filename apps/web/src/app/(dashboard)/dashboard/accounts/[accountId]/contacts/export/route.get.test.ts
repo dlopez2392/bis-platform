@@ -16,15 +16,25 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 
 const listContacts = vi.fn();
 const listTagNamesForContacts = vi.fn();
+const countContacts = vi.fn();
 vi.mock("@bis/db", () => ({
   listContacts: (...a: unknown[]) => listContacts(...a),
   listTagNamesForContacts: (...a: unknown[]) => listTagNamesForContacts(...a),
+  countContacts: (...a: unknown[]) => countContacts(...a),
 }));
 
-const { GET } = await import("./route");
+// F-118 part 1 (plan Task 7, review m5): the agency-visit gate and the access-log write. A download
+// link must never fall through to a redirect that would save the chooser's HTML as the file.
+const agencyVisitMissing = vi.fn(async (..._a: unknown[]) => false);
+vi.mock("@/lib/access-log/gate", () => ({ agencyVisitMissing: (...a: unknown[]) => agencyVisitMissing(...a) }));
+const noteOpenedApi = vi.fn(async (..._a: unknown[]) => true);
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...a) }));
 
-function req(qs = ""): Request {
-  return new Request(`http://x/dashboard/accounts/a1/contacts/export${qs}`);
+const { GET } = await import("./route");
+const { m } = await import("@/lib/messages");
+
+function req(qs = "", headers?: Record<string, string>): Request {
+  return new Request(`http://x/dashboard/accounts/a1/contacts/export${qs}`, headers ? { headers } : undefined);
 }
 function ctx() {
   return { params: Promise.resolve({ accountId: "a1" }) };
@@ -60,8 +70,14 @@ beforeEach(() => {
   access.mockReset();
   listContacts.mockReset();
   listTagNamesForContacts.mockReset();
+  countContacts.mockReset();
+  agencyVisitMissing.mockReset();
+  noteOpenedApi.mockReset();
   access.mockResolvedValue({ userId: "u1", isAgency: true });
   listTagNamesForContacts.mockResolvedValue(new Map());
+  countContacts.mockResolvedValue(0);
+  agencyVisitMissing.mockResolvedValue(false);
+  noteOpenedApi.mockResolvedValue(true);
 });
 
 describe("contacts CSV export route (GET)", () => {
@@ -200,5 +216,69 @@ describe("contacts CSV export route (GET)", () => {
     }]);
     await GET(req(), ctx());
     expect(listContacts).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * F-118 part 1 (plan Task 7; spec 4.1): the export route logs the download before the first byte
+ * leaves, counted on the export's own filters, and answers a plain-text 409 — never a redirect — when
+ * the agency's visit has ended. A Link's prefetch or RSC fetch must neither read nor log.
+ */
+describe("contacts CSV export route: the access log (F-118 part 1)", () => {
+  it.each([
+    ["rsc", { rsc: "1" }],
+    ["next-router-prefetch", { "next-router-prefetch": "1" }],
+  ])("a %s request answers 204 with an empty body; none of the guard, the gate, the count, the note or listContacts runs (mutation: drop the check -> FAILS)", async (_l, headers) => {
+    const res = await GET(req("", headers), ctx());
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+    expect(agencyVisitMissing).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
+    expect(countContacts).not.toHaveBeenCalled();
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+    expect(listContacts).not.toHaveBeenCalled();
+  });
+
+  it("review m5: an agency visit that has ended answers 409 plain text, no Content-Disposition, before requireAccountOwner can redirect (mutation: drop the check -> FAILS)", async () => {
+    agencyVisitMissing.mockResolvedValue(true);
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(409);
+    expect(res.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(res.headers.get("Content-Disposition")).toBeNull();
+    expect(await res.text()).toBe(m["accessLog.exportEnded"]);
+    expect(access).not.toHaveBeenCalled();
+    expect(listContacts).not.toHaveBeenCalled();
+  });
+
+  it("counts with the SAME search and archived filters the stream's listContacts gets (mutation: drop search -> FAILS)", async () => {
+    listContacts.mockResolvedValueOnce([]);
+    await GET(req("?q=rosa&view=archived"), ctx());
+    expect(countContacts).toHaveBeenCalledWith({}, "a1", { search: "rosa", archived: "only" });
+    expect(listContacts).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ search: "rosa", archived: "only" }));
+  });
+
+  it("noteOpenedApi runs with the count BEFORE the first listContacts (mutation: log after the first chunk -> FAILS)", async () => {
+    countContacts.mockResolvedValue(7);
+    listContacts.mockResolvedValueOnce([]);
+    const res = await GET(req(), ctx());
+    await text(res);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u1", isAgency: true }, "a1", { kind: "customer_list_export", itemCount: 7 });
+    expect(noteOpenedApi.mock.invocationCallOrder[0]!).toBeLessThan(listContacts.mock.invocationCallOrder[0]!);
+  });
+
+  it("noteOpenedApi -> false (the visit ended in between) answers the same 409, and listContacts never runs (mutation: ignore the answer -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValue(false);
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(409);
+    expect(await res.text()).toBe(m["accessLog.exportEnded"]);
+    expect(listContacts).not.toHaveBeenCalled();
+  });
+
+  it("a rejected note rejects the GET, and listContacts never runs (mutation: swallow it -> FAILS)", async () => {
+    const boom = new Error("write failed");
+    noteOpenedApi.mockRejectedValue(boom);
+    await expect(GET(req(), ctx())).rejects.toBe(boom);
+    expect(listContacts).not.toHaveBeenCalled();
   });
 });

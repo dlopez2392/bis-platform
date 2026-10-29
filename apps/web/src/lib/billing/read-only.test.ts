@@ -137,8 +137,9 @@ const ACCOUNT_ROOTS = ["app/(dashboard)/dashboard/accounts/[accountId]", "lib"];
  * `file#function`, each with its reason. The audit read every exported action
  * in the 38 account-scoped "use server" files (36 under accounts/[accountId],
  * lib/ai-acts/actions.ts, lib/proposals/actions.ts): these are the ones that
- * write nothing and call no model or provider, plus two named exceptions:
- * Manage billing, which is how a paused client pays, and READ STATE, a write
+ * write nothing (an agency person's open of a file also writes its one access-log row, F-118; that row
+ * is not business data and no client action writes it) and call no model or provider, plus two named
+ * exceptions: Manage billing, which is how a paused client pays, and READ STATE, a write
  * to the reader's unread counter that changes nothing in the business
  * (markConversationReadAction; it does not revalidate: MarkRead refreshes the
  * page itself, so the refresh is a plain render, never inside the action). A getter that lazily creates a row is a write:
@@ -151,7 +152,7 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts#getShellSnapshot":
     "the shell's background read on every in-account navigation (badge, meter, presence, status): reads only",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions.ts#getDocumentUrlAction":
-    "opening a file: reads the version and mints a 120-second signed read URL, writes nothing",
+    "opening a file: mints a 120-second signed read URL; writes nothing for a client (for the agency, one access-log row, F-118)",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts#countContactDocumentsAction":
     "the delete dialog's file count: one count on the request client (the delete itself is refused)",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/archive-actions.ts#contactDeleteBlockersAction":

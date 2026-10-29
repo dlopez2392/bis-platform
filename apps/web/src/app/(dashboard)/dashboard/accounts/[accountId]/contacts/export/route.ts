@@ -1,5 +1,7 @@
-import { listContacts, listTagNamesForContacts, type SortKey, type SortDir } from "@bis/db";
+import { listContacts, listTagNamesForContacts, countContacts, type SortKey, type SortDir } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
+import { agencyVisitMissing } from "@/lib/access-log/gate";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { archivedFilterOf, parseView } from "@/lib/contacts/view";
@@ -73,11 +75,26 @@ function cursorValue(
 // query cheap while keeping the total query count small for a large account.
 const CHUNK_SIZE = 500;
 
+/** Review m5: the agency's visit ended. Plain text, never a redirect — a download link must not save
+ *  the chooser's HTML as the file. */
+function exportEnded(): Response {
+  return new Response(m["accessLog.exportEnded"], {
+    status: 409,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ accountId: string }> },
 ) {
   const { accountId } = await params;
+  // F-118 part 1 (plan C2): a Link's prefetch or RSC fetch of this URL must neither read nor log.
+  if (req.headers.get("rsc") !== null || req.headers.get("next-router-prefetch") !== null) return new Response(null, { status: 204 });
+  // Review m5: a download link must never save the chooser's HTML as the file. An agency person whose visit
+  // ended is told so in plain text, BEFORE any guard can redirect.
+  if (await agencyVisitMissing(accountId)) return exportEnded();
+
   // Staff and roles: export is Owner-only, so this is requireAccountOwner
   // — not the plain requireAccountAccess every other route under this
   // account's contacts (layout.tsx, actions.ts) uses — and NOT the /api
@@ -90,7 +107,7 @@ export async function GET(
   // (requireAccountOwner's own doc comment). Staff can still READ contacts
   // (requireAccountAccess would let them through here), so this guard is a
   // friction control on the bulk-download path, not a data-visibility one.
-  await requireAccountOwner(accountId);
+  const access = await requireAccountOwner(accountId);
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q") ?? undefined;
@@ -101,6 +118,11 @@ export async function GET(
   const archived = archivedFilterOf(parseView(url.searchParams.get("view")));
 
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
+
+  // F-118 part 1 (plan C1): the route streams, so the count of what it is about to send is read first, on the
+  // export's own filters, and the download is logged before a single row leaves (owner ruling 4).
+  const total = await countContacts(db, accountId, { search: q, archived });
+  if (!(await noteOpenedApi(access, accountId, { kind: "customer_list_export", itemCount: total }))) return exportEnded();
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
