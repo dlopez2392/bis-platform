@@ -716,7 +716,7 @@ describe("0105: concurrent starts", () => {
 
   Read the `accounts` insert's other NOT NULL columns off `0001_tenancy.sql` before running, and add any the table needs; the source wins. Under M22, `raced` is `"finished"` and the visit count is 2, so both assertions are red.
 
-- [ ] **Step 3: Run it on `pre`. Every database case must fail.** `cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55851/pre pnpm exec vitest run src/test/access-log-schema.test.ts > "$D/vt-pre.txt" 2>&1; echo $? > "$D/vt-pre.exit"` (with `D=SCRATCH/al-t1`). Paste the summary line and one red line (expected: `function public.start_agency_visit(...) does not exist` / `relation "public.agency_visits" does not exist`). The three pure cases pass on `pre`, and that is correct.
+- [ ] **Step 3: Run it on `pre`. Every database case must fail.** `cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55851/pre pnpm exec vitest run src/test/access-log-schema.test.ts > "$D/vt-pre.txt" 2>&1; echo $? > "$D/vt-pre.exit"` (with `D=SCRATCH/al-t1`). Paste the summary line and one red line (expected: `function public.start_agency_visit(...) does not exist` / `relation "public.agency_visits" does not exist`). The `ACCOUNT_OWNED_TABLES` pure case passes on `pre`, and that is correct. The `AGENCY_VISIT_HOURS` pin is red on `pre` too (`ENOENT`): it reads 0105, which Step 4 creates.
 
 - [ ] **Step 4: Write the migration and the wrappers.** Create `packages/db/supabase/migrations/0105_access_log.sql`. It must be ASCII only, with no backslash anywhere:
 
@@ -980,6 +980,8 @@ Add the barrel block to `index.ts`. In `account-teardown.ts`, append to the comm
 | M21 | `grant select on public.agency_visits to authenticated` (table-level) | table privileges, AND column SELECT |
 | M22 | `pg_advisory_xact_lock` to `pg_advisory_xact_lock_shared` | concurrent starts (Step 2b) |
 | M23 | drop `'document_share'` from `agency_visit_items_kind_check` | access_log_page (its share insert is refused 23514) |
+| X1 | add `grant update (started_at) on public.agency_visits to service_role;` (T1 review: a column-level grant that `has_table_privilege` cannot see, and that would allow backdating) | column privileges on ANY column |
+| X2 | add `grant update (first_opened_at, record_id) on public.agency_visit_items to service_role;` (T1 review) | column privileges on ANY column |
 
 M11 may also turn other cases red. That is fine, as long as the NAMED case is among them. If a row stays green, do NOT accept it: find out why and substitute a mutation that can fail, then say so in the report (working rule 2).
 

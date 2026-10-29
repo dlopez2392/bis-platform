@@ -280,7 +280,7 @@ agency_visit_items
   check ((kind = 'customer_list_export') = (record_id is null))
   check ((kind = 'customer_list_export') = (item_count is not null))
   unique index agency_visit_items_once on (visit_id, kind, record_id) where record_id is not null
-  index agency_visit_items_visit on (visit_id, first_opened_at)
+  index agency_visit_items_visit on (visit_id, first_opened_at desc)
 ```
 
 No customer data is stored: ids only, resolved to names when an Owner reads (§6.2). A customer deleted
@@ -319,7 +319,7 @@ one place, `app.agency_visit_window()` (`select interval '2 hours'`, immutable).
 
 | Function | Granted to | Does |
 |---|---|---|
-| `start_agency_visit(p_account_id, p_actor, p_actor_name, p_session, p_reason) returns uuid` | service_role | Returns the live visit for (actor, session, account) if one exists, else inserts one. Takes `pg_advisory_xact_lock(hashtextextended(p_actor || p_session || p_account_id, 0))` first, so two taps make one visit. |
+| `start_agency_visit(p_account_id, p_actor, p_actor_name, p_session, p_reason) returns uuid` | service_role | Returns the live visit for (actor, session, account) if one exists, else inserts one. Takes `pg_advisory_xact_lock(hashtextextended(p_actor || '|' || p_session || '|' || p_account_id::text, 0))` first (the separators keep two different triples from hashing one string), so two taps make one visit. |
 | `agency_visit_live(p_account_id, p_actor, p_session) returns uuid` | service_role | The newest visit for the triple with `started_at > now() - app.agency_visit_window()`, or NULL. |
 | `note_agency_open(p_account_id, p_actor, p_session, p_kind, p_record_id, p_item_count) returns text` | service_role | Finds the live visit for the triple (NOT a caller-supplied visit id, so no visit of another account or person can be named), inserts the item `on conflict do nothing` (or always, for an export), answers `ok` or `no_visit`. |
 | `access_log_page(p_account_id, p_before_started, p_before_id, p_limit) returns jsonb` | authenticated | Invoker, so RLS bounds it. `p_limit` 1–50 or it raises. Up to `p_limit + 1` visits older than the cursor, each with `ended_at` (its last item's time), counts per kind (files counted once per document across view and download) and its first 100 items, newest first. |

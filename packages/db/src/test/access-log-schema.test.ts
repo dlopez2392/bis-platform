@@ -119,6 +119,25 @@ describe("0105: grants make both tables append-only", () => {
       ].map((col) => ({ r: "service_role", col })));
     }));
 
+  it("column privileges on ANY column: no role may UPDATE or REFERENCES a single column of either table, anon holds no column privilege at all, authenticated only SELECTs (T1 review; mutations: `grant update (started_at) on public.agency_visits to service_role` -> FAILS; `grant update (first_opened_at, record_id) on public.agency_visit_items to service_role` -> FAILS)", () =>
+    withRollback(async (c) => {
+      // has_table_privilege is false for a COLUMN-level grant, so the table-privileges case above cannot see
+      // one; a column UPDATE on started_at or first_opened_at would let service_role backdate the log.
+      const { rows } = await c.query(
+        `select r, t, p from unnest(array['anon','authenticated','service_role']) r
+           cross join unnest(array['public.agency_visit_items','public.agency_visits']) t
+           cross join unnest(array['SELECT','INSERT','UPDATE','REFERENCES']) p
+          where has_any_column_privilege(r, t, p) order by 1, 2, 3`);
+      expect(rows).toEqual([
+        { r: "authenticated", t: "public.agency_visit_items", p: "SELECT" },
+        { r: "authenticated", t: "public.agency_visits", p: "SELECT" },
+        { r: "service_role", t: "public.agency_visit_items", p: "INSERT" },
+        { r: "service_role", t: "public.agency_visit_items", p: "SELECT" },
+        { r: "service_role", t: "public.agency_visits", p: "INSERT" },
+        { r: "service_role", t: "public.agency_visits", p: "SELECT" },
+      ]);
+    }));
+
   it("as service_role: UPDATE and DELETE are refused 42501, and so is an INSERT naming started_at (mutation: grant update (reason) on agency_visits to service_role -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "ro");

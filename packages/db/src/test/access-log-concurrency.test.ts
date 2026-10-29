@@ -15,9 +15,15 @@ import "dotenv/config";
  * account a killed run strands is one the fixture sweep (sweep-fixtures.ts) removes.
  */
 const url = () => process.env.SUPABASE_DB_URL!;
-/** Never throws and never echoes the URL: a URL parse error message can carry a credential (2026-09-24). */
+/**
+ * Never throws and never echoes the URL: a URL parse error message can carry a credential (2026-09-24).
+ * A URL with ANY query string is refused (T1 review): pg's own parser, pg-connection-string, lets `?host=`
+ * override the authority, so `postgresql://u@localhost/db?host=<cloud>` reads as localhost to `new URL` and
+ * connects to the cloud. CI verify's URL has no query string (ci-target-guard.sh:203 refuses one), so it
+ * still qualifies.
+ */
 function onThisMachine(raw: string | undefined): boolean {
-  if (!raw) return false;
+  if (!raw || raw.includes("?")) return false;
   try {
     const host = new URL(raw).hostname;
     return host === "localhost" || host === "127.0.0.1";
@@ -25,6 +31,24 @@ function onThisMachine(raw: string | undefined): boolean {
     return false;
   }
 }
+
+describe("0105: the concurrency test runs only against a database on this machine (review r3)", () => {
+  it.each([
+    ["the local replica", "postgresql://postgres@localhost:55801/post", true],
+    ["CI verify's in-runner stack", "postgresql://postgres:postgres@127.0.0.1:54322/postgres", true],
+    ["a ?host= that overrides localhost (mutation: drop the query-string refusal -> FAILS)", "postgresql://postgres@localhost:5432/postgres?host=db.example.invalid", false],
+    ["any other query string on localhost", "postgresql://postgres@127.0.0.1:5432/postgres?sslmode=require", false],
+    ["a bare trailing ?", "postgresql://postgres@localhost:5432/postgres?", false],
+    ["a cloud pooler", "postgresql://postgres.abcd:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres", false],
+    ["a host that only starts with localhost", "postgresql://postgres@localhost.example.invalid:5432/postgres", false],
+    ["an empty host (pg would fall back to PGHOST)", "postgresql://postgres@/postgres", false],
+    ["no URL", undefined, false],
+    ["an empty URL", "", false],
+    ["not a URL", "not a url", false],
+  ])("%s", (_name, raw, expected) => {
+    expect(onThisMachine(raw)).toBe(expected);
+  });
+});
 const connect = async () => { const c = new Client({ connectionString: url(), connectionTimeoutMillis: 10_000 }); await c.connect(); return c; };
 const START = "select public.start_agency_visit($1, 'user_race', 'Race', 'sess_race', 'support') as id";
 
