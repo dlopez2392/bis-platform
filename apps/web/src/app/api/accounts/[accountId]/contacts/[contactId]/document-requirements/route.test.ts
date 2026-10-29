@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 
 const apiAccountAccess = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (id: string) => apiAccountAccess(id) }));
+const noteOpenedApi = vi.fn(async () => true);
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...(a as [])) }));
 // The account row the documents clock reads on the SAME request client: its zone decides the day.
 const REQUEST = {
   tag: "request-db",
@@ -30,6 +32,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-10-17T03:00:00.000Z"));
   errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
   apiAccountAccess.mockResolvedValue({ userId: "user_me", isAgency: false });
+  noteOpenedApi.mockResolvedValue(true);
   db.getContact.mockResolvedValue({ id: C });
   db.listDocumentRequirements.mockResolvedValue(ITEMS);
 });
@@ -75,5 +78,31 @@ describe("the Documents card's checklist read for a contact (spec 5.3)", () => {
     db.getContact.mockResolvedValue(null);
     await call();
     expect(db.serviceDb).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this card is logged", () => {
+  beforeEach(() => { apiAccountAccess.mockResolvedValue({ userId: "user_me", isAgency: true }); });
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await call();
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "user_me", isAgency: true }, ACC, { kind: "contact", recordId: C });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    db.getContact.mockResolvedValue(null);
+    expect((await call()).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await call();
+    expect(res.status).toBe(404);
+    expect(db.listDocumentRequirements).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await call().then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(db.listDocumentRequirements).not.toHaveBeenCalled();
   });
 });

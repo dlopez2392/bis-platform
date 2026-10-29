@@ -48,6 +48,8 @@ function recordingClient(client: Read["client"]) {
 const request = recordingClient("request");
 const service = recordingClient("service");
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: async () => ({ userId: "u1", isAgency: true }) }));
+// F-118 part 1 (plan Task 6): the access-log write is its own module, not a from()/rpc() this fence counts.
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: async () => true }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => request }));
 // Its own one-row read of the person's users row (its own client): counted by hand, +1.
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));

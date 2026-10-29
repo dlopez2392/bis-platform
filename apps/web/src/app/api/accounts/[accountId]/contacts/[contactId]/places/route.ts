@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, listContactPlaces, type ContactPlaceGroup, type PlaceRow, type EquipmentRow, type GroupKind } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
@@ -47,6 +48,8 @@ export async function GET(
     // (another account's, or under 0068 another person's for a Technician) reads nothing else.
     const contact = await getContact(db, accountId, contactId);
     if (!contact) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves.
+    if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
     const [read, today] = await Promise.all([listContactPlaces(db, accountId, contactId), accountToday(db, accountId)]);
     const body: PlacesResponse = {
       subject: {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, listOpenDocumentRequests, documentRequestTarget } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -24,6 +25,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   const db = await dbForRequest();
   try {
     if (!(await getContact(db, accountId, contactId))) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves. Inside this try: a
+    // rejected write is caught below and answered as this route's own 500 (fail closed).
+    if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
     const now = new Date();
     const [requests, target] = await Promise.all([
       listOpenDocumentRequests(db, accountId, { kind: "contact", id: contactId }, now),
