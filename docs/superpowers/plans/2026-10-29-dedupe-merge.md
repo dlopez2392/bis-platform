@@ -50,11 +50,22 @@ Each is also recorded in the spec's §14, same commit.
 16. **Copy.** "Compare" and "Undo" are controls, not words inside a sentence (the toast's action is `common.undo`, `messages.ts:302`). Keys are added for counts, failures, field nouns and the hidden-record fallback (T2's table).
 17. **Assumptions verified.** A file's storage path is `account/document/version` (`0077_document_vault.sql:102`), so documents move by row alone. No job handler carries a contact (`lib/automations/jobs/registry.ts:8-10`: only `platform-ping`). `contacts.dnd` is dead (`automations.ts:1402`); its rule is "the kept record's unless empty".
 18. **Reactivation's held release** (`getDueReactivationById`, `automations.ts:1736-1745`) would send to the merged-away address; T8 filters `merged_into`. The reactivation walk itself never finds a tombstone (it starts from conversations, and a tombstone has none).
-19. **`p_seen` must carry `updated_at` exactly as PostgREST returned it.** A JavaScript `Date` round trip drops the microseconds and would read every merge as stale.
+19. **`stale` compares a fingerprint of the merge's fields, not `updated_at`.** Several writers never stamp `contacts.updated_at` (`assignment.ts:339`, `contacts.ts:1295,1313,1540`, `automations.ts:1855`, `MIG/0076:107`), so the spec's check missed their writes (plan review m3). `app.merge_fields_of(contacts)` is the merge's one field list; `contact_merge_preview` answers both rows' `fields` and `seen` (`md5` of each), the screen shows those fields and sends `seen` back as `p_seen`, so what is shown and what is checked are one snapshot.
 20. **Who checks live in one function, `app.may_merge(account)`,** with 0103's two coalesces; five definers call it.
 21. **`EXPECTED_DEFINERS` goes 29 → 36** (T1 +3, T3 +4; 0104 and 0105 add none).
 22. **No 100,000-row timing or off-peak rule** (production facts above). T1 times one 10,000-contact apply for the header.
 23. **One import-free twin module, `packages/db/src/dedupe-keys.ts`** (`nameFold`, `nameKey`, `phoneNational`, `phoneFamily`, the reason strengths), exported as `@bis/db/dedupe-keys`, instead of `phoneNational` in `contacts.ts` and a separate `name-key.ts`.
+
+### Plan review fixes (2026-10-29; the reviewer ran the SQL on a PG17 replica: merge then Undo restored all 30 fixture rows exactly once)
+
+- **I1, a dismissed pair resurfaced and a phantom survived Undo.** The field update filled K's blank email from O, the flag trigger filed K–X fresh (undismissed), and the later O–X re-file then conflicted and did nothing, unrecorded. Now the re-file runs BEFORE the field update, and every flag the trigger files for K during the field update (flag ids naming K, compared before and after) is recorded in `contact_duplicate_flags_added`, so Undo removes it. T3's Flags case seeds exactly that shape.
+- **I2, an in-flight write landed on the hidden record.** `follow_merge` read `merged_into` without a lock, so a write that began before the merge committed read the old pointer. Both pointer reads are now `for share` (still SECURITY DEFINER): the write waits on the merge's row lock and reads the committed pointer. T3 adds a two-connection test outside `withRollback`. Spec §7.2-7.3 corrected: "the insert waits" was true only for messages.
+- **m3:** `stale` by fingerprint (correction 19).
+- **m4:** T1's probe (c) needed its own case: an Owner of A whose token names org B.
+- **m5:** `app.open_duplicate_pairs` cannot inline (it sets `search_path`), so the contact filter, the cursor and the limit are its own parameters; T1 measures it at 20,000 contacts.
+- **m6:** T3 guards that every foreign-key table into contacts is in `merge_contacts`' `c_moves` or a named special, stays or self list.
+- **m7:** the SMS route bumps unread on the conversation its message now sits on (T7), so a merge between the insert and the bump cannot make the bump a silent no-op.
+- **m8:** (a) the merge never touches `messages.updated_at` (an Undo could not restore it); (b) a redirected late insert that collides with a row K already has (a skip, a membership) answers 23505 and the caller reports its usual failure, while a tag upsert is a no-op (ON CONFLICT sees the redirected row): documented and tested in T3; (c) `authenticated` reads only ten columns of `contact_merges` (never `removed`, `moved`, `keep_before`, `keep_after`, `choices` or `other_reply_token`); (d) T1's placeholder and no-last-name seeds use two different phones, so a phone pair cannot satisfy them.
 
 ---
 
@@ -75,7 +86,9 @@ contact_duplicate_flags + dismissed_at, dismissed_by, merge_id bigint (-> contac
 public.contact_merges(id bigint, account_id, keep_id, other_id, merged_by, merged_at, undo_until, keep_before, keep_after,
                       choices, moved, moved_counts, removed, unread_handed, other_reply_token, undone_at, undone_by)
 app.may_merge(uuid) -> boolean                                       the one who-check (service_role JWT, agency, Owner/Staff of this account)
-app.open_duplicate_pairs(uuid) -> setof pair rows                     invoker; the read-time filters
+app.open_duplicate_pairs(p_account_id uuid, p_contact_id uuid default null, p_after_strength smallint default null,
+  p_after_created_at timestamptz default null, p_after_id uuid default null, p_limit integer default null)
+  -> setof pair rows          invoker; the read-time filters, and the contact filter, cursor and limit INSIDE (it cannot inline)
 public.duplicate_pairs_page(p_account_id uuid, p_limit int, p_after_strength smallint, p_after_created_at timestamptz, p_after_id uuid)
 public.duplicate_pairs_count(p_account_id uuid) -> integer
 public.duplicate_pairs_of(p_account_id uuid, p_contact_id uuid)       -- at most 20, strongest first
@@ -86,8 +99,12 @@ public.merge_contacts(p_account_id uuid, p_keep uuid, p_other uuid, p_choices js
 public.undo_contact_merge(p_account_id uuid, p_merge_id bigint, p_actor text default null)
   -> {"status":"undone","otherId":uuid,"keptNew":n,"keptEdits":[field]} | {"status":"not_found"|"already_undone"|"expired"|"later_merge"}
 public.contact_merge_preview(p_account_id uuid, p_keep uuid, p_other uuid)        invoker
-  -> {"status":"ok","counts":{messages,calls,bookings,documents,opportunities,notes,tasks,form_submissions}}
+  -> {"status":"ok","counts":{messages,calls,bookings,documents,opportunities,notes,tasks,form_submissions},
+      "fields":{"keep":{…},"other":{…}},"seen":{"keep":<md5>,"other":<md5>}}
    | {"status":"same"|"not_found"|"holding"|"already_merged"}
+app.merge_fields_of(public.contacts) -> jsonb    the merge's one field list; p_seen = md5(merge_fields_of(row)::text) per side
+contact_merges: authenticated SELECTs only id, account_id, keep_id, other_id, merged_by, merged_at, undo_until,
+                moved_counts, undone_at, undone_by (column grant, plan review m8c)
 contact_delete_blockers: + reason 'merges' (a merge not undone names the contact)
 ai_contact_held_by: + reason 'contact_merges' (same rule)
 ```
@@ -125,6 +142,7 @@ dismissDuplicatePair(db, accountId, flagId, actor?): Promise<"dismissed" | "not_
 undismissDuplicatePair(db, accountId, flagId, actor?): Promise<"restored" | "not_found">
 export type MergeChoice = "keep" | "other";
 export const MERGE_CHOICE_FIELDS = ["first_name", "last_name", "email", "phone", "assigned_to", "language"] as const;
+/** `seen`: the two fingerprints `contactMergePreview` answered, sent back unchanged (correction 19). */
 export type MergeInput = { keepId: string; otherId: string; choices: Readonly<Record<string, MergeChoice>>; seen: { keep: string; other: string }; actor?: string };
 export type MergeOutcome = { status: "merged"; mergeId: number; moved: Record<string, number> }
                          | { status: "same" | "not_found" | "holding" | "already_merged" | "stale" };
@@ -134,7 +152,10 @@ export type UndoMergeOutcome = { status: "undone"; otherId: string; keptNew: num
 undoContactMerge(db, accountId, mergeId: number, actor?: string): Promise<UndoMergeOutcome>
 export const MERGE_COUNT_KEYS = ["messages", "calls", "bookings", "documents", "opportunities", "notes", "tasks", "form_submissions"] as const;
 export type MergeCountKey = (typeof MERGE_COUNT_KEYS)[number];
-export type MergePreview = { status: "ok"; counts: Record<MergeCountKey, number> } | { status: "same" | "not_found" | "holding" | "already_merged" };
+export type MergePreview =
+  | { status: "ok"; counts: Record<MergeCountKey, number>;
+      fields: { keep: Record<string, unknown>; other: Record<string, unknown> }; seen: { keep: string; other: string } }
+  | { status: "same" | "not_found" | "holding" | "already_merged" };
 contactMergePreview(db, accountId, keepId, otherId): Promise<MergePreview>
 followMerge(db, accountId, contactId): Promise<string>       // merged_into ?? contactId; an unknown id answers itself; throws on a read error
 mergedIdsOf(db, accountId, keepId): Promise<string[]>        // the tombstones pointing at keepId (one hop: 0106 flattens chains)
@@ -186,7 +207,7 @@ The compare route is `ACCT/contacts/merge?a=<uuid>&b=<uuid>[&keep=<uuid>]`: `a` 
 | `TIMELINE_SOURCES` | `packages/db/src/test/record.test.ts:305` | + `"merge"` after `"archive"` | T9 |
 | `NINE` source lists | `record.test.ts:754,894` | + `"merge"` | T9 |
 | Derived source list | `packages/db/src/test/timeline-merge.test.ts:149` | none (it filters the two asked-for sources; `merge` is always read) | — |
-| `lib/messages-readers.test.ts` | `apps/web/src/lib/messages-readers.test.ts:18-27` | **none**: every new messages read is SQL (correction 13) | — |
+| `lib/messages-readers.test.ts` | `apps/web/src/lib/messages-readers.test.ts:23` | `messaging.ts` 14 → 15: `incrementUnreadForMessage` reads one message's thread (plan review m7). The compare screen adds none (correction 13) | T7 |
 | `in-account-service-reads.test.ts` `ALLOWED` | `ACCT/in-account-service-reads.test.ts:90-210` | **none**: every new page and action uses the request client only. A task that adds `serviceDb` stops and asks | — |
 | `READ_ONLY_ALLOWED` (billing pause) | `apps/web/src/lib/billing/read-only.test.ts:149-170` | **none**: merge, undo, dismiss and undismiss are writes and stay refused while paused; the compare page is a page | — |
 | `technician-guards.test.ts` `PAGES` | `ACCT/technician-guards.test.ts:20-23` | + `"contacts/merge/page.tsx"` | T10 |
@@ -238,9 +259,9 @@ Every account-scoped read or write this plan adds gets a test in which a SECOND 
 | `packages/db/src/test/contact-merge-schema.test.ts` (new) | T3 |
 | `packages/db/src/contacts.ts`, `contact-import.ts`, `contacts-merge-resolve.test.ts` (new), `test/contact-merge-lookups-live.test.ts` (new), four live files' pins | T4 |
 | `packages/db/src/contact-merge.ts`, `contact-merge.test.ts` (new), `test/contact-merge-live.test.ts` (new) | T5 |
-| `packages/db/src/index.ts` | T1 (W1), T5 (W2), T9 (W3) |
+| `packages/db/src/index.ts` | T1 (W1), T5 (W2), T7 (W3; T9 adds nothing to the barrel: apps/web names the type as `Extract<TimelineEntry, { kind: "merge" }>["merge"]`) |
 | `packages/db/src/voice.ts`, `voice-merge.test.ts` (new), `test/voice-merge-live.test.ts` (new); `apps/web/src/lib/voice/identity/candidates.test.ts`; `lib/ai-acts/actions.ts`; `lib/proposals/kinds/contact-field.ts` (+ tests) | T6 |
-| `packages/db/src/messaging.ts`, `inbound-email.ts`, `messaging-merge.test.ts` (new), `test/messaging-merge-live.test.ts` (new) | T7 |
+| `packages/db/src/messaging.ts`, `inbound-email.ts`, `messaging-merge.test.ts` (new), `test/messaging-merge-live.test.ts` (new); `apps/web/src/app/api/sms/inbound/route.ts` (+ two tests); `apps/web/src/lib/messages-readers.test.ts` | T7 |
 | `packages/db/src/automations.ts`, `automations-merge.test.ts` (new) | T8 |
 | `packages/db/src/record.ts`, `test/record.test.ts`, `test/record-merge-live.test.ts` (new); `apps/web/src/lib/record/{timeline-rows,author-mark,recent-rows,loaders}.ts` (+ tests); `apps/web/src/lib/contacts/merge-copy.ts` (+ test); `ACCT/contacts/[contactId]/activity-timeline.tsx` (+ `activity-timeline.merge.test.ts`); `ACCT/groups/[groupId]/group-timeline.tsx` (+ test); `ACCT/contacts/[contactId]/page.test.ts` (mock only) | T9 |
 | `ACCT/contacts/merge/{page,loading,merge-screen}.tsx` (+ tests), `ACCT/contacts/merge-actions.ts` (+ test), `ACCT/contacts/duplicates-list.tsx` (+ test), `ACCT/contacts/page.tsx` (+ test), `apps/web/src/lib/contacts/{view,merge-fields,duplicates}.ts` (+ tests), `ACCT/contacts/export/route.get.test.ts`, `ACCT/tasks/page.tsx` (+ test), `ACCT/technician-guards.test.ts` | T10 |
@@ -552,8 +573,8 @@ Then the trigger, written in full in the same style:
 |---|---|---|---|
 | same name, two surnames | `{María, García López, +19565550101}`, `{Maria, Garcia, +19565550102}` | `pairs` = `[pair(x, y, "same_name")]` | key on the whole folded last name |
 | one first name is not another | `{Juan Carlos, García, …0103}`, `{Juan, García, …0104}` | `[]` | key on the first word of the first name |
-| placeholders never pair | `{Caller, Prueba, …0105}` ×2 and `{Unknown, Caller, …0107}` ×2 (each with a LAST name, so the no-last-name rule cannot be what refuses them) | `[]` | delete the placeholder array |
-| no last name, no key | `{Ana, null, …0109}` ×2 | `[]` and both `name_key` null | coalesce the last name to `''` |
+| placeholders never pair | `{Caller, Prueba, …0105}` and `{Caller, Prueba, …0106}`; `{Unknown, Caller, …0107}` and `{Unknown, Caller, …0108}` (each with a LAST name, so the no-last-name rule cannot be what refuses them, and two different phones, so a phone pair cannot either: review m8d) | `[]` | delete the placeholder array |
+| no last name, no key | `{Ana, null, …0109}` and `{Ana, null, …0110}` (two phones, review m8d) | `[]` and both `name_key` null | coalesce the last name to `''` |
 | legacy +52 1 is the same phone | `{Uno, phone '+5218999221234'}`, `{Dos, '+528999221234'}` | `[pair(…, "same_phone")]` | drop the `521` branch |
 | a +1 and a +52 of one ten digits | `{Uno, '+18999221234'}`, `{Dos, '+528999221234'}` | `[pair(…, "same_digits")]` | write `same_phone` whatever the family |
 | email | `{Uno, email 'ANA@x.mx'}`, `{Dos, email 'ana+tag@x.mx'}` | `[pair(…, "same_email")]` | drop the email insert |
@@ -575,11 +596,11 @@ The list functions and dismissal, in full in the same style. Call them as an Own
 | a tombstone side or a holding side hides a pair | flag rows inserted by hand as owner naming a tombstone, and one naming a holding record | hidden | drop either filter |
 | rows and total agree across a page boundary | 3 pairs, all `same_phone`, two of them given the SAME `created_at` (`update … set created_at = '2026-10-01T00:00:00Z'` as owner) | page 1 (limit 2) + page 2 (after the last row of page 1) = all three, each once, ordered `(strength, created_at desc, id desc)`; `duplicate_pairs_count` = 3 | drop the `id` tiebreak from the cursor (page 2 repeats or loses a row) |
 | phone before name | a `same_name` pair newer than a `same_phone` pair | the phone pair first | order by `created_at` alone |
-| `duplicate_pairs_of` | three pairs naming X, one not | exactly X's three, strongest first | drop the `contact_a = … or contact_b = …` filter |
+| `duplicate_pairs_of` | three pairs naming X, one not | exactly X's three, strongest first | drop the `p_contact_id` term in `app.open_duplicate_pairs` |
 | a Technician reads nothing | as a Technician | page `[]`, count 0 | drop `contact_duplicate_flags_technician_none` (0068) |
 | second account | B's pair under A's id | page `[]`, count 0 | drop `f.account_id = p_account_id` |
 | dismiss and undismiss | Owner dismisses: `{"status":"dismissed"}`, the pair leaves the page; undismiss: `{"status":"restored"}`, it is back; a second dismiss of a dismissed pair: `not_found` | | dismiss stamps nothing |
-| who | Staff succeeds; a Technician is refused 42501; an Owner of an account with `client_access_enabled = false` is refused 42501; an Owner of account B passing A's flag id under A is refused 42501 | | (a) drop the `sees_all_customers` term in `app.may_merge`; (b) drop BOTH coalesces around the account term and the whole expression (either alone still refuses; the 0103 probe); (c) drop `p_account_id = app.current_account_id()` |
+| who | Staff succeeds; a Technician is refused 42501; an Owner of an account with `client_access_enabled = false` is refused 42501; an Owner of account B passing A's flag id under A is refused 42501; **an Owner of A whose token names org B** is refused 42501 (seed ONE users row with Owner memberships in A and in B, then `actAs(c, { org_id: <B's org>, sub })`: `app.sees_all_customers(A)` is true for them, so only the account term can refuse; review m4) | | (a) drop the `sees_all_customers` term in `app.may_merge` → the Technician case; (b) drop BOTH coalesces around the account term and the whole expression (either alone still refuses; the 0103 probe) → the access-off case; (c) drop `coalesce(p_account_id = app.current_account_id(), false) and` → the Owner-of-A-with-B's-token case (the Owner of B alone is still refused by `sees_all_customers(A)`, so it cannot catch (c)) |
 | service role | `set local role service_role` + `request.jwt.claims {"role":"service_role"}` and `p_actor 'svc'`: dismissed, `dismissed_by = 'svc'` | | drop the service term |
 
 The grants, the guard and the replaced functions:
@@ -619,6 +640,17 @@ describe("0106: grants", () => {
                 has_column_privilege('authenticated', 'public.contacts', 'merged_into', 'UPDATE') as m`);
       expect(p).toEqual({ i: false, u: false, d: false, m: false });
     }));
+
+  it("authenticated reads exactly the ten timeline columns of contact_merges, never a snapshot or the reply token (review m8c; mutation: grant select on public.contact_merges to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ col: string }>(
+        `select a.attname as col from pg_attribute a
+          where a.attrelid = 'public.contact_merges'::regclass and a.attnum > 0 and not a.attisdropped
+            and has_column_privilege('authenticated', 'public.contact_merges', a.attnum, 'SELECT')
+          order by 1`);
+      expect(rows.map((r) => r.col)).toEqual(["account_id", "id", "keep_id", "merged_at", "merged_by", "moved_counts",
+        "other_id", "undo_until", "undone_at", "undone_by"]);
+    }));
 });
 ```
 
@@ -628,14 +660,14 @@ describe("0106: grants", () => {
 | a signed-in insert cannot be born a tombstone | authenticated holds TABLE-level INSERT on contacts (`schema-grants-guard.test.ts:87-90`, `insertDeleteAndUpdate`), so a column list cannot refuse it: as an Owner, `insert into public.contacts (account_id, first_name, merged_into, merged_at) values (A, 'Born', <another contact>, now()) returning merged_into, merged_at` answers both null | drop the guard's insert branch |
 | a signed-in delete of a tombstone is refused | Owner `delete from public.contacts where id = <tombstone>`: 42501 | drop the guard's delete branch |
 | server code is not limited | `set local role service_role`: updating a tombstone's `first_name` succeeds | refuse service_role too |
-| `contact_merges` read | an Owner of A reads A's row, not B's; a Technician reads the row of a kept record assigned to them and not one that is not | policy `using (true)`; policy in the house shape `app.is_agency() or account_id = app.current_account_id()` (the Technician half FAILS) |
+| `contact_merges` read | (select `id` only: the client holds SELECT on ten columns, and `select *` would refuse 42501 for the wrong reason) an Owner of A reads A's row, not B's; a Technician reads the row of a kept record assigned to them and not one that is not | policy `using (true)`; policy in the house shape `app.is_agency() or account_id = app.current_account_id()` (the Technician half FAILS) |
 | blockers name `merges` | a live merge row (insert one as owner: every NOT NULL column, `undo_until = merged_at + interval '30 days'`) on keep K and other O, O a tombstone: `contact_delete_blockers(A, [K, O])` answers both with `{merges}`; set `undone_at`, `undone_by`: neither | drop the clause; drop `undone_at is null` |
 | the 30-day window is pinned | inserting a row with `undo_until = merged_at + interval '7 days'` fails `contact_merges_window` (23514) | drop the check |
 
 - [ ] **Step 5: Run it red on `pre`.** `cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55761/pre pnpm exec vitest run src/test/contact-dedupe-schema.test.ts`. Expected: every case fails; the first line reads `column "name_key" does not exist` or `function app.phone_family(text) does not exist`. Paste one.
 
 - [ ] **Step 6: Write 0106 part A.** Create `packages/db/supabase/migrations/0106_contact_merge.sql`. The header follows 0103's sections (WHY / WHAT / GRANTS / SEARCH PATHS / LOCKS AND COST / LOAD-BEARING / ROLLBACK, `MIG/0103_contact_archive.sql:1-121`). State in it:
-  - GRANTS: the flag table loses table INSERT, UPDATE and DELETE for authenticated and keeps INSERT on four columns (`EXPECTED_WRITES` changes; the digest moves 52 → 49); `contact_merges` select to authenticated through its policy, all four to service_role; no client grant on `merged_into`/`merged_at`; the three key functions EXECUTE for authenticated and service_role (correction 3), `app.phone_family` and `app.may_merge` service_role and the owner only; the list functions authenticated and service_role; dismiss and undismiss authenticated and service_role; anon executes nothing (the default ACL grants anon by name, so every revoke names it). Three definers join `EXPECTED_DEFINERS` (29 → 32).
+  - GRANTS: the flag table loses table INSERT, UPDATE and DELETE for authenticated and keeps INSERT on four columns (`EXPECTED_WRITES` changes; the digest moves 52 → 49); `contact_merges` SELECT on ten columns to authenticated through its policy (review m8c), all four to service_role; no client grant on `merged_into`/`merged_at`; the three key functions EXECUTE for authenticated and service_role (correction 3), `app.phone_family` and `app.may_merge` service_role and the owner only; the list functions authenticated and service_role; dismiss and undismiss authenticated and service_role; anon executes nothing (the default ACL grants anon by name, so every revoke names it). Three definers join `EXPECTED_DEFINERS` (29 → 32).
   - LOCKS AND COST: the four contacts columns go in ONE `alter table`, so `contacts` is rewritten once under ACCESS EXCLUSIVE; paste T1 Step 8's 10,000-contact time. Production held 53 contacts and 0 flags on 2026-10-29. `lock_timeout` 5s bounds only the wait.
   - LOAD-BEARING: from T4 on, the app names `merged_into` in `COLS` and every list read.
   - ROLLBACK, in order (roll the app back first; undo every live merge first, see part B): drop the dismiss pair; drop the four list functions; drop `app.open_duplicate_pairs`, `app.may_merge`; drop trigger `contacts_flag_pairs` and its function; drop trigger `contacts_tombstone_server_only` and its function; restore 0103's `contact_delete_blockers` body and 0092's `ai_contact_held_by` body (with 0096's `search_path`); drop index `tasks_contact_id`; drop the four flag indexes, the flag columns and the check; recreate `contact_duplicate_flags_member_all` exactly as `MIG/0033:78-81` and `grant insert, update, delete on public.contact_duplicate_flags to authenticated`; drop table `contact_merges`; drop the contacts indexes, the FK, the two checks and the four columns; drop the four key functions.
@@ -795,7 +827,11 @@ create unique index contact_merges_reply_token on public.contact_merges (other_r
   where other_reply_token is not null and undone_at is null;
 alter table public.contact_merges enable row level security;
 revoke all on public.contact_merges from anon, authenticated;
-grant select on public.contact_merges to authenticated;
+-- Ten columns only (plan review m8c): the policy below admits a Technician to the merges of a kept record assigned to
+-- them, and the snapshots (removed, moved, keep_before, keep_after, choices) and other_reply_token are not theirs to
+-- read. These are exactly the columns the timeline selects (Task 9).
+grant select (id, account_id, keep_id, other_id, merged_by, merged_at, undo_until, moved_counts, undone_at, undone_by)
+  on public.contact_merges to authenticated;
 grant select, insert, update, delete on public.contact_merges to service_role;
 -- Through the kept record, so contacts' own policies (0068's Technician fence included) decide (0103's log shape).
 create policy contact_merges_read on public.contact_merges for select to authenticated
@@ -909,8 +945,12 @@ $$;
 revoke all on function app.may_merge(uuid) from public, anon, authenticated, service_role;
 
 -- 9. The open pairs, with the read-time filters (spec 6.2; correction 14). INVOKER: the caller's RLS decides, so a
---    Technician reads nothing (0068's restrictive policy). Rows and total share this one function.
-create function app.open_duplicate_pairs(p_account_id uuid)
+--    Technician reads nothing (0068's restrictive policy). Rows and total share this one function. The contact
+--    filter, the cursor and the limit are its OWN parameters (plan review m5): a function that sets search_path is
+--    never inlined, so a filter its caller applied would run only after every open pair of the account was read.
+create function app.open_duplicate_pairs(
+  p_account_id uuid, p_contact_id uuid default null, p_after_strength smallint default null,
+  p_after_created_at timestamptz default null, p_after_id uuid default null, p_limit integer default null)
 returns table (id uuid, contact_a uuid, contact_b uuid, reason text, strength smallint, created_at timestamptz,
                a_first_name text, a_last_name text, b_first_name text, b_last_name text)
 language sql stable set search_path = pg_catalog, pg_temp as $$
@@ -920,6 +960,11 @@ language sql stable set search_path = pg_catalog, pg_temp as $$
     join public.contacts b on b.account_id = f.account_id and b.id = f.contact_b
    where f.account_id = p_account_id
      and f.dismissed_at is null and f.merge_id is null
+     and (p_contact_id is null or f.contact_a = p_contact_id or f.contact_b = p_contact_id)
+     and (p_after_id is null
+          or f.strength > p_after_strength
+          or (f.strength = p_after_strength
+              and (f.created_at < p_after_created_at or (f.created_at = p_after_created_at and f.id < p_after_id))))
      and a.merged_into is null and b.merged_into is null
      and not a.holds_shared_number and not b.holds_shared_number
      and not exists (
@@ -934,6 +979,8 @@ language sql stable set search_path = pg_catalog, pg_temp as $$
                   join public.client_groups g on g.account_id = ma.account_id and g.id = ma.client_group_id
                  where ma.account_id = f.account_id and ma.contact_id = f.contact_a
                    and mb.contact_id = f.contact_b and g.kind = 'household'))
+   order by f.strength asc, f.created_at desc, f.id desc
+   limit p_limit
 $$;
 
 create function public.duplicate_pairs_page(
@@ -942,13 +989,8 @@ create function public.duplicate_pairs_page(
 returns table (id uuid, contact_a uuid, contact_b uuid, reason text, strength smallint, created_at timestamptz,
                a_first_name text, a_last_name text, b_first_name text, b_last_name text)
 language sql stable set search_path = pg_catalog, pg_temp as $$
-  select p.* from app.open_duplicate_pairs(p_account_id) as p
-   where p_after_id is null
-      or p.strength > p_after_strength
-      or (p.strength = p_after_strength
-          and (p.created_at < p_after_created_at or (p.created_at = p_after_created_at and p.id < p_after_id)))
-   order by p.strength asc, p.created_at desc, p.id desc
-   limit least(greatest(coalesce(p_limit, 50), 1), 101)
+  select * from app.open_duplicate_pairs(p_account_id, null, p_after_strength, p_after_created_at, p_after_id,
+                                         least(greatest(coalesce(p_limit, 50), 1), 101))
 $$;
 
 create function public.duplicate_pairs_count(p_account_id uuid) returns integer
@@ -960,14 +1002,11 @@ create function public.duplicate_pairs_of(p_account_id uuid, p_contact_id uuid)
 returns table (id uuid, contact_a uuid, contact_b uuid, reason text, strength smallint, created_at timestamptz,
                a_first_name text, a_last_name text, b_first_name text, b_last_name text)
 language sql stable set search_path = pg_catalog, pg_temp as $$
-  select p.* from app.open_duplicate_pairs(p_account_id) as p
-   where p.contact_a = p_contact_id or p.contact_b = p_contact_id
-   order by p.strength asc, p.created_at desc, p.id desc
-   limit 20
+  select * from app.open_duplicate_pairs(p_account_id, p_contact_id, null, null, null, 20)
 $$;
 
-revoke all on function app.open_duplicate_pairs(uuid) from public, anon;
-grant execute on function app.open_duplicate_pairs(uuid) to authenticated, service_role;
+revoke all on function app.open_duplicate_pairs(uuid, uuid, smallint, timestamptz, uuid, integer) from public, anon;
+grant execute on function app.open_duplicate_pairs(uuid, uuid, smallint, timestamptz, uuid, integer) to authenticated, service_role;
 revoke all on function public.duplicate_pairs_page(uuid, integer, smallint, timestamptz, uuid) from public, anon;
 grant execute on function public.duplicate_pairs_page(uuid, integer, smallint, timestamptz, uuid) to authenticated, service_role;
 revoke all on function public.duplicate_pairs_count(uuid) from public, anon;
@@ -1037,7 +1076,7 @@ grant execute on function public.undismiss_duplicate_pair(uuid, uuid, text) to a
 Grep the file before applying: `grep -n "agency_visit\|access_log_page\|note_agency_open" packages/db/supabase/migrations/0106_contact_merge.sql` answers nothing; and a node byte check (memory `bis-local-db-replica`: Git Bash `grep -P` cannot run it) confirms ASCII only and no backslash: `node -e "const s=require('fs').readFileSync('packages/db/supabase/migrations/0106_contact_merge.sql');let bad=0;for(const b of s)if(b>127||b===92)bad++;console.log('non-ascii-or-backslash bytes:',bad)"` answers `0`. Paste both.
 
 - [ ] **Step 7: Apply to `post` and run green.** `sh pg17-dm.sh post`, then Step 5's command against `/post`. Expected: all pass. Paste the summary line.
-- [ ] **Step 8: The backfill and the cost.** In a copy `create database bf template pre`: insert as `postgres` one account and five contacts: `{Ana, Ruiz, +19565550201}`, `{Ana, Ruiz, +529565550201}`, `{Beto, Paz, email beto@x.mx}`, `{Roberto, Paz, email BETO@x.mx}`, `{Luis, Mar, +19565550299}`. Apply 0106 with `psql -1 -f`. Then `select reason, count(*) from public.contact_duplicate_flags group by 1 order by 1`. Expected exactly `same_digits 1`, `same_email 1` (Ana/Ana is a `same_name` too, but `same_digits` was written first). Comment out the phone backfill insert, rebuild `bf`, re-run: `same_name 1`, `same_email 1`. Paste both outputs. Then `sh pg17-dm.sh rw` and paste the apply time into the header's LOCKS AND COST.
+- [ ] **Step 8: The backfill and the cost.** In a copy `create database bf template pre`: insert as `postgres` one account and five contacts: `{Ana, Ruiz, +19565550201}`, `{Ana, Ruiz, +529565550201}`, `{Beto, Paz, email beto@x.mx}`, `{Roberto, Paz, email BETO@x.mx}`, `{Luis, Mar, +19565550299}`. Apply 0106 with `psql -1 -f`. Then `select reason, count(*) from public.contact_duplicate_flags group by 1 order by 1`. Expected exactly `same_digits 1`, `same_email 1` (Ana/Ana is a `same_name` too, but `same_digits` was written first). Comment out the phone backfill insert, rebuild `bf`, re-run: `same_name 1`, `same_email 1`. Paste both outputs. Then `sh pg17-dm.sh rw` and paste the apply time into the header's LOCKS AND COST. Then, in `rw` after the apply, file 2,000 open pairs (`update public.contacts set phone = '+19565550001' where … limit 2000` across pairs of rows, or direct flag inserts as owner) and paste `explain (analyze, buffers)` of `select * from public.duplicate_pairs_of(<account>, <a contact with pairs>)`, `… duplicate_pairs_page(<account>, 51)` and `… duplicate_pairs_count(<account>)` (review m5: the reviewer measured 515 ms at 20,000 contacts before the filters moved inside). `duplicate_pairs_of` and the page must read `contact_duplicate_flags` through `contact_duplicate_flags_a`/`_b` or `_open`, never a sequential scan; if the `p_contact_id is null or …` disjunction keeps the contact filter off the indexes on PG17, rewrite that term as `f.id in (select x.id from public.contact_duplicate_flags x where x.account_id = p_account_id and x.contact_a = p_contact_id union all select x.id from … x.contact_b = p_contact_id)` guarded by `p_contact_id is null or`, re-measure, and say so in your report.
 - [ ] **Step 9: The pinned lists.** Edit, run each file on `post` (green) and on `pre` (red where noted), paste each red line:
   - `definer-search-path.test.ts`: add, in sorted position, `"app.contacts_flag_pairs()": PG_CATALOG_PG_TEMP`, `"public.dismiss_duplicate_pair(uuid,uuid,text)": PG_CATALOG_PG_TEMP`, `"public.undismiss_duplicate_pair(uuid,uuid,text)": PG_CATALOG_PG_TEMP`; the comment at `:25` becomes "The 32 SECURITY DEFINER functions in public and app at 0106 part A (0103's 29, 0104 and 0105 add none, 0106 part A adds three)"; the `it` name at `:70` and `toHaveLength` at `:75` say 32, `:84` `toBeGreaterThanOrEqual(32)`. Red on `pre`: `expected [ …29 rows… ] to have a length of 32`; paste the line vitest prints.
   - `schema-grants-guard.test.ts:79`: `"authenticated contact_duplicate_flags": ["INSERT(account_id)", "INSERT(contact_a)", "INSERT(contact_b)", "INSERT(reason)"],` with the comment `// 0106 (F-006): writes left with the two definers; the four-column insert stays for the TypeScript writers.`
@@ -1063,10 +1102,12 @@ Grep the file before applying: `grep -n "agency_visit\|access_log_page\|note_age
 | `open_duplicate_pairs`: drop the household `and not (…)` | "household members on one phone are hidden" |
 | `open_duplicate_pairs`: household filter applied to every reason | the same case's email half |
 | `open_duplicate_pairs`: drop the relationship `not exists` | "a relationship hides a pair" |
-| `duplicate_pairs_page`: drop `p.id < p_after_id` (keep the rest) | "rows and total agree across a page boundary" |
-| `duplicate_pairs_page`: order by `p.created_at desc, p.id desc` only | "phone before name" |
+| `app.open_duplicate_pairs`: drop `f.id < p_after_id` (keep the rest) | "rows and total agree across a page boundary" |
+| `app.open_duplicate_pairs`: order by `f.created_at desc, f.id desc` only | "phone before name" |
 | `app.may_merge`: drop the `sees_all_customers` term | dismiss "who" (the Technician half) |
 | `app.may_merge`: drop BOTH the inner coalesce on the account term and the outer one | dismiss "who" (client access off); either alone still refuses |
+| `app.may_merge`: drop `coalesce(p_account_id = app.current_account_id(), false) and` | dismiss "who" (the Owner of A whose token names org B; review m4) |
+| `app.open_duplicate_pairs`: drop the `p_contact_id` term | "`duplicate_pairs_of`" |
 | `drop policy contact_duplicate_flags_member_insert` | "an Owner's four-column insert still works through RLS" |
 | `grant update (dismissed_at) on public.contact_duplicate_flags to authenticated` | "authenticated may insert the flag table's four columns" |
 | tombstone guard: delete the `old.merged_into is not null` raise | "a signed-in update of a tombstone is refused" and "… delete …" |
@@ -1184,11 +1225,17 @@ The timeline verbs are lower-case because the row draws "{mark} {verb}" (`timeli
 - [ ] **Step 1: The failing test.** Create `contact-merge-schema.test.ts`. Copy `seedAccount`, `refusal` and T1's `person` and `tombstone` helpers (T1's file; files stay disjoint). Add:
 
 ```ts
-const NOW_SEEN = async (c: Client, id: string) =>
-  (await c.query<{ s: string }>("select updated_at::text as s from public.contacts where id = $1", [id])).rows[0]!.s;
-/** As an Owner of the account: the app's path (the request client). */
-async function merge(c: Client, a: Acct, keep: string, other: string, choices: Record<string, string> = {}) {
-  const seen = { keep: await NOW_SEEN(c, keep), other: await NOW_SEEN(c, other) };
+/** The fingerprints the compare screen sends back: contact_merge_preview's own `seen` (review m3). As owner: the
+ *  preview is an invoker function and the owner role bypasses RLS. */
+async function seenOf(c: Client, a: Acct, keep: string, other: string): Promise<{ keep: string; other: string }> {
+  await actAsOwner(c);
+  const { rows: [r] } = await c.query("select public.contact_merge_preview($1, $2, $3) -> 'seen' as s", [a.accountId, keep, other]);
+  return r.s;
+}
+/** As an Owner of the account: the app's path (the request client). `seen` defaults to a fresh preview. */
+async function merge(c: Client, a: Acct, keep: string, other: string, choices: Record<string, string> = {},
+                     seen?: { keep: string; other: string }) {
+  seen ??= await seenOf(c, a, keep, other);
   await actAsMember(c, a.accountId, a.orgId, "owner");
   const { rows: [r] } = await c.query("select public.merge_contacts($1, $2, $3, $4::jsonb, $5::jsonb) as r",
     [a.accountId, keep, other, JSON.stringify(choices), JSON.stringify(seen)]);
@@ -1244,13 +1291,13 @@ Write it in full, plus: "K has no thread: one is created and O's rows move to it
 - custom: a key on one side only is kept; a key on both with different values takes `choices["custom.k"]`.
 - marketing opt-out is the earliest; `reactivation_sent_at` the latest.
 - archive: K archived, O not → K is active and `contact_archive_log` has one `restored` row by the merging person (mutation: keep K's archive). Both archived → K stays archived.
-- `keep_before`/`keep_after` hold exactly `c_fields`' keys.
+- `keep_before`/`keep_after` hold exactly `app.merge_fields_of`'s keys.
 
-**Refusals and who**: `same`; `not_found` (O in account B, merged under A: second account); `holding`; `already_merged` (O already a tombstone; mutation: drop the check → FAILS); `stale` (update O's `updated_at` between reading `seen` and merging; mutation: drop the check). A Technician is refused 42501; an Owner with client access off is refused 42501 (the NULL path, through `app.may_merge`); Staff succeeds; service role with `p_actor` succeeds and `merged_by = p_actor`; service role without `p_actor` is 22023.
+**Refusals and who**: `same`; `not_found` (O in account B, merged under A: second account); `holding`; `already_merged` (O already a tombstone; mutation: drop the check → FAILS); `stale`, three cases: (1) O's `first_name` changed between `seenOf` and the merge; (2) **a write that never stamps `updated_at`**, as `assignment.ts:339` does: `update public.contacts set assigned_to = <a member's users.id> where id = O` with `updated_at` untouched (review m3; mutation: compare `updated_at` instead of the fingerprint → this case merges, FAILS); (3) `reactivation_sent_at` set the same way (`automations.ts:1855`'s shape). Mutation for all three: drop the check. A Technician is refused 42501; an Owner with client access off is refused 42501 (the NULL path, through `app.may_merge`); an Owner of A whose token names org B is refused 42501 (T1's seed shape; review m4); Staff succeeds; service role with `p_actor` succeeds and `merged_by = p_actor`; service role without `p_actor` is 22023.
 
 **Chain**: A into B, then B into C → A's `merged_into` is C, and A is in the second merge's `moved.contacts` (mutation: drop the flatten).
 
-**Flags**: the merged pair gets `merge_id`; with no pair, a `merged_by_hand` row is written with `merge_id` (mutation: skip it → FAILS); a pair O–X becomes K–X with its reason and dismissal kept, recorded in `moved.contact_duplicate_flags_added` and `removed.contact_duplicate_flags`.
+**Flags**: the merged pair gets `merge_id`; with no pair, a `merged_by_hand` row is written with `merge_id` (mutation: skip it → FAILS); a pair O–X becomes K–X with its reason and dismissal kept, recorded in `moved.contact_duplicate_flags_added` and `removed.contact_duplicate_flags`. And the review's I1 shape, in full: K has NO email; O's email is `maria@x.mx`; X's is `MARIA@x.mx` (the trigger files O–X `same_email` when X is inserted); an Owner dismisses O–X; K, O and X share nothing else (three phones, no last names). Merge K ← O with no choices (K's blank email is filled from O). Assert: K–X exists, `same_email`, STILL DISMISSED, and is absent from `duplicate_pairs_page`; after Undo, no row names K–X and O–X is back, dismissed. Mutations: (a) run the re-file after the field update → K–X is undismissed and listed, FAILS; (b) drop the before/after record of the trigger's flags → after Undo K–X survives (a phantom), FAILS. A second shape for (b) alone: X has no pair with O at all because X was inserted while O held a different email; K gains O's email and the trigger files K–X fresh; after Undo it is gone.
 
 **Preview equals the move**: seed O with two messages, a call by contact AND by thread (the same call), a booking, a document, a deal, a note, a to-do and a form answer; `contact_merge_preview(A, K, O)` as an Owner; merge; `contact_merges.moved_counts` equals the preview's `counts` exactly (`calls` = 1, not 2: the union). Mutation: count `calls` twice in the preview → FAILS. Preview refusals: `same`, `not_found`, `holding`, `already_merged`.
 
@@ -1271,6 +1318,76 @@ Write it in full, plus: "K has no thread: one is created and O's rows move to it
 
 **The backstop** (`follow_merge`):
 - a task inserted (as owner) with O's id after the merge lands on K (mutation: drop `tasks_follow_merge`).
+- **a write racing a merge waits for it and lands on K (plan review I2).** Two `pg.Client`s OUTSIDE `withRollback` (the second session must see committed rows), so the seed is committed and removed in `finally`:
+
+```ts
+import { Client as Pg } from "pg";
+import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
+
+it("an insert naming O while a merge holds its transaction waits, then lands on K (review I2; mutation: drop `for share` from app.follow_merge -> the task lands on O, FAILS)", async () => {
+  const url = process.env.SUPABASE_DB_URL!;
+  const setup = new Pg({ connectionString: url }), merger = new Pg({ connectionString: url }), writer = new Pg({ connectionString: url });
+  await Promise.all([setup.connect(), merger.connect(), writer.connect()]);
+  let agencyId = "", accountId = "", open = false;
+  try {
+    agencyId = (await setup.query("insert into public.agencies (name) values ('Race') returning id")).rows[0].id;
+    accountId = (await setup.query(
+      "insert into public.accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Race') returning id", [agencyId, `org_race_${RUN}`])).rows[0].id;
+    const k = (await setup.query("insert into public.contacts (account_id, first_name, author_kind) values ($1, 'Keep', 'person') returning id", [accountId])).rows[0].id;
+    const o = (await setup.query("insert into public.contacts (account_id, first_name, author_kind) values ($1, 'Other', 'person') returning id", [accountId])).rows[0].id;
+    const seen = (await setup.query("select public.contact_merge_preview($1, $2, $3) -> 'seen' as s", [accountId, k, o])).rows[0].s;
+    await merger.query("begin"); open = true;
+    await merger.query("set local role service_role");
+    await merger.query(`select set_config('request.jwt.claims', '{"role":"service_role"}', true)`);
+    const { rows: [m] } = await merger.query("select public.merge_contacts($1, $2, $3, '{}'::jsonb, $4::jsonb, 'race') as r", [accountId, k, o, JSON.stringify(seen)]);
+    expect(m.r.status).toBe("merged");
+    let settled = false;
+    const late = writer.query("insert into public.tasks (account_id, contact_id, title) values ($1, $2, 'late') returning contact_id", [accountId, o])
+      .finally(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(settled, "the insert waits on the merge's row lock").toBe(false);
+    await merger.query("commit"); open = false;
+    expect((await late).rows[0].contact_id).toBe(k);
+  } finally {
+    if (open) await merger.query("rollback");
+    if (accountId) {
+      for (const t of ACCOUNT_OWNED_TABLES) await setup.query(`delete from public.${t} where account_id = $1`, [accountId]);
+      await setup.query("delete from public.accounts where id = $1", [accountId]);
+    }
+    if (agencyId) await setup.query("delete from public.agencies where id = $1", [agencyId]);
+    await Promise.all([setup.end(), merger.end(), writer.end()]);
+  }
+});
+```
+
+  Without the fix the insert also waits (its foreign-key check meets the merge's row lock), which is why the assertion that discriminates is WHERE it lands, not that it waited. Run the file with vitest's default isolation; this case must not share a connection with any `withRollback` case.
+- **a late insert that collides with a row K already has (review m8b, documented):** after the merge, (a) `insert into public.contact_tags (contact_id, tag_id, account_id) values (O, <a tag K has>, A) on conflict (contact_id, tag_id) do nothing` (the shape `addTagToContact`'s upsert sends, `contacts.ts:1004-1006`) succeeds and leaves one row on K: ON CONFLICT is judged on the redirected row; (b) an active `insurance` skip inserted naming O when K already has one answers 23505 through `refusal()`. (b) is the designed answer: each such caller already reports a duplicate or a failure, and nothing is written. Say so in the trigger's comment.
+- **every foreign-key table into contacts is accounted for by the merge (review m6):**
+
+```ts
+const C_MOVES = ["automation_log", "bookings", "calls", "document_requests", "documents", "form_submissions", "notes", "opportunities", "places", "tasks"];
+const SPECIAL = ["client_group_members", "contact_duplicate_flags", "contact_relationships", "contact_tags", "conversations", "document_requirement_skips", "record_summaries"];
+const STAYS = ["ai_acts", "consent_events", "contact_archive_log", "proposals"];
+const SELF = ["contact_merges", "contacts"];
+it("every table with a foreign key into contacts is moved, handled, kept or the merge's own, and c_moves is exactly C_MOVES (review m6; mutation: a new FK table -> FAILS naming it)", () =>
+  withRollback(async (c) => {
+    const { rows } = await c.query<{ t: string }>(
+      `select distinct rc.relname as t from pg_constraint k join pg_class rc on rc.oid = k.conrelid
+        where k.contype = 'f' and k.confrelid = 'public.contacts'::regclass order by 1`);
+    expect(rows.map((r) => r.t)).toEqual([...C_MOVES, ...SPECIAL, ...STAYS, ...SELF].sort());
+    const { rows: [fn] } = await c.query<{ src: string }>("select prosrc as src from pg_proc where oid = 'public.merge_contacts(uuid,uuid,uuid,jsonb,jsonb,text)'::regprocedure");
+    const code = fn!.src.replace(/--.*$/gm, "");   // a comment naming a table cannot satisfy this
+    const lit = /c_moves constant text\[\] := array\[([^\]]*)\]/.exec(code)?.[1] ?? "";
+    expect(lit.split(",").map((x) => x.trim().replace(/^'|'$/g, "")).filter(Boolean)).toEqual(C_MOVES);
+    for (const t of SPECIAL) expect(code, t).toContain(`public.${t}`);
+    // The control: a throwaway FK table reds the first assertion, so the list cannot pass empty.
+    await c.query("create table public.zz_fk_probe (account_id uuid, contact_id uuid, foreign key (account_id, contact_id) references public.contacts (account_id, id))");
+    const { rows: after } = await c.query<{ t: string }>(
+      `select distinct rc.relname as t from pg_constraint k join pg_class rc on rc.oid = k.conrelid
+        where k.contype = 'f' and k.confrelid = 'public.contacts'::regclass order by 1`);
+    expect(after.map((r) => r.t)).toContain("zz_fk_probe");   // the same query sees a new table, so the equality above can fail
+  }));
+```
 - an `ai_acts` insert naming O lands on K (insert-only trigger).
 - an update of a note's `contact_id` to O lands on K.
 - `contact_relationships.related_contact_id` = O lands on K (the second function).
@@ -1326,15 +1443,33 @@ $$;
 revoke all on function app.merge_side(text, text, text) from public, anon, authenticated, service_role;
 revoke all on function app.merge_push(jsonb, text, jsonb) from public, anon, authenticated, service_role;
 
+-- The merge's ONE field list, as jsonb: keep_before, keep_after, the preview's fields, and (through md5) the
+-- fingerprint stale compares (plan review m3: assignment.ts:339, contacts.ts:1295,1313,1540, automations.ts:1855 and
+-- 0076:107 write contacts without stamping updated_at). STABLE, not immutable: to_jsonb prints a timestamptz in the
+-- session's TimeZone, and the preview and the merge both run through PostgREST, whose sessions are UTC.
+create function app.merge_fields_of(p_row public.contacts) returns jsonb
+language sql stable parallel safe set search_path = pg_catalog, pg_temp as $$
+  select coalesce(pg_catalog.jsonb_object_agg(e.key, e.value), '{}'::jsonb)
+    from pg_catalog.jsonb_each(pg_catalog.to_jsonb(p_row)) as e
+   where e.key = any (array['first_name', 'last_name', 'email', 'phone', 'phone_country_unconfirmed', 'assigned_to',
+     'custom', 'language', 'language_source', 'language_set_at', 'last_language_signal', 'last_language_signal_source',
+     'last_language_signal_at', 'language_hint_kept_at', 'marketing_email_opted_out_at', 'dnd', 'reactivation_sent_at',
+     'archived_at', 'archived_by'])
+$$;
+revoke all on function app.merge_fields_of(public.contacts) from public, anon;
+grant execute on function app.merge_fields_of(public.contacts) to authenticated, service_role;
+
 -- 15. The backstop (spec 7.2; correction 12): a write that names a tombstone lands on the kept record. DEFINER, so
---     the pointer is read whatever the writer's RLS sees. One primary-key read per write.
+--     the pointer is read whatever the writer's RLS sees. One primary-key read per write, FOR SHARE (plan review I2):
+--     a write that began before a merge committed waits on the merge's row lock and then reads the COMMITTED pointer;
+--     an unlocked read saw the pre-merge snapshot and the write landed on the hidden record.
 create function app.follow_merge() returns trigger
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
 declare
   v_to uuid;
 begin
   if new.contact_id is not null then
-    select k.merged_into into v_to from public.contacts k where k.id = new.contact_id;
+    select k.merged_into into v_to from public.contacts k where k.id = new.contact_id for share;
     if v_to is not null then
       new.contact_id := v_to;
     end if;
@@ -1347,7 +1482,7 @@ declare
   v_to uuid;
 begin
   if new.related_contact_id is not null then
-    select k.merged_into into v_to from public.contacts k where k.id = new.related_contact_id;
+    select k.merged_into into v_to from public.contacts k where k.id = new.related_contact_id for share;
     if v_to is not null then
       new.related_contact_id := v_to;
     end if;
@@ -1385,10 +1520,6 @@ create function public.merge_contacts(
 returns jsonb
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
 declare
-  c_fields constant text[] := array['first_name', 'last_name', 'email', 'phone', 'phone_country_unconfirmed', 'assigned_to',
-    'custom', 'language', 'language_source', 'language_set_at', 'last_language_signal', 'last_language_signal_source',
-    'last_language_signal_at', 'language_hint_kept_at', 'marketing_email_opted_out_at', 'dnd', 'reactivation_sent_at',
-    'archived_at', 'archived_by'];
   c_moves constant text[] := array['automation_log', 'bookings', 'calls', 'document_requests', 'documents',
     'form_submissions', 'notes', 'opportunities', 'places', 'tasks'];
   v_actor text;
@@ -1415,6 +1546,7 @@ declare
   v_x uuid;
   v_km public.client_group_members%rowtype;
   v_merge bigint;
+  v_flags_before uuid[];
   r record;
 begin
   -- 1. Who (app.may_merge: a service_role JWT, the agency, or an Owner or Staff of this account whose token is in it).
@@ -1451,20 +1583,19 @@ begin
   perform 1 from public.conversations cv
    where cv.account_id = p_account_id and cv.contact_id in (p_keep, p_other) order by cv.id for update;
 
-  -- 3. Refusals, each a status the screen can word. stale: the screen showed older values (correction 19: the app
-  --    sends updated_at exactly as it read it).
+  -- 3. Refusals, each a status the screen can word. stale: either row's merge fields changed since the preview the
+  --    screen showed (correction 19: a fingerprint, because several writers never stamp updated_at).
   if k.holds_shared_number or o.holds_shared_number then
     return pg_catalog.jsonb_build_object('status', 'holding');
   end if;
   if k.merged_into is not null or o.merged_into is not null then
     return pg_catalog.jsonb_build_object('status', 'already_merged');
   end if;
-  if (p_seen ->> 'keep')::timestamptz is distinct from k.updated_at
-     or (p_seen ->> 'other')::timestamptz is distinct from o.updated_at then
+  if pg_catalog.md5(app.merge_fields_of(k)::text) is distinct from (p_seen ->> 'keep')
+     or pg_catalog.md5(app.merge_fields_of(o)::text) is distinct from (p_seen ->> 'other') then
     return pg_catalog.jsonb_build_object('status', 'stale');
   end if;
-  select pg_catalog.jsonb_object_agg(e.key, e.value) into v_before
-    from pg_catalog.jsonb_each(pg_catalog.to_jsonb(k)) as e where e.key = any (c_fields);
+  v_before := app.merge_fields_of(k);
 
   -- 4. The tombstone FIRST, then the chain flattened (one hop for every lookup), so the flag trigger, which skips a
   --    tombstone, never pairs the kept record with the one it absorbs while the fields below are written.
@@ -1475,7 +1606,30 @@ begin
   select coalesce(pg_catalog.array_agg(f.id::text), '{}') into v_ids from f;
   v_moved := v_moved || pg_catalog.jsonb_build_object('contacts', pg_catalog.to_jsonb(v_ids));
 
-  -- 5. Fields (spec 5.2). A choice names a side; every value is read from the locked rows.
+  -- 5. Flags, BEFORE the fields (plan review I1). Every other pair naming the other record is re-filed on the kept one
+  --    with its reason AND its dismissal before the field update below can make the flag trigger file the same pair
+  --    fresh (undismissed) and leave this re-file a silent, unrecorded conflict.
+  select f.id into v_pair from public.contact_duplicate_flags f
+   where f.account_id = p_account_id and f.contact_a = least(p_keep, p_other) and f.contact_b = greatest(p_keep, p_other);
+  for r in select f.* from public.contact_duplicate_flags f
+            where f.account_id = p_account_id and (f.contact_a = p_other or f.contact_b = p_other)
+              and f.id is distinct from v_pair loop
+    delete from public.contact_duplicate_flags where id = r.id;
+    v_removed := app.merge_push(v_removed, 'contact_duplicate_flags', pg_catalog.to_jsonb(r) - 'strength');
+    v_x := case when r.contact_a = p_other then r.contact_b else r.contact_a end;
+    v_new := null;
+    if v_x <> p_keep then
+      insert into public.contact_duplicate_flags (account_id, contact_a, contact_b, reason, dismissed_at, dismissed_by, created_at)
+      values (p_account_id, least(p_keep, v_x), greatest(p_keep, v_x), r.reason, r.dismissed_at, r.dismissed_by, r.created_at)
+      on conflict (account_id, contact_a, contact_b) do nothing
+      returning id into v_new;
+      if v_new is not null then
+        v_moved := app.merge_push(v_moved, 'contact_duplicate_flags_added', pg_catalog.to_jsonb(v_new::text));
+      end if;
+    end if;
+  end loop;
+
+  -- 6. Fields (spec 5.2). A choice names a side; every value is read from the locked rows.
   v_s_first := app.merge_side(k.first_name, o.first_name, p_choices ->> 'first_name');
   v_s_last := app.merge_side(k.last_name, o.last_name, p_choices ->> 'last_name');
   v_s_email := app.merge_side(k.email, o.email, p_choices ->> 'email');
@@ -1508,6 +1662,10 @@ begin
   v_choices := v_choices || pg_catalog.jsonb_build_object('first_name', v_s_first, 'last_name', v_s_last, 'email', v_s_email,
     'phone', v_s_phone, 'assigned_to', v_s_assigned, 'language', v_s_lang);
 
+  -- The update below fires contacts_flag_pairs for K (a key K gains from O files K's pairs). Every flag it files is
+  -- recorded, so the Undo removes it (plan review I1): the flag ids naming K, before and after.
+  select coalesce(pg_catalog.array_agg(f.id), '{}') into v_flags_before from public.contact_duplicate_flags f
+   where f.account_id = p_account_id and (f.contact_a = p_keep or f.contact_b = p_keep);
   update public.contacts c set
     first_name = case v_s_first when 'other' then o.first_name else k.first_name end,
     last_name = case v_s_last when 'other' then o.last_name else k.last_name end,
@@ -1530,17 +1688,20 @@ begin
     archived_by = case when o.archived_at is null then null else k.archived_by end,
     updated_at = pg_catalog.now()
    where c.account_id = p_account_id and c.id = p_keep;
+  for v_new in select f.id from public.contact_duplicate_flags f
+                where f.account_id = p_account_id and (f.contact_a = p_keep or f.contact_b = p_keep)
+                  and not (f.id = any (v_flags_before)) order by f.id loop
+    v_moved := app.merge_push(v_moved, 'contact_duplicate_flags_added', pg_catalog.to_jsonb(v_new::text));
+  end loop;
   -- An archive is a person's act with a log row; inside a definer the 0103 log trigger (WHEN current_user =
   -- 'authenticated') does not fire, so the merge writes the row itself.
   if k.archived_at is not null and o.archived_at is null then
     insert into public.contact_archive_log (account_id, contact_id, action, author_kind, author_id)
     values (p_account_id, p_keep, 'restored', 'person', v_actor);
   end if;
-  select pg_catalog.jsonb_object_agg(e.key, e.value) into v_after
-    from public.contacts c, pg_catalog.jsonb_each(pg_catalog.to_jsonb(c)) as e
-   where c.id = p_keep and e.key = any (c_fields);
+  select app.merge_fields_of(c) into v_after from public.contacts c where c.id = p_keep;
 
-  -- 6. Rows that simply move (spec 5.3).
+  -- 7. Rows that simply move (spec 5.3).
   foreach v_t in array c_moves loop
     execute pg_catalog.format(
       'with m as (update public.%I set contact_id = $1 where account_id = $2 and contact_id = $3 returning id) '
@@ -1633,7 +1794,8 @@ begin
       insert into public.conversations (account_id, contact_id) values (p_account_id, p_keep) returning id into v_kc;
       v_moved := v_moved || pg_catalog.jsonb_build_object('conversation_created', v_kc);
     end if;
-    with m as (update public.messages set conversation_id = v_kc, updated_at = pg_catalog.now()
+    -- messages.updated_at is left as it was (plan review m8a): an Undo could not put it back.
+    with m as (update public.messages set conversation_id = v_kc
                 where account_id = p_account_id and conversation_id = v_oc.id returning id)
     select coalesce(pg_catalog.array_agg(m.id::text), '{}') into v_ids from m;
     v_moved := v_moved || pg_catalog.jsonb_build_object('messages', pg_catalog.to_jsonb(v_ids));
@@ -1661,27 +1823,6 @@ begin
 
   -- A cache: regenerated, never snapshotted.
   delete from public.record_summaries where account_id = p_account_id and contact_id in (p_keep, p_other);
-
-  -- 7. Flags. Every other pair naming the other record is re-filed on the kept one (reason and dismissal kept).
-  select f.id into v_pair from public.contact_duplicate_flags f
-   where f.account_id = p_account_id and f.contact_a = least(p_keep, p_other) and f.contact_b = greatest(p_keep, p_other);
-  for r in select f.* from public.contact_duplicate_flags f
-            where f.account_id = p_account_id and (f.contact_a = p_other or f.contact_b = p_other)
-              and f.id is distinct from v_pair loop
-    delete from public.contact_duplicate_flags where id = r.id;
-    v_removed := app.merge_push(v_removed, 'contact_duplicate_flags', pg_catalog.to_jsonb(r) - 'strength');
-    v_x := case when r.contact_a = p_other then r.contact_b else r.contact_a end;
-    v_new := null;
-    if v_x <> p_keep then
-      insert into public.contact_duplicate_flags (account_id, contact_a, contact_b, reason, dismissed_at, dismissed_by, created_at)
-      values (p_account_id, least(p_keep, v_x), greatest(p_keep, v_x), r.reason, r.dismissed_at, r.dismissed_by, r.created_at)
-      on conflict (account_id, contact_a, contact_b) do nothing
-      returning id into v_new;
-      if v_new is not null then
-        v_moved := app.merge_push(v_moved, 'contact_duplicate_flags_added', pg_catalog.to_jsonb(v_new::text));
-      end if;
-    end if;
-  end loop;
 
   -- 8. The log, the pair resolved, the event.
   select pg_catalog.jsonb_build_object(
@@ -1722,7 +1863,7 @@ grant execute on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, 
   1. `select * into g from public.contact_merges where account_id = p_account_id and id = p_merge_id for update`; not found → `not_found`; `undone_at` set → `already_undone`; `now() > undo_until` → `expired`.
   2. Lock both contacts, then their conversations, in id order (as the merge). `later_merge` when the kept record is now a tombstone, or a merge into the kept record with a greater id is not undone.
   3. **Clear the tombstone FIRST**: `update contacts set merged_into = null, merged_at = null where account_id = p_account_id and id = g.other_id and merged_into = g.keep_id`; then un-flatten: `merged_into = g.other_id` for the ids in `g.moved -> 'contacts'` still pointing at `g.keep_id`. (The `follow_merge` triggers would otherwise send every row moved back straight to the kept record; the ORDER test pins it.)
-  4. The thread: `v_kc` = the kept record's thread. When `g.removed ? 'conversations'`: re-insert the snapshot with an explicit column list (`id, account_id, contact_id, last_message_at, unread_count, assigned_to, created_at, updated_at, reply_token, reply_token_revoked_at`; never `inbox_visible`, which is generated, nor `contact_archived`, which its trigger derives), `unread_count` 0, `on conflict (id) do nothing`. Move back the recorded `messages`, `calls_thread` and `inbound_emails` ids still on `v_kc`. Hand back `least(g.unread_handed, <v_kc's unread>)` only when anything moved back (0098's rule, `MIG/0098:202-211`), and recompute both threads' `last_message_at` from their messages. Restore `v_kc.assigned_to` to `g.moved -> 'conversation_assigned_before'` only while it still holds the value the merge set. When `g.moved ? 'conversation_created'` and that thread now holds no message, call or inbound email, delete it.
+  4. The thread: `v_kc` = the kept record's thread. When `g.removed ? 'conversations'`: re-insert the snapshot with an explicit column list (`id, account_id, contact_id, last_message_at, unread_count, assigned_to, created_at, updated_at, reply_token, reply_token_revoked_at`; never `inbox_visible`, which is generated, nor `contact_archived`, which its trigger derives), `unread_count` 0, `on conflict (id) do nothing`. Move back the recorded `messages`, `calls_thread` and `inbound_emails` ids still on `v_kc`, never setting `messages.updated_at` (review m8a). Hand back `least(g.unread_handed, <v_kc's unread>)` only when anything moved back (0098's rule, `MIG/0098:202-211`), and recompute both threads' `last_message_at` from their messages. Restore `v_kc.assigned_to` to `g.moved -> 'conversation_assigned_before'` only while it still holds the value the merge set. When `g.moved ? 'conversation_created'` and that thread now holds no message, call or inbound email, delete it.
   5. Rows: for each of `c_moves` (the same literal as the merge, with a comment saying so), `execute format('update public.%I set contact_id = $1 where account_id = $2 and contact_id = $3 and id::text = any ($4)', t) using g.other_id, p_account_id, g.keep_id, <ids>`. Tags by `tag_id`. Group memberships: FIRST restore each `client_group_members_flags` snapshot (`is_billing`, `is_primary_contact` back) on the kept membership, THEN re-insert the removed memberships (one primary contact per group), then move back the recorded ids and set `is_primary = true` again for `client_group_members_unprimaried`. Relationships: move back the recorded side(s) only where they still name the kept record; re-insert removed rows `on conflict do nothing`. Skips: same. Re-insert `removed` snapshots with `insert into public.<t> select (pg_catalog.jsonb_populate_record(null::public.<t>, e.x)).* from pg_catalog.jsonb_array_elements(coalesce(g.removed -> '<t>', '[]')) as e(x) on conflict do nothing` for `contact_tags`, `client_group_members`, `contact_relationships`, `document_requirement_skips`; for `contact_duplicate_flags` use an explicit column list (it has the generated `strength`).
   6. Flags: delete `contact_duplicate_flags_added`; re-insert the removed pairs; the merged pair: `delete` when its reason is `merged_by_hand` and its `merge_id` is this merge, else `merge_id = null` (the suggestion comes back).
   7. Fields, compare and restore, in groups that must move together (a group restores only when EVERY member still equals `keep_after`; the 0076 language checks and 0103's `contacts_archived_by_needs_at` would otherwise refuse a half): `[first_name]`, `[last_name]`, `[email]`, `[phone, phone_country_unconfirmed]`, `[assigned_to]`, `[custom]`, `[language, language_source, language_set_at]`, `[last_language_signal, last_language_signal_source, last_language_signal_at]`, `[language_hint_kept_at]`, `[marketing_email_opted_out_at]`, `[dnd]`, `[reactivation_sent_at]`, `[archived_at, archived_by]`. A group whose `keep_before` differs from `keep_after` and whose current value no longer equals `keep_after` is named in `keptEdits` (its first member's name). Compare with `pg_catalog.to_jsonb(<row>) -> <field>` on both sides, so timestamps compare in one format. Apply the patch with one `update public.contacts c set (<every field>) = (select p.<field>, … from pg_catalog.jsonb_populate_record(c, <patch>) as p), updated_at = now() where c.id = g.keep_id`. When the archive group is restored to an archived state, write one `archived` row to `contact_archive_log` with `author_kind 'person'` and the undoing person.
@@ -1730,7 +1871,7 @@ grant execute on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, 
   9. Stamp `undone_at = now()`, `undone_by = v_actor`; insert the `contact.merge_undone` event (actor `user`, payload `contactId`, `otherId`, `mergeId`); answer `{"status":"undone","otherId":…,"keptNew":…,"keptEdits":[…]}`.
   Grants as the merge's.
 
-  **Section 18, `public.contact_merge_preview(p_account_id uuid, p_keep uuid, p_other uuid) returns jsonb`**: `language plpgsql stable` INVOKER, `set search_path = pg_catalog, pg_temp`. Refusals in the merge's order (`same`; either id not in the account → `not_found`; `holding`; `already_merged`). Then the counts, from the other record only: `messages` (all on its thread), `calls` (`contact_id = p_other` OR `conversation_id` = its thread, counted once), and `bookings`, `documents`, `opportunities`, `notes`, `tasks`, `form_submissions` by `contact_id`, each `account_id`-scoped. `revoke all … from public, anon; grant execute … to authenticated, service_role`.
+  **Section 18, `public.contact_merge_preview(p_account_id uuid, p_keep uuid, p_other uuid) returns jsonb`**: `language plpgsql stable` INVOKER, `set search_path = pg_catalog, pg_temp`. Refusals in the merge's order (`same`; either id not in the account → `not_found`; `holding`; `already_merged`). It reads both rows whole (`contacts%rowtype`) and answers, beside the counts, `fields` = `{ keep: app.merge_fields_of(k), other: app.merge_fields_of(o) }` and `seen` = `{ keep: md5(app.merge_fields_of(k)::text), other: md5(app.merge_fields_of(o)::text) }`, all from one statement snapshot, so the screen shows exactly the values its `seen` vouches for (review m3). Then the counts, from the other record only: `messages` (all on its thread), `calls` (`contact_id = p_other` OR `conversation_id` = its thread, counted once), and `bookings`, `documents`, `opportunities`, `notes`, `tasks`, `form_submissions` by `contact_id`, each `account_id`-scoped. `revoke all … from public, anon; grant execute … to authenticated, service_role`.
 
   **Section 19, comments** on the four public functions and `contact_merges.other_reply_token`.
 
@@ -1759,6 +1900,12 @@ grant execute on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, 
 | skip the `merged_by_hand` insert | the flags case |
 | preview: count calls by contact and by thread separately | "preview equals the move" |
 | undo: clear the tombstone AFTER the row moves | "ORDER: the tombstone is cleared first" |
+| merge: move the section 5 flag re-file back after the field update | the Flags case, I1 shape (K–X undismissed) |
+| merge: drop the `v_flags_before` record loop | the Flags case, I1 second shape (a phantom after Undo) |
+| merge: compare `(p_seen ->> 'keep')::timestamptz` with `k.updated_at` as before | `stale` case (2), the write that never stamps `updated_at` |
+| `app.follow_merge`: drop `for share` | "an insert naming O while a merge holds its transaction waits, then lands on K" |
+| add `'tags'` (any word) to `c_moves` | "every table with a foreign key into contacts is accounted for" (the literal no longer equals C_MOVES) |
+| merge: set `messages.updated_at = now()` again | add the assertion to "everything comes back": a moved message's `updated_at` equals its pre-merge value after merge AND after Undo (review m8a) |
 | undo: restore every field unconditionally | "an edit after the merge is kept" |
 | undo: move every message on the kept thread | "a text after the merge stays" |
 | undo: drop the window check | `expired` |
@@ -1844,11 +1991,11 @@ git commit -m "feat(db): 0106 part B: merge two contacts with every row logged, 
 **Interfaces:** Produces the `contact-merge.ts` block in "Shared facts". Consumes T1's and T3's SQL by name (the pure tests need neither).
 
 - [ ] **Step 1: Pure failing tests.** A fake client that records `rpc(name, args)` and answers per function name, and records `from("contacts")` reads:
-  - `listDuplicatePairs` calls `duplicate_pairs_page` with `p_after_*` null on a cold start and the cursor's three values verbatim after (the `createdAt` string unchanged, never re-formatted: correction 19's rule), clamps `limit` to `1..DUPLICATE_PAGE_MAX + 1`, and maps rows to `DuplicatePair`.
+  - `listDuplicatePairs` calls `duplicate_pairs_page` with `p_after_*` null on a cold start and the cursor's three values verbatim after (the `createdAt` string unchanged, never re-formatted through a `Date`, which drops microseconds and would repeat or skip a row at a page boundary), clamps `limit` to `1..DUPLICATE_PAGE_MAX + 1`, and maps rows to `DuplicatePair`.
   - `countDuplicatePairs` returns the number; THROWS on `null` (the head-count-null lesson; mutation: `?? 0` → FAILS).
   - `mergeContacts` sends `p_choices`, `p_seen` and `p_actor` (null when absent) and parses each status; an unknown shape THROWS (mutation: return it as `merged`).
   - `undoContactMerge` parses `undone` with `keptNew`/`keptEdits`, and the four refusals.
-  - `contactMergePreview` parses `ok` with every `MERGE_COUNT_KEYS` key present as a number (a missing key THROWS).
+  - `contactMergePreview` parses `ok` with every `MERGE_COUNT_KEYS` key present as a number, `fields.keep`/`fields.other` as objects and `seen.keep`/`seen.other` as 32-character hex strings (any of them missing or malformed THROWS; mutation: default a missing `seen` to `""` → FAILS).
   - `dismissDuplicatePair` / `undismissDuplicatePair` return the status word.
   - `followMerge`: `merged_into` when set, the id itself when null or no row; throws on an error (mutation: swallow → returns the id).
   - `mergedIdsOf`: reads `contacts` with `eq("merged_into", keepId)` AND `eq("account_id", accountId)` (mutation: drop the account term → FAILS).
@@ -1867,7 +2014,7 @@ export {
 ```
 
 - [ ] **Step 4: Run green** and `pnpm --filter @bis/db exec tsc --noEmit -p .`. Paste.
-- [ ] **Step 5: Live tests (CI).** `contact-merge-live.test.ts`, `withTestAccount` nested for B: two contacts on one phone → `listDuplicatePairs` and `countDuplicatePairs` agree (1) and B's identical pair is not in A's; `dismissDuplicatePair(…, "user_test")` empties both; `undismiss` restores; `mergeContacts` with `actor: "user_test"` and `seen` read off the rows as PostgREST returned them → `merged`; `followMerge(other)` = keep; `mergedIdsOf(keep)` = `[other]`; `undoContactMerge` → `undone`; `followMerge(other)` = other.
+- [ ] **Step 5: Live tests (CI).** `contact-merge-live.test.ts`, `withTestAccount` nested for B: two contacts on one phone → `listDuplicatePairs` and `countDuplicatePairs` agree (1) and B's identical pair is not in A's; `dismissDuplicatePair(…, "user_test")` empties both; `undismiss` restores; `mergeContacts` with `actor: "user_test"` and `seen` from `contactMergePreview` → `merged`; a second preview, then an `assigned_to` write that does not stamp `updated_at`, then `mergeContacts` with the stale `seen` → `stale`; `followMerge(other)` = keep; `mergedIdsOf(keep)` = `[other]`; `undoContactMerge` → `undone`; `followMerge(other)` = other.
 - [ ] **Step 6: Mutation probes** as named in Step 1, each red by name.
 - [ ] **Step 7: Commit** the four paths: `feat(contacts): typed wrappers for possible duplicates, merge, undo and the merge pointer`.
 
@@ -1907,20 +2054,21 @@ export {
 
 **Tier:** medium · **Owner:** bis-comms · **Wave:** 3
 
-**Files:** Modify `packages/db/src/messaging.ts:121-155` (`ensureConversation`), `packages/db/src/inbound-email.ts:118-127` (`findReplyThread`) and `:325-345` (`matchSender`). Create `packages/db/src/messaging-merge.test.ts` (pure), `packages/db/src/test/messaging-merge-live.test.ts` (CI).
+**Files:** Modify `packages/db/src/messaging.ts:121-155` (`ensureConversation`) and beside `:604-610` (a new `incrementUnreadForMessage`), `packages/db/src/index.ts` (the messaging export line `:60-64`: add `incrementUnreadForMessage`), `packages/db/src/inbound-email.ts:118-127` (`findReplyThread`) and `:325-345` (`matchSender`), `apps/web/src/app/api/sms/inbound/route.ts:236-257` (the unread bump), its `route.test.ts` and `route.consent.test.ts` (the `@bis/db` mocks gain `incrementUnreadForMessage`), and `apps/web/src/lib/messages-readers.test.ts:23` (`messaging.ts` count 14 → 15, the why text gains "one message's thread for its unread bump (0106: a merge can move it)"). Create `packages/db/src/messaging-merge.test.ts` (pure), `packages/db/src/test/messaging-merge-live.test.ts` (CI).
 
 **Interfaces:** Consumes `followMerge` (T5), `contact_merges.other_reply_token` (T1), the merge (T3, live tests only).
 
 - [ ] **Step 1: Failing tests (fake client).**
   - `ensureConversation(db, A, "T")`: the thread read for T answers none; `followMerge` (the `contacts` read) answers K; the next read is for K's thread and its id comes back, `created: false`. Mutation: insert for T after the miss → an insert is recorded, FAILS. The hot path (a thread found for the id asked) issues no `contacts` read (mutation: resolve first → an extra read, FAILS).
   - `matchSender(db, A, "K", "old@x.mx")`: K's own `email_key` differs; a read of `contacts` with `eq("merged_into", "K")` and `eq("email_key", <key>)` answers T → `{ contactId: "K", firstName: <K's>, lastName: <K's>, viaGroup: false }`. Mutation: drop that read → `null` (the mail would be held), FAILS.
+  - `incrementUnreadForMessage(db, A, "m1")` reads `messages` by `id` AND `account_id` for its `conversation_id` and calls `increment_conversation_unread` with THAT thread (review m7: a merge between the message insert and the bump moved the message, and bumping the thread the route remembered was a silent no-op on a deleted row). A missing message THROWS (mutation: return quietly → FAILS). In `route.test.ts`, the bump is called with the id `createMessage` answered (mutation: `incrementUnreadCount(db, accountId, conversation.id)` as before → FAILS).
   - `findReplyThread(db, token)`: no conversation holds the token; `contact_merges` with `eq("other_reply_token", token)` and `is("undone_at", null)` answers `{ account_id, keep_id: "K" }`; `followMerge(K)` = K; K's thread answers → `{ conversationId: <K's thread>, accountId, contactId: "K", revoked: false, inboundDomain }` (read `inbound_domain` off the account as the main read does). An undone merge's token answers `null` (mutation: drop `is("undone_at", null)`).
 - [ ] **Step 2: Run red.** Paste.
-- [ ] **Step 3: Implement** the three, each with a one-paragraph comment citing owner ruling D8 and correction 7. `ensureConversation`: on a miss, `const resolved = await followMerge(db, accountId, contactId)`; if it differs, run the same find-or-insert for `resolved` (the 23505 re-select also uses `resolved`); emit `conversation.created` with `contactId: resolved`.
+- [ ] **Step 3: Implement** the four, each with a one-paragraph comment citing owner ruling D8 (or review m7) and correction 7. In `route.ts`, keep the id `createMessage` returns (`const created = await createMessage(…)`, held in a `let messageId: string | null` declared before the filing `try`) and call `incrementUnreadForMessage(db, accountId, messageId)` in the `if (firstFiling)` block in place of `incrementUnreadCount(db, accountId, conversation.id)`. Every other `incrementUnreadCount` caller is unchanged. `ensureConversation`: on a miss, `const resolved = await followMerge(db, accountId, contactId)`; if it differs, run the same find-or-insert for `resolved` (the 23505 re-select also uses `resolved`); emit `conversation.created` with `contactId: resolved`.
 - [ ] **Step 4: Run green** (`src/messaging-merge.test.ts` and the existing pure messaging and inbound tests) plus `pnpm --filter @bis/db exec tsc --noEmit -p .` and `pnpm --filter web exec vitest run src/lib/email/inbound src/app/api/sms/inbound`. Paste.
-- [ ] **Step 5: Live (CI).** Merge for real (`mergeContacts` on the service client, `actor`): O's thread had reply token `bbbbbbbbbbbbbbbbbbbbbbbb`; `findReplyThread` of it answers K's thread; after `undoContactMerge` it answers O's restored thread again. `ensureConversation(O)` after the merge answers K's thread; `matchSender(K, <O's email>)` answers K. Account B's merge never answers A's token.
+- [ ] **Step 5: Live (CI).** Merge for real (`mergeContacts` on the service client, `actor`): O's thread had reply token `bbbbbbbbbbbbbbbbbbbbbbbb`; `findReplyThread` of it answers K's thread; after `undoContactMerge` it answers O's restored thread again. `ensureConversation(O)` after the merge answers K's thread; `matchSender(K, <O's email>)` answers K. Account B's merge never answers A's token. A message inserted on O's thread, then a merge, then `incrementUnreadForMessage` for that message bumps K's thread by one.
 - [ ] **Step 6: Mutations** as named.
-- [ ] **Step 7: Commit** the four paths: `feat(sms): a text or a reply to an old email from a merged-away customer lands on the kept customer's thread`.
+- [ ] **Step 7: Commit** every listed path: `feat(sms): a text or a reply to an old email from a merged-away customer lands on the kept customer's thread, and its unread count follows it`.
 
 ---
 
@@ -1941,7 +2089,6 @@ export {
 
 **Files:**
 - Modify: `packages/db/src/record.ts` (`TimelineSource`, `TIMELINE_SOURCES` `:277-281`; `TimelineEntry` `:329-362`; a `listContactMergeLog` beside `listContactArchiveLog` `:432-449`; one `settle("merge", …)` after `"archive"` at `:539`)
-- Modify: `packages/db/src/index.ts` (the record block `:393-400`: add `type TimelineMerge`)
 - Modify: `packages/db/src/test/record.test.ts:305,754,894`
 - Create: `packages/db/src/test/record-merge-live.test.ts` (CI)
 - Modify: `apps/web/src/lib/record/timeline-rows.ts` (`:57` WHAT map; the row builder, beside `case "archive"` `:206`), `author-mark.ts` (`:81`), `recent-rows.ts` (`:62`), `loaders.ts` (`loadTimeline` `:77-102`), and their tests
@@ -1964,7 +2111,7 @@ export {
   - `record.test.ts`: `:305` gains `"merge"` after `"archive"`; both `NINE` lists (`:754`, `:894`) gain `"merge"` at the end (rename nothing; the two `TEN`s derive from them).
   - `loaders.ts`: `loadTimeline` reads `mergedIdsOf` first (a failure logs `activity (merge set)` and reads `[contactId]`), then `listTimelinePage(db, accountId, [contactId, ...tombstones], before, { suggestions: true, aiActs: true, onError })`. `readActFacts` keeps the page's `contactId`.
   - `timeline-rows.ts`, `author-mark.ts`, `recent-rows.ts`, `activity-timeline.tsx`, `group-timeline.tsx`: one case each for `"merge"` and `"mergeUndone"` (icons `Merge` and `Undo2` from `lucide-react`, the archive cases' shape). Every exhaustive switch over `entry.kind` must compile: run `pnpm --filter web typecheck` and fix each one it names (`dashboard/styleguide/ai-acts-demo.tsx` builds entries; read whether it switches).
-  - `index.ts`: add `type TimelineMerge` to the record export block.
+  - The barrel is NOT touched (T7 owns `index.ts` this wave): apps/web names the type as `Extract<TimelineEntry, { kind: "merge" }>["merge"]`; `TimelineEntry` is already exported.
 - [ ] **Step 4: Run green** (`pnpm --filter web exec vitest run src/lib/record src/lib/contacts/merge-copy.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]" "src/app/(dashboard)/dashboard/accounts/[accountId]/groups/[groupId]"`), `pnpm --filter web typecheck`, `pnpm --filter @bis/db exec tsc --noEmit -p .`. Paste.
 - [ ] **Step 5: Live (CI).** `record-merge-live.test.ts`: merge K ← O on the service client (an `ai_acts` row on O seeded first, from `ai-acts-schema.test.ts`'s seed); `listTimelinePage(db, A, [K, O])` shows the `merge` row AND O's act (correction 11; mutation: read `[K]` only → the act is missing); undo → a `mergeUndone` row; account B's merge never appears in A's page; `listContactTimelinePage(db, A, K).sources` includes `"merge"`.
 - [ ] **Step 6: Mutations** as named.
@@ -1987,15 +2134,15 @@ export {
 
 **Interfaces:** Produces the four actions (signatures in "Shared facts"), the compare route, `ContactsView` = `"active" | "archived" | "duplicates"`. Consumes T5's wrappers, T2's keys, T9's `mergeCountsList`.
 
-- [ ] **Step 1: `merge-fields.ts`, red then green.** Pure: `mergeConflicts(keep, other)` answers the fields both hold differently (`first_name`, `last_name`, `email`, `phone`, `assigned_to`, `language`, and each `custom.<key>` on both sides), each with `{ field, keepValue, otherValue, preselect: "keep" | "other" }`. `preselect` is `"keep"` except for `language`, which follows 0106's rule (staff beats a sign; else the earlier `language_set_at`; mutation: always `"keep"` → the staff case FAILS). `alsoKeeps(keep, other)` lists the fields the rules fill from the other (a blank on the kept side). `otherReach(keep, other, choices)`: the other's phone when the kept phone after the choices differs from it, and the same for email (D8's two lines). Tests: a field equal on both sides is not a conflict (mutation: list every field); a blank is never a conflict; `custom` keys on one side only are not conflicts.
+- [ ] **Step 1: `merge-fields.ts`, red then green.** Pure: `mergeConflicts(keep, other)` (each side the preview's `fields` object) answers the fields both hold differently (`first_name`, `last_name`, `email`, `phone`, `assigned_to`, `language`, and each `custom.<key>` on both sides), each with `{ field, keepValue, otherValue, preselect: "keep" | "other" }`. `preselect` is `"keep"` except for `language`, which follows 0106's rule (staff beats a sign; else the earlier `language_set_at`; mutation: always `"keep"` → the staff case FAILS). `alsoKeeps(keep, other)` lists the fields the rules fill from the other (a blank on the kept side). `otherReach(keep, other, choices)`: the other's phone when the kept phone after the choices differs from it, and the same for email (D8's two lines). Tests: a field equal on both sides is not a conflict (mutation: list every field); a blank is never a conflict; `custom` keys on one side only are not conflicts.
 - [ ] **Step 2: `duplicates.ts`, red then green.** `toRowCursor(pair)` = `{ v: \`${pair.strength}|${pair.createdAt}\`, id: pair.id }` for `lib/cursor.ts`'s `encodeCursor`; `fromRowCursor(rc)` answers a `DuplicateCursor` or `undefined` for anything that does not parse (a strength outside 1–9, a `v` without exactly one `|`, an unparseable instant). Total, like `parseCursor` (`lib/cursor.ts:55`). `compareHref(accountId, pair, keep?)` builds `ACCT/contacts/merge?a=…&b=…[&keep=…]`.
 - [ ] **Step 3: `merge-actions.ts`, red then green.** Mock `@/lib/auth`, `@/lib/db` and `@bis/db` in the pattern of `archive-actions.test.ts` (read it). Tests:
   - every action refuses a Technician (`seesWholeAccount` false) BEFORE any db call, and a non-uuid id (mutation: drop the role check → a db call is recorded).
-  - `mergeContactsAction` validates `choices` (keys in `MERGE_CHOICE_FIELDS` or `custom.`, values `keep`/`other`) and `seen` (two non-empty strings of at most 64 characters) and passes them unchanged to `mergeContacts` on `dbForRequest()`; `merged` → `{ ok: true, mergeId, keptId }` and revalidates the list and both record paths; `stale` → `contacts.merge.stale`; every other status and a throw → `contacts.merge.failed` (logged with `loggableError`).
+  - `mergeContactsAction` validates `choices` (keys in `MERGE_CHOICE_FIELDS` or `custom.`, values `keep`/`other`) and `seen` (two strings matching `/^[0-9a-f]{32}$/`, the preview's md5 fingerprints) and passes them unchanged to `mergeContacts` on `dbForRequest()`; `merged` → `{ ok: true, mergeId, keptId }` and revalidates the list and both record paths; `stale` → `contacts.merge.stale`; every other status and a throw → `contacts.merge.failed` (logged with `loggableError`).
   - `undoMergeAction`: `undone` → `{ ok: true, … }`; `expired` → `contacts.merge.undoExpired`; `later_merge` → `contacts.merge.undoLater`; the rest → `contacts.merge.undoFailed`.
   - dismiss and undismiss: `dismissed`/`restored` → ok; otherwise `contacts.duplicates.dismissFailed`.
   - no action names `serviceDb` (the file must not appear in `in-account-service-reads.test.ts`), and none passes `duringPause` (writes stay refused while paused).
-- [ ] **Step 4: The compare screen.** `merge/page.tsx` (server): `const access = await requireNotTechnician(accountId)`; parse `a`, `b`, `keep` (uuids; anything else → `notFound()`); `getContact` both on `dbForRequest()`; a missing one → `notFound()`; a holding record → `notFound()`; a tombstone → `redirect` to the duplicates view. Kept = `keep` when it is one of the two, else the older by `created_at` then `id` (owner ruling D4). Read `contactMergePreview` and `duplicatePairsOf(kept)` (for the reason line) in `Promise.all`; a failed preview renders the error state (`contacts.merge.loadFailed`, a Retry link to the same URL). Pass the two rows' `updated_at` STRINGS through untouched (correction 19). `merge/loading.tsx`: a skeleton of two columns (rule 7). `merge-screen.tsx` (client): two columns on a desk, one on a phone with the kept record first; each conflict a radio pair with its `preselect`; the also-keeps line; the two reach lines; the moves line (`contacts.merge.moves` with `mergeCountsList`, or `nothingMoves`); "Keep this one instead" a ghost link (`compareHref` with `keep` swapped); Cancel ghost; **Merge** the one primary. On Merge: `mergeContactsAction`; ok → toast `contacts.merge.done` with action `common.undo` calling `undoMergeAction(accountId, mergeId)` (the toast's Undo answers with `contacts.merge.undone` plus `undoneKept`/`undoneEdits` when they apply, or the failure key), then `router.push` to the kept record; `stale` → toast the key and `router.refresh()`; failed → toast the key, nothing moves. `merge-screen.test.ts` tests the exported handlers (the `assignSelected` style, as `archive-controls.test.ts`): Merge sends exactly the choices on screen (mutation: send every field), the toast's Undo calls `undoMergeAction` with the merge id the action returned (mutation: pass the pair), Merge is the only `variant="default"` button in the markup (rule 8).
+- [ ] **Step 4: The compare screen.** `merge/page.tsx` (server): `const access = await requireNotTechnician(accountId)`; parse `a`, `b`, `keep` (uuids; anything else → `notFound()`); `getContact` both on `dbForRequest()`; a missing one → `notFound()`; a holding record → `notFound()`; a tombstone → `redirect` to the duplicates view. Kept = `keep` when it is one of the two, else the older by `created_at` then `id` (owner ruling D4). Read `contactMergePreview` and `duplicatePairsOf(kept)` (for the reason line) in `Promise.all`; a failed preview, or a refusal status, renders the error state (`contacts.merge.loadFailed`, a Retry link to the same URL). The compared values are the PREVIEW's `fields` (never the two `getContact` rows, which only choose the kept side and catch a holding or merged record), and its `seen` travels to the action unchanged, so the fields shown and the fingerprints checked are one snapshot (correction 19). `merge/loading.tsx`: a skeleton of two columns (rule 7). `merge-screen.tsx` (client): two columns on a desk, one on a phone with the kept record first; each conflict a radio pair with its `preselect`; the also-keeps line; the two reach lines; the moves line (`contacts.merge.moves` with `mergeCountsList`, or `nothingMoves`); "Keep this one instead" a ghost link (`compareHref` with `keep` swapped); Cancel ghost; **Merge** the one primary. On Merge: `mergeContactsAction`; ok → toast `contacts.merge.done` with action `common.undo` calling `undoMergeAction(accountId, mergeId)` (the toast's Undo answers with `contacts.merge.undone` plus `undoneKept`/`undoneEdits` when they apply, or the failure key), then `router.push` to the kept record; `stale` → toast the key and `router.refresh()`; failed → toast the key, nothing moves. `merge-screen.test.ts` tests the exported handlers (the `assignSelected` style, as `archive-controls.test.ts`): Merge sends exactly the choices on screen (mutation: send every field), the toast's Undo calls `undoMergeAction` with the merge id the action returned (mutation: pass the pair), Merge is the only `variant="default"` button in the markup (rule 8).
 - [ ] **Step 5: The list.** `view.ts`: `ContactsView` gains `"duplicates"`; `parseView("duplicates")` → `"duplicates"`; `withView` carries it; `archivedFilterOf("duplicates")` → `"exclude"`. `page.tsx`: when `view === "duplicates"` and `seesWholeAccount(access)`, read `listDuplicatePairs(db, accountId, { limit: PAGE_SIZE + 1, after: fromRowCursor(parseCursor(before)) })` and `countDuplicatePairs` and render `<DuplicatesList>` under the title `contacts.duplicates.title` with the count `contacts.duplicates.count`/`One`, the back link `contacts.archived.back`, the pager "Next"/"Back to the start" (`contacts.duplicates.next`/`first`, the 2026-10-17 amendment), and the empty state (title + body, rule 5). A Technician asking for the view gets the active list. The active view's toolbar gains a ghost link "Possible duplicates" (`contacts.duplicates.link`) for `wholeAccount`, beside "Archived". A failed read renders `contacts.duplicates.listFailed` with Retry. `duplicates-list.tsx` (client): one row per pair, `data-duplicate-row={pair.id}`; both names (`contactDisplayName`), the reason in words (`reasonLabel` → `contacts.duplicates.reason.*`), `contacts.duplicates.foundOn`; the whole row is the target (click and Enter → `router.push(compareHref(…))`, a visible `:focus-visible` ring, hover `--surface-3`); "Not the same person" a ghost button that stops propagation and calls `dismissPairAction`, toast `contacts.duplicates.dismissed` with `common.undo` → `undismissPairAction`. No checkbox. Tests: the page passes the parsed cursor and renders the count from `countDuplicatePairs`, never the rows' length (mutation: render `rows.length` → FAILS with count 7 and 3 rows); the row's dismiss does not navigate (mutation: drop `stopPropagation`).
 - [ ] **Step 6: The To do row.** `tasks/page.tsx`: when `seesWholeAccount(access)`, read `countDuplicatePairs` best-effort beside `countHeldInboundEmails` (a throw is logged and the row omitted, `:76-83`'s shape); a count above 0 renders one row linking to `../contacts?view=duplicates` with `work.duplicates`/`One`. Test: 3 → the row and the link; 0 → none; a Technician → no read at all (mutation: read for everyone → the recorded call FAILS the Technician case).
 - [ ] **Step 7: Pins.** `technician-guards.test.ts:20-23`: add `"contacts/merge/page.tsx"` to `PAGES`. `export/route.get.test.ts`: `?view=duplicates` exports the active contacts (`archived: "exclude"`).

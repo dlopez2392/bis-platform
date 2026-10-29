@@ -248,8 +248,10 @@ create index contact_merges_other on public.contact_merges (account_id, other_id
   10,000-message merge on the replica and states the time in 0106's LOCKS AND COST.
 - RLS on; one SELECT policy for `authenticated`: the account's members or the agency, and for a Technician only
   when they can read `keep_id` (the 0103 log's shape, `docs/superpowers/specs/2026-10-28-contact-archive-design.md:103-107`).
-  No client INSERT, UPDATE or DELETE (the 0053 rule). `revoke all … from anon, authenticated; grant select … to authenticated;
-  grant select, insert, update, delete … to service_role` (the 0091 pattern, `MIG/0091:117-119`).
+  No client INSERT, UPDATE or DELETE (the 0053 rule). `revoke all … from anon, authenticated`; `authenticated` SELECTs
+  only `id, account_id, keep_id, other_id, merged_by, merged_at, undo_until, moved_counts, undone_at, undone_by`
+  (plan review m8c, 2026-10-29: the policy admits an assigned Technician, and the snapshots and the reply token are
+  not theirs to read); `grant select, insert, update, delete … to service_role` (the 0091 pattern, `MIG/0091:117-119`).
 - Listed in `ACCOUNT_OWNED_TABLES` (`packages/db/src/account-teardown.ts:20`) before `contacts`.
 
 ### 4.3 The pair queue gains a decision
@@ -287,8 +289,10 @@ SECURITY DEFINER. EXECUTE to `authenticated` and `service_role`.
    lock-then-fresh-snapshot order, so two merges cannot deadlock).
 3. **Refuse** with a status, never an exception the screen cannot word: `same` (one id twice), `not_found`
    (either is not in this account), `holding` (either holds a shared number), `merged` (either is already a
-   tombstone), `stale` (either row's `updated_at` differs from `p_seen`: the screen showed old values, so it
-   reloads instead of merging on them).
+   tombstone; renamed `already_merged`, §14), `stale` (either row's merge fields differ from what the screen
+   showed: `p_seen` is the md5 of `app.merge_fields_of(row)` that `contact_merge_preview` answered, so the screen
+   reloads instead of merging on old values. Amended 2026-10-29, plan review m3: the first draft compared
+   `updated_at`, which several writers never stamp).
 4. **Fields.** Apply section 5.2 on `p_keep`. `p_choices` names only a side (`keep` or `other`) per conflicting
    field; **values are read from the locked rows, never from the client** (the import's rule: the server
    re-validates rather than trusting the browser). An unknown field name or side is 22023.
@@ -297,6 +301,11 @@ SECURITY DEFINER. EXECUTE to `authenticated` and `service_role`.
 6. **Tombstone.** `merged_into = p_keep, merged_at = now()` on `p_other`. Then flatten: every row with
    `merged_into = p_other` now points at `p_keep`, and those ids are recorded, so a lookup never follows more
    than one hop.
+   **Order, amended 2026-10-29 (plan review I1):** the tombstone and the flattening come FIRST, then every other pair
+   naming the other record is re-filed on the kept one (reason and dismissal kept), and only then the fields. The
+   field update fires the flag trigger for the kept record; each flag it files is recorded in
+   `moved.contact_duplicate_flags_added`, so the Undo removes it. Fields-first let a dismissed pair resurface fresh
+   and left an unrecorded flag behind after Undo.
 7. **Resolve the pair.** The flag row for `(p_keep, p_other)` gets `merge_id`. If there is none (a merge started
    from search, not from a suggestion), one is inserted with reason `merged_by_hand`.
 8. **Log.** Insert `contact_merges`, and emit `contact.merged` (actor `user`, the caller's Clerk id). Return
@@ -538,10 +547,14 @@ To-do, the summary and the act when it ends. If a merge happens in between, thos
 
 Trigger `app.follow_merge()`: SECURITY DEFINER, `BEFORE INSERT OR UPDATE OF <contact column>` on every table in
 `FK_PAIRS` except `contact_merges` and the pointer itself. It reads the named contact by primary key, and when
-that row is a tombstone it rewrites the column to `merged_into`. The column name is passed as a trigger argument
-(`TG_ARGV[0]`) and applied with `jsonb_populate_record`. On `ai_acts`, `proposals` and `consent_events` it fires
-on INSERT only: their fixed-column triggers already refuse updates, and a new row is not history yet.
-It costs one primary-key read per write.
+that row is a tombstone it rewrites the column to `merged_into`. It is two static functions, one per column name
+(`contact_id`, `related_contact_id`; §14). On `ai_acts`, `proposals` and `consent_events` it fires on INSERT only:
+their fixed-column triggers already refuse updates, and a new row is not history yet. It costs one primary-key read
+per write, and that read is `for share` (amended 2026-10-29, plan review I2): a write that began before a merge
+committed waits on the merge's row lock and then reads the COMMITTED pointer. Read without a lock, it saw the
+pre-merge snapshot, and the write landed on the hidden record. A redirected insert that collides with a row the kept
+record already has answers 23505 (a skip, a membership), which each caller already reports; a tag upsert is a no-op,
+because ON CONFLICT is judged on the redirected row (plan review m8b).
 
 `ensureConversation` (`packages/db/src/messaging.ts:121-150`) looks up by `contact_id` and then inserts. Called
 with a tombstone id, its lookup would miss, its insert would be redirected onto the kept record's existing thread,
@@ -551,7 +564,10 @@ is the backstop, not the fix.
 ### 7.3 A merge racing an inbound text, call or booking for the other record
 
 - **A text** whose route resolved the other record just before the merge. Its message insert takes a key-share
-  lock on the other thread, which the merge holds `for update` (4.4 step 2), so the insert waits. If the merge
+  lock on the other thread, which the merge holds `for update` (4.4 step 2), so the insert waits. (Corrected
+  2026-10-29, plan review I2: this holds for `messages`, whose key is the THREAD, which the merge locks and then
+  deletes. A write keyed by the CONTACT, a task or a call row, is held back by `follow_merge`'s `for share` read
+  instead, 7.2.) If the merge
   removed that thread, the insert then fails its foreign key. On a first filing that is `FilingFailed`, a 503
   (`route.ts:180-192`, `:200-213`). Telnyx retries, and the retry resolves to the kept record. **ASSUMPTION:**
   Telnyx retries a 503 at least once. The route already relies on this (`route.ts:180-182`); the plan does not
@@ -559,6 +575,9 @@ is the backstop, not the fix.
 - **A booking or form** on the public pages resolves the contact through `findDuplicate` at submit (7.1). A stale
   id reaching an insert is redirected (7.2).
 - **A call in progress**: as 7.2.
+- **A text filed just before the merge, its unread bump just after:** the merge moved the message to the kept
+  thread and deleted the other, so a bump of the remembered thread was a silent no-op. The route bumps the thread
+  its message sits on now (plan review m7).
 - **Two merges of one record**: the second waits on the row lock, then sees `merged` and refuses.
 - **A merge and an archive**: both lock the contact row. Archive on a tombstone is refused (4.1).
 - **An Undo racing a new text** on the kept thread: Undo moves back only recorded ids, so the new text stays on
@@ -840,9 +859,27 @@ evidence. The ones that change this design:
     "the kept record's unless empty".
 18. **Not in the spec:** reactivation's held release (`getDueReactivationById`) would send to the merged-away address;
     it now answers `gone` for a tombstone.
-19. **4.4:** `p_seen` carries `updated_at` exactly as PostgREST returned it; a JavaScript `Date` drops microseconds.
+19. **4.4:** `stale` compares a fingerprint of the merge's fields (`app.merge_fields_of`), returned by the preview with
+    the fields it shows, not `updated_at` (amended by plan review m3, below).
 20. **4.4, 4.5, 8:** the who-check lives in one function, `app.may_merge`, with 0103's two coalesces.
 21. **4.7:** `EXPECTED_DEFINERS` goes 29 to 36 (0104 and 0105 add none).
 22. **4.6:** production held 53 contacts and 0 flags on 2026-10-29: no 100,000-row timing and no off-peak rule;
     `lock_timeout` stays.
 23. **3.1 and 3.3:** the twins live in one import-free `packages/db/src/dedupe-keys.ts` (`@bis/db/dedupe-keys`).
+
+### Plan review fixes (2026-10-29)
+
+The reviewer ran the plan's SQL on a PostgreSQL 17 replica (merge then Undo restored all 30 fixture rows exactly once)
+and found two Important and six minor defects. Each is fixed in the plan and, where it changes the design, here:
+
+- **I1:** the flag re-file runs before the field update, and flags the trigger files for the kept record during the
+  merge are recorded for Undo (4.4, order note).
+- **I2:** `follow_merge` reads the pointer `for share` (7.2, 7.3).
+- **m3:** `stale` by fingerprint (4.4 step 3).
+- **m4:** the who-check's account term has its own test: an Owner of A whose token names org B.
+- **m5:** `app.open_duplicate_pairs` takes the contact filter, the cursor and the limit as parameters (a function that
+  sets `search_path` is never inlined).
+- **m6:** a guard that every table with a foreign key into contacts is moved, handled, kept or the merge's own.
+- **m7:** the SMS route bumps unread on the message's current thread (7.3).
+- **m8:** the merge never touches `messages.updated_at`; a colliding redirected insert answers 23505 (7.2);
+  `authenticated` reads ten columns of `contact_merges` (4.2); two test seeds were given distinct phones.
