@@ -30,6 +30,14 @@ export { restoreContactFieldIf, lastFieldEditor } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { emailKey } from "./contacts";
 export { nameFold, nameKey, phoneNational, phoneFamily, reasonStrength, reasonLabel, DUPLICATE_REASON_STRENGTH, MERGE_UNDO_DAYS, type PhoneFamily, type ReasonLabel } from "./dedupe-keys";
+// 0106, F-006 part 1: possible duplicates, the merge and its Undo, and the pointer every lookup follows.
+export {
+  listDuplicatePairs, countDuplicatePairs, duplicatePairsOf, dismissDuplicatePair, undismissDuplicatePair,
+  mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf,
+  DUPLICATE_PAGE_MAX, MERGE_COUNT_KEYS, MERGE_CHOICE_FIELDS,
+  type DuplicatePair, type DuplicatePerson, type DuplicateCursor, type MergeChoice, type MergeInput, type MergeOutcome,
+  type UndoMergeOutcome, type MergePreview, type MergeCountKey,
+} from "./contact-merge";
 export { recordLanguageSignal, setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple, LANGUAGE_SOURCES,
          type ContactLanguage, type LanguageSource, type LanguageSignalSource, type LanguageTriple } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
