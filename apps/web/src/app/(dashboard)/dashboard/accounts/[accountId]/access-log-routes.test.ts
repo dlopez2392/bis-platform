@@ -7,8 +7,9 @@ import ts from "typescript";
 /**
  * F-118 part 1 (spec 4.2; plan Task 11; review I2, I3). Every way into an account's records is classified:
  * the entry files of the two account trees, every exported server action in an account-scoped "use server"
- * file, and every other file under app/ that calls a guard. A RECORD must call the one logger in real code,
- * in a shape that cannot fail open. Anything else states why it is not a record. A new file, action or
+ * file or in any "use server" file under src/ that calls a guard, every inline "use server" function under
+ * src/ (final review M1), and every other file under app/ that calls a guard. A RECORD must call the one
+ * logger in real code, in a shape that cannot fail open, handing it its own guard's answer (final review M2). Anything else states why it is not a record. A new file, action or
  * guarded file in no list fails BY NAME.
  *
  * Everything here reads the `typescript` AST, never a regex over text: comments are trivia and never
@@ -144,6 +145,9 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
     `${W}; from /dashboard/work these run with no visit (owner ruling 3, plan C11)`),
   // Spec 3.1 (review m11): captureBlueprintAction is requireAgency() alone and copies configuration.
   ...each("app/(dashboard)/dashboard/blueprints/actions.ts", ["captureBlueprintAction", "applyBlueprintAction"], AG),
+  // Final review M1: an inline "use server" function is an action too. The styleguide's billing specimen
+  // answers its own failure sentence and reads nothing.
+  "app/(dashboard)/dashboard/styleguide/page.tsx#styleguidePortalFailed": "the styleguide's specimen; reads and writes nothing",
 };
 const OTHER_GUARDED: Record<string, string> = {
   [`${A}/settings/ai-section.tsx`]: "the Settings page's AI card, after Settings' own guard; agency settings",
@@ -360,6 +364,45 @@ function badLoggerCalls(sf: ts.SourceFile): string[] {
   }
   return bad;
 }
+/**
+ * Final review M2: the logger reads only `isAgency` from its first argument, so `noteOpened({ isAgency: false }, …)`
+ * would type-check and skip the log for the agency. The first argument must therefore be an identifier declared
+ * exactly once in the call's OWN function (not a parameter, not an outer function's, not shadowed in a block),
+ * by a `const` whose initializer is a guard call or an awaited guard call.
+ */
+function badLoggerArgs(sf: ts.SourceFile): string[] {
+  const bad: string[] = [];
+  const at = (n: ts.Node) => `${sf.fileName}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
+  const ownFunction = (n: ts.Node): ts.FunctionLikeDeclaration | null => {
+    for (let p = n.parent; p && !ts.isSourceFile(p); p = p.parent) if (isFunctionLike(p)) return p;
+    return null;
+  };
+  const isGuardResult = (init: ts.Expression | undefined): boolean => {
+    let e: ts.Expression | undefined = init;
+    while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+    if (e && ts.isAwaitExpression(e)) e = e.expression;
+    while (e && ts.isParenthesizedExpression(e)) e = e.expression;
+    return !!e && ts.isCallExpression(e) && ts.isIdentifier(e.expression) && GUARDS.has(e.expression.text);
+  };
+  for (const c of [...calls(sf, "noteOpened"), ...calls(sf, "noteOpenedApi")]) {
+    const logger = (c.expression as ts.Identifier).text;
+    const arg = c.arguments[0];
+    const fn = ownFunction(c);
+    if (!arg || !ts.isIdentifier(arg) || !fn) { bad.push(`${at(c)} ${logger}'s first argument is not a name bound to a guard's answer`); continue; }
+    if (fn.parameters.some((p) => boundNames(p.name).includes(arg.text))) { bad.push(`${at(c)} ${logger}'s first argument is a parameter`); continue; }
+    const decls: ts.VariableDeclaration[] = [];
+    const visit = (n: ts.Node): void => {
+      if (n !== fn && isFunctionLike(n)) return;
+      if (ts.isVariableDeclaration(n) && boundNames(n.name).includes(arg.text)) decls.push(n);
+      ts.forEachChild(n, visit);
+    };
+    visit(fn);
+    const d = decls.length === 1 ? decls[0]! : null;
+    const ok = !!d && ts.isIdentifier(d.name) && (d.parent.flags & ts.NodeFlags.Const) !== 0 && isGuardResult(d.initializer);
+    if (!ok) bad.push(`${at(c)} ${logger}'s first argument \`${arg.text}\` is not one const, in this function, holding a guard call's answer`);
+  }
+  return bad;
+}
 const isLiteralValue = (n: ts.Expression) => ts.isStringLiteral(n) || ts.isNumericLiteral(n)
   || n.kind === ts.SyntaxKind.TrueKeyword || n.kind === ts.SyntaxKind.FalseKeyword || n.kind === ts.SyntaxKind.NullKeyword;
 /**
@@ -400,12 +443,41 @@ function unclassifiedEntries(base: string, roots: readonly string[], known: Read
 function missingLogger(base: string, record: Readonly<Record<string, string>>): string[] {
   return Object.entries(record).filter(([f, fn]) => calls(parse(join(base, f)), fn).length === 0).map(([f]) => f).sort();
 }
-/** Every `file#action` in scope: "use server" files under `roots`, plus any "use server" file under app/ calling a guard. */
+/** A function whose own body opens with the "use server" directive: Next makes it a server action wherever it sits. */
+function startsWithUseServer(fn: ts.FunctionLikeDeclaration): boolean {
+  const first = fn.body && ts.isBlock(fn.body) ? fn.body.statements[0] : undefined;
+  return !!first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use server";
+}
+/** Final review M1: every inline server action in a file, keyed by its own name, the const holding it, or its line. */
+function inlineActions(sf: ts.SourceFile): { name: string; node: ts.Node }[] {
+  const out: { name: string; node: ts.Node }[] = [];
+  const visit = (n: ts.Node): void => {
+    if (isFunctionLike(n) && startsWithUseServer(n)) {
+      const holder = unwrap(n.parent);
+      const name = (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n)) && n.name ? n.name.text
+        : ts.isVariableDeclaration(holder) && holder.initializer === n && ts.isIdentifier(holder.name) ? holder.name.text
+        : `<inline at line ${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}>`;
+      out.push({ name, node: n });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+/**
+ * Every `file#action` in scope (final review M1: the whole of src/, not only app/ and lib/): the exported
+ * bindings of "use server" files under `roots` or calling a guard anywhere, plus every inline "use server"
+ * function anywhere (one already counted as an export is not counted twice).
+ */
 function actionKeys(base: string, roots: readonly string[] = ACTION_ROOTS): { key: string; node: ts.Node }[] {
-  const files = walk(join(base, "app"), isSource).concat(walk(join(base, "lib"), isSource))
-    .filter((p) => isUseServer(parse(p)))
+  const sources = walk(base, isSource);
+  const files = sources.filter((p) => isUseServer(parse(p)))
     .filter((p) => roots.some((r) => rel(p, base).startsWith(`${r}/`)) || callsAny(parse(p), GUARDS));
-  return files.flatMap((p) => exportedBindings(parse(p)).map((f) => ({ key: `${rel(p, base)}#${f.name}`, node: f.node })));
+  const exported = files.flatMap((p) => exportedBindings(parse(p)).map((f) => ({ key: `${rel(p, base)}#${f.name}`, node: f.node })));
+  const seen = new Set(exported.map((e) => e.node));
+  const inline = sources.flatMap((p) => inlineActions(parse(p)).filter((f) => !seen.has(f.node))
+    .map((f) => ({ key: `${rel(p, base)}#${f.name}`, node: f.node })));
+  return [...exported, ...inline];
 }
 
 /* ---------- the cases ---------- */
@@ -473,6 +545,14 @@ describe("every logger call is unskippable (spec 4.2 item 5, review I3)", () => 
     const users = walk(SRC, isSource).filter((p) => calls(parse(p), "noteOpened").length + calls(parse(p), "noteOpenedApi").length > 0);
     expect(users.length).toBeGreaterThan(15);   // positive control: it checked the real callers
     expect(users.flatMap((p) => badLoggerCalls(parse(p))).map(short)).toEqual([]);
+  }, WHOLE_TREE);
+});
+
+describe("every logger call is handed its own guard's answer (final review M2)", () => {
+  it("noteOpened / noteOpenedApi's first argument is a const bound in the same function to a guard call's result, never a literal or a value from elsewhere (mutation: `noteOpened({ isAgency: false }, …)` on the call page -> FAILS naming the line)", () => {
+    const users = walk(SRC, isSource).filter((p) => calls(parse(p), "noteOpened").length + calls(parse(p), "noteOpenedApi").length > 0);
+    expect(users.length).toBeGreaterThan(15);   // positive control: it checked the real callers
+    expect(users.flatMap((p) => badLoggerArgs(parse(p))).map(short)).toEqual([]);
   }, WHOLE_TREE);
 });
 
@@ -665,5 +745,55 @@ describe("the walk itself (self-tests on a throwaway tree)", () => {
   });
   it("the guard-call check accepts no options, a literal object of literal values, and a typeof in a type", () => {
     expect(badGuardCalls(parse(join(base, "lib/guards/ok.ts")))).toEqual([]);
+  });
+});
+
+describe("the walk itself, final review M1 and M2 (self-tests on their own throwaway tree)", () => {
+  const base = mkdtempSync(join(tmpdir(), "access-log-routes-m-"));
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  const put = (f: string, body: string) => { mkdirSync(join(base, f, ".."), { recursive: true }); writeFileSync(join(base, f), body); };
+  const GIMPORT = "import { requireAccountAccess, apiAccountAccess } from \"@/lib/auth\";\n";
+  const NIMPORT = "import { noteOpened, noteOpenedApi } from \"@/lib/access-log/note\";\n";
+  const ITEM = "\"a\", { kind: \"call\", recordId: \"b\" }";
+
+  // M1: a guard-calling "use server" file OUTSIDE app/ and lib/, and an inline "use server" function anywhere.
+  put("components/x/guarded-actions.ts", `"use server";\n${GIMPORT}export async function act(a: string) { await requireAccountAccess(a); }\n`);
+  put("components/x/plain-actions.ts", "\"use server\";\nexport async function quiet() { return 1; }\n");
+  put("app/y/list/page.tsx", "async function inlineAct() { \"use server\"; return 1; }\n"
+    + "const held = async () => { \"use server\"; return 2; };\n"
+    + "export default function P() { return [inlineAct, held, async () => { \"use server\"; return 3; }]; }\n"
+    + "function notAnAction() { const s = \"use server\"; return s; }\nexport const x = notAnAction;\n");
+
+  it("a guard-calling \"use server\" file under components/ is enumerated, one that calls no guard outside the roots is not (M1)", () => {
+    const keys = actionKeys(base, ["lib/acts"]).map((k) => k.key);
+    expect(keys).toContain("components/x/guarded-actions.ts#act");
+    expect(keys).not.toContain("components/x/plain-actions.ts#quiet");
+  });
+  it("every function whose body starts with a \"use server\" directive is an action, named or not; a string that is not a directive is not (M1)", () => {
+    const keys = actionKeys(base, ["lib/acts"]).map((k) => k.key).filter((k) => k.startsWith("app/y/"));
+    expect(keys.sort()).toEqual(["app/y/list/page.tsx#<inline at line 3>", "app/y/list/page.tsx#held", "app/y/list/page.tsx#inlineAct"]);
+  });
+
+  // M2: the logger's first argument.
+  const M2_BAD: Record<string, string> = {
+    "literal.ts": `${NIMPORT}export async function f() { await noteOpened({ isAgency: false }, ${ITEM}); }\n`,
+    "held-literal.ts": `${NIMPORT}export async function f() { const access = { isAgency: false }; await noteOpened(access, ${ITEM}); }\n`,
+    "parameter.ts": `${NIMPORT}export async function f(access: { isAgency: boolean }) { await noteOpened(access, ${ITEM}); }\n`,
+    "let-bound.ts": `${GIMPORT}${NIMPORT}export async function f(a: string) { let access = await requireAccountAccess(a); access = { ...access, isAgency: false }; await noteOpened(access, ${ITEM}); }\n`,
+    "outer-function.ts": `${GIMPORT}${NIMPORT}export async function f(a: string) { const access = await requireAccountAccess(a); const inner = async () => { await noteOpened(access, ${ITEM}); }; await inner(); }\n`,
+    "shadowed.ts": `${GIMPORT}${NIMPORT}export async function f(a: string) { const access = await requireAccountAccess(a); { const access = { isAgency: false }; await noteOpened(access, ${ITEM}); } }\n`,
+    "spread.ts": `${GIMPORT}${NIMPORT}export async function f(a: string) { const access = await requireAccountAccess(a); await noteOpened({ ...access }, ${ITEM}); }\n`,
+    "api-literal.ts": `${NIMPORT}export async function f() { if (!(await noteOpenedApi({ isAgency: false }, ${ITEM}))) return 404; return 200; }\n`,
+    "not-a-guard.ts": `${NIMPORT}declare function lookAlike(a: string): Promise<{ isAgency: boolean }>;\nexport async function f(a: string) { const access = await lookAlike(a); await noteOpened(access, ${ITEM}); }\n`,
+  };
+  for (const [n, b] of Object.entries(M2_BAD)) put(`lib/args/${n}`, b);
+  put("lib/args/ok.ts", `${GIMPORT}${NIMPORT}export async function f(a: string) { const access = await requireAccountAccess(a); await noteOpened(access, ${ITEM}); }\n`
+    + `export async function g(a: string) { const access = await apiAccountAccess(a); if (!access) return 404; if (!(await noteOpenedApi(access, ${ITEM}))) return 404; return 200; }\n`);
+
+  it.each(Object.keys(M2_BAD))("the argument check refuses %s (M2)", (n) => {
+    expect(badLoggerArgs(parse(join(base, "lib/args", n))).length).toBeGreaterThan(0);
+  });
+  it("the argument check accepts a const bound to an awaited guard call in the same function, page and API shapes (M2)", () => {
+    expect(badLoggerArgs(parse(join(base, "lib/args/ok.ts")))).toEqual([]);
   });
 });
