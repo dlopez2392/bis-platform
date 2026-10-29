@@ -2463,3 +2463,202 @@ describe("contact archive copy, English and Spanish (plan Task 3, spec §6)", ()
     }
   });
 });
+
+describe("duplicates and merge copy, English and Spanish (F-006 plan Task 2)", () => {
+  const WANT: Record<string, string> = {
+    "contacts.duplicates.title": "Possible duplicates",
+    "contacts.duplicates.title.es": "Posibles duplicados",
+    "contacts.duplicates.link": "Possible duplicates",
+    "contacts.duplicates.link.es": "Posibles duplicados",
+    "contacts.duplicates.count": "{count} possible duplicates",
+    "contacts.duplicates.count.es": "{count} posibles duplicados",
+    "contacts.duplicates.countOne": "1 possible duplicate",
+    "contacts.duplicates.countOne.es": "1 posible duplicado",
+    "contacts.duplicates.banner": "May be the same person as {name} · {reason}",
+    "contacts.duplicates.banner.es": "Puede ser la misma persona que {name} · {reason}",
+    "contacts.duplicates.bannerMore": "and {count} more",
+    "contacts.duplicates.bannerMore.es": "y {count} más",
+    "contacts.duplicates.bannerMoreOne": "and 1 more",
+    "contacts.duplicates.bannerMoreOne.es": "y 1 más",
+    "contacts.duplicates.compare": "Compare",
+    "contacts.duplicates.compare.es": "Comparar",
+    "contacts.duplicates.reason.samePhone": "same phone number",
+    "contacts.duplicates.reason.samePhone.es": "mismo número de teléfono",
+    "contacts.duplicates.reason.sameDigits": "same phone digits, saved as a US and a Mexican number",
+    "contacts.duplicates.reason.sameDigits.es": "mismos dígitos, guardados como número de EE. UU. y de México",
+    "contacts.duplicates.reason.sameEmail": "same email",
+    "contacts.duplicates.reason.sameEmail.es": "mismo correo",
+    "contacts.duplicates.reason.sameName": "same name",
+    "contacts.duplicates.reason.sameName.es": "mismo nombre",
+    "contacts.duplicates.reason.other": "found when a record was saved",
+    "contacts.duplicates.reason.other.es": "se detectó al guardar un registro",
+    "contacts.duplicates.foundOn": "Found {date}",
+    "contacts.duplicates.foundOn.es": "Detectado el {date}",
+    "contacts.duplicates.emptyTitle": "No possible duplicates",
+    "contacts.duplicates.emptyTitle.es": "No hay posibles duplicados",
+    "contacts.duplicates.emptyBody":
+      "When two records look like the same customer (same phone, email or name), they show up here so you can merge them.",
+    "contacts.duplicates.emptyBody.es":
+      "Cuando dos registros parecen ser el mismo cliente (mismo teléfono, correo o nombre), aparecen aquí para que los una.",
+    "contacts.duplicates.listFailed": "Couldn't load possible duplicates. Try again.",
+    "contacts.duplicates.listFailed.es": "No se pudieron cargar los posibles duplicados. Intente de nuevo.",
+    "contacts.duplicates.notSame": "Not the same person",
+    "contacts.duplicates.notSame.es": "No es la misma persona",
+    "contacts.duplicates.dismissed": "Got it. We won't suggest these two again.",
+    "contacts.duplicates.dismissed.es": "Entendido. No volveremos a sugerir estos dos.",
+    "contacts.duplicates.dismissFailed": "Couldn't save that. Nothing changed. Try again.",
+    "contacts.duplicates.dismissFailed.es": "No se pudo guardar. No cambió nada. Intente de nuevo.",
+    "contacts.duplicates.next": "Next",
+    "contacts.duplicates.next.es": "Siguiente",
+    "contacts.duplicates.first": "Back to the start",
+    "contacts.duplicates.first.es": "Volver al principio",
+    "work.duplicates": "{count} possible duplicate customers to check",
+    "work.duplicates.es": "{count} posibles clientes duplicados por revisar",
+    "work.duplicatesOne": "1 possible duplicate customer to check",
+    "work.duplicatesOne.es": "1 posible cliente duplicado por revisar",
+    "contacts.merge.title": "Merge two records",
+    "contacts.merge.title.es": "Unir dos registros",
+    "contacts.merge.keep": "Keep this one",
+    "contacts.merge.keep.es": "Conservar este",
+    "contacts.merge.swap": "Keep this one instead",
+    "contacts.merge.swap.es": "Mejor conservar este",
+    "contacts.merge.joins": "Joins the one you keep",
+    "contacts.merge.joins.es": "Se une al que conserva",
+    "contacts.merge.pick": "The two records don't agree on the {field}. Which one do we keep?",
+    "contacts.merge.pick.es": "Los dos registros no coinciden en {field}. ¿Cuál conservamos?",
+    "contacts.merge.field.firstName": "first name",
+    "contacts.merge.field.firstName.es": "el nombre",
+    "contacts.merge.field.lastName": "last name",
+    "contacts.merge.field.lastName.es": "el apellido",
+    "contacts.merge.field.email": "email",
+    "contacts.merge.field.email.es": "el correo",
+    "contacts.merge.field.phone": "phone number",
+    "contacts.merge.field.phone.es": "el teléfono",
+    "contacts.merge.field.assignedTo": "person it's assigned to",
+    "contacts.merge.field.assignedTo.es": "la persona asignada",
+    "contacts.merge.field.language": "language",
+    "contacts.merge.field.language.es": "el idioma",
+    "contacts.merge.field.custom": "“{label}” field",
+    "contacts.merge.field.custom.es": "campo “{label}”",
+    "contacts.merge.alsoKeeps": "Also keeps: {list}",
+    "contacts.merge.alsoKeeps.es": "También conserva: {list}",
+    "contacts.merge.otherNumber": "Calls and texts from {phone} will still reach {name}.",
+    "contacts.merge.otherNumber.es": "Las llamadas y los mensajes de {phone} seguirán llegando a {name}.",
+    "contacts.merge.otherEmail": "Email from {email} will still reach {name}.",
+    "contacts.merge.otherEmail.es": "Los correos de {email} seguirán llegando a {name}.",
+    "contacts.merge.moves": "Moves to {name}: {list}",
+    "contacts.merge.moves.es": "Pasan a {name}: {list}",
+    "contacts.merge.nothingMoves": "{name} has no history to move.",
+    "contacts.merge.nothingMoves.es": "{name} no tiene historial que pasar.",
+    "contacts.merge.count.messages": "{count} messages",
+    "contacts.merge.count.messages.es": "{count} mensajes",
+    "contacts.merge.count.messagesOne": "1 message",
+    "contacts.merge.count.messagesOne.es": "1 mensaje",
+    "contacts.merge.count.calls": "{count} calls",
+    "contacts.merge.count.calls.es": "{count} llamadas",
+    "contacts.merge.count.callsOne": "1 call",
+    "contacts.merge.count.callsOne.es": "1 llamada",
+    "contacts.merge.count.bookings": "{count} appointments",
+    "contacts.merge.count.bookings.es": "{count} citas",
+    "contacts.merge.count.bookingsOne": "1 appointment",
+    "contacts.merge.count.bookingsOne.es": "1 cita",
+    "contacts.merge.count.documents": "{count} files",
+    "contacts.merge.count.documents.es": "{count} archivos",
+    "contacts.merge.count.documentsOne": "1 file",
+    "contacts.merge.count.documentsOne.es": "1 archivo",
+    "contacts.merge.count.opportunities": "{count} deals",
+    "contacts.merge.count.opportunities.es": "{count} oportunidades",
+    "contacts.merge.count.opportunitiesOne": "1 deal",
+    "contacts.merge.count.opportunitiesOne.es": "1 oportunidad",
+    "contacts.merge.count.notes": "{count} notes",
+    "contacts.merge.count.notes.es": "{count} notas",
+    "contacts.merge.count.notesOne": "1 note",
+    "contacts.merge.count.notesOne.es": "1 nota",
+    "contacts.merge.count.tasks": "{count} to-dos",
+    "contacts.merge.count.tasks.es": "{count} pendientes",
+    "contacts.merge.count.tasksOne": "1 to-do",
+    "contacts.merge.count.tasksOne.es": "1 pendiente",
+    "contacts.merge.count.form_submissions": "{count} form answers",
+    "contacts.merge.count.form_submissions.es": "{count} respuestas de formulario",
+    "contacts.merge.count.form_submissionsOne": "1 form answer",
+    "contacts.merge.count.form_submissionsOne.es": "1 respuesta de formulario",
+    "contacts.merge.action": "Merge",
+    "contacts.merge.action.es": "Unir",
+    "contacts.merge.done": "Merged into {name}",
+    "contacts.merge.done.es": "Se unió con {name}",
+    "contacts.merge.stale": "One of these records changed while you were looking. Here it is again with the new details.",
+    "contacts.merge.stale.es": "Uno de estos registros cambió mientras lo revisaba. Aquí está de nuevo con los datos nuevos.",
+    "contacts.merge.failed": "Couldn't merge. Nothing changed. Try again.",
+    "contacts.merge.failed.es": "No se pudo unir. No cambió nada. Intente de nuevo.",
+    "contacts.merge.loadFailed": "Couldn't load these two records. Try again.",
+    "contacts.merge.loadFailed.es": "No se pudieron cargar estos dos registros. Intente de nuevo.",
+    "contacts.merge.undone": "Merge undone. {name} is back as their own record.",
+    "contacts.merge.undone.es": "Se deshizo la unión. {name} volvió a tener su propio registro.",
+    "contacts.merge.undoneKept": "{count} things that arrived after the merge stay with {name}.",
+    "contacts.merge.undoneKept.es": "{count} cosas que llegaron después de la unión se quedan con {name}.",
+    "contacts.merge.undoneKeptOne": "1 thing that arrived after the merge stays with {name}.",
+    "contacts.merge.undoneKeptOne.es": "1 cosa que llegó después de la unión se queda con {name}.",
+    "contacts.merge.undoneEdits": "Kept what was changed after the merge: {list}.",
+    "contacts.merge.undoneEdits.es": "Se conservó lo que se cambió después de la unión: {list}.",
+    "contacts.merge.undoExpired": "This merge is more than 30 days old and can't be undone.",
+    "contacts.merge.undoExpired.es": "Esta unión tiene más de 30 días y ya no se puede deshacer.",
+    "contacts.merge.undoLater":
+      "This merge can't be undone yet: {name} was merged again since. Undo the newer merge first.",
+    "contacts.merge.undoLater.es":
+      "Esta unión todavía no se puede deshacer: {name} se volvió a unir después. Deshaga primero la unión más reciente.",
+    "contacts.merge.undoFailed": "Couldn't undo the merge. Nothing changed. Try again.",
+    "contacts.merge.undoFailed.es": "No se pudo deshacer la unión. No cambió nada. Intente de nuevo.",
+    "timeline.merged": "merged {name} into this record: {list} moved here",
+    "timeline.merged.es": "unió a {name} con este registro: {list} pasaron aquí",
+    "timeline.mergedEmpty": "merged {name} into this record",
+    "timeline.mergedEmpty.es": "unió a {name} con este registro",
+    "timeline.mergeUndone": "undid the merge with {name}",
+    "timeline.mergeUndone.es": "deshizo la unión con {name}",
+    "timeline.undoMerge": "Undo merge",
+    "timeline.undoMerge.es": "Deshacer unión",
+    "timeline.mergeOtherHidden": "another record",
+    "timeline.mergeOtherHidden.es": "otro registro",
+    "timeline.what.merge": "merge history",
+    "timeline.what.merge.es": "historial de uniones",
+  };
+
+  it("has every key with exactly this text (mutation: write 'Une' into contacts.merge.action.es → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("every English key has its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'Vuelve' in contacts.merge.failed.es → FAILS)", () => {
+    const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(WANT[k]!), k).toBe(false);
+      const en = WANT[k.slice(0, -3)]!;
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(WANT[k]!), k).toEqual(ph(en));
+    }
+  });
+
+  // The toast's own Undo action is common.undo ("Undo") — these new strings describe the merge
+  // and its reversal in prose, never re-mint that button as a word dropped mid-sentence (which
+  // would read as a stray capital). A short label naming a SPECIFIC action ("Undo merge", the
+  // timeline row's own link once the toast is long gone) or a sentence-initial imperative
+  // ("Undo the newer merge first.") are both fine; "Undo" is only wrong capitalized after a
+  // lower-case word with no sentence break before it.
+  it("no copy says 'survivor', 'loser', draws an arrow, leaks template syntax, or drops a stray capitalized 'Undo' mid-sentence (mutation: write 'you can Undo this' into contacts.merge.undone → FAILS)", () => {
+    const MIDSENTENCE_UNDO = /[a-z,:]\s+Undo\b/;
+    for (const [k, v] of Object.entries(WANT)) {
+      expect(v.includes("survivor"), k).toBe(false);
+      expect(v.includes("loser"), k).toBe(false);
+      expect(v.includes("→"), k).toBe(false);
+      expect(v.includes("{{"), k).toBe(false);
+      expect(MIDSENTENCE_UNDO.test(v), k).toBe(false);
+    }
+  });
+});
