@@ -1,8 +1,9 @@
 # Duplicates found the Valley way, and a merge that keeps everything (F-006 part 1, with S-12): design
 
 Date: 2026-10-29. Author: bis-crm. Base: `1f565f60` (branch `feat/dedupe-merge`).
-Status: design for review. Nothing here is built yet. Migration number: **0106** (0105 is reserved by the
-F-118 access-log lane; it is not used here).
+Status: design; the owner ruled on every OWNER decision on 2026-10-29 (§13); corrections made while planning are in
+§14; plan: `docs/superpowers/plans/2026-10-29-dedupe-merge.md`. Nothing here is built yet. Migration number: **0106**
+(0105 is reserved by the F-118 access-log lane; it is not used here, and 0106 reaches bis-ci only after 0105).
 
 Every claim about current code cites `path:line` at `1f565f60`. Paths below shorten
 `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/` to `ACCT/` and `packages/db/supabase/migrations/`
@@ -46,21 +47,21 @@ and Mexican numbers, merged without losing history". S-12 is "Merge with history
 
 ## 2. Decisions, each with a recommendation
 
-Each decision marked **OWNER** needs the owner's ruling. The rest are recommended by this spec and can be
-changed in review. Section 13 lists the OWNER ones again, with their questions.
+Each decision marked **OWNER** needed the owner's ruling; the owner ruled on all six on 2026-10-29, each as
+recommended (section 13 records the rulings). The rest are recommended by this spec and can be changed in review.
 
 | # | Decision | Recommendation | Who |
 |---|---|---|---|
 | D1 | What counts as a likely duplicate in part 1 | Same phone (any +1 / +52 / legacy Mexican form of the same ten digits), same email key, or same name (accents and case folded, first name + first surname). Sections 3.1-3.3 | review |
-| D2 | Ship same-name-only suggestions in part 1? | **Yes**, labelled "Same name" and listed after phone and email pairs, with a strict key (a last name is required) | **OWNER** |
+| D2 | Ship same-name-only suggestions in part 1? | **Yes**, labelled "Same name" and listed after phone and email pairs, with a strict key (a last name is required) | **OWNER: ruled yes, 2026-10-29** |
 | D3 | Where suggestions show | A line under the record header, a "Possible duplicates" view of the contact list, one count row in To do. No new top-level surface. Section 6 | review |
-| D4 | Which record survives | The older record by default, with "Keep this one instead". Section 5.1 | **OWNER** |
+| D4 | Which record survives | The older record by default, with "Keep this one instead". Section 5.1 | **OWNER: ruled as recommended, 2026-10-29** |
 | D5 | Field choices | Rules for most fields, and a choice only where both records hold different values. Section 5.2 | review |
 | D6 | Reversible or destructive | **Reversible.** It runs at once with Undo (rule 6), because the losing record stays as a hidden pointer and every moved row is logged. Section 4 | review |
-| D7 | How long Undo lasts | The toast, then "Undo merge" on the timeline row for **30 days** | **OWNER** |
-| D8 | A number or email the merge did not keep | It still reaches the kept record: a call or text from it lands there | **OWNER** |
-| D9 | Who may merge | Owners, Staff and the agency. Technicians may not | **OWNER** |
-| D10 | Ship before S-04 (`record_changes`)? | **Yes.** The merge's own log holds every value it overwrote. When S-04 lands, the merge also writes S-04's rows | **OWNER** |
+| D7 | How long Undo lasts | The toast, then "Undo merge" on the timeline row for **30 days** | **OWNER: ruled 30 days, 2026-10-29** |
+| D8 | A number or email the merge did not keep | It still reaches the kept record: a call or text from it lands there | **OWNER: ruled as recommended, 2026-10-29** |
+| D9 | Who may merge | Owners, Staff and the agency. Technicians may not | **OWNER: ruled as recommended, 2026-10-29** |
+| D10 | Ship before S-04 (`record_changes`)? | **Yes.** The merge's own log holds every value it overwrote. When S-04 lands, the merge also writes S-04's rows | **OWNER: ruled yes, 2026-10-29; the roadmap order changes (§13)** |
 | D11 | "Not the same person" | Stored on the pair and never suggested again, with Undo | review |
 
 ---
@@ -773,19 +774,75 @@ merge the app PR. If 0105 slips, 0106 waits for it. Renumbering is the other opt
 
 ---
 
-## 13. Decisions for the owner
+## 13. Decisions for the owner: RULED 2026-10-29
 
-1. **D2: Show "same name" pairs in part 1?** Recommendation: yes, labelled "Same name", listed after phone and
-   email pairs, keyed on first name + first surname, with a last name required and placeholder names excluded.
-   The other choice is phone and email only, which drops the two-surname half of F-006's promise until later.
-2. **D4: Which record is kept by default?** Recommendation: the older one, with "Keep this one instead" on the
-   compare screen.
-3. **D7: How long can a merge be undone?** Recommendation: 30 days, from the toast and then from the timeline row.
-   After that the merge stays, with its full log.
-4. **D8: The phone or email the merge did not keep.** Recommendation: it still reaches the kept record (calls,
-   texts and mail from it file there), because the merged-away record stays as a hidden pointer. The other
-   choice, forgetting it, would turn the next call from that number into a brand-new "Caller".
-5. **D9: Who may merge?** Recommendation: Owners, Staff and the agency, as for archive. Not Technicians.
-6. **D10: Ship before S-04's change log?** Recommendation: yes. The merge's own log records every overwritten
-   value and every moved row; when S-04 lands, the merge writes S-04's rows too. This changes the roadmap's
-   stated order (`docs/crm-features.md:1404-1406`: S-04 before S-12), so it is the owner's call.
+The owner ruled on all six on 2026-10-29, each as recommended. These rulings are binding on the plan.
+
+1. **D2: Show "same name" pairs in part 1?** **Ruled: yes.** Labelled "Same name", listed after phone and email
+   pairs, keyed on first name + first surname, a last name required, placeholder names excluded, and dismissable
+   for good ("Not the same person", D11).
+2. **D4: Which record is kept by default?** **Ruled: the older one** (`created_at`, then `id`), with "Keep this one
+   instead" on the compare screen. (The orchestrator accepted this spec's recommendation.)
+3. **D7: How long can a merge be undone?** **Ruled: 30 days**, from the toast and then from the merge row on the
+   timeline. After that the merge stays, with its full log.
+4. **D8: The phone or email the merge did not keep.** **Ruled: it still routes calls, texts and mail to the kept
+   customer**, because the merged-away record stays as a hidden pointer that every lookup follows.
+5. **D9: Who may merge?** **Ruled: Owners, Staff and BIS (the agency). Not Technicians.** The same people dismiss a
+   pair and undo a merge.
+6. **D10: Ship before S-04's change log?** **Ruled: yes, merge ships BEFORE S-04.** The merge's own log records every
+   overwritten value and every moved row; when S-04 lands, the merge also writes S-04's rows. **The roadmap order
+   changes:** `docs/crm-features.md:1404-1406` lists S-04 before S-12 and makes S-12 and F-006 depend on S-04. After
+   this ruling S-12 depends on nothing, F-006 on S-12, and S-04's row gains "when it lands, the merge also writes
+   one change row per overwritten field". The orchestrator lands that edit (plan checklist step 12).
+
+## 14. Corrections made while planning (2026-10-29)
+
+The plan (`docs/superpowers/plans/2026-10-29-dedupe-merge.md`, "Corrections to the spec") carries each with its
+evidence. The ones that change this design:
+
+1. **4.3:** `contact_duplicate_flags_pair` leads on `account_id`, not `contact_a` (`MIG/0033:65-66`). 0106 indexes
+   `contact_a`, `contact_b` and `tasks(contact_id)`; `contact-archive-schema.test.ts:643`'s list becomes empty.
+2. **4.3:** the client keeps INSERT on the flag table's four columns (`account_id`, `contact_a`, `contact_b`,
+   `reason`): `createContact`, `updateContact`, `setContactPhoneCountry` and `flagMatchesOf` insert on the request
+   client, and two of them throw on a refusal. UPDATE and DELETE go; dismissal and `merge_id` are definer-only.
+   The client-write digest moves 52 to 49.
+3. **3.3 and 4.6:** a stored generated column runs its function as the writing role (proven on PG18: `permission
+   denied for function`), so the key functions keep EXECUTE for `authenticated` and `service_role` and never call
+   the service-only `app.group_ws()`. `search_path` is `pg_catalog, pg_temp` (the 0096 rule), not `''`.
+4. **3.3:** the name key never calls `lower()` (nor `.toLowerCase()` in the twin): one `translate()` maps A to Z and
+   the accented letters, then everything outside `[a-z0-9 ]` is dropped.
+5. **4.4 and 4.5:** the refusals are `already_merged` and `already_undone` (`merged` and `undone` were also the
+   success statuses).
+6. **3.5:** the trigger files a pair before the TypeScript writers run, so pairs both find carry the trigger's reason;
+   about fifteen pinned live assertions move. The writers stay for their `flagged` answers and for
+   `email_phone_conflict`.
+7. **4.2 and 7.1 (D8):** email replies reach a thread only by its `reply_token` (`MIG/0082:51-56`).
+   `contact_merges.other_reply_token` records the removed thread's token and `findReplyThread` falls back to it.
+8. **5.3:** threads always combine into a kept thread, made by the merge when the kept record has none; the other
+   thread is never re-pointed.
+9. **4.2 and 4.3:** `contact_merges`' contact keys are ON DELETE CASCADE (like `contact_archive_log`); a merge not
+   undone blocks delete through `merges`; `contact_duplicate_flags.merge_id` is ON DELETE SET NULL.
+10. **4.7:** `ai_contact_held_by`'s new reason is `contact_merges`, the table name, the house shape.
+11. **6.4:** consent is not a timeline source; the kept timeline shows the tombstone's AI acts, suggestions and archive
+    history, not its consent rows.
+12. **7.2:** `follow_merge` also skips `contact_duplicate_flags`, `contact_archive_log` and `record_summaries`, and is
+    two static trigger functions rather than one with `TG_ARGV`.
+13. **6.4:** the compare screen's counts come from `contact_merge_preview` (SQL, invoker), sharing the merge's table
+    list; no new TypeScript `messages` reader.
+14. **6.2:** the duplicates list, its total and the record's line read through invoker SQL functions
+    (`app.open_duplicate_pairs` and three public ones), because PostgREST cannot express the household and
+    relationship filters; the open index includes `strength`.
+15. **4.2:** `contact_merges.moved_counts` holds the counts the timeline reads; `moved` keeps the ids for Undo only.
+16. **10:** "Compare" and "Undo" are controls, not words inside a sentence; keys are added for counts, field nouns,
+    failures and a hidden other record.
+17. **Assumptions verified:** a file's storage path names no contact (`MIG/0077:102`); no job handler carries a
+    contact (`lib/automations/jobs/registry.ts:8-10`); `contacts.dnd` is dead (`automations.ts:1402`), so its rule is
+    "the kept record's unless empty".
+18. **Not in the spec:** reactivation's held release (`getDueReactivationById`) would send to the merged-away address;
+    it now answers `gone` for a tombstone.
+19. **4.4:** `p_seen` carries `updated_at` exactly as PostgREST returned it; a JavaScript `Date` drops microseconds.
+20. **4.4, 4.5, 8:** the who-check lives in one function, `app.may_merge`, with 0103's two coalesces.
+21. **4.7:** `EXPECTED_DEFINERS` goes 29 to 36 (0104 and 0105 add none).
+22. **4.6:** production held 53 contacts and 0 flags on 2026-10-29: no 100,000-row timing and no off-peak rule;
+    `lock_timeout` stays.
+23. **3.1 and 3.3:** the twins live in one import-free `packages/db/src/dedupe-keys.ts` (`@bis/db/dedupe-keys`).
