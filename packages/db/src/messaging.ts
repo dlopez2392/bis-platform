@@ -6,6 +6,9 @@ import { withAssigneeOn } from "./contacts";
 import { messageAuthor, type AuthorKind } from "./provenance";
 import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 import { WEBCHAT_ACTOR_ID, type PlannedWebchatRow } from "./webchat-plan";
+// 0106 (F-006, Task 7): a miss on a contact's own thread is followed through a merge pointer before
+// anything is created — see ensureConversation below.
+import { followMerge } from "./contact-merge";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -118,15 +121,15 @@ const STATUS_RANK: Record<MessageStatus, number> = {
   failed: 4,
 };
 
-export async function ensureConversation(
-  db: SupabaseClient, accountId: string, contactId: string, actorId: string,
-  actorType: ActorType = "user",
+/**
+ * The insert-or-reselect half of `ensureConversation`, against whichever contact id the caller has
+ * already decided is the TARGET (0106, Task 7: that is `followMerge`'s own answer, never the id a
+ * caller first asked with) — pulled out so the merge-pointer follow below runs it once, against the
+ * resolved id, rather than a second hand-copied block that could drift from this one.
+ */
+async function insertOrReselectConversation(
+  db: SupabaseClient, accountId: string, contactId: string, actorId: string, actorType: ActorType,
 ): Promise<{ id: string; created: boolean }> {
-  const { data: existing, error: findErr } = await db.from("conversations")
-    .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
-  if (findErr) throw new Error(`conversation lookup failed: ${findErr.message}`);
-  if (existing) return { id: existing.id, created: false };
-
   // Plain insert, not upsert: PostgREST's upsert response can't distinguish
   // "I inserted" from "I updated on conflict", so two callers racing past the
   // lookup above would both get created: true and both emit
@@ -155,6 +158,32 @@ export async function ensureConversation(
     throw new Error(`conversation re-select after conflict failed: ${reselectErr?.message}`);
   }
   return { id: winner.id, created: false };
+}
+
+export async function ensureConversation(
+  db: SupabaseClient, accountId: string, contactId: string, actorId: string,
+  actorType: ActorType = "user",
+): Promise<{ id: string; created: boolean }> {
+  const { data: existing, error: findErr } = await db.from("conversations")
+    .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (findErr) throw new Error(`conversation lookup failed: ${findErr.message}`);
+  if (existing) return { id: existing.id, created: false };
+
+  // 0106 (F-006, owner ruling D8; plan correction 8): `contactId` missed its own thread — before
+  // creating one, follow it through the merge pointer, so a tombstone never gets a thread of its own,
+  // not even for an instant. The hot path above (a contact that already has its own thread) returns
+  // before this line ever runs, so it pays no extra read for a pointer it does not need to follow.
+  const target = await followMerge(db, accountId, contactId);
+  if (target !== contactId) {
+    // `contactId` is a tombstone pointing at `target` — the SAME find this function started with, now
+    // for the record the write actually lands on. A thread already there answers it directly; a miss
+    // falls through to the shared insert-or-reselect below, targeted at `target`, never `contactId`.
+    const { data: theirs, error: theirErr } = await db.from("conversations")
+      .select("id").eq("account_id", accountId).eq("contact_id", target).maybeSingle();
+    if (theirErr) throw new Error(`conversation lookup failed: ${theirErr.message}`);
+    if (theirs) return { id: theirs.id, created: false };
+  }
+  return insertOrReselectConversation(db, accountId, target, actorId, actorType);
 }
 
 export async function createMessage(
@@ -607,6 +636,26 @@ export async function incrementUnreadCount(
   const { error } = await db.rpc("increment_conversation_unread", {
     p_account_id: accountId, p_conversation_id: conversationId });
   if (error) throw new Error(`incrementUnreadCount failed: ${error.message}`);
+}
+
+/**
+ * 0106 (F-006, Task 7; plan review m7): the unread bump for ONE message, read fresh at bump time rather
+ * than carried as the conversation id a caller resolved earlier. A merge between an inbound write and its
+ * own unread bump (sms/inbound's route) can move the message onto the kept record's conversation — bumping
+ * the conversation the caller still remembers would be a silent no-op on a row the message no longer sits
+ * on. THROWS when the message itself cannot be found (mutation: return quietly instead — an unread count
+ * that should have moved just vanishes, with nothing anywhere to say so).
+ */
+export async function incrementUnreadForMessage(
+  db: SupabaseClient, accountId: string, messageId: string,
+): Promise<void> {
+  const { data, error } = await db.from("messages")
+    .select("conversation_id")
+    .eq("account_id", accountId).eq("id", messageId)
+    .maybeSingle();
+  if (error) throw new Error(`incrementUnreadForMessage failed: ${error.message}`);
+  if (!data) throw new Error(`incrementUnreadForMessage: no message ${messageId}`);
+  await incrementUnreadCount(db, accountId, (data as { conversation_id: string }).conversation_id);
 }
 
 export async function clearUnreadCount(

@@ -11,7 +11,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
  */
 const db = vi.hoisted(() => ({
   serviceDb: vi.fn(), getPhoneNumberByE164: vi.fn(), getAlertPhone: vi.fn(), findMessageByProviderId: vi.fn(),
-  createContact: vi.fn(), ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
+  createContact: vi.fn(), ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadForMessage: vi.fn(),
   applyConfirmationReply: vi.fn(), updateMessageStatusByProviderId: vi.fn(),
   appendConsentEventGuarded: vi.fn(), ensureConsentTask: vi.fn(), nextBookedStart: vi.fn(),
   readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(), readConsentHistory: vi.fn(),
@@ -127,7 +127,7 @@ describe("STOP: one confirmation, never two, none missing (spec §8)", () => {
     const res = await POST(text("STOP"));
     expect(res.status).toBe(200);
     expect(db.createMessage).not.toHaveBeenCalled();
-    expect(db.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(db.incrementUnreadForMessage).not.toHaveBeenCalled();
     expect(deferred).toHaveLength(0);
   });
 
@@ -275,7 +275,7 @@ describe("what answers 503 (plan G2)", () => {
     db.createContact.mockRejectedValue(new Error("createContact failed"));
     expect((await POST(text("STOP"))).status).toBe(503);
     db.createContact.mockResolvedValue({ id: "ct_1", existing: true, flagged: false });
-    db.incrementUnreadCount.mockRejectedValue(new Error("unread bump failed"));
+    db.incrementUnreadForMessage.mockRejectedValue(new Error("unread bump failed"));
     expect((await POST(text("see you Tuesday"))).status).toBe(200);
     expect(db.createMessage).toHaveBeenCalledTimes(1);
   });
