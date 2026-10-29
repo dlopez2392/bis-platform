@@ -94,7 +94,13 @@ test("a deep link meets the chooser, a reason returns it there, and the Owner re
 
   // 1. A new agency session: a fresh sign-in is a fresh Clerk session id, and
   // §3.3 ties a visit to the session that started it — this one has none yet.
-  const agencyCtx = await browser.newContext();
+  // `storageState: undefined` overrides the "chromium" project's own default
+  // (`playwright.config.ts`'s AUTH_FILE, the shared agency session every other
+  // spec in this project relies on) — without it, `browser.newContext()`
+  // inherits that same signed-in session, and clerk.signIn's own
+  // `SignIn.create()` refuses with "You're already signed in" because the
+  // page it runs on is not actually blank.
+  const agencyCtx = await browser.newContext({ storageState: undefined });
   try {
     const page = await agencyCtx.newPage();
     await clerkSetup();
