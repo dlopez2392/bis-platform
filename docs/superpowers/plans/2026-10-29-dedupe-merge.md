@@ -228,6 +228,8 @@ A bare factory exposes only what it lists; a module under test that newly calls 
 | `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts:36` | bare | `duplicatePairsOf`; a tombstone row from `getContact` | T11 |
 | `apps/web/src/lib/proposals/kinds/contact-field.test.ts:7` | partial | `followMerge` | T6 |
 | `apps/web/src/lib/ai-acts/actions.test.ts:39` | bare | `followMerge` | T6 |
+| `apps/web/src/lib/voice/finish-call.test.ts:1232` (`fakeContactDb`) | hand-built fake client reached through the real implementation | not a `@bis/db` module mock at all — `vi.importActual` runs the GENUINE `fillContactBlanksReport` against this hand-rolled query-builder object, which newly needs an `is()` method once that function's twin-check reads add `.is("merged_into", null)` | T4 |
+| `packages/db/src/test/assignee-filters.test.ts:255` (`fakeFlagMatchesOfDb`) | hand-built fake client reached through the real implementation | same shape: the real `flagMatchesOf` is run against this scripted client, whose candidate-read chain newly needs `is()` once that read adds `.is("merged_into", null)` | T4 |
 
 ### The second-account rule
 
@@ -1942,11 +1944,12 @@ git commit -m "feat(db): 0106 part B: merge two contacts with every row logged, 
 - Create: `packages/db/src/contacts-merge-resolve.test.ts` (pure)
 - Create: `packages/db/src/test/contact-merge-lookups-live.test.ts` (CI)
 - Modify (pins, correction 6): `packages/db/src/test/contacts.test.ts`, `test/contacts-phone-live.test.ts`, `test/contact-import.test.ts`, `test/assignee-filters.test.ts`
+- Modify (hand-built fake client, newly needs `is()`): `apps/web/src/lib/voice/finish-call.test.ts` (`fakeContactDb`), `packages/db/src/test/assignee-filters.test.ts` (`fakeFlagMatchesOfDb`, same file as the pin above — one edit, not two)
 
 **Interfaces:** Consumes T1's columns. Produces `COLS` with `merged_into` and `"merges"` in `DELETE_BLOCK_REASONS`. Exports nothing new (the barrel is T5's this wave).
 
 - [ ] **Step 1: Pure failing tests.** Create `contacts-merge-resolve.test.ts` with a `recordingDb` copied from `packages/db/src/contacts-archive.test.ts` (read it: it records every call per query and answers per table). Cases:
-  - `listContacts` and `countContacts`, for `archived` `"exclude"` AND `"only"`, each issue `is("merged_into", null)` (mutation: drop it from one branch of `withArchived` → that branch's case FAILS).
+  - `listContacts` and `countContacts`, for `archived` `"exclude"` AND `"only"`, each issue `is("merged_into", null)` (mutation: drop it — `withArchived` applies it once, after the ternary, to both branches alike — → both cases FAIL).
   - `findDuplicate` through `createContact`: the email read answers `[{ id: "T", merged_into: "K" }]` → `createContact` returns `{ id: "K", existing: true }` (mutation: drop the resolve → `T`).
   - an email match on T (→ K) and a phone match on K is NOT a conflict: no `email_phone_conflict` insert is recorded (mutation: compare before resolving → the insert is recorded).
   - `flagDuplicatesAfterWrite` (through `updateContact`) and `setContactPhoneCountry`'s twin read each issue `is("merged_into", null)`; so does `flagMatchesOf`'s candidate read.

@@ -81,6 +81,13 @@ describe("contact-merge.ts's wrappers end to end (CI only: withTestAccount + ser
         expect(await followMerge(db, accountId, a1)).toBe(a1);
         expect(await mergedIdsOf(db, accountId, a1)).toEqual([a2]);
 
+        // Second-account rule: account A's merge is invisible to account B's own scope, even when B's
+        // client is handed A's ids directly — the account_id filter, not the id alone, decides what a
+        // lookup can see. a2 (A's tombstone) does not exist under accountB, so it answers itself; a1 (A's
+        // kept record) has no row pointing at it under accountB either.
+        expect(await followMerge(dbB, accountB, a2)).toBe(a2);
+        expect(await mergedIdsOf(dbB, accountB, a1)).toEqual([]);
+
         // Undo, within the window, puts the pointer back.
         const undone = await undoContactMerge(db, accountId, outcome.mergeId, "user_test");
         expect(undone).toMatchObject({ status: "undone", otherId: a2 });

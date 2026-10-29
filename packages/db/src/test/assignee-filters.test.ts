@@ -254,7 +254,7 @@ function fakeFlagMatchesOfDb(opts: {
   let contactsCalls = 0;
   const chain = (result: unknown, terminal: "maybeSingle" | "limit") => {
     const c: any = {
-      select: () => c, eq: () => c, neq: () => c, or: () => c,
+      select: () => c, eq: () => c, neq: () => c, or: () => c, is: () => c,
       [terminal]: () => Promise.resolve(result),
     };
     return c;

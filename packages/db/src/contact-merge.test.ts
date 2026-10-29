@@ -93,6 +93,11 @@ describe("listDuplicatePairs: duplicate_pairs_page, a cursor passed through verb
     expect(coldLimit).toBeLessThanOrEqual(DUPLICATE_PAGE_MAX + 1);
   });
 
+  it("throws on a NaN limit rather than silently sending NaN over the wire (`??` only replaces null/undefined, never NaN; JSON would otherwise have turned it into a silent `null`; mutation: let it fall through to Math.min/Math.max -> FAILS)", async () => {
+    const { db } = fakeDb({ rpc: { duplicate_pairs_page: { data: [], error: null } } });
+    await expect(listDuplicatePairs(db, "acct-1", { limit: NaN })).rejects.toThrow(/NaN/);
+  });
+
   it("throws on an RPC error", async () => {
     const { db } = fakeDb({ rpc: { duplicate_pairs_page: { data: null, error: { message: "boom" } } } });
     await expect(listDuplicatePairs(db, "acct-1")).rejects.toThrow("listDuplicatePairs failed: boom");
@@ -202,6 +207,14 @@ describe("mergeContacts: sends p_choices, p_seen and p_actor (null when absent);
       .rejects.toThrow();
   });
 
+  it("throws when a moved count is not a number — \"an object\" alone let a non-numeric count through silently (mutation: drop the per-value number check -> FAILS)", async () => {
+    const { db } = fakeDb({
+      rpc: { merge_contacts: { data: { status: "merged", mergeId: 1, moved: { messages: "2" } }, error: null } },
+    });
+    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }))
+      .rejects.toThrow();
+  });
+
   it("throws on an RPC error", async () => {
     const { db } = fakeDb({ rpc: { merge_contacts: { data: null, error: { message: "boom" } } } });
     await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }))
@@ -286,6 +299,12 @@ describe("contactMergePreview: every MERGE_COUNT_KEYS key, fields as objects, se
     await expect(contactMergePreview(db, "acct-1", "k1", "o1")).rejects.toThrow();
   });
 
+  it("throws when seen.other is malformed too, not only seen.keep (symmetry check)", async () => {
+    const broken = { ...okAnswer, seen: { keep: "a".repeat(32), other: "not-hex" } };
+    const { db } = fakeDb({ rpc: { contact_merge_preview: { data: broken, error: null } } });
+    await expect(contactMergePreview(db, "acct-1", "k1", "o1")).rejects.toThrow();
+  });
+
   it("throws when fields.other is missing", async () => {
     const broken = { ...okAnswer, fields: { keep: { first_name: "Ana" } } };
     const { db } = fakeDb({ rpc: { contact_merge_preview: { data: broken, error: null } } });
@@ -329,6 +348,12 @@ describe("mergedIdsOf: contacts filtered by merged_into AND account_id", () => {
     expect(result).toEqual(["t1", "t2"]);
     expect(hasFrom(fromCalls, "contacts", "eq", "account_id", "acct-1")).toBe(true);
     expect(hasFrom(fromCalls, "contacts", "eq", "merged_into", "keep-1")).toBe(true);
+  });
+
+  it("caps the read at 1000 rows — 0106 flattens chains to one hop, but a corrupt or adversarial account should never make this read unbounded (mutation: drop the .limit(1000) call -> FAILS)", async () => {
+    const { db, fromCalls } = fakeDb({ from: { contacts: { data: [], error: null } } });
+    await mergedIdsOf(db, "acct-1", "keep-1");
+    expect(hasFrom(fromCalls, "contacts", "limit", 1000)).toBe(true);
   });
 
   it("returns an empty array when there are no tombstones", async () => {

@@ -47,6 +47,22 @@ describe("createContact's dedupe follows a real tombstone to the record it point
       const again = await createContact(db, accountId, { firstName: "Again", phone: "+19565550402" }, "user_test");
       expect(again).toEqual({ id: kept.id, existing: true, flagged: false });
     }));
+
+  it("a SECOND account's contact holding the tombstone's own email is never confused with A's tombstone: A still resolves to A's kept record (mutation: drop the account_id filter from findDuplicate's email read -> B's contact answers instead, FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const kept = await createContact(db, accountA, { firstName: "Kept" }, "user_test");
+        const tomb = await createContact(db, accountA, { firstName: "Tomb", email: "shared-tomb@example.com" }, "user_test");
+        await makeTombstone(db, accountA, tomb.id, kept.id);
+        // Account B's contact shares the TOMBSTONE's own email — the tombstone keeps it (owner ruling D8) —
+        // so a filter scoped wrong (across accounts) would hand A's answer to B's row.
+        const inB = await createContact(dbB, accountB, { firstName: "InB", email: "shared-tomb@example.com" }, "user_test");
+
+        const again = await createContact(db, accountA, { firstName: "Again", email: "shared-tomb@example.com" }, "user_test");
+        expect(again).toEqual({ id: kept.id, existing: true, flagged: false });
+        expect(again.id).not.toBe(inB.id);
+      });
+    }));
 });
 
 describe("applyImportBatch's match index follows a real tombstone too", () => {
@@ -65,6 +81,22 @@ describe("applyImportBatch's match index follows a real tombstone too", () => {
       expect(r).toEqual({ created: 0, updated: 1, flagged: 0 });
       const { data } = await db.from("contacts").select("last_name").eq("account_id", accountId).eq("id", kept.id).single();
       expect(data?.last_name).toBe("Updated");
+    }));
+
+  it("a SECOND account's match index maps the same email to ITS OWN contact, never across to A's kept record (mutation: drop the account_id filter from buildMatchIndex's read -> B's index maps to A's kept id, FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const kept = await createContact(db, accountA, { firstName: "Kept" }, "user_test");
+        const tomb = await createContact(db, accountA, { firstName: "Tomb", email: "shared-import@example.com" }, "user_test");
+        await makeTombstone(db, accountA, tomb.id, kept.id);
+        const inB = await createContact(dbB, accountB, { firstName: "InB", email: "shared-import@example.com" }, "user_test");
+
+        const indexA = await buildMatchIndex(db, accountA);
+        expect(indexA.byEmail.get("shared-import@example.com")).toBe(kept.id);
+
+        const indexB = await buildMatchIndex(dbB, accountB);
+        expect(indexB.byEmail.get("shared-import@example.com")).toBe(inB.id);
+      });
     }));
 });
 

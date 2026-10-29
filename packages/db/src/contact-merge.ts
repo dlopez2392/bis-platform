@@ -40,6 +40,11 @@ function mapPairRow(row: RawPairRow): DuplicatePair {
 
 function clampLimit(limit: number | undefined): number {
   const n = limit ?? DUPLICATE_PAGE_MAX;
+  // `??` only replaces null/undefined, never NaN — a caller that passes NaN (a bad query-string parse,
+  // say) would otherwise fall straight through Math.trunc/max/min, every one of which answers NaN right
+  // back, and `JSON.stringify(NaN)` is `null`, so the RPC would silently receive no limit at all rather
+  // than the caller's mistake surfacing anywhere. Fails closed instead (review T4-fix).
+  if (Number.isNaN(n)) throw new Error("clampLimit: NaN is not a valid limit");
   return Math.min(Math.max(Math.trunc(n), 1), DUPLICATE_PAGE_MAX + 1);
 }
 
@@ -133,7 +138,12 @@ export async function mergeContacts(db: SupabaseClient, accountId: string, input
   });
   if (error) throw new Error(`mergeContacts failed: ${error.message}`);
   const r = data as { status?: unknown; mergeId?: unknown; moved?: unknown } | null;
-  if (r?.status === "merged" && typeof r.mergeId === "number" && typeof r.moved === "object" && r.moved !== null) {
+  if (
+    r?.status === "merged" && typeof r.mergeId === "number" && typeof r.moved === "object" && r.moved !== null
+    // "an object" alone let a non-numeric count through silently, read as a real per-table total by the
+    // timeline's counts phrase (mutation: drop this check -> a string count reaches the caller unflagged).
+    && Object.values(r.moved).every((v) => typeof v === "number")
+  ) {
     return { status: "merged", mergeId: r.mergeId, moved: r.moved as Record<string, number> };
   }
   const refusal = MERGE_REFUSALS.find((s) => s === r?.status);
@@ -238,7 +248,10 @@ export async function followMerge(db: SupabaseClient, accountId: string, contact
  *  (impossible in practice, since `merged_into` carries contacts' own account-scoped FK) can never widen
  *  what a caller on one account sees. */
 export async function mergedIdsOf(db: SupabaseClient, accountId: string, keepId: string): Promise<string[]> {
-  const { data, error } = await db.from("contacts").select("id").eq("account_id", accountId).eq("merged_into", keepId);
+  // 0106 flattens a chain of merges onto the record currently kept, so this is ordinarily a handful of
+  // rows — but a corrupt or adversarial account must never make an unbounded read (review T4-fix).
+  const { data, error } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).eq("merged_into", keepId).limit(1000);
   if (error) throw new Error(`mergedIdsOf failed: ${error.message}`);
   return ((data ?? []) as { id: string }[]).map((r) => r.id);
 }
