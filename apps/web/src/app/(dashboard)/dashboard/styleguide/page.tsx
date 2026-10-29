@@ -87,6 +87,7 @@ import "@/app/c/[publicId]/concierge.css";
 import { m, type MessageKey } from "@/lib/messages";
 import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
 import { TradePickerDemo } from "./trade-picker-demo";
+import { BisAccessDemo } from "./bis-access-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -1012,6 +1013,13 @@ export default async function StyleguidePage({
         <Section title={t(m, "styleguide.toasts", "en")} file="components/ui/sonner.tsx">
           <ToastDemo />
         </Section>
+
+        <section aria-labelledby="sg-bis-access" className="space-y-3">
+          <h2 id="sg-bis-access" className="text-sm font-medium">{m["accessLog.title"]}</h2>
+          {/* F-118 part 1: the chooser's reason tiles and the Owner's BIS access row, skeleton and
+              error state — "BIS access" / "Acceso de BIS" at the bottom of the Team page. */}
+          <BisAccessDemo />
+        </section>
 
         <Separator />
         <p className="max-w-prose text-xs text-muted-foreground">
