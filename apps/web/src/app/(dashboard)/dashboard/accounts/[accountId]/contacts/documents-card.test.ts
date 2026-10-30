@@ -143,6 +143,12 @@ describe("the Documents card (spec 4.1, 4.5)", () => {
     expect(render(ready([view()]))).not.toContain("data-documents-trash");
   });
 
+  it("a trashed row wraps instead of overflowing at phone width — Restore and Delete forever never force a sideways scroll in Spanish (CI phone-width.spec.ts; mutation: drop flex-wrap -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z" })]));
+    const liTag = /<li[^>]*data-document-trashed="t1"[^>]*>/.exec(html)![0];
+    expect(liTag).toMatch(/class="[^"]*\bflex-wrap\b/);
+  });
+
   it("empty: the spec's sentence and Upload; loading: skeleton rows, no spinner; error: the card's own sentence with Retry (rule 5, rule 7)", () => {
     const empty = render(ready([]));
     expect(renderedText(empty)).toContain(m["documents.empty.contact"]);
