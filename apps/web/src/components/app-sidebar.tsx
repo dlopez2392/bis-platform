@@ -38,7 +38,7 @@ import { useLocale } from "@/components/locale-provider";
 import { t } from "@/lib/i18n/t";
 // Conversations' unread badge and the footer's setup meter both read from
 // this one shared background fetch — see shell-data.tsx's own doc comment
-// for why the read lives in the [accountId] segment (via shell-actions.ts)
+// for why the read lives in the [accountId] segment (via lib/shell/snapshot.ts)
 // rather than this component's own layout ancestor, and for the
 // paired-state/derive-by-account-match shape that used to live here as two
 // separate effects before this task coalesced them into one.
@@ -485,7 +485,7 @@ export function AppSidebar({
               changed. Hidden at done === total too: a genuinely complete
               setup and the read's own failure fold both land here, and
               Setup leaving the nav on completion means this row IS its nav
-              presence — see shell-actions.ts. */}
+              presence — see lib/shell/snapshot.ts. */}
           {isAgency && base && setupProgress.done !== setupProgress.total ? (
             <SetupMeterLink
               base={base}

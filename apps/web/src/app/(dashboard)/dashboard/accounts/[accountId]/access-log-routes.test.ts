@@ -64,6 +64,8 @@ const NOT_A_RECORD: Record<string, string> = {
   [`${A}/dashboard/page.tsx`]: "totals",
   [`${A}/voice/knowledge/[version]/page.tsx`]: "the business's own facts, not a customer's",
   [`${API}/search/route.ts`]: "returns names like a list; opening a result opens a logged record",
+  // The agency refresh loop (2026-10-30): the shell's badges moved off a server action onto this GET.
+  [`${API}/shell/route.ts`]: "the shell's counts and status (a list read inside the visit); no record",
 };
 
 const RECORD_ACTIONS: Record<string, "noteOpened"> = {
@@ -141,7 +143,6 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
   ...each(`${A}/settings/document-requirements-actions.ts`, ["setRequiredDocumentCategoriesAction"], CFG),
   ...each(`${A}/settings/trade-actions.ts`, ["setTradeAction"], AG),
   ...each(`${A}/setup/actions.ts`, ["setSetupTickAction", "goLiveAction", "renameAccountAction"], AG),
-  ...each(`${A}/shell-actions.ts`, ["getShellSnapshot"], "the shell's counts and status; no record"),
   ...each(`${A}/tasks/actions.ts`, ["completeWorkTask", "reopenWorkTask", "dismissToTask", "closeOutBooking", "confirmStopFromTask",
     "notAStopFromTask", "undoHoldDecisionFromTask", "setTaskAssigneeAction"], W),
   ...each(`${A}/team/actions.ts`, ["inviteTeamMemberAction", "setTeamRoleAction", "setTeamLanguageAction", "removeTeamMemberAction",

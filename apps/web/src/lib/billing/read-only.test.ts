@@ -149,8 +149,6 @@ const ACCOUNT_ROOTS = ["app/(dashboard)/dashboard/accounts/[accountId]", "lib"];
 const READ_ONLY_ALLOWED: Record<string, string> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/billing/actions.ts#openBillingPortalAction":
     "the way to pay (spec flow 5): a Stripe Customer Portal session, no row written",
-  "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts#getShellSnapshot":
-    "the shell's background read on every in-account navigation (badge, meter, presence, status): reads only",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions.ts#getDocumentUrlAction":
     "opening a file: mints a 120-second signed read URL; writes nothing for a client (for the agency, one access-log row, F-118)",
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts#countContactDocumentsAction":
@@ -279,7 +277,6 @@ describe("the allow-list (plan G11, Task 7 Step 1)", () => {
     expect(files.length).toBeGreaterThanOrEqual(38);
     for (const f of [
       "app/(dashboard)/dashboard/accounts/[accountId]/billing/actions.ts",
-      "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts",
       "lib/ai-acts/actions.ts", "lib/proposals/actions.ts",
     ]) expect(files).toContain(f);
   });
@@ -313,7 +310,7 @@ describe("the allow-list (plan G11, Task 7 Step 1)", () => {
     expect(optOuts().inside).not.toContain(key);
   });
 
-  it("no allowed action revalidates: a revalidation re-renders the page inside the action's own request, where the guard would refuse it (mutation: add revalidatePath to getShellSnapshot → FAILS)", () => {
+  it("no allowed action revalidates: a revalidation re-renders the page inside the action's own request, where the guard would refuse it (mutation: add revalidatePath to openBillingPortalAction → FAILS)", () => {
     for (const key of Object.keys(READ_ONLY_ALLOWED)) {
       const [file, name] = key.split("#") as [string, string];
       const fn = exportedActions(file).find((f) => f.name === name)!;
