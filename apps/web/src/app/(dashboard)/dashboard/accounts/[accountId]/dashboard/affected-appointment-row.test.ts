@@ -57,11 +57,12 @@ describe("AffectedAppointmentRow", () => {
     expect(text(render())).not.toMatch(/waiting/);
   });
 
-  it("whoever may act sees the caller's Keep control and \"Cancel on the calendar\", linking to that booking's calendar row", () => {
+  it("whoever may act sees the caller's Keep control and \"Cancel on the calendar\", linking to that booking's drawer, ?job=<id> (F-046 part 1; mutation: the old #booking- anchor → FAILS)", () => {
     const html = render();
     expect(html).toContain("KEEP-CONTROL");
     expect(text(html)).toContain(m["business.card.cancelOnCalendar"]);
-    expect(html).toContain('href="/dashboard/accounts/a1/calendar#booking-bk_1"');
+    expect(html).toContain('href="/dashboard/accounts/a1/calendar?job=bk_1"');
+    expect(html).not.toContain("#booking-");
   });
 
   it("a kept appointment shows \"Kept\" as TEXT, never a button (mutation: keep rendering the control once kept -> FAILS)", () => {

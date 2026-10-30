@@ -193,6 +193,15 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  // F-046 part 1 (plan Task 7): the Agenda card. Every word, in both languages.
+  it("finds Calendar by agenda, schedule and add job, in English and Spanish (mutation: drop one of the five → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const calendar = entries.find((e) => e.id === `nav:${BASE}/calendar`)!;
+    for (const word of ["agenda", "schedule", "add job", "trabajo", "agregar trabajo"]) {
+      expect(calendar.keywords, word).toContain(word);
+    }
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;

@@ -5,7 +5,7 @@ import { bookingUid } from "./ics";
 const row = (over: Partial<FeedContentRow> = {}): FeedContentRow => ({
   id: "b-1", status: "booked", starts_at: "2026-11-03T15:00:00Z", ends_at: "2026-11-03T16:00:00Z",
   updated_at: "2026-11-01T12:00:00Z", created_at: "2026-11-01T12:00:00Z", first_name: "Maria Lopez",
-  rootId: "root-1", depth: 0, ...over,
+  rootId: "root-1", depth: 0, meeting_type: null, ...over,
 });
 const O = { locale: "en" as const, meetingType: "in_person" as const, origin: "https://app.bis-rgv.com", accountId: "acc-1" };
 beforeEach(() => { vi.spyOn(console, "error").mockImplementation(() => {}); });
@@ -39,6 +39,28 @@ describe("feedEvents", () => {
     expect(feedEvents([row()], { ...O, meetingType: "phone" })[0]!.summary).toBe("Phone call: Maria");
     expect(feedEvents([row({ status: "no_show" })], { ...O, locale: "es" })[0]!.summary).toBe("No se presentó · Cita: Maria");
   });
+  // F-046 part 1 (plan Task 7): a booking's own meeting type (0107) decides its kind; NULL is the calendar's.
+  it("a row's own meeting type names its kind, over the calendar's (mutation: read o.meetingType only → FAILS)", () => {
+    const [video, phone] = feedEvents([
+      row({ id: "b-v", rootId: "root-v", meeting_type: "video" }),
+      row({ id: "b-p", rootId: "root-p", meeting_type: "phone", starts_at: "2026-11-04T15:00:00Z", ends_at: "2026-11-04T16:00:00Z" }),
+    ], { ...O, meetingType: "in_person" });
+    expect(video!.summary).toBe("Video call: Maria");
+    expect(phone!.summary).toBe("Phone call: Maria");
+  });
+  it("a row with no meeting type of its own reads the calendar's (mutation: default a null row to in_person → FAILS)", () => {
+    expect(feedEvents([row({ meeting_type: null })], { ...O, meetingType: "phone" })[0]!.summary).toBe("Phone call: Maria");
+  });
+  it("each event's link opens that booking's drawer, ?job=<row id> (mutation: the old page link → FAILS)", () => {
+    const events = feedEvents([
+      row({ id: "b-1", rootId: "root-1" }),
+      row({ id: "b-9", rootId: "root-9", starts_at: "2026-11-04T15:00:00Z", ends_at: "2026-11-04T16:00:00Z" }),
+    ], O);
+    expect(events.map((e) => e.description)).toEqual([
+      "Open in BIS: https://app.bis-rgv.com/dashboard/accounts/acc-1/calendar?job=b-1",
+      "Open in BIS: https://app.bis-rgv.com/dashboard/accounts/acc-1/calendar?job=b-9",
+    ]);
+  });
   it("a name holding $& is printed as typed, never expanded by String.replace (mutation: replace with a string, not a function → FAILS)", () => {
     expect(feedEvents([row({ first_name: "$&x" })], O)[0]!.summary).toBe("Appointment: $&x");
   });
@@ -52,9 +74,10 @@ describe("feedIcsFor — data minimisation and language", () => {
     const ics = feedIcsFor({ ...O, brandName: "Rio Roofing", rows: [row({ first_name: "Maria Lopez" })] });
     expect(ics).not.toMatch(/Lopez|ORGANIZER|ATTENDEE|LOCATION|URL:/);
     expect(ics).toContain("SUMMARY:Appointment: Maria");
-    // The dashboard-link line is 82 octets and so is RFC-5545-folded at 75 (ics.ts's `fold`,
+    // The dashboard-link line is past 75 octets and so is RFC-5545-folded (ics.ts's `fold`,
     // pinned by ics.test.ts's own 75-octet test); unfold before the plain containment check.
-    expect(unfold(ics)).toContain("DESCRIPTION:Open in BIS: https://app.bis-rgv.com/dashboard/accounts/acc-1/calendar");
+    // F-046 part 1: the link opens this booking's drawer, and the line ENDS there.
+    expect(unfold(ics)).toContain("DESCRIPTION:Open in BIS: https://app.bis-rgv.com/dashboard/accounts/acc-1/calendar?job=b-1\r\n");
     expect(ics).toContain("NAME:Rio Roofing bookings");
   });
   it("is Spanish end to end for es, and names the calendar Citas with no brand", () => {

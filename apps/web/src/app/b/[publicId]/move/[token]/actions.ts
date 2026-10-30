@@ -130,7 +130,9 @@ export async function confirmMoveAction(
 
     // A NEW room sized to the NEW time, the receptionist's rule: the old
     // room expires with the old slot. Best-effort; never logs a url.
-    if (ctx.calendar.meeting_type === "video") {
+    // F-046 part 1: the BOOKING's own kind decides (a job staff booked as a
+    // video call on an in-person calendar); NULL is the calendar's.
+    if ((ctx.row.meeting_type ?? ctx.calendar.meeting_type) === "video") {
       const provider = getMeetingProvider();
       if (provider) {
         try {

@@ -2,9 +2,11 @@ import { cache } from "react";
 import { serviceDb, type BookingRow } from "@bis/db";
 import { scrubToken } from "@/lib/booking/links";
 
+// `meeting_type` (0107, F-046 part 1): the move page mints a room by the
+// booking's own kind, so this read needs 0107 on the project it runs against.
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, "
-  + "cancel_token, booker_timezone, reminder_sent_at";
+  + "cancel_token, booker_timezone, reminder_sent_at, meeting_type";
 
 /**
  * Read-only lookup by token — a plain SELECT, no `.update()` anywhere in this

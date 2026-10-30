@@ -220,6 +220,30 @@ describe("confirmMoveAction — the move", () => {
     expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
     expect(m.moveBooking.mock.calls[1]![3].meetingUrl).toBeUndefined();
   });
+
+  // F-046 part 1 (plan correction 9): the BOOKING's own meeting type (0107) decides the room; NULL is the calendar's.
+  it("a video booking on an in-person calendar gets a NEW room (mutation: read ctx.calendar.meeting_type → FAILS)", async () => {
+    m.readMoveContext.mockResolvedValue(context({ meeting_type: "video" }, { meeting_type: "in_person" }));
+    const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://meet.example/job-room" });
+    getMeetingProviderMock.mockReturnValue({ createMeetingRoom });
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
+    expect(createMeetingRoom).toHaveBeenCalledTimes(1);
+    expect(m.moveBooking.mock.calls[0]![3]).toMatchObject({ meetingUrl: "https://meet.example/job-room" });
+  });
+
+  it("a phone booking on a video calendar gets no room; a booking with no type of its own on a video calendar does (mutation: `||` the two types → FAILS)", async () => {
+    const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://meet.example/cal-room" });
+    getMeetingProviderMock.mockReturnValue({ createMeetingRoom });
+    m.readMoveContext.mockResolvedValueOnce(context({ meeting_type: "phone" }, { meeting_type: "video" }));
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
+    expect(createMeetingRoom).not.toHaveBeenCalled();
+    expect(m.moveBooking.mock.calls[0]![3].meetingUrl).toBeUndefined();
+
+    m.readMoveContext.mockResolvedValueOnce(context({ meeting_type: null }, { meeting_type: "video" }));
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
+    expect(createMeetingRoom).toHaveBeenCalledTimes(1);
+    expect(m.moveBooking.mock.calls[1]![3]).toMatchObject({ meetingUrl: "https://meet.example/cal-room" });
+  });
 });
 
 describe("confirmMoveAction — who is told", () => {
