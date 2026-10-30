@@ -2066,7 +2066,7 @@ export const m = {
   "calendar.job.edited": "Job updated.",
   "calendar.job.edited.es": "Trabajo actualizado.",
   "calendar.job.moveUndone": "Back at {when}.",
-  "calendar.job.moveUndone.es": "De vuelta a las {when}.",
+  "calendar.job.moveUndone.es": "De vuelta: {when}.",
   "calendar.job.moveUndoTaken": "Another job took the old time, so it can't go back.",
   "calendar.job.moveUndoTaken.es": "Otro trabajo ocupó el horario anterior, así que no puede regresar.",
   "calendar.job.emailSent": "Confirmation emailed {time}",

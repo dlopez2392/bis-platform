@@ -606,7 +606,7 @@ in what the customer reads.
 | `calendar.job.moved` | Moved to {when}. We'll email {first} when this closes. | Se cambió a {when}. Le enviaremos un correo a {first} cuando se cierre este aviso. |
 | `calendar.job.movedQuiet` | Moved to {when}. | Se cambió a {when}. |
 | `calendar.job.edited` | Job updated. | Trabajo actualizado. |
-| `calendar.job.moveUndone` | Back at {when}. | De vuelta a las {when}. |
+| `calendar.job.moveUndone` | Back at {when}. | De vuelta: {when}. |
 | `calendar.job.moveUndoTaken` | Another job took the old time, so it can't go back. | Otro trabajo ocupó el horario anterior, así que no puede regresar. |
 | `calendar.job.emailSent` | Confirmation emailed {time} | Confirmación enviada {time} |
 | `calendar.job.emailPending` | We'll email the confirmation in a few seconds | Enviaremos la confirmación en unos segundos |
