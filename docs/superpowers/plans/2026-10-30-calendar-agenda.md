@@ -47,7 +47,16 @@
 14. **`listCalendarBookings` stays** (no caller after T12; its three live tests at `booking.test.ts:508`, `:638`, `:683` keep pinning `BOOKING_COLS`). Removal is deferred.
 15. **`e2e/booking.spec.ts:370-390` reads the old list** (`getByText(noteText)`, `page.locator("li").filter(…)`, the row's Cancel button), which leaves the page. T14 rewrites those lines against the drawer; nothing else in `e2e/` reads `BookingsList` (grepped: `one-switch.spec.ts`'s `li` locators are scoped to `#closed-days`).
 16. **Settling needs an origin.** The `after()` job takes `originFrom(await headers())` from the action's own request (the cancel's shape, `CAL/actions.ts:342`); the pass uses `ctx.origin`.
-17. **ASSUMPTIONS, each with how it is verified:** (a) PostgREST surfaces a plpgsql `raise … using errcode = 'exclusion_violation'` as `error.code === "23P01"` exactly as it does a constraint's (verified only by T4's live round trip on CI: `createBooking` of a customer row over a staff job throws `SlotTakenError`); (b) a second FK from `bookings` (to `places`) does not make PostgREST see a many-to-many between `contacts` and `places` through `bookings` (bookings' primary key is `id` alone; verified by T4's live embed probe and by `same-account-fk-schema.test.ts`'s existing probes on CI); (c) Next's `after()` keeps the function alive for the 15 s wait under `maxDuration = 60` (the repo already relies on it, `CAL/actions.ts:356-361`, `CAL/page.tsx:31-38`; the cron pass is the backstop if not); (d) production holds a few hundred bookings (read by the orchestrator before applying, checklist step 6); (e) `Intl` short zone names differ between the two halves of a fall-back day in `es-US` (T3 asserts inequality, and exact strings only for `en-US`).
+17. **ASSUMPTIONS, each with how it is verified:** (a) PostgREST surfaces a plpgsql `raise … using errcode = 'exclusion_violation'` as `error.code === "23P01"` exactly as it does a constraint's (verified only by T4's live round trip on CI: `createBooking` of a customer row over a staff job throws `SlotTakenError`); (b) a second FK from `bookings` (to `places`) does not make PostgREST see a many-to-many between `contacts` and `places` through `bookings` (bookings' primary key is `id` alone; verified by T4's live embed probe and by `same-account-fk-schema.test.ts`'s existing probes on CI); (c) Next's `after()` keeps the function alive for the 15 s wait under `maxDuration = 60` (the repo already relies on it, `CAL/actions.ts:356-361`, `CAL/page.tsx:31-38`; the cron pass is the backstop if not); (d) production holds a few hundred bookings (read by the orchestrator before applying, checklist step 7); (e) `Intl` short zone names differ between the two halves of a fall-back day in `es-US` (T3 asserts inequality, and exact strings only for `en-US`); (f) MCP `apply_migration` runs the file as ONE transaction. The constraint swap no longer depends on it (its drop and re-add are one `ALTER TABLE` statement, plan review), and checklist step 7 confirms the whole file landed. Assumptions (a) and (b) gate production: checklist step 6.
+
+### Plan review fixes (2026-10-30; opus review of `68de6d5e`, re-verified on a scratch PG17.6 replica)
+
+- **I1, a deadlock.** `undo_ai_booking_act`'s reschedule branch deletes the new booking and then restores the old one; the restore fires 0107's trigger, which locks the calendar row. A customer insert overlapping the new booking takes that lock first and then waits on the uncommitted delete: `deadlock detected … while locking tuple (0,1) in relation "calendars"` (reproduced by the planner on the replica). 0107 now `create or replace`s `undo_ai_booking_act` with ONE added statement, the calendar lock right after its `ai_acts` lock (invoker, `search_path`, volatility, grants and comment unchanged; `prosrc` diff is exactly those three lines), and `undo_staff_move` takes the same lock FIRST. "The lock rule" in Shared facts states it for any later multi-write unit. T1 gains two race cases and mutations (9) and (10). After the fix: the undo answers `undone` and the customer insert saves.
+- **I2, a confirmation that never went, or went twice.** Claims (`claimJobHold`, `listDueJobHolds`) take BOOKED rows only, so an add's hold that falls due while a move has it cancelled stays unclaimed; the move's new row is written with `notice_wanted` NULL and `setJobNotice` decides it from a RE-READ of the old row after the cancel (unclaimed and wanting a confirmation → `"confirmation"`; claimed → `"moved"` when ticked); the Undo of a move RE-ARMS the restored row with one `after()` settle waiting out what is left of its own hold. T4 (h), T10's three cases.
+- **I3, the drawer's Cancel deleted a moved job.** The delete requires `rescheduled_from_id is null` and answers `is_move`; a held move's Cancel runs the ordinary cancel flow (why: Cancel means the job is off; undoing the move would bring back a time nobody asked for, and the cancelled new row is never claimed, so no "moved" email goes). T4 (i), T10, T11.
+- **I4, reminders gated on the clock.** Every forward due-list read now filters `hold_until.is.null,hold_settled_at.not.is.null`: a staff job is reminded only after its hold is claimed (T4, T9; T4 (d) flipped).
+- **I5, a mutation pointed at the wrong cases.** Mutation (6) fails only "two overlapping staff-made rows"; the C9 and customer-first race names now cite mutation (1).
+- **Minors.** A new address for a new customer: the action makes the contact, then the place, then the job (`JobDraft.newPlace`). T14's 10:00 control seeds a 60-minute slot and no buffer. A staff move's two events are written by the settle of its new row, never by `moveBooking`, so an undone move leaves none (D8 extended). The agenda shows `calendar.agenda.truncated` at the 400-row cap. T10 adds two `each(…)` lines; the palette terms are `registry.ts:76-77`. The constraint swap is one `ALTER TABLE` statement, and ASSUMPTION 17f names the one-transaction apply; checklist step 6 gates production on CI proving 17a and 17b.
 
 ---
 
@@ -70,7 +79,12 @@ app.bookings_slot_guard()  SECURITY DEFINER trigger: BEFORE INSERT OR UPDATE OF 
                            message 'bookings_no_overlap: overlaps a job staff booked'
 public.undo_staff_move(p_account_id uuid, p_new_id uuid, p_old_id uuid, p_cancelled_at timestamptz, p_now timestamptz)
   returns text: 'undone' | 'gone' | 'too_late' | 'time_taken' | 'changed'     SECURITY INVOKER, EXECUTE service_role only
+  -- locks the account's calendar row FIRST, before its delete (plan review item 1)
+public.undo_ai_booking_act(...)   0091's, replaced with ONE added statement: the calendar lock right after its
+                                  ai_acts lock; invoker, search_path, volatility and grants unchanged
 ```
+
+**The lock rule (plan review item 1).** Every function or transaction that writes more than one booking takes the calendar row (`select … from public.calendars where account_id = … for no key update`) BEFORE its first booking write. The trigger takes it at each live write; a multi-write unit that waits for the trigger to take it deadlocks with a customer insert that took it first and then waits on the unit's uncommitted delete. A single PostgREST call writes one row, so the app's own multi-call sequences (`moveBooking`) are exempt: each call commits before the next.
 
 ### TypeScript interfaces
 
@@ -88,9 +102,12 @@ export type StaffJobInput = {
 };
 createStaffJob(db, accountId, input: StaffJobInput, actorId: string): Promise<{ id: string; cancelToken: string }>   // no event (D8)
 export type StaffMoveJob = { note: string | null; placeId: string | null; meetingType: BookingMeetingType;
-  holdUntil: Date; noticeWanted: NoticeWanted | null; closureKept: boolean };
+  holdUntil: Date; closureKept: boolean };
 moveBooking(db, accountId, bookingId, to: { startsAt; endsAt; meetingUrl?; ipHash?; job?: StaffMoveJob }, actorId, actorType?)
-  // without `job`: the new row carries the old row's place_id and meeting_type, and no hold
+  // without `job`: the new row carries the old row's place_id and meeting_type, and no hold; events as today
+  // with `job`: the new row is held with notice_wanted NULL (setJobNotice decides it after the cancel), and moveBooking
+  // writes NO events: the settle of the new row writes them (D8 extended, plan review minor), so an undone move leaves none
+setJobNotice(db, accountId, bookingId, notice: NoticeWanted | null): Promise<boolean>   // only while the hold is unsettled
 export const AGENDA_ROW_CAP = 400;
 export type AgendaBookingRow = {
   id: string; contact_id: string; starts_at: string; ends_at: string; status: BookingStatus; note: string | null;
@@ -108,10 +125,10 @@ countAwaitingOutcomeBefore(db, accountId, beforeIso): Promise<number>   // booke
 export type JobHoldClaim = { id: string; status: BookingStatus; notice_wanted: NoticeWanted | null; starts_at: string; ends_at: string;
   contact_id: string; calendar_id: string; place_id: string | null; meeting_url: string | null; cancel_token: string;
   rescheduled_from_id: string | null; author_id: string | null; hold_until: string; created_at: string };
-claimJobHold(db, accountId, bookingId, nowIso): Promise<JobHoldClaim | null>
+claimJobHold(db, accountId, bookingId, nowIso): Promise<JobHoldClaim | null>   // status = 'booked' only (plan review item 2)
 stampJobNoticeSent(db, accountId, bookingId): Promise<void>
-listDueJobHolds(db, beforeIso, limit): Promise<{ accountId: string; bookingId: string; holdUntil: string }[]>
-export type UndoAddOutcome = "deleted" | "settled" | "moved" | "not_yours" | "gone";
+listDueJobHolds(db, beforeIso, limit): Promise<{ accountId: string; bookingId: string; holdUntil: string }[]>   // booked only
+export type UndoAddOutcome = "deleted" | "settled" | "moved" | "is_move" | "not_yours" | "gone";
 deleteUnsettledStaffJob(db, accountId, bookingId, actorId): Promise<UndoAddOutcome>
 export type UndoStaffMoveOutcome = "undone" | "gone" | "too_late" | "time_taken" | "changed";
 undoStaffMove(db, accountId, newId, oldId, cancelledAt: string, now: Date): Promise<UndoStaffMoveOutcome>
@@ -163,7 +180,7 @@ export type SettleDeps = { db: SupabaseClient; origin: string | null; now?: () =
   send?: (req: EmailRequest) => Promise<SendEmailResult> };
 export async function settleJobHold(accountId: string, bookingId: string, deps: SettleDeps): Promise<JobHoldOutcome>;  // never throws
 export async function settleAfterWindow(accountId: string, bookingId: string, origin: string | null,
-  deps?: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void> }): Promise<JobHoldOutcome>;              // sleeps UNDO_WINDOW_MS + NOTICE_GRACE_MS
+  deps?: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void>; waitMs?: number }): Promise<JobHoldOutcome>;  // sleeps waitMs ?? UNDO_WINDOW_MS + NOTICE_GRACE_MS
 export async function jobNoticeAvailability(readDb: SupabaseClient, writer: SupabaseClient,
   accountId: string, contactId: string): Promise<NoticeAvailability>;
 ```
@@ -174,7 +191,11 @@ Server actions (T10, `CAL/agenda-actions.ts`; T11 and T12 consume them):
 export type JobCustomer = { kind: "existing"; id: string } | { kind: "new"; name: string; phone: string; addAsNew: boolean };
 export type JobFields = { date: string; start: string; minutes: number; what: string; placeId: string | null;
   meetingType: BookingMeetingType; notify: boolean };
-export type JobDraft = JobFields & { customer: JobCustomer };
+export type JobDraft = JobFields & { customer: JobCustomer;
+  /** A new address typed in the sheet: the raw fields `parsePlaceFields` (WEB/lib/contacts/place-input.ts:116) reads. The
+   *  ACTION saves it on the customer, after the customer exists (a quick-add makes them first) and before the job;
+   *  `placeId` is then ignored. Plan review minor: a place needs its contact first. */
+  newPlace?: unknown };
 export type JobWarningView = { key: string; kind: "outside_hours" | "notice" | "closed" | "overlaps" | "no_video";
   count?: number; at?: string };     // at: ISO of the earliest overlapped start
 export type JobErrorKey = "calendar.job.past" | "calendar.job.noSuchTime" | "calendar.job.changed" | "calendar.job.saveFailed";
@@ -183,7 +204,10 @@ export type AddJobResult =
   | { ok: false; needs: { phoneOwner: { id: string; name: string; first: string } } | { warnings: JobWarningView[] } }
   | { ok: false; errorKey: JobErrorKey };
 export async function addJobAction(accountId: string, draft: JobDraft, seen: string[]): Promise<AddJobResult>;
-export type UndoAddResult = { ok: true } | { ok: false; errorKey: "calendar.job.undoTooLate" | "calendar.job.undoMovedSince" | "calendar.bookings.statusUpdateFailed"; settled?: true };
+export type UndoAddResult = { ok: true } | { ok: false; errorKey: "calendar.job.undoTooLate" | "calendar.job.undoMovedSince" | "calendar.bookings.statusUpdateFailed";
+  /** The Undo cannot delete this row: its hold already settled, or it is a MOVE's new row ("is_move"). The drawer's
+   *  Cancel then runs the ordinary cancel flow instead (plan review item 3). */
+  fallback?: true };
 export async function undoAddJobAction(accountId: string, bookingId: string): Promise<UndoAddResult>;
 export type JobOpened = { startsAt: string; endsAt: string; note: string | null; placeId: string | null;
   meetingType: BookingMeetingType | null; meetingUrl: string | null };
@@ -226,7 +250,7 @@ The hold: `hold_until = now + UNDO_WINDOW_MS + NOTICE_GRACE_MS` (10 s + 5 s, `CA
 | Cron route bare mock and seven bodies | `WEB/app/api/cron/reminders/route.test.ts:212,328,451,474,497,513,606,623,667` | + `listDueJobHolds`, `EMPTY_JOB_HOLDS`, `jobHolds:` in each body | T9 |
 | `RECORD` / `NOT_A_RECORD` (pages) | `ACCT/access-log-routes.test.ts:35-74` (`:54` LIST) | `calendar/page.tsx` LIST → RECORD | T12 |
 | `NOT_A_RECORD_ACTIONS` | `ACCT/access-log-routes.test.ts:84-88` | + the seven agenda actions | T10 |
-| Palette `/calendar` terms | `WEB/lib/palette/registry.ts:75-76` | + "agenda", "schedule", "add job", "trabajo", "agregar trabajo" | T7 |
+| Palette `/calendar` terms | `WEB/lib/palette/registry.ts:76-77` | + "agenda", "schedule", "add job", "trabajo", "agregar trabajo" | T7 |
 | `READ_ONLY_ALLOWED` (billing pause) | `WEB/lib/billing/read-only.test.ts:149-176` | **none**: every agenda action is refused while paused, the notice-option read included (the add it serves is refused) | — |
 | `technician-guards.test.ts` `PAGES` | `ACCT/technician-guards.test.ts:20-26` | **none**: a Technician reads the agenda; each write refuses on `seesWholeAccount` itself | — |
 | `EXPECTED_WRITES`, client-write digest | `DB/test/schema-grants-guard.test.ts`, `DB/test/proposals-drop.test.ts` | **none**: no grant changes | — |
@@ -326,8 +350,10 @@ import { withRollback } from "./db";
  * trigger and the function do not exist). GREEN BEFORE 0107 TOO, and said so: the cases that pin what
  * customers KEEP (refused over a staff job, by insert and by un-cancel; back-to-back legal; a cancelled or
  * another calendar's job blocks nothing; the staff-first race), because 0016 already refused all of them.
- * Their red is each case's named mutation of 0107, run after apply (Step 4b). The two race cases COMMIT,
- * so they run only against a database on this machine (access-log-concurrency.test.ts's onThisMachine).
+ * Their red is each case's named mutation of 0107, run after apply (Step 4b). The undo_ai_booking_act lock
+ * race is green before 0107 too (no trigger yet, so nothing deadlocks); its red is dropping 0107's added lock,
+ * which turns it into 40P01. The race cases COMMIT, so they run only against a database on this machine
+ * (access-log-concurrency.test.ts's onThisMachine).
  *
  * ONE REFUSED STATEMENT PER SAVEPOINT (`attempt`): a refusal otherwise aborts the transaction (25P02).
  */
@@ -515,7 +541,7 @@ describe("0107: who may overlap (R1, R2, R11)", () => {
       expect((await statusOf(c, old))!.status).toBe("cancelled");
     }));
 
-  it("a staff job flipped back to booked over a customer row saves (R1; mutation: the trigger checks staff rows too -> FAILS)", () =>
+  it("a staff job flipped back to booked over a customer row saves (R1; mutation: the constraint without its author_kind term -> 23P01, FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const job = await booking(c, s, { status: "cancelled", from: 0, to: 1 });
@@ -709,7 +735,7 @@ describe("0107: the calendar lock (spec 7), this machine only", () => {
     }
   });
 
-  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))("customer first: the staff insert waits, then saves beside it (R1; mutation: the trigger checks staff rows too -> refused, FAILS)", async () => {
+  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))("customer first: the staff insert waits, then saves beside it (R1; mutation: the constraint without its author_kind term -> the constraint waits, then refuses 23P01, FAILS)", async () => {
     const admin = await connect(); const c1 = await connect(); const c2 = await connect();
     let s: Seed | null = null;
     try {
@@ -724,6 +750,97 @@ describe("0107: the calendar lock (spec 7), this machine only", () => {
     } finally {
       await c1.query("rollback").catch(() => {});
       await raceTeardown(admin, s);
+      await Promise.all([admin.end(), c1.end(), c2.end()]);
+    }
+  });
+});
+
+/* ---------- the undo functions take the calendar lock FIRST (plan review item 1), this machine only ----------
+ * Both undos delete one booking and then restore another. The restore fires bookings_slot_guard, which locks the
+ * calendar row; taken only there, a customer insert that took the lock first and then waits on the uncommitted
+ * delete (its exclusion check) deadlocks with the undo. Reproduced before the fix on the planner's replica:
+ * `deadlock detected … while locking tuple (0,1) in relation "calendars"` from undo_ai_booking_act. */
+async function moveSeed(admin: Client, tag: string) {
+  await admin.query("begin");
+  const s = await seed(admin, tag);
+  const q1 = async (sql: string, args: unknown[]) => (await admin.query<{ id: string }>(sql, args)).rows[0]!.id;
+  const phone = await q1("insert into public.phone_numbers (account_id, e164) values ($1, $2) returning id", [s.acct, `+1956${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`]);
+  const call = await q1("insert into public.calls (account_id, phone_number_id, contact_id) values ($1, $2, $3) returning id", [s.acct, phone, s.ana]);
+  const ins = (cols: string, vals: unknown[]) =>
+    q1(`insert into public.bookings (account_id, calendar_id, contact_id, ${cols}) values ($1, $2, $3, ${vals.map((_, i) => `$${i + 4}`).join(", ")}) returning id`,
+      [s.acct, s.cal, s.ana, ...vals]);
+  // A staff move as moveBooking leaves it, and Sofia's reschedule as 0091's act names it.
+  const staffOld = await ins("starts_at, ends_at, cancel_token, author_kind, status, updated_at", [at(0), at(1), `so_${tag}_${RUN}`, "customer", "cancelled", "2031-01-01T00:00:00.123456Z"]);
+  const staffNew = await ins("starts_at, ends_at, cancel_token, author_kind, author_id, rescheduled_from_id, hold_until", [at(24), at(25), `sn_${tag}_${RUN}`, "person", "user_0107", staffOld, at(-1)]);
+  const aiOld = await ins("starts_at, ends_at, cancel_token, author_kind, status, updated_at", [at(48), at(49), `ao_${tag}_${RUN}`, "ai", "cancelled", "2031-01-01T00:00:00.123Z"]);
+  const aiNew = await ins("starts_at, ends_at, cancel_token, author_kind, rescheduled_from_id", [at(72), at(73), `an_${tag}_${RUN}`, "ai", aiOld]);
+  const act = await q1(`insert into public.ai_acts (account_id, actor, call_id, contact_id, kind, target, before, after)
+                        values ($1, 'voice', $2, $3, 'booking_rescheduled', $4, $5, '{}') returning id`,
+    [s.acct, call, s.ana, JSON.stringify({ bookingId: aiNew, fromBookingId: aiOld }), JSON.stringify({ version: "2031-01-01T00:00:00.123Z" })]);
+  await admin.query("commit");
+  return { s, staffOld, staffNew, aiOld, aiNew, act };
+}
+async function moveTeardown(admin: Client, s: Seed | null) {
+  if (!s) return;
+  await admin.query("delete from public.ai_acts where account_id = $1", [s.acct]);
+  await admin.query("delete from public.calls where account_id = $1", [s.acct]);
+  await admin.query("delete from public.phone_numbers where account_id = $1", [s.acct]);
+  await raceTeardown(admin, s);
+}
+
+describe("0107: both undos lock the calendar before they delete (plan review item 1), this machine only", () => {
+  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))("undo_ai_booking_act: a customer insert overlapping the booking being taken back neither deadlocks nor is lost (mutation: drop 0107's added `perform … for no key update` -> 40P01 deadlock detected, FAILS)", async () => {
+    const admin = await connect(); const c1 = await connect(); const c2 = await connect(); const c3 = await connect();
+    let m: Awaited<ReturnType<typeof moveSeed>> | null = null;
+    try {
+      m = await moveSeed(admin, "d1");
+      const { rows: [p1] } = await c1.query<{ pid: number }>("select pg_backend_pid() as pid");
+      // c3 holds the OLD row, so the undo stops between its delete and its restore.
+      await c3.query("begin");
+      await c3.query("select id from public.bookings where id = $1 for update", [m.aiOld]);
+      await c1.query("set role service_role");
+      const undo = c1.query<{ r: string }>("select public.undo_ai_booking_act($1, $2, 'race', now()) as r", [m.s.acct, m.act])
+        .then((r) => r.rows[0]!.r, (e: DatabaseError) => e.code);
+      expect(await waitsOnLock(admin, p1!.pid)).toBe(true);
+      // A customer books over the NEW booking's time while the undo is parked.
+      const insert = c2.query(
+        `insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind)
+         values ($1, $2, $3, $4, $5, $6, 'customer')`, [m.s.acct, m.s.cal, m.s.ana, at(72.5), at(73.5), `cx_d1_${RUN}`])
+        .then(() => "saved", (e: DatabaseError) => e.code);
+      await new Promise((r) => setTimeout(r, 500));
+      await c3.query("commit");
+      expect(await undo).toBe("undone");
+      expect(await insert).toBe("saved");
+    } finally {
+      await c3.query("rollback").catch(() => {});
+      await moveTeardown(admin, m?.s ?? null);
+      await Promise.all([admin.end(), c1.end(), c2.end(), c3.end()]);
+    }
+  });
+
+  it.skipIf(!onThisMachine(process.env.SUPABASE_DB_URL))("undo_staff_move: while another write holds the calendar row, the undo waits BEFORE deleting, so the new row is not yet locked (mutation: drop its first `perform … for no key update` -> the row is locked, 55P03, FAILS)", async () => {
+    const admin = await connect(); const c1 = await connect(); const c2 = await connect();
+    let m: Awaited<ReturnType<typeof moveSeed>> | null = null;
+    try {
+      m = await moveSeed(admin, "d2");
+      const { rows: [p1] } = await c1.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await c2.query("begin");
+      await c2.query(`insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind)
+                      values ($1, $2, $3, $4, $5, $6, 'customer')`, [m.s.acct, m.s.cal, m.s.ana, at(200), at(201), `cx_d2_${RUN}`]);
+      await c1.query("set role service_role");
+      const undo = c1.query<{ r: string }>("select public.undo_staff_move($1, $2, $3, $4, now()) as r",
+        [m.s.acct, m.staffNew, m.staffOld, "2031-01-01T00:00:00.123456Z"]).then((r) => r.rows[0]!.r, (e: DatabaseError) => e.code);
+      expect(await waitsOnLock(admin, p1!.pid)).toBe(true);
+      await admin.query("begin");
+      const probe = await admin.query("select id from public.bookings where id = $1 for update nowait", [m.staffNew])
+        .then(() => "not locked", (e: DatabaseError) => e.code);
+      await admin.query("rollback");
+      expect(probe).toBe("not locked");
+      await c2.query("commit");
+      expect(await undo).toBe("undone");
+    } finally {
+      await c2.query("rollback").catch(() => {});
+      await moveTeardown(admin, m?.s ?? null);
       await Promise.all([admin.end(), c1.end(), c2.end()]);
     }
   });
@@ -759,7 +876,12 @@ Run it against `pre`: `SUPABASE_DB_URL=postgresql://postgres@localhost:55971/pre
 --   app.bookings_slot_guard() and its trigger: every live-booking write waits on its calendar row, and a
 --     customer-made live row overlapping a live staff job is refused 23P01 (exclusion_violation), which
 --     createBooking, setBookingStatus, moveBooking and undo_ai_booking_act already map.
---   public.undo_staff_move(...): the Undo of a staff move in one transaction.
+--   public.undo_staff_move(...): the Undo of a staff move in one transaction, calendar row locked FIRST.
+--   public.undo_ai_booking_act, replaced with one added statement: it locks the calendar row right after
+--     its ai_acts lock. Its reschedule branch deletes one booking and then restores another; taking the
+--     calendar lock only at the restore (the trigger) deadlocks with a customer insert that took it first
+--     and then waits on the uncommitted delete (plan review 2026-10-30, item 1). Body, search_path,
+--     SECURITY INVOKER and grants are otherwise exactly 0091's as 0096 left them.
 --
 -- WHO WRITES. Only service_role, as since 0053: the Calendar page's agenda actions, their after() job
 -- and the cron pass write the new columns after their own checks.
@@ -782,6 +904,10 @@ Run it against `pre`: `SUPABASE_DB_URL=postgresql://postgres@localhost:55971/pre
 -- production (MCP apply_migration, name calendar_agenda), then the parity check, then merge.
 -- LOAD-BEARING: from the agenda's first build on, the app names every new column and calls
 -- undo_staff_move, so production gets this file BEFORE the merge deploy.
+-- ONE TRANSACTION. ASSUMPTION: MCP apply_migration runs the file as one transaction (the replica runs it with
+-- psql -1). The constraint swap does not rely on it: its drop and re-add are ONE ALTER TABLE statement, so no
+-- moment exists without an overlap rule. A partial apply would leave columns without their trigger or functions,
+-- which the running build never names; the orchestrator confirms the whole file applied (checklist step 7).
 -- SAFE UNDER THE RUNNING BUILD: its customer rows meet the same exclusion constraint as before plus a
 -- trigger that finds no live staff job to collide with; its person-made rows (the demo seed, whose slots
 -- never overlap) gain only the freedom to overlap.
@@ -796,6 +922,7 @@ Run it against `pre`: `SUPABASE_DB_URL=postgresql://postgres@localhost:55971/pre
 --   drop trigger bookings_slot_guard on public.bookings;
 --   drop function app.bookings_slot_guard();
 --   drop function public.undo_staff_move(uuid, uuid, uuid, timestamptz, timestamptz);
+--   (undo_ai_booking_act keeps its added calendar lock: harmless without the trigger.)
 --   drop index public.bookings_staff_live, public.bookings_place, public.bookings_hold_due;
 --   alter table public.bookings drop constraint bookings_no_overlap;
 --   alter table public.bookings drop column place_id, drop column meeting_type, drop column hold_until,
@@ -843,8 +970,10 @@ comment on column public.bookings.hold_settled_at is
   'F-046: the one claim on the hold (claimJobHold): the after() job or the jobHolds pass. The Undo deletes only while this is NULL.';
 
 -- 2. The overlap rule: the constraint for customer-made rows, the trigger for customer against staff.
-alter table public.bookings drop constraint bookings_no_overlap;
-alter table public.bookings add constraint bookings_no_overlap
+-- ONE statement: the drop and the re-add are atomic even if the apply were not one transaction.
+alter table public.bookings
+  drop constraint bookings_no_overlap,
+  add constraint bookings_no_overlap
   exclude using gist (calendar_id with =, tstzrange(starts_at, ends_at) with &&)
   where (status = 'booked' and author_kind <> 'person');
 create index bookings_staff_live on public.bookings
@@ -892,6 +1021,9 @@ declare
   v_n integer;
   v_settled timestamptz;
 begin
+  -- The calendar row FIRST, before the delete: the restore below fires bookings_slot_guard, which takes
+  -- this lock; taken only there, it deadlocks with a customer insert holding it and waiting on our delete.
+  perform 1 from public.calendars c where c.account_id = p_account_id for no key update;
   begin
     delete from public.bookings b
      where b.account_id = p_account_id and b.id = p_new_id and b.status = 'booked'
@@ -933,16 +1065,134 @@ comment on function public.undo_staff_move(uuid, uuid, uuid, timestamptz, timest
   'F-046 (0107): the Undo of a staff move. Deletes the new row while its hold is unsettled and restores the old row by the move''s own version, in one transaction. Service role only.';
 revoke all on function public.undo_staff_move(uuid, uuid, uuid, timestamptz, timestamptz) from public, anon, authenticated, service_role;
 grant execute on function public.undo_staff_move(uuid, uuid, uuid, timestamptz, timestamptz) to service_role;
+
+-- 4. undo_ai_booking_act (0091, search_path as 0096 left it): the same body with ONE added statement, the
+--    calendar lock right after the act lock and before any booking write (item 1 of the plan review).
+--    SECURITY INVOKER, volatile, EXECUTE service_role only: create or replace keeps the grants and comment.
+create or replace function public.undo_ai_booking_act(p_account_id uuid, p_act_id uuid, p_by text, p_now timestamptz)
+returns text
+language plpgsql
+security invoker
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_kind text;
+  v_undone timestamptz;
+  v_target jsonb;
+  v_before jsonb;
+  v_after jsonb;
+  v_id uuid;
+  v_from uuid;
+  v_status text;
+  v_starts timestamptz;
+  v_n integer;
+begin
+  select a.kind, a.undone_at, a.target, a.before, a.after
+    into v_kind, v_undone, v_target, v_before, v_after
+    from public.ai_acts a
+   where a.account_id = p_account_id and a.id = p_act_id
+   for update;
+  if not found then
+    return 'gone';
+  end if;
+  if v_kind not in ('booking_created', 'booking_rescheduled', 'booking_cancelled') then
+    raise exception 'undo_ai_booking_act: not a booking act: %', p_act_id using errcode = '22023';
+  end if;
+  if v_undone is not null then
+    return 'already_undone';
+  end if;
+  -- 0107: the calendar row before any booking write (bookings_slot_guard takes it on the restore below;
+  -- taken only there, the reschedule branch deadlocks with a customer insert waiting on its delete).
+  perform 1 from public.calendars c where c.account_id = p_account_id for no key update;
+  v_id := (v_target ->> 'bookingId')::uuid;
+
+  if v_kind = 'booking_created' then
+    update public.bookings b set status = 'cancelled', updated_at = p_now
+     where b.account_id = p_account_id and b.id = v_id and b.status = 'booked' and b.starts_at > p_now;
+    get diagnostics v_n = row_count;
+    if v_n = 0 then
+      select b.status, b.starts_at into v_status, v_starts
+        from public.bookings b where b.account_id = p_account_id and b.id = v_id;
+      if not found then
+        return 'gone';
+      end if;
+      if v_status <> 'booked' then
+        return 'already_cancelled';
+      end if;
+      return 'already_happened';
+    end if;
+
+  elsif v_kind = 'booking_cancelled' then
+    begin
+      update public.bookings b set status = 'booked', updated_at = p_now
+       where b.account_id = p_account_id and b.id = v_id and b.status = 'cancelled'
+         and b.updated_at = (v_after ->> 'version')::timestamptz
+         and b.starts_at > p_now
+         and not exists (select 1 from public.bookings r
+                          where r.account_id = p_account_id and r.rescheduled_from_id = v_id);
+      get diagnostics v_n = row_count;
+    exception when exclusion_violation then
+      return 'time_taken';
+    end;
+    if v_n = 0 then
+      select b.status, b.starts_at into v_status, v_starts
+        from public.bookings b where b.account_id = p_account_id and b.id = v_id;
+      if not found then
+        return 'gone';
+      end if;
+      if v_status = 'booked' then
+        return 'rebooked';
+      end if;
+      if v_starts <= p_now then
+        return 'time_passed';
+      end if;
+      return 'changed';
+    end if;
+
+  else
+    v_from := (v_target ->> 'fromBookingId')::uuid;
+    begin
+      delete from public.bookings b
+       where b.account_id = p_account_id and b.id = v_id and b.status = 'booked' and b.starts_at > p_now
+         and not exists (select 1 from public.bookings r
+                          where r.account_id = p_account_id and r.rescheduled_from_id = v_id);
+      get diagnostics v_n = row_count;
+      if v_n = 0 then
+        raise exception 'undo_ai_booking_act: the new booking changed' using errcode = 'ZA001';
+      end if;
+      update public.bookings b set status = 'booked', updated_at = p_now
+       where b.account_id = p_account_id and b.id = v_from and b.status = 'cancelled'
+         and b.updated_at = (v_before ->> 'version')::timestamptz
+         and b.starts_at > p_now;
+      get diagnostics v_n = row_count;
+      if v_n = 0 then
+        raise exception 'undo_ai_booking_act: the old booking changed' using errcode = 'ZA002';
+      end if;
+    exception
+      when exclusion_violation then
+        return 'old_time_taken';
+      when sqlstate 'ZA001' then
+        return 'changed';
+      when sqlstate 'ZA002' then
+        return 'changed';
+    end;
+  end if;
+
+  update public.ai_acts a set undone_at = p_now, undone_by = p_by
+   where a.account_id = p_account_id and a.id = p_act_id;
+  return 'undone';
+end;
+$$;
 ```
 
-Check the text before applying: `grep -nP '[^\x00-\x7F]' 0107_calendar_agenda.sql` and `grep -n '\\' 0107_calendar_agenda.sql` both print nothing; `grep -o '\$\$' 0107_calendar_agenda.sql | wc -l` is even (6).
+Check the text before applying: `grep -nP '[^\x00-\x7F]' 0107_calendar_agenda.sql` and `grep -n '\\' 0107_calendar_agenda.sql` both print nothing; `grep -o '\$\$' 0107_calendar_agenda.sql | wc -l` is 8 (the do block and three functions). Section 4's body is 0091's `undo_ai_booking_act` exactly as `pg_get_functiondef` prints it on a replica of 0001–0106, plus the three marked lines: build it by copying that output (between `AS $function$` and `$function$`) and adding them, then confirm with `diff` of `prosrc` before and after apply that ONLY those three lines differ (the planner's run of this: `27a28,30`, the comment pair and the `perform`).
 
-- [ ] **Step 4: Apply and go green.** `sh pg17-ca.sh post` (expected `0107 apply exit 0`). Then run Step 2's file against `post`. Expected: `Tests  32 passed` (5 catalogue, 9 overlap, 9 column-rule, 7 undo, 2 race; none skipped, the race cases run because the URL is localhost). Paste the summary line.
-- [ ] **Step 4b: The mutations of 0107**, each in a scratch copy of the file applied to a fresh `post` (`sh pg17-ca.sh post` re-creates it from `pre`), each failing the named case BY NAME, then restored: (1) the constraint without `and author_kind <> 'person'` → "two overlapping staff-made rows"; (2) the trigger's `if … and exists (…)` removed → "a customer-made row over a live staff job"; (3) `errcode = 'P0001'` → the same case's code assertion; (4) `before insert` only → "flipped back to booked over a staff job"; (5) `for no key update` removed → "staff first" race; (6) the trigger checking every author (drop `new.author_kind <> 'person' and`) → "staff job flipped back … saves" and the customer-first race; (7) `tstzrange(…, '[]')` in the trigger → the back-to-back case; (8) the restore moved after the inner block → "time_taken". Paste each failing line.
+- [ ] **Step 4: Apply and go green.** `sh pg17-ca.sh post` (expected `0107 apply exit 0`). Then run Step 2's file against `post`. Expected: `Tests  34 passed` (5 catalogue, 9 overlap, 9 column-rule, 7 undo, 2 race, 2 undo-lock; none skipped, the race cases run because the URL is localhost). Paste the summary line.
+- [ ] **Step 4b: The mutations of 0107**, each in a scratch copy of the file applied to a fresh `post` (`sh pg17-ca.sh post` re-creates it from `pre`), each failing the named case BY NAME, then restored: (1) the constraint without `and author_kind <> 'person'` → "two overlapping staff-made rows", "a staff job flipped back to booked over a customer row saves" and the customer-first race; (2) the trigger's `if … and exists (…)` removed → "a customer-made row over a live staff job"; (3) `errcode = 'P0001'` → the same case's code assertion; (4) `before insert` only → "flipped back to booked over a staff job"; (5) `for no key update` removed → "staff first" race; (6) the trigger checking every author (drop `new.author_kind <> 'person' and`) → "two overlapping staff-made rows" only (a staff row then meets the other staff row; C9 and the customer-first race meet a CUSTOMER row, which the trigger never checks, so they stay green and are guarded by (1)); (7) `tstzrange(…, '[]')` in the trigger → the back-to-back case; (8) the restore moved after the inner block → "time_taken"; (9) drop the `perform … for no key update` 0107 adds to undo_ai_booking_act → its lock race FAILS with 40P01; (10) drop undo_staff_move's first `perform` → its lock-order case FAILS with 55P03. Paste each failing line.
 
 - [ ] **Step 5: The definer pin.** In `definer-search-path.test.ts`: add `"app.bookings_slot_guard()": PG_CATALOG_PG_TEMP,` after `"app.account_role(uuid)"` (`:31`); `:25-28`'s comment becomes "The 37 SECURITY DEFINER functions in public and app at 0107 (0106's 36, 0107 adds app.bookings_slot_guard), …"; `:79` "exactly these 36" → 37; `:84` `toHaveLength(36)` → 37; `:93` floor 36 → 37. Run it on `pre` (red: `expected [ …36 items ] to have a length of 37`… paste it) and on `post` (green). Mutation: drop `security definer` from the trigger function in a scratch copy of 0107, rebuild `post`: the count case FAILS by name. Restore.
 
-- [ ] **Step 6: The two 0091 interactions.** In `ai-acts-schema.test.ts:115-122`, `booking()` gains `author?: string` in its options and writes `o.author ?? 'ai'` in place of the literal `'ai'` (one more `$10` parameter). Add to the `booking_cancelled` describe: "a staff job that took the time answers time_taken (0107's trigger raises exclusion_violation, not P0001)" — the cancelled ai booking `b` at 24, `await booking(c, s, 24.5, { contact: s.theirs, author: "person" })`, `undoBooking` → `"time_taken"`, `b` still cancelled. Add to the `booking_rescheduled` describe: "the old slot taken by a staff job answers old_time_taken, the new booking still booked" (`pair`, then `booking(c, s, 24.5, { contact: s.theirs, author: "person" })`). Both are green BEFORE 0107 too (0016's constraint binds a person row as well) and say so in their names: they are the mutation guards for the trigger's errcode. Run on `post` with `-t "undo_ai_booking_act"`: the summary must show every case in the two `undo_ai_booking_act` describes run (paste it). Mutation: `errcode = 'P0001'` in a scratch 0107 → both new cases FAIL by name. Restore.
+- [ ] **Step 6: The two 0091 interactions.** In `ai-acts-schema.test.ts:115-122`, `booking()` gains `author?: string` in its options and writes `o.author ?? 'ai'` in place of the literal `'ai'` (one more `$10` parameter). Add to the `booking_cancelled` describe: "a staff job that took the time answers time_taken (0107's trigger raises exclusion_violation, not P0001)" — the cancelled ai booking `b` at 24, `await booking(c, s, 24.5, { contact: s.theirs, author: "person" })`, `undoBooking` → `"time_taken"`, `b` still cancelled. Add to the `booking_rescheduled` describe: "the old slot taken by a staff job answers old_time_taken, the new booking still booked" (`pair`, then `booking(c, s, 24.5, { contact: s.theirs, author: "person" })`). Both are green BEFORE 0107 too (0016's constraint binds a person row as well) and say so in their names: they are the mutation guards for the trigger's errcode. Run on `post` with `-t "undo_ai_booking_act|function grants and settings"`: the summary must show every case of the three `undo_ai_booking_act` describes AND of "0091: function grants and settings" (`:1031-1066`, which pins the replaced function's invoker status, `search_path`, volatility and EXECUTE grants, so `create or replace` must leave them exactly) run and pass UNCHANGED (paste it). Mutation: `errcode = 'P0001'` in a scratch 0107 → both new cases FAIL by name. Restore.
 
 - [ ] **Step 7: The two live fixtures (CI proves them).** `booking.test.ts:66-87`: both `createBooking` calls at `:73` and `:75-77` pass `"public", "system"` (the customer's actor), and the comment above `:66` says why: "0107: only a customer-made row is refused; a person-made row may overlap (R1)". Directly after that test add `it("F-046 (0107): two overlapping staff-made bookings both save (R1)", …)`: two `createBooking(…, "user_test")` rows at 15:00-16:00 and 15:30-16:30 on 2027-03-03, both resolve. `booking.test.ts:390-429` (D-036): `b` (`:416`) is created with `"public", "system"`, so its un-cancel re-enters the rule; the in-between row (`:418`) stays `"public", "system"`; after `:421` add: a person-made row `c2` at `range("04")`, cancelled, a customer row booked into `range("04")`, then `setBookingStatus(…, c2.id, "booked", "user_test", "user", { onlyFrom: "cancelled" })` RESOLVES (R1: a staff job may come back beside it). These run only on CI verify; record "not run locally" in the report.
 
@@ -988,6 +1238,7 @@ Leave the replica running for the reviewer (port 55971, `pre` and `post`), and p
 | `calendar.agenda.bookedOnline` | Booked online | Reservada en línea |
 | `calendar.agenda.bookedBy` | Booked by {persona} | Agendada por {persona} |
 | `calendar.agenda.pastOpen` / `pastOpenOne` | {count} past jobs still need Completed or No-show · To do / 1 past job still needs Completed or No-show · To do | {count} trabajos pasados aún necesitan Terminado o No llegó · Pendientes / 1 trabajo pasado aún necesita Terminado o No llegó · Pendientes |
+| `calendar.agenda.truncated` | Only the first {cap} jobs are shown here. Open a single day to see them all. | Aquí solo se muestran los primeros {cap} trabajos. Abra un solo día para verlos todos. |
 | `calendar.job.titleAdd` / `titleMove` | Add a job / Move this job | Agregar un trabajo / Cambiar el horario de este trabajo |
 | `calendar.job.customer` | Customer | Cliente |
 | `calendar.job.search` | Search by name or phone | Busque por nombre o teléfono |
@@ -1308,12 +1559,12 @@ The chain test (a–b, b–c, a and c apart) pins `reach` as the running maximum
 - [ ] **Step 1: Failing fake-client tests.** Create `packages/db/src/booking-agenda.test.ts` with a SCRIPTED fake (each `from()`/`rpc()` consumes the next answer from a queue and records its calls; the shape of `booking-cancel-notices.test.ts:14-33`, plus `rpc`, `gt`, `lt`, `in`, `is`, `not`, `or`, `neq`, `single`, `head` options recorded). Cases, each with its mutation:
   - `createStaffJob` inserts exactly `{ …, author_kind: "person", author_id: "user_1", booker_timezone: null, place_id, meeting_type, meeting_url, hold_until, notice_wanted, closure_kept_at }` with `closure_kept_at` an ISO string only when `closureKept` (mutation: always stamp → FAILS), and writes NO `events` row (mutation: emit → a second `from("events")` FAILS); a 23P01 answer throws `SlotTakenError`.
   - `createBooking`'s insert is exactly the object it writes today, no new key (mutation: give `insertBookingRow`'s `extra` a default of `{ place_id: null }` → the pin FAILS).
-  - `moveBooking` without `job` copies the old row's `place_id` and `meeting_type` into the new insert (mutation: omit them → FAILS); with `job` it writes `note`, `place_id`, `meeting_type`, `hold_until`, `notice_wanted` and `closure_kept_at` from `job` (mutation: ignore `job.note` → FAILS).
+  - `moveBooking` without `job` copies the old row's `place_id` and `meeting_type` into the new insert (mutation: omit them → FAILS); with `job` it writes `note`, `place_id`, `meeting_type`, `hold_until` and `closure_kept_at` from `job`, `notice_wanted` NULL (mutation: ignore `job.note` → FAILS), and records NO `events` insert (mutation: emit as today → the two `from("events")` calls FAIL the pin); without `job` its two events are written exactly as today.
   - `listBookedRanges` selects `id, starts_at, ends_at`.
-  - `listDueReminders` adds `.or("hold_until.is.null,hold_until.lte.<now>")` to BOTH reads (mutation: only the day-before read → the late-read assertion FAILS); `getDueReminderById` adds nothing (plan correction 3; the test asserts its call list is unchanged).
+  - `listDueReminders` adds `.or("hold_until.is.null,hold_settled_at.not.is.null")` to BOTH reads: a staff job is reminded only once its hold is SETTLED (claimed), never on the clock alone, so a reminder can neither precede the confirmation nor go for a job undone after `hold_until` but before the claim (plan review item 4; mutation: `hold_until.lte.<now>` → FAILS; only the day-before read → the late-read assertion FAILS); `getDueReminderById` adds nothing (plan correction 3; the test asserts its call list is unchanged).
   - `listAgendaBookings` filters `lt("starts_at", to)` AND `gt("ends_at", from)` (a job from 23:00 to 01:00 is on both days; mutation: filter on `starts_at` only → FAILS), orders by `starts_at` then `id`, limits `AGENDA_ROW_CAP + 1`, answers `truncated` when the read returned 401 rows, and reads `rescheduled_from_id in (<the cancelled ids>)` once, marking those `replaced` (mutation: mark every cancelled row → FAILS; no cancelled rows → no second read).
-  - `claimJobHold` updates only `hold_settled_at` with `.eq(account).eq(id).lte("hold_until", now).is("hold_settled_at", null)` (mutation: drop the `is` → FAILS; and the update object has no `updated_at`, plan correction 13).
-  - `deleteUnsettledStaffJob`: the delete carries `.eq("author_kind","person").eq("author_id", actor).eq("status","booked").is("hold_settled_at", null).not("hold_until","is",null)` (mutation: drop `is("hold_settled_at")` → FAILS); zero rows then a read answering `{ hold_settled_at: "x" }` → `"settled"`, `{ author_id: "other" }` → `"not_yours"`, `{ status: "cancelled" }` with `bookingWasMoved` true → `"moved"`, no row → `"gone"`.
+  - `claimJobHold` updates only `hold_settled_at` with `.eq(account).eq(id).eq("status","booked").lte("hold_until", now).is("hold_settled_at", null)` (mutations: drop the `is` → FAILS; drop the status term → FAILS; and the update object has no `updated_at`, plan correction 13); `listDueJobHolds` carries the same `eq("status","booked")` (mutation: drop it → FAILS). `setJobNotice` updates only `notice_wanted` with `.not("hold_until","is",null).is("hold_settled_at", null)`.
+  - `deleteUnsettledStaffJob`: the delete carries `.eq("author_kind","person").eq("author_id", actor).eq("status","booked").is("hold_settled_at", null).not("hold_until","is",null)` and `.is("rescheduled_from_id", null)` (mutations: drop `is("hold_settled_at")` → FAILS; drop the `rescheduled_from_id` term → the moved-row case deletes, FAILS); zero rows then a read answering `{ status: "booked", rescheduled_from_id: "old" }` → `"is_move"`, `{ hold_settled_at: "x" }` → `"settled"`, `{ author_id: "other" }` → `"not_yours"`, `{ status: "cancelled" }` with `bookingWasMoved` true → `"moved"`, no row → `"gone"`.
   - `undoStaffMove` calls `rpc("undo_staff_move", { p_account_id, p_new_id, p_old_id, p_cancelled_at, p_now })` and passes each of the five answers through; an unknown answer or an error THROWS.
   - `editJobDetails` writes the four columns, `.eq("status","booked")`, and for each `from` value `.eq(col, v)` or `.is(col, null)` when null (mutation: `.eq(col, null)` → FAILS); never `updated_at`.
   - `countAwaitingOutcomeBefore` THROWS on `{ count: null, error: null }` (the head-count-null lesson; mutation: `count ?? 0` → FAILS).
@@ -1366,9 +1617,9 @@ export async function createStaffJob(
 }
 ```
 
-`moveBooking` (`:928`): the read selects `id, calendar_id, contact_id, note, booker_timezone, status, place_id, meeting_type`; `to` gains `job?: StaffMoveJob`; the insert's `input.note` is `to.job ? to.job.note ?? undefined : old.note ?? undefined`; `insertBookingRow` gets `extra = to.job ? { place_id: to.job.placeId, meeting_type: to.job.meetingType, hold_until: to.job.holdUntil.toISOString(), notice_wanted: to.job.noticeWanted, closure_kept_at: to.job.closureKept ? new Date().toISOString() : null } : { place_id: old.place_id ?? null, meeting_type: old.meeting_type ?? null }`. Nothing else in the function changes; its doc comment gains one paragraph saying what is carried.
+`moveBooking` (`:928`): the read selects `id, calendar_id, contact_id, note, booker_timezone, status, place_id, meeting_type`; `to` gains `job?: StaffMoveJob`; the insert's `input.note` is `to.job ? to.job.note ?? undefined : old.note ?? undefined`; `insertBookingRow` gets `extra = to.job ? { place_id: to.job.placeId, meeting_type: to.job.meetingType, hold_until: to.job.holdUntil.toISOString(), closure_kept_at: to.job.closureKept ? new Date().toISOString() : null } : { place_id: old.place_id ?? null, meeting_type: old.meeting_type ?? null }`. Step 4 of the function (the two `emitLogged` calls, `:1027-1031`) runs only when `!to.job`: a staff move's events are written by the settle of its new row (T6), so a move undone inside its hold leaves no `booking.created` for a deleted row (plan review minor; D8 extended to moves). Nothing else in the function changes; its doc comment gains one paragraph saying what is carried and why a staff move writes no event here.
 
-`listDueReminders`: both reads gain `.or(\`hold_until.is.null,hold_until.lte.${new Date(now).toISOString()}\`)` after `.is("reminder_sent_at", null)` (the unquoted ISO form `messaging.ts:756` already sends), with one comment: "F-046: a staff job's Undo window (hold_until) is not over; the customer has not been told yet. By-id twins deliberately do not filter (plan correction 3)."
+`listDueReminders`: both reads gain `.or("hold_until.is.null,hold_settled_at.not.is.null")` after `.is("reminder_sent_at", null)`, with one comment: "F-046: a staff job is reminded only once its Undo hold is SETTLED, so the confirmation (the settle sends it) always comes first, and a job undone before its claim never gets a reminder. Gated on the claim, never on hold_until: the clock passing proves nothing was settled (plan review item 4). By-id twins deliberately do not filter (plan correction 3)."
 
 The rest (new, after `bookingWasMoved`):
 
@@ -1456,10 +1707,13 @@ export type JobHoldClaim = {
 
 /** F-046 (spec 6.5): the hold's one claim. Conditional on the hold being due and unclaimed, so the after()
  *  job, the pass and the Undo's delete serialise on the row and exactly one wins. Never touches updated_at
- *  (a cancel's version). null = someone else won, or nothing is due. THROWS on a write error. */
+ *  (a cancel's version). Only a BOOKED row is claimed (plan review item 2): a hold that falls due while its row
+ *  is cancelled by a move stays unclaimed, so an Undo of that move brings back a row whose confirmation can still
+ *  go. null = someone else won, the row is not booked, or nothing is due. THROWS on a write error. */
 export async function claimJobHold(db: SupabaseClient, accountId: string, bookingId: string, nowIso: string): Promise<JobHoldClaim | null> {
   const { data, error } = await db.from("bookings").update({ hold_settled_at: nowIso })
-    .eq("account_id", accountId).eq("id", bookingId).lte("hold_until", nowIso).is("hold_settled_at", null)
+    .eq("account_id", accountId).eq("id", bookingId).eq("status", "booked")
+    .lte("hold_until", nowIso).is("hold_settled_at", null)
     .select(CLAIM_COLS);
   if (error) throw new Error(`claimJobHold failed: ${error.message}`);
   return ((data ?? []) as unknown as JobHoldClaim[])[0] ?? null;
@@ -1472,31 +1726,44 @@ export async function stampJobNoticeSent(db: SupabaseClient, accountId: string, 
   if (error) throw new Error(`stampJobNoticeSent failed: ${error.message}`);
 }
 
+/** F-046 (plan review item 2): a staff move's email, decided AFTER moveBooking's cancel of the old row (the action
+ *  re-reads that row: see T10). Only while the new row's hold is unsettled, so the settle reads one settled value.
+ *  true = written. THROWS on a write error. */
+export async function setJobNotice(db: SupabaseClient, accountId: string, bookingId: string, notice: NoticeWanted | null): Promise<boolean> {
+  const { data, error } = await db.from("bookings").update({ notice_wanted: notice })
+    .eq("account_id", accountId).eq("id", bookingId).not("hold_until", "is", null).is("hold_settled_at", null).select("id");
+  if (error) throw new Error(`setJobNotice failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
 /** The jobHolds pass's read, every account (service role): holds due by `beforeIso`, oldest first. */
 export async function listDueJobHolds(db: SupabaseClient, beforeIso: string, limit: number):
   Promise<{ accountId: string; bookingId: string; holdUntil: string }[]> {
   const { data, error } = await db.from("bookings").select("id, account_id, hold_until")
-    .lte("hold_until", beforeIso).is("hold_settled_at", null)
+    .eq("status", "booked").lte("hold_until", beforeIso).is("hold_settled_at", null)
     .order("hold_until", { ascending: true }).limit(limit);
   if (error) throw new Error(`listDueJobHolds failed: ${error.message}`);
   return ((data ?? []) as { id: string; account_id: string; hold_until: string }[])
     .map((r) => ({ accountId: r.account_id, bookingId: r.id, holdUntil: r.hold_until }));
 }
 
-export type UndoAddOutcome = "deleted" | "settled" | "moved" | "not_yours" | "gone";
+export type UndoAddOutcome = "deleted" | "settled" | "moved" | "is_move" | "not_yours" | "gone";
 /** F-046 (D5): the Undo of an add DELETES the row while its hold is unsettled (0091's reason: a cancelled
- *  row would still count as a booking made and sit on the timeline). Only the person who added it. */
+  *  row would still count as a booking made and sit on the timeline). Only the person who added it, and only an ADD:
+ *  a held row a move made (rescheduled_from_id set) is never deleted here, or its old row would stay cancelled and
+ *  the customer would have no appointment at all (plan review item 3); it answers "is_move". */
 export async function deleteUnsettledStaffJob(db: SupabaseClient, accountId: string, bookingId: string, actorId: string): Promise<UndoAddOutcome> {
   const { data, error } = await db.from("bookings").delete()
     .eq("account_id", accountId).eq("id", bookingId).eq("author_kind", "person").eq("author_id", actorId)
-    .eq("status", "booked").is("hold_settled_at", null).not("hold_until", "is", null).select("id");
+    .eq("status", "booked").is("rescheduled_from_id", null).is("hold_settled_at", null).not("hold_until", "is", null).select("id");
   if (error) throw new Error(`deleteUnsettledStaffJob failed: ${error.message}`);
   if ((data?.length ?? 0) > 0) return "deleted";
-  const { data: row, error: rErr } = await db.from("bookings").select("status, author_id, hold_settled_at")
+  const { data: row, error: rErr } = await db.from("bookings").select("status, author_id, hold_settled_at, rescheduled_from_id")
     .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
   if (rErr) throw new Error(`deleteUnsettledStaffJob re-read failed: ${rErr.message}`);
-  const r = row as { status: BookingStatus; author_id: string | null; hold_settled_at: string | null } | null;
+  const r = row as { status: BookingStatus; author_id: string | null; hold_settled_at: string | null; rescheduled_from_id: string | null } | null;
   if (!r) return "gone";
+  if (r.status === "booked" && r.rescheduled_from_id) return "is_move";
   if (r.status === "cancelled" && await bookingWasMoved(db, accountId, bookingId)) return "moved";
   if (r.hold_settled_at) return "settled";
   if (r.author_id !== actorId) return "not_yours";
@@ -1531,10 +1798,10 @@ export async function editJobDetails(db: SupabaseClient, accountId: string, book
 
 `listFeedBookings` (`:817-861`): `cols` gains `meeting_type`, `FeedRaw` and `FeedBookingRow` gain `meeting_type: BookingMeetingType | null`, and the mapped row carries it.
 
-`index.ts`, one line after `:127`: `export { createStaffJob, listAgendaBookings, readAgendaJob, jobWasTold, countAwaitingOutcomeBefore, claimJobHold, stampJobNoticeSent, listDueJobHolds, deleteUnsettledStaffJob, undoStaffMove, editJobDetails, AGENDA_ROW_CAP, type BookingMeetingType, type NoticeWanted, type StaffJobInput, type StaffMoveJob, type AgendaBookingRow, type JobHoldClaim, type UndoAddOutcome, type UndoStaffMoveOutcome, type JobDetails } from "./booking";`
+`index.ts`, one line after `:127`: `export { createStaffJob, listAgendaBookings, readAgendaJob, jobWasTold, countAwaitingOutcomeBefore, claimJobHold, stampJobNoticeSent, setJobNotice, listDueJobHolds, deleteUnsettledStaffJob, undoStaffMove, editJobDetails, AGENDA_ROW_CAP, type BookingMeetingType, type NoticeWanted, type StaffJobInput, type StaffMoveJob, type AgendaBookingRow, type JobHoldClaim, type UndoAddOutcome, type UndoStaffMoveOutcome, type JobDetails } from "./booking";`
 
 - [ ] **Step 3: Run green:** `pnpm --filter @bis/db exec vitest run src/booking-agenda.test.ts src/booking-cancel-notices.test.ts` and `pnpm --filter @bis/db typecheck` and `pnpm --filter web typecheck` (web consumes `listBookedRanges`; the new `id` field breaks nothing). Paste all three.
-- [ ] **Step 4: The live round trips (CI proves them).** Add `describe("F-046 part 1: staff jobs, the agenda read and the hold (0107)")` at the end of `test/booking.test.ts`, with `withTestAccount` cases: (a) `createStaffJob` then read the row back: `author_kind "person"`, `place_id`, `meeting_type`, `hold_until`, `notice_wanted`; (b) a customer `createBooking(…, "public", "system")` over that staff job throws `SlotTakenError` (ASSUMPTION 17a, proven here); (c) `listAgendaBookings` over 2027-04-01 returns a job from 23:00 to 01:00 on both the 1st's and the 2nd's windows, with `place.label`/`address` embedded (ASSUMPTION 17b, proven here); (d) `listDueReminders` at a `now` 23.5 h before the job's start does not list it while `hold_until` is in the future and lists it once `hold_until` is past; (e) `moveBooking` of a staff job without `job` carries `place_id` and `meeting_type`; (f) the claim and the Undo: `claimJobHold` then `deleteUnsettledStaffJob` → `"settled"`, the row still there; reversed order → `"deleted"`, the claim answers `null`; (g) `undoStaffMove` round trip answers `"undone"`. Seed the place with `addPlace` (DB/places.ts) on the same contact. Record "CI only" in the report.
+- [ ] **Step 4: The live round trips (CI proves them).** Add `describe("F-046 part 1: staff jobs, the agenda read and the hold (0107)")` at the end of `test/booking.test.ts`, with `withTestAccount` cases: (a) `createStaffJob` then read the row back: `author_kind "person"`, `place_id`, `meeting_type`, `hold_until`, `notice_wanted`; (b) a customer `createBooking(…, "public", "system")` over that staff job throws `SlotTakenError` (ASSUMPTION 17a, proven here); (c) `listAgendaBookings` over 2027-04-01 returns a job from 23:00 to 01:00 on both the 1st's and the 2nd's windows, with `place.label`/`address` embedded (ASSUMPTION 17b, proven here); (d) `listDueReminders` at a `now` 23.5 h before the job's start does NOT list it while its hold is unsettled, EVEN with `hold_until` already past (the clock is not the gate), and lists it once `claimJobHold` has settled it (plan review item 4); (e) `moveBooking` of a staff job without `job` carries `place_id` and `meeting_type`; (f) the claim and the Undo: `claimJobHold` then `deleteUnsettledStaffJob` → `"settled"`, the row still there; reversed order → `"deleted"`, the claim answers `null`; (g) `undoStaffMove` round trip answers `"undone"`; (h) the move-and-undo race (plan review item 2): a staff add with a confirmation, moved with `job` (its new row's `notice_wanted` NULL, no `events` row for either id), then `claimJobHold` on the OLD row after its `hold_until` answers `null` (cancelled), `undoStaffMove` answers `"undone"`, and `claimJobHold` on the old row now returns it with `notice_wanted: "confirmation"`; (i) `deleteUnsettledStaffJob` on the held NEW row of a move answers `"is_move"` and both rows are unchanged (plan review item 3). Seed the place with `addPlace` (DB/places.ts) on the same contact. Record "CI only" in the report.
 - [ ] **Step 5: Mutations** as named in Step 1, each red by name (the fake file; the live file's are proven on CI).
 - [ ] **Step 6: Commit** every listed path: `feat(db): staff jobs, the agenda's window read, the Undo hold's claim, a move that keeps its address and meeting type, and reminders that wait out the hold`.
 
@@ -1584,14 +1851,14 @@ export async function editJobDetails(db: SupabaseClient, accountId: string, book
 - [ ] **Step 3: The address line, red then green.** `templates/booking.test.ts`: `bookingConfirmationEmail({ …, where: "Home · 1 Main St" })` renders a "Where" row (English) and "Dónde" (Spanish) in both `html` (escaped) and `text`; absent or `""` renders no row (mutation: always render → FAILS); the same two cases for `bookingRescheduledEmail`. Implement: `CONFIRMATION_COPY.en.where = "Where"`, `.es.where = "Dónde"`, `RESCHEDULED_COPY` reuses them as it reuses `move` (`:225-226`); both inputs gain `where?: string`; the row uses `ROW_LABEL_STYLE`/`ROW_VALUE_STYLE` (`:40-42`) under the time. The templates' `tú` voice is unchanged (spec §13).
 - [ ] **Step 4: The settle, red first.** `CAL/job-hold.test.ts`, every dependency injected (`deps.db` a scripted fake for `claimJobHold`/`stampJobNoticeSent`/reads via `vi.mock("@bis/db")` partial, `deps.send` a spy, `deps.now` fixed). Cases:
   - a lost claim (`claimJobHold` → `null`) sends nothing and emits nothing: `"lost"` (mutation: skip the claim → FAILS);
-  - a claim on a row no longer booked (moved or cancelled inside the hold): `"quiet"`, no send, no event;
-  - an add (`rescheduled_from_id` null) emits `booking.created` with actor `author_id`, type `"user"`, payload `{ bookingId, calendarId, contactId }`; a moved row (`rescheduled_from_id` set) emits nothing (mutation: emit for both → FAILS);
+  - a row moved or cancelled inside its hold is never claimed (`claimJobHold` answers `null`, T4): `"lost"`, no send, no event;
+  - an add (`rescheduled_from_id` null) emits `booking.created` with actor `author_id`, type `"user"`, payload `{ bookingId, calendarId, contactId }`; a staff move's new row emits that AND `booking.status_changed` `{ bookingId: rescheduled_from_id, status: "cancelled" }`, the two events `moveBooking` no longer writes for a staff move (T4; mutation: skip the second → FAILS);
   - `notice_wanted` null: `"quiet"` after the event; a started job (`starts_at <= now`) or a hold more than `JOB_NOTICE_MAX_AGE_MS` old: `"too_late"`, no send (mutation: drop the start check → FAILS);
   - `confirmation`: one send with `kind: "staff.booking_confirmation"`, `contactId`, the contact's language (`recipientLanguage(contact.language, account.language)`; a Spanish contact gets Spanish subject AND body AND `language: "es"`), `to` the contact's email, `where` built from the place (`label · address`, either alone when one is null), the cancel and calendar-file links, and the move link ONLY when the calendar is enabled (mutation: always add it → FAILS); then `stampJobNoticeSent` once: `"sent"`;
   - `moved`: `kind: "staff.booking_moved"` with `bookingRescheduledEmail`;
   - a send that throws: `"failed"`, logged by booking id (never the address), `stampJobNoticeSent` never called, and the send is NOT retried (one call; mutation: retry once → FAILS);
   - `settleJobHold` never throws: a read that throws answers `"failed"`;
-  - `settleAfterWindow` sleeps exactly `UNDO_WINDOW_MS + NOTICE_GRACE_MS` before the claim (the `sleep` spy);
+  - `settleAfterWindow` sleeps exactly `UNDO_WINDOW_MS + NOTICE_GRACE_MS` before the claim (the `sleep` spy), or `waitMs` when given;
   - `jobNoticeAvailability`: no email → `"no_email"`; suppressed account → `"suppressed_account"`; a blocked address → `"address_blocked"`; else `"available"` (the contact read on `readDb`, the two facts on `writer`).
   Run `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/job-hold.test.ts"`. Paste the red line.
 - [ ] **Step 5: The settle.** `CAL/job-hold.ts`:
@@ -1618,8 +1885,8 @@ import type { NoticeAvailability } from "./cancel-flow";
 
 /**
  * F-046 part 1 (spec 6.5): a staff add or move is held for its Undo window; whoever settles the hold first
- * (this module's after() job, or the jobHolds cron pass) CLAIMS it (claimJobHold), then writes the add's
- * booking.created (D8) and sends the email the person ticked, through the email gate, in the customer's
+ * (this module's after() job, or the jobHolds cron pass) CLAIMS it (claimJobHold, booked rows only), then writes the hold's
+ * events (D8: booking.created, and for a move the old row's cancel) and sends the email the person ticked, through the email gate, in the customer's
  * own language. Claim-then-send: a failed send is logged and the drawer says so; it is NEVER retried,
  * because a retry after an unclear send emails twice (cancel-notice.ts's rule). Never throws.
  */
@@ -1638,14 +1905,19 @@ export async function settleJobHold(accountId: string, bookingId: string, deps: 
   try {
     const claim = await claimJobHold(db, accountId, bookingId, now.toISOString());
     if (!claim) return "lost";
-    if (claim.status !== "booked") return "quiet";
-    if (claim.rescheduled_from_id === null) {
-      try {
-        await emit(db, accountId, "booking.created", claim.author_id ?? "system",
-          { bookingId: claim.id, calendarId: claim.calendar_id, contactId: claim.contact_id }, "user");
-      } catch (e) {
-        console.error(`${tag}: booking.created not recorded: ${String(e)}`);
+    if (claim.status !== "booked") return "quiet";      // defensive: claimJobHold claims booked rows only
+    // D8, extended to moves (plan review): the hold's events are written here, once it is settled, never at
+    // insert, so an add or a move undone inside its hold leaves none. A move's are moveBooking's own two.
+    const actor = claim.author_id ?? "system";
+    try {
+      await emit(db, accountId, "booking.created", actor,
+        { bookingId: claim.id, calendarId: claim.calendar_id, contactId: claim.contact_id }, "user");
+      if (claim.rescheduled_from_id !== null) {
+        await emit(db, accountId, "booking.status_changed", actor,
+          { bookingId: claim.rescheduled_from_id, status: "cancelled" }, "user");
       }
+    } catch (e) {
+      console.error(`${tag}: the hold's events not recorded: ${String(e)}`);
     }
     if (!claim.notice_wanted) return "quiet";
     if (!(Date.parse(claim.starts_at) > now.getTime())
@@ -1699,8 +1971,9 @@ export async function settleJobHold(accountId: string, bookingId: string, deps: 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** The after() job: waits out the Undo window and its grace, then settles. Never throws. */
 export async function settleAfterWindow(accountId: string, bookingId: string, origin: string | null,
-  deps: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void> } = {}): Promise<JobHoldOutcome> {
-  await (deps.sleep ?? realSleep)(UNDO_WINDOW_MS + NOTICE_GRACE_MS);
+  deps: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void>; waitMs?: number } = {}): Promise<JobHoldOutcome> {
+  // waitMs: the Undo of a move re-arms its restored row with the time left on that row's own hold (T10).
+  await (deps.sleep ?? realSleep)(deps.waitMs ?? UNDO_WINDOW_MS + NOTICE_GRACE_MS);
   return settleJobHold(accountId, bookingId, { db: deps.db ?? serviceDb(), origin });
 }
 
@@ -1729,13 +2002,13 @@ export async function jobNoticeAvailability(readDb: SupabaseClient, writer: Supa
 
 **Tier:** low · **Owner:** bis-booking · **Wave:** 3
 
-**Files:** `apps/web/src/lib/booking/feed-content.ts` (`:10-45`), `feed-content.test.ts`; `ACCT/dashboard/affected-appointment-row.tsx:72` (+ its test); `ACCT/setup/steps/step-shared.tsx:74`, `step-shared.test.ts` (new: nothing pins `STEP_PATH` today); `CAL/calendar-settings.tsx` (one `id`), `calendar-settings.test.ts`; `apps/web/src/lib/palette/registry.ts:75-76`, `registry.test.ts`; `apps/web/src/app/b/[publicId]/move/[token]/actions.ts:133`, `actions.test.ts`, `data.ts:28-30`; `apps/web/src/app/b/[publicId]/cancel/[token]/data.ts:5-7`.
+**Files:** `apps/web/src/lib/booking/feed-content.ts` (`:10-45`), `feed-content.test.ts`; `ACCT/dashboard/affected-appointment-row.tsx:72` (+ its test); `ACCT/setup/steps/step-shared.tsx:74`, `step-shared.test.ts` (new: nothing pins `STEP_PATH` today); `CAL/calendar-settings.tsx` (one `id`), `calendar-settings.test.ts`; `apps/web/src/lib/palette/registry.ts:76-77`, `registry.test.ts`; `apps/web/src/app/b/[publicId]/move/[token]/actions.ts:133`, `actions.test.ts`, `data.ts:28-30`; `apps/web/src/app/b/[publicId]/cancel/[token]/data.ts:5-7`.
 
 **Interfaces:** Consumes `FeedBookingRow.meeting_type` (T4).
 
 - [ ] **Step 1: Failing tests.** `feed-content.test.ts`: a row with `meeting_type: "video"` on a phone calendar reads the video kind (mutation: use `o.meetingType` only → FAILS); a row with `null` reads the calendar's; each event's description link is `…/calendar?job=<row.id>` (mutation: the old page link → FAILS). The move action test: a booking row with `meeting_type: "video"` on an `in_person` calendar mints a room (mutation: read `ctx.calendar.meeting_type` → FAILS); `null` on a video calendar still mints. The dashboard row links `…/calendar?job=<id>`. The setup step's hours link is `/calendar?from=setup#booking-settings`. The palette's `/calendar` terms include the five new ones.
 - [ ] **Step 2: Run red** (each file by path) and paste the lines.
-- [ ] **Step 3: Implement.** `FeedContentRow` gains `meeting_type: MeetingKind | null`; `feedEvents` reads `s[\`kind_${row.meeting_type ?? o.meetingType}\`]` per row and builds the description per row with `?job=${row.id}`. `cancel/[token]/data.ts`'s `BOOKING_COLS` gains `, meeting_type` (0107 is load-bearing for this read; it is on every project before the merge deploy, checklist steps 5 and 7); `MoveContext.row`'s `Pick` gains `"meeting_type"`; the move action's test reads `(ctx.row.meeting_type ?? ctx.calendar.meeting_type) === "video"`. `affected-appointment-row.tsx:72`: `` `/dashboard/accounts/${accountId}/calendar?job=${a.id}` ``. `CalendarSettings`' outer card gets `id="booking-settings"`; `step-shared.tsx:74` becomes `"/calendar?from=setup#booking-settings"`. Palette `:75`: append `"agenda", "schedule", "add job", "trabajo", "agregar trabajo"` with a comment line "F-046 part 1: the agenda card".
+- [ ] **Step 3: Implement.** `FeedContentRow` gains `meeting_type: MeetingKind | null`; `feedEvents` reads `s[\`kind_${row.meeting_type ?? o.meetingType}\`]` per row and builds the description per row with `?job=${row.id}`. `cancel/[token]/data.ts`'s `BOOKING_COLS` gains `, meeting_type` (0107 is load-bearing for this read; it is on every project before the merge deploy, checklist steps 5 and 7); `MoveContext.row`'s `Pick` gains `"meeting_type"`; the move action's test reads `(ctx.row.meeting_type ?? ctx.calendar.meeting_type) === "video"`. `affected-appointment-row.tsx:72`: `` `/dashboard/accounts/${accountId}/calendar?job=${a.id}` ``. `CalendarSettings`' outer card gets `id="booking-settings"`; `step-shared.tsx:74` becomes `"/calendar?from=setup#booking-settings"`. Palette `:76-77`: append `"agenda", "schedule", "add job", "trabajo", "agregar trabajo"` with a comment line "F-046 part 1: the agenda card".
 - [ ] **Step 4: Run green:** `pnpm --filter web exec vitest run src/lib/booking "src/app/b/[publicId]" src/lib/palette "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard" "src/app/(dashboard)/dashboard/accounts/[accountId]/setup" "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/calendar-settings.test.ts"`, `pnpm --filter web typecheck` and `pnpm --filter web lint`. Paste all three.
 - [ ] **Step 5: Commit** every listed path: `feat(booking): a job's own meeting type reaches the owner's feed and the customer's move, and every link to a booking opens its drawer`.
 
@@ -1764,7 +2037,7 @@ export async function jobNoticeAvailability(readDb: SupabaseClient, writer: Supa
 
 **Interfaces:** Consumes `listDueJobHolds` (T4), `settleJobHold` (T6). Produces `jobHoldsPass` (key `"jobHolds"`), `JOB_HOLD_BUDGET_MS = 10_000`, `JOB_HOLD_SWEEP_SLACK_MS = 120_000`, `JOB_HOLD_SWEEP_BATCH = 25`.
 
-- [ ] **Step 1: The text-side filter, red then green.** `automations-hold.test.ts` (scripted fake): `listDueSmsReminders` and `listDueAppointmentConfirms` each add `.or("hold_until.is.null,hold_until.lte.<now>")` to their bookings read (mutation: drop one → FAILS naming it); their by-id twins add nothing (plan correction 3). Implement in `automations.ts` after each `.is(…_sent_at / confirm_asked_at, null)`, with T4's comment. Run by path.
+- [ ] **Step 1: The text-side filter, red then green.** `automations-hold.test.ts` (scripted fake): `listDueSmsReminders` and `listDueAppointmentConfirms` each add `.or("hold_until.is.null,hold_settled_at.not.is.null")` to their bookings read: gated on the hold's claim, never on the clock (plan review item 4; mutations: drop one → FAILS naming it; `hold_until.lte.<now>` → FAILS); their by-id twins add nothing (plan correction 3). Implement in `automations.ts` after each `.is(…_sent_at / confirm_asked_at, null)`, with T4's comment. Run by path.
 - [ ] **Step 2: The pass, red first.** `job-holds.test.ts` (mock `@/app/(dashboard)/dashboard/accounts/[accountId]/calendar/job-hold` and `@bis/db`): it reads `listDueJobHolds(ctx.db, now − 2 min, 25)` (mutation: no slack → FAILS); settles each row with `{ db: ctx.db, origin: ctx.origin, send }` where `send` calls `ctx.email.send` (mutation: omit `send` → the after() path's gate is used, FAILS on the spy); counts `sent`, `failed`, `quiet`, `tooLate`, `lost`; stops starting rows once `JOB_HOLD_BUDGET_MS` of wall clock is spent and counts the rest in `deferred` (a fake clock); never dereferences a `@bis/db` export at module scope.
 - [ ] **Step 3: The pass.**
 
@@ -1828,7 +2101,7 @@ export const jobHoldsPass: Pass = {
 **Files:**
 - Create: `CAL/agenda-actions.ts`, `CAL/agenda-actions.test.ts`, `CAL/prove-booking.ts`
 - Modify: `CAL/actions.ts` (delete `proveBooking`, `:179-198`, and import it from `./prove-booking`)
-- Modify: `ACCT/in-account-service-reads.test.ts` (one `ALLOWED` line, `proven-target`); `ACCT/access-log-routes.test.ts` (one `each(…)` line after `:88`)
+- Modify: `ACCT/in-account-service-reads.test.ts` (one `ALLOWED` line, `proven-target`); `ACCT/access-log-routes.test.ts` (two `each(…)` lines after `:88`)
 
 **Interfaces:** Produces the server actions in "Shared facts". Consumes T3's rules, T4's writes, T6's `settleAfterWindow` and `jobNoticeAvailability`, `getMeetingProvider()` (`WEB/lib/meetings/provider.ts:18`), `readSlotClosures` and `slotConfigFrom` (`availability.ts`), `listContactsOnNumber` (`DB/voice.ts:777`), `normalisePhone` (`@bis/db/phone`), `createContact` (`matchBy: "email_only"`, `DB/contacts.ts:42-48`), `getContact`, `listContactPlaces`, `listBookedRanges`, `getCalendarForAccount`.
 
@@ -1840,13 +2113,14 @@ export const jobHoldsPass: Pass = {
   - an existing customer is proven with `getContact` on the request client, and refused when missing, archived, merged (`merged_into`) or holding a shared number (mutation: skip the archived check → FAILS);
   - a quick-add phone already on a contact (`listContactsOnNumber` with the E.164, holding rows left out) answers `{ needs: { phoneOwner } }` and writes NOTHING (mutation: write first → FAILS); `addAsNew: true` calls `createContact` with `matchBy: "email_only"` and the phone AS TYPED (mutation: pass the E.164 → FAILS; the F-009 scan also catches it); the name splits on the first space into first and last;
   - the place must be one `listContactPlaces` returns for that customer, active (mutation: skip → a place of another customer saves, FAILS);
+  - a `newPlace` (plan review minor): its fields are parsed with `parsePlaceFields` BEFORE any write (an invalid one → `calendar.job.saveFailed`, nothing written, not even a quick-add contact); then the customer is made when new (`createContact`), then the place is saved on that customer with `addPlace` on the request client (`{ contactId, groupId: null }`, the places card's own writer), then the job names it; the recorded call order is contact, place, booking (mutation: place first → no contact id yet, FAILS); a place write that fails leaves the contact and answers `calendar.job.saveFailed` (the quick-add contact stays, spec 6.1);
   - a warning not in `seen` answers `{ needs: { warnings } }` and writes nothing; a second press sending exactly those keys writes; a NEW overlap appearing between the presses (a third id) writes nothing again (mutation: compare kinds, not keys → FAILS);
   - video with no provider adds the `no_video` warning; with a provider, a room is minted with `{ bookingId: calendar.public_id, endsAt }` before the write; a provider that throws costs no job;
   - `createStaffJob` receives `holdUntil = now + 15 000 ms`, `noticeWanted: "confirmation"` only when `notify` AND availability is `"available"`, and `closureKept: true` only when the `closed` warning was among the accepted ones (mutation: always true → FAILS);
   - `after()` is scheduled with `settleAfterWindow(accountId, bookingId, origin)` (mutation: no after() → FAILS); the answer carries `notice` (`"scheduled"`, `"none"`, `"no_email"`, `"address_blocked"`), `startsAt` and the customer's first name;
-  - `undoAddJobAction`: `deleted` → ok and emits `booking.add_undone`; `settled` → `calendar.job.undoTooLate` with `settled: true`; `moved` → `calendar.job.undoMovedSince`; others → `calendar.bookings.statusUpdateFailed`; `proveBooking` first;
-  - `moveJobAction`: same validation and warnings with `excludeId` the job itself; same time and length → `editJobDetails(from = opened, to = draft)`, no new row, no email, answers `mode: "edited"` with both sets; a new time → `moveBooking(…, { job: { …, holdUntil, noticeWanted } })` where `noticeWanted` is `"confirmation"` when the job's own hold is unsettled and wanted a confirmation, else `"moved"` when `notify`, else null (mutation: always `"moved"` → FAILS); `after()` settles the NEW id; `BookingNotMovableError` → `calendar.job.changed`;
-  - `undoMoveJobAction` proves BOTH ids (mutation: prove only the new → FAILS), calls `undoStaffMove` with the move's `cancelledAt`, maps `undone` (and emits `booking.status_changed` `{ status: "booked" }` for the old id, ai-acts.ts:99-107's shape), `time_taken` → `moveUndoTaken`, `too_late` → `undoTooLate`, the rest → `changed`;
+  - `undoAddJobAction`: `deleted` → ok and emits `booking.add_undone`; `settled` → `calendar.job.undoTooLate` with `fallback: true`; `is_move` → `calendar.bookings.statusUpdateFailed` with `fallback: true` and NOTHING deleted (plan review item 3; mutation: map it to ok → FAILS); `moved` → `calendar.job.undoMovedSince`; others → `calendar.bookings.statusUpdateFailed`; `proveBooking` first;
+  - `moveJobAction`: same validation and warnings with `excludeId` the job itself; same time and length → `editJobDetails(from = opened, to = draft)`, no new row, no email, answers `mode: "edited"` with both sets; a new time → `moveBooking(…, { job: { note, placeId, meetingType, holdUntil, closureKept } })` (the new row held, its `notice_wanted` NULL), THEN a re-read of the OLD row (`readAgendaJob` on the service client, after `moveBooking` has cancelled it, so no settler can claim it any more: claims take booked rows only), THEN `setJobNotice(newId, n)` with `n` = `"confirmation"` when the old row's `notice_wanted` was `"confirmation"` and its `hold_settled_at` is NULL (the customer never heard of the old time, whatever the tick says), else `"moved"` when `notify`, else null (plan review item 2). Both races are tested: old hold unclaimed at the re-read → `"confirmation"` (mutation: decide before the move from the drawer's data → the claimed-during-move case sends two confirmations, FAILS); old hold claimed before the cancel → `"moved"` (mutation: always `"confirmation"` while the old row wanted one → FAILS). A `setJobNotice` that answers false or throws is logged and the answer's `notice` is `"none"`; `after()` settles the NEW id; `BookingNotMovableError` → `calendar.job.changed`;
+  - `undoMoveJobAction` proves BOTH ids (mutation: prove only the new → FAILS), calls `undoStaffMove` with the move's `cancelledAt`, maps `undone` (it writes NO event: the move wrote none, T4, and the restored row's own settle writes `booking.created` if it never settled; and it RE-ARMS the restored row: `after(() => settleAfterWindow(accountId, oldId, origin, { waitMs: max(0, hold_until − now) + NOTICE_GRACE_MS }))`, because the old row's own `after()` may already have run and lost its claim while the row was cancelled; exactly one settler wins, and an old row that settled before the move is never claimed again; plan review item 2; mutation: no re-arm → FAILS), `time_taken` → `moveUndoTaken`, `too_late` → `undoTooLate`, the rest → `changed`;
   - `undoEditJobAction` writes `editJobDetails(from = to, to = from)`;
   - no action names `serviceDb` except for the bookings writes and the two suppression reads (the file is `proven-target`), and none passes `duringPause`.
 - [ ] **Step 3: Run red.** Paste.
@@ -1883,7 +2157,7 @@ export type JobDrawerView = {
   meetingType: BookingMeetingType; meetingUrl: string | null; status: BookingStatus; statusWord: string;
   madeBy: string; madeAt: string; confirmReply: "yes" | "no" | null;
   email: { state: "sent" | "pending" | "failed" | "none"; kind: NoticeWanted | null; at: string | null };
-  holdOpen: boolean; started: boolean; canWrite: boolean; canCloseOut: boolean;
+  holdOpen: boolean; isMove: boolean; started: boolean; canWrite: boolean; canCloseOut: boolean;   // isMove: rescheduled_from_id set
   opened: JobOpened; told: boolean; recordHref: string;
 };
 export function JobDrawer(props: { accountId: string; view: JobDrawerView; closeHref: string; timezone: string;
@@ -1895,10 +2169,10 @@ export function JobDrawer(props: { accountId: string; view: JobDrawerView; close
   - `ok` → a success toast whose words follow `notice` (`calendar.job.added` only for `"scheduled"`, `addedQuiet` otherwise, plus `noEmail`/`emailBlocked` lines), formatted with `formatWhen(startsAt, timezone, locale)`, carrying `calendar.job.undo` for EXACTLY `UNDO_WINDOW_MS` and dismissed then even if hovered (`cancel-booking.ts`'s rule; mutation: `duration: 4000` → FAILS);
   - Undo calls `undoAddJobAction(accountId, bookingId)` and toasts `calendar.job.undone` or the error key;
   - move: `mode: "edited"` → `calendar.job.edited` with Undo calling `undoEditJobAction(accountId, id, from, to)`; `mode: "moved"` → `moved`/`movedQuiet` with Undo calling `undoMoveJobAction(accountId, newId, oldId, cancelledAt)` (mutation: pass the old id first → FAILS).
-  `job-drawer-handlers.ts`: `cancelFromDrawer({ view, … })` calls `undoAddJobAction` when `view.holdOpen` and falls back to the ordinary cancel flow (`cancel-flow.ts`/`cancel-booking.ts`'s `runCancelButton`) when that answers `settled: true` (mutation: always the ordinary cancel → a job the customer never heard of gets a notice dialog, FAILS); otherwise the ordinary flow directly; `closeOut(status)` calls `setBookingStatusAction`. Both files under `"use client"`-free modules so they test without React.
+  `job-drawer-handlers.ts`: `cancelFromDrawer({ view, … })` calls `undoAddJobAction` only when `view.holdOpen && !view.isMove` (an ADD inside its hold, D7), and falls back to the ordinary cancel flow (`cancel-flow.ts`/`cancel-booking.ts`'s `runCancelButton`) when that answers `fallback: true` (mutation: always the ordinary cancel → a job the customer never heard of gets a notice dialog, FAILS); a held MOVE (`isMove`) goes straight to the ordinary cancel flow, never to the add's Undo and never to an Undo of the move: Cancel means "this job is off", and undoing the move would bring back the old time the person did not ask for; the cancelled new row is never claimed (claims take booked rows only), so its "moved" email never goes (plan review item 3; mutation: route a held move to `undoAddJobAction` → the server answers `is_move` and the test asserts the ordinary flow ran, FAILS if it did not); otherwise the ordinary flow directly; `closeOut(status)` calls `setBookingStatusAction`. Both files under `"use client"`-free modules so they test without React.
 - [ ] **Step 2: Run red.** Paste.
 - [ ] **Step 3: Implement the two components.**
-  - The sheet: `components/ui/sheet.tsx`'s `Sheet`/`SheetContent side="right"` (full height on a phone); fields in spec 5.4's order; the customer search fetches `GET /api/accounts/${accountId}/search?q=` (debounced 250 ms, minimum two characters as the route itself requires) and lists its `contacts` hits; "New customer" swaps in Name and Phone; once a customer is chosen, the address list fetches `/api/accounts/${accountId}/contacts/${id}/places` and shows active places ("No address" first, "New address" last, which opens `place-dialog.tsx`'s fields and calls `addPlaceAction(accountId, { kind: "contact", id }, raw)` first — read `places-actions.ts:127-150` for its argument shape); the notify tick asks `jobNoticeOptionAction` and is disabled with `noEmail`/`emailBlocked` as its description; the warnings block (`calendar.job.checkFirst` and one line per warning, `warn.overlaps`/`overlapsOne` through `plural()` with `agendaTime(at, timezone, locale, false)`) sits above the button; ONE primary, the save button; Cancel is ghost. Five-minute `step={300}` on the time input; length a select of 5-minute steps 5–720 defaulting to `defaultMinutes`.
+  - The sheet: `components/ui/sheet.tsx`'s `Sheet`/`SheetContent side="right"` (full height on a phone); fields in spec 5.4's order; the customer search fetches `GET /api/accounts/${accountId}/search?q=` (debounced 250 ms, minimum two characters as the route itself requires) and lists its `contacts` hits; "New customer" swaps in Name and Phone; once a customer is chosen, the address list fetches `/api/accounts/${accountId}/contacts/${id}/places` and shows active places ("No address" first, "New address" last, which opens `place-dialog.tsx`'s fields and sends them as the draft's `newPlace`; the ACTION saves the place after the customer exists, so New address works for a new customer too (plan review minor: a place needs its contact first; the sheet never calls `addPlaceAction` itself). For a new customer the list shows "No address" and "New address" only); the notify tick asks `jobNoticeOptionAction` and is disabled with `noEmail`/`emailBlocked` as its description; the warnings block (`calendar.job.checkFirst` and one line per warning, `warn.overlaps`/`overlapsOne` through `plural()` with `agendaTime(at, timezone, locale, false)`) sits above the button; ONE primary, the save button; Cancel is ghost. Five-minute `step={300}` on the time input; length a select of 5-minute steps 5–720 defaulting to `defaultMinutes`.
   - The drawer: a right sheet with flat sections (a mono label and row rules, never a glass card inside the glass sheet, the record drawer's rule); customer name and `tel:` phone; when, length, what, address, meeting type word and Join link (`calendar.bookings.join`), status as `DotPill` dot and word (`calendar.bookings.status.*`), who made it and when, the confirm reply (`CONFIRM_REPLY_TREATMENTS`, `CAL/confirm-reply.ts`), and the email state (`emailSent`/`emailPending`/`emailFailed` or the moved trio by `email.kind`). Actions, ALL `variant="ghost"`: Move (swaps the body for `<JobSheet mode="move">` inline), Cancel (when `canWrite` and booked), Mark completed and No-show (when `canCloseOut` and `started`), Open record (a link). NO `variant="default"` button anywhere in the drawer (owner decision 2). Esc and the close button `router.replace(closeHref, { scroll: false })` and return focus to `#booking-<id>`.
   - Every string through `t(m, key, locale)` / `plural`; tokens only; `:focus-visible` rings; `prefers-reduced-motion` respected by the sheet primitive.
 - [ ] **Step 4: Styleguide.** `job-demo.tsx` renders the sheet (open, with a warnings block and the phone-owner offer) and the drawer (a booked staff job with a pending email; a cancelled customer booking), in both themes, from fixed specimens, no actions wired (handlers are no-ops). `job-demo.test.ts` (`renderToStaticMarkup`): the drawer markup has no `data-variant="default"` (or the button component's primary marker — read `components/ui/button.tsx`), the sheet has exactly one; every visible string is a catalogue value.
@@ -1939,6 +2213,7 @@ export function buildAgendaView(i: {
   - the fall-back day's two "1:30" rows carry different labels (zone names; mutation: drop the `zoneShift` pass-through → FAILS);
   - `closed`: a closed-day range with a reason → `calendar.agenda.closed` with `business.reason.<reason>`; without → `closedPlain`; a storm in force → `business.state.storm`; Closed today → `business.state.closedToday`; running late → `null` (mutation: treat late as closed → FAILS); probed at `max(day start, now)` so today's 9 AM Closed today shows on today's head;
   - every `href` keeps `view` and `day` and adds `job` (mutation: drop `day` → FAILS).
+  - `truncated` (the 400-row cap, `AGENDA_ROW_CAP`, plan review minor): the card renders `calendar.agenda.truncated` with `{cap}` = 400 above the rows, and never claims the view is complete (mutation: ignore `truncated` → FAILS);
 - [ ] **Step 2: Failing page tests** (`page.test.ts`; the `@bis/db` mock gains the new reads, `@/lib/access-log/note` is mocked with a `noteOpened` spy, `./agenda-card` and `./job-drawer` are spy stubs like `calendarSettingsMock` at `:11`):
   - the agenda renders BEFORE the settings card in the markup (mutation: old order → FAILS);
   - `PageHeader` carries no button; Add job is inside the agenda card (the card's props carry `canAdd`) (mutation: an action in `PageHeader` → FAILS);
@@ -1949,7 +2224,7 @@ export function buildAgendaView(i: {
 - [ ] **Step 3: Run red.** Paste.
 - [ ] **Step 4: Implement.**
   - `page.tsx`: parse `view`, `day`, `job` (uuid or ignored); `today = dayKey(new Date(nowIso), account.timezone)`; when `job` is present, `readAgendaJob(db, accountId, job)` (request client), then `await noteOpened(access, accountId, { kind: "contact", recordId: row.contact_id })` in the page function itself (correction 7), then build the drawer view; the rest of the page as today minus `listCalendarBookings` and `BookingsList`; the Agenda card first and full width inside `<Suspense fallback={<AgendaSkeleton />}>`, then the existing two-column grid (`:194-238`) without `BookingsList`. `export const maxDuration = 60` stays (the after() settle runs inside the actions this page hosts).
-  - `agenda-card.tsx` (async server component): reads `listAgendaBookings` for the window, `countAwaitingOutcomeBefore(db, accountId, startOfDay(today, timezone).toISOString())`, `listPeopleNames` for the person author ids, `getVoiceProfile` persona (best effort), `getBusinessStatusRow` and `listClosedDaysFrom` (best effort: a failed closure read renders no closed heads, logged); catches its own failure (error state); renders the header (title, `Day | Week` as links with `aria-current`, Back · Today · Next links, the date, **Add job** — the card's ONE primary, `canAdd` only), the "earlier days" line (`pastOpen`/`pastOpenOne`, linking `../tasks`, only when the count is above 0), then `AgendaDay` or `AgendaWeek`, and the empty state (`emptyTitle` + `emptyBody` + Add job; `emptyTechnician` for a Technician).
+  - `agenda-card.tsx` (async server component): reads `listAgendaBookings` for the window, `countAwaitingOutcomeBefore(db, accountId, startOfDay(today, timezone).toISOString())`, `listPeopleNames` for the person author ids, `getVoiceProfile` persona (best effort), `getBusinessStatusRow` and `listClosedDaysFrom` (best effort: a failed closure read renders no closed heads, logged); catches its own failure (error state); renders `calendar.agenda.truncated` when the read answered `truncated`, then renders the header (title, `Day | Week` as links with `aria-current`, Back · Today · Next links, the date, **Add job** — the card's ONE primary, `canAdd` only), the "earlier days" line (`pastOpen`/`pastOpenOne`, linking `../tasks`, only when the count is above 0), then `AgendaDay` or `AgendaWeek`, and the empty state (`emptyTitle` + `emptyBody` + Add job; `emptyTechnician` for a Technician).
   - `agenda-day.tsx` ("use client"): rows are `<button id="booking-<id>">` in time order on `--surface-2` inside the `--surface-1` card, hover `--surface-3`, `:focus-visible` ring; ArrowUp/ArrowDown move focus between rows; click and Enter `router.push(row.href, { scroll: false })`; a `side` item is two columns, a `stack` stacks; "Overlaps" and "Outside open hours" and "Closed" as `DotPill` dot and word (`--warn`, `--crit`); free rows "10:00 · Add job" open `JobSheet` prefilled.
   - `agenda-week.tsx` ("use client"): seven columns at `md` and up (each day head a link to that Day), one day at a time under a strip of seven day links below `md` (`aria-label` `calendar.agenda.daysLabel`).
   - `agenda-skeleton.tsx`: five rows shaped like Day rows (`components/ui/skeleton.tsx`), no spinner.
@@ -1991,7 +2266,7 @@ export function buildAgendaView(i: {
 **Files:** create `apps/web/e2e/calendar-agenda.spec.ts`; modify `apps/web/e2e/booking.spec.ts:370-390`.
 
 - [ ] **Step 1: `booking.spec.ts`'s calendar steps.** `:370-372` and `:380-390` read the old list. Rewrite them against the drawer, asserting the same things: open `/dashboard/accounts/${accountId}/calendar?job=<id>` (read the booking id with the service client by its cancel token, which step 2 already holds as `cancelHref`), scope every locator to `page.getByRole("dialog")` or `getByRole("main")`, see the booker's name and the note text in the drawer, press its Cancel (`m["calendar.bookings.cancel"]`), then the existing dialog steps unchanged. Nothing else in the spec moves.
-- [ ] **Step 2: The new spec**, on the per-run fixture account only (copy `fullFixture()`, `CLIENT_FIXTURE_FILE` and the timeout header from `contacts-archive.spec.ts`, and `one-switch.spec.ts`'s `beforeAll`/`afterAll` calendar seed-and-restore: Mon–Fri 09:00–17:00 through `updateCalendarSettings`, restored after). Seed one contact with an email by direct insert. As the fixture Owner:
+- [ ] **Step 2: The new spec**, on the per-run fixture account only (copy `fullFixture()`, `CLIENT_FIXTURE_FILE` and the timeout header from `contacts-archive.spec.ts`, and `one-switch.spec.ts`'s `beforeAll`/`afterAll` calendar seed-and-restore: Mon–Fri 09:00–17:00 through `updateCalendarSettings`, restored after). Seed one contact with an email by direct insert. The seed also fixes `slotDurationMinutes: 60`, `bufferMinutes: 0`, `minNoticeHours: 1` and `maxAdvanceDays: 30` (restored after), so step 6's 10:00 control is a real slot: with a buffer the 10:00 slot would be blocked by the 11:00 job and the control could never pass (plan review minor). As the fixture Owner:
   1. open the Calendar on a weekday at least two days out (`?view=day&day=…`): the agenda is in `main` before the Booking settings card;
   2. click the free row "10:00 · Add job" (`m["calendar.agenda.addAt"]` with the time), choose the seeded contact, type a what, save: the toast reads `m["calendar.job.added"]`'s opening words; the row is on the Day;
   3. press the toast's Undo within the window: `m["calendar.job.undone"]`; after a reload the 10:00 row is gone and the free row is back;
@@ -2015,13 +2290,14 @@ export function buildAgendaView(i: {
 3. **Push after wave 2 and after wave 5.** CI `verify` builds its own stack from the branch's migrations and runs every `withTestAccount` case (T1 Step 7, T4 Step 4, T5 Step 4). Read the check runs FOR THE HEAD SHA (`gh api repos/:owner/:repo/commits/<sha>/check-runs`); a live test counts as proven only from that read. The `e2e` job's migration check fails naming 0107 until step 5; that red is expected.
 4. **T13** (docs) lands any time before the PR.
 5. **0107 to bis-ci:** `ci-project-setup.yml` from `feat/calendar-agenda`, push-dry-run, then push.
-6. **Production, read-only first:** `select count(*) from public.bookings;` (ASSUMPTION 17d: expect a few hundred at most; far more means an off-peak apply). Then apply with MCP `apply_migration`, name `calendar_agenda`, the file's exact text (ASCII only, no backslash: the `\u` trap does not apply).
-7. **Parity** (`docs/runbooks/ci-supabase-project.md`): the six columns, `pg_get_constraintdef` of `bookings_no_overlap` and the five new constraints, `pg_get_triggerdef` of `bookings_slot_guard`, md5 of `pg_get_functiondef` for `app.bookings_slot_guard()` and `public.undo_staff_move(…)`, and both functions' EXECUTE grants, equal between bis-ci and production.
-8. **Local e2e** (T14): no `screenshots.yml` run in progress; one gate at a time.
-9. **PR** from `feat/calendar-agenda`; squash-merge only after `verify` and `e2e` are green FOR THE HEAD SHA.
-10. **Owner smoke, after deploy** (the owner, never an agent; no live client account): on BIS's own account, add a job for yourself (your own Gmail customer) with the confirmation ticked, press Undo inside ten seconds and see no email arrive; add it again and receive the confirmation with its address line; move it and receive the moved email; open it from the email's link on the agenda.
-11. **Roadmap tracker:** F-046 part 1's row.
-12. **Ledger:** the seventeen planning corrections above; T9's window note (bis-automations); the deferred items below.
+6. **Gate before production (ASSUMPTIONS 17a and 17b).** Read the CI `verify` run FOR THE HEAD SHA that carries T4 (`gh api repos/:owner/:repo/commits/<sha>/check-runs`, then that run's db-suite log) and find, by name, T4 Step 4's case (b) passing (a customer `createBooking` over a staff job throws `SlotTakenError`: the trigger's 23P01 reaches the client as a code through PostgREST) and case (c) passing (the `places!bookings_place_fkey` embed resolves, no PGRST201), and `same-account-fk-schema.test.ts`'s embed probes green. Either one missing or red: stop before production.
+7. **Production.** Read-only first: `select count(*) from public.bookings;` (ASSUMPTION 17d: expect a few hundred at most; far more means an off-peak apply). Then apply with MCP `apply_migration`, name `calendar_agenda`, the file's exact text (ASCII only, no backslash: the `\u` trap does not apply). Then confirm the WHOLE file landed (ASSUMPTION 17f): `bookings_slot_guard` and `undo_staff_move` exist, and `select prosrc like '%for no key update%' from pg_proc where proname = 'undo_ai_booking_act'` is true.
+8. **Parity** (`docs/runbooks/ci-supabase-project.md`): the six columns, `pg_get_constraintdef` of `bookings_no_overlap` and the five new constraints, `pg_get_triggerdef` of `bookings_slot_guard`, md5 of `pg_get_functiondef` for `app.bookings_slot_guard()`, `public.undo_staff_move(…)` and the replaced `public.undo_ai_booking_act(…)`, and the three functions' EXECUTE grants, equal between bis-ci and production.
+9. **Local e2e** (T14): no `screenshots.yml` run in progress; one gate at a time.
+10. **PR** from `feat/calendar-agenda`; squash-merge only after `verify` and `e2e` are green FOR THE HEAD SHA.
+11. **Owner smoke, after deploy** (the owner, never an agent; no live client account): on BIS's own account, add a job for yourself (your own Gmail customer) with the confirmation ticked, press Undo inside ten seconds and see no email arrive; add it again and receive the confirmation with its address line; move it and receive the moved email; open it from the email's link on the agenda.
+12. **Roadmap tracker:** F-046 part 1's row.
+13. **Ledger:** the seventeen planning corrections and the plan review fixes above; T9's window note (bis-automations); the deferred items below.
 
 ## Deferred (named, not built)
 
@@ -2033,6 +2309,7 @@ export function buildAgendaView(i: {
 ## Self-review (done while writing, 2026-10-30)
 
 - **The migration was run while planning.** T1 Step 3's exact text was extracted from this file and applied to a scratch PostgreSQL 17.6 replica of 0001–0106 (port 55975, since stopped): apply exit 0; ASCII only, no backslash, six `$$`; `pg_get_triggerdef` is exactly the string T1's catalogue case pins; `pg_get_constraintdef(bookings_no_overlap)` reads `EXCLUDE USING gist (calendar_id WITH =, tstzrange(starts_at, ends_at) WITH &&) WHERE (((status = 'booked'::text) AND (author_kind <> 'person'::text)))` (the case uses `toContain` on the two terms); 37 definers; `undo_staff_move` EXECUTE for service_role only. Behaviour read back: two overlapping person rows save; a customer row over a staff job fails `23P01 bookings_no_overlap: overlaps a job staff booked`; a back-to-back customer row saves; `undo_staff_move` answers `time_taken` (new row kept), `changed` on a wrong version, `undone` (old row booked), then `gone`; deleting a place a job names fails `23503` on `bookings_place_fkey`. The TypeScript test file itself was not run (no `node_modules` in this worktree while planning); T1 runs it.
+- **Re-verified after the plan review (same replica, the final text of Step 3).** Apply exit 0; ASCII only, no backslash, eight `$$`; 37 definers; `undo_ai_booking_act` still invoker, `search_path=pg_catalog, pg_temp`, volatile, EXECUTE service_role only, comment kept, `prosrc` differing from 0106's only by the three added lines. I1: with 0107 as first written, three sessions (one holding the old ai booking's row, the undo, a customer insert over the new booking) ended `ERROR: deadlock detected … while locking tuple (0,1) in relation "calendars"`; with the fix the undo answered `undone` and the insert `INSERT 0 1`. `undo_staff_move`'s lock order: while another transaction held the calendar row, the new booking was lockable `for update nowait` (`not locked`) with the fix and `could not obtain lock on row in relation "bookings"` without it. I2: an add's row cancelled by a move, past its `hold_until`: the booked-only claim updated 0 rows; `undo_staff_move` answered `undone`; the restored row read `booked | unsettled | confirmation` and the re-armed claim returned it with `confirmation`. The reverse race: the old hold claimed while booked (1 row), then cancelled; the re-read showed it claimed, and `setJobNotice`'s update set the new row to `moved` (1 row). The overlap rules re-read the same as before (two staff rows save; a customer row over a staff job `bookings_no_overlap: overlaps a job staff booked`; back-to-back saves).
 
 - **Spec coverage.** §1 → T4, T10, T12. §2 R1/R2/R11 → T1; R3 → T3, T10; R4 → T6, T10; R5 → T10, T12 (RLS reads, `seesWholeAccount`); R6 → T12; R7 → T10, T11; R8 → T10, T11; R9 → T1, T4, T6, T9, T10; R10 → T11, T12. D1–D12 → T4 (D1, D2, D5, D12 unchanged count), T6 (D3, D4, D8), T10 (D6, D7), T12 (D9, D10, D11). §3 → T1, T4. §4's readers: slot engine and races unchanged (T1 proves the errcode), reminders T4, texts and confirms T9, closures T10 (`closureKept`), feed T7, activity card T6 (D8). §5 → T11, T12. §6 → T6, T9, T10. §7 → T1 (races), T4 (claim vs Undo). §8 → T10, T12. §9 → T2. §10 → each task's tests. §11 → the checklist. §14 → T13. §16 → T10/T12 (decision 1), T11/T13 (2), T6 (3, 4), T4 (5).
 - **Placeholders.** None of "TBD" or "similar to". T11's and T12's component bodies are specified by their props, their handler tests and DESIGN.md's rules rather than written out, as the model plan did for its UI tasks; every behaviour a reviewer could reject has a named test and mutation.

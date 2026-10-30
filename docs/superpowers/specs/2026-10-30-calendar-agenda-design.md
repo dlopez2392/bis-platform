@@ -69,7 +69,7 @@ Decisions this spec makes (recommended, changeable in review):
 | D5 | Undo of Add | DELETE the row while its hold is unsettled, never cancel it (6.2) |
 | D6 | Move | Runs at once with Undo (rule 6); same time and length = an in-place edit, no new row, no email (6.3) |
 | D7 | Cancel inside the hold | Is the Undo of the add: no cancel notice for a job the customer never heard of (6.4) |
-| D8 | `booking.created` for a staff add | Written when the hold settles, not at insert, so an undone add leaves no "New booking" in the activity card (6.5) |
+| D8 | `booking.created` for a staff add (and a staff move's two events, §17) | Written when the hold settles, not at insert, so an undone add leaves no "New booking" in the activity card (6.5) |
 | D9 | The access log | The agenda is a list (part of the visit); opening a job's drawer logs `contact` for the job's customer (8.2) |
 | D10 | Week | Starts on Sunday, the slot engine's own weekday order (`WEB/lib/booking/slots.ts:8`) |
 | D11 | Cancelled rows | Day view shows them muted, out of the lanes; a row a move replaced is hidden; Week view omits them (5.2) |
@@ -200,7 +200,7 @@ revoke all on function app.bookings_slot_guard() from public, anon, authenticate
 
 ### 3.3 `public.undo_staff_move(p_account_id uuid, p_new_id uuid, p_old_id uuid, p_cancelled_at timestamptz, p_now timestamptz) returns text`
 
-SECURITY INVOKER, EXECUTE to `service_role` only (0091's shape for `undo_ai_booking_act`,
+SECURITY INVOKER, EXECUTE to `service_role` only (0091's shape for `undo_ai_booking_act`, and, per §17, locking the calendar row FIRST
 `MIG/0091_ai_acts.sql:233-245`), so it adds no definer. It is 0091's reschedule branch (`:319` on) for a staff
 move: in one inner block, DELETE the new row `where status = 'booked' and hold_settled_at is null` and no row names
 it in `rescheduled_from_id`, then restore the old row `set status = 'booked' where status = 'cancelled' and
@@ -230,7 +230,7 @@ PostgREST calls could leave neither row live; one function cannot.
 |---|---|---|
 | Slot engine (public page, Sofía, the move page) | `listBookedRanges` reads every `booked` row of the calendar (`DB/booking.ts:248-262`), whoever made it; the buffer is two-sided around it (`WEB/lib/booking/slots.ts` `conflictScan`) | None. R2 holds today |
 | The race past the engine | Public submit maps `SlotTakenError` to "just taken" (`WEB/app/b/[publicId]/actions.ts:338-343`); Sofía to `slotTaken` (`registry.ts:651`); the customer's move and Sofía's reschedule through `moveBooking` (`DB/booking.ts:970`); the AI undo to `time_taken` (`MIG/0091:299-301`) | None, given the 23P01 errcode (3.2) |
-| Email reminder (day-before and late) | `listDueReminders` (`DB/booking.ts:1585-1627`) | Skip rows with `hold_until > now` (6.5) |
+| Email reminder (day-before and late) | `listDueReminders` (`DB/booking.ts:1585-1627`) | Skip a staff row until its hold is SETTLED: `hold_until is null or hold_settled_at is not null` (6.5, §17) |
 | Text reminder, appointment confirm | `listDueSmsReminders`, `listDueAppointmentConfirms` (`DB/automations.ts:642-668`, `:792-818`) and their by-id twins | The same hold filter (bis-automations) |
 | Closures | A job on a closed day has its reminders held or skipped unless `closure_kept_at` is set (`WEB/lib/automations/closures.ts:188-213`) | The add stamps `closure_kept_at` when the "closed that day" warning was accepted (6.1) |
 | Follow-up, review request, no-show nudge, referral | Post-appointment reads by status (`DB/booking.ts:1722-1755`; `DB/automations.ts:299`, `:491`, `:1148`) | None |
@@ -412,7 +412,7 @@ deleting a customer would surprise.
 ### 6.2 `undoAddJobAction(accountId, bookingId)` (D5)
 
 `proveBooking`, then one conditional DELETE through PostgREST: this account, this id, `author_kind = 'person'`,
-`author_id` = the caller, `status = 'booked'`, `hold_settled_at is null`. A row a move has replaced cannot be
+`author_id` = the caller, `status = 'booked'`, `rescheduled_from_id is null` (never a move's row, §17), `hold_settled_at is null`. A row a move has replaced cannot be
 deleted (the `rescheduled_from_id` FK, NO ACTION, `MIG/0061:81-85`) and answers "moved since". Zero rows is read
 once: settled means "Too late to undo: the confirmation already went to {first}. Cancel the job instead." A delete,
 not a cancel, for 0091's reason: a cancelled row would still count as a booking made (`DB/booking.ts:1151-1162`)
@@ -427,7 +427,7 @@ Same checks and warnings as 6.1, the overlap read excluding the job itself.
   email, no new row.
 - **A new time:** `moveBooking` (`DB/booking.ts:928-1033`), extended so the new row carries `place_id`,
   `meeting_type` and the hold columns (today it carries contact, calendar, note and zone, `:944-949`). A video job
-  gets a new room (the old one expires at the old end). The new row's `notice_wanted` is `'moved'` when the tick is
+  gets a new room (the old one expires at the old end). The new row's `notice_wanted` is `'moved'` when the tick is (superseded by §17: decided after the cancel, from a re-read of the old row)
   on; but when the old row's own hold was unsettled and wanted a confirmation, it is `'confirmation'`: the customer
   never heard of the old time. Answers `{ newId, cancelledAt }`; the toast's Undo calls
   `undoMoveJobAction(accountId, newId, oldId, cancelledAt)`, which proves both rows and calls `undo_staff_move`
@@ -447,7 +447,7 @@ hold is unsettled calls `undoAddJobAction` instead (D7). Without it, a cancel in
 
 `settleJobHold(db, accountId, bookingId)` in `CAL/job-hold.ts` (new), run by both:
 
-1. **Claim:** `update … set hold_settled_at = now() where id = … and hold_until <= now() and hold_settled_at is null
+1. **Claim:** `update … set hold_settled_at = now() where id = … and status = 'booked' (§17) and hold_until <= now() and hold_settled_at is null
    returning status, notice_wanted, …`. No row: the Undo or the other settler won; stop.
 2. **Status not `booked`** (moved or cancelled inside the hold): settled, nothing else.
 3. **Emit** `booking.created` (actor `user`, the author) for an add; a move's events are `moveBooking`'s own.
@@ -474,7 +474,7 @@ It is bis-automations', and `cron-coupling.test.ts` counts its budget.
 
 **Reminders wait for the hold.** The day-before email window has no minimum age (`DB/booking.ts:1592-1596`), so
 "same time tomorrow", the commonest phoned-in job, sits inside it on a tick that falls in the 15-second hold about
-one tick in sixty. The four forward-looking due-lists and their by-id twins skip rows with `hold_until > now`. The
+one tick in sixty. The four forward-looking due-list reads skip a staff row until its hold is settled (`hold_until is null or hold_settled_at is not null`, §17); their by-id twins do not filter (plan correction 3). The
 cost, accepted: a job whose start sits at the trailing edge of the 45-minute text-reminder window
 (`DB/automations.ts:594-595`) and whose hold covers that tick misses that text; the email reminders' wider windows
 catch it next tick.
@@ -794,3 +794,22 @@ Waves: T1, T5, T8 first; T2 and T6 on 0107; T3, T4, T7, T9, T10 on T2; T11 last.
 4. **The customer's email shows the job address** on one line; the "what the job is" line never reaches the
    customer.
 5. **A staff-made job counts as a booking everywhere** (D12): the dashboard and the weekly report, one definition.
+
+---
+
+## 17. Plan review corrections (2026-10-30; the plan's "Plan review fixes" carries the detail and the replica proofs)
+
+1. **Lock order.** Every unit that writes more than one booking takes the account's calendar row (`for no key update`)
+   before its first booking write. `undo_staff_move` does so first; 0107 replaces 0091's `undo_ai_booking_act` with
+   that one statement added after its `ai_acts` lock. Without it, its reschedule undo deadlocked with a customer
+   insert over the booking being taken back (reproduced on a PG17.6 replica).
+2. **Holds are claimed on booked rows only** (`claimJobHold`, the pass's read). A staff move's new row is written with
+   no `notice_wanted`; the action decides it after the cancel, from a re-read of the old row: unclaimed and wanting a
+   confirmation → `'confirmation'`; otherwise `'moved'` when ticked. The Undo of a move re-arms the restored row with
+   one `after()` settle, waiting out what is left of its own hold.
+3. **The add's Undo never deletes a move's row** (`rescheduled_from_id is null`). The drawer's Cancel on a held move runs
+   the ordinary cancel flow.
+4. **Reminders wait for the claim, not the clock:** `hold_until is null or hold_settled_at is not null`.
+5. **D8 covers moves:** a staff move's `booking.created` and the old row's `booking.status_changed` are written by the
+   settle of the new row; `moveBooking` writes none for a staff move, so an undone move leaves no event.
+6. **A new address for a new customer:** the action makes the contact, then the place, then the job.
