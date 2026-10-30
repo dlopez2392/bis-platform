@@ -3,14 +3,24 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
-// A direct import of a "use server" export into this client component —
-// Next.js compiles it to a callable stub, no <form action> needed. See
-// shell-actions.ts's own doc comment for why this one read has to live in
-// the [accountId] segment rather than dashboard/layout.tsx, which is where
-// this provider itself mounts.
-import {
-  getShellSnapshot, type ShellBusinessStatus, type ShellSnapshot,
-} from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import type { ShellBusinessStatus, ShellSnapshot } from "@/lib/shell/snapshot";
+
+/**
+ * The shell's one read, a plain GET of `api/accounts/[accountId]/shell` — never a server action. Next posts
+ * a server action to the router's CURRENT url, and its redirect or a cookie-modifying response navigates
+ * or refreshes the whole page: the agency refresh loop after the reason chooser (production, 2026-10-30).
+ * A fetch cannot move the page, and `redirect: "error"` refuses to follow one into some other page's HTML.
+ * A 204 (refused, or the agency with no live visit) is `null`; anything else not ok rejects, for the
+ * provider to swallow.
+ */
+export async function fetchShellSnapshot(
+  accountId: string, fetchImpl: typeof fetch = fetch,
+): Promise<ShellSnapshot | null> {
+  const res = await fetchImpl(`/api/accounts/${accountId}/shell`, { cache: "no-store", redirect: "error" });
+  if (res.status === 204) return null;
+  if (!res.ok) throw new Error(`shell read failed: ${res.status}`);
+  return (await res.json()) as ShellSnapshot;
+}
 
 type ShellDataState = { accountId: string; snapshot: ShellSnapshot } | null;
 
@@ -33,9 +43,7 @@ const ShellDataContext = createContext<ShellDataContextValue>({
  * The shell's one background fetch per in-account navigation — replaces the
  * three separate pathname-keyed effects app-sidebar.tsx and
  * topbar-presence.tsx used to each own (getUnreadTotal, getSetupProgress,
- * getVoicePresenceSnapshot), which fired as three separate `"use server"`
- * POSTs Next.js then ran SERIALLY, queuing behind any user mutation on the
- * same navigation. One effect, one call, one queue slot.
+ * getVoicePresenceSnapshot). One effect, one GET (fetchShellSnapshot above).
  *
  * Mounted in dashboard/layout.tsx wrapping AppSidebar + Topbar + `<main>` —
  * both consumers of `useShellData()` below sit inside it.
@@ -68,9 +76,10 @@ export function ShellDataProvider({ children }: { children: ReactNode }) {
     const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
     if (!accountId) return;
     let cancelled = false;
-    getShellSnapshot(accountId)
+    fetchShellSnapshot(accountId)
       .then((snapshot) => {
-        if (!cancelled) {
+        // null: nothing to show (refused, or no live visit yet). Keep whatever is on screen.
+        if (snapshot && !cancelled) {
           setState({ accountId, snapshot });
           // The fresh read REPLACES the local override outright, same navigation that fetched it —
           // never reconciled against it, never kept around once a real snapshot answers again.
@@ -78,7 +87,7 @@ export function ShellDataProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {
-        // Client-leg failure (offline, the action route itself erroring)
+        // Client-leg failure (offline, the route itself erroring)
         // keeps the last known snapshot — the shell must never take itself
         // down or surface an error of its own over a background read.
       });

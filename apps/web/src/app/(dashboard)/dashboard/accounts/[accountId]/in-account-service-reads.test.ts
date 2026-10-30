@@ -165,7 +165,6 @@ const ALLOWED: Record<string, Reason> = {
   // S-53: the Settings Trade card's write; requireAgencyOnlyAccountAccess first.
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts": "agency-only",
-  "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts": "technician-filtered",
   // completeWorkTask's hold check: ledgerDb, beside a task write on the request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/team/actions.ts": "owner-only",
@@ -197,6 +196,9 @@ const ALLOWED: Record<string, Reason> = {
   // customer notice on the service client, scoped to that same account and act.
   "lib/ai-acts/actions.ts": "proven-target",
   "lib/auth.ts": "before-trust",
+  // The shell's badges (moved off shell-actions.ts, 2026-10-30): read behind the shell route's
+  // apiAccountAccessWithRole; a Technician's unread count goes through the request client.
+  "lib/shell/snapshot.ts": "technician-filtered",
   // M7a PR-4 (Task 7): the account's billing verdict (paused, its cause, the plan's two features), never
   // customer data. A client Staff session reads no account_billing row (0066) and plans are agency-read,
   // yet every member must see the pause; every caller has already passed requireAccountAccess (or is the

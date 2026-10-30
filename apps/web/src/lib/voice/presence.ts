@@ -11,7 +11,7 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * The topbar Sofía presence indicator's data (DESIGN.md "AI presence" key
  * pattern: "● Sofía · on a call" / "✓ N calls handled in the last 7 days"). Read
  * through the guarded `"use server"` action in the [accountId] segment
- * (dashboard/accounts/[accountId]/shell-actions.ts's getShellSnapshot) —
+ * (lib/shell/snapshot.ts's readShellSnapshot) —
  * never from a layout, and never from this module directly: Task 5's
  * CORRECTED brief records why (Topbar mounts in the ROOT dashboard layout,
  * an ANCESTOR of [accountId], which never receives accountId through its

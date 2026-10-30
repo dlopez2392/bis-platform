@@ -6881,6 +6881,8 @@ export const m = {
   "accessLog.exportEnded.es": "Su visita a esta cuenta terminó, así que no se descargó nada. Vuelva a abrir la cuenta, elija por qué y luego descargue la lista.",
   "accessLog.enter.heading": "Why are you opening {name}?",
   "accessLog.enter.heading.es": "¿Por qué abre {name}?",
+  "accessLog.enter.opening": "Opening the account",
+  "accessLog.enter.opening.es": "Abriendo la cuenta",
   "accessLog.enter.legend": "Choose a reason",
   "accessLog.enter.legend.es": "Elija un motivo",
   "accessLog.enter.notice": "The business's Owners can see each visit, its reason and everything you open.",

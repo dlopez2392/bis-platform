@@ -106,18 +106,23 @@ describe("the chooser — guards, before anything renders", () => {
     expect(dbFixture.calls).toBe(0);
   });
 
-  it("a live visit redirects at once to the safe `to`, re-validated through safeReturnPath (mutation: trust `to` unvalidated -> the account-B case below FAILS)", async () => {
+  // The router-cache loop (2026-10-30): a redirect() during render cannot purge the browser's client
+  // router cache, so a visit started in ANOTHER tab would bounce chooser <-> cached chooser redirect. The
+  // live-visit branch renders the VisitBounce (a hard navigation) instead of calling redirect().
+  it("a live visit renders the bounce to the safe `to`, re-validated through safeReturnPath, and never calls redirect() (mutation: keep redirect() -> FAILS)", async () => {
     gateMocks.agencyVisitOk.mockResolvedValue(true);
     const to = `/dashboard/accounts/${A}/contacts/c1?x=1`;
-    const url = await redirectUrl(page(A, to));
-    expect(url).toBe(to);
+    const html = await page(A, to);
+    expect(html).toContain(`data-bounce-to="${to.replace("&", "&amp;")}"`);
+    expect(html).not.toContain("<form");
     expect(dbFixture.calls).toBe(0);
   });
 
-  it("a live visit with no safe `to` redirects to this account's own home, never another account's path (mutation: redirect(to ?? home) unvalidated -> FAILS, landing in B)", async () => {
+  it("a live visit with no safe `to` bounces to this account's own home, never another account's path (mutation: bounce to `to` unvalidated -> FAILS, landing in B)", async () => {
     gateMocks.agencyVisitOk.mockResolvedValue(true);
-    const url = await redirectUrl(page(A, `/dashboard/accounts/${B}/x`));
-    expect(url).toBe(`/dashboard/accounts/${A}/dashboard`);
+    const html = await page(A, `/dashboard/accounts/${B}/x`);
+    expect(html).toContain(`data-bounce-to="/dashboard/accounts/${A}/dashboard"`);
+    expect(html).not.toContain(B);
   });
 
   it("a missing account gives notFound (mutation: render with a blank name instead -> FAILS)", async () => {

@@ -1,10 +1,7 @@
-"use server";
-
 import {
   serviceDb, sumUnreadCount, getVoiceProfile, hasActiveCallSince, readAccountTimezone,
   getBusinessStatusRow, listClosedDaysFrom, readHoursChain, type SupabaseClient, type AccountRole,
 } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
@@ -74,81 +71,38 @@ export type ShellBusinessStatus = {
 const ON_CALL_FLOOR_MS = 60 * 60 * 1000;
 
 /**
- * The shell's one background read per in-account navigation — the sidebar's
- * Conversations badge, its footer setup meter, and the topbar's Sofía
- * presence indicator, coalesced from three separate `"use server"` POSTs
- * (`unread-actions.ts`'s `getUnreadTotal`, `setup-actions.ts`'s
- * `getSetupProgress`, `presence-actions.ts`'s `getVoicePresenceSnapshot` —
- * all deleted by this task) into one. Next.js executes same-client server
- * actions SERIALLY, so three background reads used to queue in front of any
- * user mutation fired on the same navigation; one call removes that queue.
+ * The shell's one background read per in-account navigation — the sidebar's Conversations badge, its footer
+ * setup meter, the topbar's Sofía presence indicator and the business-status switch, in one answer.
  *
- * `ShellDataProvider` (components/shell-data.tsx, "use client") calls this
- * directly from a `useEffect` keyed on the active account id — the same
- * imperative Server Action shape all three deleted actions used, and for the
- * identical reason each of their own doc comments gave: dashboard/layout.tsx
- * (where AppSidebar and Topbar both actually render) sits ABOVE this
- * [accountId] segment and never receives accountId through its own `params`
- * — ancestor layouts only get the params for segments up to and including
- * themselves — so the account-scoped read has to happen from inside this
- * segment, as a client-callable action, not from the layout that draws the
- * shell.
+ * Served by the plain GET `api/accounts/[accountId]/shell/route.ts`, which `ShellDataProvider`
+ * (components/shell-data.tsx) fetches on every in-account navigation. It was a server action
+ * (`getShellSnapshot`, shell-actions.ts) until the agency refresh loop of 2026-10-30: Next posts a server
+ * action to the router's CURRENT url, and an action's redirect (the reason gate's, from requireAccountAccess)
+ * or a response that modifies a cookie navigates or refreshes the WHOLE page. A route handler can do
+ * neither, so a background read can never move the person. The route admits the caller
+ * (`apiAccountAccessWithRole`: null, never a redirect, for the agency with no live visit) and hands this
+ * module the actor it settled; this module reads, and never decides who may.
  *
- * `requireAccountAccess`, not `requireAgencyOnlyAccountAccess`: Conversations
- * and presence are both-audience items, same as their own deleted actions
- * always were. Setup is agency-only data about the client, so THIS action
- * derives `isAgency` off the same guard `requireAgencyOnlyAccountAccess`
- * itself builds on (`apps/web/src/lib/auth.ts`) rather than calling that
- * stricter guard directly — calling it here would redirect a client
- * (`requireAgencyOnlyAccountAccess` bounces a non-agency caller to their own
- * dashboard) just for asking a shell-data question that has a perfectly
- * good client-side answer: hide the section. `setup: null` for a client is
- * the server deciding that, never the client — the section is simply never
- * computed for them, not computed and then hidden by the caller.
+ * The caller's role shapes the answer. Setup is agency-only data about the client: `setup: null` for a
+ * client is the server deciding that, never the browser. A Technician, or a client whose role could not be
+ * settled, gets the narrow shell (failing closed, like requireNotTechnician).
  *
- * The three reads run concurrently, but each is caught and folded
- * INDEPENDENTLY: one leg's failure degrades only ITS section to the value
- * that was already this shell's own "hidden" convention (`unreadTotal: 0`,
- * `setup: null`, `presence: null`) with its own `console.error`, exactly as
- * each deleted action did on its own. A single shared try/catch around all
- * three would let one flaky read blank sections that answered fine — a
- * badge, a meter, and a presence dot must never take each other down.
- * `requireAccountAccess` stays OUTSIDE every try, same as all three deleted
- * actions: it can `redirect()` on an unauthorized or stale account id, and
- * `redirect()` works by throwing, so catching it here would swallow that
- * throw and silently strand the caller instead of sending them where every
- * other guarded surface in this tree already would.
+ * The four reads run concurrently, but each is caught and folded INDEPENDENTLY: one leg's failure degrades
+ * only ITS section to the shell's own "hidden" value (`unreadTotal: 0`, `setup: null`, `presence: null`,
+ * `businessStatus: null`) with its own `console.error`. A badge, a meter, and a presence dot must never take
+ * each other down.
  *
- * Setup's read chain (`gatherSetupInputs` → `deriveSetupStatus` →
- * `reduceSetupProgress`) is the same proven-safe read set
- * `getSetupProgress` used, now the one shared copy in
- * `lib/setup/setup-inputs.ts`. That function is per-leg fault-isolated
- * internally (see its own doc comment) and reports which of its EIGHT reads
- * failed rather than rejecting outright — this leg folds to `null` the
- * moment one of the SIX `COUNT_DEPENDS_ON` reads did, matching this action's
- * own one-leg-at-a-time contract: a setup count built from a partial read is
- * not a count worth showing. NOT `Object.values(failed).some(Boolean)`
- * (fix-round review, IMPORTANT 1) — that folded in `forms`/`conversations`
- * too, blanking this always-visible footer meter over two reads
- * `deriveSetupStatus` never touches when computing `done`.
+ * Setup's read chain (`gatherSetupInputs` → `deriveSetupStatus` → `reduceSetupProgress`) is the one shared
+ * copy in `lib/setup/setup-inputs.ts`, per-leg fault-isolated internally; this leg folds to `null` the moment
+ * one of the SIX `COUNT_DEPENDS_ON` reads failed (not `forms`/`conversations`, which `done` never reads).
  *
- * Presence: `getVoiceProfile` is checked FIRST — `null` when the account has
- * no ENABLED voice profile, before `getVoicePresence`'s two calls ever run —
- * per `getVoicePresenceSnapshot`'s own original "skip the query" semantics.
- * `profile.enabled`, not `booking_enabled` or a phone number's `status`: the
- * simplest honest reading of "the account HAS an enabled voice profile" is
- * the profile's own flag — deliberately narrower than accept-gate.ts's
- * `callAnswerable`, which also answers for a `testing`-status number
- * regardless of `profile.enabled`. This `getVoiceProfile` call is separate
- * from the one `gatherSetupInputs` makes for the setup leg above — sharing
- * one read across both sections would mean a single failed lookup blanks
- * two sections at once (and would run even for a client, for whom the setup
- * leg never executes at all), which is exactly the coupling the per-leg
- * fold above exists to avoid.
+ * Presence: `getVoiceProfile` is checked FIRST — `null` when the account has no ENABLED voice profile —
+ * and it is this leg's own read, never shared with the setup leg's, so one failed lookup never blanks two
+ * sections at once.
  */
-export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot> {
-  // M7a PR-4 (plan G11): reads only, so it stays usable while the account is paused.
-  const { isAgency, role } = await requireAccountAccess(accountId, { duringPause: "allow" });
+export async function readShellSnapshot(
+  accountId: string, { isAgency, role }: { isAgency: boolean; role: AccountRole | null },
+): Promise<ShellSnapshot> {
   const db = serviceDb();
   // The narrow shell, failing closed like requireNotTechnician (fix round 1):
   // a Technician, or a client whose role could not be settled (null). Only
@@ -175,7 +129,7 @@ async function readUnreadTotal(db: () => Promise<SupabaseClient>, accountId: str
     return await sumUnreadCount(await db(), accountId);
   } catch (error) {
     console.error(
-      `getShellSnapshot: unread read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
+      `shell snapshot: unread read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return 0;
   }
@@ -191,7 +145,7 @@ async function readSetupProgress(
     return reduceSetupProgress(deriveSetupStatus(inputs));
   } catch (error) {
     console.error(
-      `getShellSnapshot: setup read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
+      `shell snapshot: setup read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
@@ -233,7 +187,7 @@ async function readPresence(
     // so.
     if (accountError) {
       console.error(
-        `getShellSnapshot: presence zone read failed for account ${accountId}: ${accountError.message}`,
+        `shell snapshot: presence zone read failed for account ${accountId}: ${accountError.message}`,
       );
     }
     const zone = resolveAccountZone((account as { timezone: string | null } | null)?.timezone) ?? "UTC";
@@ -244,7 +198,7 @@ async function readPresence(
     return { ...presence, personaName: profile.persona_name, showCount: true };
   } catch (error) {
     console.error(
-      `getShellSnapshot: presence read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
+      `shell snapshot: presence read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
@@ -288,7 +242,7 @@ async function readBusinessStatus(
     };
   } catch (error) {
     console.error(
-      `getShellSnapshot: business status read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
+      `shell snapshot: business status read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }

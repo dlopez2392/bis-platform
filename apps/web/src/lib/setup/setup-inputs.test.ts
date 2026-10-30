@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@bis/db";
 
 /**
  * `gatherSetupInputs` itself, against a fake `db` — not just through its
- * three callers (`shell-actions.test.ts`, `setup/actions.test.ts`), which
+ * three callers (`lib/shell/snapshot.test.ts`, `setup/actions.test.ts`), which
  * all mock this module at the import boundary and therefore cannot see
  * anything this function actually DOES. Review round, Important 3: that
  * left a real gap — mutating `setup-inputs.ts`'s own
@@ -17,7 +17,7 @@ import type { SupabaseClient } from "@bis/db";
  * suite is about the `accounts` row read and its `permissions` column
  * specifically, not a re-proof of the seven-leg fault isolation already
  * covered by the per-leg `failed` tests inside `actions.test.ts` and
- * `shell-actions.test.ts`.
+ * `lib/shell/snapshot.test.ts`.
  */
 
 const dbMocks = vi.hoisted(() => ({

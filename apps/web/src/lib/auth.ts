@@ -226,3 +226,27 @@ export async function apiAccountAccess(
   if (account.id !== accountId) return null;
   return { userId, isAgency: false };
 }
+
+/**
+ * apiAccountAccess plus the caller's role, for a GET that shapes its answer by role (the shell's badges: a
+ * Technician's narrow shell). Same admission and the same null for everything refused, the agency with no
+ * live visit included (agencyVisitOk, never the redirecting requireAgencyVisit). A client's role is settled
+ * exactly as requireAccountAccess settles it, and only once the account is proven to be theirs.
+ */
+export async function apiAccountAccessWithRole(
+  accountId: string,
+): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null } | null> {
+  const { userId, sessionId, sessionClaims, actor } = await auth();
+  if (!userId || actor) return null;
+  const claims = sessionClaims as AppClaims;
+  if (claims.app_role === "agency_admin") {
+    return (await agencyVisitOk(accountId, userId, sessionId)) ? { userId, isAgency: true, role: null } : null;
+  }
+  if (!claims.org_id) return null;
+  const storedRole = readStoredRole(accountId, userId);
+  const account = await getAccountByOrgId(serviceDb(), claims.org_id);
+  if (!account || !account.client_access_enabled) return null;
+  if (account.id !== accountId) return null;
+  const role = await ensureAccountRole(account.id, claims.org_id, userId, storedRole);
+  return { userId, isAgency: false, role };
+}

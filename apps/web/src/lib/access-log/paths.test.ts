@@ -21,10 +21,40 @@ describe("accountPathOf: the in-account path a request asked for", () => {
     expect(accountPathOf({ pathname: "/dashboard/accounts/A", search: "" })).toBe("/dashboard/accounts/A");
     expect(accountPathOf({ pathname: "/dashboard/accounts/A", search: "?c=1" })).toBe("/dashboard/accounts/A?c=1");
   });
+  // The agency refresh loop (2026-10-30): a request AT the chooser (a server action Next posted to a stale
+  // `/dashboard/enter/<id>?to=…` url) carries the path the person clicked in its own `?to=`. Without it the
+  // gate's redirect lost `to` and the owner landed on the account's dashboard instead of the page clicked.
+  it("a request at the chooser carries its own ?to= account path (mutation: return null for /dashboard/enter -> FAILS)", () => {
+    const to = "/dashboard/accounts/A/setup?step=voice";
+    expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}&_rsc=1` })).toBe(to);
+  });
+  it("round trip: a gate redirect from a request at the chooser lands on the SAME chooser url, ?to= intact (mutation: return null for /dashboard/enter -> FAILS)", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const chooser = new URL(enterHref(id, `/dashboard/accounts/${id}/website?tab=pages`), "https://app.example");
+    // proxy.ts: accountPathOf(req.nextUrl) -> x-bis-path; gate.ts: enterHref(id, safeReturnPath(header, id)).
+    const header = accountPathOf(chooser);
+    expect(enterHref(id, safeReturnPath(header, id))).toBe(chooser.pathname + chooser.search);
+  });
+  it("a chooser ?to= that is not an account path is null (the gate re-validates the account itself)", () => {
+    for (const to of ["/dashboard/work", "https://evil.example/dashboard/accounts/A", "", "/dashboard/enter/A"]) {
+      expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}` })).toBeNull();
+    }
+  });
   it.each(["/dashboard/accounts", "/dashboard/accounts/", "/dashboard/work", "/dashboard/enter/A", "/b/x", "/"])(
     "%s is not inside an account: null", (pathname) => {
       expect(accountPathOf({ pathname, search: "?x=1" })).toBeNull();
     });
+  // proxy.ts puts this value straight into a request header (BIS_PATH_HEADER); Headers.set throws on a
+  // newline or any char > 0xFF, which would 500 the request instead of refusing the path (mirrors
+  // safeReturnPath's own control-character check, extended to any non-ASCII character).
+  it("a chooser ?to= carrying a newline is null, not the raw value (mutation: drop the control/non-ASCII check -> FAILS)", () => {
+    const to = "/dashboard/accounts/A/x\ny";
+    expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}` })).toBeNull();
+  });
+  it("a chooser ?to= carrying a non-ASCII character is null, not the raw value (mutation: drop the control/non-ASCII check -> FAILS)", () => {
+    const to = "/dashboard/accounts/A/x中y";
+    expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}` })).toBeNull();
+  });
 });
 
 describe("safeReturnPath: a path inside THIS account, and nothing else", () => {

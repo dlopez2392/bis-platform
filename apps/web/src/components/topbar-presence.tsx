@@ -7,12 +7,12 @@ import { useLocale } from "@/components/locale-provider";
 import type { Locale } from "@/lib/i18n/locale";
 // Presence reads from the one shared shell fetch (shell-data.tsx) — see its
 // own doc comment for why the read lives in the [accountId] segment (via
-// shell-actions.ts) rather than dashboard/layout.tsx, which is where Topbar
+// lib/shell/snapshot.ts) rather than dashboard/layout.tsx, which is where Topbar
 // (this component's parent) actually renders, and for the
 // paired-state/derive-by-account-match shape that used to live here as its
 // own effect before this task coalesced it with the sidebar's two.
 import { useShellData } from "@/components/shell-data";
-import type { ShellPresence } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import type { ShellPresence } from "@/lib/shell/snapshot";
 // S-47d Task 11 (spec §5.6.1, S15): the one switch's own words, and its menu
 // when the viewer may change it.
 import { BusinessStatusMenu } from "@/components/business-status-menu";

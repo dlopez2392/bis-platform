@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * `readSetupProgress` (shell-actions.ts) — the sidebar's footer meter, which
+ * `readSetupProgress` (lib/shell/snapshot.ts) — the sidebar's footer meter, which
  * DESIGN.md pins as always visible.
  *
  * Fix-round review, IMPORTANT 1: the fold used to be
@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // S-47d Task 11: the shell's fourth leg (readBusinessStatus) reads these three directly, beside the
 // zone lookup (readPresence's own "accounts" table, shared below) and its OWN getVoiceProfile call
 // (never the one readPresence already made — each leg is fault-isolated on its own read, same reasoning
-// shell-actions.ts's own doc comment gives for not sharing the setup leg's profile read with presence's).
+// snapshot.ts's own doc comment gives for not sharing the setup leg's profile read with presence's).
 const dbMocks = vi.hoisted(() => ({
   sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn(), hasActiveCallSince: vi.fn(),
   getBusinessStatusRow: vi.fn(), listClosedDaysFrom: vi.fn(), readHoursChain: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   serviceDb: () => ({
     from: (table: string) => {
       if (table !== "accounts") {
-        throw new Error(`shell-actions.test.ts fake db: unexpected table "${table}"`);
+        throw new Error(`snapshot.test.ts fake db: unexpected table "${table}"`);
       }
       return {
         select: () => ({
@@ -60,10 +60,9 @@ vi.mock("@bis/db", async (importOriginal) => ({
 const setupInputsMocks = vi.hoisted(() => ({ gatherSetupInputs: vi.fn() }));
 vi.mock("@/lib/setup/setup-inputs", () => setupInputsMocks);
 
+// The caller's admission is the shell route's job now (api/accounts/[accountId]/shell/route.ts, through
+// apiAccountAccessWithRole); this module is handed the actor it settled. `authFixture` is that actor.
 const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
-vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role, canManage: authFixture.isAgency }),
-}));
 
 // F-085 part 1 (spec §7.2): a Technician's unread badge is read through the
 // REQUEST client, so RLS counts only their own conversations. A sentinel, so
@@ -77,7 +76,11 @@ vi.mock("@/lib/voice/presence", () => ({
   getVoicePresence: (...a: unknown[]) => voicePresenceMock(...a),
 }));
 
-import { getShellSnapshot } from "./shell-actions";
+import { readShellSnapshot } from "./snapshot";
+
+/** Every case below reads as the current `authFixture` actor, as the route would hand it over. */
+const getShellSnapshot = (accountId: string) =>
+  readShellSnapshot(accountId, { isAgency: authFixture.isAgency, role: authFixture.role });
 
 // Clean defaults for the three new reads on EVERY test in this file (not just the ones below that
 // exercise them), so a describe written before this task (readSetupProgress has no beforeEach of its
