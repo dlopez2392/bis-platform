@@ -5,10 +5,14 @@
 // `WorkRowActions`). This page itself still only reads and buckets
 // `listAccountWork`'s three sources and renders them — the writes live in
 // the files below it, not here.
-import { listAccountWork, listPendingProposals, countHeldInboundEmails, getVoiceProfile, type Proposal } from "@bis/db";
+import Link from "next/link";
+import {
+  listAccountWork, listPendingProposals, countHeldInboundEmails, countDuplicatePairs, getVoiceProfile, type Proposal,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { dbForRequest } from "@/lib/db";
@@ -25,6 +29,9 @@ import { makeTr } from "@/lib/record/copy";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { groupSuggestions, type SuggestionGroup } from "@/lib/proposals/group";
 import { readSuggestionStages, type StageContext } from "@/lib/proposals/view-reads";
+import { LIST_ROW } from "@/components/ui/list-panel";
+import { cn } from "@/lib/utils";
+import { Copy } from "lucide-react";
 import { WorkList } from "./work-list";
 
 export const dynamic = "force-dynamic";
@@ -81,6 +88,18 @@ export default async function TasksPage({
     heldCount = await countHeldInboundEmails(db, accountId);
   } catch (e) {
     console.error(`tasks: account ${accountId} held count read failed: ${loggableError(e)}`);
+  }
+
+  // F-006 part 1 (plan Task 10, Step 6): the Possible duplicates count, shaped the same best-effort
+  // way as the held-emails count above. Never read at all for a Technician: they cannot read the
+  // duplicates queue (0068), so even a failed-and-logged attempt would be the wrong noise for them.
+  let dupCount: number | null = null;
+  if (seesWholeAccount(access)) {
+    try {
+      dupCount = await countDuplicatePairs(db, accountId);
+    } catch (e) {
+      console.error(`tasks: account ${accountId} duplicates count read failed: ${loggableError(e)}`);
+    }
   }
 
   const rows = await listAccountWork(db, accountId, { assignee: assign.assignee });
@@ -234,6 +253,17 @@ export default async function TasksPage({
           locale={locale}
           className="mb-4"
         />
+        {dupCount && dupCount > 0 ? (
+          <Link
+            data-duplicates-row
+            href={`/dashboard/accounts/${accountId}/contacts?view=duplicates`}
+            lang={locale}
+            className={cn("mb-4 flex items-center gap-2 px-3 py-2.5 text-sm", LIST_ROW, "hover:bg-[var(--surface-3)]")}
+          >
+            <Copy className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            {tr.count("work.duplicates", dupCount)}
+          </Link>
+        ) : null}
         <WorkList
           buckets={buckets}
           accountId={accountId}

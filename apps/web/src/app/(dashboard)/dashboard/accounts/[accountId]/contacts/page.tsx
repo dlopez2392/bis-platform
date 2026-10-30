@@ -1,9 +1,14 @@
 import Link from "next/link";
-import { Archive, ArrowLeft, ArrowRight, Download, Upload, Users } from "lucide-react";
-import { countContacts, listContacts, listTags, type SortKey, type SortDir } from "@bis/db";
+import { Archive, ArrowLeft, ArrowRight, Copy, Download, Upload, Users } from "lucide-react";
+import {
+  countContacts, listContacts, listTags, listDuplicatePairs, countDuplicatePairs,
+  type SortKey, type SortDir, type DuplicatePair,
+} from "@bis/db";
 import { createContactAction } from "./actions";
+import { dismissPairAction, undismissPairAction } from "./merge-actions";
 import { ContactsTable } from "./contacts-table";
 import { AddContactDialog } from "./add-contact-dialog";
+import { DuplicatesList, type DuplicateRow } from "./duplicates-list";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -14,16 +19,19 @@ import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
 import { withWho, type Who } from "@/lib/assign/who";
 import { archivedFilterOf, parseView, withView, type ContactsView } from "@/lib/contacts/view";
+import { toRowCursor, fromRowCursor, compareHref, reasonMessageKey } from "@/lib/contacts/duplicates";
 import { loadAssignView } from "@/lib/assign/view";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { cn } from "@/lib/utils";
 import { renderZone } from "@/lib/zone";
+import { contactDisplayName, formatDateInZone } from "@/lib/format";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import { LocaleProvider } from "@/components/locale-provider";
+import { loggableError } from "@/lib/loggable-error";
 
 export const dynamic = "force-dynamic";
 
@@ -150,6 +158,124 @@ function emptyCopy(
   return { title: tr.text("contacts.empty.title"), body: tr.text("contacts.empty.body") };
 }
 
+/**
+ * F-006 part 1 (plan Task 10, Step 5): the Possible duplicates view, `?view=duplicates`. Its own small
+ * read (open pairs + their real total, through `app.open_duplicate_pairs`) and its own small render —
+ * kept apart from the active/Archived view's larger Promise.all above rather than threaded through it,
+ * so neither view's reads can accidentally run for the other.
+ */
+async function renderDuplicatesView(
+  accountId: string,
+  db: Awaited<ReturnType<typeof dbForRequest>>,
+  access: { isAgency: boolean },
+  before: string | undefined,
+  localeParam: string | undefined,
+) {
+  const [account, prefs] = await Promise.all([
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
+    getPersonPrefs(),
+  ]);
+  if (account.error) {
+    console.error(`contacts duplicates: account ${accountId} timezone and language read failed: ${account.error.message}`);
+  }
+  const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
+  const zone = await renderZone(accountRow?.timezone);
+  const accountLanguage = { language: accountRow?.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  const base = `/dashboard/accounts/${accountId}/contacts`;
+  const cursor = parseCursor(before);
+  const after = fromRowCursor(cursor);
+
+  let pairs: DuplicatePair[] = [];
+  let total = 0;
+  let failed = false;
+  try {
+    [pairs, total] = await Promise.all([
+      listDuplicatePairs(db, accountId, { limit: PAGE_SIZE + 1, after }),
+      countDuplicatePairs(db, accountId),
+    ]);
+  } catch (e) {
+    console.error(`contacts duplicates: read failed for account ${accountId}: ${loggableError(e)}`);
+    failed = true;
+  }
+
+  const hasOlder = pairs.length > PAGE_SIZE;
+  const page = hasOlder ? pairs.slice(0, PAGE_SIZE) : pairs;
+  const last = page[page.length - 1];
+  // 2026-10-17 amendment: not sorted by recency alone, so "Next" / "Back to the start", never
+  // "Older" / "Newer" — the start link drops the cursor entirely.
+  const olderHref = hasOlder && last
+    ? `?${new URLSearchParams(withView({ before: encodeCursor(toRowCursor(last)) }, "duplicates"))}` : null;
+  const startHref = cursor ? `?${new URLSearchParams(withView({}, "duplicates"))}` : null;
+  const countLabel = tr.count("contacts.duplicates.count", total);
+  const showEmpty = !failed && page.length === 0 && !cursor;
+
+  const rows: DuplicateRow[] = page.map((pair) => ({
+    id: pair.id,
+    href: compareHref(accountId, pair),
+    aName: contactDisplayName({ first_name: pair.a.firstName, last_name: pair.a.lastName }),
+    bName: contactDisplayName({ first_name: pair.b.firstName, last_name: pair.b.lastName }),
+    reasonText: tr.text(reasonMessageKey(pair.reason)),
+    foundOnText: tr.text("contacts.duplicates.foundOn", { date: formatDateInZone(pair.createdAt, zone.zone, locale) }),
+  }));
+
+  const backLink = (
+    <Link href={base} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+      <ArrowLeft className="size-4" aria-hidden />
+      {tr.text("contacts.archived.back")}
+    </Link>
+  );
+
+  return (
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
+        <PageHeader title={tr.text("contacts.duplicates.title")} count={countLabel} actions={backLink} />
+        <div className="p-6">
+          {failed ? (
+            <EmptyState
+              icon={Copy} title={tr.text("contacts.duplicates.listFailed")} lang={locale}
+              action={
+                <Link href={`${base}?view=duplicates`} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                  {tr.text("record.card.retry")}
+                </Link>
+              }
+            />
+          ) : showEmpty ? (
+            <EmptyState icon={Copy} title={tr.text("contacts.duplicates.emptyTitle")} body={tr.text("contacts.duplicates.emptyBody")} lang={locale} />
+          ) : (
+            <>
+              <DuplicatesList
+                rows={rows} locale={locale}
+                dismissAction={dismissPairAction.bind(null, accountId)}
+                undismissAction={undismissPairAction.bind(null, accountId)}
+              />
+              {startHref || olderHref ? (
+                <div className="mt-4 flex items-center justify-between">
+                  <div>
+                    {startHref ? (
+                      <Link href={startHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                        {tr.text("contacts.duplicates.first")}
+                      </Link>
+                    ) : null}
+                  </div>
+                  <div>
+                    {olderHref ? (
+                      <Link href={olderHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+                        {tr.text("contacts.duplicates.next")}
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+    </LocaleProvider>
+  );
+}
+
 export default async function ContactsPage({
   params,
   searchParams,
@@ -162,10 +288,6 @@ export default async function ContactsPage({
 }) {
   const { accountId } = await params;
   const { q, before, sort: rawSort, dir: rawDir, who: rawWho, view: rawView, locale: localeParam } = await searchParams;
-  // Contact archive (plan Task 10): `?view=archived` is the Archived view, read and counted on the server
-  // like every other filter here, so its total and its pager describe the archived rows.
-  const view = parseView(rawView);
-  const archived = archivedFilterOf(view);
   // Staff and roles: delete and export are Owner-only. The account-level
   // layout already calls requireAccountAccess to gate entry into this
   // whole account subtree, but discards the role it reads — this page
@@ -175,6 +297,17 @@ export default async function ContactsPage({
   const access = await requireAccountAccess(accountId);
   const { canManage } = access;
   const db = await dbForRequest();
+  // F-006 part 1 (plan Task 10): computed before the view is settled, because a Technician asking for
+  // the duplicates view (they cannot read the queue at all, 0068) gets the active list instead.
+  const wholeAccount = seesWholeAccount(access);
+  const requestedView = parseView(rawView);
+  const view: ContactsView = requestedView === "duplicates" && !wholeAccount ? "active" : requestedView;
+  if (view === "duplicates") {
+    return renderDuplicatesView(accountId, db, access, before, localeParam);
+  }
+  // Contact archive (plan Task 10): `?view=archived` is the Archived view, read and counted on the server
+  // like every other filter here, so its total and its pager describe the archived rows.
+  const archived = archivedFilterOf(view);
   // F-085 part 1 (spec §8-§9): Mine / Unassigned, applied on the SERVER to
   // the list AND its count, so the pager and the header's real total both
   // describe the filtered rows. Never for a Technician (their list is
@@ -239,7 +372,7 @@ export default async function ContactsPage({
   const countLabel = view === "archived" ? tr.count("contacts.archived.count", total) : tr.count("contacts.count", total);
   // F-085 part 1: a Technician (and a client whose role is unsettled) sees
   // only their own customers, so a CSV import, like Export, is not theirs.
-  const wholeAccount = seesWholeAccount(access);
+  // `wholeAccount` was computed above, before the view was settled.
   const empty = emptyCopy(q, assign.who, wholeAccount, view, tr);
   // Never a link named exactly "Contacts" (the e2e's unscoped sidebar locator): the way back reads
   // "Back to contacts".
@@ -275,6 +408,16 @@ export default async function ContactsPage({
               >
                 <Archive className="size-4" aria-hidden />
                 {tr.text("contacts.archived.link")}
+              </Link>
+            ) : null}
+            {/* F-006 part 1 (plan Task 10): beside Archived, the list's way to open pairs. */}
+            {view === "active" && wholeAccount ? (
+              <Link
+                href={`?${new URLSearchParams(withView({}, "duplicates"))}`}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+              >
+                <Copy className="size-4" aria-hidden />
+                {tr.text("contacts.duplicates.link")}
               </Link>
             ) : null}
             {canManage ? (

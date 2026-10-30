@@ -13,6 +13,12 @@ describe("parseView", () => {
     // A duplicated query key arrives as an array at runtime: never the Archived view.
     expect(parseView(["archived", "archived"])).toBe("active");
   });
+
+  // F-006 part 1 (plan Task 10): `?view=duplicates` is the Possible duplicates view.
+  it("only the exact word 'duplicates' is the duplicates view (mutation: fold it into 'archived' -> FAILS)", () => {
+    expect(parseView("duplicates")).toBe("duplicates");
+    expect(parseView("Duplicates")).toBe("active");
+  });
 });
 
 describe("withView", () => {
@@ -20,11 +26,15 @@ describe("withView", () => {
     expect(withView({ sort: "name" }, "archived")).toEqual({ sort: "name", view: "archived" });
     expect(withView({ sort: "name" }, "active")).toEqual({ sort: "name" });
   });
+  it("adds view=duplicates in the duplicates view (mutation: drop it -> FAILS; paging would lose the view)", () => {
+    expect(withView({ sort: "name" }, "duplicates")).toEqual({ sort: "name", view: "duplicates" });
+  });
 });
 
 describe("archivedFilterOf", () => {
-  it("the Archived view reads only archived contacts; the list leaves them out", () => {
+  it("the Archived view reads only archived contacts; the list and the duplicates view leave them out", () => {
     expect(archivedFilterOf("archived")).toBe("only");
     expect(archivedFilterOf("active")).toBe("exclude");
+    expect(archivedFilterOf("duplicates")).toBe("exclude");
   });
 });

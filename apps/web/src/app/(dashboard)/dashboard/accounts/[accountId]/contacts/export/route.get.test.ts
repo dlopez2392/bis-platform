@@ -114,6 +114,14 @@ describe("contacts CSV export route (GET)", () => {
     expect(listContacts.mock.calls.at(-1)![2]).toMatchObject({ archived: "exclude" });
   });
 
+  // F-006 part 1 (plan Task 10, Step 7): the duplicates view exports the active contacts, like the
+  // list it hangs off (there is no "export the pairs" concept) — never the archived ones.
+  it("?view=duplicates exports the active contacts (mutation: read it as archived -> FAILS)", async () => {
+    listContacts.mockResolvedValue([]);
+    await GET(req("?view=duplicates"), ctx());
+    expect(listContacts.mock.calls.at(-1)![2]).toMatchObject({ archived: "exclude" });
+  });
+
   it("falls back to the list page's own default (created, desc) for a missing or invalid sort/dir", async () => {
     listContacts.mockResolvedValueOnce([]);
     await GET(req("?sort=bogus&dir=sideways"), ctx());
