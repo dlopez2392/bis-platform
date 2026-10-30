@@ -389,5 +389,8 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
   await page.goto(`/dashboard/accounts/${accountId}/calendar?job=${bookingIdAt11}`);
   const drawer2 = page.getByRole("dialog");
   await expect(drawer2).toContainText(CONTACT_FULL_NAME);
-  await expect(page.getByRole("main").locator("[data-agenda-date]")).toHaveText(dayLabelText);
+  // The drawer is a modal: while it is open the page behind it is aria-hidden (Radix's hideOthers), and a role
+  // query skips aria-hidden subtrees, so `main` is only found with includeHidden. The agenda IS there, on the
+  // job's own day; this asserts the day it shows, not what a screen reader reaches past an open modal.
+  await expect(page.getByRole("main", { includeHidden: true }).locator("[data-agenda-date]")).toHaveText(dayLabelText);
 });
