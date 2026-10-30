@@ -29,7 +29,8 @@ const FIELD_KEY: Readonly<Record<string, MessageKey>> = {
   last_language_signal: "contacts.merge.field.languageHint",
   custom: "contacts.merge.field.customFields",
   archived_at: "contacts.merge.field.archived",
-  marketing_email_opted_out_at: "contacts.merge.field.emailOptOut",
+  // 0049's retired opt-out column is deliberately NOT named here (consent scan 5: no source names it);
+  // it reads the generic word below like any other unnamed group.
 };
 
 /** The field noun both the compare screen's radios and the Undo toast's "Kept what was changed…"

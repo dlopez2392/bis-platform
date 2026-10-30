@@ -99,28 +99,26 @@ describe("fieldLabel: the one field-noun function both callers share", () => {
   // Fix round, carry-in 8: every group name 0106's app.merge_fields_of can report through keptEdits
   // (read-only from the migration's own c_groups array) resolves to a WORD, never its raw snake_case
   // key — the four named ones get their own words, everything else reads a generic word.
-  it("last_language_signal, custom, archived_at and marketing_email_opted_out_at each get their own word, never the raw key (mutation: drop a FIELD_KEY entry -> that one FAILS)", () => {
+  it("last_language_signal, custom and archived_at each get their own word, never the raw key (mutation: drop a FIELD_KEY entry -> that one FAILS)", () => {
     expect(fieldLabel("last_language_signal", "en")).toBe("the language hint");
     expect(fieldLabel("custom", "en")).toBe("the custom fields");
     expect(fieldLabel("archived_at", "en")).toBe("archived status");
-    expect(fieldLabel("marketing_email_opted_out_at", "en")).toBe("the marketing email opt-out");
-    for (const field of ["last_language_signal", "custom", "archived_at", "marketing_email_opted_out_at"]) {
+    for (const field of ["last_language_signal", "custom", "archived_at"]) {
       expect(fieldLabel(field, "en")).not.toBe(field);
     }
   });
 
-  it("every OTHER group representative 0106 can report (dnd, reactivation_sent_at, language_hint_kept_at) reads the generic word, never the raw key (mutation: fall back to the raw field -> FAILS)", () => {
-    for (const field of ["dnd", "reactivation_sent_at", "language_hint_kept_at"]) {
+  it("every OTHER group representative 0106 can report (dnd, reactivation_sent_at, language_hint_kept_at, and 0049's retired opt-out column, which consent scan 5 forbids source code to name) reads the generic word, never the raw key (mutation: fall back to the raw field -> FAILS)", () => {
+    for (const field of ["dnd", "reactivation_sent_at", "language_hint_kept_at", "marketing_email_opted_out_at"]) {
       expect(fieldLabel(field, "en")).toBe("another detail");
       expect(fieldLabel(field, "en")).not.toBe(field);
     }
   });
 
-  it("the four named groups and the generic fallback both have Spanish words", () => {
+  it("the three named groups and the generic fallback both have Spanish words", () => {
     expect(fieldLabel("last_language_signal", "es")).toBe("el aviso de idioma");
     expect(fieldLabel("custom", "es")).toBe("los campos personalizados");
     expect(fieldLabel("archived_at", "es")).toBe("el estado de archivado");
-    expect(fieldLabel("marketing_email_opted_out_at", "es")).toBe("la baja de correos de marketing");
     expect(fieldLabel("dnd", "es")).toBe("otro dato");
   });
 });

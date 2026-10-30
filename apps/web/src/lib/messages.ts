@@ -5348,8 +5348,6 @@ export const m = {
   "contacts.merge.field.customFields.es": "los campos personalizados",
   "contacts.merge.field.archived": "archived status",
   "contacts.merge.field.archived.es": "el estado de archivado",
-  "contacts.merge.field.emailOptOut": "the marketing email opt-out",
-  "contacts.merge.field.emailOptOut.es": "la baja de correos de marketing",
   "contacts.merge.field.other": "another detail",
   "contacts.merge.field.other.es": "otro dato",
   "contacts.merge.alsoKeeps": "Also keeps: {list}",
