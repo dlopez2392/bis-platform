@@ -94,9 +94,14 @@ describe("MergeScreen markup (DESIGN.md rule 8: one primary per view)", () => {
     undoAction: vi.fn(),
   }));
 
-  it("exactly one data-variant=\"default\" button: Merge (mutation: make Cancel default too -> FAILS)", () => {
-    expect(html().match(/data-variant="default"/g)?.length).toBe(1);
-    expect(html()).toContain(">Merge<");
+  it("exactly one primary-styled control: Merge (mutation: make Cancel's own buttonVariants 'default' too -> FAILS)", () => {
+    const out = html();
+    // Merge is a real <Button>, which stamps data-variant; Cancel and "Keep this one instead" are
+    // <Link>s that only borrow buttonVariants' CLASSES (no data-variant at all) — so the primary
+    // look is pinned by the class btn-primary itself, not only by the attribute Button happens to add.
+    expect(out.match(/data-variant="default"/g)?.length).toBe(1);
+    expect(out.match(/class="[^"]*\bbtn-primary\b[^"]*"/g)?.length).toBe(1);
+    expect(out).toContain(">Merge<");
   });
 
   it("names both records and the swap link", () => {
