@@ -64,7 +64,11 @@ const ACTOR = "e2e-calendar-agenda-spec";
 const CONTACT_FIRST = "Agenda";
 const CONTACT_LAST = `Client ${STAMP}`;
 const CONTACT_FULL_NAME = `${CONTACT_FIRST} ${CONTACT_LAST}`;
-const CONTACT_EMAIL = `e2e+agenda${STAMP}@example.com`;
+// NEVER `e2e+<tag><stamp>@example.com`: emailKey() (packages/db/contacts.ts) strips `+...@`, so every spec
+// using that shape collapses to the SAME key (`e2e@example.com`) and one spec's createContact (matchBy
+// "email_only") can pick up another's leftover contact (calendar-feed.spec.ts did, via this exact row). The
+// stamp alone makes the local part unique; no `+` means nothing to strip.
+const CONTACT_EMAIL = `agenda-${STAMP}@example.com`;
 const JOB_WHAT = "Fix the leaking water heater";
 
 /** The booking page's own loading state (`.bis-booking-skeletons`) — booking.spec.ts's and
@@ -91,14 +95,49 @@ function opening(template: string): string {
   return template.split("{")[0]!.trim();
 }
 
-async function findBookingId(accountId: string, contactId: string, atIso: string): Promise<string> {
-  const { data, error } = await serviceDb().from("bookings").select("id")
-    .eq("account_id", accountId).eq("contact_id", contactId).eq("starts_at", atIso).eq("status", "booked")
-    .maybeSingle();
-  if (error || !data) {
-    throw new Error(`calendar-agenda e2e: could not find the booking at ${atIso}: ${error?.message ?? "no row"}`);
+/** `starts_at` read back as `HH:MM` in the account's own zone — exactly the read a person looking at the
+ *  agenda row would make, so matching it never depends on reproducing the app's own UTC arithmetic a second
+ *  time in the test. */
+function wallClockOf(iso: string, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", hour: "numeric", minute: "numeric" })
+    .formatToParts(new Date(iso));
+  const hh = parts.find((p) => p.type === "hour")!.value.padStart(2, "0");
+  const mi = parts.find((p) => p.type === "minute")!.value.padStart(2, "0");
+  return `${hh}:${mi}`;
+}
+
+/**
+ * The booking at wall time `hhmm` (the account's own zone) on the picked day, for this contact — found by
+ * CONTACT + DAY, never by an exact-instant match. This suite runs right after the fall-back (DST ends the
+ * first Sunday of November), where a correctly-saved 18:00 add lands on `T00:00:00.000Z` the NEXT calendar
+ * day — a real, correct result of the account's zone, not a bug — so a test that recomputes that same UTC
+ * instant a second time and then demands bit-for-bit equality with whatever the server actually wrote is
+ * exactly the kind of duplicated arithmetic that goes quietly wrong at a zone boundary. Scoped to the picked
+ * day's own bounds (`agendaWindow`'s day, the app's own reckoning of "a day" in this zone) and picked out by
+ * its OWN wall clock, read back exactly as the agenda row would show it — so the assertion still proves the
+ * booking landed at the intended time, not merely that some row for this contact exists that day.
+ */
+async function findBookingId(
+  accountId: string, contactId: string, dayStart: Date, dayEnd: Date, hhmm: string, timezone: string,
+): Promise<string> {
+  const { data, error } = await serviceDb().from("bookings").select("id, starts_at")
+    .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "booked")
+    .gte("starts_at", dayStart.toISOString()).lt("starts_at", dayEnd.toISOString());
+  if (error) {
+    throw new Error(
+      `calendar-agenda e2e: looking up the ${hhmm} booking between ${dayStart.toISOString()} and ` +
+      `${dayEnd.toISOString()} failed: ${error.message}`,
+    );
   }
-  return data.id as string;
+  const rows = data ?? [];
+  const hit = rows.find((r) => wallClockOf(r.starts_at as string, timezone) === hhmm);
+  if (!hit) {
+    throw new Error(
+      `calendar-agenda e2e: could not find a ${hhmm} booking (account zone ${timezone}) for contact ${contactId} ` +
+      `between ${dayStart.toISOString()} and ${dayEnd.toISOString()}: ${rows.length} booking(s) that day, none at ${hhmm}`,
+    );
+  }
+  return hit.id as string;
 }
 
 let accountId = "";
@@ -183,6 +222,24 @@ test.afterAll(async () => {
     }
   }
 
+  // Delete every row this spec wrote for its own contact — any booking row (cancelled or not) blocks
+  // deleting the contact (`bookings_contact_id_fkey`), and the contact itself must not outlive this spec:
+  // another spec's createContact (matchBy "email_only") could otherwise still find it by name or future
+  // email collision. The fixture teardown deletes the whole per-run account eventually, but other specs run
+  // against the SAME account before that happens.
+  if (contactId) {
+    try {
+      await db.from("bookings").delete().eq("account_id", accountId).eq("contact_id", contactId);
+    } catch (e) {
+      fail(`calendar-agenda e2e cleanup: deleting this contact's bookings failed: ${String(e)}`);
+    }
+    try {
+      await db.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+    } catch (e) {
+      fail(`calendar-agenda e2e cleanup: deleting the seeded contact failed: ${String(e)}`);
+    }
+  }
+
   if (calendarSeeded && priorSettings) {
     try {
       await updateCalendarSettings(db, accountId, priorSettings, ACTOR);
@@ -200,12 +257,14 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
   const main = page.getByRole("main");
   const calendarUrl = `/dashboard/accounts/${accountId}/calendar?view=day&day=${dayKeyPicked}`;
 
-  const zoneShift = agendaWindow("day", dayKeyPicked, timezone).days[0]!.zoneShift;
+  const agendaDay = agendaWindow("day", dayKeyPicked, timezone).days[0]!;
+  const zoneShift = agendaDay.zoneShift;
   const timeLabel = (hhmm: string) => agendaTime(wallToInstant(dayKeyPicked, hhmm, timezone)!, timezone, "en", zoneShift);
   const addAtLabel = (hhmm: string) => m["calendar.agenda.addAt"].replace("{time}", timeLabel(hhmm));
+  // Only for the public page's expected slot LABEL (step 6) — never for a DB lookup; see findBookingId's doc.
   const at10Iso = wallToInstant(dayKeyPicked, "10:00", timezone)!.toISOString();
   const at11Iso = wallToInstant(dayKeyPicked, "11:00", timezone)!.toISOString();
-  const at18Iso = wallToInstant(dayKeyPicked, "18:00", timezone)!.toISOString();
+  const findOnDay = (hhmm: string) => findBookingId(accountId, contactId, agendaDay.start, agendaDay.end, hhmm, timezone);
 
   // --- Step 1: the agenda is in `main`, before the Booking settings card -----------------------------
   await page.goto(calendarUrl);
@@ -233,7 +292,7 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
 
   const addedToast10 = page.locator("[data-sonner-toast]").filter({ hasText: opening(m["calendar.job.added"]) });
   await expect(addedToast10).toBeVisible();
-  const bookingIdAt10 = await findBookingId(accountId, contactId, at10Iso);
+  const bookingIdAt10 = await findOnDay("10:00");
   const row10 = main.locator(`#booking-${bookingIdAt10}`);
   await expect(row10).toBeVisible();
   await expect(row10).toContainText(CONTACT_FULL_NAME);
@@ -259,7 +318,7 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
 
   const addedToast11 = page.locator("[data-sonner-toast]").filter({ hasText: opening(m["calendar.job.added"]) });
   await expect(addedToast11).toBeVisible();
-  bookingIdAt11 = await findBookingId(accountId, contactId, at11Iso);
+  bookingIdAt11 = await findOnDay("11:00");
   const row11 = main.locator(`#booking-${bookingIdAt11}`);
   await expect(row11).toBeVisible();
   await expect(row11).toContainText(CONTACT_FULL_NAME);
@@ -284,7 +343,7 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
 
   const addedToast18 = page.locator("[data-sonner-toast]").filter({ hasText: opening(m["calendar.job.added"]) });
   await expect(addedToast18).toBeVisible();
-  bookingIdAt18 = await findBookingId(accountId, contactId, at18Iso);
+  bookingIdAt18 = await findOnDay("18:00");
   const row18 = main.locator(`#booking-${bookingIdAt18}`);
   await expect(row18).toBeVisible();
   await expect(row18).toContainText(m["calendar.agenda.outsideHours"]);
