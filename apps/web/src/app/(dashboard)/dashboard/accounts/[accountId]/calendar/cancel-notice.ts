@@ -85,6 +85,10 @@ export type QueueCancelNoticeRequest = {
   /** The owner's message, already bounded by the action. */
   message: string;
   origin: string | null;
+  /** F-046 (T10 carry-in 2): the booking whose time the email names, when it is not the cancelled one. A staff
+   *  job cancelled inside its Undo hold was never told to the customer; the action names the earlier row of the
+   *  same appointment that they WERE told (`cancelBookingAction`). Must be the same customer's, or this THROWS. */
+  whenFrom?: string;
 };
 
 /** Everything the send needs, fixed when the row is written. */
@@ -110,6 +114,16 @@ export async function queueCancelNotice(
     contact_id: string; calendar_id: string; starts_at: string; booker_timezone: string | null;
   } | null;
   if (!booking) throw new Error("booking not found");
+  let when: { starts_at: string; booker_timezone: string | null } = booking;
+  if (req.whenFrom !== undefined) {
+    const { data: toldData, error: toldErr } = await db.from("bookings")
+      .select("contact_id, starts_at, booker_timezone")
+      .eq("account_id", req.accountId).eq("id", req.whenFrom).maybeSingle();
+    if (toldErr) throw new Error(`told booking read failed: ${toldErr.message}`);
+    const told = toldData as { contact_id: string; starts_at: string; booker_timezone: string | null } | null;
+    if (!told || told.contact_id !== booking.contact_id) throw new Error("the told booking is not this customer's");
+    when = told;
+  }
 
   const contact = await getContact(db, req.accountId, booking.contact_id) as { email?: string | null } | null;
   const to = contact?.email?.trim();
@@ -121,9 +135,9 @@ export async function queueCancelNotice(
   if (calErr) throw new Error(`calendar read failed: ${calErr.message}`);
   const calendar = calData as { public_id: string; enabled: boolean } | null;
 
-  const startsAt = new Date(booking.starts_at);
+  const startsAt = new Date(when.starts_at);
   const accountZone = safeZone(account.accountTimezone, "UTC");
-  const bookerZone = safeZone(booking.booker_timezone ?? undefined, accountZone);
+  const bookerZone = safeZone(when.booker_timezone ?? undefined, accountZone);
   const rebookUrl = calendar?.enabled && req.origin
     ? `${req.origin}/b/${calendar.public_id}${req.locale === "es" ? "?locale=es" : ""}`
     : "";

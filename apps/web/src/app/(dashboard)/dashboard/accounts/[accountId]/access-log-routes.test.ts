@@ -84,6 +84,8 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
   ...each(`${A}/calendar/actions.ts`, ["updateCalendarSettingsAction"], CFG),
   ...each(`${A}/calendar/actions.ts`, ["setBookingStatusAction", "cancelBookingAction", "keepAppointmentAction", "undoCancelBookingAction"], W),
   ...each(`${A}/calendar/actions.ts`, ["cancelNoticeOptionAction"], "Cancel's notice check, from the calendar (a list, owner ruling 2)"),
+  ...each(`${A}/calendar/agenda-actions.ts`, ["addJobAction", "undoAddJobAction", "moveJobAction", "undoMoveJobAction", "undoEditJobAction"], W),
+  ...each(`${A}/calendar/agenda-actions.ts`, ["jobNoticeOptionAction"], "the Add job sheet's notice check, from the calendar (a list, owner ruling 2)"),
   ...each(`${A}/calendar/closed-days-actions.ts`, ["addClosedDayAction", "removeClosedDayAction"], CFG),
   ...each(`${A}/calendar/feed-actions.ts`, ["makeFeedLinkAction", "replaceFeedLinkAction", "turnOffFeedLinkAction", "undoFeedLinkAction"], CFG),
   ...each(`${A}/checklist/actions.ts`, ["setChecklistItemAction", "setA2pRegistrationAction", "addChecklistItemAction"], AG),

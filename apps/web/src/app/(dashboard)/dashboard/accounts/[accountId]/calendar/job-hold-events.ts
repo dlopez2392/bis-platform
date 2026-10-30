@@ -10,8 +10,13 @@ import { emit, type JobHoldClaim, type SupabaseClient } from "@bis/db";
  * Its own module, not job-hold.ts: that file sends through the email gate, and consent scan 2 reads every
  * `booking.`-prefixed literal in a gate caller as an email kind. These are event types, as createBooking and
  * setBookingStatus write them in @bis/db. THROWS on a write error; the settle logs it and goes on.
+ *
+ * F-046 T10 (carry-in 2): also written by the Calendar page's Cancel of a job whose hold never settled (a
+ * cancelled row is never claimed, so no settle ever will), which is why it takes only the five fields it reads.
  */
-export async function emitJobHoldEvents(db: SupabaseClient, accountId: string, claim: JobHoldClaim): Promise<void> {
+export type JobHoldEventsRow = Pick<JobHoldClaim, "id" | "author_id" | "calendar_id" | "contact_id" | "rescheduled_from_id">;
+
+export async function emitJobHoldEvents(db: SupabaseClient, accountId: string, claim: JobHoldEventsRow): Promise<void> {
   const [actor, actorType] = claim.author_id ? [claim.author_id, "user" as const] : ["system", "system" as const];
   await emit(db, accountId, "booking.created", actor,
     { bookingId: claim.id, calendarId: claim.calendar_id, contactId: claim.contact_id }, actorType);

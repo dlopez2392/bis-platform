@@ -7,13 +7,13 @@ import {
   serviceDb, updateCalendarSettings, getOrCreateCalendar, nextSpanishBox,
   setBookingStatus, undoOperatorCancel,
   discardQueuedNotice, noticeMessageStatus, savePendingCancelNotice, deletePendingCancelNotice,
-  setBookingClosureKept, bumpHeldForAccount, emit,
+  setBookingClosureKept, bumpHeldForAccount, emit, readAgendaJob, getCalendarForAccount,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
-  type BookingStatus, type CalendarSettingsPatch,
+  type BookingStatus, type CalendarSettingsPatch, type AgendaBookingRow,
 } from "@bis/db";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
-import { callerCanSee, noticeBelongsToBooking } from "@/lib/auth/visible";
+import { noticeBelongsToBooking } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
@@ -28,6 +28,11 @@ import {
   cancelNoticeAvailability, queueCancelNotice, sendQueuedCancelNotice, type NoticeAvailability,
 } from "./cancel-notice";
 import { NOTICE_MESSAGE_MAX, UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
+// F-085 part 1, spec §7.3: every booking action below proves its booking through the caller's own client
+// first (`callerCanSee`). Moved out of this "use server" file (F-046 plan correction 5): exported here it
+// would have been a callable server action.
+import { proveBooking } from "./prove-booking";
+import { emitJobHoldEvents } from "./job-hold-events";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -177,27 +182,6 @@ export async function updateCalendarSettingsAction(
 }
 
 /**
- * F-085 part 1, spec §7.3: "prove the target through the request client, then
- * write through the service client". Every booking action below writes (or
- * reads) with serviceDb(), which RLS does not bind, so each first proves the
- * booking with `callerCanSee`, through the caller's OWN client: under 0068 a
- * Technician cannot see another person's customer's booking, and the proof
- * fails with no role branching here. A "no" and a proof that could not be
- * made are the same generic refusal; `action` names the caller in the log.
- * Answers null when the booking is proven.
- */
-async function proveBooking(
-  action: string, accountId: string, bookingId: string,
-): Promise<{ ok: false; error: string } | null> {
-  try {
-    if (await callerCanSee("bookings", accountId, bookingId)) return null;
-  } catch (e) {
-    console.error(`${action}: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
-  }
-  return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-}
-
-/**
  * Cancel / complete / no-show, both audiences.
  *
  * Deliberately serviceDb(), the one exception in this file: unlike the
@@ -249,6 +233,33 @@ export async function setBookingStatusAction(
   return { ok: true };
 }
 
+/** How far `untoldHold` walks back for a time the customer knows (rescheduleChain's own bound). */
+const TOLD_WALK_MAX = 50;
+
+/**
+ * F-046 T10 (carry-in 2): a staff job whose Undo hold never settled was never told to the customer. Its
+ * confirmation, or a move's new time, goes only when the hold settles (job-hold.ts), and only a BOOKED row is
+ * ever claimed, so once cancelled it never will be. null = an ordinary booking (no hold, or a hold that settled:
+ * its email may have gone). Otherwise `toldId` is the newest earlier row of the same appointment whose time the
+ * customer DOES know: one they made themselves, one Sofía made with them, or one they were emailed about
+ * (`notice_sent_at`); null when they know none. jobWasTold's rule (DB/booking.ts), read row by row so a customer's
+ * or Sofía's own move in the middle of a chain counts too, and so the row itself is known. Reads on the service
+ * client: every caller has proven the booking. THROWS on a read error.
+ */
+async function untoldHold(accountId: string, bookingId: string): Promise<{ row: AgendaBookingRow; toldId: string | null } | null> {
+  const db = serviceDb();
+  const row = await readAgendaJob(db, accountId, bookingId);
+  if (!row || row.hold_until === null || row.hold_settled_at !== null) return null;
+  let id = row.rescheduled_from_id;
+  for (let hop = 0; id !== null && hop < TOLD_WALK_MAX; hop++) {
+    const r = await readAgendaJob(db, accountId, id);
+    if (!r) break;
+    if (r.notice_sent_at !== null || r.author_kind === "customer" || r.author_kind === "ai") return { row, toldId: r.id };
+    id = r.rescheduled_from_id;
+  }
+  return { row, toldId: null };
+}
+
 /**
  * F-048: before the Calendar page opens its Cancel dialog, can a customer
  * notice go at all? (`cancelNoticeAvailability`: an address, an account that
@@ -268,6 +279,11 @@ export async function cancelNoticeOptionAction(
   const refused = await proveBooking("cancelNoticeOptionAction", accountId, bookingId);
   if (refused) return refused;
   try {
+    // F-046 T10 (carry-in 2): a held job the customer knows nothing of has nobody to tell, which the Cancel button
+    // treats exactly as no address on file (cancelStep: cancel at once, "we haven't told the customer"). The
+    // cancel itself decides again, on the row as it leaves it.
+    const held = await untoldHold(accountId, bookingId);
+    if (held && held.toldId === null) return { ok: true, notice: "no_email" };
     return { ok: true, notice: await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId) };
   } catch (e) {
     console.error(`cancelNoticeOptionAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
@@ -334,13 +350,41 @@ export async function cancelBookingAction(
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
 
+  // F-046 T10 (carry-in 2): a staff job cancelled inside its Undo hold. Decided on the row AS THIS CANCEL LEFT IT,
+  // which is final (nothing claims a cancelled row): a settle that won just before the cancel may have emailed
+  // its time, so that one is an ordinary cancel. The customer is never emailed about a time they were never told:
+  // the notice names the time they DO know (`whenFrom`), or nobody is emailed. The hold's events, which its
+  // settle would have written (D8), are written here. A row that cannot be read is told to nobody: the cancel
+  // stands and the toast says the customer was not told.
+  let held: Awaited<ReturnType<typeof untoldHold>> = null;
+  let tellable = true;
+  try {
+    held = await untoldHold(accountId, bookingId);
+    if (held && held.toldId === null) tellable = false;
+  } catch (e) {
+    console.error(`cancelBookingAction: booking ${bookingId} (account ${accountId}) cancelled, but its hold could not be read, so nobody is told: ${String(e)}`);
+    tellable = false;
+  }
+  if (held) {
+    try {
+      const calendar = await getCalendarForAccount(serviceDb(), accountId);
+      if (!calendar) throw new Error("no calendar");
+      const { id, author_id, contact_id, rescheduled_from_id } = held.row;
+      await emitJobHoldEvents(serviceDb(), accountId, { id, author_id, calendar_id: calendar.id, contact_id, rescheduled_from_id });
+    } catch (e) {
+      console.error(`cancelBookingAction: booking ${bookingId} (account ${accountId}) cancelled inside its hold, its events not recorded: ${String(e)}`);
+    }
+  }
+  if (!tellable) availability = null;
+  const whenFrom = held?.toldId ? { whenFrom: held.toldId } : {};
+
   let result: CancelBookingResult = {
     ok: true, version, notice: availability === "address_blocked" ? "address_blocked" : "none",
   };
   if (availability === "available") {
     try {
       const origin = originFrom(await headers());
-      const queued = await queueCancelNotice(serviceDb(), { accountId, bookingId, userId, locale, message, origin });
+      const queued = await queueCancelNotice(serviceDb(), { accountId, bookingId, userId, locale, message, origin, ...whenFrom });
       // The notice's durable copy (0100): the cron sweep sends it if this
       // process dies before after() does. Its own try: a copy that cannot be
       // written leaves the notice exactly as it was before the sweep existed,

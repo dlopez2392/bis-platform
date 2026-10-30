@@ -13,7 +13,7 @@ const db = vi.hoisted(() => ({
   discardQueuedNotice: vi.fn(),
   readBookingStatus: vi.fn(),
   deletePendingCancelNotice: vi.fn(),
-  rows: { booking: null as unknown, calendar: null as unknown },
+  rows: { booking: null as unknown, calendar: null as unknown, byId: {} as Record<string, unknown> },
 }));
 vi.mock("@bis/db", () => ({
   claimCancelNotice: db.claimCancelNotice,
@@ -43,10 +43,14 @@ import { UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
  *  @bis/db helper above. */
 const fakeDb = {
   from: (table: string) => {
+    // F-046 T10: a booking named in `rows.byId` answers by its id (the time the customer was told).
+    let id: unknown = null;
     const q = {
       select: () => q,
-      eq: () => q,
-      maybeSingle: async () => ({ data: table === "bookings" ? db.rows.booking : db.rows.calendar, error: null }),
+      eq: (col: string, v: unknown) => { if (col === "id") id = v; return q; },
+      maybeSingle: async () => ({
+        data: table !== "bookings" ? db.rows.calendar : String(id) in db.rows.byId ? db.rows.byId[String(id)] : db.rows.booking, error: null,
+      }),
     };
     return q;
   },
@@ -78,6 +82,7 @@ beforeEach(() => {
     starts_at: "2026-11-01T14:00:00Z", booker_timezone: "America/New_York",
   };
   db.rows.calendar = { public_id: "pub1", enabled: true };
+  db.rows.byId = {};
   db.claimCancelNotice.mockReset().mockImplementation(async () => { order.push("claim"); return true; });
   db.getContact.mockReset().mockResolvedValue({ id: "contact_1", email: " maria@example.com ", first_name: "Maria" });
   db.ensureConversation.mockReset().mockResolvedValue({ id: "conv_1", created: false });
@@ -161,6 +166,27 @@ describe("queueCancelNotice — the thread row is written QUEUED in the cancel i
   it("THROWS when the contact has no address left, writing no row", async () => {
     db.getContact.mockResolvedValue({ id: "contact_1", email: null });
     await expect(queueCancelNotice(fakeDb as never, QREQ)).rejects.toThrow(/no email/);
+    expect(db.createMessage).not.toHaveBeenCalled();
+  });
+
+  // F-046 T10, carry-in 2: a staff job cancelled inside its Undo hold was never told to the customer; the notice
+  // names the time they WERE told, an earlier row of the same appointment, in that row's own zones.
+  it("whenFrom names the told row's time, never the cancelled row's (mutation: ignore whenFrom → FAILS)", async () => {
+    db.rows.byId.bk_told = {
+      contact_id: "contact_1", calendar_id: "cal_1", starts_at: "2026-10-30T14:00:00Z", booker_timezone: "America/New_York",
+    };
+    const { email } = await queueCancelNotice(fakeDb as never, { ...QREQ, whenFrom: "bk_told" });
+    expect(email.text).toMatch(/10:00 AM EDT/);
+    expect(email.text).toMatch(/9:00 AM CDT for us/);
+    expect(email.text).not.toMatch(/9:00 AM EST/);
+    expect(email.contactId).toBe("contact_1");
+  });
+
+  it("whenFrom of another customer's booking, or of none, THROWS before any row is written (never someone else's time)", async () => {
+    db.rows.byId.bk_other = { contact_id: "contact_2", calendar_id: "cal_1", starts_at: "2026-10-30T14:00:00Z", booker_timezone: null };
+    await expect(queueCancelNotice(fakeDb as never, { ...QREQ, whenFrom: "bk_other" })).rejects.toThrow(/told/);
+    db.rows.byId.bk_gone = null;
+    await expect(queueCancelNotice(fakeDb as never, { ...QREQ, whenFrom: "bk_gone" })).rejects.toThrow(/told/);
     expect(db.createMessage).not.toHaveBeenCalled();
   });
 });
