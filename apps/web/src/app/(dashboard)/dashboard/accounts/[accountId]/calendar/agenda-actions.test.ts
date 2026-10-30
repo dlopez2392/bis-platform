@@ -92,10 +92,13 @@ const OPENED: JobOpened = {
   startsAt: "2026-11-03T16:00:00.000Z", endsAt: "2026-11-03T17:00:00.000Z", note: "Fix the water heater",
   placeId: null, meetingType: "in_person", meetingUrl: null,
 };
+type Opened = JobOpened & { told: boolean };
+/** What Move opened with, and whether the customer had been told about the job then (T10 review I2). */
+const opened = (over: Partial<Opened> = {}): Opened => ({ ...OPENED, told: true, ...over });
 /** Move the job to Wed 4 Nov, 10:00-11:00 Chicago = 16:00-17:00 UTC. */
-const moveDraft = (over: Partial<JobFields & { opened: JobOpened }> = {}): JobFields & { opened: JobOpened } => ({
+const moveDraft = (over: Partial<JobFields & { opened: Opened }> = {}): JobFields & { opened: Opened } => ({
   date: "2026-11-04", start: "10:00", minutes: 60, what: "Fix the water heater", placeId: null, meetingType: "in_person",
-  notify: true, opened: OPENED, ...over,
+  notify: true, opened: opened(), ...over,
 });
 
 beforeEach(() => {
@@ -271,6 +274,19 @@ describe("addJobAction: a new customer (R8, carry-in 4: never silently folded in
     expect(r).toEqual({ ok: false, needs: { phoneOwner: { id: C1, name: "Ana García", first: "Ana" } } });
     expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+19565550123");
     expect(writes()).toEqual([]);
+  });
+
+  // listContactsOnNumber reads by phone_key, a SUPERSET on purpose (phoneKeysOf: a Mexican number keys its ten
+  // national digits too), so the exact number is decided here with isCallerIdNumber (spec S1). A US number with the
+  // same ten digits is somebody else, never the owner of the typed +52 number.
+  it("a row the phone_key superset brings back on a DIFFERENT number is nobody: no phoneOwner prompt (mutation: drop isCallerIdNumber → FAILS)", async () => {
+    db.listContactsOnNumber.mockImplementation(rec("listContactsOnNumber", async () => ({
+      rows: [{ id: C1, first_name: "Ana", last_name: "García", phone: "(956) 292-1696", email_key: null, holds_shared_number: false }], truncated: false,
+    })));
+    const r = await addJobAction(ACCT, quick({ phone: "+52 956 292 1696" }), []);
+    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+529562921696");
+    expect(r.ok).toBe(true);
+    expect(db.createContact).toHaveBeenCalled();
   });
 
   it("a shared number's holding record is nobody: it is left out, and the customer is made", async () => {
@@ -505,7 +521,9 @@ describe("undoAddJobAction (D5, plan review item 3)", () => {
     ["settled", { ok: false, errorKey: "calendar.job.undoTooLate", fallback: true }],
     ["is_move (mutation: map it to ok → FAILS)", { ok: false, errorKey: "calendar.bookings.statusUpdateFailed", fallback: true }],
     ["moved", { ok: false, errorKey: "calendar.job.undoMovedSince" }],
-    ["not_yours", { ok: false, errorKey: "calendar.bookings.statusUpdateFailed" }],
+    // T10 review minor: a colleague's held add cannot be deleted by this person, but the drawer's ordinary Cancel can
+    // still take it off the agenda (mutation: drop its fallback → FAILS).
+    ["not_yours", { ok: false, errorKey: "calendar.bookings.statusUpdateFailed", fallback: true }],
     ["gone", { ok: false, errorKey: "calendar.bookings.statusUpdateFailed" }],
   ])("%s", async (outcome, expected) => {
     db.deleteUnsettledStaffJob.mockImplementation(rec("deleteUnsettledStaffJob", async () => outcome.split(" ")[0]));
@@ -552,7 +570,7 @@ describe("moveJobAction: same time and length is an in-place edit (D6)", () => {
     await moveJobAction(ACCT, J1, moveDraft({ date: "2026-11-03", meetingType: "video" }), []);
     expect(provider.createMeetingRoom).toHaveBeenCalledWith({ bookingId: "pub123", endsAt: at("2026-11-03T17:00:00.000Z") });
     expect(db.editJobDetails.mock.calls[0]![4]).toMatchObject({ meetingType: "video", meetingUrl: "https://rio.daily.co/room1" });
-    const wasVideo = { ...OPENED, meetingType: "video" as const, meetingUrl: "https://rio.daily.co/old" };
+    const wasVideo = opened({ meetingType: "video", meetingUrl: "https://rio.daily.co/old" });
     db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => job({ meeting_type: "video", meeting_url: "https://rio.daily.co/old" })));
     await moveJobAction(ACCT, J1, moveDraft({ date: "2026-11-03", meetingType: "phone", opened: wasVideo }), []);
     expect(db.editJobDetails.mock.calls[1]![4]).toMatchObject({ meetingType: "phone", meetingUrl: null });
@@ -560,7 +578,7 @@ describe("moveJobAction: same time and length is an in-place edit (D6)", () => {
 
   it("an address the job already names is kept even once archived; a different one must be the customer's and active", async () => {
     db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => job({ place_id: P2 })));
-    const kept = { ...OPENED, placeId: P2 };
+    const kept = opened({ placeId: P2 });
     expect((await moveJobAction(ACCT, J1, moveDraft({ date: "2026-11-03", placeId: P2, what: "y", opened: kept }), [])).ok).toBe(true);
     expect(db.listContactPlaces).not.toHaveBeenCalled();
     expect(await moveJobAction(ACCT, J1, moveDraft({ date: "2026-11-03", placeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", opened: kept }), []))
@@ -634,6 +652,48 @@ describe("moveJobAction: a new time (D6, plan review item 2, carry-in 1)", () =>
       : job({ status: "cancelled", hold_until: "2026-11-02T15:00:10Z", notice_wanted: "confirmation", hold_settled_at: "2026-11-02T15:00:10Z" }))));
     await moveJobAction(ACCT, J1, moveDraft({ notify: true }), []);
     expect(db.setJobNotice).toHaveBeenCalledWith(h.SVC, ACCT, NEW, "moved");
+  });
+
+  /**
+   * T10 review I2: staff add at 0s; open the drawer at 5s, where the tick is off because nothing has been sent yet
+   * (told: false); the hold settles at 15s and the confirmation goes; staff save a new time at 20s with the tick still
+   * off. The customer was told the OLD time after the form opened, so they are told the new one: an unticked box
+   * under told=false was "nobody to tell yet", never a choice to stay silent.
+   */
+  it("I2: told about the OLD time after the form opened (told=false then, the confirmation claimed since) → \"moved\", tick or no tick (mutation: trust the stale tick → FAILS: the customer keeps the old time)", async () => {
+    let n = 0;
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => (n++ === 0
+      ? job({ hold_until: "2026-11-02T15:00:10Z", notice_wanted: "confirmation", hold_settled_at: "2026-11-02T15:00:10Z", notice_sent_at: "2026-11-02T15:00:11Z" })
+      : job({ status: "cancelled", hold_until: "2026-11-02T15:00:10Z", notice_wanted: "confirmation", hold_settled_at: "2026-11-02T15:00:10Z", notice_sent_at: "2026-11-02T15:00:11Z" }))));
+    const r = await moveJobAction(ACCT, J1, moveDraft({ notify: false, opened: opened({ told: false }) }), []);
+    expect(db.setJobNotice).toHaveBeenCalledWith(h.SVC, ACCT, NEW, "moved");
+    expect(r).toMatchObject({ ok: true, mode: "moved", notice: "scheduled" });
+  });
+
+  it("I2: a claim that settled but whose send did not stamp still counts as told (the confirmation may have gone)", async () => {
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () =>
+      job({ hold_until: "2026-11-02T15:00:10Z", notice_wanted: "confirmation", hold_settled_at: "2026-11-02T15:00:10Z" })));
+    await moveJobAction(ACCT, J1, moveDraft({ notify: false, opened: opened({ told: false }) }), []);
+    expect(db.setJobNotice).toHaveBeenCalledWith(h.SVC, ACCT, NEW, "moved");
+  });
+
+  it("I2 controls: told=true at open and unticked is a choice, respected; told=false and a hold that settled with no email owed tells nobody", async () => {
+    const settled = job({ hold_until: "2026-11-02T15:00:10Z", notice_wanted: "confirmation", hold_settled_at: "2026-11-02T15:00:10Z", notice_sent_at: "2026-11-02T15:00:11Z" });
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => settled));
+    await moveJobAction(ACCT, J1, moveDraft({ notify: false, opened: opened({ told: true }) }), []);
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () =>
+      job({ hold_until: "2026-11-02T15:00:10Z", notice_wanted: null, hold_settled_at: "2026-11-02T15:00:10Z" })));
+    await moveJobAction(ACCT, J1, moveDraft({ notify: false, opened: opened({ told: false }) }), []);
+    expect(db.setJobNotice).not.toHaveBeenCalled();
+  });
+
+  it("I2: an opened snapshot without a boolean told is refused before anything is written", async () => {
+    const noTold: Partial<Opened> = opened();
+    delete noTold.told;
+    for (const o of [noTold, { ...noTold, told: "no" }]) {
+      expect(await moveJobAction(ACCT, J1, moveDraft({ opened: o as Opened }), [])).toEqual({ ok: false, errorKey: "calendar.job.saveFailed" });
+    }
+    expect(writes()).toEqual([]);
   });
 
   it("unticked and nothing owed: no email asked for, notice none", async () => {
@@ -775,6 +835,46 @@ describe("undoEditJobAction", () => {
 
   it("a malformed snapshot is refused before any write", async () => {
     expect(await undoEditJobAction(ACCT, J1, { ...OPENED, placeId: "x" }, OPENED)).toEqual({ ok: false, errorKey: "calendar.job.changed" });
+    expect(writes()).toEqual([]);
+  });
+
+  /**
+   * T10 review I1 (security): `from` is the browser's word and is WRITTEN; only `to` is compared. A scratch call
+   * wrote another customer's place and `meetingUrl: "https://evil.example/join"`, which the confirmation and the
+   * reminder render as the branded Join button. `from` is now held to what the server can prove.
+   */
+  it("I1: a place that is not this customer's (nor their household's) is refused, read on the request client, and nothing is written (mutation: drop the place check → FAILS)", async () => {
+    const r = await undoEditJobAction(ACCT, J1, { ...OPENED, placeId: P2 }, OPENED);
+    expect(r).toEqual({ ok: false, errorKey: "calendar.job.changed" });
+    expect(db.readAgendaJob).toHaveBeenCalledWith(h.REQ, ACCT, J1);
+    expect(db.listContactPlaces).toHaveBeenCalledWith(h.REQ, ACCT, C1);
+    expect(writes()).toEqual([]);
+  });
+
+  it("I1: a link the job does not hold now is refused: an arbitrary URL is never written (mutation: drop the link check → FAILS)", async () => {
+    const r = await undoEditJobAction(ACCT, J1, { ...OPENED, meetingType: "video", meetingUrl: "https://evil.example/join" }, OPENED);
+    expect(r).toEqual({ ok: false, errorKey: "calendar.job.changed" });
+    expect(writes()).toEqual([]);
+  });
+
+  it("I1: the Undo of a place change writes back a place of the customer's, archived since included (the job named it)", async () => {
+    db.listContactPlaces.mockImplementation(rec("listContactPlaces", async () => ({
+      groups: [], places: [{ id: P1, archived_at: "2026-11-02T14:00:00Z" }], placeCount: 1, equipment: [], equipmentCount: 0,
+    })));
+    expect(await undoEditJobAction(ACCT, J1, { ...OPENED, placeId: P1 }, { ...OPENED, placeId: null })).toEqual({ ok: true });
+    expect(db.editJobDetails.mock.calls[0]![4]).toMatchObject({ placeId: P1 });
+  });
+
+  it("I1: an unchanged place or link needs no proof beyond the compare-and-set, which pins it to the row (a note edit on a video job)", async () => {
+    const vid = { ...OPENED, meetingType: "video" as const, meetingUrl: "https://rio.daily.co/room1", placeId: P2 };
+    expect(await undoEditJobAction(ACCT, J1, vid, { ...vid, note: "x" })).toEqual({ ok: true });
+    expect(db.listContactPlaces).not.toHaveBeenCalled();
+    expect(db.editJobDetails.mock.calls[0]![3]).toMatchObject({ meetingUrl: "https://rio.daily.co/room1", placeId: P2 });
+  });
+
+  it("I1: a job that cannot be read (another account's, or gone) → changed, nothing written", async () => {
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => null));
+    expect(await undoEditJobAction(ACCT, J1, { ...OPENED, placeId: P1 }, OPENED)).toEqual({ ok: false, errorKey: "calendar.job.changed" });
     expect(writes()).toEqual([]);
   });
 });

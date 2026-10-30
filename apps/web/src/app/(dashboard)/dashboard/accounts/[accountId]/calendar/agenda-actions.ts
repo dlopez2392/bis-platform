@@ -69,6 +69,9 @@ export type UndoAddResult = { ok: true } | { ok: false; errorKey: "calendar.job.
   fallback?: true };
 export type JobOpened = { startsAt: string; endsAt: string; note: string | null; placeId: string | null;
   meetingType: BookingMeetingType | null; meetingUrl: string | null };
+/** What Move opened with, plus whether the customer had been told about this job THEN (the drawer's `told`,
+ *  T10 review I2). Required: the move's email is decided against it. */
+export type MoveOpened = JobOpened & { told: boolean };
 export type MoveJobResult =
   | { ok: true; mode: "edited"; from: JobOpened; to: JobOpened }
   | { ok: true; mode: "moved"; newId: string; oldId: string; cancelledAt: string; startsAt: string; first: string; notice: "scheduled" | "none" }
@@ -142,6 +145,13 @@ function parseOpened(raw: unknown): JobOpened | null {
   return { startsAt, endsAt, note, placeId: placeId === null ? null : placeId.toLowerCase(), meetingType, meetingUrl };
 }
 
+/** parseOpened, and `told` must be a boolean. The answer's `opened` carries no `told`: it is the row's snapshot. */
+function parseMoveOpened(raw: unknown): { opened: JobOpened; told: boolean } | null {
+  const opened = parseOpened(raw);
+  if (!opened || !isRecord(raw) || typeof raw.told !== "boolean") return null;
+  return { opened, told: raw.told };
+}
+
 const seenKeys = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : []);
 const detailsOf = (o: JobOpened): JobDetails => ({ note: o.note, placeId: o.placeId, meetingType: o.meetingType, meetingUrl: o.meetingUrl });
 
@@ -197,10 +207,13 @@ async function mintRoom(calendar: CalendarRow, endsAt: Date, tag: string): Promi
 }
 
 /** A saved place the job may name: one of this customer's (or their households') ACTIVE places, as the caller's
- *  own client reads them. */
-async function placeIsCustomers(db: SupabaseClient, accountId: string, contactId: string, placeId: string): Promise<boolean> {
+ *  own client reads them. `archivedToo`: an archived one of theirs counts as well (an Undo writing back the place
+ *  the job named before, which an edit keeps even once archived). */
+async function placeIsCustomers(
+  db: SupabaseClient, accountId: string, contactId: string, placeId: string, archivedToo = false,
+): Promise<boolean> {
   const { places } = await listContactPlaces(db, accountId, contactId);
-  return places.some((p) => p.id.toLowerCase() === placeId && p.archived_at === null);
+  return places.some((p) => p.id.toLowerCase() === placeId && (archivedToo || p.archived_at === null));
 }
 
 const holdUntilFrom = (now: Date) => new Date(now.getTime() + UNDO_WINDOW_MS + NOTICE_GRACE_MS);
@@ -324,7 +337,7 @@ export async function addJobAction(accountId: string, draft: JobDraft, seen: str
 /**
  * Spec 6.2 (D5): the Undo of an add DELETES the row while its hold is unsettled, only the caller's own add, never
  * a move's row (plan review item 3). The answers that cannot delete tell the drawer to run the ordinary Cancel
- * instead (`fallback`): a settled hold (the confirmation went) and a held move.
+ * instead (`fallback`): a settled hold (the confirmation went), a held move, and a colleague's held add (T10 review).
  */
 export async function undoAddJobAction(accountId: string, bookingId: string): Promise<UndoAddResult> {
   const access = await requireAccountAccess(accountId);
@@ -339,6 +352,8 @@ export async function undoAddJobAction(accountId: string, bookingId: string): Pr
   }
   if (outcome === "settled") return { ok: false, errorKey: "calendar.job.undoTooLate", fallback: true };
   if (outcome === "is_move") return { ok: false, errorKey: "calendar.bookings.statusUpdateFailed", fallback: true };
+  // A colleague's held add: only its author may delete it, but anyone who sees the whole account may Cancel it.
+  if (outcome === "not_yours") return { ok: false, errorKey: "calendar.bookings.statusUpdateFailed", fallback: true };
   if (outcome === "moved") return { ok: false, errorKey: "calendar.job.undoMovedSince" };
   if (outcome !== "deleted") return statusFailed;
   try {
@@ -365,13 +380,14 @@ export async function undoAddJobAction(accountId: string, bookingId: string): Pr
  * A retry here could only meet the Undo's committed result (the old row gone), so the answer is a refusal.
  */
 export async function moveJobAction(
-  accountId: string, bookingId: string, draft: JobFields & { opened: JobOpened }, seen: string[],
+  accountId: string, bookingId: string, draft: JobFields & { opened: MoveOpened }, seen: string[],
 ): Promise<MoveJobResult> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access) || !isUuid(bookingId)) return saveFailed;
   const f = parseFields(draft);
-  const opened = parseOpened(isRecord(draft) ? draft.opened : undefined);
-  if (!f || !opened) return saveFailed;
+  const snapshot = parseMoveOpened(isRecord(draft) ? draft.opened : undefined);
+  if (!f || !snapshot) return saveFailed;
+  const { opened, told: toldAtOpen } = snapshot;
   const accepted = seenKeys(seen);
   const now = new Date();
   const tag = `moveJobAction: booking ${bookingId} (account ${accountId})`;
@@ -463,11 +479,18 @@ export async function moveJobAction(
   }
 
   // Plan review item 2: decided only now, from the old row as the move left it (cancelled, so final).
+  // T10 review I2: the tick is what the person chose against `told` AS THE FORM OPENED. Told nothing then (the
+  // tick off because there was nobody to tell yet), and the old row's own email claimed since (its hold settled
+  // with an email wanted, or one went): the customer now holds the OLD time, so they hear the new one, ticked or
+  // not. Answering "changed" instead could not cover this: the move has already committed by the re-read, and only
+  // the re-read is final (a settle can claim between any earlier check and the move's cancel).
   let wanted: NoticeWanted | null = null;
   try {
     const old = await readAgendaJob(serviceDb(), accountId, bookingId);
+    const toldSinceOpened = !toldAtOpen && old !== null
+      && (old.notice_sent_at !== null || (old.hold_settled_at !== null && old.notice_wanted !== null));
     wanted = old?.notice_wanted === "confirmation" && old.hold_settled_at === null ? "confirmation"
-      : f.notify ? "moved" : null;
+      : f.notify || toldSinceOpened ? "moved" : null;
   } catch (e) {
     console.error(`${tag}: moved to ${moved.id}, but the old row could not be re-read, so no email is asked for: ${loggableError(e)}`);
   }
@@ -488,7 +511,17 @@ export async function moveJobAction(
     startsAt: startsAt.toISOString(), first, notice };
 }
 
-/** Spec 6.3: the Undo of an in-place edit writes the opened values back, compare-and-set on what the edit wrote. */
+/**
+ * Spec 6.3: the Undo of an in-place edit writes the opened values back, compare-and-set on what the edit wrote.
+ *
+ * T10 review I1: `to` is only compared, so the compare-and-set pins it to the row; `from` is WRITTEN, and it is the
+ * browser's word. So whatever `from` changes is proven first. A place it names that the row does not name now must
+ * be this customer's or their household's (the add/edit rule, read on the request client; archived counts, since
+ * the job may have named it). A link must be the one the row holds now, or none: the confirmation and the reminder
+ * render it as the branded Join button, and nothing stored remembers a link an edit dropped (editJobDetails
+ * overwrites meeting_url and writes no event), so the Undo of an edit that left video cannot put that link back
+ * and answers "changed" rather than take a URL from the browser.
+ */
 export async function undoEditJobAction(
   accountId: string, bookingId: string, from: JobOpened, to: JobOpened,
 ): Promise<{ ok: true } | { ok: false; errorKey: "calendar.job.changed" }> {
@@ -497,8 +530,14 @@ export async function undoEditJobAction(
   const a = parseOpened(from);
   const b = parseOpened(to);
   if (!a || !b) return changed;
+  if (a.meetingUrl !== null && a.meetingUrl !== b.meetingUrl) return changed;
   if (await proveBooking("undoEditJobAction", accountId, bookingId)) return changed;
   try {
+    if (a.placeId !== null && a.placeId !== b.placeId) {
+      const db = await dbForRequest();
+      const row = await readAgendaJob(db, accountId, bookingId);
+      if (!row || !(await placeIsCustomers(db, accountId, row.contact_id, a.placeId, true))) return changed;
+    }
     if (!(await editJobDetails(serviceDb(), accountId, bookingId, detailsOf(b), detailsOf(a)))) return changed;
   } catch (e) {
     console.error(`undoEditJobAction: failed for booking ${bookingId} (account ${accountId}): ${loggableError(e)}`);

@@ -198,7 +198,11 @@ export async function updateCalendarSettingsAction(
 export async function setBookingStatusAction(
   accountId: string, bookingId: string, status: BookingStatus,
 ): Promise<ActionResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { userId } = access;
+  // T10 review I3, spec §8.1: a Technician never cancels, through this door either. Completed and No-show stay
+  // theirs on their own customers' jobs (owner decision 1), bounded by proveBooking's RLS read below.
+  if (status === "cancelled" && !seesWholeAccount(access)) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   const refused = await proveBooking("setBookingStatusAction", accountId, bookingId);
   if (refused) return refused;
 
@@ -318,7 +322,10 @@ export async function cancelNoticeOptionAction(
 export async function cancelBookingAction(
   accountId: string, bookingId: string, notice: CancelNoticeChoice,
 ): Promise<CancelBookingResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { userId } = access;
+  // T10 review I3, spec §8.1: a Technician never cancels. Refused before anything is read or written.
+  if (!seesWholeAccount(access)) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   const refused = await proveBooking("cancelBookingAction", accountId, bookingId);
   if (refused) return refused;
 
@@ -486,7 +493,10 @@ export async function keepAppointmentAction(
 export async function undoCancelBookingAction(
   accountId: string, bookingId: string, version: string, noticeMessageId?: string,
 ): Promise<ActionResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { userId } = access;
+  // T10 review I3, spec §8.1: who may not cancel may not put a cancel back either. Refused before anything.
+  if (!seesWholeAccount(access)) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   const refused = await proveBooking("undoCancelBookingAction", accountId, bookingId);
   if (refused) return refused;
   if (typeof version !== "string" || version === "") {

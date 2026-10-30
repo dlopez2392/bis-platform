@@ -773,6 +773,17 @@ describe("cancelBookingAction — a staff job cancelled inside its Undo hold (F-
     expect(notice.queue).toHaveBeenCalledWith({}, expect.objectContaining({ bookingId: "bk_B", whenFrom: "bk_R" }));
   });
 
+  // T10 review minor (M13 survived): why untoldHold walks row by row instead of calling jobWasTold, which reads
+  // only the chain ROOT's author. Here the root R is a staff job nobody was emailed about, and the customer moved
+  // it themselves by link (A, customer-made, MID-chain); staff then moved A inside a hold (B). The customer knows
+  // A's time.
+  it("a customer's own move in the MIDDLE of a chain is a time they know: the notice names it (mutation: count only the root's author → FAILS)", async () => {
+    heldMove({ author_kind: "customer", author_id: null }, { author_kind: "person", author_id: "user_2" });
+    const r = await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(r).toMatchObject({ notice: "scheduled" });
+    expect(notice.queue).toHaveBeenCalledWith({}, expect.objectContaining({ bookingId: "bk_B", whenFrom: "bk_A" }));
+  });
+
   it("the newest time they know wins: a move of a customer-made booking, emailed, names the emailed row, not the root", async () => {
     heldMove({ notice_sent_at: "2026-10-29T12:00:00Z" }, { author_kind: "customer", author_id: null });
     await cancelBookingAction("acct_1", "bk_B", NOTICE);
@@ -897,6 +908,63 @@ describe("booking actions prove the booking through the caller's own client firs
     const r = await run();
     expect(r.ok).toBe(true);
     expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+  });
+});
+
+/**
+ * T10 review I3, spec §8.1: a Technician never cancels (nor puts a cancel back). Cancel through either door
+ * (`cancelBookingAction`, or `setBookingStatusAction` with "cancelled") and the Undo are refused BEFORE anything is
+ * read or written, the proof included. Completed and No-show stay theirs on their OWN customers' jobs (owner
+ * decision 1): RLS behind `proveBooking` bounds which jobs those are.
+ */
+describe("a Technician cannot cancel or undo a cancel; Completed and No-show stay theirs (T10 review I3, spec §8.1)", () => {
+  const V = "2026-10-09T18:00:00.123Z";
+  const REFUSED = { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  const TECH = { userId: "tech_1", isAgency: false, role: "technician" as const };
+
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: V });
+    dbMocks.undoOperatorCancel.mockReset().mockResolvedValue(undefined);
+    dbMocks.discardQueuedNotice.mockReset().mockResolvedValue(true);
+    dbMocks.deletePendingCancelNotice.mockReset().mockResolvedValue(undefined);
+    notice.availability.mockReset().mockResolvedValue("available");
+    notice.queue.mockReset().mockResolvedValue({ messageId: "msg_1", email: { to: "maria@example.com" } });
+    nextMocks.after.mockReset();
+    nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
+  });
+
+  function expectNothingTouched() {
+    expect(visible.callerCanSee).not.toHaveBeenCalled();
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.undoOperatorCancel).not.toHaveBeenCalled();
+    expect(dbMocks.readAgendaJob).not.toHaveBeenCalled();
+    expect(notice.availability).not.toHaveBeenCalled();
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(nextMocks.after).not.toHaveBeenCalled();
+  }
+
+  const refused = [
+    ["cancelBookingAction (mutation: drop its role check → FAILS)", () => cancelBookingAction("acct_1", "bk_1", { send: true, locale: "en", message: "" })],
+    ["setBookingStatusAction with \"cancelled\" (mutation: drop its role check → FAILS)", () => setBookingStatusAction("acct_1", "bk_1", "cancelled")],
+    ["undoCancelBookingAction (mutation: drop its role check → FAILS)", () => undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")],
+  ] as const;
+
+  it.each(refused)("%s: a Technician is refused before anything is read or written", async (_name, run) => {
+    access.value = TECH;
+    expect(await run()).toEqual(REFUSED);
+    expectNothingTouched();
+  });
+
+  it.each(["completed", "no_show"] as const)("a Technician may still mark their own customer's job %s, proven first (mutation: refuse every status → FAILS)", async (status) => {
+    access.value = TECH;
+    expect(await setBookingStatusAction("acct_1", "bk_1", status)).toEqual({ ok: true });
+    expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "acct_1", "bk_1", status, "tech_1", "user", expect.anything());
+  });
+
+  it.each(refused)("%s: Staff still may", async (_name, run) => {
+    access.value = { userId: "user_1", isAgency: false, role: "staff" };
+    expect((await run()).ok).toBe(true);
   });
 });
 
