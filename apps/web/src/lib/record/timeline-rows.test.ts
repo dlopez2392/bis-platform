@@ -469,3 +469,43 @@ describe("an archive/restore row's phrase (contact archive, spec §6.2)", () => 
     expect(rows([archiveEntry("restored", "customer", "booking")], "es")[0]!.verb).toBe("volvió: hizo una cita");
   });
 });
+
+describe("a merge/mergeUndone row's phrase (F-006 part 1, plan Task 9)", () => {
+  const AT = "2026-10-09T16:12:00Z";
+  const TM = (over: Record<string, unknown> = {}) => ({
+    mergeId: "1", otherId: "c9", otherFirstName: "Other", otherLastName: "Person", otherVisible: true,
+    mergedBy: "user_dan", mergedAt: AT, undoUntil: AT, undoneAt: null, undoneBy: null, counts: {}, ...over,
+  });
+  const mergeEntry = (over: Record<string, unknown> = {}): TimelineEntry =>
+    ({ kind: "merge", id: "1", at: AT, contactId: "c1", merge: TM(over) }) as TimelineEntry;
+  const undoneEntry = (over: Record<string, unknown> = {}): TimelineEntry =>
+    ({ kind: "mergeUndone", id: "1", at: AT, contactId: "c1", merge: TM(over) }) as TimelineEntry;
+
+  it("names the other record and what moved, in words joined by Intl.ListFormat (mutation: hard-code a comma -> FAILS)", () => {
+    const [r] = rows([mergeEntry({ counts: { messages: 2, calls: 1 } })]);
+    expect(r!.verb).toBe("merged Other Person into this record: 2 messages and 1 call moved here");
+    expect([r!.status, r!.detail]).toEqual([null, null]);
+  });
+
+  it("with nothing to move, reads the empty form (mutation: always read timeline.merged -> FAILS)", () => {
+    expect(rows([mergeEntry({ counts: {} })])[0]!.verb).toBe("merged Other Person into this record");
+  });
+
+  it("with the other record hidden by RLS, names 'another record' instead (mutation: ignore otherVisible -> FAILS)", () => {
+    const [r] = rows([mergeEntry({ otherVisible: false, otherFirstName: null, otherLastName: null, counts: { notes: 1 } })]);
+    expect(r!.verb).toBe("merged another record into this record: 1 note moved here");
+  });
+
+  it("a mergeUndone row names who undid it and the other record (mutation: drop the name -> FAILS)", () => {
+    expect(rows([undoneEntry()])[0]!.verb).toBe("undid the merge with Other Person");
+  });
+
+  it("in Spanish (mutation: build from m[...] in English -> FAILS)", () => {
+    expect(rows([mergeEntry({ counts: { notes: 1 } })], "es")[0]!.verb).toBe("unió a Other Person con este registro: 1 nota pasaron aquí");
+    expect(rows([undoneEntry()], "es")[0]!.verb).toBe("deshizo la unión con Other Person");
+  });
+
+  it("WHAT names the merge source for the 'couldn't load' line (mutation: no merge key -> FAILS)", () => {
+    expect(timelineFailedText(["merge"], makeTr("en"))).toBe("Couldn't load merge history.");
+  });
+});

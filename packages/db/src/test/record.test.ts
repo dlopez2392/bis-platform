@@ -302,7 +302,7 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
       // The pinned list, in source order (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS); 8b-2's
       // suggestions, then item 8c's ai_acts, both read only when asked.
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "suggestions", "ai_acts"]);
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts"]);
     }));
 });
 
@@ -751,7 +751,7 @@ describe("the documents source's share rows (S-07 3b)", () => {
 describe("the suggestions source (item 8b-2)", () => {
   const FAR = "2031-03-04T05:06:07.000Z";
   const at = (d: number) => `2026-10-0${d}T15:00:00+00:00`;
-  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge"];
   const TEN = [...NINE, "suggestions"];
 
   async function suggestionOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, title: string): Promise<string> {
@@ -891,7 +891,7 @@ describe("the suggestions source (item 8b-2)", () => {
  * when the caller asks (`opts.aiActs`) — the suggestions source's own shape, one source later.
  */
 describe("the ai_acts source (item 8c)", () => {
-  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge"];
   const TEN = [...NINE, "ai_acts"];
 
   async function actOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, value: string) {

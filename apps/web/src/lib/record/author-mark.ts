@@ -80,6 +80,10 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // it; a restore the CUSTOMER brought on by their own sign (text, email, call…) carries no person id.
     case "archive": return entry.archive.author_kind === "customer"
       ? { kind: "customer", personId: null } : { kind: "person", personId: entry.archive.author_id };
+    // F-006 part 1 (plan Task 9): a merge is the person who ran it; a mergeUndone is the person who
+    // undid it (undone_by is NOT NULL exactly when undone_at is, 0106's own check).
+    case "merge": return { kind: "person", personId: entry.merge.mergedBy };
+    case "mergeUndone": return { kind: "person", personId: entry.merge.undoneBy };
   }
 }
 

@@ -60,6 +60,10 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "aiAct": return null;
     // Contact archive: the head already says it all ("archived this contact", "came back: sent you a text").
     case "archive": return null;
+    // F-006 part 1 (plan Task 9): the head already says it all ("merged X into this record: …", "undid
+    // the merge with X"). The drawer never reads this source today either way (T9's loaders.ts change
+    // touches loadTimeline only); kept exhaustive for the type.
+    case "merge": case "mergeUndone": return null;
   }
 }
 

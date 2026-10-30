@@ -1,6 +1,7 @@
 import {
   contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
-  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, listPendingProposalsForContact,
+  listCustomFields, listContactTimelinePage, listTimelinePage, mergedIdsOf, listPeopleNames, getVoiceProfile,
+  listPendingProposalsForContact,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
   type TimelinePage, type TimelineCursor,
 } from "@bis/db";
@@ -86,9 +87,17 @@ export async function loadTimeline(
     now?: Date;
   } = {},
 ): Promise<TimelineLoad> {
+  // F-006 part 1 (plan Task 9): the kept record's timeline reads the tombstones pointing at it too (a
+  // merge is one source among the rest below, but the OTHER sources — notes, calls, Sofía's acts…—
+  // need the id set to show what the merged-away record itself carried). A failed read costs only the
+  // tombstones: the page still reads, on this one contact alone.
+  const tombstones = await mergedIdsOf(db, accountId, contactId).catch((e: unknown) => {
+    log("activity (merge set)", accountId, e);
+    return [] as string[];
+  });
   let page: TimelinePage;
   try {
-    page = await listContactTimelinePage(db, accountId, contactId, before, {
+    page = await listTimelinePage(db, accountId, [contactId, ...tombstones], before, {
       suggestions: true,
       aiActs: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),

@@ -81,7 +81,12 @@ const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> 
 /** The sources a mocked page read (item 8b-2: every page names them). */
 const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
 const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
+// F-006 part 1 (plan Task 9): loadTimeline now reads `listTimelinePage` (through the tombstone id set)
+// rather than `listContactTimelinePage` (loadRecent's own, unused on this page); both map onto this
+// SAME mock, so every existing assertion below (by shape, not by which export name was called) still
+// proves what it always proved, and a 404/holding-redirect "no page read ran" case still catches it.
 const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
+const mergedIdsOfMock = vi.fn(async (..._a: unknown[]): Promise<string[]> => []);
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
 // Item 8b-2 (spec 5.3): What's next's "Waiting for you" read; none pending unless a case says so.
@@ -108,6 +113,8 @@ vi.mock("@bis/db", () => ({
   findConversationForContact: (...a: unknown[]) => findConversationForContactMock(...a),
   serviceDb: () => SERVICE,
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
+  listTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
+  mergedIdsOf: (...a: unknown[]) => mergedIdsOfMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
   listPendingProposalsForContact: (...a: unknown[]) => listPendingProposalsForContactMock(...a),
@@ -305,7 +312,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     getContactMock.mockResolvedValue(null);
     const reads = {
       contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
-      listContactTimelinePage: listContactTimelinePageMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
+      listContactTimelinePage: listContactTimelinePageMock, mergedIdsOf: mergedIdsOfMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
       listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
       getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock, readReplyToken: readReplyTokenMock,
@@ -331,7 +338,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     findConversationForContactMock.mockResolvedValue("cv9");
     const reads = {
       contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
-      listContactTimelinePage: listContactTimelinePageMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
+      listContactTimelinePage: listContactTimelinePageMock, mergedIdsOf: mergedIdsOfMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
       listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
       getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock, readReplyToken: readReplyTokenMock,

@@ -1,5 +1,5 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
-         StickyNote } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+         StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { SmsGate } from "@/lib/sms/sender";
@@ -291,6 +291,12 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // Contact archive (spec §6.2): no body — the verb (row.verb) already says everything.
     case "archive":
       return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
+    // F-006 part 1 (plan Task 9): no body — the verb already names the other record and what moved.
+    // No Undo control yet here (T11 adds it on top of this row).
+    case "merge":
+      return <TimelineItem {...head} icon={Merge} />;
+    case "mergeUndone":
+      return <TimelineItem {...head} icon={Undo2} />;
     default:
       return unknownKind(e);
   }

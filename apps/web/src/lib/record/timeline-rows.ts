@@ -4,7 +4,8 @@ import type { Proposal } from "@bis/db/proposal-rules";
 import { describeRow } from "@/lib/proposals/view";
 import type { DescribeCtx, Description, Part } from "@/lib/proposals/kinds/types";
 import type { TimelineTone } from "@/components/record/timeline-item";
-import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
+import { contactDisplayName, formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
+import { mergeCountsList } from "@/lib/contacts/merge-copy";
 import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { describeAct } from "@/lib/ai-acts/kinds";
@@ -55,7 +56,7 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
   documents: "timeline.what.documents", chats: "timeline.what.chats", archive: "timeline.what.archive",
-  suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
+  merge: "timeline.what.merge", suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -210,6 +211,21 @@ function phrase(
           : "timeline.restored";
       // The account's own AI persona (else Sofía), as every other AI-facing row on the timeline names it.
       return { verb: tr.text(key, { persona }), status: null, detail: null };
+    }
+    // F-006 part 1 (plan Task 9): the other record's name, else "another record" when RLS (0068's
+    // Technician fence included) could not read it — the row still says what moved either way.
+    case "merge": {
+      const name = entry.merge.otherVisible
+        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName })
+        : tr.text("timeline.mergeOtherHidden");
+      const list = mergeCountsList(entry.merge.counts, tr, tr.locale);
+      return { verb: list ? tr.text("timeline.merged", { name, list }) : tr.text("timeline.mergedEmpty", { name }), status: null, detail: null };
+    }
+    case "mergeUndone": {
+      const name = entry.merge.otherVisible
+        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName })
+        : tr.text("timeline.mergeOtherHidden");
+      return { verb: tr.text("timeline.mergeUndone", { name }), status: null, detail: null };
     }
   }
 }

@@ -21,6 +21,7 @@ import { parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayloa
 import { listContactAiActs } from "./ai-acts";
 import type { AiAct } from "./ai-act-rules";
 import type { RestoreSign } from "./contacts";
+import { MERGE_COUNT_KEYS, type MergeCountKey } from "./contact-merge";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -274,11 +275,11 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "suggestions" | "ai_acts";
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "merge" | "suggestions" | "ai_acts";
 /** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`)
  *  and `ai_acts` only when asked (`opts.aiActs`, item 8c), so what a page read is its own `sources`,
- *  never this list. */
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "suggestions", "ai_acts"];
+ *  never this list. `merge` (F-006 part 1, plan Task 9) is unconditional, like every source before it. */
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts"];
 
 /** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
  *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
@@ -324,6 +325,15 @@ export type TimelineChat = { conversationId: string; count: number; matchedExist
  *  always a person's; `action` "restored" is either a person's own undo or the customer's own sign
  *  (`sign` non-null exactly then, the migration's own check) bringing them back ("Came back: …"). */
 export type TimelineArchive = { action: "archived" | "restored"; author_kind: "person" | "customer"; author_id: string | null; sign: RestoreSign | null };
+/** F-006 part 1 (plan Task 9): one `contact_merges` row as the timeline draws it. `otherVisible` is
+ *  false exactly when the ONE extra read of the other contact's name (RLS-gated, 0068's Technician
+ *  fence included) could not see it; the row still states what moved either way. `counts` is
+ *  `moved_counts` (never `moved`: correction 15, it can hold thousands of ids). */
+export type TimelineMerge = {
+  mergeId: string; otherId: string; otherFirstName: string | null; otherLastName: string | null; otherVisible: boolean;
+  mergedBy: string; mergedAt: string; undoUntil: string; undoneAt: string | null; undoneBy: string | null;
+  counts: Partial<Record<MergeCountKey, number>>;
+};
 /** Every variant names its member (`contactId`, S-03 part 2b): the group page's merged timeline says
  *  whose row it is. On the contact page it is always that page's contact. */
 export type TimelineEntry =
@@ -359,7 +369,14 @@ export type TimelineEntry =
   | { kind: "aiAct"; id: string; at: string; contactId: string; act: AiAct }
   /** Contact archive (0103, spec §4.2): one row per archive or restore, read from `contact_archive_log`
    *  so RLS decides. `id` is the log row's id as a string. */
-  | { kind: "archive"; id: string; at: string; contactId: string; archive: TimelineArchive };
+  | { kind: "archive"; id: string; at: string; contactId: string; archive: TimelineArchive }
+  /** F-006 part 1 (plan Task 9): one row per merge, at `merged_at`, read from `contact_merges`; `id` is
+   *  the merge row's id as a string. `contactId` is always the KEPT record (`keep_id`): the other side
+   *  is a tombstone with no timeline of its own, which is why the kept record's page reads it. */
+  | { kind: "merge"; id: string; at: string; contactId: string; merge: TimelineMerge }
+  /** F-006 part 1: a SECOND row for a merge since undone, at `undone_at`, from the same table. The kind
+   *  keeps its key apart from the merge row's. */
+  | { kind: "mergeUndone"; id: string; at: string; contactId: string; merge: TimelineMerge };
 /** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
  *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
  *  reads nothing, so both are empty and that is an empty timeline, not an error. */
@@ -446,6 +463,60 @@ async function listContactArchiveLog(
     kind: "archive", id: String(r.id), at: r.created_at, contactId: r.contact_id,
     archive: { action: r.action, author_kind: r.author_kind, author_id: r.author_id, sign: r.sign },
   }));
+}
+
+/**
+ * F-006 part 1 (plan Task 9): the `merge` source, two reads of `contact_merges` scoped to the kept
+ * record(s) only (`contact_merges_read`, 0106: a tombstone carries no merge row of its own — its merge
+ * is told from the record that kept it), each paged like every other source: one on `merged_at` (every
+ * merge), one on `undone_at` (only the ones since undone), NEVER selecting `moved` (it can hold
+ * thousands of ids, correction 15). The other contact's name is read in ONE extra query of the distinct
+ * other ids, on the caller's client, so RLS (0068's Technician fence included) decides whether the kept
+ * record's timeline may say who the other one was (`otherVisible`); hidden by it, the row still shows
+ * what moved. THROWS on a read error (listTimelinePage's settle).
+ */
+async function listContactMergeLog(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
+): Promise<TimelineEntry[]> {
+  const COLS = "id, keep_id, other_id, merged_by, merged_at, undo_until, undone_at, undone_by, moved_counts";
+  type Row = {
+    id: number | string; keep_id: string; other_id: string; merged_by: string; merged_at: string;
+    undo_until: string; undone_at: string | null; undone_by: string | null; moved_counts: Record<string, unknown> | null;
+  };
+  const mergedQ = withTimelinePage(
+    forContacts(db.from("contact_merges").select(COLS).eq("account_id", accountId), "keep_id", who), "merged_at", page);
+  const undoneQ = withTimelinePage(
+    forContacts(db.from("contact_merges").select(COLS).eq("account_id", accountId).not("undone_at", "is", null), "keep_id", who),
+    "undone_at", page);
+  const [merged, undone] = await Promise.all([mergedQ, undoneQ]);
+  if (merged.error) throw new Error(`listContactMergeLog failed: ${merged.error.message}`);
+  if (undone.error) throw new Error(`listContactMergeLog undone failed: ${undone.error.message}`);
+  const mergedRows = (merged.data ?? []) as Row[];
+  const undoneRows = (undone.data ?? []) as Row[];
+  const otherIds = [...new Set([...mergedRows, ...undoneRows].map((r) => r.other_id))];
+  let otherMap = new Map<string, { first_name: string | null; last_name: string | null }>();
+  if (otherIds.length > 0) {
+    const { data, error } = await db.from("contacts").select("id, first_name, last_name").eq("account_id", accountId).in("id", otherIds);
+    if (error) throw new Error(`listContactMergeLog names failed: ${error.message}`);
+    otherMap = new Map(((data ?? []) as { id: string; first_name: string | null; last_name: string | null }[]).map((r) => [r.id, r]));
+  }
+  const toMerge = (r: Row): TimelineMerge => {
+    const other = otherMap.get(r.other_id);
+    const counts = {} as Partial<Record<MergeCountKey, number>>;
+    for (const key of MERGE_COUNT_KEYS) {
+      const v = r.moved_counts?.[key];
+      if (typeof v === "number") counts[key] = v;
+    }
+    return {
+      mergeId: String(r.id), otherId: r.other_id, otherFirstName: other?.first_name ?? null, otherLastName: other?.last_name ?? null,
+      otherVisible: other !== undefined, mergedBy: r.merged_by, mergedAt: r.merged_at, undoUntil: r.undo_until,
+      undoneAt: r.undone_at, undoneBy: r.undone_by, counts,
+    };
+  };
+  return [
+    ...mergedRows.map((r): TimelineEntry => ({ kind: "merge", id: String(r.id), at: r.merged_at, contactId: r.keep_id, merge: toMerge(r) })),
+    ...undoneRows.map((r): TimelineEntry => ({ kind: "mergeUndone", id: String(r.id), at: r.undone_at!, contactId: r.keep_id, merge: toMerge(r) })),
+  ];
 }
 
 /**
@@ -537,6 +608,9 @@ export async function listTimelinePage(
     settle("chats", () => listContactChats(db, accountId, who, page)),
     // Contact archive (0103, spec §4.2): one row per archive or restore, newest first.
     settle("archive", () => listContactArchiveLog(db, accountId, who, page)),
+    // F-006 part 1 (plan Task 9): one row per merge, and a second for one since undone, unconditional
+    // like every source above it.
+    settle("merge", () => listContactMergeLog(db, accountId, who, page)),
     // item 8b-2 (spec 5.4): one row per accepted suggestion, only when asked (owner decision 1, 2026-10-19:
     // the record page's timeline, not the drawer's Recent and not the household page).
     ...(opts.suggestions === true

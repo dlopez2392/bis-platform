@@ -231,6 +231,22 @@ describe("an archive/restore row's mark (contact archive, spec §4.2)", () => {
   });
 });
 
+describe("a merge/mergeUndone row's mark (F-006 part 1, plan Task 9)", () => {
+  const TM = (over: Record<string, unknown> = {}) => ({
+    mergeId: "1", otherId: "c9", otherFirstName: "Other", otherLastName: null, otherVisible: true,
+    mergedBy: "user_dan", mergedAt: AT, undoUntil: AT, undoneAt: null, undoneBy: null, counts: {}, ...over,
+  });
+  it("merge is the person who ran it, mergeUndone the person who undid it (mutation: swap them -> FAILS)", () => {
+    const merge: TimelineEntry = { kind: "merge", id: "1", at: AT, contactId: "c1", merge: TM() } as TimelineEntry;
+    const mergeUndone: TimelineEntry = {
+      kind: "mergeUndone", id: "1", at: AT, contactId: "c1", merge: TM({ undoneAt: AT, undoneBy: "user_ana" }),
+    } as TimelineEntry;
+    expect(authorOf(merge)).toEqual({ kind: "person", personId: "user_dan" });
+    expect(authorOf(mergeUndone)).toEqual({ kind: "person", personId: "user_ana" });
+    expect(personIdsOf([merge, mergeUndone])).toEqual(["user_dan", "user_ana"]);
+  });
+});
+
 // item 8c: an act Sofia (or the web chat) took live is hers, never a person's — Task 5 gives it the
 // persona's own label; this is the type-only case only.
 describe("an ai_acts row's mark (item 8c)", () => {

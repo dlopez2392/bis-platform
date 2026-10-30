@@ -1,5 +1,5 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
-         StickyNote } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+         StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -224,6 +224,11 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
     // Contact archive (spec §6.2): no body — the verb (row.verb) already says everything.
     case "archive":
       return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
+    // F-006 part 1 (plan Task 9): no body — the verb already names the other record and what moved.
+    case "merge":
+      return <TimelineItem {...head} icon={Merge} />;
+    case "mergeUndone":
+      return <TimelineItem {...head} icon={Undo2} />;
     default:
       return unknownKind(e);
   }
