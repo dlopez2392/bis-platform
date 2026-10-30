@@ -149,4 +149,11 @@ describe("freeHours: every whole open hour with no live job, from now on", () =>
     expect(freeHours({ dayKey: "2026-03-08", timezone: CHI, openHours: { sun: [["00:00", "04:00"]] }, live: [], now }).map(iso))
       .toEqual(["2026-03-08T06:00:00.000Z", "2026-03-08T07:00:00.000Z", "2026-03-08T08:00:00.000Z"]);
   });
+
+  it("on the fall-back day the repeated 01:00 is offered ONCE, as its first occurrence (CDT), never the second (CST)", () => {
+    // Accepted (owner carry-in, T12): a typed "01:00" resolves to the first occurrence, so no free row offers the second.
+    const now = new Date("2026-10-25T00:00:00.000Z");
+    expect(freeHours({ dayKey: "2026-11-01", timezone: CHI, openHours: { sun: [["00:00", "04:00"]] }, live: [], now }).map(iso))
+      .toEqual(["2026-11-01T05:00:00.000Z", "2026-11-01T06:00:00.000Z", "2026-11-01T08:00:00.000Z", "2026-11-01T09:00:00.000Z"]);
+  });
 });

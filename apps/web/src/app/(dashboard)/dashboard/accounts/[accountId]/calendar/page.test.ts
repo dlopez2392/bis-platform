@@ -1,18 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CLOSURE_APPOINTMENTS_LIMIT } from "@bis/db";
+import { CLOSURE_APPOINTMENTS_LIMIT, type AgendaBookingRow } from "@bis/db";
 
-// Task 7 (staff and roles): CalendarSettings and BookingsList are "use
-// client" components (useState/useTransition), unreachable under
+// Task 7 (staff and roles): CalendarSettings is a "use
+// client" component (useState/useTransition), unreachable under
 // renderToStaticMarkup — stubbed the same way contacts/page.test.ts stubs
 // ContactsTable/AddContactDialog. Spies, not bare `() => null`: this file's
 // whole claim is WHETHER the page calls CalendarSettings at all for a
 // Staff caller, which only a spy can answer.
-const calendarSettingsMock = vi.fn((_props: unknown) => null);
+// F-046 part 1 (plan Task 12): the stubs that mark their place in the markup draw a `data-stub` element, so
+// the page's ORDER is assertable (the agenda before the settings card), not only whether each was called.
+const order: string[] = [];
+const calendarSettingsMock = vi.fn((_props: unknown) => createElement("div", { "data-stub": "settings" }));
 vi.mock("./calendar-settings", () => ({ CalendarSettings: (props: unknown) => calendarSettingsMock(props) }));
-const bookingsListMock = vi.fn((_props: unknown) => null);
-vi.mock("./bookings-list", () => ({ BookingsList: (props: unknown) => bookingsListMock(props) }));
-// S-47d Task 12: "use client" (hooks) like CalendarSettings/BookingsList above — unreachable under
+// F-046 part 1: the Agenda card (an async server component that reads its own window; its own tests are
+// agenda-card.test.ts) and the job drawer (T11's "use client" sheet) are spies here: this file's claims are
+// the page's ORDER, the props it hands them and the ?job= read and log that happen in the page itself.
+const agendaCardMock = vi.fn((_props: unknown) => createElement("div", { "data-stub": "agenda" }));
+vi.mock("./agenda-card", () => ({ AgendaCard: (props: unknown) => agendaCardMock(props) }));
+const jobDrawerMock = vi.fn((_props: unknown) => { order.push("drawer"); return createElement("div", { "data-stub": "drawer" }); });
+vi.mock("./job-drawer", () => ({ JobDrawer: (props: unknown) => jobDrawerMock(props) }));
+const noteOpenedMock = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => {}));
+vi.mock("@/lib/access-log/note", () => ({
+  noteOpened: async (...a: unknown[]) => { order.push("note"); return noteOpenedMock(...a); },
+}));
+// S-47d Task 12: "use client" (hooks) like CalendarSettings above — unreachable under
 // renderToStaticMarkup, so a spy stub the same way.
 const closedDaysCardMock = vi.fn((_props: unknown) => null);
 vi.mock("./closed-days-card", () => ({ ClosedDaysCard: (props: unknown) => closedDaysCardMock(props) }));
@@ -63,6 +76,11 @@ const CALENDAR = {
 const dbMocks = vi.hoisted(() => ({
   getOrCreateCalendar: vi.fn(),
   listCalendarBookings: vi.fn(),
+  // F-046 part 1: the ?job= drawer's reads, in the page itself (plan correction 7).
+  readAgendaJob: vi.fn(),
+  listPeopleNames: vi.fn(),
+  jobWasTold: vi.fn(),
+  getContact: vi.fn(),
   serviceDb: vi.fn(() => ({})),
   // S-47d Task 12: the Closed days card's own two new reads.
   listClosedDaysFrom: vi.fn(),
@@ -78,6 +96,10 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getOrCreateCalendar: (...a: unknown[]) => dbMocks.getOrCreateCalendar(...a),
   listCalendarBookings: (...a: unknown[]) => dbMocks.listCalendarBookings(...a),
+  readAgendaJob: (...a: unknown[]) => dbMocks.readAgendaJob(...a),
+  listPeopleNames: (...a: unknown[]) => dbMocks.listPeopleNames(...a),
+  jobWasTold: (...a: unknown[]) => dbMocks.jobWasTold(...a),
+  getContact: (...a: unknown[]) => dbMocks.getContact(...a),
   serviceDb: () => dbMocks.serviceDb(),
   listClosedDaysFrom: (...a: unknown[]) => dbMocks.listClosedDaysFrom(...a),
   listClosureAppointmentsForRanges: (...a: unknown[]) => dbMocks.listClosureAppointmentsForRanges(...a),
@@ -87,18 +109,19 @@ vi.mock("@bis/db", async (importOriginal) => ({
 
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago" }, error: null }));
-vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({
-    from: (table: string) => {
-      if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
-      return { select: () => ({ eq: () => ({ maybeSingle: () => accountRead() }) }) };
-    },
-  }),
-}));
+// ONE object per run, so a read can be asserted to run on THIS client (the request's, RLS) and never serviceDb().
+const REQUEST_DB = vi.hoisted(() => ({ from: (_t: string): unknown => undefined }));
+REQUEST_DB.from = (table: string) => {
+  if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
+  return { select: () => ({ eq: () => ({ maybeSingle: () => accountRead() }) }) };
+};
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST_DB }));
 
 const { default: CalendarPage } = await import("./page");
+const { m } = await import("@/lib/messages");
+const { renderedText } = await import("@/lib/rendered-text");
 
-async function render(searchParams: { from?: string; closedDay?: string; locale?: string } = {}) {
+async function render(searchParams: { from?: string; closedDay?: string; locale?: string; view?: string; day?: string; job?: string } = {}) {
   return renderToStaticMarkup(
     await CalendarPage({
       params: Promise.resolve({ accountId: "a1" }),
@@ -126,24 +149,24 @@ describe("CalendarPage — settings are Owner-only (staff and roles)", () => {
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
     dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
     calendarSettingsMock.mockClear();
-    bookingsListMock.mockClear();
+    agendaCardMock.mockClear();
     closedDaysCardMock.mockClear();
   });
 
-  it("canManage: true (Owner/agency) renders both the settings form and the bookings list", async () => {
+  it("canManage: true (Owner/agency) renders both the settings form and the agenda", async () => {
     authState.canManage = true;
     authState.isAgency = true;
     authState.role = null;
     await render();
     expect(calendarSettingsMock).toHaveBeenCalledTimes(1);
-    expect(bookingsListMock).toHaveBeenCalledTimes(1);
+    expect(agendaCardMock).toHaveBeenCalledTimes(1);
   });
 
-  it("canManage: false (Staff) renders the bookings list and no settings form (mutation: render CalendarSettings unconditionally → FAILS)", async () => {
+  it("canManage: false (Staff) renders the agenda and no settings form (mutation: render CalendarSettings unconditionally → FAILS)", async () => {
     authState.canManage = false;
     await render();
     expect(calendarSettingsMock).not.toHaveBeenCalled();
-    expect(bookingsListMock).toHaveBeenCalledTimes(1);
+    expect(agendaCardMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -157,7 +180,6 @@ describe("CalendarPage — the Closed days card's props (S-47d Task 12)", () => 
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
     dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
     calendarSettingsMock.mockClear();
-    bookingsListMock.mockClear();
     closedDaysCardMock.mockClear();
     authState.canManage = true;
     authState.isAgency = true;
@@ -459,5 +481,142 @@ describe("CalendarPage — the phone calendar card (F-048 part 2)", () => {
     expect(props.view).toBe(view);
     expect(props.locale).toBe("es");
     for (const k of ["make", "replace", "turnOff", "undo"]) expect(typeof props[k], k).toBe("function");
+  });
+});
+
+// F-046 part 1 (plan Task 12, spec 5.1, 5.5, 8.2): the agenda opens the page; ?job= opens one job's drawer,
+// read on the caller's own client and logged as an open of its customer BEFORE the drawer is drawn.
+describe("CalendarPage — the agenda and the job drawer (F-046 part 1)", () => {
+  const JOB = "11111111-2222-4333-8444-555555555555";
+  const JOB_ROW: AgendaBookingRow = {
+    id: JOB, contact_id: "c_9", starts_at: "2026-12-02T16:00:00.000Z", ends_at: "2026-12-02T17:00:00.000Z", status: "booked",
+    note: "Fix the gate", author_kind: "person", author_id: "user_2", meeting_type: null, meeting_url: null, place_id: null,
+    confirm_reply: null, hold_until: null, hold_settled_at: null, notice_wanted: null, notice_sent_at: null,
+    rescheduled_from_id: null, created_at: "2026-11-30T12:00:00.000Z",
+    contact: { first_name: "Ana", last_name: "Reyes", phone: null, email: null }, place: null, replaced: false,
+  };
+  const agendaProps = () => agendaCardMock.mock.calls[0]![0] as Record<string, unknown>;
+  const drawerProps = () => jobDrawerMock.mock.calls[0]![0] as { view: Record<string, unknown>; closeHref: string };
+
+  beforeEach(() => {
+    dbMocks.getOrCreateCalendar.mockReset().mockResolvedValue(CALENDAR);
+    dbMocks.listCalendarBookings.mockReset().mockResolvedValue([]);
+    dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
+    dbMocks.listClosureAppointmentsForRanges.mockReset().mockResolvedValue([]);
+    dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
+    dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
+    dbMocks.readAgendaJob.mockReset().mockResolvedValue(JOB_ROW);
+    dbMocks.listPeopleNames.mockReset().mockResolvedValue({ user_2: "Dan" });
+    dbMocks.jobWasTold.mockReset().mockResolvedValue(false);
+    dbMocks.getContact.mockReset().mockResolvedValue({ language: "es" });
+    agendaCardMock.mockClear();
+    jobDrawerMock.mockClear();
+    calendarSettingsMock.mockClear();
+    closedDaysCardMock.mockClear();
+    feedCardMock.mockClear();
+    noteOpenedMock.mockClear();
+    order.length = 0;
+    Object.assign(authState, { canManage: true, isAgency: true, role: null });
+  });
+
+  it("the agenda renders BEFORE the settings card (mutation: the old order -> FAILS)", async () => {
+    const html = await render();
+    expect(html.indexOf('data-stub="agenda"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-stub="agenda"')).toBeLessThan(html.indexOf('data-stub="settings"'));
+  });
+
+  it("the page no longer reads the old list (listCalendarBookings leaves the page)", async () => {
+    await render();
+    expect(dbMocks.listCalendarBookings).not.toHaveBeenCalled();
+  });
+
+  it("PageHeader carries no button; Add job lives in the agenda card, whose props carry canAdd (mutation: an action in PageHeader -> FAILS)", async () => {
+    const html = await render();
+    const head = html.slice(0, html.indexOf('data-stub="agenda"'));
+    expect(head).toContain("<h1");
+    expect(head).not.toContain("<button");
+    expect(head).not.toContain("data-variant");
+    expect(agendaProps()).toMatchObject({ canAdd: true, accountId: "a1", viewerId: "user_1", timezone: "America/Chicago" });
+    expect(agendaProps().db).toBe(REQUEST_DB); // RLS decides what a Technician sees (R5): never serviceDb()
+  });
+
+  it("view and day come from the URL; no day is today in the account's zone; the page's one instant reaches the card", async () => {
+    await render({ view: "week", day: "2026-12-09" });
+    expect(agendaProps()).toMatchObject({ view: "week", day: "2026-12-09" });
+    agendaCardMock.mockClear();
+    await render();
+    const p = agendaProps();
+    expect(p.view).toBe("day");
+    expect(p.day).toBe(p.today);
+    expect(typeof p.nowIso).toBe("string");
+  });
+
+  it("?job=: read on the REQUEST client, noted as an open of its customer BEFORE the drawer, and the drawer gets the view (mutation: serviceDb() -> FAILS)", async () => {
+    await render({ job: JOB, day: "2026-12-02" });
+    expect(dbMocks.readAgendaJob).toHaveBeenCalledWith(REQUEST_DB, "a1", JOB);
+    expect(noteOpenedMock).toHaveBeenCalledTimes(1);
+    const [accessArg, accountArg, ref] = noteOpenedMock.mock.calls[0]!;
+    expect((accessArg as { userId: string }).userId).toBe("user_1");
+    expect(accountArg).toBe("a1");
+    expect(ref).toEqual({ kind: "contact", recordId: "c_9" });
+    expect(order).toEqual(["note", "drawer"]);
+    expect(drawerProps().view).toMatchObject({ id: JOB, customer: { id: "c_9", name: "Ana Reyes", language: "es" }, madeBy: "Added by Dan" });
+    expect(drawerProps().closeHref).toBe("/dashboard/accounts/a1/calendar?view=day&day=2026-12-02");
+  });
+
+  it("?job= with no day opens the job's OWN day", async () => {
+    await render({ job: JOB });
+    expect(agendaProps()).toMatchObject({ view: "day", day: "2026-12-02" });
+  });
+
+  it("a job the caller cannot see: no drawer, no note, and the gone line (mutation: note before the read's answer -> FAILS)", async () => {
+    dbMocks.readAgendaJob.mockResolvedValue(null);
+    const html = await render({ job: JOB });
+    expect(jobDrawerMock).not.toHaveBeenCalled();
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+    expect(html).toContain("data-job-gone");
+    expect(renderedText(html)).toContain(m["calendar.job.gone"]);
+  });
+
+  it("a job param that is not a uuid is ignored: no read", async () => {
+    await render({ job: "not-a-uuid" });
+    expect(dbMocks.readAgendaJob).not.toHaveBeenCalled();
+    expect(jobDrawerMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed job read logs, draws no drawer and no note, and every card still renders", async () => {
+    dbMocks.readAgendaJob.mockRejectedValue(new Error("boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render({ job: JOB });
+      expect(jobDrawerMock).not.toHaveBeenCalled();
+      expect(noteOpenedMock).not.toHaveBeenCalled();
+      expect(html).toContain('data-stub="agenda"');
+      expect(closedDaysCardMock).toHaveBeenCalled();
+      expect(feedCardMock).toHaveBeenCalled();
+      expect(spy).toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  it("a Technician: canAdd false, and the drawer's canWrite false with canCloseOut true (owner decision 1)", async () => {
+    Object.assign(authState, { isAgency: false, role: "technician", canManage: false });
+    await render({ job: JOB });
+    expect(agendaProps().canAdd).toBe(false);
+    expect(drawerProps().view).toMatchObject({ canWrite: false, canCloseOut: true });
+  });
+
+  it("Staff: canAdd and canWrite true (seesWholeAccount)", async () => {
+    Object.assign(authState, { isAgency: false, role: "staff", canManage: false });
+    await render({ job: JOB });
+    expect(agendaProps().canAdd).toBe(true);
+    expect(drawerProps().view).toMatchObject({ canWrite: true });
+  });
+
+  it("second account: the card and the job read carry the ROUTE's account (mutation: hardcode \"a1\" -> FAILS)", async () => {
+    await renderForAccount("a2");
+    expect(agendaProps().accountId).toBe("a2");
+    renderToStaticMarkup(await CalendarPage({ params: Promise.resolve({ accountId: "a2" }), searchParams: Promise.resolve({ job: JOB }) }));
+    expect(dbMocks.readAgendaJob).toHaveBeenLastCalledWith(REQUEST_DB, "a2", JOB);
+    expect(noteOpenedMock.mock.calls.at(-1)![1]).toBe("a2");
   });
 });
