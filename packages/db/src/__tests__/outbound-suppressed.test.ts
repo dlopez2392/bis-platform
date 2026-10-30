@@ -50,6 +50,11 @@ const SETTLED_BY_THE_GATE: Record<string, Record<string, string>> = {
     // Filtered out of this read instead, a suppressed account's row would sit at the head of the
     // oldest-first batch for good.
     listDueCancelNotices: "the email gate refuses a suppressed account and the delivery then settles the row",
+    // F-046 part 1 (0107). Each row is a staff job's undo hold that must be SETTLED (sent or quiet) exactly once;
+    // the confirmation it may send goes through the same email gate, whose step 2b refuses a suppressed account,
+    // and the settle stamps hold_settled_at either way (plan Task 6). Filtered out of this read instead, a
+    // suppressed account's held job would never settle, and its reminders (which wait for the settle) never go.
+    listDueJobHolds: "a hold must settle once either way; the email gate refuses a suppressed account's send and the settle still stamps it",
   },
 };
 
