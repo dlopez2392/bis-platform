@@ -105,7 +105,7 @@ export function AgendaCardView(p: AgendaCardViewProps) {
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <div className="flex items-center">
+          <div className="flex flex-wrap items-center">
             <Link href={agendaHref(base, { view: p.view, day: shiftKey(p.view, p.day, -1) })} scroll={false} className={LINK}>{tr.text("calendar.agenda.back")}</Link>
             <span aria-hidden className="text-muted-foreground">·</span>
             <Link href={agendaHref(base, { view: p.view, day: p.today })} scroll={false} className={LINK}>{tr.text("calendar.agenda.today")}</Link>

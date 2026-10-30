@@ -53,6 +53,33 @@ describe("styleguide: the Agenda card", () => {
     expect(words).toContain(pseudoLocale(m["calendar.bookings.status.booked"]));
   });
 
+  // Spec §5.3 / CI phone-width.spec at 375 px: the Back · Today · Next row was a non-wrapping `flex` of
+  // nowrap buttons (342 px under the pseudo-locale) and pushed the page to 472 px. A flex ROW either wraps
+  // or has a child that may shrink below its content (`min-w-0`); a `flex-col` stacks and cannot widen.
+  it("375 px: every flex row in every card state wraps or has a child that may shrink (mutation: drop flex-wrap from Back · Today · Next -> FAILS)", () => {
+    const rows = [...html.matchAll(/<(\w+)\b[^>]*\bclass="([^"]*)"[^>]*>/g)].filter((x) => {
+      const cls = x[2]!.split(/\s+/);
+      return cls.includes("flex") && !cls.includes("flex-col");
+    });
+    expect(rows.length).toBeGreaterThan(3);
+    const stuck = rows.filter((x) => {
+      if (x[2]!.split(/\s+/).includes("flex-wrap")) return false;
+      const from = x.index! + x[0].length;
+      const inner = html.slice(from, html.indexOf(`</${x[1]}>`, from));
+      return !/class="[^"]*\bmin-w-0\b/.test(inner);
+    }).map((x) => x[0]);
+    expect(stuck).toEqual([]);
+  });
+  it("375 px: the Week's 7-day strip keeps each day inside its seventh (min-w-0 + break-words on every day link)", () => {
+    const strips = [...html.matchAll(/<nav [^>]*class="grid grid-cols-7[^"]*"[^>]*>([\s\S]*?)<\/nav>/g)];
+    expect(strips.length).toBeGreaterThan(0);
+    for (const s of strips) {
+      const links = s[1]!.match(/<a [^>]*>/g) ?? [];
+      expect(links).toHaveLength(7);
+      for (const a of links) expect(a).toMatch(/class="(?=[^"]*\bmin-w-0\b)(?=[^"]*\bbreak-words\b)[^"]*"/);
+    }
+  });
+
   it("no two rows share an anchor id across the demo's cards", () => {
     const ids = [...html.matchAll(/id="(booking-[^"]+)"/g)].map((x) => x[1]);
     expect(new Set(ids).size).toBe(ids.length);

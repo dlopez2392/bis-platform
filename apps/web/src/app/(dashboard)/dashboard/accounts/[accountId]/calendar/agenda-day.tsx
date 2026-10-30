@@ -146,7 +146,7 @@ export function AgendaDay({ day, words, sheet }: { day: AgendaDayView; words: Ag
                 className={cn(ROW, "flex items-center gap-2 border border-dashed border-[var(--line)] px-3 py-1.5 text-sm text-muted-foreground")}
               >
                 <Plus aria-hidden className="size-4 shrink-0" />
-                <span className="tabular-nums">{e.free.label}</span>
+                <span className="min-w-0 break-words tabular-nums">{e.free.label}</span>
               </button>
             );
           }

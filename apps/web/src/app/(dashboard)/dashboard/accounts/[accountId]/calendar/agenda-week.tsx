@@ -31,7 +31,7 @@ export function AgendaWeek({ days, selected, words, weekHref }: {
             href={weekHref[d.key] ?? d.href}
             scroll={false}
             aria-current={d.key === selected ? "date" : undefined}
-            className={cn(LINK, "flex-col px-0 text-xs tabular-nums", d.key === selected && "bg-[var(--accent-dim)] font-medium text-foreground")}
+            className={cn(LINK, "min-w-0 flex-col break-words px-0 text-xs tabular-nums", d.key === selected && "bg-[var(--accent-dim)] font-medium text-foreground")}
           >
             {d.short}
           </Link>
