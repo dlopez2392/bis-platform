@@ -783,14 +783,14 @@ Waves: T1, T5, T8 first; T2 and T6 on 0107; T3, T4, T7, T9, T10 on T2; T11 last.
 
 ---
 
-## 16. Open questions, each with a recommendation
+## 16. Owner decisions on the open questions (2026-10-30, all as recommended)
 
-1. **Technicians and Completed / No-show.** R5 says "view only"; today they may mark their own customers' jobs
-   (`CAL/actions.ts:214-219`), and they are the ones on site. **Recommend:** keep it; "view only" means no add, move
-   or cancel.
-2. **The drawer's primary** (14.2). **Recommend:** none, with a DESIGN.md line.
-3. **The email class** (6.6). **Recommend:** `transactional` for both kinds; bis-comms and the owner confirm,
-   because the class was created for one kind by an owner ruling.
-4. **The address in the customer's email.** **Recommend:** yes, one line, so a wrong address is caught by the
-   customer; the "what" line stays out, as staff may write things for themselves.
-5. **Counts** (D12). **Recommend:** a staff-made job counts as a booking everywhere, one definition.
+1. **Technicians keep Completed / No-show** on their own customers' jobs (`CAL/actions.ts:214-219`); "view only"
+   means no add, move or cancel.
+2. **The job drawer carries no primary** (14.2): Move, Cancel, Done and No-show are equal ghost buttons, and
+   DESIGN.md gains one line saying so (the same reasoning as the 2026-10-29 one-shot action tiles amendment).
+3. **Both new email kinds use the `transactional` class** (6.6); bis-comms updates `classes.test.ts:111-113`'s pin
+   in the same commit.
+4. **The customer's email shows the job address** on one line; the "what the job is" line never reaches the
+   customer.
+5. **A staff-made job counts as a booking everywhere** (D12): the dashboard and the weekly report, one definition.
