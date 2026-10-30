@@ -33,7 +33,7 @@ async function makeTombstone(db: SupabaseClient, accountId: string, tombstoneId:
 }
 
 describe("listContactsOnNumber follows a real tombstone (0106, owner ruling D8)", () => {
-  it("K's own live row and T's tombstone on the SAME number answer ONE row, K's own (mutation: no de-duplication -> two rows)", () =>
+  it("K's own live row and T's tombstone on the SAME number answer ONE row, K's own (mutation: drop the tombstone loop's own seen.has(kept.id) guard -> K's row is pushed a second time, two rows)", () =>
     withTestAccount(async (db, accountId) => {
       const kept = await createContact(db, accountId, { firstName: "Kept", phone: "+19565550511" }, "user_test");
       const tomb = await insertTwin(db, accountId, "Tomb", "+19565550511");

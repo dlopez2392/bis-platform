@@ -50,9 +50,10 @@ type MergeAction = (input: MergeInput) => Promise<MergeActionResult>;
 /**
  * Runs the merge, then wires the toast's own Undo to the MERGE ID THE ACTION RETURNED — never the
  * pair's own ids, which would ask to undo the wrong thing once more than one merge has touched either
- * record — and to `ctx.otherName`, the record the Undo gives back its OWN record (never `keepName`:
- * fix round, finding #1). Fails closed: a rejected `mergeAction` toasts `contacts.merge.failed` and
- * this still RESOLVES, never an unhandled rejection (finding #3).
+ * record — and to BOTH names: `ctx.otherName`, the record the Undo gives back its OWN record, and
+ * `ctx.keepName`, the record that keeps what arrives after it (second fix round finding #1: `runUndoMerge`
+ * now needs both, never just `otherName`). Fails closed: a rejected `mergeAction` toasts
+ * `contacts.merge.failed` and this still RESOLVES, never an unhandled rejection (finding #3).
  */
 export async function runMerge(
   mergeAction: MergeAction, undoAction: UndoMergeAction, input: MergeInput, locale: Locale,
@@ -74,14 +75,16 @@ export async function runMerge(
   toast.success(t(messages, "contacts.merge.done", locale, { name: ctx.keepName }), {
     action: {
       label: t(messages, "common.undo", locale),
-      onClick: () => void runUndoMerge(undoAction, r.mergeId, ctx.otherName, locale, ctx.onUndone ?? (() => {})),
+      onClick: () => void runUndoMerge(
+        undoAction, r.mergeId, { otherName: ctx.otherName, keptName: ctx.keepName }, locale, ctx.onUndone ?? (() => {}),
+      ),
     },
   });
 }
 
 export function MergeScreen({
   accountId, keep, other, conflicts, alsoKeeps, otherReach, movesText, seen, swapHref, locale, mergeAction, undoAction,
-  assigneeNames = {},
+  assigneeNames = {}, customFieldNames = {},
 }: {
   accountId: string;
   keep: { id: string; name: string };
@@ -98,6 +101,9 @@ export function MergeScreen({
   /** Clerk user id -> display name, for every `assigned_to` conflict on screen (fix round, finding
    *  #4). An id absent here (an unknown or unreadable member) reads "Someone on the team". */
   assigneeNames?: Readonly<Record<string, string>>;
+  /** Custom field `field_key` -> its own definition's `name` (fix round, carry-in 10): a `custom.<key>`
+   *  conflict or "Also keeps" entry names the field's real label instead of its raw key. */
+  customFieldNames?: Readonly<Record<string, string>>;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Record<string, MergeChoice>>({});
@@ -134,13 +140,13 @@ export function MergeScreen({
       <h1 className="mb-1 text-[22px] font-semibold tracking-[-.02em] text-[var(--text-1)]">
         {t(messages, "contacts.merge.title", locale)}
       </h1>
-      <Link href={swapHref} className={cn(buttonVariants({ variant: "link", size: "sm" }), "px-0")}>
+      <Link href={swapHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
         {t(messages, "contacts.merge.swap", locale)}
       </Link>
 
       <div className="mt-4 grid gap-6 md:grid-cols-2">
         {[keep, other].map((person, i) => (
-          <div key={person.id} className="space-y-2 rounded-xl border border-border p-4">
+          <div key={person.id} className="space-y-2 rounded-xl border border-border bg-card glass p-4">
             <p className="font-medium text-[var(--text-1)]">
               {person.name}
               {i === 0 ? <span className="ml-2 text-xs text-[var(--text-2)]">{t(messages, "contacts.merge.keep", locale)}</span>
@@ -155,7 +161,7 @@ export function MergeScreen({
           {conflicts.map((c) => (
             <fieldset key={c.field} className="space-y-1">
               <legend className="text-sm text-[var(--text-2)]">
-                {t(messages, "contacts.merge.pick", locale, { field: fieldLabel(c.field, locale) })}
+                {t(messages, "contacts.merge.pick", locale, { field: fieldLabel(c.field, locale, customFieldNames) })}
               </legend>
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -180,7 +186,7 @@ export function MergeScreen({
 
       {alsoKeeps.length > 0 ? (
         <p className="mt-4 text-sm text-[var(--text-2)]">
-          {t(messages, "contacts.merge.alsoKeeps", locale, { list: alsoKeeps.map((f) => fieldLabel(f, locale)).join(", ") })}
+          {t(messages, "contacts.merge.alsoKeeps", locale, { list: alsoKeeps.map((f) => fieldLabel(f, locale, customFieldNames)).join(", ") })}
         </p>
       ) : null}
       {otherReach.phone ? (

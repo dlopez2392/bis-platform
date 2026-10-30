@@ -5340,6 +5340,18 @@ export const m = {
   "contacts.merge.field.language.es": "el idioma",
   "contacts.merge.field.custom": "“{label}” field",
   "contacts.merge.field.custom.es": "campo “{label}”",
+  // Fix round, carry-in 8: the rest of 0106's app.merge_fields_of groups, named in words — never shown
+  // as the raw snake_case key a merge's own Undo can report in keptEdits.
+  "contacts.merge.field.languageHint": "the language hint",
+  "contacts.merge.field.languageHint.es": "el aviso de idioma",
+  "contacts.merge.field.customFields": "the custom fields",
+  "contacts.merge.field.customFields.es": "los campos personalizados",
+  "contacts.merge.field.archived": "archived status",
+  "contacts.merge.field.archived.es": "el estado de archivado",
+  "contacts.merge.field.emailOptOut": "the marketing email opt-out",
+  "contacts.merge.field.emailOptOut.es": "la baja de correos de marketing",
+  "contacts.merge.field.other": "another detail",
+  "contacts.merge.field.other.es": "otro dato",
   "contacts.merge.alsoKeeps": "Also keeps: {list}",
   "contacts.merge.alsoKeeps.es": "También conserva: {list}",
   "contacts.merge.otherNumber": "Calls and texts from {phone} will still reach {name}.",
@@ -5406,6 +5418,11 @@ export const m = {
   "contacts.merge.undoLater.es": "Esta unión todavía no se puede deshacer: {name} se volvió a unir después. Deshaga primero la unión más reciente.",
   "contacts.merge.undoFailed": "Couldn't undo the merge. Nothing changed. Try again.",
   "contacts.merge.undoFailed.es": "No se pudo deshacer la unión. No cambió nada. Intente de nuevo.",
+  // Fix round, carry-in 5: a tag, group or customer the merge re-inserted on Undo was itself deleted
+  // since — a foreign-key error (23503), never the generic "try again" (nothing to retry: the missing
+  // thing is gone).
+  "contacts.merge.undoBlocked": "Can't undo: a tag, group or customer from before the merge was deleted since.",
+  "contacts.merge.undoBlocked.es": "No se puede deshacer: se eliminó una etiqueta, un grupo o un cliente de antes de la unión.",
   "contacts.archive.failed": "Couldn't archive. Nothing changed. Try again.",
   "contacts.archive.failed.es": "No se pudo archivar. No cambió nada. Intente de nuevo.",
   "contacts.restore.failed": "Couldn't restore. Nothing changed. Try again.",

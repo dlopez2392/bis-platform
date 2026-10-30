@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getContact, contactMergePreview, listPeopleNames } from "@bis/db";
+import { getContact, contactMergePreview, listPeopleNames, listCustomFields } from "@bis/db";
 import type { Locale } from "@/lib/i18n/locale";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -52,6 +52,9 @@ export default async function MergeComparePage({
   const { a, b, keep: keepParam, locale: localeParam } = (await searchParams) ?? {};
   const access = await requireNotTechnician(accountId);
   if (!isUuid(a) || !isUuid(b)) notFound();
+  // Fix round, minor 10: the same id twice names nothing to compare — a malformed link, not a load
+  // that might succeed on retry. 404, never the "couldn't load" error state.
+  if (a === b) notFound();
   const db = await dbForRequest();
   const [rowA, rowB] = await Promise.all([
     getContact(db, accountId, a) as Promise<ContactRow | null>,
@@ -97,13 +100,24 @@ export default async function MergeComparePage({
   const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
 
   if (!preview || preview.status !== "ok") {
+    // Fix round, minor 10: a title (this page always has one) and a way BACK to the duplicates view —
+    // not only Retry, which cannot help when the pair itself no longer matches (already merged, one
+    // side gone).
     const retryHref = `/dashboard/accounts/${accountId}/contacts/merge?${queryString(a, b, keepParam)}`;
     return (
       <div className="p-6" lang={locale}>
+        <h1 className="mb-1 text-[22px] font-semibold tracking-[-.02em] text-[var(--text-1)]">
+          {tr.text("contacts.merge.title")}
+        </h1>
         <p className="text-sm text-[var(--text-2)]">{tr.text("contacts.merge.loadFailed")}</p>
-        <Link href={retryHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-4")}>
-          {tr.text("record.card.retry")}
-        </Link>
+        <div className="mt-4 flex gap-2">
+          <Link href={retryHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            {tr.text("record.card.retry")}
+          </Link>
+          <Link href={`${contactsHref}?view=duplicates`} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+            {tr.text("contacts.duplicates.link")}
+          </Link>
+        </div>
       </div>
     );
   }
@@ -127,6 +141,17 @@ export default async function MergeComparePage({
     return {};
   });
 
+  // Fix round, minor 10: a custom field conflict shows the field's own DEFINED label, never its raw
+  // key — read only when the screen actually has a `custom.<key>` entry to show (same "never read for
+  // nothing" shape as assigneeNames above), and a failed read costs only the labels, never the page.
+  const hasCustomField = [...conflicts.map((c) => c.field), ...also].some((f) => f.startsWith("custom."));
+  const customFieldNames = !hasCustomField ? {} : await listCustomFields(db, accountId, "contact")
+    .then((defs) => Object.fromEntries(defs.map((d) => [d.field_key, d.name])))
+    .catch((e: unknown) => {
+      console.error(`contacts merge: custom field names read failed for account ${accountId}: ${loggableError(e)}`);
+      return {};
+    });
+
   return (
     <MergeScreen
       accountId={accountId}
@@ -142,6 +167,7 @@ export default async function MergeComparePage({
       mergeAction={mergeContactsAction.bind(null, accountId)}
       undoAction={undoMergeAction.bind(null, accountId)}
       assigneeNames={assigneeNames}
+      customFieldNames={customFieldNames}
     />
   );
 }

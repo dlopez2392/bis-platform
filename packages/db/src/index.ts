@@ -33,7 +33,7 @@ export { nameFold, nameKey, phoneNational, phoneFamily, reasonStrength, reasonLa
 // 0106, F-006 part 1: possible duplicates, the merge and its Undo, and the pointer every lookup follows.
 export {
   listDuplicatePairs, countDuplicatePairs, duplicatePairsOf, dismissDuplicatePair, undismissDuplicatePair,
-  mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf,
+  mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf, mergeKeptIdOf, MergeRpcError,
   DUPLICATE_PAGE_MAX, MERGE_COUNT_KEYS, MERGE_CHOICE_FIELDS,
   type DuplicatePair, type DuplicatePerson, type DuplicateCursor, type MergeChoice, type MergeInput, type MergeOutcome,
   type UndoMergeOutcome, type MergePreview, type MergeCountKey,

@@ -16,8 +16,13 @@ vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
 const revalidatePath = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath }));
 
+class FakeMergeRpcError extends Error {
+  constructor(message: string, readonly code: string | undefined) { super(message); }
+}
 const dbMocks = {
   mergeContacts: vi.fn(), undoContactMerge: vi.fn(), dismissDuplicatePair: vi.fn(), undismissDuplicatePair: vi.fn(),
+  mergeKeptIdOf: vi.fn(async () => null as string | null),
+  MergeRpcError: FakeMergeRpcError,
   MERGE_CHOICE_FIELDS: ["first_name", "last_name", "email", "phone", "assigned_to", "language"],
 };
 vi.mock("@bis/db", () => dbMocks);
@@ -76,22 +81,42 @@ describe("mergeContactsAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("every other refusal, and a throw, answer contacts.merge.failed and log (mutation: swallow the throw silently -> FAILS)", async () => {
+  it("a throw answers contacts.merge.failed and logs (mutation: swallow the throw silently -> FAILS)", async () => {
     const log = quietly();
-    dbMocks.mergeContacts.mockResolvedValue({ status: "holding" });
-    expect(await mergeContactsAction("a1", input)).toEqual({ ok: false, errorKey: "contacts.merge.failed" });
     dbMocks.mergeContacts.mockRejectedValue(new Error("boom"));
     expect(await mergeContactsAction("a1", input)).toEqual({ ok: false, errorKey: "contacts.merge.failed" });
     expect(log).toHaveBeenCalled();
   });
+
+  it("'same' is the one refusal that still answers contacts.merge.failed, not stale (nothing changed under the viewer — the two ids given were just the same)", async () => {
+    dbMocks.mergeContacts.mockResolvedValue({ status: "same" });
+    expect(await mergeContactsAction("a1", input)).toEqual({ ok: false, errorKey: "contacts.merge.failed" });
+  });
+
+  it.each(["already_merged", "holding", "not_found"] as const)(
+    "%s maps to contacts.merge.stale, never the generic 'try again' a retry cannot fix (fix round, minor 7; mutation: fall through to contacts.merge.failed -> FAILS)",
+    async (status) => {
+      dbMocks.mergeContacts.mockResolvedValue({ status });
+      expect(await mergeContactsAction("a1", input)).toEqual({ ok: false, errorKey: "contacts.merge.stale" });
+    },
+  );
 });
 
 describe("undoMergeAction", () => {
-  it("undone reports otherId, keptNew and keptEdits, and revalidates", async () => {
+  it("undone reports otherId, keptNew and keptEdits, and revalidates the list, the other record AND the kept record (fix round, carry-in 6; mutation: drop the mergeKeptIdOf revalidate -> FAILS)", async () => {
     dbMocks.undoContactMerge.mockResolvedValue({ status: "undone", otherId: OTHER, keptNew: 2, keptEdits: ["email"] });
+    dbMocks.mergeKeptIdOf.mockResolvedValueOnce(KEEP);
     expect(await undoMergeAction("a1", 42)).toEqual({ ok: true, otherId: OTHER, keptNew: 2, keptEdits: ["email"] });
     expect(dbMocks.undoContactMerge).toHaveBeenCalledWith(REQUEST, "a1", 42);
+    expect(dbMocks.mergeKeptIdOf).toHaveBeenCalledWith(REQUEST, "a1", 42);
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${OTHER}`);
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${KEEP}`);
+  });
+  it("a mergeKeptIdOf read that fails (or answers null) costs only that one extra revalidate, never the Undo itself", async () => {
+    dbMocks.undoContactMerge.mockResolvedValue({ status: "undone", otherId: OTHER, keptNew: 0, keptEdits: [] });
+    dbMocks.mergeKeptIdOf.mockRejectedValueOnce(new Error("boom"));
+    expect(await undoMergeAction("a1", 42)).toEqual({ ok: true, otherId: OTHER, keptNew: 0, keptEdits: [] });
   });
   it("expired and later_merge map to their own keys", async () => {
     dbMocks.undoContactMerge.mockResolvedValue({ status: "expired" });
@@ -104,6 +129,16 @@ describe("undoMergeAction", () => {
     dbMocks.undoContactMerge.mockResolvedValue({ status: "not_found" });
     expect(await undoMergeAction("a1", 1)).toEqual({ ok: false, errorKey: "contacts.merge.undoFailed" });
     dbMocks.undoContactMerge.mockRejectedValue(new Error("boom"));
+    expect(await undoMergeAction("a1", 1)).toEqual({ ok: false, errorKey: "contacts.merge.undoFailed" });
+  });
+  it("a foreign-key violation (23503: something the merge re-inserts was deleted since) maps to contacts.merge.undoBlocked, never the generic undoFailed (fix round, minor 5; mutation: drop the MergeRpcError check -> FAILS)", async () => {
+    quietly();
+    dbMocks.undoContactMerge.mockRejectedValue(new FakeMergeRpcError("undoContactMerge failed: fk", "23503"));
+    expect(await undoMergeAction("a1", 1)).toEqual({ ok: false, errorKey: "contacts.merge.undoBlocked" });
+  });
+  it("a deadlock (40P01) that still throws after a retry answers the generic undoFailed, not undoBlocked (mutation: map every MergeRpcError to undoBlocked -> FAILS)", async () => {
+    quietly();
+    dbMocks.undoContactMerge.mockRejectedValue(new FakeMergeRpcError("undoContactMerge failed: deadlock", "40P01"));
     expect(await undoMergeAction("a1", 1)).toEqual({ ok: false, errorKey: "contacts.merge.undoFailed" });
   });
   it("a Technician and a non-integer id are refused before any db call", async () => {
@@ -130,6 +165,12 @@ describe("dismissPairAction / undismissPairAction", () => {
     expect(await dismissPairAction("a1", "nope")).toEqual({ ok: false, errorKey: "contacts.duplicates.dismissFailed" });
     expect(dbForRequest).not.toHaveBeenCalled();
     expect(dbMocks.dismissDuplicatePair).not.toHaveBeenCalled();
+  });
+  it("undismissPairAction also refuses a Technician before any db call (fix round, minor 10; mutation: drop the role check on undismiss -> a db call is recorded)", async () => {
+    requireAccountAccess.mockResolvedValueOnce(TECH);
+    expect(await undismissPairAction("a1", FLAG)).toEqual({ ok: false, errorKey: "contacts.duplicates.dismissFailed" });
+    expect(dbForRequest).not.toHaveBeenCalled();
+    expect(dbMocks.undismissDuplicatePair).not.toHaveBeenCalled();
   });
   it("a throw answers the failure key and logs", async () => {
     const log = quietly();

@@ -104,6 +104,14 @@ describe("the merge row's own 'Undo merge' control (F-006 part 1, plan Task 11)"
     expect(r).not.toContain("Undo merge");
   });
 
+  it("a merge row whose OWN kept side is NOT this page (fix round, carry-in 9: a chain's older merge, shown on the newer kept record's page) never shows the button, even with a future undoUntil and canMerge true (mutation: drop the e.contactId === contactId guard -> FAILS)", () => {
+    const entries: TimelineEntry[] = [
+      { kind: "merge", id: "1", at: AT, contactId: "b-not-this-page", merge: TM() } as TimelineEntry,
+    ];
+    const r = row(render(entries), "merge");
+    expect(r).not.toContain("Undo merge");
+  });
+
   it("a mergeUndone row never carries the button either (control; mutation: show it on mergeUndone too -> FAILS)", () => {
     const entries: TimelineEntry[] = [{ kind: "mergeUndone", id: "2", at: AT, contactId: "c1", merge: TM({ undoneAt: AT, undoneBy: "user_dan" }) } as TimelineEntry];
     const r = row(render(entries), "mergeUndone");
@@ -120,42 +128,51 @@ describe("the merge row's own 'Undo merge' control (F-006 part 1, plan Task 11)"
  * `undoMergeOne` (merge-undo.tsx): the toast's own Undo and the row's "Undo merge" button both call
  * this. Tested directly — no DOM renderer runs onClick (archive-controls.test.ts's own pattern).
  */
-describe("undoMergeOne: the exported handler (F-006 part 1, plan Task 11)", () => {
+describe("undoMergeOne: the exported handler (F-006 part 1, plan Task 11; second fix round adds keptName)", () => {
   beforeEach(() => { undoMergeActionMock.mockReset(); toasts.success.mockReset(); toasts.error.mockReset(); });
 
   it("calls undoMergeAction(accountId, mergeId) — a number, never a string id (mutation: pass the kept id -> FAILS)", async () => {
     undoMergeActionMock.mockResolvedValue({ ok: true, otherId: "c9", keptNew: 0, keptEdits: [] });
     const onDone = vi.fn();
-    await undoMergeOne("a1", 1, "Other Person", "en", onDone);
+    await undoMergeOne("a1", 1, "Other Person", "This Page's Contact", "en", onDone);
     expect(undoMergeActionMock).toHaveBeenCalledWith("a1", 1);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("success toasts contacts.merge.undone naming the other person, with no extra lines when nothing arrived or changed since (mutation: always add a description -> FAILS)", async () => {
+  it("success toasts contacts.merge.undone naming the OTHER person, with no extra lines when nothing arrived or changed since (mutation: always add a description -> FAILS)", async () => {
     undoMergeActionMock.mockResolvedValue({ ok: true, otherId: "c9", keptNew: 0, keptEdits: [] });
-    await undoMergeOne("a1", 1, "Jose Garcia", "en", vi.fn());
+    await undoMergeOne("a1", 1, "Jose Garcia", "Maria Garcia", "en", vi.fn());
     expect(toasts.success).toHaveBeenCalledWith("Merge undone. Jose Garcia is back as their own record.", undefined);
   });
 
-  it("names what arrived since and what stayed changed, as their own lines (mutation: drop either -> FAILS)", async () => {
+  it("names what arrived since and what stayed changed, as their own lines — WITH keptName, never otherName (second fix round finding #1; mutation: pass otherName here instead -> FAILS)", async () => {
     undoMergeActionMock.mockResolvedValue({ ok: true, otherId: "c9", keptNew: 2, keptEdits: ["first_name", "phone"] });
-    await undoMergeOne("a1", 1, "Jose Garcia", "en", vi.fn());
+    await undoMergeOne("a1", 1, "Jose Garcia", "Maria Garcia", "en", vi.fn());
     const [, opts] = toasts.success.mock.calls[0]!;
-    expect(opts.description).toContain("2 things that arrived after the merge stay with Jose Garcia.");
+    expect(opts.description).toContain("2 things that arrived after the merge stay with Maria Garcia.");
+    expect(opts.description).not.toContain("stay with Jose Garcia");
     expect(opts.description).toContain("Kept what was changed after the merge: first name and phone number.");
   });
 
   it("a refusal toasts the error key; onDone never runs (mutation: call onDone regardless -> FAILS)", async () => {
     undoMergeActionMock.mockResolvedValue({ ok: false, errorKey: "contacts.merge.undoExpired" });
     const onDone = vi.fn();
-    await undoMergeOne("a1", 1, "Jose Garcia", "en", onDone);
+    await undoMergeOne("a1", 1, "Jose Garcia", "Maria Garcia", "en", onDone);
     expect(toasts.error).toHaveBeenCalledWith("This merge is more than 30 days old and can't be undone.");
     expect(onDone).not.toHaveBeenCalled();
   });
 
+  it("undoLater names keptName, not otherName (second fix round finding #1)", async () => {
+    undoMergeActionMock.mockResolvedValue({ ok: false, errorKey: "contacts.merge.undoLater" });
+    await undoMergeOne("a1", 1, "Jose Garcia", "Maria Garcia", "en", vi.fn());
+    expect(toasts.error).toHaveBeenCalledWith(
+      "This merge can't be undone yet: Maria Garcia was merged again since. Undo the newer merge first.",
+    );
+  });
+
   it("a throw toasts contacts.merge.undoFailed, never an unhandled rejection (mutation: let it throw -> FAILS)", async () => {
     undoMergeActionMock.mockRejectedValue(new Error("down"));
-    await undoMergeOne("a1", 1, "Jose Garcia", "en", vi.fn());
+    await undoMergeOne("a1", 1, "Jose Garcia", "Maria Garcia", "en", vi.fn());
     expect(toasts.error).toHaveBeenCalledWith("Couldn't undo the merge. Nothing changed. Try again.");
   });
 });

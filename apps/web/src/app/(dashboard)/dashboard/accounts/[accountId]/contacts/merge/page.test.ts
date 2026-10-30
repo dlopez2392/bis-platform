@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { renderedText } from "@/lib/rendered-text";
 
 /**
  * F-006 part 1 (plan Task 10, Step 4, folded Task 13 F-118 reconcile): the compare screen. Same mocking
@@ -41,10 +42,12 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 const getContactMock = vi.fn();
 const contactMergePreviewMock = vi.fn();
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]) => ({}) as Record<string, string>);
+const listCustomFieldsMock = vi.fn(async (..._a: unknown[]) => [] as { field_key: string; name: string }[]);
 vi.mock("@bis/db", () => ({
   getContact: (...a: unknown[]) => getContactMock(...a),
   contactMergePreview: (...a: unknown[]) => contactMergePreviewMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
+  listCustomFields: (...a: unknown[]) => listCustomFieldsMock(...a),
   MERGE_COUNT_KEYS: ["messages", "calls", "bookings", "documents", "opportunities", "notes", "tasks", "form_submissions"],
 }));
 
@@ -85,12 +88,18 @@ beforeEach(() => {
   getContactMock.mockImplementation(async (_db: unknown, _accountId: string, id: string) => contact(id));
   contactMergePreviewMock.mockResolvedValue(PREVIEW_OK);
   listPeopleNamesMock.mockResolvedValue({});
+  listCustomFieldsMock.mockResolvedValue([]);
   screenProps.length = 0;
 });
 
 describe("the compare page: what it refuses, before any markup", () => {
   it("a non-uuid a or b 404s before any contact read", async () => {
     await expect(MergePage(ctx("nope", B))).rejects.toThrow(/NEXT_NOT_FOUND/);
+    expect(getContactMock).not.toHaveBeenCalled();
+  });
+
+  it("the same id for a and b 404s before any contact read (fix round, minor 10; mutation: drop the a===b check -> FAILS)", async () => {
+    await expect(MergePage(ctx(A, A))).rejects.toThrow(/NEXT_NOT_FOUND/);
     expect(getContactMock).not.toHaveBeenCalled();
   });
 
@@ -145,6 +154,16 @@ describe("the compare page: a failed or refused preview is the error state, not 
     await expect(MergePage(ctx(A, B))).resolves.toBeDefined();
     expect(screenProps).toEqual([]);
   });
+
+  it("the error state carries a title and a way BACK to the duplicates view, not only Retry (fix round, minor 10; mutation: drop the back link -> FAILS)", async () => {
+    contactMergePreviewMock.mockResolvedValue({ status: "holding" });
+    const html = renderToStaticMarkup(await MergePage(ctx(A, B)));
+    const text = renderedText(html);
+    expect(text).toContain("Merge two records");
+    expect(text).toContain("Couldn't load these two records. Try again.");
+    expect(html).toContain(`href="/dashboard/accounts/acct1/contacts?view=duplicates"`);
+    expect(text).toContain("Possible duplicates");
+  });
 });
 
 describe("the compare page: the account's own language, read like sibling pages do (fix round, finding #5)", () => {
@@ -193,6 +212,34 @@ describe("the compare page: assignee ids resolve to names before they reach Merg
   it("with no assigned_to on either side, no read at all (mutation: always read -> FAILS)", async () => {
     renderToStaticMarkup(await MergePage(ctx(A, B)));
     expect(listPeopleNamesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("the compare page: custom field DEFINITIONS reach MergeScreen as customFieldNames (fix round, minor 10)", () => {
+  it("reads listCustomFields only when a custom.<key> conflict or Also-keeps entry is on screen, and hands the field_key -> name map down", async () => {
+    contactMergePreviewMock.mockResolvedValue({
+      ...PREVIEW_OK,
+      fields: { keep: { custom: { favoriteColor: "Red" } }, other: { custom: { favoriteColor: "Blue" } } },
+    });
+    listCustomFieldsMock.mockResolvedValue([{ field_key: "favoriteColor", name: "Favorite Color" }]);
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(listCustomFieldsMock).toHaveBeenCalledWith(REQUEST, "acct1", "contact");
+    expect(screenProps.at(-1)!.customFieldNames).toEqual({ favoriteColor: "Favorite Color" });
+  });
+
+  it("with no custom field on screen, no read at all (mutation: always read -> FAILS)", async () => {
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(listCustomFieldsMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed custom field names read costs only the labels, never the whole page (mutation: let it throw -> FAILS)", async () => {
+    contactMergePreviewMock.mockResolvedValue({
+      ...PREVIEW_OK,
+      fields: { keep: { custom: { favoriteColor: "Red" } }, other: { custom: { favoriteColor: "Blue" } } },
+    });
+    listCustomFieldsMock.mockRejectedValue(new Error("down"));
+    await expect(MergePage(ctx(A, B)).then((el) => renderToStaticMarkup(el))).resolves.toBeDefined();
+    expect(screenProps.at(-1)!.customFieldNames).toEqual({});
   });
 });
 

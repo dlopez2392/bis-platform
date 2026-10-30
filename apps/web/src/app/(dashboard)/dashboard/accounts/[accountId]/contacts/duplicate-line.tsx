@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { DuplicatePair } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
@@ -32,10 +33,10 @@ export function DuplicateLine({
       {more > 0 ? (
         <span>{more === 1 ? t(m, "contacts.duplicates.bannerMoreOne", locale) : t(m, "contacts.duplicates.bannerMore", locale, { count: more })}</span>
       ) : null}
-      <a href={compareHref(accountId, strongest)}
+      <Link href={compareHref(accountId, strongest)}
         className="rounded-[var(--radius-ctl)] underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
         {t(m, "contacts.duplicates.compare", locale)}
-      </a>
+      </Link>
     </p>
   );
 }

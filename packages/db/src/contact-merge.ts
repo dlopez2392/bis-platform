@@ -112,6 +112,38 @@ export async function undismissDuplicatePair(
   throw new Error(`undismissDuplicatePair: unexpected answer ${JSON.stringify(data)}`);
 }
 
+/** A failed merge RPC, carrying PostgREST's error code (a SQLSTATE such as `40P01` deadlock or `23503`
+ *  a foreign key violation) beside the message — `undoMergeAction` (apps/web) reads `.code` to tell a
+ *  blocked Undo (something the merge re-inserts was deleted since) from any other failure. */
+export class MergeRpcError extends Error {
+  constructor(message: string, readonly code: string | undefined) { super(message); }
+}
+
+/** Postgres's deadlock_detected. */
+const MERGE_DEADLOCK = "40P01";
+/** How many times a merge RPC runs again after a deadlock (one retry: two calls at most) — fix round,
+ *  carry-in 4, the same shape as client-groups.ts:52-56. `merge_contacts` and `undo_contact_merge` are
+ *  each one transaction, so a 40P01 rolled all of it back and running the call again is safe; a SECOND
+ *  40P01 surfaces as the usual failure (the action layer already maps any thrown error to
+ *  contacts.merge.failed/undoFailed). */
+const MERGE_DEADLOCK_RETRIES = 1;
+
+/** The two merge RPCs' own call, retrying a deadlock once; every other error (including a second
+ *  deadlock) throws a `MergeRpcError` carrying PostgREST's code. `wrapperName` names the THROWING
+ *  function (`mergeContacts`/`undoContactMerge`), never the RPC's own snake_case name, matching the
+ *  message shape both wrappers already carried before this helper existed. */
+async function mergeRpc<T>(
+  db: SupabaseClient, rpcName: string, wrapperName: string, args: Record<string, unknown>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const { data, error } = await db.rpc(rpcName, args);
+    if (!error) return data as T;
+    const code = (error as { code?: string }).code;
+    if (code === MERGE_DEADLOCK && attempt < MERGE_DEADLOCK_RETRIES) continue;
+    throw new MergeRpcError(`${wrapperName} failed: ${error.message}`, code);
+  }
+}
+
 export type MergeChoice = "keep" | "other";
 export const MERGE_CHOICE_FIELDS = ["first_name", "last_name", "email", "phone", "assigned_to", "language"] as const;
 
@@ -132,11 +164,10 @@ const MERGE_REFUSALS = ["same", "not_found", "holding", "already_merged", "stale
  *  as a success (mutation: coercing an unknown shape to "merged" would silently report a merge that the
  *  database never made). */
 export async function mergeContacts(db: SupabaseClient, accountId: string, input: MergeInput): Promise<MergeOutcome> {
-  const { data, error } = await db.rpc("merge_contacts", {
+  const data = await mergeRpc<unknown>(db, "merge_contacts", "mergeContacts", {
     p_account_id: accountId, p_keep: input.keepId, p_other: input.otherId,
     p_choices: input.choices, p_seen: input.seen, p_actor: input.actor ?? null,
   });
-  if (error) throw new Error(`mergeContacts failed: ${error.message}`);
   const r = data as { status?: unknown; mergeId?: unknown; moved?: unknown } | null;
   if (
     r?.status === "merged" && typeof r.mergeId === "number" && typeof r.moved === "object" && r.moved !== null
@@ -161,8 +192,9 @@ const UNDO_REFUSALS = ["not_found", "already_undone", "expired", "later_merge"] 
 export async function undoContactMerge(
   db: SupabaseClient, accountId: string, mergeId: number, actor?: string,
 ): Promise<UndoMergeOutcome> {
-  const { data, error } = await db.rpc("undo_contact_merge", { p_account_id: accountId, p_merge_id: mergeId, p_actor: actor ?? null });
-  if (error) throw new Error(`undoContactMerge failed: ${error.message}`);
+  const data = await mergeRpc<unknown>(
+    db, "undo_contact_merge", "undoContactMerge", { p_account_id: accountId, p_merge_id: mergeId, p_actor: actor ?? null },
+  );
   const r = data as { status?: unknown; otherId?: unknown; keptNew?: unknown; keptEdits?: unknown } | null;
   if (r?.status === "undone" && typeof r.otherId === "string" && typeof r.keptNew === "number" && Array.isArray(r.keptEdits)) {
     return { status: "undone", otherId: r.otherId, keptNew: r.keptNew, keptEdits: r.keptEdits.map(String) };
@@ -226,6 +258,16 @@ export async function contactMergePreview(db: SupabaseClient, accountId: string,
   const refusal = PREVIEW_REFUSALS.find((s) => s === r?.status);
   if (refusal) return { status: refusal };
   throw new Error(`contactMergePreview: unexpected answer ${JSON.stringify(data)}`);
+}
+
+/** Fix round, carry-in 6: the KEPT side of one merge row, so `undoMergeAction` can revalidate that
+ *  record's page too (`undo_contact_merge`'s own JSON never echoes it back — only `otherId`). Null when
+ *  no such merge row exists in this account; the caller's own status check already covers that case. */
+export async function mergeKeptIdOf(db: SupabaseClient, accountId: string, mergeId: number): Promise<string | null> {
+  const { data, error } = await db.from("contact_merges").select("keep_id")
+    .eq("account_id", accountId).eq("id", mergeId).maybeSingle();
+  if (error) throw new Error(`mergeKeptIdOf failed: ${error.message}`);
+  return (data as { keep_id: string } | null)?.keep_id ?? null;
 }
 
 /**

@@ -360,7 +360,10 @@ export default async function ContactDetailPage({
             holdOpenTaskIds={timeline.holdOpen}
             customerLang={(contact.language as "en" | "es" | null) ?? ""}
             // F-006 part 1 (plan Task 11): the merge row's own "Undo merge" (owner ruling D9).
+            // Fix round, carry-in 9 + finding #1: this page's own contact IS the kept side for any
+            // merge row whose button shows at all; its display name feeds the Undo toast directly.
             canMerge={seesWholeAccount(access)}
+            contactName={name}
             nowMs={now.getTime()}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".

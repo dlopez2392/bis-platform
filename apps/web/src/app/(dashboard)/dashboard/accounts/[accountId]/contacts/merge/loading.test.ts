@@ -29,4 +29,8 @@ describe("the compare screen's loading skeleton", () => {
   it("shows two skeleton columns, one per record", () => {
     expect(render("en").match(/data-merge-column/g)?.length).toBe(2);
   });
+
+  it("both placeholder columns paint the card surface — DESIGN.md C1 (mutation: drop bg-card glass -> FAILS)", () => {
+    expect(render("en").match(/class="[^"]*\bbg-card\b[^"]*\bglass\b[^"]*"/g)?.length).toBe(2);
+  });
 });

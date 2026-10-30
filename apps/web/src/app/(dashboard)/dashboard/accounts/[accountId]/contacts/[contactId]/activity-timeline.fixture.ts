@@ -48,6 +48,10 @@ export function legacyTimeline(p: Record<string, unknown>): ActivityTimelineProp
     // never pass it) keep seeing whatever a merge row already shows; the merge test file is the one
     // that exercises false.
     canMerge: p.canMerge === undefined ? true : Boolean(p.canMerge),
+    // Fix round, carry-in 9 + finding #1: the page's own contact name, for the merge row's "Undo
+    // merge" toast. Defaulted so the nine pre-existing *.test.ts files (which never pass it) keep
+    // working; the merge test file is the one that exercises a real value.
+    contactName: (p.contactName as string | undefined) ?? "Kept Person",
     nowMs: typeof p.nowMs === "number" ? p.nowMs : Date.now(),
   };
 }

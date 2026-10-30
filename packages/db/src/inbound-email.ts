@@ -366,12 +366,14 @@ export async function matchSender(db: SupabaseClient, accountId: string, contact
   if (self?.email_key === key) return { contactId: self.id, firstName: self.first_name, lastName: self.last_name, viaGroup: false };
 
   // 0106 (F-006, Task 7; owner ruling D8): the thread's own contact may have absorbed another record's
-  // address through a merge — an address the kept record never itself used, but the merge still promised
-  // would keep reaching this same customer. A merged-away (tombstone) record naming THIS contact as its
+  // address through a merge — checked only once its own email_key has already missed, above, so this is
+  // an address the kept record never itself used. D8 is the promise the compare screen's own copy states
+  // (contacts.merge.otherEmail: mail to the other address "will still reach" the kept record); this is
+  // the read half of that promise. A merged-away (tombstone) record naming THIS contact as its
   // `merged_into` and carrying the matched email answers the KEPT contact's own name, never the hidden
-  // record's: `viaGroup: false` on purpose — that flag means "a different person's thread", and an
-  // address the merge moved is still this one person's. Checked before the group fallback below: D8 is a
-  // promise about this exact person, not a household heuristic.
+  // record's, with `viaGroup: false` — proven below. Checked before the group fallback below: this is
+  // simply the ORDER the code takes (no test exercises both a merge-match and a group-match at once, so
+  // this does not prove which should win if they ever disagreed).
   const { data: viaMerge, error: mergeErr } = await db.from("contacts").select("id")
     .eq("account_id", accountId).eq("merged_into", contactId).eq("email_key", key).limit(1).maybeSingle();
   if (mergeErr) throw new Error(`matchSender merged-away read failed: ${mergeErr.message}`);

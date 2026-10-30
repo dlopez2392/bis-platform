@@ -132,6 +132,42 @@ describe("MergeScreen markup (DESIGN.md rule 8: one primary per view)", () => {
     expect(out).toContain("Maria G.");
     expect(out).toContain("Keep this one instead");
   });
+
+  it("both record panels paint the card surface — DESIGN.md C1 (mutation: drop bg-card glass -> FAILS)", () => {
+    const out = html();
+    expect(out.match(/class="[^"]*\bbg-card\b[^"]*\bglass\b[^"]*"/g)?.length).toBe(2);
+  });
+
+  it("the swap link is ghost, never the underlined link variant (fix round, I1; mutation: keep variant: \"link\" -> FAILS)", () => {
+    const out = html();
+    const swap = out.match(/<a[^>]*href="\/dashboard\/accounts\/a1\/contacts\/merge\?a=k1&amp;b=o1&amp;keep=o1"[^>]*>/)?.[0] ?? "";
+    expect(swap).toContain("hover:bg-[var(--surface-3)]");
+    expect(swap).not.toContain("hover:underline");
+  });
+});
+
+describe("MergeScreen markup: a custom field conflict shows the field's own DEFINED label, not its raw key (fix round, carry-in 10)", () => {
+  it("passes customFieldNames through to both the legend and the Also-keeps line (mutation: ignore customFieldNames -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(MergeScreen, {
+      accountId: "a1",
+      keep: { id: "k1", name: "Maria Garcia" },
+      other: { id: "o1", name: "Maria G." },
+      conflicts: [{ field: "custom.favoriteColor", keepValue: "Red", otherValue: "Blue", preselect: "keep" as const }],
+      alsoKeeps: ["custom.shirtSize"],
+      otherReach: {},
+      movesText: "",
+      seen: { keep: "a".repeat(32), other: "b".repeat(32) },
+      swapHref: "/x",
+      locale: "en" as const,
+      mergeAction: vi.fn(),
+      undoAction: vi.fn(),
+      customFieldNames: { favoriteColor: "Favorite Color", shirtSize: "Shirt Size" },
+    }));
+    expect(html).toContain("“Favorite Color” field");
+    expect(html).toContain("“Shirt Size” field");
+    expect(html).not.toContain("“favoriteColor” field");
+    expect(html).not.toContain("“shirtSize” field");
+  });
 });
 
 describe("MergeScreen markup: assigned_to shows a name and language shows a word, never a raw id or code (fix round, finding #4)", () => {

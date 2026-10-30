@@ -60,6 +60,11 @@ export type ActivityTimelineProps = {
   /** F-006 part 1 (plan Task 11): may this caller undo a merge (seesWholeAccount: Owners, Staff, the
    *  agency; never a Technician, owner ruling D9). False by default. */
   canMerge?: boolean;
+  /** Fix round, carry-in 9 + finding #1: this page's own contact's display name, for the merge row's
+   *  "Undo merge" button — `p.contactId` IS the kept side whenever that button can show at all (see
+   *  the merge case's own `e.contactId === p.contactId` guard), so this is the record the Undo keeps
+   *  adding arrivals to, never a second read. */
+  contactName: string;
   /** The page's own clock (epoch ms), so a merge row's Undo window is judged without an impure call
    *  during render; with none, no merge row offers Undo (the action re-checks the window anyway). */
   nowMs?: number;
@@ -131,7 +136,8 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
                 </div>
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
-                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs} />
+                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} contactId={p.contactId} contactName={p.contactName}
+                tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs} />
             </li>
           ))}
         </ol>
@@ -147,10 +153,10 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang, canMerge, nowMs }: {
+function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, customerLang, canMerge, nowMs }: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
-  assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; tr: Tr;
-  customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
+  assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; contactId: string;
+  contactName: string; tr: Tr; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -300,15 +306,21 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
       return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
     // F-006 part 1 (plan Task 9): no body — the verb already names the other record and what moved.
     // Task 11: "Undo merge" while undo_until is still in the future (owner ruling D7), ghost (rule 8),
-    // and only for someone who may merge (canMerge; a Technician never, owner ruling D9).
+    // and only for someone who may merge (canMerge; a Technician never, owner ruling D9). Fix round,
+    // carry-in 9: `e.contactId` is THIS merge row's own keep_id (listContactMergeLog, record.ts) — in a
+    // chain (A→B, then B→C), C's timeline also carries merge 1 (A→B) because 0106 flattens the chain
+    // onto C's own tombstone set, but merge 1's keep_id is still B, not C, so trying to undo it from
+    // C's page could only ever answer later_merge. The button shows only on the row whose OWN kept
+    // record is the page being viewed.
     case "merge": {
-      const canUndo = canMerge && nowMs !== undefined && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > nowMs;
+      const canUndo = canMerge && nowMs !== undefined && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > nowMs
+        && e.contactId === contactId;
       const otherName = e.merge.otherVisible
         ? contactDisplayName({ first_name: e.merge.otherFirstName, last_name: e.merge.otherLastName })
         : tr.text("timeline.mergeOtherHidden");
       return (
         <TimelineItem {...head} icon={Merge} action={canUndo
-          ? <UndoMergeButton accountId={accountId} mergeId={e.merge.mergeId} otherName={otherName} locale={tr.locale} />
+          ? <UndoMergeButton accountId={accountId} mergeId={e.merge.mergeId} otherName={otherName} keptName={contactName} locale={tr.locale} />
           : null} />
       );
     }

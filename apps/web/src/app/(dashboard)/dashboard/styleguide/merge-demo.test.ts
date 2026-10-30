@@ -1,12 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 
-// F-006 part 1 (plan Task 11, spec §6.1, §6.4): the record header's duplicate line and the timeline's
-// merge/mergeUndone row with its own "Undo merge", on the styleguide (DESIGN.md's DoD: a new
-// component is on the styleguide). The row's button here is plain markup (design M-9's own rule):
-// nothing on this page reaches merge-actions.ts.
+// F-006 part 1 (plan Task 11, spec §6.1, §6.4; fix round, design I1): the record header's duplicate
+// line, the timeline's merge/mergeUndone row with its own "Undo merge", the Possible-duplicates
+// view's own row (DuplicatesList) and the compare screen's conflict layout (MergeScreen), on the
+// styleguide (DESIGN.md's DoD: a new component is on the styleguide). The timeline row's button here
+// is plain markup (design M-9's own rule); DuplicatesList and MergeScreen are the REAL components,
+// with no-op actions, so both need next/navigation's useRouter (archive-demo.test.ts's own pattern).
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 const { MergeDemo } = await import("./merge-demo");
 
 describe("styleguide: possible duplicates and merge (F-006 part 1, plan Task 11)", () => {
@@ -35,5 +38,27 @@ describe("styleguide: possible duplicates and merge (F-006 part 1, plan Task 11)
     expect(html).toMatch(/^<div class="[^"]*\bmin-w-0\b/);
     expect(html).not.toMatch(/(?<!max-)\bw-\[\d+px\]/);
     expect(html).not.toMatch(/\bmin-w-\[\d+px\]/);
+  });
+
+  it("the Possible-duplicates row (DuplicatesList), with its own dismiss control, in both languages (fix round, design I1; mutation: drop a locale -> FAILS)", () => {
+    expect(html.match(/data-duplicates-list/g)?.length).toBe(2);
+    expect(html.match(/data-duplicate-row="flag-1"/g)?.length).toBe(2);
+    expect(text).toContain("Not the same person");
+    expect(text).toContain("No es la misma persona");
+  });
+
+  it("the compare screen's conflict layout (MergeScreen), with a conflict, an Also-keeps line and a Moves line, in both languages (fix round, design I1; mutation: drop a locale or the conflicts -> FAILS)", () => {
+    expect(html.match(/data-sg-merge-compare/g)?.length).toBe(2);
+    expect(text).toContain("Merge");
+    expect(text).toContain("Unir");
+    expect(text).toContain("Also keeps:");
+    expect(text).toContain("También conserva:");
+  });
+
+  it("the compare screen demo is INERT — no-op handlers only, nothing reaching merge-actions.ts (design M-9; mutation: wire mergeContactsAction -> FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./merge-demo.tsx", import.meta.url)), "utf8");
+    expect(src).not.toMatch(/merge-actions/);
   });
 });

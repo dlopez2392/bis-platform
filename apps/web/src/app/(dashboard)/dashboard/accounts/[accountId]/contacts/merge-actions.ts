@@ -7,7 +7,7 @@ import { seesWholeAccount } from "@/lib/auth-role";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
 import {
-  mergeContacts, undoContactMerge, dismissDuplicatePair, undismissDuplicatePair,
+  mergeContacts, undoContactMerge, dismissDuplicatePair, undismissDuplicatePair, mergeKeptIdOf, MergeRpcError,
   MERGE_CHOICE_FIELDS, type MergeChoice,
 } from "@bis/db";
 
@@ -67,7 +67,14 @@ export async function mergeContactsAction(
       revalidatePath(contactPath(accountId, input.otherId));
       return { ok: true, mergeId: r.mergeId, keptId: input.keepId };
     }
-    if (r.status === "stale") return { ok: false, errorKey: "contacts.merge.stale" };
+    // Fix round, minor 7: "already_merged", "holding" and "not_found" are the SAME situation a staff
+    // member can fix by looking again — the pair on screen changed under them — never the generic
+    // "try again" a retry cannot help. Reusing contacts.merge.stale also re-triggers onStale()
+    // (merge-screen.tsx), which refreshes the page and lets it redirect to the duplicates view once a
+    // merged-away side shows.
+    if (r.status === "stale" || r.status === "already_merged" || r.status === "holding" || r.status === "not_found") {
+      return { ok: false, errorKey: "contacts.merge.stale" };
+    }
     return { ok: false, errorKey: "contacts.merge.failed" };
   } catch (e) {
     console.error(`contacts merge (account ${accountId}): ${loggableError(e)}`);
@@ -77,10 +84,18 @@ export async function mergeContactsAction(
 
 export type UndoMergeActionResult =
   | { ok: true; otherId: string; keptNew: number; keptEdits: string[] }
-  | { ok: false; errorKey: "contacts.merge.undoExpired" | "contacts.merge.undoLater" | "contacts.merge.undoFailed" };
+  | {
+      ok: false;
+      errorKey: "contacts.merge.undoExpired" | "contacts.merge.undoLater" | "contacts.merge.undoBlocked"
+        | "contacts.merge.undoFailed";
+    };
 
 /** Owner ruling D7: within 30 days, newest-merge-first. The toast's own "Undo" and the timeline row's
- *  "Undo merge" both call this. */
+ *  "Undo merge" both call this. Fix round, minor 5: a foreign-key error (23503) — a tag, group or
+ *  contact Undo would re-insert was itself deleted since — maps to its own worded key, never the
+ *  generic "try again" (there is nothing left to retry). Fix round, carry-in 6: a successful Undo
+ *  revalidates the KEPT record's page too, read via `mergeKeptIdOf` (0106's own JSON never echoes it
+ *  back), not only the other (now independent) record's. */
 export async function undoMergeAction(accountId: string, mergeId: number): Promise<UndoMergeActionResult> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access) || !Number.isInteger(mergeId) || mergeId <= 0) {
@@ -92,6 +107,8 @@ export async function undoMergeAction(accountId: string, mergeId: number): Promi
     if (r.status === "undone") {
       revalidatePath(contactsPath(accountId));
       revalidatePath(contactPath(accountId, r.otherId));
+      const keptId = await mergeKeptIdOf(db, accountId, mergeId).catch(() => null);
+      if (keptId) revalidatePath(contactPath(accountId, keptId));
       return { ok: true, otherId: r.otherId, keptNew: r.keptNew, keptEdits: r.keptEdits };
     }
     if (r.status === "expired") return { ok: false, errorKey: "contacts.merge.undoExpired" };
@@ -99,6 +116,7 @@ export async function undoMergeAction(accountId: string, mergeId: number): Promi
     return { ok: false, errorKey: "contacts.merge.undoFailed" };
   } catch (e) {
     console.error(`contacts merge undo (account ${accountId}): ${loggableError(e)}`);
+    if (e instanceof MergeRpcError && e.code === "23503") return { ok: false, errorKey: "contacts.merge.undoBlocked" };
     return { ok: false, errorKey: "contacts.merge.undoFailed" };
   }
 }

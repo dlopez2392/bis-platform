@@ -55,4 +55,12 @@ describe("DuplicateLine (F-006 part 1, plan Task 11, spec §6.1)", () => {
   it("is not role=\"status\": nothing changed just now, there is nothing to announce (mutation: add role=status -> FAILS)", () => {
     expect(render([PHONE])).not.toContain('role="status"');
   });
+
+  it("the Compare link is next/link, never a plain <a> (fix round, minor 10; mutation: revert to a bare <a> -> FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./duplicate-line.tsx", import.meta.url)), "utf8");
+    expect(src).toMatch(/import Link from "next\/link"/);
+    expect(src).not.toMatch(/<a\s/);
+  });
 });

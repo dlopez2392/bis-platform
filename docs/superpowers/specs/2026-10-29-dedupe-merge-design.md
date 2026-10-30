@@ -670,6 +670,15 @@ tombstone never "loser" on screen.
 `{list}` is built from counted phrases ("12 texts, 3 calls and 1 booking"), each with its One twin, joined by
 the locale's own list format.
 
+**Correction (fix round, finding #1):** this table leaves `{name}` on `contacts.merge.undoneKept`/`One`
+ambiguous, and never lists `contacts.merge.undoLater` (added later, in `undoFailed`'s own commit) at all.
+Both carry the KEPT record's name, never the other's — `undoneKept`/`One` because that record is the one
+that keeps absorbing whatever arrives after the merge; `undoLater` because the record that "was merged
+again since" is the kept side of THIS merge (the one a later merge then absorbed). Only `contacts.merge.undone`
+carries the OTHER record's name — it is the one record this Undo actually gives back. The implementation
+had both carrying `otherName` until the fix round caught it (`lib/contacts/merge-undo.ts`'s `runUndoMerge`,
+pinned in `merge-undo.test.ts`).
+
 ---
 
 ## 11. Tests, each with the mutation that must turn it red

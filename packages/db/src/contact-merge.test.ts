@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   listDuplicatePairs, countDuplicatePairs, duplicatePairsOf, dismissDuplicatePair, undismissDuplicatePair,
-  mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf,
+  mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf, mergeKeptIdOf, MergeRpcError,
   DUPLICATE_PAGE_MAX, MERGE_COUNT_KEYS,
 } from "./contact-merge";
 
@@ -255,6 +255,90 @@ describe("undoContactMerge: parses \"undone\" with keptNew/keptEdits, and the fo
   it("throws on an RPC error", async () => {
     const { db } = fakeDb({ rpc: { undo_contact_merge: { data: null, error: { message: "boom" } } } });
     await expect(undoContactMerge(db, "acct-1", 42)).rejects.toThrow("undoContactMerge failed: boom");
+  });
+});
+
+/** Fix round, carry-in 4/5: a scripted `rpc` that answers each CALL in order (falling back to the
+ *  last answer once exhausted), the same shape `client-groups-guards.test.ts`'s `scriptedRpcDb` uses
+ *  for `setContactsBusiness`'s own deadlock retry. */
+function scriptedRpcDb(answers: { data?: unknown; error?: { code: string; message: string } }[]) {
+  let calls = 0;
+  const db = {
+    rpc: (_name: string, _args: unknown) => {
+      const a = answers[Math.min(calls, answers.length - 1)]!;
+      calls++;
+      return Promise.resolve({ data: a.data ?? null, error: a.error ?? null });
+    },
+  } as unknown as SupabaseClient;
+  return { db, calls: () => calls };
+}
+const DEADLOCK = { code: "40P01", message: "deadlock detected" };
+const FK_VIOLATION = { code: "23503", message: "violates foreign key constraint" };
+const MERGED_OK = { status: "merged", mergeId: 7, moved: { messages: 1 } };
+const UNDONE_OK = { status: "undone", otherId: "o1", keptNew: 0, keptEdits: [] };
+const CHOICES2 = { first_name: "keep" as const };
+const SEEN2 = { keep: "a".repeat(32), other: "b".repeat(32) };
+
+describe("mergeContacts / undoContactMerge: retry a 40P01 deadlock ONCE, a second surfaces as the usual failure (fix round, carry-in 4)", () => {
+  it("mergeContacts: a deadlock then success is retried once, answers the second call (mutation: drop the 40P01 retry -> FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }, { data: MERGED_OK }]);
+    const r = await mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 });
+    expect(r).toEqual({ status: "merged", mergeId: 7, moved: { messages: 1 } });
+    expect(s.calls()).toBe(2);
+  });
+
+  it("mergeContacts: two deadlocks in a row give up after ONE retry (two calls total), throwing a MergeRpcError carrying the code (mutation: retry a second time -> calls() would be 3, FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }, { error: DEADLOCK }]);
+    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }))
+      .rejects.toMatchObject({ code: "40P01" });
+    expect(s.calls()).toBe(2);
+  });
+
+  it("mergeContacts: any other error is never retried (mutation: retry every error -> calls() would be 2, FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: { code: "57014", message: "statement timeout" } }, { data: MERGED_OK }]);
+    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }))
+      .rejects.toThrow(/statement timeout/);
+    expect(s.calls()).toBe(1);
+  });
+
+  it("undoContactMerge: a deadlock then success is retried once (mutation: drop the retry -> FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }, { data: UNDONE_OK }]);
+    const r = await undoContactMerge(s.db, "acct-1", 42);
+    expect(r).toEqual({ status: "undone", otherId: "o1", keptNew: 0, keptEdits: [] });
+    expect(s.calls()).toBe(2);
+  });
+
+  it("undoContactMerge: two deadlocks give up after one retry, the thrown error still carries the code (mutation: swallow the code -> FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }, { error: DEADLOCK }]);
+    await expect(undoContactMerge(s.db, "acct-1", 42)).rejects.toMatchObject({ code: "40P01" });
+    expect(s.calls()).toBe(2);
+  });
+
+  it("undoContactMerge: a foreign-key violation (23503, something the merge re-inserts was deleted since) throws a MergeRpcError with that code, UNRETRIED (mutation: throw a plain Error without .code -> FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: FK_VIOLATION }]);
+    const err = await undoContactMerge(s.db, "acct-1", 42).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MergeRpcError);
+    expect((err as InstanceType<typeof MergeRpcError>).code).toBe("23503");
+    expect(s.calls()).toBe(1);
+  });
+});
+
+describe("mergeKeptIdOf: the KEPT side of one merge row, by account and merge id (fix round, carry-in 6)", () => {
+  it("returns keep_id when the row exists", async () => {
+    const { db, fromCalls } = fakeDb({ from: { contact_merges: { data: { keep_id: "k1" }, error: null } } });
+    expect(await mergeKeptIdOf(db, "acct-1", 42)).toBe("k1");
+    expect(hasFrom(fromCalls, "contact_merges", "eq", "account_id", "acct-1")).toBe(true);
+    expect(hasFrom(fromCalls, "contact_merges", "eq", "id", 42)).toBe(true);
+  });
+
+  it("returns null when there is no such merge row (mutation: throw instead -> FAILS)", async () => {
+    const { db } = fakeDb({ from: { contact_merges: { data: null, error: null } } });
+    expect(await mergeKeptIdOf(db, "acct-1", 999)).toBeNull();
+  });
+
+  it("throws on a database error (mutation: swallow the error and return null -> FAILS)", async () => {
+    const { db } = fakeDb({ from: { contact_merges: { data: null, error: { message: "boom" } } } });
+    await expect(mergeKeptIdOf(db, "acct-1", 42)).rejects.toThrow("mergeKeptIdOf failed: boom");
   });
 });
 
