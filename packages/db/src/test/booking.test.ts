@@ -79,11 +79,13 @@ describe("booking accessors", () => {
         { calendarId: cal.id, contactId, startsAt: new Date("2027-03-02T15:30:00Z"),
           endsAt: new Date("2027-03-02T16:30:00Z") }, "public", "system"),
       ).rejects.toThrow(SlotTakenError);
-      // Cancel frees the range — the constraint binds status='booked' only.
+      // Cancel frees the range — the constraint binds status='booked' only. The re-create is the
+      // customer's too: a person-made row would save over a LIVE customer row under 0107 (R1), so
+      // it could not prove the cancel freed anything (T1 review I1).
       const cancelled = await cancelBookingByToken(db, first.cancelToken);
       expect(cancelled?.id).toBe(first.id);
       await expect(createBooking(db, accountId,
-        { calendarId: cal.id, contactId, startsAt: t0, endsAt: t1 }, "user_test"),
+        { calendarId: cal.id, contactId, startsAt: t0, endsAt: t1 }, "public", "system"),
       ).resolves.toBeTruthy();
       // A second cancel with the same token is a null no-op, not an error.
       expect(await cancelBookingByToken(db, first.cancelToken)).toBeNull();

@@ -327,7 +327,7 @@ describe("0107: undo_staff_move (spec 3.3)", () => {
       expect((await statusOf(c, m.neu))!.status).toBe("booked");
     }));
 
-  it("the client role cannot call it (42501)", () =>
+  it("a client-role call is refused 42501 (by the bookings table privilege as much as the function's; the EXECUTE grant itself is pinned by the catalogue case above, not here)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const m = await moved(c, s);
