@@ -43,6 +43,16 @@ describe("styleguide: the Agenda card", () => {
     expect(html).toContain("data-agenda-skeleton");
   });
 
+  it("a pseudo-locale specimen: the Day card with every word padded (design review I2; mutation: drop it -> FAILS)", async () => {
+    const { pseudoLocale } = await import("@/lib/i18n/pseudo-locale");
+    const pseudo = cards.find((c) => c.includes('aria-labelledby="sg-agenda-pseudo"'));
+    expect(pseudo).toBeDefined();
+    const words = renderedText(pseudo!);
+    expect(words).toContain(pseudoLocale(m["calendar.agenda.title"]));
+    expect(words).toContain(pseudoLocale(m["calendar.agenda.addJob"]));
+    expect(words).toContain(pseudoLocale(m["calendar.bookings.status.booked"]));
+  });
+
   it("no two rows share an anchor id across the demo's cards", () => {
     const ids = [...html.matchAll(/id="(booking-[^"]+)"/g)].map((x) => x[1]);
     expect(new Set(ids).size).toBe(ids.length);

@@ -8,8 +8,8 @@ import type { BookingMeetingType, BookingStatus } from "@bis/db";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DotPill } from "@/components/dot-pill";
-import { m, type MessageKey } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import type { MessageKey } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
 import { cn } from "@/lib/utils";
 import { CONFIRM_REPLY_TREATMENTS } from "./confirm-reply";
 import { runCancelWithUndo } from "./cancel-booking";
@@ -29,7 +29,7 @@ import {
  * F-046 part 1 (plan Task 11, spec 5.5): the job drawer, a right sheet over the agenda opened by a row or by
  * `?job=<id>` (the page reads the job on the caller's own client and notes the customer, correction 7). Flat
  * sections inside the glass sheet (a mono label and row rules, never a glass card in it: the record drawer's
- * rule). NO primary (DESIGN.md rule 8, amended 2026-10-30, owner decision 2): Move, Cancel, Mark completed and
+ * rule; the details carry RecordSection's own label, design review M3). NO primary (DESIGN.md rule 8, amended 2026-10-30, owner decision 2): Move, Cancel, Mark completed and
  * No-show are equal ghost buttons, and Open record is a ghost link. Move swaps the body for the Add job form,
  * whose own Save is that form's one primary. Esc and the close button leave by the URL (`closeHref`), and focus
  * goes back to the job's row (`#booking-<id>`).
@@ -51,6 +51,8 @@ export type JobDrawerView = {
 };
 export type JobDrawerProps = {
   accountId: string; view: JobDrawerView; closeHref: string; timezone: string; locale: "en" | "es";
+  /** The QA pseudo-locale (`?locale=pseudo`): every word the drawer draws is padded (design review C1). */
+  pseudo?: boolean;
   calendarMeetingType: BookingMeetingType; defaultMinutes: number;
 };
 
@@ -59,13 +61,13 @@ const ROW = "grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] items-baseline gap-
 const SECTION = "min-w-0 border-t border-[var(--line)] pt-3";
 const ACTION = "h-auto min-h-11 whitespace-normal md:min-h-8";
 
-export function JobDrawer({ accountId, view, closeHref, timezone, locale, calendarMeetingType, defaultMinutes }: JobDrawerProps) {
+export function JobDrawer({ accountId, view, closeHref, timezone, locale, pseudo = false, calendarMeetingType, defaultMinutes }: JobDrawerProps) {
   const router = useRouter();
   const [open, setOpen] = useState(true);
   const [moving, setMoving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const tx = makeTr(locale, pseudo).text;
 
   function close() {
     setOpen(false);
@@ -77,7 +79,7 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, calend
     await runCancelWithUndo(
       () => cancelBookingAction(accountId, view.id, notice),
       (version, noticeMessageId) => undoCancelBookingAction(accountId, view.id, version, noticeMessageId),
-      toast, { noNoticeMessage },
+      toast, { noNoticeMessage, locale },
     );
   }
   const ordinary = () => runCancelButton({
@@ -93,14 +95,14 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, calend
         data-job-drawer={view.id} onCloseAutoFocus={(e) => focusJobRow(e, view.id)}>
         <div lang={locale} className="flex min-h-0 flex-1 flex-col">
           <SheetHeader>
-            <JobDrawerHeader view={view} locale={locale} wrapHeading={(h) => <SheetTitle asChild>{h}</SheetTitle>} />
+            <JobDrawerHeader view={view} locale={locale} pseudo={pseudo} wrapHeading={(h) => <SheetTitle asChild>{h}</SheetTitle>} />
             <SheetDescription className="sr-only">{view.when}</SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
             {moving ? (
               <section aria-label={tx("calendar.job.titleMove")} className="min-w-0 space-y-3">
                 <h3 className={LABEL}>{tx("calendar.job.titleMove")}</h3>
-                <JobForm accountId={accountId} timezone={timezone} locale={locale} mode="move"
+                <JobForm accountId={accountId} timezone={timezone} locale={locale} pseudo={pseudo} mode="move"
                   prefill={movePrefill(view, timezone)} job={moveJob(view)}
                   calendarMeetingType={calendarMeetingType} defaultMinutes={defaultMinutes}
                   onCancel={() => setMoving(false)}
@@ -111,10 +113,11 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, calend
                   onDone={({ moved }) => { if (moved) close(); else setMoving(false); }} />
               </section>
             ) : (
-              <JobDrawerDetails view={view} timezone={timezone} locale={locale} pending={pending}
+              <JobDrawerDetails view={view} timezone={timezone} locale={locale} pseudo={pseudo} pending={pending}
                 onMove={() => setMoving(true)}
                 onCancel={() => startTransition(async () => {
-                  await cancelFromDrawer({ accountId, view, locale, toast, undoAdd: undoAddJobAction, ordinary });
+                  // An add the Undo deleted is gone: the drawer closes (and ?job= leaves the URL).
+                  await cancelFromDrawer({ accountId, view, locale, toast, undoAdd: undoAddJobAction, ordinary, onGone: close });
                 })}
                 onCloseOut={(status) => startTransition(async () => {
                   await closeOut({ accountId, bookingId: view.id, status, locale, toast, setStatus: setBookingStatusAction });
@@ -124,7 +127,7 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, calend
         </div>
         {dialogOpen ? (
           <CancelDialog contactName={view.customer.name} when={view.when}
-            defaultLocale={view.customer.language ?? locale} onOpenChange={setDialogOpen}
+            defaultLocale={view.customer.language ?? locale} locale={locale} pseudo={pseudo} onOpenChange={setDialogOpen}
             onConfirm={(choice) => startTransition(async () => { await cancelWith(choice); })} />
         ) : null}
       </SheetContent>
@@ -133,8 +136,8 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, calend
 }
 
 /** The customer's name (the dialog's title), their phone as a `tel:` link, and the status as dot and word. */
-export function JobDrawerHeader({ view, locale, wrapHeading }: {
-  view: JobDrawerView; locale: "en" | "es"; wrapHeading?: (h: ReactElement) => ReactNode;
+export function JobDrawerHeader({ view, locale, pseudo = false, wrapHeading }: {
+  view: JobDrawerView; locale: "en" | "es"; pseudo?: boolean; wrapHeading?: (h: ReactElement) => ReactNode;
 }) {
   const heading = <h2 className="min-w-0 break-words pr-8 text-lg font-semibold text-foreground">{view.customer.name}</h2>;
   const reply = view.confirmReply ? CONFIRM_REPLY_TREATMENTS[view.confirmReply] : null;
@@ -151,7 +154,7 @@ export function JobDrawerHeader({ view, locale, wrapHeading }: {
         <DotPill label={view.statusWord} {...JOB_STATUS_TREATMENTS[view.status]} dense data-job-status={view.status} />
         {reply && view.confirmReply ? (
           <DotPill chip={reply.chip} dot={reply.dot} dense testId="booking-confirm-reply"
-            label={t(m, view.confirmReply === "yes" ? "calendar.bookings.confirmed" : "calendar.bookings.confirmDeclined", locale)} />
+            label={makeTr(locale, pseudo).text(view.confirmReply === "yes" ? "calendar.bookings.confirmed" : "calendar.bookings.confirmDeclined")} />
         ) : null}
       </div>
     </div>
@@ -159,13 +162,13 @@ export function JobDrawerHeader({ view, locale, wrapHeading }: {
 }
 
 /** The details and the equal ghost actions. Presentational: the styleguide renders it with no-op handlers. */
-export function JobDrawerDetails({ view, timezone, locale, pending = false, onMove, onCancel, onCloseOut }: {
-  view: JobDrawerView; timezone: string; locale: "en" | "es"; pending?: boolean;
+export function JobDrawerDetails({ view, timezone, locale, pseudo = false, pending = false, onMove, onCancel, onCloseOut }: {
+  view: JobDrawerView; timezone: string; locale: "en" | "es"; pseudo?: boolean; pending?: boolean;
   onMove: () => void; onCancel: () => void; onCloseOut: (status: "completed" | "no_show") => void;
 }) {
-  const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const tx = makeTr(locale, pseudo).text;
   const can = drawerActions(view);
-  const email = emailLine(view.email, timezone, locale);
+  const email = emailLine(view.email, timezone, locale, pseudo);
   const row = (key: MessageKey, value: ReactNode, attr: string) => (
     <div className={ROW} data-job-row={attr}>
       <dt className="text-xs text-muted-foreground">{tx(key)}</dt>
@@ -174,6 +177,7 @@ export function JobDrawerDetails({ view, timezone, locale, pending = false, onMo
   );
   return (
     <div className="min-w-0 space-y-3">
+      <h3 className={LABEL}>{tx("groupPage.card.details")}</h3>
       <dl className="min-w-0">
         {row("calendar.job.date", <span className="tabular-nums">{view.when}</span>, "when")}
         {row("calendar.job.length", <span className="tabular-nums">{tx("calendar.job.minutes", { minutes: view.lengthMinutes })}</span>, "length")}
@@ -181,7 +185,7 @@ export function JobDrawerDetails({ view, timezone, locale, pending = false, onMo
         {view.address ? row("calendar.job.address", view.address, "address") : null}
         {row("calendar.job.meet", (
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{meetingWord(view.meetingType, locale)}</span>
+            <span>{meetingWord(view.meetingType, locale, pseudo)}</span>
             {view.meetingUrl ? (
               // A new tab: the operator never leaves their own dashboard.
               <a href={view.meetingUrl} target="_blank" rel="noopener noreferrer" data-job-join

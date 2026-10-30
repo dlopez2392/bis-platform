@@ -585,6 +585,16 @@ describe("moveJobAction: same time and length is an in-place edit (D6)", () => {
       .toEqual({ ok: false, errorKey: "calendar.job.saveFailed" });
   });
 
+  it("the fall-back night: a note edit on the SECOND 01:30 (07:30Z, Chicago) stays an in-place edit, never a move an hour earlier (T11/T12 review; mutation: plain wallToInstant -> FAILS)", async () => {
+    vi.setSystemTime(new Date("2026-10-30T15:00:00.000Z"));
+    const night = { startsAt: "2026-11-01T07:30:00.000Z", endsAt: "2026-11-01T08:30:00.000Z" };
+    db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => job({ starts_at: night.startsAt, ends_at: night.endsAt })));
+    const r = await moveJobAction(ACCT, J1, moveDraft({ date: "2026-11-01", start: "01:30", minutes: 60, what: "Bring the ladder", opened: opened(night) }), []);
+    expect(r).toMatchObject({ ok: true, mode: "edited", to: { startsAt: night.startsAt, endsAt: night.endsAt, note: "Bring the ladder" } });
+    expect(db.moveBooking).not.toHaveBeenCalled();
+    expect(db.editJobDetails).toHaveBeenCalledTimes(1);
+  });
+
   it("a job that is no longer booked → calendar.job.changed, nothing written", async () => {
     db.readAgendaJob.mockImplementation(rec("readAgendaJob", async () => job({ status: "cancelled" })));
     expect(await moveJobAction(ACCT, J1, moveDraft(), [])).toEqual({ ok: false, errorKey: "calendar.job.changed" });

@@ -69,7 +69,7 @@ export function AgendaCardView(p: AgendaCardViewProps) {
   }
 
   const sheet: AgendaSheetContext = {
-    accountId: p.accountId, timezone: p.timezone, locale: p.locale,
+    accountId: p.accountId, timezone: p.timezone, locale: p.locale, pseudo: p.pseudo ?? false,
     calendarMeetingType: p.calendar.meeting_type, defaultMinutes: p.calendar.slot_duration_minutes,
   };
   const words: AgendaWords = {
@@ -118,7 +118,8 @@ export function AgendaCardView(p: AgendaCardViewProps) {
       <div className="space-y-3 p-4">
         {p.truncated ? (
           <p data-agenda-truncated role="status" className="text-sm text-muted-foreground">
-            {tr.text("calendar.agenda.truncated", { cap: AGENDA_ROW_CAP })}
+            {/* A Day IS a single day: never "Open a single day" there (T11/T12 review minor). */}
+            {tr.text(p.view === "day" ? "calendar.agenda.truncatedDay" : "calendar.agenda.truncated", { cap: AGENDA_ROW_CAP })}
           </p>
         ) : null}
         {p.pastOpen > 0 ? (

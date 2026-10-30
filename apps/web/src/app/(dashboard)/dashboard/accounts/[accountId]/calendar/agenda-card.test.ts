@@ -6,7 +6,9 @@ import type { AgendaBookingRow } from "@bis/db";
  *  caps on its own (rule 5 extended to the card): the page's other cards never wait on it or fall with it. */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }) }));
 // T11's sheet is a client component with its own tests; here it only has to exist.
-vi.mock("./job-sheet", () => ({ JobSheet: () => null }));
+// Its props are recorded: the pseudo-locale must reach it (design review C1).
+const sheetProps = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock("./job-sheet", () => ({ JobSheet: (p: Record<string, unknown>) => { sheetProps.push(p); return null; } }));
 
 const dbMocks = vi.hoisted(() => ({
   listAgendaBookings: vi.fn(),
@@ -42,10 +44,10 @@ const row = (o: Partial<AgendaBookingRow> = {}): AgendaBookingRow => ({
   contact: { first_name: "Ana", last_name: "Reyes", phone: null, email: null }, place: null, replaced: false, ...o,
 });
 
-async function render(o: { canAdd?: boolean; view?: "day" | "week"; day?: string; job?: string | null } = {}) {
+async function render(o: { canAdd?: boolean; view?: "day" | "week"; day?: string; job?: string | null; pseudo?: boolean } = {}) {
   return renderToStaticMarkup(await AgendaCard({
     db: DB, accountId: "a1", view: o.view ?? "day", day: o.day ?? "2026-11-04", today: "2026-11-04", nowIso: NOW,
-    timezone: "America/Chicago", locale: "en", canAdd: o.canAdd ?? true, viewerId: "user_1", calendar: CAL, job: o.job ?? null,
+    timezone: "America/Chicago", locale: "en", canAdd: o.canAdd ?? true, viewerId: "user_1", calendar: CAL, job: o.job ?? null, pseudo: o.pseudo,
   }));
 }
 const primaries = (html: string) => html.match(/data-variant="default"/g)?.length ?? 0;
@@ -104,7 +106,8 @@ describe("AgendaCard: loaded", () => {
 describe("AgendaCard: the lines above the rows", () => {
   it("the 400-row cap shows the truncated line and never claims the view is complete (mutation: ignore truncated -> FAILS)", async () => {
     dbMocks.listAgendaBookings.mockResolvedValue({ rows: [row()], truncated: true });
-    const text = renderedText(await render());
+    // A Week: a Day says its own sentence (below).
+    const text = renderedText(await render({ view: "week" }));
     expect(text).toContain(m["calendar.agenda.truncated"].replace("{cap}", "400"));
   });
   it("no cap, no line", async () => {
@@ -190,5 +193,36 @@ describe("AgendaCard: Week", () => {
     }
     expect(html).toContain(`aria-label="${m["calendar.agenda.daysLabel"]}"`);
     expect(html).not.toContain("data-agenda-free");
+  });
+});
+
+describe("AgendaCard: T11/T12 review minors and the design review", () => {
+  it("a Day that hit the cap never says 'Open a single day' (it is one); a Week still does (mutation: one key for both -> FAILS)", async () => {
+    dbMocks.listAgendaBookings.mockResolvedValue({ rows: [row()], truncated: true });
+    const day = renderedText(await render({ view: "day" }));
+    expect(day).toContain(m["calendar.agenda.truncatedDay"].replace("{cap}", "400"));
+    expect(day).not.toContain(m["calendar.agenda.truncated"].replace("{cap}", "400"));
+    const week = renderedText(await render({ view: "week" }));
+    expect(week).toContain(m["calendar.agenda.truncated"].replace("{cap}", "400"));
+  });
+
+  it("Week: a job past midnight is in two columns but carries its anchor id ONCE, in the chosen day's column when it is there (mutation: id on every copy -> FAILS)", async () => {
+    // Wed 4 Nov 21:00 CST to Thu 5 Nov 01:00 CST.
+    dbMocks.listAgendaBookings.mockResolvedValue({ rows: [row({ starts_at: "2026-11-05T03:00:00.000Z", ends_at: "2026-11-05T07:00:00.000Z" })], truncated: false });
+    const wed = await render({ view: "week", day: "2026-11-04" });
+    expect(wed.match(/id="booking-b1"/g)).toHaveLength(1);
+    expect(wed.match(/data-agenda-row="booked"/g)).toHaveLength(2);
+    const thu = await render({ view: "week", day: "2026-11-05" });
+    expect(thu.match(/id="booking-b1"/g)).toHaveLength(1);
+    const column = (html: string, key: string) => html.slice(html.indexOf(`data-agenda-column="${key}"`), html.indexOf("data-agenda-column=", html.indexOf(`data-agenda-column="${key}"`) + 1));
+    expect(column(thu, "2026-11-05")).toContain('id="booking-b1"');
+    expect(column(wed, "2026-11-04")).toContain('id="booking-b1"');
+  });
+
+  it("the pseudo-locale reaches the Add job sheet (design review C1; mutation: drop it from the sheet context -> FAILS)", async () => {
+    sheetProps.length = 0;
+    await render({ pseudo: true });
+    expect(sheetProps.length).toBeGreaterThan(0);
+    for (const p of sheetProps) expect(p.pseudo).toBe(true);
   });
 });

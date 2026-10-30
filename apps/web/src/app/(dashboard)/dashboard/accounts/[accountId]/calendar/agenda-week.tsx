@@ -16,6 +16,10 @@ export function AgendaWeek({ days, selected, words, weekHref }: {
   /** The strip's link for a day of this week: `?view=week&day=<key>`. */
   weekHref: Readonly<Record<string, string>>;
 }) {
+  // A job past midnight is in two columns; its anchor id goes on ONE copy: the chosen day's when the job is on
+  // it (the phone shows only that column), else the first column it is in (T11/T12 review minor).
+  const anchorDay = new Map<string, string>();
+  for (const d of days) for (const r of d.rows) if (!anchorDay.has(r.id) || d.key === selected) anchorDay.set(r.id, d.key);
   const LINK = "inline-flex min-h-11 items-center justify-center rounded-[var(--radius-ctl)] px-2 text-sm outline-none "
     + "transition-colors duration-150 hover:bg-[var(--surface-3)] focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8";
   return (
@@ -43,7 +47,7 @@ export function AgendaWeek({ days, selected, words, weekHref }: {
             {d.closed ? <ClosedHead words={d.closed} /> : null}
             <div data-agenda-list onKeyDown={onAgendaListKeys} className="space-y-2">
               {[...d.rows].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)).map((r) => (
-                <AgendaRow key={r.id} row={r} words={words} compact />
+                <AgendaRow key={r.id} row={r} words={words} compact anchor={anchorDay.get(r.id) === d.key} />
               ))}
             </div>
           </section>

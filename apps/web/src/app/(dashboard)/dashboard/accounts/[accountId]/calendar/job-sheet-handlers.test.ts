@@ -5,9 +5,11 @@ import { formatWhen } from "@/lib/booking/time";
 import { agendaTime } from "@/lib/booking/agenda-window";
 import { UNDO_WINDOW_MS } from "./undo-window";
 import {
-  submitJob, warningLines, withExistingCustomer, withAddAsNew, noticeReason, LENGTH_OPTIONS,
-  type AddRun, type MoveRun, type JobToast, type OpenedSnapshot,
+  submitJob, warningLines, withExistingCustomer, noticeReason, LENGTH_OPTIONS,
+  sheetDraft, addingAsNew, typedCustomer, phoneOwnerWords,
+  type AddRun, type MoveRun, type JobToast, type OpenedSnapshot, type SheetCustomer,
 } from "./job-sheet-handlers";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { JobDraft, JobFields, JobOpened, JobWarningView } from "./agenda-actions";
 
 /**
@@ -224,9 +226,11 @@ describe("the sheet's pure helpers", () => {
 
   it("'Use Ana' swaps the typed customer for Ana's id; 'Add as new' keeps the typed one and says so (R8)", () => {
     const typed: JobDraft = { ...DRAFT, customer: { kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: false } };
-    expect(withExistingCustomer(typed, { id: "id_ana" }).customer).toEqual({ kind: "existing", id: "id_ana" });
-    expect(withAddAsNew(typed).customer).toEqual({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: true });
-    expect(withAddAsNew(DRAFT)).toBe(DRAFT);
+    expect(withExistingCustomer(typed, { id: "id_ana" }, true).customer).toEqual({ kind: "existing", id: "id_ana" });
+    expect(addingAsNew({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: false }))
+      .toEqual({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: true });
+    const ana: SheetCustomer = { kind: "existing", id: "c1", name: "Ana GarcÃ­a", first: "Ana" };
+    expect(addingAsNew(ana)).toBe(ana);
   });
 
   it("noticeReason: the tick's reason when no confirmation can go, none when one can", () => {
@@ -244,5 +248,67 @@ describe("the sheet's pure helpers", () => {
     expect(LENGTH_OPTIONS.at(-1)).toBe(720);
     expect(LENGTH_OPTIONS).toHaveLength(144);
     expect(LENGTH_OPTIONS.every((n) => n % 5 === 0)).toBe(true);
+  });
+});
+
+describe("T11/T12 review: the sheet's draft is built from the customer it holds", () => {
+  const owner = { id: "22222222-2222-4222-8222-222222222222", name: "Ana García", first: "Ana" };
+  /** The server's rules for a typed customer on Ana's number at 7 PM (outside hours): the phone's owner is
+   *  offered until the draft says Add as new, then the warning, then the save. */
+  const server = () => vi.fn(async (_a: string, d: JobDraft, seen: string[]) => {
+    if (d.customer.kind === "new" && !d.customer.addAsNew) return { ok: false as const, needs: { phoneOwner: owner } };
+    if (!seen.includes("outside_hours")) return { ok: false as const, needs: { warnings: [W_HOURS] } };
+    return { ok: true as const, bookingId: "b_new", startsAt: STARTS, first: "Ana", notice: "none" as const };
+  });
+  const SEVEN_PM: JobFields = { ...FIELDS, start: "19:00", notify: false };
+
+  it("Add as new, then the warnings, then 'Add it anyway' SAVES: the press is kept in the customer, never the phone offer again (mutation: addAsNew: false in the draft -> FAILS)", async () => {
+    const add = server();
+    let c: SheetCustomer = { kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: false };
+    expect(await submitJob(addRun({ add, draft: sheetDraft(c, SEVEN_PM)! }))).toEqual({ kind: "phoneOwner", owner });
+    c = addingAsNew(c);
+    const second = await submitJob(addRun({ add, draft: sheetDraft(c, SEVEN_PM)! }));
+    if (second.kind !== "warnings") throw new Error(`expected the warnings, got ${second.kind}`);
+    const third = await submitJob(addRun({ add, draft: sheetDraft(c, SEVEN_PM)!, seen: second.seen }));
+    expect(third).toEqual({ kind: "saved" });
+    expect(add.mock.calls[2]![1].customer).toEqual({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: true });
+  });
+
+  it("typing a different name or number after Add as new asks again (the press was about that number)", () => {
+    const c = addingAsNew({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: false });
+    expect(typedCustomer(c, { phone: "956 555 0199" })).toEqual({ kind: "new", name: "Ana Reyes", phone: "956 555 0199", addAsNew: false });
+    expect(typedCustomer(c, { name: "Ana R." })).toMatchObject({ addAsNew: false });
+  });
+
+  it("an existing customer's draft names their id; no customer, no draft; a new address rides along", () => {
+    expect(sheetDraft({ kind: "existing", id: "c1", name: "Ana García", first: "Ana" }, FIELDS)).toEqual({ ...FIELDS, customer: { kind: "existing", id: "c1" } });
+    expect(sheetDraft(null, FIELDS)).toBeNull();
+    const place = { label: "Home", address: "1 Elm", city: "", landmark: "" };
+    expect(sheetDraft({ kind: "existing", id: "c1", name: "A", first: "A" }, FIELDS, place)).toMatchObject({ newPlace: place });
+  });
+
+  it("Use Ana: the job goes to Ana WANTING the confirmation (owner ruling R4), though the typed person's tick was off for want of an email; the server's check decides (mutation: keep the typed draft's notify -> FAILS)", async () => {
+    const typed = sheetDraft({ kind: "new", name: "Ana Reyes", phone: "956 555 0100", addAsNew: false }, { ...FIELDS, notify: false })!;
+    const add = vi.fn<AddRun["add"]>(async () => ({ ok: true as const, bookingId: "b_new", startsAt: STARTS, first: "Ana", notice: "scheduled" as const }));
+    await submitJob(addRun({ add, draft: withExistingCustomer(typed, owner, true) }));
+    expect(add.mock.calls[0]![1]).toMatchObject({ customer: { kind: "existing", id: owner.id }, notify: true });
+    // Whoever unticked it on purpose keeps it off.
+    expect(withExistingCustomer(typed, owner, false).notify).toBe(false);
+  });
+
+  it("the phone offer names a nameless owner with a plain word, never an empty gap (mutation: the raw name -> FAILS)", () => {
+    const en = phoneOwnerWords({ id: "x", name: " ", first: "" }, "en");
+    expect(en.question).toBe(t(m, "calendar.job.phoneOwner", "en", { name: m["places.thisCustomer"], first: "this customer" }));
+    expect(en.button).toBe(t(m, "calendar.job.useExisting", "en", { first: "this customer" }));
+    expect(phoneOwnerWords({ id: "x", name: "", first: "" }, "es").button).toBe(t(m, "calendar.job.useExisting", "es", { first: "este cliente" }));
+    expect(phoneOwnerWords({ id: "x", name: "Ana García", first: "Ana" }, "en").question).toBe(t(m, "calendar.job.phoneOwner", "en", { name: "Ana García", first: "Ana" }));
+  });
+});
+
+describe("the pseudo-locale reaches the sheet's own lines (design review C1)", () => {
+  it("warningLines and noticeReason wrap their words (mutation: ignore pseudo -> FAILS)", () => {
+    expect(warningLines([W_HOURS], TZ, "en", true)).toEqual([pseudoLocale(m["calendar.job.warn.outsideHours"])]);
+    expect(noticeReason("suppressed_account", "Ana", "en", true)).toBe(pseudoLocale(m["calendar.job.accountNoEmail"]));
+    expect(phoneOwnerWords({ id: "x", name: "Ana García", first: "Ana" }, "en", true).button).toBe(pseudoLocale(t(m, "calendar.job.useExisting", "en", { first: "Ana" })));
   });
 });

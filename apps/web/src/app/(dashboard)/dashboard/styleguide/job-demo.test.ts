@@ -40,8 +40,8 @@ const drawers = frames("data-sg-job-drawer");
 
 describe("styleguide: the Add job sheet and the job drawer (F-046 part 1, plan Task 11)", () => {
   it("renders two sheet specimens and two drawer specimens, each in English and Spanish (mutation: drop a locale -> FAILS)", () => {
-    expect([...sheets.keys()].sort()).toEqual(["owner-en", "owner-es", "warnings-en", "warnings-es"]);
-    expect([...drawers.keys()].sort()).toEqual(["booked-en", "booked-es", "cancelled-en", "cancelled-es"]);
+    expect([...sheets.keys()].sort()).toEqual(["owner-en", "owner-es", "warnings-en", "warnings-es", "warnings-pseudo"]);
+    expect([...drawers.keys()].sort()).toEqual(["booked-en", "booked-es", "booked-pseudo", "cancelled-en", "cancelled-es"]);
   });
 
   it("each sheet has exactly ONE primary, by either marker (rule 8; mutation: make Cancel default -> FAILS)", () => {
@@ -102,9 +102,28 @@ describe("styleguide: the Add job sheet and the job drawer (F-046 part 1, plan T
       .map((v) => new RegExp(`^${v.replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\{[a-zA-Z]+\}/g, ".+?")}$`, "s"));
     const exact = new Set(Object.values(m as Record<string, string>));
     const specimens = new Set<string>(JOB_DEMO_SPECIMENS);
-    const segments = html.split(/<[^>]+>/).map((s) => renderedText(s).trim()).filter((s) => /\p{L}/u.test(s));
+    // The pseudo specimens are checked on their own below: every word there is wrapped.
+    const real = [...sheets, ...drawers].filter(([k]) => k.endsWith("-pseudo")).reduce((h, [, slice]) => h.replace(slice, ""), html);
+    const segments = real.split(/<[^>]+>/).map((s) => renderedText(s).trim()).filter((s) => /\p{L}/u.test(s));
     const strays = segments.filter((s) => !exact.has(s) && !specimens.has(s) && !templates.some((re) => re.test(s)));
     expect(strays).toEqual([]);
+  });
+
+  it("the pseudo-locale specimens: the sheet with its warnings and the booked drawer, every word padded (design review I2; mutation: drop pseudo -> FAILS)", async () => {
+    const { pseudoLocale } = await import("@/lib/i18n/pseudo-locale");
+    const sheet = renderedText(sheets.get("warnings-pseudo")!);
+    expect(sheet).toContain(pseudoLocale(m["calendar.job.checkFirst"]));
+    expect(sheet).toContain(pseudoLocale(m["calendar.job.saveAnyway"]));
+    const drawer = renderedText(drawers.get("booked-pseudo")!);
+    expect(drawer).toContain(pseudoLocale(m["calendar.job.titleMove"]));
+    expect(drawer).toContain(pseudoLocale(m["calendar.job.emailPending"]));
+    const specimens = new Set<string>(JOB_DEMO_SPECIMENS);
+    for (const slice of [sheets.get("warnings-pseudo")!, drawers.get("booked-pseudo")!]) {
+      // The frame's slice opens inside its own tag and closes inside the end marker's: only what lies between.
+      const bare = slice.slice(slice.indexOf(">") + 1, slice.lastIndexOf("<")).split(/<[^>]+>/).map((x) => renderedText(x).trim()).filter((x) => /\p{L}/u.test(x))
+        .filter((x) => !/^\[[\s\S]*\]$/.test(x) && !specimens.has(x));
+      expect(bare).toEqual([]);
+    }
   });
 
   it("nothing is fixed-width, so /styleguide never scrolls sideways at 375px (e2e/phone-width.spec.ts)", () => {

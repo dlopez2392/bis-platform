@@ -2,6 +2,7 @@
 
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
 import { JobForm, type JobFormSpecimen } from "../accounts/[accountId]/calendar/job-sheet";
 import { JobDrawerDetails, JobDrawerHeader, type JobDrawerView } from "../accounts/[accountId]/calendar/job-drawer";
 
@@ -9,7 +10,8 @@ import { JobDrawerDetails, JobDrawerHeader, type JobDrawerView } from "../accoun
  * F-046 part 1 (plan Task 11, step 4): the Add job sheet and the job drawer, for the styleguide (DESIGN.md's DoD: a
  * new component is on /styleguide). The sheet with its confirm-in-place warnings, and with the phone owner's
  * offer; the drawer for a booked staff job whose confirmation is about to go, and for a cancelled customer
- * booking. Each in English and Spanish. Sheet-styled frames, not open Sheets: an open Radix sheet would cover
+ * booking. Each in English and Spanish, and the warnings sheet and the booked drawer in the QA pseudo-locale
+ * (every word padded, +35%: the DoD's overflow check, design review I2). Sheet-styled frames, not open Sheets: an open Radix sheet would cover
  * this page, and its portal draws nothing in a server render.
  *
  * INERT: every handler is a no-op and nothing here names a server action. The specimen values (a customer, a
@@ -40,16 +42,17 @@ const WARNINGS: JobFormSpecimen = { warnings: [
 ] };
 const OWNER: JobFormSpecimen = { phoneOwner: { id: "sg-ana", name: NAME, first: "Ana" }, typed: { name: TYPED, phone: PHONE } };
 
-function view(kind: "booked" | "cancelled", locale: "en" | "es"): JobDrawerView {
+function view(kind: "booked" | "cancelled", locale: "en" | "es", pseudo = false): JobDrawerView {
   const booked = kind === "booked";
+  const tr = makeTr(locale, pseudo);
   return {
     id: `sg-${kind}-${locale}`,
     customer: { id: "sg-ana", name: NAME, first: "Ana", phone: PHONE, email: null },
     when: WHEN[locale], lengthMinutes: 90, what: booked ? WHAT : null, address: booked ? ADDRESS : null,
     meetingType: booked ? "in_person" : "video", meetingUrl: null,
     status: booked ? "booked" : "cancelled",
-    statusWord: t(m, booked ? "calendar.bookings.status.booked" : "calendar.bookings.status.cancelled", locale),
-    madeBy: t(m, booked ? "calendar.agenda.addedByYou" : "calendar.agenda.bookedOnline", locale),
+    statusWord: tr.text(booked ? "calendar.bookings.status.booked" : "calendar.bookings.status.cancelled"),
+    madeBy: tr.text(booked ? "calendar.agenda.addedByYou" : "calendar.agenda.bookedOnline"),
     madeAt: MADE_AT[locale], confirmReply: booked ? null : "yes",
     email: booked ? { state: "pending", kind: "confirmation", at: null } : { state: "none", kind: null, at: null },
     holdOpen: booked, isMove: false, started: false, canWrite: true, canCloseOut: true,
@@ -85,6 +88,19 @@ export function JobDemo() {
           <span data-sg-job-end hidden />
         </div>
       )))}
+      <div data-sg-job-sheet="warnings-pseudo" lang="en" className={FRAME}>
+        <h2 className={TITLE}>{makeTr("en", true).text("calendar.job.titleAdd")}</h2>
+        <JobForm accountId={ACCOUNT} timezone={ZONE} locale="en" pseudo mode="add" specimen={WARNINGS}
+          prefill={{ date: "2026-11-03", start: "19:00", minutes: 90, customer: { id: "sg-ana", name: NAME, first: "Ana" }, what: WHAT, meetingType: "in_person" }}
+          calendarMeetingType="in_person" defaultMinutes={60} onDone={noop} onCancel={noop} />
+        <span data-sg-job-end hidden />
+      </div>
+      <div data-sg-job-drawer="booked-pseudo" lang="en" className={FRAME}>
+        <JobDrawerHeader view={view("booked", "en", true)} locale="en" pseudo />
+        <JobDrawerDetails view={view("booked", "en", true)} timezone={ZONE} locale="en" pseudo
+          onMove={noop} onCancel={noop} onCloseOut={noop} />
+        <span data-sg-job-end hidden />
+      </div>
     </div>
   );
 }

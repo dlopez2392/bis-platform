@@ -1961,6 +1961,8 @@ export const m = {
   "calendar.agenda.pastOpenOne.es": "1 trabajo pasado aún necesita Terminado o No llegó · Pendientes",
   "calendar.agenda.truncated": "Only the first {cap} jobs are shown here. Open a single day to see them all.",
   "calendar.agenda.truncated.es": "Aquí solo se muestran los primeros {cap} trabajos. Abra un solo día para verlos todos.",
+  "calendar.agenda.truncatedDay": "Only the first {cap} jobs of this day are shown here.",
+  "calendar.agenda.truncatedDay.es": "Aquí solo se muestran los primeros {cap} trabajos de este día.",
   "calendar.job.titleAdd": "Add a job",
   "calendar.job.titleAdd.es": "Agregar un trabajo",
   "calendar.job.titleMove": "Move this job",
@@ -2089,6 +2091,8 @@ export const m = {
   "calendar.job.openRecord.es": "Abrir ficha",
   "calendar.job.gone": "This job isn't on the calendar any more.",
   "calendar.job.gone.es": "Este trabajo ya no está en la agenda.",
+  "calendar.job.readFailed": "Couldn't open this job. Try again in a moment.",
+  "calendar.job.readFailed.es": "No se pudo abrir este trabajo. Intente de nuevo en un momento.",
 
   "calendar.embed.title": "Embed",
   "calendar.embed.hint": "Paste this where the booking widget should appear.",

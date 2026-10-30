@@ -22,6 +22,8 @@ import type { AgendaDayView, AgendaFreeRow, AgendaRowView } from "./agenda-view"
 /** What the Add job sheet needs beyond its prefill: the props every sheet on this card shares. */
 export type AgendaSheetContext = {
   accountId: string; timezone: string; locale: "en" | "es"; calendarMeetingType: BookingMeetingType; defaultMinutes: number;
+  /** The QA pseudo-locale, so the Add job sheet pads its words as the card does (design review C1). */
+  pseudo: boolean;
 };
 export type AgendaWords = { overlaps: string; outsideHours: string; daysLabel: string };
 
@@ -54,13 +56,14 @@ export function ClosedHead({ words }: { words: string }) {
   return <DotPill data-agenda-closed label={words} {...CLOSED_TREATMENT} />;
 }
 
-/** One job. `compact` is the Week column's: the time and name, then the tags. */
-export function AgendaRow({ row, words, compact = false }: { row: AgendaRowView; words: AgendaWords; compact?: boolean }) {
+/** One job. `compact` is the Week column's: the time and name, then the tags. `anchor`: whether this copy carries
+ *  the row's `id="booking-<id>"` (Week draws a job past midnight in two columns; an id is ONE element's). */
+export function AgendaRow({ row, words, compact = false, anchor = true }: { row: AgendaRowView; words: AgendaWords; compact?: boolean; anchor?: boolean }) {
   const router = useRouter();
   const details = [row.address, row.meetingWord, row.madeBy].filter(Boolean).join(" · ");
   return (
     <button
-      id={`booking-${row.id}`}
+      id={anchor ? `booking-${row.id}` : undefined}
       type="button"
       data-agenda-nav
       data-agenda-row={row.status}

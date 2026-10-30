@@ -3,11 +3,13 @@ import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { agendaTime } from "@/lib/booking/agenda-window";
+import { makeTr } from "@/lib/record/copy";
 import { partsInZone } from "@/lib/booking/slots";
 import { STATUS_TREATMENTS } from "@/lib/automations/log-titles";
 import type { ActionResult } from "./actions";
 import type { JobOpened, UndoAddResult } from "./agenda-actions";
 import type { OpenedSnapshot } from "./job-sheet-handlers";
+import { inDrawerLanguage } from "./server-words";
 
 /**
  * F-046 part 1 (plan Task 11, spec 5.5, 6.4): what the job drawer's buttons DO, minus React, so the one rule
@@ -30,11 +32,13 @@ const firstOr = (first: string, locale: Locale) => first.trim() || t(m, "calenda
  *   undoing the move would bring back a time nobody asked for. The cancelled new row is never claimed (claims
  *   take booked rows only), so its "moved" email never goes; the cancel action itself decides whom to tell.
  * - Anything else: the ordinary cancel (cancel-flow.ts's `runCancelButton`, with its notice dialog and Undo).
+ * An add the Undo deleted is gone, so `onGone` closes the drawer that showed it (T11/T12 review).
  */
 export async function cancelFromDrawer(d: {
   accountId: string; view: DrawerCancelView; locale: Locale; toast: Toast;
   undoAdd: (accountId: string, bookingId: string) => Promise<UndoAddResult>;
   ordinary: () => Promise<void>;
+  onGone?: () => void;
 }): Promise<"undone" | "ordinary" | "refused"> {
   const { view, locale } = d;
   if (!view.holdOpen || view.isMove) {
@@ -51,6 +55,7 @@ export async function cancelFromDrawer(d: {
   const first = firstOr(view.customer.first, locale);
   if (r.ok) {
     d.toast.success(t(m, "calendar.job.undone", locale, { first }));
+    d.onGone?.();
     return "undone";
   }
   if (r.fallback) {
@@ -61,7 +66,8 @@ export async function cancelFromDrawer(d: {
   return "refused";
 }
 
-/** Mark completed / No-show (D-030): `setBookingStatusAction`, which the server refuses before the start. */
+/** Mark completed / No-show (D-030): `setBookingStatusAction`, which the server refuses before the start. Its
+ *  refusal is an English catalogue sentence, said back in the drawer's language (server-words.ts). */
 export async function closeOut(d: {
   accountId: string; bookingId: string; status: "completed" | "no_show"; locale: Locale; toast: Toast;
   setStatus: (accountId: string, bookingId: string, status: BookingStatus) => Promise<ActionResult>;
@@ -74,7 +80,7 @@ export async function closeOut(d: {
     return false;
   }
   if (r.ok) d.toast.success(t(m, "calendar.bookings.statusUpdated", d.locale));
-  else d.toast.error(r.error);
+  else d.toast.error(inDrawerLanguage(r.error, d.locale));
   return r.ok;
 }
 
@@ -93,19 +99,20 @@ export function drawerActions(v: { status: BookingStatus; canWrite: boolean; can
 export type JobEmailState = { state: "sent" | "pending" | "failed" | "none"; kind: NoticeWanted | null; at: string | null };
 
 /** The email line: the confirmation's trio, or the moved trio when the email is a move's new time. */
-export function emailLine(e: JobEmailState, timezone: string, locale: Locale): string | null {
+export function emailLine(e: JobEmailState, timezone: string, locale: Locale, pseudo = false): string | null {
   if (e.state === "none") return null;
+  const tr = makeTr(locale, pseudo);
   const moved = e.kind === "moved";
   if (e.state === "sent") {
     const time = e.at ? agendaTime(new Date(e.at), timezone, locale, false) : "";
-    return t(m, moved ? "calendar.job.movedEmailSent" : "calendar.job.emailSent", locale, { time });
+    return tr.text(moved ? "calendar.job.movedEmailSent" : "calendar.job.emailSent", { time });
   }
-  if (e.state === "pending") return t(m, moved ? "calendar.job.movedEmailPending" : "calendar.job.emailPending", locale);
-  return t(m, moved ? "calendar.job.movedEmailFailed" : "calendar.job.emailFailed", locale);
+  if (e.state === "pending") return tr.text(moved ? "calendar.job.movedEmailPending" : "calendar.job.emailPending");
+  return tr.text(moved ? "calendar.job.movedEmailFailed" : "calendar.job.emailFailed");
 }
 
-export function meetingWord(type: BookingMeetingType, locale: Locale): string {
-  return t(m, type === "video" ? "calendar.job.byVideo" : type === "phone" ? "calendar.job.byPhone" : "calendar.job.inPerson", locale);
+export function meetingWord(type: BookingMeetingType, locale: Locale, pseudo = false): string {
+  return makeTr(locale, pseudo).text(type === "video" ? "calendar.job.byVideo" : type === "phone" ? "calendar.job.byPhone" : "calendar.job.inPerson");
 }
 
 /**

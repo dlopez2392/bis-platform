@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   agendaTime, agendaWindow, dayHasZoneShift, freeHours, parseAgendaParams, shiftKey, wallToInstant, weekStartKey,
+  wallToInstantKeeping,
 } from "./agenda-window";
 
 const CHI = "America/Chicago";
@@ -155,5 +156,21 @@ describe("freeHours: every whole open hour with no live job, from now on", () =>
     const now = new Date("2026-10-25T00:00:00.000Z");
     expect(freeHours({ dayKey: "2026-11-01", timezone: CHI, openHours: { sun: [["00:00", "04:00"]] }, live: [], now }).map(iso))
       .toEqual(["2026-11-01T05:00:00.000Z", "2026-11-01T06:00:00.000Z", "2026-11-01T08:00:00.000Z", "2026-11-01T09:00:00.000Z"]);
+  });
+});
+
+describe("wallToInstantKeeping: an unchanged wall time keeps its own instant (T11/T12 review: a fall-back note edit moved the job)", () => {
+  // Sun 1 Nov 2026, Chicago falls back at 02:00 CDT: 01:30 happens twice, 06:30Z (CDT) then 07:30Z (CST).
+  it("the SECOND 01:30 reads back as itself, never the first (mutation: plain wallToInstant -> FAILS)", () => {
+    const second = new Date("2026-11-01T07:30:00.000Z");
+    expect(iso(wallToInstantKeeping("2026-11-01", "01:30", CHI, second))).toBe("2026-11-01T07:30:00.000Z");
+    const first = new Date("2026-11-01T06:30:00.000Z");
+    expect(iso(wallToInstantKeeping("2026-11-01", "01:30", CHI, first))).toBe("2026-11-01T06:30:00.000Z");
+  });
+  it("a wall time the kept instant does not read as is reckoned as ever; a gap stays null", () => {
+    const second = new Date("2026-11-01T07:30:00.000Z");
+    expect(iso(wallToInstantKeeping("2026-11-01", "01:35", CHI, second))).toBe(iso(wallToInstant("2026-11-01", "01:35", CHI)));
+    expect(iso(wallToInstantKeeping("2026-11-02", "01:30", CHI, second))).toBe("2026-11-02T07:30:00.000Z");
+    expect(wallToInstantKeeping("2026-03-08", "02:30", CHI, second)).toBeNull();
   });
 });

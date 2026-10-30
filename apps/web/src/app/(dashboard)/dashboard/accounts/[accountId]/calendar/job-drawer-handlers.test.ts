@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { agendaTime } from "@/lib/booking/agenda-window";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import {
   cancelFromDrawer, closeOut, drawerActions, emailLine, meetingWord, focusJobRow, movePrefill, moveJob, JOB_STATUS_TREATMENTS, type DrawerCancelView,
 } from "./job-drawer-handlers";
@@ -165,5 +166,34 @@ describe("the drawer's words", () => {
     expect(row.focus).toHaveBeenCalled();
     focusJobRow({ preventDefault }, "b_gone", doc);
     expect(row.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("T11/T12 review: the drawer after the add's Undo, and in Spanish", () => {
+  it("Cancel on a held add deletes it and then CLOSES the drawer, whose job is gone (mutation: never call onGone -> FAILS)", async () => {
+    const onGone = vi.fn();
+    await cancelFromDrawer({ accountId: ACCOUNT, view: view({ holdOpen: true }), locale: "en", toast: toast(), ordinary: vi.fn(async () => {}),
+      undoAdd: vi.fn(async () => ({ ok: true as const })), onGone });
+    expect(onGone).toHaveBeenCalledTimes(1);
+    // An ordinary cancel keeps the drawer: the job is still there, cancelled, with its Undo.
+    const kept = vi.fn();
+    await cancelFromDrawer({ accountId: ACCOUNT, view: view(), locale: "en", toast: toast(), ordinary: vi.fn(async () => {}), undoAdd: vi.fn(), onGone: kept });
+    expect(kept).not.toHaveBeenCalled();
+  });
+
+  it("closeOut's refusal is said in the drawer's language, from the sentence's key, never the server's English (mutation: toast r.error -> FAILS)", async () => {
+    const tst = toast();
+    await closeOut({ accountId: ACCOUNT, bookingId: "b_1", status: "completed", toast: tst, locale: "es",
+      setStatus: vi.fn(async () => ({ ok: false as const, error: m["calendar.bookings.notStartedYet"] })) });
+    expect(tst.error).toHaveBeenCalledWith(m["calendar.bookings.notStartedYet.es"]);
+    const tst2 = toast();
+    await closeOut({ accountId: ACCOUNT, bookingId: "b_1", status: "completed", toast: tst2, locale: "es",
+      setStatus: vi.fn(async () => ({ ok: false as const, error: "Something only English knows." })) });
+    expect(tst2.error).toHaveBeenCalledWith(m["calendar.bookings.statusUpdateFailed.es"]);
+  });
+
+  it("the pseudo-locale wraps the email line and the meeting word (design review C1; mutation: ignore pseudo -> FAILS)", () => {
+    expect(emailLine({ state: "pending", kind: "confirmation", at: null }, TZ, "en", true)).toBe(pseudoLocale(m["calendar.job.emailPending"]));
+    expect(meetingWord("phone", "en", true)).toBe(pseudoLocale(m["calendar.job.byPhone"]));
   });
 });

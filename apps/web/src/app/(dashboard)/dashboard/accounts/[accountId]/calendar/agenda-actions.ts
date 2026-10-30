@@ -17,7 +17,7 @@ import { isUuid } from "@/lib/assign/action-guards";
 import { isDateKey } from "@/lib/business-status/status";
 import { readSlotClosures, slotConfigFrom } from "@/lib/booking/availability";
 import { jobWarnings, warningKey, type JobWarning } from "@/lib/booking/job-warnings";
-import { wallToInstant } from "@/lib/booking/agenda-window";
+import { wallToInstant, wallToInstantKeeping } from "@/lib/booking/agenda-window";
 import { parsePlaceFields } from "@/lib/contacts/place-input";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { isCallerIdNumber } from "@/lib/voice/phone-number";
@@ -416,7 +416,9 @@ export async function moveJobAction(
     return saveFailed;
   }
 
-  const startsAt = wallToInstant(f.date, f.start, tz);
+  // The job's own start when the form sent its wall time back unchanged: on a fall-back night the repeated hour
+  // would otherwise read as its FIRST occurrence, and a note edit would move the job (T11/T12 review).
+  const startsAt = wallToInstantKeeping(f.date, f.start, tz, new Date(current.starts_at));
   if (!startsAt) return { ok: false, errorKey: "calendar.job.noSuchTime" };
   const endsAt = new Date(startsAt.getTime() + f.minutes * 60_000);
   const sameTime = startsAt.getTime() === Date.parse(current.starts_at) && endsAt.getTime() === Date.parse(current.ends_at);

@@ -249,7 +249,8 @@ export default async function CalendarPage({
       <div className="space-y-6 p-6">
         {jobRead === "gone" || jobRead === "failed" ? (
           <p data-job-gone role="status" className="text-sm text-muted-foreground">
-            {tr.text(jobRead === "gone" ? "calendar.job.gone" : "calendar.agenda.error")}
+            {/* The job's own words: never the agenda's "Couldn't load your schedule" over an agenda that loaded. */}
+            {tr.text(jobRead === "gone" ? "calendar.job.gone" : "calendar.job.readFailed")}
           </p>
         ) : null}
         {/* F-046 part 1 (spec 5.1): the agenda first and full width, streaming behind its own skeleton; Add job
@@ -299,7 +300,7 @@ export default async function CalendarPage({
       {drawerView ? (
         <JobDrawer
           key={drawerView.id} accountId={accountId} view={drawerView} closeHref={agendaHref(base, { view, day })} timezone={account.timezone}
-          locale={locale} calendarMeetingType={calendar.meeting_type} defaultMinutes={calendar.slot_duration_minutes}
+          locale={locale} pseudo={pseudo} calendarMeetingType={calendar.meeting_type} defaultMinutes={calendar.slot_duration_minutes}
         />
       ) : null}
     </>

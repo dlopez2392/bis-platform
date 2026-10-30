@@ -51,6 +51,17 @@ export function wallToInstant(key: string, hhmm: string, tz: string): Date | nul
   const [hh, mi] = hhmm.split(":").map(Number) as [number, number];
   return zonedTimeToUtc(y, m, d, hh, mi, tz);
 }
+/**
+ * wallToInstant, but `keep` when `keep` itself reads as that wall time in `tz`. A fall-back night shows 01:30
+ * twice and wallToInstant answers the first; a job at the SECOND 01:30 that the form re-sends unchanged must
+ * come back as its own instant, or a note edit becomes a move an hour earlier (T11/T12 review).
+ */
+export function wallToInstantKeeping(key: string, hhmm: string, tz: string, keep: Date): Date | null {
+  const p = partsInZone(keep, tz);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (`${p.y}-${pad(p.m)}-${pad(p.d)}` === key && `${pad(p.hh)}:${pad(p.mi)}` === hhmm && keep.getTime() % 60_000 === 0) return keep;
+  return wallToInstant(key, hhmm, tz);
+}
 /** The free rows of a Day: every whole hour inside the day's open hours that starts at or after `now` and that
  *  no live job touches ([) bounds). An hour the clocks skip is never offered. */
 export function freeHours(i: { dayKey: string; timezone: string; openHours: OpenHours;

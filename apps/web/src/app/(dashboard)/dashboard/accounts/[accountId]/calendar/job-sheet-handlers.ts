@@ -3,6 +3,7 @@ import { t, plural } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { formatWhen } from "@/lib/booking/time";
 import { agendaTime } from "@/lib/booking/agenda-window";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { UNDO_WINDOW_MS } from "./undo-window";
 import type { NoticeAvailability } from "./cancel-flow";
 import type {
@@ -33,6 +34,8 @@ type Ctx = {
   /** The keys of the warnings the person has been shown and is saving past (the second press). */
   seen: string[];
   toast: JobToast;
+  /** The QA pseudo-locale: the warning lines the form draws are padded too. */
+  pseudo?: boolean;
   schedule?: (fn: () => void, ms: number) => unknown;
 };
 /**
@@ -70,10 +73,13 @@ export type SubmitOutcome =
 export const LENGTH_OPTIONS: readonly number[] = Array.from({ length: 144 }, (_, i) => (i + 1) * 5);
 
 const firstOr = (first: string, locale: Locale) => first.trim() || t(m, "calendar.job.customerFallback", locale);
+/** The QA pseudo-locale (lib/record/copy.ts's makeTr): every word the sheet draws can be padded. */
+const padded = (s: string, pseudo: boolean) => (pseudo ? pseudoLocale(s) : s);
 
 /** One line per warning, in the sheet's language; an overlap names the earliest start in the account's zone. */
-export function warningLines(warnings: readonly JobWarningView[], timezone: string, locale: Locale): string[] {
-  return warnings.map((w) => {
+export function warningLines(warnings: readonly JobWarningView[], timezone: string, locale: Locale, pseudo = false): string[] {
+  return warnings.map((w) => padded(line(w), pseudo));
+  function line(w: JobWarningView): string {
     switch (w.kind) {
       case "outside_hours": return t(m, "calendar.job.warn.outsideHours", locale);
       case "notice": return t(m, "calendar.job.warn.notice", locale);
@@ -85,23 +91,59 @@ export function warningLines(warnings: readonly JobWarningView[], timezone: stri
         return plural(m, "calendar.job.warn.overlaps", count, locale, { count, time });
       }
     }
-  });
+  }
 }
 
-/** R8 "Use Ana": the job goes to the number's owner. */
-export function withExistingCustomer(draft: JobDraft, owner: { id: string }): JobDraft {
-  return { ...draft, customer: { kind: "existing", id: owner.id } };
+/**
+ * R8 "Use Ana": the job goes to the number's owner, wanting the confirmation the person asked for (`notify`, the
+ * tick's own state), owner ruling R4: on by default. The typed customer's draft carried it OFF only because a
+ * person typed in has no email (T11/T12 review); Ana may have one, and the action's own check decides.
+ */
+export function withExistingCustomer(draft: JobDraft, owner: { id: string }, notify: boolean): JobDraft {
+  return { ...draft, notify, customer: { kind: "existing", id: owner.id } };
 }
-/** R8 "Add as new": the typed person is made as a second customer on that number (createContact email_only). */
-export function withAddAsNew(draft: JobDraft): JobDraft {
-  return draft.customer.kind === "new" ? { ...draft, customer: { ...draft.customer, addAsNew: true } } : draft;
+
+/** The customer the sheet holds: one chosen from the search, or one typed in. */
+export type SheetCustomer =
+  | { kind: "existing"; id: string; name: string; first: string }
+  | { kind: "new"; name: string; phone: string; addAsNew: boolean };
+
+/** What the sheet sends: its fields, the customer it holds, and a typed New address when one is chosen. */
+export function sheetDraft(customer: SheetCustomer | null, fields: JobFields, newPlace?: unknown): JobDraft | null {
+  if (!customer) return null;
+  return {
+    ...fields, ...(newPlace !== undefined ? { newPlace } : {}),
+    customer: customer.kind === "existing" ? { kind: "existing", id: customer.id }
+      : { kind: "new", name: customer.name, phone: customer.phone, addAsNew: customer.addAsNew },
+  };
+}
+/**
+ * R8 "Add as new", kept in the customer the sheet holds (T11/T12 review): built into one draft only, the next
+ * save (past the warnings that answer it, say) asked about the phone's owner again, for ever.
+ */
+export function addingAsNew<C extends SheetCustomer>(c: C): C { return c.kind === "new" ? { ...c, addAsNew: true } : c; }
+/** A typed name or phone changed: Add as new answered the offer about THAT person on THAT number, so the server
+ *  asks again. */
+export function typedCustomer(c: Extract<SheetCustomer, { kind: "new" }>, patch: { name?: string; phone?: string }): SheetCustomer {
+  return { ...c, ...patch, addAsNew: false };
+}
+/** The phone owner's offer: the question and the primary's words. An owner with no name on file reads "This
+ *  customer" ("Use this customer?"), never "already has this number. Use ?" (T11/T12 review minor). */
+export function phoneOwnerWords(owner: PhoneOwner, locale: Locale, pseudo = false): { question: string; button: string } {
+  const generic = t(m, "places.thisCustomer", locale);
+  const name = owner.name.trim() || generic;
+  const first = owner.first.trim() || generic.charAt(0).toLocaleLowerCase(locale) + generic.slice(1);
+  return {
+    question: padded(t(m, "calendar.job.phoneOwner", locale, { name, first }), pseudo),
+    button: padded(t(m, "calendar.job.useExisting", locale, { first }), pseudo),
+  };
 }
 
 /** Why "Send {first} a confirmation" is off, or null when it can go (or is not known yet: the server re-checks). */
-export function noticeReason(n: NoticeAvailability | null, first: string, locale: Locale): string | null {
-  if (n === "no_email") return t(m, "calendar.job.noEmail", locale, { first: firstOr(first, locale) });
-  if (n === "address_blocked") return t(m, "calendar.job.emailBlocked", locale, { first: firstOr(first, locale) });
-  if (n === "suppressed_account") return t(m, "calendar.job.accountNoEmail", locale);
+export function noticeReason(n: NoticeAvailability | null, first: string, locale: Locale, pseudo = false): string | null {
+  if (n === "no_email") return padded(t(m, "calendar.job.noEmail", locale, { first: firstOr(first, locale) }), pseudo);
+  if (n === "address_blocked") return padded(t(m, "calendar.job.emailBlocked", locale, { first: firstOr(first, locale) }), pseudo);
+  if (n === "suppressed_account") return padded(t(m, "calendar.job.accountNoEmail", locale), pseudo);
   return null;
 }
 
@@ -138,7 +180,7 @@ function needsOutcome(
   if ("phoneOwner" in r.needs) return { kind: "phoneOwner", owner: r.needs.phoneOwner };
   const warnings = r.needs.warnings;
   return {
-    kind: "warnings", warnings, lines: warningLines(warnings, run.timezone, run.locale), seen: warnings.map((w) => w.key),
+    kind: "warnings", warnings, lines: warningLines(warnings, run.timezone, run.locale, run.pseudo), seen: warnings.map((w) => w.key),
     button: run.mode === "move" ? "calendar.job.moveAnyway" : "calendar.job.saveAnyway",
   };
 }

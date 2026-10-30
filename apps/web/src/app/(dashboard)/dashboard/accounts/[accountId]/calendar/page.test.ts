@@ -598,6 +598,28 @@ describe("CalendarPage — the agenda and the job drawer (F-046 part 1)", () => 
     } finally { spy.mockRestore(); }
   });
 
+  it("a failed job read says so in its OWN words, never the agenda's 'Couldn't load your schedule' over a loaded agenda (T11/T12 review; mutation: calendar.agenda.error -> FAILS)", async () => {
+    dbMocks.readAgendaJob.mockRejectedValue(new Error("boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const text = renderedText(await render({ job: JOB }));
+      expect(text).toContain(m["calendar.job.readFailed"]);
+      expect(text).not.toContain(m["calendar.agenda.error"]);
+    } finally { spy.mockRestore(); }
+  });
+
+  it("the pseudo-locale reaches the drawer, as it reaches the agenda (design review C1; mutation: drop the prop -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      await render({ job: JOB, locale: "pseudo" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((jobDrawerMock.mock.calls[0]![0] as { pseudo?: boolean }).pseudo).toBe(true);
+    expect(agendaProps().pseudo).toBe(true);
+  });
+
   it("a Technician: canAdd false, and the drawer's canWrite false with canCloseOut true (owner decision 1)", async () => {
     Object.assign(authState, { isAgency: false, role: "technician", canManage: false });
     await render({ job: JOB });

@@ -10,8 +10,8 @@ import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { Skeleton } from "@/components/ui/skeleton";
-import { m, type MessageKey } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import type { MessageKey } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
 import { cn } from "@/lib/utils";
 import { parsePlaceFields, PLACE_LIMITS } from "@/lib/contacts/place-input";
 import { placeTitle } from "@/lib/contacts/place-view";
@@ -23,8 +23,8 @@ import {
   type JobDraft, type JobFields, type JobWarningView,
 } from "./agenda-actions";
 import {
-  submitJob, noticeReason, warningLines, withExistingCustomer, withAddAsNew, LENGTH_OPTIONS,
-  type OpenedSnapshot, type PhoneOwner, type SubmitOutcome,
+  submitJob, noticeReason, warningLines, withExistingCustomer, sheetDraft, addingAsNew, typedCustomer, phoneOwnerWords, LENGTH_OPTIONS,
+  type OpenedSnapshot, type PhoneOwner, type SheetCustomer, type SubmitOutcome,
 } from "./job-sheet-handlers";
 
 /**
@@ -46,6 +46,8 @@ export type JobSheetPrefill = {
 };
 export type JobSheetProps = {
   accountId: string; timezone: string; locale: "en" | "es"; mode: "add" | "move";
+  /** The QA pseudo-locale (`?locale=pseudo`, lib/record/copy.ts): every word the sheet draws is padded. */
+  pseudo?: boolean;
   open: boolean; onOpenChange: (open: boolean) => void;
   prefill: JobSheetPrefill;
   /** Move only: the job and what the form opened with (the in-place edit's compare-and-set, D6), with whether
@@ -67,9 +69,7 @@ export type JobFormProps = Omit<JobSheetProps, "open" | "onOpenChange"> & {
   specimen?: JobFormSpecimen;
 };
 
-type Customer =
-  | { kind: "existing"; id: string; name: string; first: string }
-  | { kind: "new"; name: string; phone: string };
+type Customer = SheetCustomer;
 type PlaceItem = { id: string; title: string };
 type Places = { contactId: string; status: "ready" | "error"; items: PlaceItem[] };
 type Avail = { contactId: string; notice: NoticeAvailability | null };
@@ -84,10 +84,11 @@ const firstWord = (name: string) => name.trim().split(/\s+/)[0] ?? "";
 
 export function JobSheet(props: JobSheetProps) {
   const { open, onOpenChange, locale, mode } = props;
-  const title = t(m, mode === "move" ? "calendar.job.titleMove" : "calendar.job.titleAdd", locale);
+  const tr = makeTr(locale, props.pseudo);
+  const title = tr.text(mode === "move" ? "calendar.job.titleMove" : "calendar.job.titleAdd");
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md" closeLabel={t(m, "common.close", locale)}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md" closeLabel={tr.text("common.close")}>
         <div lang={locale} className="flex min-w-0 flex-col">
           <SheetHeader>
             <SheetTitle className="pr-8">{title}</SheetTitle>
@@ -107,13 +108,13 @@ export function JobSheet(props: JobSheetProps) {
 
 /** The form itself: the sheet's body, and the drawer's body while it moves a job (spec 5.5). */
 export function JobForm(p: JobFormProps) {
-  const { accountId, timezone, locale, mode, prefill, job, specimen } = p;
-  const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const { accountId, timezone, locale, mode, prefill, job, specimen, pseudo = false } = p;
+  const tx = makeTr(locale, pseudo).text;
   const id = useId();
   const [pending, startTransition] = useTransition();
 
   const [customer, setCustomer] = useState<Customer | null>(() => {
-    if (specimen && "phoneOwner" in specimen) return { kind: "new", ...specimen.typed };
+    if (specimen && "phoneOwner" in specimen) return { kind: "new", ...specimen.typed, addAsNew: false };
     return prefill.customer ? { kind: "existing", ...prefill.customer } : null;
   });
   const [query, setQuery] = useState("");
@@ -138,7 +139,7 @@ export function JobForm(p: JobFormProps) {
   const [outcome, setOutcome] = useState<Exclude<SubmitOutcome, { kind: "saved" }> | null>(() => {
     if (!specimen) return null;
     if ("phoneOwner" in specimen) return { kind: "phoneOwner", owner: specimen.phoneOwner };
-    return { kind: "warnings", warnings: specimen.warnings, lines: warningLines(specimen.warnings, timezone, locale),
+    return { kind: "warnings", warnings: specimen.warnings, lines: warningLines(specimen.warnings, timezone, locale, pseudo),
       seen: specimen.warnings.map((w) => w.key), button: mode === "move" ? "calendar.job.moveAnyway" : "calendar.job.saveAnyway" };
   });
   const [seen, setSeen] = useState<string[]>(outcome?.kind === "warnings" ? outcome.seen : []);
@@ -205,7 +206,7 @@ export function JobForm(p: JobFormProps) {
     ? [{ id: prefill.placeId, title: tx("calendar.job.address") }] : [];
   const notice: NoticeAvailability | null = customer?.kind === "new" ? "no_email"
     : customerId && avail?.contactId === customerId ? avail.notice : null;
-  const reason = noticeReason(notice, first, locale);
+  const reason = noticeReason(notice, first, locale, pseudo);
   const notifyOff = notice !== null && notice !== "available";
   const canSave = mode === "move" || (customer !== null && (customer.kind === "existing" || customer.name.trim() !== ""));
 
@@ -216,18 +217,15 @@ export function JobForm(p: JobFormProps) {
     };
   }
 
-  function draft(): JobDraft | null {
-    if (!customer) return null;
-    return {
-      ...fields(), ...(placeChoice === NEW_PLACE ? { newPlace } : {}),
-      customer: customer.kind === "existing" ? { kind: "existing", id: customer.id } : { kind: "new", name: customer.name, phone: customer.phone, addAsNew: false },
-    };
+  // Built from the customer the sheet HOLDS, so Add as new rides every later save (T11/T12 review).
+  function draft(from: Customer | null = customer): JobDraft | null {
+    return sheetDraft(from, fields(), placeChoice === NEW_PLACE ? newPlace : undefined);
   }
 
   function run(override?: JobDraft) {
     if (placeChoice === NEW_PLACE) {
       const parsed = parsePlaceFields(newPlace, locale);
-      if (!parsed.ok) { setPlaceError(t(m, parsed.error.key as MessageKey, locale, parsed.error.params)); return; }
+      if (!parsed.ok) { setPlaceError(tx(parsed.error.key as MessageKey, parsed.error.params)); return; }
     }
     startTransition(async () => {
       let out: SubmitOutcome;
@@ -235,13 +233,13 @@ export function JobForm(p: JobFormProps) {
         // A Move with no job names nothing: never fall through to an add.
         if (!job) return;
         out = await submitJob({
-          mode: "move", accountId, timezone, locale, seen, toast, bookingId: job.id, draft: { ...fields(), opened: job.opened },
+          mode: "move", accountId, timezone, locale, pseudo, seen, toast, bookingId: job.id, draft: { ...fields(), opened: job.opened },
           move: moveJobAction, undoEdit: undoEditJobAction, undoMove: undoMoveJobAction,
         });
       } else {
         const d = override ?? draft();
         if (!d) return;
-        out = await submitJob({ mode: "add", accountId, timezone, locale, seen, toast, draft: d, add: addJobAction, undoAdd: undoAddJobAction });
+        out = await submitJob({ mode: "add", accountId, timezone, locale, pseudo, seen, toast, draft: d, add: addJobAction, undoAdd: undoAddJobAction });
       }
       if (out.kind === "saved") { p.onDone({ moved: out.moved === true }); return; }
       if (out.kind === "error" && out.changed) p.onChanged?.();
@@ -255,13 +253,17 @@ export function JobForm(p: JobFormProps) {
     if (!d) return;
     setCustomer({ kind: "existing", id: owner.id, name: owner.name, first: owner.first });
     setOutcome(null);
-    run(withExistingCustomer(d, owner));
+    // The tick's own state, not the typed person's "no email" (R4: on by default; the server checks Ana's email).
+    run(withExistingCustomer(d, owner, notify));
   }
   function addAsNew() {
-    const d = draft();
+    if (!customer) return;
+    const next = addingAsNew(customer);
+    const d = draft(next);
     if (!d) return;
+    setCustomer(next);
     setOutcome(null);
-    run(withAddAsNew(d));
+    run(d);
   }
 
   const label = (forId: string, key: MessageKey) => <Label htmlFor={`${id}-${forId}`}>{tx(key)}</Label>;
@@ -287,12 +289,12 @@ export function JobForm(p: JobFormProps) {
             <div className="min-w-0 space-y-1">
               {label("name", "calendar.job.name")}
               <Input id={`${id}-name`} value={customer.name} maxLength={200} autoComplete="off"
-                onChange={(e) => { touch(); setCustomer({ ...customer, name: e.target.value }); }} />
+                onChange={(e) => { touch(); setCustomer(typedCustomer(customer, { name: e.target.value })); }} />
             </div>
             <div className="min-w-0 space-y-1">
               {label("phone", "calendar.job.phone")}
               <Input id={`${id}-phone`} type="tel" value={customer.phone} maxLength={40} autoComplete="off"
-                onChange={(e) => { touch(); setCustomer({ ...customer, phone: e.target.value }); }} />
+                onChange={(e) => { touch(); setCustomer(typedCustomer(customer, { phone: e.target.value })); }} />
             </div>
             <div className="sm:col-span-2">
               <Button type="button" variant="ghost" size="sm" className={TOUCH} onClick={() => choose(null)}>
@@ -323,7 +325,7 @@ export function JobForm(p: JobFormProps) {
                 ) : null}
             </div>
             <Button type="button" variant="ghost" size="sm" className={TOUCH}
-              onClick={() => choose({ kind: "new", name: query.trim(), phone: "" })}>
+              onClick={() => choose({ kind: "new", name: query.trim(), phone: "", addAsNew: false })}>
               {tx("calendar.job.newCustomer")}
             </Button>
           </div>
@@ -363,11 +365,12 @@ export function JobForm(p: JobFormProps) {
           onChange={(e) => { touch(); setPlaceChoice(e.target.value); }} className={cn(nativeFieldClass, "h-9 py-1")}>
           <option value="">{tx("calendar.job.noAddress")}</option>
           {[...keptPlace, ...placeItems].map((pl) => <option key={pl.id} value={pl.id}>{pl.title}</option>)}
-          <option value={NEW_PLACE}>{tx("calendar.job.newAddress")}</option>
+          {/* Move offers saved addresses only (T11/T12 review): the move keeps no typed address. */}
+          {mode === "add" ? <option value={NEW_PLACE}>{tx("calendar.job.newAddress")}</option> : null}
         </select>
         {placesLoading ? <Skeleton data-job-places-skeleton className="h-4 w-1/2" /> : null}
         {placesFailed ? <p className="text-xs text-muted-foreground">{tx("record.card.failed", { title: tx("calendar.job.address") })}</p> : null}
-        {placeChoice === NEW_PLACE ? (
+        {mode === "add" && placeChoice === NEW_PLACE ? (
           <div data-job-new-place className="grid gap-2 border-l-2 border-[var(--line)] pl-3 sm:grid-cols-2">
             {(["label", "address", "city", "landmark"] as const).map((k) => (
               <div key={k} className="min-w-0 space-y-1">
@@ -425,12 +428,12 @@ export function JobForm(p: JobFormProps) {
 
       {outcome?.kind === "phoneOwner" ? (
         <div data-job-phone-owner className="space-y-2">
-          <p className="break-words text-sm">{tx("calendar.job.phoneOwner", { name: outcome.owner.name, first: outcome.owner.first })}</p>
+          <p className="break-words text-sm">{phoneOwnerWords(outcome.owner, locale, pseudo).question}</p>
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="ghost" className={TOUCH} onClick={p.onCancel}>{tx("common.cancel")}</Button>
             <Button type="button" variant="ghost" className={TOUCH} disabled={pending} onClick={addAsNew}>{tx("calendar.job.addAsNew")}</Button>
             <Button type="button" className={TOUCH} disabled={pending} onClick={() => pickOwner(outcome.owner)}>
-              {tx("calendar.job.useExisting", { first: outcome.owner.first })}
+              {phoneOwnerWords(outcome.owner, locale, pseudo).button}
             </Button>
           </div>
         </div>
