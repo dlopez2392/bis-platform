@@ -101,6 +101,7 @@ export function withAddAsNew(draft: JobDraft): JobDraft {
 export function noticeReason(n: NoticeAvailability | null, first: string, locale: Locale): string | null {
   if (n === "no_email") return t(m, "calendar.job.noEmail", locale, { first: firstOr(first, locale) });
   if (n === "address_blocked") return t(m, "calendar.job.emailBlocked", locale, { first: firstOr(first, locale) });
+  if (n === "suppressed_account") return t(m, "calendar.job.accountNoEmail", locale);
   return null;
 }
 
@@ -175,8 +176,7 @@ export async function submitJob(run: AddRun | MoveRun): Promise<SubmitOutcome> {
     if (r.mode === "edited") {
       toastWithUndo(run, t(m, "calendar.job.edited", locale), () => settleUndo(run,
         () => run.undoEdit(run.accountId, run.bookingId, r.from, r.to),
-        // No "edit undone" sentence in the catalogue: the booking's own "updated" line (reported, plan Task 11).
-        () => t(m, "calendar.bookings.statusUpdated", locale),
+        () => t(m, "calendar.job.editUndone", locale),
         (u) => (u.ok ? "" : errorOf(u.errorKey, locale))));
       return { kind: "saved" };
     }

@@ -179,6 +179,8 @@ describe("submitJob: Move's two results (D6)", () => {
     opts.action.onClick();
     await flush();
     expect(undoEdit).toHaveBeenCalledWith(ACCOUNT, "b_old", OPENED, to);
+    // The Undo's own sentence says the changes were undone (mutation: reuse statusUpdated -> FAILS).
+    expect(toast.success.mock.calls[1]![0]).toBe(m["calendar.job.editUndone"]);
   });
 
   it("moved: the new time's sentence, and Undo calls undoMoveJobAction(accountId, newId, oldId, cancelledAt) in that order (mutation: old id first -> FAILS)", async () => {
@@ -232,6 +234,9 @@ describe("the sheet's pure helpers", () => {
     expect(noticeReason(null, "Ana", "en")).toBeNull();
     expect(noticeReason("no_email", "Ana", "en")).toBe(t(m, "calendar.job.noEmail", "en", { first: "Ana" }));
     expect(noticeReason("address_blocked", "Ana", "es")).toBe(t(m, "calendar.job.emailBlocked", "es", { first: "Ana" }));
+    // An account that sends no email says so, never a silent disabled tick (mutation: no reason -> FAILS).
+    expect(noticeReason("suppressed_account", "Ana", "en")).toBe(m["calendar.job.accountNoEmail"]);
+    expect(noticeReason("suppressed_account", "Ana", "es")).toBe(m["calendar.job.accountNoEmail.es"]);
   });
 
   it("the length choices run 5 to 720 in five-minute steps", () => {
