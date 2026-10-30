@@ -468,7 +468,7 @@ node of the fan-out plan (`WEB/lib/automations/fanout.ts:79`); `jobsDrain` is no
 (`WEB/lib/automations/registry.ts:73`), and with `CRON_FANOUT` off (`fanout.ts:88`) the tick runs `PASSES` alone. A
 job enqueued today would never run in production. The pass is `cancelNotices`' twin
 (`WEB/lib/automations/passes/cancel-notices.ts:50-58`): rows with `hold_until` two minutes past and
-`hold_settled_at` null (index `bookings_hold_due`), oldest first, 25 a tick, a 10 s budget, abandoned after 48 hours.
+`hold_settled_at` null (index `bookings_hold_due`), oldest first, 25 a tick, a 10 s budget. Nothing is abandoned: every row the pass reads is claimed (settled), and one whose hold fell due more than 24 hours ago, or whose job has started, settles with no email (`too_late`, `JOB_NOTICE_MAX_AGE_MS`).
 It runs right after `cancelNotices` and before `reminders`, so a confirmation always precedes a reminder in one tick.
 It is bis-automations', and `cron-coupling.test.ts` counts its budget.
 
