@@ -418,6 +418,18 @@ describe("addJobAction: warnings, each shown once (R1, R3)", () => {
     ] } });
     expect(avail.readSlotClosures).toHaveBeenCalledWith(h.REQ, ACCT, "America/Chicago", NOW);
   });
+
+  it("\"Add it anyway\" at 18:00: the second press with the outside-hours key seen saves the job and answers ok (the e2e's step 5; mutation: ignore `seen` → FAILS)", async () => {
+    // Mon 18:00 Chicago is 00:00Z the next UTC day (CST, UTC-6): after the 17:00 close, nothing else broken.
+    const first = await addJobAction(ACCT, draft({ date: "2026-11-02", start: "18:00" }), []);
+    expect(first).toEqual({ ok: false, needs: { warnings: [{ key: "outside_hours", kind: "outside_hours" }] } });
+    expect(writes()).toEqual([]);
+    const r = await addJobAction(ACCT, draft({ date: "2026-11-02", start: "18:00" }), ["outside_hours"]);
+    expect(r).toMatchObject({ ok: true, bookingId: NEW, startsAt: "2026-11-03T00:00:00.000Z" });
+    expect(db.createStaffJob).toHaveBeenCalledTimes(1);
+    expect(db.createStaffJob.mock.calls[0]![2]).toMatchObject({ startsAt: at("2026-11-03T00:00:00.000Z"), closureKept: false });
+    expect(h.afters).toHaveLength(1);
+  });
 });
 
 describe("addJobAction: video (R7)", () => {

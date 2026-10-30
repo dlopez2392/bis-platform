@@ -5,6 +5,7 @@ import { serviceDb, getOrCreateCalendar, updateCalendarSettings, setBookingStatu
 import { m } from "../src/lib/messages";
 import { dayKey, addDays } from "../src/lib/business-status/status";
 import { agendaWindow, agendaTime, wallToInstant } from "../src/lib/booking/agenda-window";
+import { UNDO_WINDOW_MS } from "../src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/undo-window";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -324,6 +325,12 @@ test("a job added from a free hour shows on the Day, undoes clean, blocks the pu
   await expect(row11).toContainText(CONTACT_FULL_NAME);
 
   // --- Step 5: add one at 18:00, outside open hours — warned, then saved past the warning ------------
+  // The 11:00 job's "Job added for …" toast stays up for its whole Undo window (toastWithUndo), and the 18:00
+  // toast below is found by the same words. Left up, it satisfied that wait 10 ms after "Add it anyway" was
+  // pressed, while the 18:00 save was still in flight, and the one-shot lookup found only the 11:00 row (the
+  // trace: 11:00 toast at 75.2 s, the 18:00 wait passed at 78.6 s, the save's POST never answered). So it must
+  // be gone first: then the toast awaited below can only be the 18:00 one.
+  await expect(addedToast11).toHaveCount(0, { timeout: UNDO_WINDOW_MS + 5_000 });
   await main.getByRole("button", { name: m["calendar.agenda.addJob"], exact: true }).click();
   sheet = page.getByRole("dialog");
   await sheet.getByLabel(m["calendar.job.date"]).fill(dayKeyPicked);
