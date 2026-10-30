@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { computeSlots, bookableRange, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range, type SlotClosures } from "./slots";
+import { computeSlots, bookableRange, fitsOpenHours, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range, type SlotClosures } from "./slots";
 import { hoursChain, slotClosures, untilFor, type StatusInput, type StatusRowInput } from "../business-status/status";
 
 const CFG: SlotConfig = {
@@ -578,5 +578,58 @@ describe("closures (S-47d)", () => {
       expect(computeSlots({ ...C, closures: b }, [], WED)).toEqual([]);
       expect(bookableRange({ ...C, closures: b }, [], WED, sat9)).toBeNull();
     }
+  });
+});
+
+describe("fitsOpenHours (F-046: the staff job's open-hours warning)", () => {
+  const TZ = "America/Chicago";
+  const MON: OpenHours = { mon: [["09:00", "17:00"]] };
+  const at = (iso: string) => new Date(iso);
+  const plus = (d: Date, minutes: number) => new Date(d.getTime() + minutes * 60_000);
+
+  it("fits a job inside one open interval on the wall clock and in real time", () => {
+    const mon9 = at("2026-09-07T14:00:00.000Z"); // Mon 09:00 CDT
+    expect(fitsOpenHours(MON, mon9, plus(mon9, 60), TZ)).toBe(true);
+    const mon1600 = at("2026-09-07T21:00:00.000Z"); // Mon 16:00 CDT, ends exactly at 17:00
+    expect(fitsOpenHours(MON, mon1600, plus(mon1600, 60), TZ)).toBe(true);
+  });
+
+  it("does not fit a job that runs past the close or starts before the open", () => {
+    const mon1630 = at("2026-09-07T21:30:00.000Z"); // Mon 16:30 CDT
+    expect(fitsOpenHours(MON, mon1630, plus(mon1630, 60), TZ)).toBe(false);
+    const mon0855 = at("2026-09-07T13:55:00.000Z"); // Mon 08:55 CDT
+    expect(fitsOpenHours(MON, mon0855, plus(mon0855, 60), TZ)).toBe(false);
+  });
+
+  it("does not fit on a day with no hours", () => {
+    const sun9 = at("2026-09-06T14:00:00.000Z"); // Sun 09:00 CDT
+    expect(fitsOpenHours(MON, sun9, plus(sun9, 60), TZ)).toBe(false);
+  });
+
+  it("a 22:00-24:00 interval fits a two-hour job ending at midnight", () => {
+    const late = at("2026-09-08T03:00:00.000Z"); // Mon 2026-09-07 22:00 CDT
+    expect(fitsOpenHours({ mon: [["22:00", "24:00"]] }, late, plus(late, 120), TZ)).toBe(true);
+    expect(fitsOpenHours({ mon: [["22:00", "24:00"]] }, late, plus(late, 125), TZ)).toBe(false);
+  });
+
+  it("on the spring-forward day (2026-03-08) the gap eats an hour: 01:00 for 120 min ends at 04:00 wall, past a 03:00 close", () => {
+    const hours: OpenHours = { sun: [["00:00", "03:00"]] };
+    // The control, a week later with no gap: the same wall start and length fit.
+    const sun15 = at("2026-03-15T06:00:00.000Z"); // Sun 2026-03-15 01:00 CDT
+    expect(fitsOpenHours(hours, sun15, plus(sun15, 120), TZ)).toBe(true);
+    // The same day, a job that ends before the gap: fits.
+    const gapDayMidnight = at("2026-03-08T06:00:00.000Z"); // 00:00 CST
+    expect(fitsOpenHours(hours, gapDayMidnight, plus(gapDayMidnight, 60), TZ)).toBe(true);
+    // 01:00 CST + 120 real minutes = 09:00Z = 04:00 CDT.
+    const gapDay1 = at("2026-03-08T07:00:00.000Z");
+    expect(fitsOpenHours(hours, gapDay1, plus(gapDay1, 120), TZ)).toBe(false);
+  });
+
+  it("fails CLOSED: an invalid zone, an Invalid Date or an empty range answers false", () => {
+    const mon9 = at("2026-09-07T14:00:00.000Z");
+    expect(fitsOpenHours(MON, mon9, plus(mon9, 60), "Not/AZone")).toBe(false);
+    expect(fitsOpenHours(MON, new Date(NaN), plus(mon9, 60), TZ)).toBe(false);
+    expect(fitsOpenHours(MON, mon9, new Date(NaN), TZ)).toBe(false);
+    expect(fitsOpenHours(MON, mon9, mon9, TZ)).toBe(false);
   });
 });

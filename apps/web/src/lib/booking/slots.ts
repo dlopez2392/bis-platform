@@ -240,6 +240,32 @@ function endsByClose(candEnd: Date, cal: { m: number; d: number }, toMinutes: nu
   return endMinutes <= toMinutes;
 }
 
+/** F-046: whether [start, end) sits inside one open interval of start's own account-zone day, on the wall
+ *  clock AND in real time (`endsByClose`), as the engine fits a slot. For the staff warning only: it never
+ *  decides what a customer is offered. Fails CLOSED (false), so a doubt shows the warning. */
+export function fitsOpenHours(openHours: OpenHours, start: Date, end: Date, timeZone: string): boolean {
+  try {
+    const s = start.getTime();
+    const e = end.getTime();
+    if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return false;
+    const p = partsInZone(start, timeZone);
+    const cal = { y: p.y, m: p.m, d: p.d };
+    const from = p.hh * 60 + p.mi;
+    const lengthMinutes = Math.round((e - s) / 60_000);
+    const weekday = WEEKDAYS[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()]!;
+    for (const [f, t] of normalizeOpenHours(openHours)[weekday] ?? []) {
+      const fm = minutesOf(f);
+      const tm = minutesOf(t);
+      if (from < fm || from + lengthMinutes > tm) continue;
+      if (endsByClose(end, cal, tm, timeZone)) return true;
+    }
+    return false;
+  } catch (err) {
+    if (err instanceof RangeError) return false;
+    throw err;
+  }
+}
+
 /** S-47d spec §5.3: THE closure rule, the one predicate both `computeSlots` (the slot is dropped) and
  *  `bookableRange` (null) run, so the picker and the submit cannot disagree. True when every slot is blocked
  *  (an open-ended storm), the start is before the stored window's end (Closed today's midnight, a dated

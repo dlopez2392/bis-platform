@@ -34,7 +34,7 @@ async function readsFor(
   return { booked, config: { ...slotConfigFrom(calendar, timezone), closures } };
 }
 
-function slotConfigFrom(calendar: CalendarRow, timezone: string): SlotConfig {
+export function slotConfigFrom(calendar: CalendarRow, timezone: string): SlotConfig {
   return {
     timezone,
     slotDurationMinutes: calendar.slot_duration_minutes,
