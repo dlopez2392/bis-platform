@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getContact, contactMergePreview } from "@bis/db";
+import { getContact, contactMergePreview, listPeopleNames } from "@bis/db";
+import type { Locale } from "@/lib/i18n/locale";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { noteOpened } from "@/lib/access-log/note";
@@ -73,16 +74,24 @@ export default async function MergeComparePage({
     noteOpened(access, accountId, { kind: "contact", recordId: other.id }),
   ]);
 
-  const [preview, prefs] = await Promise.all([
+  // Fix round, finding #5: the account's own language, read the way sibling pages do
+  // (contacts/page.tsx, documents/page.tsx) — never the `{ language: null }` literal this page used
+  // to hand `requestLocale`, which could never read a Spanish account's own default.
+  const [preview, prefs, account] = await Promise.all([
     contactMergePreview(db, accountId, kept.id, other.id).catch((e: unknown) => {
       console.error(`contacts merge: preview read failed for account ${accountId}: ${loggableError(e)}`);
       return null;
     }),
     getPersonPrefs(),
+    db.from("accounts").select("language").eq("id", accountId).maybeSingle(),
   ]);
-
+  if (account.error) {
+    console.error(`contacts merge: account ${accountId} language read failed: ${account.error.message}`);
+  }
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: (account.data as { language: Locale | null } | null)?.language ?? null };
   const locale = requestLocale(
-    { account: { language: null }, isOperator: access.isAgency, userLanguage: prefs.language },
+    { account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language },
     { locale: localeParam },
   );
   const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
@@ -105,6 +114,19 @@ export default async function MergeComparePage({
   const movesText = mergeCountsList(preview.counts, tr, locale);
   const swapHref = `/dashboard/accounts/${accountId}/contacts/merge?${queryString(rowA.id, rowB.id, other.id)}`;
 
+  // Fix round, finding #4: the compare screen must never show a raw Clerk user id as a radio label.
+  // Read ONLY the ids the preview's own fields actually carry (never read for nothing, and never a
+  // whole-team read), and let a failed read cost only the names — never the page (the drawer's own
+  // duplicates read follows the same pattern just above, in `page.tsx`'s sibling, `[contactId]/page.tsx`).
+  const assigneeIds = [...new Set(
+    [preview.fields.keep.assigned_to, preview.fields.other.assigned_to]
+      .filter((v): v is string => typeof v === "string" && v.length > 0),
+  )];
+  const assigneeNames = assigneeIds.length === 0 ? {} : await listPeopleNames(db, assigneeIds).catch((e: unknown) => {
+    console.error(`contacts merge: assignee names read failed for account ${accountId}: ${loggableError(e)}`);
+    return {};
+  });
+
   return (
     <MergeScreen
       accountId={accountId}
@@ -119,6 +141,7 @@ export default async function MergeComparePage({
       locale={locale}
       mergeAction={mergeContactsAction.bind(null, accountId)}
       undoAction={undoMergeAction.bind(null, accountId)}
+      assigneeNames={assigneeNames}
     />
   );
 }

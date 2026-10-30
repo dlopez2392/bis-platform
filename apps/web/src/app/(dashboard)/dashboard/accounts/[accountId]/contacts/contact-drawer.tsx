@@ -31,6 +31,7 @@ import { textsLoadFrom, type TextsLoad } from "@/lib/consent/texts-row";
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { returnFocusToRow } from "@/lib/contacts/drawer-focus";
+import { replacePeek } from "@/lib/contacts/use-peek";
 import { drawerFieldsRow, drawerLoadFrom, drawerSummaryUrl, type DrawerLoad, type ParsedDrawerSummary } from "@/lib/contacts/drawer-summary";
 import type { RecentRowView } from "@/lib/record/recent-rows";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
@@ -140,6 +141,16 @@ export function ContactDrawer({
         // Checked again AFTER the body is read: the cleanup can land while `res.json()` is pending,
         // and without this a switched-away contact's result (or an older retry's) would overwrite.
         if (!stale) setFetched({ contactId, result });
+        // F-006 part 1 (plan Task 11 fix round, finding #6; spec §6.4): a `?peek=` to a merged-away
+        // record's own route answers the KEPT record's own summary. The whole drawer re-keys to it —
+        // every inline edit, Texts, Email and the tags/assignee fields below key off `row.id`
+        // (derived from the URL's own `?peek=`), never `body.contactId` one level down — by swapping
+        // the URL's id IN PLACE (no new history entry). `usePeek`'s own subscribers (the table) read
+        // the new id back and hand this component a fresh `row`, which starts this effect over for
+        // the KEPT id — whose own route answers its own id, so this never loops.
+        if (!stale && result.status === "ready" && result.body.contactId && result.body.contactId !== contactId) {
+          replacePeek(result.body.contactId);
+        }
       })
       .catch(() => { if (!stale) setFetched({ contactId, result: { status: "error" } }); });
     return () => { stale = true; };

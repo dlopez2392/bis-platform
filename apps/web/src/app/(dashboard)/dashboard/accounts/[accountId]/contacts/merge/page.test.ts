@@ -26,14 +26,25 @@ vi.mock("next/navigation", () => ({
 const noteOpenedMock = vi.fn(async (..._a: unknown[]): Promise<void> => undefined);
 vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpenedMock(...a) }));
 
-const REQUEST = { tag: "request-db" };
+// Fix round, finding #5: a named variable, read fresh each test — never the `{ language: null }`
+// literal the page used to hand `requestLocale`, which could never read a Spanish account.
+const accountFixture = vi.hoisted(() => ({ language: null as string | null }));
+const REQUEST = {
+  tag: "request-db",
+  from: (table: string) => {
+    if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
+    return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: accountFixture.language }, error: null }) }) }) };
+  },
+};
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 
 const getContactMock = vi.fn();
 const contactMergePreviewMock = vi.fn();
+const listPeopleNamesMock = vi.fn(async (..._a: unknown[]) => ({}) as Record<string, string>);
 vi.mock("@bis/db", () => ({
   getContact: (...a: unknown[]) => getContactMock(...a),
   contactMergePreview: (...a: unknown[]) => contactMergePreviewMock(...a),
+  listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   MERGE_COUNT_KEYS: ["messages", "calls", "bookings", "documents", "opportunities", "notes", "tasks", "form_submissions"],
 }));
 
@@ -70,8 +81,10 @@ const PREVIEW_OK = {
 beforeEach(() => {
   vi.clearAllMocks();
   accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+  accountFixture.language = null;
   getContactMock.mockImplementation(async (_db: unknown, _accountId: string, id: string) => contact(id));
   contactMergePreviewMock.mockResolvedValue(PREVIEW_OK);
+  listPeopleNamesMock.mockResolvedValue({});
   screenProps.length = 0;
 });
 
@@ -131,5 +144,85 @@ describe("the compare page: a failed or refused preview is the error state, not 
     contactMergePreviewMock.mockRejectedValue(new Error("boom"));
     await expect(MergePage(ctx(A, B))).resolves.toBeDefined();
     expect(screenProps).toEqual([]);
+  });
+});
+
+describe("the compare page: the account's own language, read like sibling pages do (fix round, finding #5)", () => {
+  it("a client-role staff member on a Spanish account resolves Spanish (mutation: hand requestLocale {language: null} -> this stays 'en', FAILS)", async () => {
+    accountFixture.language = "es";
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(screenProps.at(-1)!.locale).toBe("es");
+  });
+
+  it("with no account language set, English (control)", async () => {
+    accountFixture.language = null;
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(screenProps.at(-1)!.locale).toBe("en");
+  });
+
+  it("the error state (a refused preview) also renders in the account's own language, not hard-coded English", async () => {
+    accountFixture.language = "es";
+    contactMergePreviewMock.mockResolvedValue({ status: "holding" });
+    const html = renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(html).toContain("Intentar de nuevo"); // record.card.retry's Spanish twin
+  });
+});
+
+describe("the compare page: assignee ids resolve to names before they reach MergeScreen (fix round, finding #4)", () => {
+  it("reads listPeopleNames for every assigned_to id the preview's fields carry, and hands the map down as assigneeNames", async () => {
+    contactMergePreviewMock.mockResolvedValue({
+      ...PREVIEW_OK,
+      fields: { keep: { assigned_to: "user_1" }, other: { assigned_to: "user_2" } },
+    });
+    listPeopleNamesMock.mockResolvedValue({ user_1: "Ana López", user_2: "Beto Ruiz" });
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(listPeopleNamesMock).toHaveBeenCalledWith(REQUEST, expect.arrayContaining(["user_1", "user_2"]));
+    expect(screenProps.at(-1)!.assigneeNames).toEqual({ user_1: "Ana López", user_2: "Beto Ruiz" });
+  });
+
+  it("a failed names read costs only the names, never the whole page (mutation: let it throw -> FAILS)", async () => {
+    contactMergePreviewMock.mockResolvedValue({
+      ...PREVIEW_OK,
+      fields: { keep: { assigned_to: "user_1" }, other: {} },
+    });
+    listPeopleNamesMock.mockRejectedValue(new Error("down"));
+    await expect(MergePage(ctx(A, B)).then((el) => renderToStaticMarkup(el))).resolves.toBeDefined();
+    expect(screenProps.at(-1)!.assigneeNames).toEqual({});
+  });
+
+  it("with no assigned_to on either side, no read at all (mutation: always read -> FAILS)", async () => {
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(listPeopleNamesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("the compare page: three mutations the opus review found survived 8/8 green (fix round, finding #7)", () => {
+  it("M1 — the preview's own `seen` fingerprints reach MergeScreen UNCHANGED (mutation: replace seen with zeros -> FAILS)", async () => {
+    const seen = { keep: "a1".repeat(16), other: "b2".repeat(16) };
+    contactMergePreviewMock.mockResolvedValue({ ...PREVIEW_OK, seen });
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(screenProps.at(-1)!.seen).toEqual(seen);
+    expect(screenProps.at(-1)!.seen).not.toEqual({ keep: "0".repeat(32), other: "0".repeat(32) });
+  });
+
+  it("M2 — conflicts are built from the PREVIEW's fields, never the getContact rows (mutation: build from rowA/rowB instead -> FAILS)", async () => {
+    getContactMock.mockImplementation(async (_db: unknown, _accountId: string, id: string) =>
+      contact(id, { email: id === A ? "rowA@getcontact.example" : "rowB@getcontact.example" }));
+    contactMergePreviewMock.mockResolvedValue({
+      ...PREVIEW_OK,
+      fields: { keep: { email: "keep@preview.example" }, other: { email: "other@preview.example" } },
+    });
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    const conflicts = screenProps.at(-1)!.conflicts as { field: string; keepValue: unknown; otherValue: unknown }[];
+    const emailConflict = conflicts.find((c) => c.field === "email");
+    expect(emailConflict).toMatchObject({ keepValue: "keep@preview.example", otherValue: "other@preview.example" });
+  });
+
+  it("M3 — the OLDER record is kept by created_at, even when the older one has the LARGER id (mutation: reverse the date comparison, or run the id tiebreak first -> FAILS)", async () => {
+    getContactMock.mockImplementation(async (_db: unknown, _accountId: string, id: string) =>
+      contact(id, id === A ? { created_at: "2026-02-01T00:00:00Z" } : { created_at: "2026-01-01T00:00:00Z" }));
+    // A ("1...") sorts before B ("2...") by id alone, but B is the OLDER record here.
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(screenProps.at(-1)!.keep).toMatchObject({ id: B });
   });
 });

@@ -65,6 +65,10 @@ vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAct
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
 // Contact archive (plan Task 11): the header's ArchiveControls bind these "use server" actions; nothing runs here.
 vi.mock("./archive-actions", () => ({ archiveContactsAction: vi.fn(), restoreContactsAction: vi.fn(), contactDeleteBlockersAction: vi.fn() }));
+// F-006 part 1 (plan Task 11 fix round, finding #6): a spy, not the real URL-mutating function —
+// this file runs with no `window` at all outside the one block that stubs it.
+const replacePeekMock = vi.fn();
+vi.mock("@/lib/contacts/use-peek", () => ({ replacePeek: (...a: unknown[]) => replacePeekMock(...a) }));
 
 const { ContactDrawer } = await import("./contact-drawer");
 
@@ -123,7 +127,7 @@ async function load(body: unknown, ok = true): Promise<unknown> {
 
 // A spy, not fake timers: `vi.waitFor` advances faked timers by its poll
 // interval, which would move a faked Date under the assertion.
-beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000); });
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000); replacePeekMock.mockReset(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ContactDrawer: the summary body is parsed, one section at a time (S-03 part 3 §7.4)", () => {
@@ -141,6 +145,37 @@ describe("ContactDrawer: the summary body is parsed, one section at a time (S-03
     const stored = await load(body) as { result: { status: string; body: { recent: { status: string }; nextUp: { status: string } } } };
     expect(stored.result.status).toBe("ready");
     expect([stored.result.body.recent.status, stored.result.body.nextUp.status]).toEqual(["error", "ready"]);
+  });
+});
+
+/**
+ * F-006 part 1 (plan Task 11, spec §6.4; fix round, finding #6): a `?peek=` of a merged-away id
+ * fetches the kept record's own summary (route.ts already follows the pointer); the drawer must
+ * re-key its OWN id to match, by swapping the URL's `?peek=` in place, so every inline edit, Texts,
+ * Email and the tags/assignee fields key off the KEPT id (`row.id`) from here on, never the hidden
+ * one the drawer happened to open with.
+ */
+describe("ContactDrawer: a merged-away ?peek= re-keys to the kept record (fix round, finding #6)", () => {
+  it("replaces the URL's peek with body.contactId when it differs from the id fetched for (mutation: compare to the wrong id, or drop the call entirely -> FAILS)", async () => {
+    const body = { ...JSON.parse(JSON.stringify(GOOD)), contactId: "kept9" };
+    await load(body);
+    expect(replacePeekMock).toHaveBeenCalledWith("kept9");
+  });
+
+  it("never replaces when the body's own contactId already matches what was fetched for (control; mutation: always replace -> FAILS)", async () => {
+    const body = { ...JSON.parse(JSON.stringify(GOOD)), contactId: "c1" };
+    await load(body);
+    expect(replacePeekMock).not.toHaveBeenCalled();
+  });
+
+  it("never replaces on an older server that sends no contactId at all (control)", async () => {
+    await load(GOOD);
+    expect(replacePeekMock).not.toHaveBeenCalled();
+  });
+
+  it("never replaces on the whole drawer's error state (control)", async () => {
+    await load(omit("header"));
+    expect(replacePeekMock).not.toHaveBeenCalled();
   });
 });
 

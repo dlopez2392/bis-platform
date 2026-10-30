@@ -1,33 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { m, type MessageKey } from "@/lib/messages";
+import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
-import { undoMergeAction, type UndoMergeActionResult } from "../merge-actions";
+import { runUndoMerge } from "@/lib/contacts/merge-undo";
+import { undoMergeAction } from "../merge-actions";
 
 /**
- * F-006 part 1 (plan Task 11, spec §6.4): the merge row's own "Undo merge", while `undo_until` is
- * still in the future (owner ruling D7, 30 days). The merge's toast (T10's merge-screen.tsx) carries
- * its own Undo too, calling the same `undoMergeAction`; this file is the timeline row's copy, kept
- * here (not T10's) because it reads the ROW's own `otherFirstName`/`otherLastName` (`TimelineMerge`),
- * never a second read, for the toast's "{name}" — never the kept record's own name, which the row is
- * already on.
+ * F-006 part 1 (plan Task 11, spec §6.4; fix round): the merge row's own "Undo merge", while
+ * `undo_until` is still in the future (owner ruling D7, 30 days). The merge's toast
+ * (merge/merge-screen.tsx) carries its own Undo too; both call the SAME `runUndoMerge`
+ * (lib/contacts/merge-undo.ts) now, so there is one place that names the record, one place that
+ * supplies every error key's values, and one place that catches a rejected server action — not two
+ * copies that can drift (the fix round's own finding).
  */
-
-const FIELD_KEY: Readonly<Record<string, MessageKey>> = {
-  first_name: "contacts.merge.field.firstName", last_name: "contacts.merge.field.lastName",
-  email: "contacts.merge.field.email", phone: "contacts.merge.field.phone",
-  assigned_to: "contacts.merge.field.assignedTo", language: "contacts.merge.field.language",
-};
-/** T10's merge-screen.tsx own `fieldLabel`, restated here (not exported there, and that file is not
- *  mine to import from this one's worktree-shared-ownership boundary). */
-function fieldLabel(field: string, locale: Locale): string {
-  if (field.startsWith("custom.")) return t(m, "contacts.merge.field.custom", locale, { label: field.slice("custom.".length) });
-  return t(m, FIELD_KEY[field] ?? "contacts.merge.field.custom", locale, { label: field });
-}
 
 /**
  * Exported so this is testable without a DOM (archive-controls.ts's own exported-handler pattern).
@@ -38,27 +26,7 @@ function fieldLabel(field: string, locale: Locale): string {
 export async function undoMergeOne(
   accountId: string, mergeId: number, otherName: string, locale: Locale, onDone: () => void,
 ): Promise<void> {
-  let r: UndoMergeActionResult;
-  try {
-    r = await undoMergeAction(accountId, mergeId);
-  } catch {
-    toast.error(t(m, "contacts.merge.undoFailed", locale));
-    return;
-  }
-  if (!r.ok) { toast.error(t(m, r.errorKey, locale)); return; }
-  const lines: string[] = [];
-  if (r.keptNew > 0) {
-    lines.push(r.keptNew === 1
-      ? t(m, "contacts.merge.undoneKeptOne", locale, { name: otherName })
-      : t(m, "contacts.merge.undoneKept", locale, { count: r.keptNew, name: otherName }));
-  }
-  if (r.keptEdits.length > 0) {
-    const list = new Intl.ListFormat(locale === "es" ? "es-US" : "en-US", { type: "conjunction" })
-      .format(r.keptEdits.map((f) => fieldLabel(f, locale)));
-    lines.push(t(m, "contacts.merge.undoneEdits", locale, { list }));
-  }
-  toast.success(t(m, "contacts.merge.undone", locale, { name: otherName }), lines.length > 0 ? { description: lines.join(" ") } : undefined);
-  onDone();
+  await runUndoMerge((id) => undoMergeAction(accountId, id), mergeId, otherName, locale, onDone);
 }
 
 /** The row's ghost control (DESIGN.md rule 8: never a second primary). `mergeId` is the STRING the

@@ -45,7 +45,7 @@ describe("runMerge", () => {
     const mergeAction = vi.fn(async () => ({ ok: true as const, mergeId: 77, keptId: "k1" }));
     const undoAction = vi.fn(async () => ({ ok: true as const, otherId: "o1", keptNew: 0, keptEdits: [] }));
     const onMerged = vi.fn();
-    await runMerge(mergeAction, undoAction, input, "en", { keepName: "Maria Garcia", onMerged, onStale: vi.fn() });
+    await runMerge(mergeAction, undoAction, input, "en", { keepName: "Maria Garcia", otherName: "Maria G.", onMerged, onStale: vi.fn() });
     expect(mergeAction).toHaveBeenCalledWith(input);
     expect(onMerged).toHaveBeenCalledTimes(1);
     expect(toasts.success).toHaveBeenCalledTimes(1);
@@ -57,11 +57,22 @@ describe("runMerge", () => {
     expect(undoAction).not.toHaveBeenCalledWith("o1");
   });
 
+  it("the toast's own Undo names the OTHER (merged-away) record, never the kept one (fix round, finding #1; mutation: pass ctx.keepName instead of ctx.otherName -> FAILS)", async () => {
+    const mergeAction = vi.fn(async () => ({ ok: true as const, mergeId: 5, keptId: "k1" }));
+    const undoAction = vi.fn(async () => ({ ok: true as const, otherId: "o1", keptNew: 0, keptEdits: [] }));
+    await runMerge(mergeAction, undoAction, input, "en", { keepName: "Maria Garcia", otherName: "Jose Garcia Jr.", onMerged: vi.fn(), onStale: vi.fn() });
+    const opts = toasts.success.mock.calls[0]![1] as { action: { onClick: () => void } };
+    opts.action.onClick();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toasts.success).toHaveBeenCalledWith("Merge undone. Jose Garcia Jr. is back as their own record.", undefined);
+    expect(toasts.success).not.toHaveBeenCalledWith(expect.stringContaining("Maria Garcia is back"), expect.anything());
+  });
+
   it("stale toasts its own key and refreshes, never navigating", async () => {
     const mergeAction = vi.fn(async () => ({ ok: false as const, errorKey: "contacts.merge.stale" as const }));
     const onStale = vi.fn();
     const onMerged = vi.fn();
-    await runMerge(mergeAction, vi.fn(), input, "en", { keepName: "x", onMerged, onStale });
+    await runMerge(mergeAction, vi.fn(), input, "en", { keepName: "x", otherName: "y", onMerged, onStale });
     expect(onStale).toHaveBeenCalledTimes(1);
     expect(onMerged).not.toHaveBeenCalled();
     expect(toasts.error).toHaveBeenCalled();
@@ -71,10 +82,21 @@ describe("runMerge", () => {
     const mergeAction = vi.fn(async () => ({ ok: false as const, errorKey: "contacts.merge.failed" as const }));
     const onMerged = vi.fn();
     const onStale = vi.fn();
-    await runMerge(mergeAction, vi.fn(), input, "en", { keepName: "x", onMerged, onStale });
+    await runMerge(mergeAction, vi.fn(), input, "en", { keepName: "x", otherName: "y", onMerged, onStale });
     expect(onMerged).not.toHaveBeenCalled();
     expect(onStale).not.toHaveBeenCalled();
     expect(toasts.error).toHaveBeenCalled();
+  });
+
+  it("a rejected mergeAction resolves anyway, toasting the failure key (fix round, finding #3; mutation: drop runMerge's own try/catch -> this rejects instead of resolving, FAILS)", async () => {
+    const mergeAction = vi.fn(async () => { throw new Error("network"); });
+    const onMerged = vi.fn();
+    const onStale = vi.fn();
+    await expect(runMerge(mergeAction, vi.fn(), input, "en", { keepName: "x", otherName: "y", onMerged, onStale }))
+      .resolves.toBeUndefined();
+    expect(onMerged).not.toHaveBeenCalled();
+    expect(onStale).not.toHaveBeenCalled();
+    expect(toasts.error).toHaveBeenCalledWith("Couldn't merge. Nothing changed. Try again.");
   });
 });
 
@@ -109,5 +131,68 @@ describe("MergeScreen markup (DESIGN.md rule 8: one primary per view)", () => {
     expect(out).toContain("Maria Garcia");
     expect(out).toContain("Maria G.");
     expect(out).toContain("Keep this one instead");
+  });
+});
+
+describe("MergeScreen markup: assigned_to shows a name and language shows a word, never a raw id or code (fix round, finding #4)", () => {
+  const base = {
+    accountId: "a1",
+    keep: { id: "k1", name: "Maria Garcia" },
+    other: { id: "o1", name: "Maria G." },
+    alsoKeeps: [],
+    otherReach: {},
+    movesText: "",
+    seen: { keep: "a".repeat(32), other: "b".repeat(32) },
+    swapHref: "/x",
+    mergeAction: vi.fn(),
+    undoAction: vi.fn(),
+  };
+  const html = (over: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(MergeScreen, {
+    ...base,
+    locale: "en" as const,
+    conflicts: [{ field: "assigned_to", keepValue: "user_1", otherValue: null, preselect: "keep" as const }],
+    assigneeNames: { user_1: "Ana López" },
+    ...over,
+  } as never));
+
+  it("names the assignee from assigneeNames, never the raw id (mutation: render String(value) -> FAILS)", () => {
+    const out = html();
+    expect(out).toContain("Ana López");
+    expect(out).not.toContain("user_1");
+  });
+
+  it("an id not in assigneeNames reads 'Someone on the team', never the raw id (mutation: fall back to the id -> FAILS)", () => {
+    const out = html({
+      conflicts: [{ field: "assigned_to", keepValue: "user_gone", otherValue: null, preselect: "keep" as const }],
+      assigneeNames: {},
+    });
+    expect(out).toContain("Someone on the team");
+    expect(out).not.toContain("user_gone");
+  });
+
+  it("a null assignee reads 'Unassigned', never '—' (mutation: treat null like any other blank -> FAILS)", () => {
+    const out = html({
+      conflicts: [{ field: "assigned_to", keepValue: null, otherValue: "user_1", preselect: "keep" as const }],
+    });
+    expect(out).toContain("Unassigned");
+  });
+
+  it("language shows the word, never the raw code (mutation: String(value) -> FAILS)", () => {
+    const out = html({
+      conflicts: [{ field: "language", keepValue: "en", otherValue: "es", preselect: "keep" as const }],
+    });
+    expect(out).toContain(">English<");
+    expect(out).toContain(">Spanish<");
+    expect(out).not.toContain(">en<");
+    expect(out).not.toContain(">es<");
+  });
+
+  it("in Spanish, language shows the Spanish words (mutation: always show English words -> FAILS)", () => {
+    const out = html({
+      locale: "es" as const,
+      conflicts: [{ field: "language", keepValue: "en", otherValue: "es", preselect: "keep" as const }],
+    });
+    expect(out).toContain(">inglés<");
+    expect(out).toContain(">español<");
   });
 });
