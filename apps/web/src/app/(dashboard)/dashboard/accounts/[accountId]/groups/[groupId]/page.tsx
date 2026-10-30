@@ -28,6 +28,7 @@ import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { renderZone } from "@/lib/zone";
+import { noteOpened } from "@/lib/access-log/note";
 import { PlacesCard } from "../../contacts/places-card";
 import { DocumentsCard } from "../../contacts/documents-card";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
@@ -91,7 +92,12 @@ export default async function GroupRecordPage({ params, searchParams }: {
   // C5: the middle column's ONE set, read before the cards that take it. A failed scan leaves no set:
   // the summary, Next up, the timeline and Deals are then their own cards' errors, never read with a
   // guessed set (People's page is a different list, by joined order).
-  const activity = await loadGroupActivity(db, accountId, group.id);
+  // F-118 part 1 (spec 4.1, ruling 4): the ONE access-log write for this record, beside the middle
+  // column's own activity scan — after readGroup has proven the record, never swallowed.
+  const [activity] = await Promise.all([
+    loadGroupActivity(db, accountId, group.id),
+    noteOpened(access, accountId, { kind: "group", recordId: group.id }),
+  ]);
   const set = activity.status === "ready" ? activity.activity : null;
   const ids = set ? set.people.map((p) => p.contactId) : null;
   const now = new Date();

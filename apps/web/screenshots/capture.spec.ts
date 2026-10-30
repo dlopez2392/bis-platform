@@ -138,6 +138,22 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 }
 
 /**
+ * F-118 part 1: the capture's agency session is a fresh sign-in every run
+ * (screenshots/auth.setup.ts), so the first account it opens has no live
+ * visit and meets the chooser (`/dashboard/enter/<id>`) exactly as any other
+ * agency sign-in does. Gives the demo account one reason — "Setup", the
+ * truest one for a screenshot run — so every capture after this one lands on
+ * the page it asked for. The demo's own access log keeps this visit's ids
+ * only; no picture of the chooser or this visit is ever taken.
+ */
+async function enterOnce(page: Page, accountId: string) {
+  if (new URL(page.url()).pathname.startsWith(`/dashboard/enter/${accountId}`)) {
+    await page.getByRole("button", { name: m["accessLog.reason.setup"], exact: true }).click();
+    await page.waitForURL(new RegExp(`/dashboard/accounts/${accountId}/dashboard$`));
+  }
+}
+
+/**
  * Waits for the page to be worth photographing, rather than for a timeout.
  *
  * `networkidle` alone is not enough on a dashboard whose panels stream in:
@@ -227,6 +243,7 @@ test.describe("demo captures", () => {
     await useTheme(page, "dark");
     await page.setViewportSize(DASHBOARD);
     await page.goto(`/dashboard/accounts/${demo.accountId}/dashboard`);
+    await enterOnce(page, demo.accountId);
     await settled(page);
     const axis = await page.locator('[data-slot="chart-axis"]').first().boundingBox();
     expect(axis, "the calls chart's day labels are not on the dashboard").not.toBeNull();

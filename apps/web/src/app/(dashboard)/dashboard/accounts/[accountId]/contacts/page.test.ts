@@ -368,6 +368,23 @@ describe("Export link and canDelete are Owner-only (staff and roles)", () => {
     expect(html).toContain(m["contacts.export"]);
     expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ canDelete: true }));
   });
+
+  // F-118 part 1 (plan Task 7): a Link prefetches and its RSC fetch would run the export route's
+  // handler, logging a download nobody asked for. The control is a plain anchor with `download`.
+  it("Export is a plain <a download>, never a Next <Link> (mutation: put back <Link> without download -> FAILS on the attribute)", async () => {
+    const html = renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    const match = html.match(/<a[^>]*data-export-link[^>]*>/);
+    expect(match).toBeTruthy();
+    const tag = match![0];
+    expect(tag).toMatch(/\bdownload(=""|\b)/);
+    const href = tag.match(/href="([^"]*)"/)?.[1]?.replaceAll("&amp;", "&");
+    expect(href).toBe(buildExportHref("/dashboard/accounts/a1/contacts", undefined, "created", "desc"));
+  });
 });
 
 // F-085 part 1 (spec §8-§9): Mine / Unassigned filter on the SERVER, so the

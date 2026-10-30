@@ -126,6 +126,15 @@ export const ACCOUNT_OWNED_TABLES = [
  * customer notice waiting for its Undo window, not a lead-bearing row, and every FK it has cascades
  * (booking, account, message). `bookings` is on the list, so each row leaves with its booking
  * (`booking-cancel-notices-schema.test.ts` proves the cascades).
+ *
+ * `agency_visits` and `agency_visit_items` (0105) are deliberately not on that list either, for
+ * consent_events' reason: they are the append-only log of when BIS looked, and 0105 grants `service_role`
+ * SELECT and column-level INSERT only, with no UPDATE or DELETE for any role, so a listed
+ * `.delete().eq("account_id", accountId)` would throw 42501 on EVERY account's teardown. Their rows still
+ * leave: `agency_visits.account_id … on delete cascade`, and the items cascade through their composite key
+ * to the visit, so the `accounts` delete at the end of this function carries both away.
+ * `access-log-schema.test.ts` pins their absence from the list (a pure case) and proves the cascade;
+ * `access-log-live.test.ts` proves a real teardown leaves nothing.
  */
 
 /**

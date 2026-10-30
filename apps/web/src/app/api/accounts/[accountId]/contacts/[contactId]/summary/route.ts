@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, type AuthorKind } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { contactDisplayName } from "@/lib/format";
@@ -42,6 +43,9 @@ export async function GET(
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
   const contact = await getContact(db, accountId, contactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
+  // F-118 part 1 (plan Task 6): BIS's open of this drawer is logged, after the proof and before any data
+  // leaves. A client is never logged (noteOpenedApi returns at once). No live visit: this route's own 404.
+  if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
 
   // The QA override the drawer forwards from the list URL (C9); ignored outside BIS_I18N_QA.
   const localeParam = new URL(req.url).searchParams.get("locale") ?? undefined;

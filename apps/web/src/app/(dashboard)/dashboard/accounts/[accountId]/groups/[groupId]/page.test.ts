@@ -103,6 +103,9 @@ const renderZone = vi.fn(async (z: string | undefined) => (z
   ? { zone: z, guessed: false, label: z, source: "account" as const }
   : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
 vi.mock("@/lib/zone", () => ({ renderZone: (z: string | undefined) => renderZone(z) }));
+// F-118 part 1 (plan Task 7): the group page's own access-log write, beside loadGroupActivity.
+const noteOpenedMock = vi.fn(async (..._a: unknown[]): Promise<void> => undefined);
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpenedMock(...a) }));
 const resolveSmsSenderMock = vi.fn();
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => resolveSmsSenderMock(...a) }));
 const smsRecipientStateMock = vi.fn();
@@ -171,13 +174,14 @@ beforeEach(() => {
   listPeopleNamesMock.mockReset().mockResolvedValue({});
   getVoiceProfileMock.mockReset().mockResolvedValue(null);
   placesCardProps.length = 0; peopleCardProps.length = 0; detailsCardProps.length = 0;
+  noteOpenedMock.mockReset().mockResolvedValue(undefined);
   errors?.mockRestore();
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 const EVERY_READ = () => [listGroupMembersMock, listGroupPeopleMock, listGroupPlacesMock, listOpenDealsForMock, listContactPlacesMock,
   getContactMock, resolveSmsSenderMock, prefsMock, ledgerDbMock, accountRead,
-  groupActivityMembersMock, groupFactsMock, groupNextUpMock, listTimelinePageMock, listPeopleNamesMock, getVoiceProfileMock];
+  groupActivityMembersMock, groupFactsMock, groupNextUpMock, listTimelinePageMock, listPeopleNamesMock, getVoiceProfileMock, noteOpenedMock];
 
 describe("the group record page: authorisation before any read (C16)", () => {
   it("a malformed id is a 404 before ANY read (C16; mutation: start the reads before the uuid check -> FAILS)", async () => {
@@ -680,5 +684,28 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
   it("still names no hero with the middle column drawn (rule 11)", async () => {
     groupActivityMembersMock.mockResolvedValue({ people: many(50), total: { ok: true, value: 73 }, more: true });
     expect(await render()).not.toContain("data-hero");
+  });
+});
+
+/**
+ * F-118 part 1 (plan Task 7; spec 4.1): the group page's own access-log write, beside
+ * loadGroupActivity — never before readGroup has proven the record, never swallowed.
+ */
+describe("the group record page logs BIS's open (F-118 part 1)", () => {
+  it("calls noteOpened with the access the guard returned, this account and the group kind/id (mutation: pass a different kind or id -> FAILS)", async () => {
+    await render();
+    expect(noteOpenedMock).toHaveBeenCalledWith(
+      { userId: "u1", isAgency: true, role: null, canManage: true }, "acct1", { kind: "group", recordId: G });
+  });
+
+  it("a group readGroup cannot see 404s and never calls noteOpened (mutation: log before readGroup -> FAILS)", async () => {
+    readGroupMock.mockResolvedValue(null);
+    await expect(render()).rejects.toBe(NOT_FOUND);
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  it("a rejected noteOpened rejects the page, with no markup rendered (mutation: swallow it -> FAILS)", async () => {
+    noteOpenedMock.mockRejectedValue(new Error("no live visit"));
+    await expect(render()).rejects.toThrow("no live visit");
   });
 });

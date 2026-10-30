@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const access = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: access }));
+const noteOpenedApi = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi }));
 const accountRead = vi.hoisted(() => vi.fn());
 const accountFilters = vi.hoisted(() => [] as [string, unknown][]);
 /** The request client: a sentinel by identity, which also answers the account's zone read. */
@@ -45,6 +47,7 @@ const GROUPS = [{ id: G, kind: "household", name: "Ramírez", isPrimary: true }]
 
 beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false, role: "owner", canManage: true });
+  noteOpenedApi.mockReset().mockResolvedValue(true);
   getContact.mockReset().mockResolvedValue({ id: S, first_name: "Sofía", last_name: "Ramírez" });
   listContactPlaces.mockReset().mockResolvedValue({ groups: GROUPS, places: [PLACE], placeCount: 1, equipment: [UNIT], equipmentCount: 1 });
   accountRead.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago" }, error: null });
@@ -121,5 +124,31 @@ describe("GET …/places (spec §6: the card's own read)", () => {
     const logged = String(vi.mocked(console.error).mock.calls[0]?.[0]);
     expect(logged).toContain("places read");
     expect(logged).toContain(A);
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this card is logged", () => {
+  beforeEach(() => { access.mockResolvedValue({ userId: "u", isAgency: true, role: "owner", canManage: true }); });
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await GET(new Request("https://x.test"), params());
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u", isAgency: true, role: "owner", canManage: true }, A, { kind: "contact", recordId: S });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    getContact.mockResolvedValueOnce(null);
+    expect((await GET(new Request("https://x.test"), params())).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await GET(new Request("https://x.test"), params());
+    expect(res.status).toBe(404);
+    expect(listContactPlaces).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await GET(new Request("https://x.test"), params()).then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(listContactPlaces).not.toHaveBeenCalled();
   });
 });

@@ -30,6 +30,8 @@ const aiCompleteMock = vi.fn<AnyArgs<{ ok: boolean; reason: string }>>(async () 
 const readBillingStandingMock = vi.fn<AnyArgs<object | null>>(async () => null);
 
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: async () => fx.access }));
+const noteOpenedApi = vi.fn(async () => true);
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...(a as [])) }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: fx.prefsLanguage, theme: null }) }));
 vi.mock("@/lib/zone", () => ({ renderZone: async (z?: string) => ({ zone: z ?? "America/Chicago", guessed: false, label: "x", source: "account" }) }));
@@ -55,6 +57,7 @@ beforeEach(() => {
   fx.contact = { id: C, first_name: "Ana", last_name: null, language: null, created_at: "2025-12-02T18:00:00Z", source: null };
   fx.prefsLanguage = null; fx.accountLanguage = null; fx.something = true; fx.order = [];
   vi.clearAllMocks();
+  noteOpenedApi.mockReset().mockResolvedValue(true);
   REQUEST.from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "America/Chicago", language: fx.accountLanguage }, error: null }) }) }) }));
 });
 
@@ -209,6 +212,35 @@ describe("the AI summary route (spec 4.2)", () => {
     const res = await call(GET);
     expect([res.status, await res.json()]).toEqual([200, { state: "failed" }]);
     expect(serviceDbMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this card is logged", () => {
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    fx.access = { userId: "u1", isAgency: true };
+    await call(GET);
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u1", isAgency: true }, A, { kind: "contact", recordId: C });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    fx.access = { userId: "u1", isAgency: true };
+    fx.contact = null;
+    expect((await call(GET)).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    fx.access = { userId: "u1", isAgency: true };
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await call(GET);
+    expect(res.status).toBe(404);
+    expect(buildMock).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    fx.access = { userId: "u1", isAgency: true };
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await call(GET).then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(buildMock).not.toHaveBeenCalled();
   });
 });
 

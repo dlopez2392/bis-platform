@@ -163,6 +163,21 @@ export function buildPaletteEntries(
     });
   }
 
+  // F-118 part 1 (owner ruling 9): the Team page's own "BIS access"
+  // section — every visit BIS has made to this account, its reason and
+  // what it opened — reached by an Owner directly and by the agency.
+  // Staff and a Technician never get this entry, and never reach the Team
+  // page at all (requireAccountOwner itself keeps them off it, so hiding
+  // this entry is convenience, not the authorization — same discipline as
+  // every other entry in this file).
+  if (base && (isAgency || isOwner)) {
+    entries.push({
+      kind: "href", id: "nav:bis-access", label: m["accessLog.title"], group: "navigation", agencyOnly: false,
+      keywords: ["bis", "access", "log", "visits", "who looked", "acceso", "registro", "visitas"],
+      href: `${base}/team#bis-access`,
+    });
+  }
+
   if (base && isAgency) {
     entries.push({
       kind: "href",

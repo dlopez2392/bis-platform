@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const access = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: access }));
+const noteOpenedApi = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi }));
 const maybeSingle = vi.hoisted(() => vi.fn());
 /** The request's own RLS client — a stable identity, so a test can prove
  *  getContact/readTextsView are read under THIS one, not serviceDb or some
@@ -25,6 +27,7 @@ const params = { params: Promise.resolve({ accountId: "a1", contactId: "c1" }) }
 
 beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false });
+  noteOpenedApi.mockReset().mockResolvedValue(true);
   getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
   readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
   ledgerDb.mockClear();
@@ -80,5 +83,31 @@ describe("GET …/texts — the Texts row's own read (spec §6: its own loading 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "UTC", phone: "+19562921696" });
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("timezone unreadable"));
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this row is logged", () => {
+  beforeEach(() => { access.mockResolvedValue({ userId: "u", isAgency: true }); });
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await GET(new Request("https://x.test"), params);
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u", isAgency: true }, "a1", { kind: "contact", recordId: "c1" });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    getContact.mockResolvedValueOnce(null);
+    expect((await GET(new Request("https://x.test"), params)).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await GET(new Request("https://x.test"), params);
+    expect(res.status).toBe(404);
+    expect(readTextsView).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await GET(new Request("https://x.test"), params).then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(readTextsView).not.toHaveBeenCalled();
   });
 });

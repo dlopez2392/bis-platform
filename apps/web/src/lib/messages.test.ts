@@ -2662,3 +2662,33 @@ describe("duplicates and merge copy, English and Spanish (F-006 plan Task 2)", (
     }
   });
 });
+
+describe("the BIS access copy (F-118 part 1)", () => {
+  const keys = Object.keys(m).filter((k) => k.startsWith("accessLog.") && !k.endsWith(".es"));
+  it("exists, and every key has its Spanish twin (positive control: the family is not empty)", () => {
+    expect(keys.length).toBeGreaterThan(40);
+    for (const k of keys) expect(m, k).toHaveProperty(`${k}.es`);
+  });
+  it("cites no milestone, no ticket, no template syntax and no arrow, in either language (mutation: put 'F-118' in accessLog.intro -> FAILS)", () => {
+    for (const k of keys) for (const v of [m[k as keyof typeof m], m[`${k}.es` as keyof typeof m]]) {
+      expect(v, k).not.toMatch(/\bM\d[a-z]?\b|F-\d{3}|\{\{|[←-⇿]/);
+    }
+  });
+  it("every counted phrase has its singular twin, in both languages", () => {
+    for (const base of ["accessLog.total", "accessLog.count.customers", "accessLog.count.groups", "accessLog.count.calls",
+      "accessLog.count.conversations", "accessLog.count.files", "accessLog.count.forms", "accessLog.summary.downloads", "accessLog.item.export"]) {
+      expect(m, base).toHaveProperty(`${base}One`);
+      expect(m, base).toHaveProperty(`${base}One.es`);
+    }
+  });
+  it("the Owner-facing promises are the spec's words (mutation: restore 'Nobody, at BIS or here' -> FAILS; drop the agency-lists sentence -> FAILS)", () => {
+    expect(m["accessLog.intro"]).toContain("These entries can't be changed or deleted from BIS or from your account.");
+    expect(m["accessLog.intro.es"]).toContain("Estas entradas no se pueden cambiar ni borrar desde BIS ni desde su cuenta.");
+    expect(m["accessLog.note.agencyLists"]).toContain("open work, screened calls and phone numbers");
+    expect(m["accessLog.note.agencyLists.es"]).toContain("el trabajo pendiente, las llamadas filtradas y los números de teléfono");
+    expect(m["accessLog.enter.ended.es"]).toBe("Su última visita aquí terminó al cabo de 2 horas.");
+    // Review I5 (orchestrator decision, consistent with ruling 2): lists are part of the visit, not listed one by one.
+    expect(m["accessLog.note.lists"]).toBe("Lists inside your account, like your customers, inbox and calls, are part of the visit and aren't listed one by one.");
+    expect(m["accessLog.note.lists.es"]).toBe("Las listas dentro de su cuenta, como sus clientes, la bandeja de entrada y las llamadas, forman parte de la visita y no aparecen una por una.");
+  });
+});

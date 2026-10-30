@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const apiAccountAccess = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (id: string) => apiAccountAccess(id) }));
+const noteOpenedApi = vi.fn(async () => true);
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...(a as [])) }));
 // The account row the documents clock reads on the SAME request client (its zone decides today and each added day).
 type ZoneAnswer = { data: { timezone: string } | null; error: { message: string } | null };
 const zoneRead = vi.fn<(...read: string[]) => Promise<ZoneAnswer>>(async () => ({ data: { timezone: "America/Chicago" }, error: null }));
@@ -36,6 +38,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-13T13:00:00.000Z"));
   apiAccountAccess.mockResolvedValue({ userId: "user_me", isAgency: false });
+  noteOpenedApi.mockResolvedValue(true);
   db.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Casa", billingAddress: null });
   db.listRecordDocuments.mockResolvedValue({ live: [row()], trashed: [], liveMore: false, trashedMore: false });
   db.listPeopleNames.mockResolvedValue({ user_ana: "Ana" });
@@ -138,5 +141,31 @@ describe("the Documents card's read for a group", () => {
     expect(body.live.some((d: object) => "share" in d)).toBe(false);
     expect(logged.mock.calls.map((c) => c.map(String).join(" ")).filter((l) => l.includes(ACC) && l.includes("42501"))).toHaveLength(1);
     logged.mockRestore();
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this card is logged", () => {
+  beforeEach(() => { apiAccountAccess.mockResolvedValue({ userId: "user_me", isAgency: true }); });
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await call();
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "user_me", isAgency: true }, ACC, { kind: "group", recordId: G });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    db.readGroup.mockResolvedValue(null);
+    expect((await call()).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await call();
+    expect(res.status).toBe(404);
+    expect(db.listRecordDocuments).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await call().then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(db.listRecordDocuments).not.toHaveBeenCalled();
   });
 });

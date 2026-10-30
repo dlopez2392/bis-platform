@@ -24,9 +24,14 @@ vi.mock("@bis/db", async (importOriginal) => {
 const hdrs: { value: Headers } = { value: new Headers() };
 vi.mock("next/headers", () => ({ headers: async () => hdrs.value }));
 const TOKEN = "T".repeat(43);
+const newShareToken = vi.fn(() => TOKEN);
 vi.mock("@/lib/document-shares/share-token", () => ({
-  newShareToken: () => TOKEN, shareUrl: (o: string, t: string) => `${o}/s/${t}`,
+  newShareToken: () => newShareToken(), shareUrl: (o: string, t: string) => `${o}/s/${t}`,
 }));
+// F-118 part 1 (plan Task 7, review I1): a share link opens the file with no sign-in, so making one
+// is a file open; the write happens BEFORE the token is minted.
+const noteOpened = vi.fn(async (..._a: unknown[]): Promise<void> => undefined);
+vi.mock("@/lib/access-log/note", () => ({ noteOpened: (...a: unknown[]) => noteOpened(...a) }));
 const A = await import("./document-shares-actions");
 
 const ACC = "44444444-4444-4444-8444-444444444444";
@@ -57,6 +62,8 @@ beforeEach(() => {
   db.createDocumentShare.mockResolvedValue({ status: "ok", share: SHARE_ROW });
   db.revokeDocumentShares.mockResolvedValue({ ids: [S1], revokedAt: REVOKED_AT });
   db.restoreDocumentShares.mockResolvedValue({ status: "restored", count: 1 });
+  newShareToken.mockReset().mockReturnValue(TOKEN);
+  noteOpened.mockReset().mockResolvedValue(undefined);
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -134,6 +141,44 @@ describe("createDocumentShareAction: Copy share link (spec 4.1)", () => {
     } finally {
       for (const spy of others) spy.mockRestore();
     }
+  });
+});
+
+/**
+ * F-118 part 1 (plan Task 7, review I1; spec 4.1): a share link opens the file with no sign-in, so
+ * making one is a file open. The write runs BEFORE the token is minted — a failed write mints nothing.
+ */
+describe("createDocumentShareAction logs the open (F-118 part 1, review I1)", () => {
+  it("a clean, visible file logs document_share for this document, BEFORE newShareToken and createDocumentShare (mutation: note after createDocumentShare -> FAILS)", async () => {
+    expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: true, url: `https://app.example.com/s/${TOKEN}` });
+    expect(noteOpened).toHaveBeenCalledWith(STAFF, ACC, { kind: "document_share", recordId: DOC });
+    expect(noteOpened.mock.invocationCallOrder[0]!).toBeLessThan(newShareToken.mock.invocationCallOrder[0]!);
+    expect(noteOpened.mock.invocationCallOrder[0]!).toBeLessThan(db.createDocumentShare.mock.invocationCallOrder[0]!);
+  });
+
+  it.each([
+    ["a trashed file", () => db.getDocument.mockResolvedValue(doc({ deleted_at: "2026-10-17T00:00:00Z", deleted_by: "u_bo" }))],
+    ["a pending version", () => db.listReadyVersionScans.mockResolvedValue([scan(V3, "pending", "2026-10-02T00:00:00Z")])],
+    ["a removed (infected) version", () => db.listReadyVersionScans.mockResolvedValue([scan(V3, "infected", "2026-10-02T00:00:00Z")])],
+    ["an Owners-only file, for Staff", () => db.getDocument.mockResolvedValue(doc({ owners_only: true }))],
+  ] as const)("%s returns its existing key with NO note (mutation: note before the proof -> FAILS)", async (_l, arrange) => {
+    arrange();
+    const before = await A.createDocumentShareAction(ACC, DOC);
+    expect(before.ok).toBe(false);
+    expect(noteOpened).not.toHaveBeenCalled();
+  });
+
+  it("a rejected note returns documents.share.failed, and neither newShareToken nor createDocumentShare ran (mutation: let the write proceed anyway -> FAILS)", async () => {
+    noteOpened.mockRejectedValueOnce(new Error("no live visit"));
+    expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: false, error: "documents.share.failed" });
+    expect(newShareToken).not.toHaveBeenCalled();
+    expect(db.createDocumentShare).not.toHaveBeenCalled();
+  });
+
+  it("a redirect digest from the note rejects the action (mutation: drop unstable_rethrow -> FAILS)", async () => {
+    const redirect = Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;replace;/dashboard/enter/A;307;" });
+    noteOpened.mockRejectedValueOnce(redirect);
+    await expect(A.createDocumentShareAction(ACC, DOC)).rejects.toBe(redirect);
   });
 });
 

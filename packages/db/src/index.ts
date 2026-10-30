@@ -130,6 +130,13 @@ export {
   readLiveCalendarFeed, createCalendarFeed, revokeCalendarFeed, replaceCalendarFeed, restoreCalendarFeed,
   claimCalendarFeedFetch, type CalendarFeedRow, type FeedClaim,
 } from "./calendar-feeds";
+export {
+  AGENCY_VISIT_REASONS, ACCESS_LOG_KINDS, AGENCY_VISIT_HOURS, ACCESS_LOG_PAGE_SIZE, ACCESS_LOG_ITEMS_SHOWN,
+  isAgencyVisitReason, startAgencyVisit, agencyVisitLive, noteAgencyOpen, newestAgencyVisitStart,
+  readAgencyActorName, readAccessLogPage, parseAccessLogPage,
+  type AgencyVisitReason, type AccessLogKind, type OpenedRef, type AgencyActor, type AccessLogCounts,
+  type AccessLogItem, type AccessLogVisit, type AccessLogPage, type AccessLogCursor,
+} from "./access-log";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContact, listContactRelationships } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
+import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
@@ -31,6 +32,8 @@ export async function GET(
   try {
     const contact = await getContact(db, accountId, contactId);
     if (!contact) return NextResponse.json({}, { status: 404 });
+    // F-118 part 1 (plan Task 6): logged after the proof, before any data leaves.
+    if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
     const { rows, people } = await listContactRelationships(db, accountId, contactId);
     const views = rows.map((r) => toRelationshipView(r, contactId, people)).filter((v): v is RelationshipView => v !== null);
     const body: RelationshipsResponse = {

@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const order: string[] = [];
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
+const noteOpenedApi = vi.fn(async () => true);
+vi.mock("@/lib/access-log/note", () => ({ noteOpenedApi: (...a: unknown[]) => noteOpenedApi(...(a as [])) }));
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago", language: null }, error: null }));
 const db = { from: (table: string) => { order.push(table); const chain = { select: () => chain, eq: () => chain, maybeSingle: () => accountRead() }; return chain; } };
@@ -61,6 +63,7 @@ const body = async (q = "") => (await GET(req(q), ctx())).json();
 beforeEach(() => {
   order.length = 0;
   access.mockReset().mockResolvedValue({ userId: "u1", isAgency: true });
+  noteOpenedApi.mockReset().mockResolvedValue(true);
   accountRead.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago", language: null }, error: null });
   ledgerDbFn.mockReset().mockImplementation(() => { order.push("ledgerDb"); return ledger; });
   prefs.mockReset().mockResolvedValue({ language: null, theme: null });
@@ -96,6 +99,31 @@ describe("the drawer's summary route: authorisation first", () => {
     await body();
     expect(order.indexOf("ledgerDb")).toBeGreaterThan(order.indexOf("getContact"));
     expect(smsState).toHaveBeenCalledWith(ledger, "a1", CONTACT);
+  });
+});
+
+describe("F-118 part 1 (plan Task 6): BIS's open of this drawer is logged", () => {
+  it("logged after the proof, with the same access object (mutation: hard-code { isAgency: false } -> FAILS)", async () => {
+    await body();
+    expect(noteOpenedApi).toHaveBeenCalledTimes(1);
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u1", isAgency: true }, "a1", { kind: "contact", recordId: "c1" });
+  });
+  it("a 404 logs nothing (mutation: move the call above the proof -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    expect((await GET(req(), ctx())).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+  it("no live visit: 404, and the first data read never ran (mutation: ignore the false -> FAILS)", async () => {
+    noteOpenedApi.mockResolvedValueOnce(false);
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(404);
+    expect(dbMocks.contactFacts).not.toHaveBeenCalled();
+  });
+  it("the write rejects: a status >= 500, and the first data read never ran (mutation: try/catch around the call -> FAILS)", async () => {
+    noteOpenedApi.mockRejectedValueOnce(new Error("db down"));
+    const status = await GET(req(), ctx()).then((r) => r.status, () => 500);
+    expect(status).toBeGreaterThanOrEqual(500);
+    expect(dbMocks.contactFacts).not.toHaveBeenCalled();
   });
 });
 

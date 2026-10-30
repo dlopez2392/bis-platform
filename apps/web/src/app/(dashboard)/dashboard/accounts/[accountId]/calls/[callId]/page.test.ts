@@ -74,6 +74,13 @@ const getCallMock = vi.fn();
 const listFailedOutboundSmsMock = vi.fn();
 const listProposalsForCallMock = vi.fn();
 const getContactMock = vi.fn();
+/** F-118 part 1 (spec 4.1): the one logger call this page owes BIS's access log. Mocked rather than
+ *  exercising the real database write — note.test.ts already proves what the real function does with
+ *  this access value; this file proves only that the PAGE calls it, with what, and does not swallow it. */
+const noteOpenedMock = vi.fn();
+vi.mock("@/lib/access-log/note", () => ({
+  noteOpened: (...args: unknown[]) => noteOpenedMock(...args),
+}));
 /** The call card (0064) and the persona its author mark names: each its own
  *  read, each defaulted in `beforeEach` to "nothing", so every case written
  *  before the card renders exactly what it rendered before. */
@@ -197,6 +204,7 @@ beforeEach(() => {
   };
   prefsFixture.language = null;
   listPeopleNamesMock.mockReset().mockResolvedValue({});
+  noteOpenedMock.mockReset().mockResolvedValue(undefined);
 });
 
 function render(
@@ -501,6 +509,37 @@ describe("CallDetailPage", () => {
     expect(html).not.toContain("Text-back");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
     spy.mockRestore();
+  });
+});
+
+/**
+ * F-118 part 1 (spec 4.1, plan Task 8): the call page is a record surface, so BIS's own open of it is
+ * written to the account's access log — after `getCall` has proven the call exists in this account, and
+ * before any of the page's markup is returned.
+ */
+describe("CallDetailPage — the access log (F-118 part 1)", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true;
+  });
+
+  it("logs once, with this call's own id, and the access value the page's own guard returned (mutation: pass { isAgency: false } -> FAILS)", async () => {
+    await render(CALL);
+    expect(noteOpenedMock).toHaveBeenCalledTimes(1);
+    expect(noteOpenedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ isAgency: true }),
+      "acct1",
+      { kind: "call", recordId: "call1" },
+    );
+  });
+
+  it("logs nothing for a call that does not exist here — a 404 is never logged (mutation: call noteOpened before the null check -> FAILS)", async () => {
+    await expect(render(null)).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed log write rejects the page rather than being swallowed (fail closed, owner ruling 4; mutation: wrap the call in try/catch -> FAILS)", async () => {
+    noteOpenedMock.mockRejectedValueOnce(new Error("agency_visit_items insert failed"));
+    await expect(render(CALL)).rejects.toThrow("agency_visit_items insert failed");
   });
 });
 

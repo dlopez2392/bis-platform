@@ -1,9 +1,18 @@
+import { NextResponse } from "next/server";
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { BIS_PATH_HEADER, accountPathOf } from "@/lib/access-log/paths";
 
 const isProtected = createRouteMatcher(["/dashboard(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isProtected(req)) await auth.protect();
+  // F-118 part 1 (spec 3.2): the in-account path the person asked for, so the reason gate can send them back
+  // to it. Set (overwriting any value the browser sent) on account paths only; the gate re-validates it.
+  const path = accountPathOf(req.nextUrl);
+  if (path === null) return;
+  const headers = new Headers(req.headers);
+  headers.set(BIS_PATH_HEADER, path);
+  return NextResponse.next({ request: { headers } });
 });
 
 /**

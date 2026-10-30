@@ -16,12 +16,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * stubbed to an object nothing dereferences.
  */
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+// The real unstable_rethrow (review: the Setup-visit catch must let Next's own redirect through), the
+// redirect itself still a spy.
+vi.mock("next/navigation", async (importOriginal) => ({ ...(await importOriginal<object>()), redirect: vi.fn() }));
 const dbMocks = vi.hoisted(() => ({ createAccount: vi.fn(), applyBlueprint: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
 }));
 vi.mock("@/lib/auth", () => ({ requireAgency: async () => ({ userId: "user_agency" }) }));
+// F-118 part 1 (plan C10, Task 5 step 4): a created or adopted company starts its creator's Setup visit
+// before the redirect into it — without this, that very redirect would meet the chooser.
+const visitMocks = vi.hoisted(() => ({
+  startVisitForCaller: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "visit_1"),
+}));
+vi.mock("@/lib/access-log/visit", () => ({
+  startVisitForCaller: (...a: unknown[]) => visitMocks.startVisitForCaller(...a),
+}));
 const clerkMocks = vi.hoisted(() => ({ createOrg: vi.fn(), deleteOrg: vi.fn(), getOrg: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({
   clerkClient: async () => ({
@@ -59,6 +69,7 @@ beforeEach(() => {
   clerkMocks.createOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID });
   clerkMocks.deleteOrg.mockReset().mockResolvedValue(undefined);
   clerkMocks.getOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID, name: "Rio Roofing" });
+  visitMocks.startVisitForCaller.mockReset().mockResolvedValue("visit_1");
 });
 
 /**
@@ -278,6 +289,88 @@ describe("adoptOrphanOrgAction (D-087)", () => {
     expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz("Mars/Olympus")))
       .toEqual({ ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", "Mars/Olympus") });
     expect(clerkMocks.getOrg).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-118 part 1 (plan C10): the owner's ruling — creating or adopting a company is agency WORK on that
+ * account, so it starts the creator's own Setup visit, or the redirect these two actions already end in
+ * would land the caller straight on the chooser they just avoided. A failed start is logged and
+ * swallowed (the chooser asks instead); it must never cost the account that was just created.
+ */
+describe("F-118 part 1 (plan C10): a created or adopted company starts its creator's Setup visit", () => {
+  const tz = (zone = "America/Chicago") => {
+    const f = new FormData();
+    f.set("timezone", zone);
+    f.set("trade", "hvac");
+    return f;
+  };
+
+  it("createClientAccount starts the Setup visit for the new account id, BEFORE the redirect into it (mutation: call it after the redirect line -> the order assertion FAILS)", async () => {
+    await createClientAccount(form());
+    expect(visitMocks.startVisitForCaller).toHaveBeenCalledWith("acct_1", "setup");
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/setup");
+    expect(visitMocks.startVisitForCaller.mock.invocationCallOrder[0]!)
+      .toBeLessThan(vi.mocked(redirect).mock.invocationCallOrder[0]!);
+  });
+
+  it("createClientAccount still redirects into the new account when starting its Setup visit fails (mutation: let the rejection propagate unhandled -> FAILS, no redirect)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    visitMocks.startVisitForCaller.mockRejectedValue(new Error("agency_visits insert failed"));
+    await createClientAccount(form());
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/setup");
+    errorSpy.mockRestore();
+  });
+
+  it("adoptOrphanOrgAction starts the Setup visit for the adopted account id, BEFORE the redirect into it (mutation: call it after the redirect line -> the order assertion FAILS)", async () => {
+    await adoptOrphanOrgAction(CLERK_ORG_ID, tz());
+    expect(visitMocks.startVisitForCaller).toHaveBeenCalledWith("acct_1", "setup");
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/settings#client-access");
+    expect(visitMocks.startVisitForCaller.mock.invocationCallOrder[0]!)
+      .toBeLessThan(vi.mocked(redirect).mock.invocationCallOrder[0]!);
+  });
+
+  it("adoptOrphanOrgAction still redirects into the adopted account when starting its Setup visit fails (mutation: let the rejection propagate unhandled -> FAILS, no redirect)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    visitMocks.startVisitForCaller.mockRejectedValue(new Error("agency_visits insert failed"));
+    await adoptOrphanOrgAction(CLERK_ORG_ID, tz());
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/settings#client-access");
+    errorSpy.mockRestore();
+  });
+
+  /** A real Next redirect error, thrown by the real `redirect` (the module's own is a spy here). */
+  const realRedirectError = async (): Promise<unknown> => {
+    const real = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+    try { real.redirect("/dashboard/enter/acct_1"); } catch (e) { return e; }
+    throw new Error("the real redirect did not throw");
+  };
+
+  it.each([
+    ["createClientAccount", () => createClientAccount(form())],
+    ["adoptOrphanOrgAction", () => adoptOrphanOrgAction(CLERK_ORG_ID, tz())],
+  ] as const)("%s: a redirect thrown from inside starting the Setup visit propagates, never swallowed as a failure (mutation: drop unstable_rethrow -> FAILS)", async (_n, run) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy.mockClear();
+    const redirectError = await realRedirectError();
+    visitMocks.startVisitForCaller.mockRejectedValue(redirectError);
+    await expect(run()).rejects.toBe(redirectError);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it.each([
+    ["createClientAccount", () => createClientAccount(form())],
+    ["adoptOrphanOrgAction", () => adoptOrphanOrgAction(CLERK_ORG_ID, tz())],
+  ] as const)("%s: a failed Setup visit is logged through loggableError, never with an address in it (mutation: log String(e) -> FAILS)", async (_n, run) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy.mockClear();
+    visitMocks.startVisitForCaller.mockRejectedValue(new Error("insert refused for owner@rio-roofing.test"));
+    await run();
+    const line = errorSpy.mock.calls.map((c) => c.join(" ")).find((l) => l.includes("Setup visit"));
+    expect(line).toContain("Error: insert refused for [email]");
+    expect(line).not.toContain("owner@rio-roofing.test");
+    errorSpy.mockRestore();
   });
 });
 
