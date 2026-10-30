@@ -22,6 +22,13 @@ vi.mock("@/lib/access-log/visit", () => ({
   startVisitForCaller: (...a: unknown[]) => visitMocks.startVisitForCaller(...a),
 }));
 
+// The second loop path (2026-10-30): with no valid reason but a visit ALREADY live, the chooser would just
+// redirect straight back. Default: no live visit (agencyVisitMissing true), so every older case is unchanged.
+const gateMocks = vi.hoisted(() => ({ agencyVisitMissing: vi.fn() }));
+vi.mock("@/lib/access-log/gate", () => ({
+  agencyVisitMissing: (...a: unknown[]) => gateMocks.agencyVisitMissing(...a),
+}));
+
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => { throw new Error(`REDIRECT:${url}`); },
 }));
@@ -52,6 +59,7 @@ const redirectUrl = async (p: Promise<void>): Promise<string> => {
 beforeEach(() => {
   authFixture.fail = false;
   visitMocks.startVisitForCaller.mockReset().mockResolvedValue("visit_1");
+  gateMocks.agencyVisitMissing.mockReset().mockResolvedValue(true);
 });
 
 describe("startVisitAction — the reason, checked against the closed list", () => {
@@ -117,5 +125,37 @@ describe("startVisitAction — the account id and the visit write", () => {
     authFixture.fail = true;
     await expect(startVisitAction(A, null, form("support"))).rejects.toThrow("NEXT_REDIRECT:/sign-in");
     expect(visitMocks.startVisitForCaller).not.toHaveBeenCalled();
+  });
+});
+
+describe("startVisitAction — no valid reason while a visit is ALREADY live (the agency refresh loop, 2026-10-30)", () => {
+  it.each(["curious", "", undefined])(
+    "reason %j with a live visit goes to the safe `to`, never back to the chooser, and starts nothing (mutation: drop the live-visit check -> FAILS)",
+    async (reason) => {
+      gateMocks.agencyVisitMissing.mockResolvedValue(false);
+      const to = `/dashboard/accounts/${A}/setup`;
+      const url = await redirectUrl(startVisitAction(A, to, form(reason)));
+      expect(url).toBe(to);
+      expect(gateMocks.agencyVisitMissing).toHaveBeenCalledWith(A);
+      expect(visitMocks.startVisitForCaller).not.toHaveBeenCalled();
+    },
+  );
+
+  it("with a live visit and no safe `to`, goes to this account's home", async () => {
+    gateMocks.agencyVisitMissing.mockResolvedValue(false);
+    const url = await redirectUrl(startVisitAction(A, `/dashboard/accounts/${B}/x`, form("curious")));
+    expect(url).toBe(`/dashboard/accounts/${A}/dashboard`);
+  });
+
+  it("a failed visit read falls back to the chooser, never into the account (fail closed)", async () => {
+    gateMocks.agencyVisitMissing.mockRejectedValue(new Error("down"));
+    const url = await redirectUrl(startVisitAction(A, null, form("curious")));
+    expect(url).toBe(`/dashboard/enter/${A}`);
+  });
+
+  it("a VALID reason never asks whether a visit is live: it starts one, as before", async () => {
+    gateMocks.agencyVisitMissing.mockResolvedValue(false);
+    await redirectUrl(startVisitAction(A, null, form("support")));
+    expect(visitMocks.startVisitForCaller).toHaveBeenCalledWith(A, "support");
   });
 });
