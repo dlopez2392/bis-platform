@@ -81,6 +81,25 @@ describe("removing and restoring a place (C5)", () => {
       await removePlace(db, accountId, p.id, ctx);
       expect(await setPlaceArchived(db, accountId, p.id, false, ctx)).toMatchObject({ id: p.id, archived_at: null });
     }));
+  it("a place a job names (bookings.place_id, 0107, NO ACTION) is archived, not deleted, and the job still names it (F-046; mutation: skip the bookings count -> deletes, and the job's place_id dangles, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const place = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
+      const { data: calendar, error: calErr } = await db.from("calendars")
+        .insert({ account_id: accountId, public_id: `cal_place_${Date.now()}` }).select("id").single();
+      if (calErr) throw calErr;
+      const { data: bk, error: bkErr } = await db.from("bookings").insert({
+        account_id: accountId, calendar_id: calendar!.id, contact_id: ana,
+        starts_at: "2031-06-02T15:00:00.000Z", ends_at: "2031-06-02T16:00:00.000Z",
+        cancel_token: `tok_place_${Date.now()}`, author_kind: "person", place_id: place.id,
+      }).select("id").single();
+      if (bkErr) throw bkErr;
+      const r = await removePlace(db, accountId, place.id, ctx);
+      expect(r).toMatchObject({ mode: "archived" });
+      const { data: row } = await db.from("bookings").select("place_id").eq("id", bk!.id).single();
+      expect(row?.place_id).toBe(place.id);
+    }));
   it("updatePlace answers the previous values for Undo", () => withTestAccount(async (db, accountId) => {
     const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
     const ctx = { subjectId: ana, actorId: ACTOR };

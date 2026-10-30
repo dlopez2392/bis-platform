@@ -234,4 +234,17 @@ describe("HEAD count reads fail closed on a count-less answer, never read it as 
       const { count } = await sdb.from("equipment").select("id", { count: "exact", head: true }).eq("place_id", place.id);
       expect(count).toBe(1);
     }));
+
+  it("removePlace keeps a place a job names when the booking count comes back empty (F-046; mutation: restore `(count ?? 0) === 0` on the booking count -> the place is deleted though a job still names it, FAILS)", () =>
+    withTestAccount(async (sdb, accountId) => {
+      const { id: ana } = await createContact(sdb, accountId, { firstName: "Ana" }, ACTOR);
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const place = await addPlace(sdb, accountId, { contactId: ana, groupId: null }, {
+        label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: null, region: null, postal_code: null, country: null,
+      }, ctx);
+      await expect(removePlace(noCount(sdb, "bookings"), accountId, place.id, ctx))
+        .rejects.toThrow(/removePlace booking count failed: no count returned/);
+      // Nothing was removed: the place is still there, not archived.
+      expect(await getPlace(sdb, accountId, place.id)).toMatchObject({ id: place.id, archived_at: null });
+    }));
 });
