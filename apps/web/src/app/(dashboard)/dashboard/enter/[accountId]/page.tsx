@@ -1,5 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { AGENCY_VISIT_REASONS, type AgencyVisitReason } from "@bis/db";
 import { requireAgency, accountHome } from "@/lib/auth";
@@ -14,6 +14,7 @@ import { makeTr } from "@/lib/record/copy";
 import type { MessageKey } from "@/lib/messages";
 import { PageHeader } from "@/components/page-header";
 import { ReasonTiles } from "@/components/access-log/reason-tiles";
+import { VisitBounce } from "@/components/access-log/visit-bounce";
 import { buttonVariants } from "@/components/ui/button";
 import { startVisitAction } from "./actions";
 
@@ -34,7 +35,7 @@ const REASON_LABEL_KEY = {
  * the agency's own surface (never on an Owner's).
  *
  * `to` is the in-account path the proxy recorded on the way in (`x-bis-path`, carried here as `?to=`), and
- * it is re-validated through `safeReturnPath` both on an already-live visit (immediate redirect, below)
+ * it is re-validated through `safeReturnPath` both on an already-live visit (the VisitBounce, below)
  * and inside `startVisitAction` after a tile is chosen — never trusted from the query string on its own.
  */
 export default async function EnterPage({ params, searchParams }: {
@@ -48,7 +49,12 @@ export default async function EnterPage({ params, searchParams }: {
   const back = safeReturnPath(toParam, accountId);
   const { sessionId } = await auth();
   if (await agencyVisitOk(accountId, userId, sessionId)) {
-    redirect(back ?? accountHome(accountId, null));
+    // Never redirect() here (the router-cache loop, 2026-10-30): a render-time redirect cannot purge this
+    // tab's client router cache, which may still hold prefetched "go to the chooser" answers for the
+    // account's routes from before the visit (started in another tab) existed. The bounce hard-navigates.
+    const { language } = await getPersonPrefs();
+    const tr = makeTr(requestLocale({ account: null, isOperator: true, userLanguage: language }, { locale: qaLocale }), requestPseudoMode({ locale: qaLocale }));
+    return <VisitBounce target={back ?? accountHome(accountId, null)} label={tr.text("accessLog.enter.opening")} />;
   }
 
   const db = await dbForRequest();
