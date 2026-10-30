@@ -65,7 +65,7 @@ describe("GET /api/cron/reminders — the dispatcher behind CRON_FANOUT", () => 
     const res = await GET(cronReq());
     expect(res.status).toBe(200);
 
-    expect(fetchSpy).toHaveBeenCalledTimes(21);
+    expect(fetchSpy).toHaveBeenCalledTimes(22);   // 21 until F-046 part 1 added jobHolds
     const urls = fetchSpy.mock.calls.map((c) => c[0] as string);
     expect([...urls].sort()).toEqual(PLAN.map((n) => `https://app.example.com/api/cron/pass/${n.key}`).sort());
     for (const [, init] of fetchSpy.mock.calls as [string, RequestInit][]) {

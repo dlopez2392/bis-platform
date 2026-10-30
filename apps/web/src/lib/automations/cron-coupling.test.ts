@@ -21,6 +21,7 @@ import { RELEASE_BUDGET_MS } from "./passes/release-held";
 import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 import { EXPIRY_BUDGET_MS } from "./passes/documents-expiry";
 import { CANCEL_NOTICE_BUDGET_MS } from "./passes/cancel-notices";
+import { JOB_HOLD_BUDGET_MS } from "./passes/job-holds";
 import {
   PLAN, longestPathS, PASS_ROUTE_MAX_S, JOBS_DRAIN_MAX_S, JOBS_DRAIN_KEY, DISPATCHER_MAX_S,
   DISPATCH_SLACK_S, LEGACY_TICK_CEILING_S,
@@ -349,12 +350,15 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
    * reads as "room for the rest", not a number tuned to pass today's
    * five. Since the F-048 follow-up it is 50 s: a sixth budget (the
    * cancel-notice sweep, 10 s) moved one of "the rest" into the sum, so the
-   * same room is now partly a bound that pass enforces on itself. Mutation: raise any one budget past the point this leaves
+   * same room is now partly a bound that pass enforces on itself. Since
+   * F-046 part 1 a seventh (the job-hold backstop, 10 s) is added, and
+   * LEGACY_TICK_CEILING_S rose 300 → 310 to hold it, so no neighbour's
+   * budget shrank and the 50 s stays. Mutation: raise any one budget past the point this leaves
    * zero headroom → FAILS; comment out LEGACY_TICK_CEILING_S or any budget
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).
    */
-  it("the six wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside the in-process tick's ceiling", () => {
+  it("the seven wall-clock budgets, summed, still leave headroom for the unbudgeted passes inside the in-process tick's ceiling", () => {
     // Since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s)
     // joined the other three; since S-07 3a, the documents expiry pass
     // (EXPIRY_BUDGET_MS, 15 s) is the fifth: 60 + 60 + 60 + 45 + 15 = 240 s,
@@ -366,11 +370,16 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // 240 + 10 + 50 = 300 = the in-process ceiling, exactly. The real room for
     // unbudgeted work is unchanged; part of it is now a stated, enforced bound.
     // The next budget added must come out of a neighbour or raise LEGACY_TICK_CEILING_S.
+    // F-046 part 1: the job-hold backstop (JOB_HOLD_BUDGET_MS, 10 s) is the
+    // seventh, and took the second route: LEGACY_TICK_CEILING_S 300 → 310.
+    // 60 + 60 + 60 + 45 + 15 + 10 + 10 = 260, + the 50 s headroom = 310 = the
+    // in-process ceiling, exactly. The route's live maxDuration is 800 s, so
+    // 310 still fits it with room.
     // F-196: retargeted to LEGACY_TICK_CEILING_S, the in-process tick's
     // budget (the route itself now declares the dispatcher's 800 s).
     const MIN_HEADROOM_MS = 50_000;
     const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS + EXPIRY_BUDGET_MS
-      + CANCEL_NOTICE_BUDGET_MS;
+      + CANCEL_NOTICE_BUDGET_MS + JOB_HOLD_BUDGET_MS;
     expect(LEGACY_TICK_CEILING_S * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
   });
 });
@@ -392,12 +401,12 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
 describe("fan-out: each pass in its own function, the plan inside the dispatcher's ceiling", () => {
   const BUDGETS_MS = {
     RELEASE_BUDGET_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS,
-    DOCUMENT_SCAN_BUDGET_MS, EXPIRY_BUDGET_MS, CANCEL_NOTICE_BUDGET_MS,
+    DOCUMENT_SCAN_BUDGET_MS, EXPIRY_BUDGET_MS, CANCEL_NOTICE_BUDGET_MS, JOB_HOLD_BUDGET_MS,
   };
 
-  it("1. the pass route declares a LIVE maxDuration of PASS_ROUTE_MAX_S, and each of the six budgets plus 30 s fits it (mutation: route literal 60, RELEASE_BUDGET_MS 61_000, or the export commented out → FAILS)", () => {
+  it("1. the pass route declares a LIVE maxDuration of PASS_ROUTE_MAX_S, and each of the seven budgets plus 30 s fits it (mutation: route literal 60, RELEASE_BUDGET_MS 61_000, or the export commented out → FAILS)", () => {
     expect(declaredMaxDuration(passRouteSource)).toBe(PASS_ROUTE_MAX_S);
-    expect(Object.keys(BUDGETS_MS)).toHaveLength(6);
+    expect(Object.keys(BUDGETS_MS)).toHaveLength(7);
     for (const [name, ms] of Object.entries(BUDGETS_MS)) {
       expect(ms + 30_000, name).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
     }
@@ -429,18 +438,19 @@ describe("fan-out: each pass in its own function, the plan inside the dispatcher
   it("5. the row in flight past a budget ends inside the pass route, counting each pass's sends per row: budget + sends x (two attempts + one rate-limit wait) + 5 s ≤ 90 s (mutation: RATE_LIMIT_MAX_WAIT_MS 10_000, or SEND_TIMEOUT_MS 15_000 → FAILS)", () => {
     // A pass checks its budget BEFORE a row, so the row in flight can run
     // past it by every send that row makes. One send is at most attempt +
-    // wait + attempt (Task 4): 23 s today. Five passes make ONE send per row
-    // (or none), checked against their budget: 60 + 23 + 5 = 88 ≤ 90.
+    // wait + attempt (Task 4): 23 s today. Six passes make ONE send per row
+    // (or none), checked against their budget: 60 + 23 + 5 = 88 ≤ 90. The
+    // job-hold backstop (F-046) is the sixth: one settle, at most one email.
     const sendWorstMs = 2 * SEND_TIMEOUT_MS + RATE_LIMIT_MAX_WAIT_MS;
     const SENDS_PER_ROW = {
       RELEASE_BUDGET_MS: 1, USAGE_REPORT_BUDGET_MS: 1, DOCUMENT_SCAN_BUDGET_MS: 1,
-      EXPIRY_BUDGET_MS: 1, CANCEL_NOTICE_BUDGET_MS: 1,
+      EXPIRY_BUDGET_MS: 1, CANCEL_NOTICE_BUDGET_MS: 1, JOB_HOLD_BUDGET_MS: 1,
     } as const;
     for (const [name, sends] of Object.entries(SENDS_PER_ROW)) {
       const budget = BUDGETS_MS[name as keyof typeof BUDGETS_MS];
       expect(budget + sends * sendWorstMs + 5_000, name).toBeLessThanOrEqual(PASS_ROUTE_MAX_S * 1000);
     }
-    // The weekly client report is the sixth, and the exception (Task 7
+    // The weekly client report is the seventh, and the exception (Task 7
     // review, I1): ONE row (an account) makes one send PER RECIPIENT, up to
     // WEEKLY_REPORT_MAX_RECIPIENTS. Its budget alone cannot bound that
     // (60 + 3 x 23 = 129 s), so it starts an account only when every send

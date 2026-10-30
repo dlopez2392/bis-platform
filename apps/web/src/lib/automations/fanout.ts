@@ -23,8 +23,10 @@ export const PASS_ROUTE_MAX_S = 90;
 export const JOBS_DRAIN_MAX_S = 300;
 /** The dispatcher's (`/api/cron/reminders`) `maxDuration` under fan-out. */
 export const DISPATCHER_MAX_S = 800;
-/** The in-process tick's budget: what every pass together must fit when the switch is off. */
-export const LEGACY_TICK_CEILING_S = 300;
+/** The in-process tick's budget: what every pass together must fit when the switch is off. 300 until F-046's
+ *  job-hold pass took the seventh budget (cron-coupling.test.ts's rule: raise this or take it from a
+ *  neighbour); the route's live maxDuration is 800. */
+export const LEGACY_TICK_CEILING_S = 310;
 /** How long past a node's ceiling the dispatcher waits for its answer before calling it no answer. */
 export const ANSWER_GRACE_S = 5;
 /** Headroom the dispatcher keeps beyond the plan's longest path. */
@@ -67,6 +69,9 @@ const HEAD: readonly PlanNode[] = [
   n("billingPause", []),
   n("releaseHeld", ["billingPause"]),
   n("cancelNotices", ["billingPause"]),
+  // F-046: after billingPause only, not releaseHeld (test 4 pins every released recipe's `after` to exactly
+  // ["releaseHeld"]); "a confirmation precedes a reminder in one tick" holds for the in-process tick.
+  n("jobHolds", ["billingPause"]),
   rel("reminders"), rel("followups"),
   n("reviewRequests", ["followups"], "completed"),
   n("referralAsks", ["reviewRequests"], "completed"),
