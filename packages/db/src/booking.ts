@@ -43,7 +43,14 @@ export type BookingRow = {
    *  Written by the inbound SMS webhook; it never changes `status`. */
   confirm_reply: "yes" | "no" | null;
   confirm_reply_at: string | null;
+  /** F-046 (0107): this booking's own kind; NULL = the calendar's `meeting_type`. Optional: no read selects it yet. */
+  meeting_type?: BookingMeetingType | null;
 };
+
+/** F-046 (0107): how a booking meets. A booking's own NULL means its calendar's. */
+export type BookingMeetingType = "in_person" | "phone" | "video";
+/** F-046 (0107): the email a staff job's hold sends when it settles. */
+export type NoticeWanted = "confirmation" | "moved";
 
 export type CalendarSettingsPatch = Partial<{
   enabled: boolean;
@@ -250,9 +257,10 @@ export async function listBookedRanges(
   /** F-048: leave this one booking out — the one a customer is MOVING, which
    *  is still `booked` while they pick (`computeMoveSlots` in apps/web). */
   excludeBookingId?: string,
-): Promise<{ starts_at: string; ends_at: string }[]> {
+): Promise<{ id: string; starts_at: string; ends_at: string }[]> {
+  // F-046: `id` too, so a staff job's overlap warning can name the jobs it overlaps (plan correction 10).
   let q = db.from("bookings")
-    .select("starts_at, ends_at")
+    .select("id, starts_at, ends_at")
     .eq("calendar_id", calendarId).eq("status", "booked")
     .lt("starts_at", toIso).gt("ends_at", fromIso);
   if (excludeBookingId !== undefined) q = q.neq("id", excludeBookingId);
@@ -300,11 +308,19 @@ function isOverlapError(error: WriteError): boolean {
   return error?.code === "23P01" || error?.message?.includes("bookings_no_overlap") === true;
 }
 
+/** F-046 (0107): the columns only a staff job, or a move carrying a row's own place and kind, writes. */
+type BookingExtraColumns = Partial<{
+  place_id: string | null; meeting_type: BookingMeetingType | null; hold_until: string | null;
+  notice_wanted: NoticeWanted | null; closure_kept_at: string | null;
+}>;
+
 /** The row `createBooking` writes, and nothing else: no event. Shared with
  *  `moveBooking`, which must tell a write that failed from an event that
- *  failed after the write landed (fix round 1, I2). */
+ *  failed after the write landed (fix round 1, I2). F-046: `extra` is spread
+ *  LAST and is empty by default, so `createBooking`'s insert is unchanged. */
 async function insertBookingRow(
   db: SupabaseClient, accountId: string, input: CreateBookingInput, cancelToken: string, author: RowAuthor,
+  extra: BookingExtraColumns = {},
 ): Promise<{ data: { id: string } | null; error: WriteError }> {
   const { data, error } = await db.from("bookings")
     .insert({
@@ -322,9 +338,43 @@ async function insertBookingRow(
       // Who made it (0073, spec §5.2): bookingAuthor, from the actor the caller passes.
       author_kind: author.authorKind,
       author_id: author.authorId,
+      ...extra,
     })
     .select("id").single();
   return { data: (data as { id: string } | null) ?? null, error: (error as WriteError) ?? null };
+}
+
+export type StaffJobInput = {
+  calendarId: string; contactId: string; startsAt: Date; endsAt: Date;
+  note: string | null; placeId: string | null; meetingType: BookingMeetingType; meetingUrl: string | null;
+  holdUntil: Date; noticeWanted: NoticeWanted | null; closureKept: boolean;
+};
+
+/**
+ * F-046 (spec 6.1): a job a person on the dashboard books. Person-made (R1: it may overlap, 0107), in the
+ * account's zone (no booker zone), held for the Undo window (`hold_until`). `closure_kept_at` is stamped
+ * only when "You're closed that day" was accepted, or the closure would hold its reminders. NO event:
+ * `booking.created` is written when the hold settles (D8), so an undone add leaves no "New booking" behind.
+ * One INSERT: it takes the calendar row in 0107's trigger and holds no other row, so it cannot deadlock
+ * with an undo (the lock rule). A 23P01 (a customer-made row cannot reach here; kept for parity) is
+ * `SlotTakenError`. THROWS on any other write error.
+ */
+export async function createStaffJob(
+  db: SupabaseClient, accountId: string, input: StaffJobInput, actorId: string,
+): Promise<{ id: string; cancelToken: string }> {
+  const cancelToken = newCancelToken();
+  const { data, error } = await insertBookingRow(db, accountId, {
+    calendarId: input.calendarId, contactId: input.contactId, startsAt: input.startsAt, endsAt: input.endsAt,
+    note: input.note ?? undefined, meetingUrl: input.meetingUrl ?? undefined,
+  }, cancelToken, bookingAuthor("user", actorId), {
+    place_id: input.placeId, meeting_type: input.meetingType, hold_until: input.holdUntil.toISOString(),
+    notice_wanted: input.noticeWanted, closure_kept_at: input.closureKept ? new Date().toISOString() : null,
+  });
+  if (error || !data) {
+    if (isOverlapError(error)) throw new SlotTakenError();
+    throw new Error(`createStaffJob failed: ${error?.message}`);
+  }
+  return { id: data.id, cancelToken };
 }
 
 /**
@@ -798,11 +848,14 @@ export type FeedBookingRow = {
   id: string; status: "booked" | "completed" | "no_show";
   starts_at: string; ends_at: string; updated_at: string; created_at: string;
   first_name: string | null; rootId: string; depth: number;
+  /** F-046 (0107): this row's own kind; NULL = the calendar's (`meetingType` beside the rows). */
+  meeting_type: BookingMeetingType | null;
 };
 
 type FeedRaw = {
   id: string; status: FeedBookingRow["status"]; starts_at: string; ends_at: string;
   updated_at: string; created_at: string; rescheduled_from_id: string | null;
+  meeting_type: BookingMeetingType | null;
   contacts: { first_name: string | null; assigned_to: string | null } | null;
 };
 
@@ -829,7 +882,7 @@ export async function listFeedBookings(
   const nowIso = o.now.toISOString();
   const fromIso = new Date(o.now.getTime() - FEED_PAST_DAYS * FEED_DAY_MS).toISOString();
   const toIso = new Date(o.now.getTime() + FEED_FUTURE_DAYS * FEED_DAY_MS).toISOString();
-  const cols = "id, status, starts_at, ends_at, updated_at, created_at, rescheduled_from_id, contacts!inner(first_name, assigned_to)";
+  const cols = "id, status, starts_at, ends_at, updated_at, created_at, rescheduled_from_id, meeting_type, contacts!inner(first_name, assigned_to)";
   const base = () => {
     let q = db.from("bookings").select(cols)
       .eq("account_id", accountId).eq("calendar_id", c.id).in("status", [...FEED_STATUSES]);
@@ -855,7 +908,8 @@ export async function listFeedBookings(
     const chain = roots.get(r.id);
     if (!chain) return [];
     return [{ id: r.id, status: r.status, starts_at: r.starts_at, ends_at: r.ends_at, updated_at: r.updated_at,
-      created_at: r.created_at, first_name: r.contacts?.first_name ?? null, rootId: chain.rootId, depth: chain.depth }];
+      created_at: r.created_at, first_name: r.contacts?.first_name ?? null, rootId: chain.rootId, depth: chain.depth,
+      meeting_type: r.meeting_type ?? null }];
   });
   return { meetingType: c.meeting_type, rows, truncated, capped };
 }
@@ -869,6 +923,12 @@ export class BookingNotMovableError extends Error {
     this.name = "BookingNotMovableError";
   }
 }
+
+/** F-046 (spec 6.3): what a person's Move on the Calendar page writes on the new row (`moveBooking`'s `to.job`). */
+export type StaffMoveJob = {
+  note: string | null; placeId: string | null; meetingType: BookingMeetingType;
+  holdUntil: Date; closureKept: boolean;
+};
 
 /**
  * F-048: a customer moves their own booking (the link in their email). The
@@ -924,29 +984,48 @@ export class BookingNotMovableError extends Error {
  * `setBookingStatus`'s `updatedAt` is a cancel's. The phone receptionist's
  * reschedule records it on its act, the key 0091's Undo restores against;
  * reading the row afterwards could read someone else's later write.
+ *
+ * F-046 (0107). Without `to.job` (the customer's link, Sofía) the new row
+ * also carries the old row's `place_id` and `meeting_type`, so a job staff
+ * booked keeps its address and its kind when the customer moves it. With
+ * `to.job` (a person moving a job on the Calendar page) the new row takes
+ * the job's note, place, kind and closure keep, and is HELD (`hold_until`)
+ * with `notice_wanted` NULL: the action decides the email after this call's
+ * cancel, from a re-read of the old row (`setJobNotice`, plan review item 2).
+ * A staff move writes NO events here: the settle of its new row writes them
+ * (D8 extended), so a move undone inside its hold leaves no `booking.created`
+ * for a row that was deleted.
  */
 export async function moveBooking(
   db: SupabaseClient, accountId: string, bookingId: string,
-  to: { startsAt: Date; endsAt: Date; meetingUrl?: string; ipHash?: string },
+  to: { startsAt: Date; endsAt: Date; meetingUrl?: string; ipHash?: string; job?: StaffMoveJob },
   actorId: string, actorType: ActorType = "user",
 ): Promise<{ id: string; cancelToken: string; cancelledAt: string }> {
   const { data, error } = await db.from("bookings")
-    .select("id, calendar_id, contact_id, note, booker_timezone, status")
+    .select("id, calendar_id, contact_id, note, booker_timezone, status, place_id, meeting_type")
     .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
   if (error) throw new Error(`moveBooking read failed: ${error.message}`);
   const old = data as {
     id: string; calendar_id: string; contact_id: string;
     note: string | null; booker_timezone: string | null; status: BookingStatus;
+    place_id: string | null; meeting_type: BookingMeetingType | null;
   } | null;
   if (!old || old.status !== "booked") throw new BookingNotMovableError();
 
   // --- 2. the new row ----------------------------------------------------
+  const job = to.job;
   const input: CreateBookingInput = {
     calendarId: old.calendar_id, contactId: old.contact_id,
     startsAt: to.startsAt, endsAt: to.endsAt,
-    note: old.note ?? undefined, bookerTimezone: old.booker_timezone ?? undefined,
+    note: (job ? job.note : old.note) ?? undefined, bookerTimezone: old.booker_timezone ?? undefined,
     meetingUrl: to.meetingUrl, rescheduledFromId: old.id, ipHash: to.ipHash,
   };
+  const extra: BookingExtraColumns = job
+    ? {
+      place_id: job.placeId, meeting_type: job.meetingType, hold_until: job.holdUntil.toISOString(),
+      notice_wanted: null, closure_kept_at: job.closureKept ? new Date().toISOString() : null,
+    }
+    : { place_id: old.place_id ?? null, meeting_type: old.meeting_type ?? null };
   const cancelToken = newCancelToken();
   // The new row, removed by the token only this call holds: idempotent, so
   // it is safe whether or not the row ever landed. Retried once. Answers the
@@ -962,7 +1041,7 @@ export async function moveBooking(
     return last;
   };
 
-  const inserted = await insertBookingRow(db, accountId, input, cancelToken, bookingAuthor(actorType, actorId));
+  const inserted = await insertBookingRow(db, accountId, input, cancelToken, bookingAuthor(actorType, actorId), extra);
   let newId: string;
   if (inserted.data && !inserted.error) {
     newId = inserted.data.id;
@@ -1025,10 +1104,13 @@ export async function moveBooking(
   }
 
   // --- 4. settled: the events, which never undo it -----------------------
-  await emitLogged(db, accountId, "booking.created", actorId,
-    { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
-  await emitLogged(db, accountId, "booking.status_changed", actorId,
-    { bookingId: old.id, status: "cancelled" }, actorType);
+  // F-046: a staff move's events are its settle's (D8 extended), so none here.
+  if (!job) {
+    await emitLogged(db, accountId, "booking.created", actorId,
+      { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
+    await emitLogged(db, accountId, "booking.status_changed", actorId,
+      { bookingId: old.id, status: "cancelled" }, actorType);
+  }
   return { id: newId, cancelToken, cancelledAt: ourStamp };
 }
 
@@ -1079,6 +1161,230 @@ export async function bookingWasMoved(
   const { data, error } = await db.from("bookings").select("id")
     .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
   if (error) throw new Error(`bookingWasMoved failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/** F-046 (spec 5.2): how many bookings the agenda draws for one window at most. */
+export const AGENDA_ROW_CAP = 400;
+// The two embeds name their CONSTRAINT: a column hint resolves only against a single-column FK, and both are
+// composite (0050's note; bookings_place_fkey is 0107's). The place embed is the second FK from bookings, and
+// the live probe in test/booking.test.ts ("F-046 part 1", case c) proves PostgREST still reads it unambiguously.
+const AGENDA_COLS = "id, contact_id, starts_at, ends_at, status, note, author_kind, author_id, meeting_type, meeting_url, place_id, "
+  + "confirm_reply, hold_until, hold_settled_at, notice_wanted, notice_sent_at, rescheduled_from_id, created_at, "
+  + "contact:contacts!bookings_contact_id_fkey(first_name, last_name, phone, email), place:places!bookings_place_fkey(label, address)";
+
+export type AgendaBookingRow = {
+  id: string; contact_id: string; starts_at: string; ends_at: string; status: BookingStatus; note: string | null;
+  author_kind: AuthorKind; author_id: string | null; meeting_type: BookingMeetingType | null; meeting_url: string | null;
+  place_id: string | null; confirm_reply: "yes" | "no" | null; hold_until: string | null; hold_settled_at: string | null;
+  notice_wanted: NoticeWanted | null; notice_sent_at: string | null; rescheduled_from_id: string | null; created_at: string;
+  contact: { first_name: string | null; last_name: string | null; phone: string | null; email: string | null } | null;
+  place: { label: string | null; address: string | null } | null;
+  /** Cancelled AND a row of this account names it in `rescheduled_from_id`: a move replaced it. */
+  replaced: boolean;
+};
+
+/**
+ * F-046 (spec 5.2): every booking overlapping [fromIso, toIso), any status, soonest first (then by id, so the
+ * same rows always read the same way), at most AGENDA_ROW_CAP; `truncated` says the cap cut rows. Overlap,
+ * not "starts inside": a job from 23:00 to 01:00 is on both days. On the CALLER's client: RLS (0068) decides
+ * what a Technician sees, so no "busy" block of anyone else's job can exist to draw (R5). A cancelled row a
+ * move replaced is marked `replaced`, in one extra read per ROOT_BATCH cancelled ids (the feed's URL bound).
+ * THROWS on a read error.
+ */
+export async function listAgendaBookings(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<{ rows: AgendaBookingRow[]; truncated: boolean }> {
+  const { data, error } = await db.from("bookings").select(AGENDA_COLS)
+    .eq("account_id", accountId).lt("starts_at", toIso).gt("ends_at", fromIso)
+    .order("starts_at", { ascending: true }).order("id", { ascending: true }).limit(AGENDA_ROW_CAP + 1);
+  if (error) throw new Error(`listAgendaBookings failed: ${error.message}`);
+  const raw = (data ?? []) as unknown as Omit<AgendaBookingRow, "replaced">[];
+  const rows = raw.slice(0, AGENDA_ROW_CAP);
+  const cancelled = rows.filter((r) => r.status === "cancelled").map((r) => r.id);
+  const batches: string[][] = [];
+  for (let i = 0; i < cancelled.length; i += ROOT_BATCH) batches.push(cancelled.slice(i, i + ROOT_BATCH));
+  const answers = await Promise.all(batches.map((ids) => db.from("bookings").select("rescheduled_from_id")
+    .eq("account_id", accountId).in("rescheduled_from_id", ids)));
+  const replaced = new Set<string>();
+  for (const { data: links, error: lErr } of answers) {
+    if (lErr) throw new Error(`listAgendaBookings (replaced) failed: ${lErr.message}`);
+    for (const l of (links ?? []) as { rescheduled_from_id: string }[]) replaced.add(l.rescheduled_from_id);
+  }
+  return { rows: rows.map((r) => ({ ...r, replaced: replaced.has(r.id) })), truncated: raw.length > AGENDA_ROW_CAP };
+}
+
+/** F-046 (spec 5.5): one job for the drawer and `?job=`, on the caller's client. null = not this caller's to
+ *  see. A cancelled row reads `bookingWasMoved` once, so a moved job is told from a cancelled one here too.
+ *  THROWS on a read error. */
+export async function readAgendaJob(db: SupabaseClient, accountId: string, bookingId: string): Promise<AgendaBookingRow | null> {
+  const { data, error } = await db.from("bookings").select(AGENDA_COLS)
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`readAgendaJob failed: ${error.message}`);
+  if (!data) return null;
+  const row = data as unknown as Omit<AgendaBookingRow, "replaced">;
+  const replaced = row.status === "cancelled" && await bookingWasMoved(db, accountId, bookingId);
+  return { ...row, replaced };
+}
+
+/** F-046 (spec 5.4, Move's tick): the customer knows this appointment when its chain's first row is theirs or
+ *  Sofía's, or any row of the chain had its email sent. Walks `rescheduleChain`'s way, account-scoped at
+ *  every hop; a row it cannot read answers false (nothing proves they were told). THROWS on a read error. */
+export async function jobWasTold(db: SupabaseClient, accountId: string, bookingId: string): Promise<boolean> {
+  let id: string | null = bookingId;
+  for (let hop = 0; id && hop <= RESCHEDULE_CHAIN_MAX; hop++) {
+    const { data, error } = await db.from("bookings").select("author_kind, notice_sent_at, rescheduled_from_id")
+      .eq("account_id", accountId).eq("id", id).maybeSingle();
+    if (error) throw new Error(`jobWasTold failed: ${error.message}`);
+    const r = data as { author_kind: AuthorKind; notice_sent_at: string | null; rescheduled_from_id: string | null } | null;
+    if (!r) return false;
+    if (r.notice_sent_at) return true;
+    if (!r.rescheduled_from_id) return r.author_kind === "customer" || r.author_kind === "ai";
+    id = r.rescheduled_from_id;
+  }
+  return false;
+}
+
+/** F-046 (spec 5.2, "Earlier days"): started and over before `beforeIso`, still booked (work-queue.ts's
+ *  staleBookings predicate). An exact head count; THROWS on a count-less answer (head-count-null) or an error. */
+export async function countAwaitingOutcomeBefore(db: SupabaseClient, accountId: string, beforeIso: string): Promise<number> {
+  const { count, error } = await db.from("bookings").select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("status", "booked").lt("ends_at", beforeIso);
+  if (error) throw new Error(`countAwaitingOutcomeBefore failed: ${error.message}`);
+  if (count === null) throw new Error("countAwaitingOutcomeBefore failed: no count returned");
+  return count;
+}
+
+const CLAIM_COLS = "id, status, notice_wanted, starts_at, ends_at, contact_id, calendar_id, place_id, meeting_url, "
+  + "cancel_token, rescheduled_from_id, author_id, hold_until, created_at";
+export type JobHoldClaim = {
+  id: string; status: BookingStatus; notice_wanted: NoticeWanted | null; starts_at: string; ends_at: string;
+  contact_id: string; calendar_id: string; place_id: string | null; meeting_url: string | null; cancel_token: string;
+  rescheduled_from_id: string | null; author_id: string | null; hold_until: string; created_at: string;
+};
+
+/**
+ * F-046 (spec 6.5): the hold's one claim. Conditional on the hold being due and unclaimed, so the after()
+ * job, the pass and the Undo's delete serialise on the row and exactly one wins. Writes ONLY
+ * `hold_settled_at`: never `updated_at` (a cancel's version, plan correction 13), and no column 0107's trigger
+ * watches, so it takes no calendar lock. Only a BOOKED row is claimed (plan review item 2): a hold that falls
+ * due while a move has its row cancelled stays unclaimed, so an Undo of that move brings back a row whose
+ * confirmation can still go. null = someone else won, the row is not booked, or nothing is due. THROWS on a
+ * write error.
+ */
+export async function claimJobHold(db: SupabaseClient, accountId: string, bookingId: string, nowIso: string): Promise<JobHoldClaim | null> {
+  const { data, error } = await db.from("bookings").update({ hold_settled_at: nowIso })
+    .eq("account_id", accountId).eq("id", bookingId).eq("status", "booked")
+    .lte("hold_until", nowIso).is("hold_settled_at", null)
+    .select(CLAIM_COLS);
+  if (error) throw new Error(`claimJobHold failed: ${error.message}`);
+  return ((data ?? []) as unknown as JobHoldClaim[])[0] ?? null;
+}
+
+/** F-046: send-then-stamp (stampReminderSent's reasoning): only after the gate said SENT. THROWS on a write error. */
+export async function stampJobNoticeSent(db: SupabaseClient, accountId: string, bookingId: string): Promise<void> {
+  const { error } = await db.from("bookings").update({ notice_sent_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", bookingId);
+  if (error) throw new Error(`stampJobNoticeSent failed: ${error.message}`);
+}
+
+/** F-046 (plan review item 2): a staff move's email, decided AFTER moveBooking's cancel of the old row (the
+ *  action re-reads that row). Only while the new row's hold is unsettled, so the settle reads one settled
+ *  value. true = written. THROWS on a write error. */
+export async function setJobNotice(db: SupabaseClient, accountId: string, bookingId: string, notice: NoticeWanted | null): Promise<boolean> {
+  const { data, error } = await db.from("bookings").update({ notice_wanted: notice })
+    .eq("account_id", accountId).eq("id", bookingId).not("hold_until", "is", null).is("hold_settled_at", null).select("id");
+  if (error) throw new Error(`setJobNotice failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/** F-046: the jobHolds pass's read, every account (service role): booked rows whose hold is due by
+ *  `beforeIso` and unclaimed (index bookings_hold_due), oldest first, at most `limit`. THROWS on a read error. */
+export async function listDueJobHolds(db: SupabaseClient, beforeIso: string, limit: number):
+  Promise<{ accountId: string; bookingId: string; holdUntil: string }[]> {
+  const { data, error } = await db.from("bookings").select("id, account_id, hold_until")
+    .eq("status", "booked").lte("hold_until", beforeIso).is("hold_settled_at", null)
+    .order("hold_until", { ascending: true }).limit(limit);
+  if (error) throw new Error(`listDueJobHolds failed: ${error.message}`);
+  return ((data ?? []) as { id: string; account_id: string; hold_until: string }[])
+    .map((r) => ({ accountId: r.account_id, bookingId: r.id, holdUntil: r.hold_until }));
+}
+
+export type UndoAddOutcome = "deleted" | "settled" | "moved" | "is_move" | "not_yours" | "gone";
+
+/**
+ * F-046 (D5): the Undo of an add DELETES the row while its hold is unsettled (0091's reason: a cancelled row
+ * would still count as a booking made and sit on the timeline). Only the person who added it, and only an
+ * ADD: a held row a move made (`rescheduled_from_id` set) is never deleted here, or its old row would stay
+ * cancelled and the customer would have no appointment at all (plan review item 3); that answers "is_move".
+ * A DELETE fires no 0107 trigger and restores nothing, so it takes no calendar lock. Zero rows is told apart
+ * by one re-read. THROWS on a write or read error.
+ */
+export async function deleteUnsettledStaffJob(
+  db: SupabaseClient, accountId: string, bookingId: string, actorId: string,
+): Promise<UndoAddOutcome> {
+  const { data, error } = await db.from("bookings").delete()
+    .eq("account_id", accountId).eq("id", bookingId).eq("author_kind", "person").eq("author_id", actorId)
+    .eq("status", "booked").is("rescheduled_from_id", null).is("hold_settled_at", null).not("hold_until", "is", null)
+    .select("id");
+  if (error) throw new Error(`deleteUnsettledStaffJob failed: ${error.message}`);
+  if ((data?.length ?? 0) > 0) return "deleted";
+  const { data: row, error: rErr } = await db.from("bookings").select("status, author_id, hold_settled_at, rescheduled_from_id")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (rErr) throw new Error(`deleteUnsettledStaffJob re-read failed: ${rErr.message}`);
+  const r = row as { status: BookingStatus; author_id: string | null; hold_settled_at: string | null; rescheduled_from_id: string | null } | null;
+  if (!r) return "gone";
+  if (r.status === "booked" && r.rescheduled_from_id) return "is_move";
+  if (r.status === "cancelled" && await bookingWasMoved(db, accountId, bookingId)) return "moved";
+  if (r.hold_settled_at) return "settled";
+  if (r.author_id !== actorId) return "not_yours";
+  return "gone";
+}
+
+export type UndoStaffMoveOutcome = "undone" | "gone" | "too_late" | "time_taken" | "changed";
+const UNDO_MOVE_ANSWERS: readonly UndoStaffMoveOutcome[] = ["undone", "gone", "too_late", "time_taken", "changed"];
+/** Postgres's deadlock_detected. */
+const UNDO_MOVE_DEADLOCK = "40P01";
+
+/**
+ * F-046 (D6, spec 3.3): the Undo of a staff move, 0107's `undo_staff_move` (service role only). Its answers
+ * pass through; anything else THROWS. A deadlock is run again ONCE (client-groups.ts's shape): the RPC is one
+ * transaction, so a 40P01 rolled all of it back and the second call starts clean. The function takes the
+ * calendar row first, but a single-statement write that sets a booking back to `booked` takes the booking row
+ * first (moveBooking's roll-back, setBookingStatus's Undo), so the two can still meet in a cycle (T1 review).
+ * A second deadlock THROWS.
+ */
+export async function undoStaffMove(
+  db: SupabaseClient, accountId: string, newId: string, oldId: string, cancelledAt: string, now: Date,
+): Promise<UndoStaffMoveOutcome> {
+  const args = { p_account_id: accountId, p_new_id: newId, p_old_id: oldId, p_cancelled_at: cancelledAt, p_now: now.toISOString() };
+  for (let attempt = 0; ; attempt++) {
+    const { data, error } = await db.rpc("undo_staff_move", args);
+    if (error) {
+      if (error.code === UNDO_MOVE_DEADLOCK && attempt === 0) continue;
+      throw new Error(`undoStaffMove failed: ${error.message}`);
+    }
+    if (!UNDO_MOVE_ANSWERS.includes(data as UndoStaffMoveOutcome)) throw new Error(`undoStaffMove: unexpected answer ${String(data)}`);
+    return data as UndoStaffMoveOutcome;
+  }
+}
+
+export type JobDetails = { note: string | null; placeId: string | null; meetingType: BookingMeetingType | null; meetingUrl: string | null };
+
+/** F-046 (D6): a Move that keeps the time is an in-place edit, compare-and-set on what the form opened with
+ *  (`is` for a NULL: `eq` NULL matches nothing). Writes none of 0107's watched columns and never `updated_at`
+ *  (a cancel's version, plan correction 13). true = written. THROWS on a write error. */
+export async function editJobDetails(
+  db: SupabaseClient, accountId: string, bookingId: string, from: JobDetails, to: JobDetails,
+): Promise<boolean> {
+  let q = db.from("bookings").update({ note: to.note, place_id: to.placeId, meeting_type: to.meetingType, meeting_url: to.meetingUrl })
+    .eq("account_id", accountId).eq("id", bookingId).eq("status", "booked");
+  const pairs: [string, string | null][] = [
+    ["note", from.note], ["place_id", from.placeId], ["meeting_type", from.meetingType], ["meeting_url", from.meetingUrl],
+  ];
+  for (const [col, v] of pairs) q = v === null ? q.is(col, null) : q.eq(col, v);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`editJobDetails failed: ${error.message}`);
   return (data?.length ?? 0) > 0;
 }
 
@@ -1567,6 +1873,9 @@ export function ownAccountEmbedsOnly<T>(
 const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url, closure_kept_at,
              calendars(account_id, public_id), contacts(account_id, first_name, last_name, email, phone, language)`;
 
+/** F-046 (0107): no Undo hold, or a hold already claimed. The forward due-lists' filter (spec 6.5, section 17). */
+const HOLD_SETTLED_OR_NONE = "hold_until.is.null,hold_settled_at.not.is.null";
+
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
   return {
@@ -1589,9 +1898,13 @@ export async function listDueReminders(
   const windowStart = new Date(now + REMINDER_WINDOW_START_MS).toISOString();
   const windowEnd = new Date(now + REMINDER_WINDOW_END_MS).toISOString();
 
+  // F-046: a staff job is reminded only once its Undo hold is SETTLED, so the confirmation (the settle sends
+  // it) always comes first, and a job undone before its claim never gets a reminder. Gated on the claim, never
+  // on hold_until: the clock passing proves nothing was settled (plan review item 4). Both reads carry it; the
+  // by-id twin deliberately does not (plan correction 3).
   const { data, error } = await db.from("bookings")
     .select(REMINDER_SELECT)
-    .eq("status", "booked").is("reminder_sent_at", null)
+    .eq("status", "booked").is("reminder_sent_at", null).or(HOLD_SETTLED_OR_NONE)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueReminders failed: ${error.message}`);
@@ -1603,7 +1916,7 @@ export async function listDueReminders(
   // window and the minimum age bound the read itself.
   const { data: lateData, error: lateError } = await db.from("bookings")
     .select(REMINDER_SELECT)
-    .eq("status", "booked").is("reminder_sent_at", null)
+    .eq("status", "booked").is("reminder_sent_at", null).or(HOLD_SETTLED_OR_NONE)
     .gte("starts_at", new Date(now + LATE_REMINDER_WINDOW_START_MS).toISOString())
     .lte("starts_at", new Date(now + LATE_REMINDER_WINDOW_END_MS).toISOString())
     .lte("created_at", new Date(now - LATE_REMINDER_MIN_AGE_MS).toISOString())

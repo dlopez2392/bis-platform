@@ -16,8 +16,11 @@ import {
   moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
   moveStamp, sameMicroInstant,
   countContactBookingsMade, listContactUpcomingBookings, listContactBookings, countBookingsMadeFor,
+  createStaffJob, listAgendaBookings, claimJobHold, deleteUnsettledStaffJob, undoStaffMove, newCancelToken,
+  type StaffJobInput,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
+import { addPlace } from "../places";
 
 describe("booking accessors", () => {
   it("creates the calendar lazily, once, disabled, with a public id", async () => {
@@ -2294,6 +2297,218 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
       const again = await getOrCreateCalendar(db, accountId, "user_test");
       expect([again.followup_body_es, again.followup_body_es_basis]).toEqual(["Gracias.", "Thanks."]);
       expect(cal.id).toBe(again.id);
+    });
+  });
+});
+
+/**
+ * F-046 part 1 (plan Task 4, Step 4): the staff-job query layer against a real database. CI ONLY (verify):
+ * no agent runs this file locally. Two cases carry the plan's labelled ASSUMPTIONS, and production waits on
+ * them (checklist step 6):
+ *   17a, "PostgREST surfaces 0107's plpgsql raise as 23P01": case (b), on an INSERT and on an UPDATE;
+ *   17b, "a second FK from bookings (to places) makes no many-to-many between contacts and places": case (c).
+ * Instants are in 2032, which no other live test books, because listDueReminders reads every account.
+ */
+describe("F-046 part 1: staff jobs, the agenda read and the hold (0107)", () => {
+  const ACTOR = "user_test";
+  const at = (iso: string) => new Date(iso);
+  const past = () => new Date(Date.now() - 60_000);
+  const later = () => new Date(Date.now() + 10 * 60_000);
+  type Seed = { calendarId: string; contactId: string; placeId: string };
+  const seed = async (db: SupabaseClient, accountId: string): Promise<Seed> => {
+    const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+    const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana.f046@example.com" }, ACTOR);
+    const place = await addPlace(db, accountId, { contactId, groupId: null },
+      { label: "Home", address: "1204 Nolana Ave", landmark: null, directions: null, city: null, region: null, postal_code: null, country: null },
+      { subjectId: contactId, actorId: ACTOR });
+    return { calendarId: cal.id, contactId, placeId: place.id };
+  };
+  const job = (s: Seed, startIso: string, endIso: string, over: Partial<StaffJobInput> = {}): StaffJobInput => ({
+    calendarId: s.calendarId, contactId: s.contactId, startsAt: at(startIso), endsAt: at(endIso),
+    note: "Fix the gate", placeId: s.placeId, meetingType: "in_person", meetingUrl: null,
+    holdUntil: later(), noticeWanted: "confirmation", closureKept: false, ...over,
+  });
+  const read = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("bookings")
+      .select("status, author_kind, author_id, place_id, meeting_type, hold_until, hold_settled_at, notice_wanted, booker_timezone, closure_kept_at, rescheduled_from_id")
+      .eq("id", id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data as Record<string, unknown> | null;
+  };
+  // One read per id, with the `.eq("payload->>bookingId", …)` shape undoOperatorCancel already uses.
+  const eventsFor = async (db: SupabaseClient, accountId: string, ids: string[]) => {
+    const out: unknown[] = [];
+    for (const id of ids) {
+      const { data, error } = await db.from("events").select("type, payload")
+        .eq("account_id", accountId).eq("payload->>bookingId", id);
+      if (error) throw new Error(error.message);
+      out.push(...(data ?? []));
+    }
+    return out;
+  };
+
+  it("(a) createStaffJob writes a person-made row with its place, kind, hold and notice, no booker zone, and NO event (D8)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const holdUntil = later();
+      const { id } = await createStaffJob(db, accountId, job(s, "2032-03-01T15:00:00Z", "2032-03-01T16:00:00Z", { holdUntil }), ACTOR);
+      const row = await read(db, id);
+      expect(row).toMatchObject({
+        status: "booked", author_kind: "person", author_id: ACTOR, place_id: s.placeId, meeting_type: "in_person",
+        hold_settled_at: null, notice_wanted: "confirmation", booker_timezone: null, closure_kept_at: null,
+      });
+      expect(new Date(row!.hold_until as string).toISOString()).toBe(holdUntil.toISOString());
+      expect(await eventsFor(db, accountId, [id])).toEqual([]);
+    });
+  });
+
+  it("(b) ASSUMPTION 17a: a customer row over a staff job is refused 23P01 THROUGH PostgREST, by the trigger, on insert and on an un-cancel; back-to-back is legal (mutation: a trigger raising P0001 → the raw code assertion FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      // A customer booking at 10:00, cancelled BEFORE the staff job takes its time.
+      const early = await createBooking(db, accountId,
+        { calendarId: s.calendarId, contactId: s.contactId, startsAt: at("2032-03-02T10:00:00Z"), endsAt: at("2032-03-02T11:00:00Z") }, "public", "system");
+      await setBookingStatus(db, accountId, early.id, "cancelled", ACTOR);
+      await createStaffJob(db, accountId, job(s, "2032-03-02T10:00:00Z", "2032-03-02T12:00:00Z"), ACTOR);
+
+      // The raw PostgREST answer, not createBooking's mapping (which would also accept the constraint's name in
+      // the message): the code itself is 23P01, and the words are the TRIGGER's (the constraint never sees a
+      // person-made row, so it cannot be what refused).
+      const raw = await db.from("bookings").insert({
+        account_id: accountId, calendar_id: s.calendarId, contact_id: s.contactId,
+        starts_at: "2032-03-02T11:00:00Z", ends_at: "2032-03-02T11:30:00Z", cancel_token: newCancelToken(), author_kind: "customer",
+      }).select("id");
+      expect(raw.error?.code).toBe("23P01");
+      expect(raw.error?.message).toContain("overlaps a job staff booked");
+
+      await expect(createBooking(db, accountId,
+        { calendarId: s.calendarId, contactId: s.contactId, startsAt: at("2032-03-02T11:30:00Z"), endsAt: at("2032-03-02T12:30:00Z") }, "public", "system"),
+      ).rejects.toThrow(SlotTakenError);
+      // An UPDATE back to booked re-enters the trigger (spec section 7: a staff Undo of a cancelled customer row).
+      await expect(setBookingStatus(db, accountId, early.id, "booked", ACTOR, "user", { onlyFrom: "cancelled" }))
+        .rejects.toThrow(SlotTakenError);
+      // [) bounds: a customer row ending exactly where the job starts saves.
+      await expect(createBooking(db, accountId,
+        { calendarId: s.calendarId, contactId: s.contactId, startsAt: at("2032-03-02T09:00:00Z"), endsAt: at("2032-03-02T10:00:00Z") }, "public", "system"),
+      ).resolves.toBeTruthy();
+    });
+  });
+
+  it("(c) ASSUMPTION 17b: listAgendaBookings puts a 23:00-01:00 job on both days with its place and customer embedded, and contacts and places still embed each other unambiguously (mutation: filter on starts_at only → the second day misses it, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id } = await createStaffJob(db, accountId, job(s, "2032-04-01T23:00:00Z", "2032-04-02T01:00:00Z"), ACTOR);
+      const { id: other } = await createStaffJob(db, accountId, job(s, "2032-04-03T15:00:00Z", "2032-04-03T16:00:00Z"), ACTOR);
+      const day1 = await listAgendaBookings(db, accountId, "2032-04-01T00:00:00.000Z", "2032-04-02T00:00:00.000Z");
+      const day2 = await listAgendaBookings(db, accountId, "2032-04-02T00:00:00.000Z", "2032-04-03T00:00:00.000Z");
+      expect(day1.rows.map((r) => r.id)).toEqual([id]);
+      expect(day2.rows.map((r) => r.id)).toEqual([id]);
+      expect(day1.truncated).toBe(false);
+      expect(day1.rows[0]).toMatchObject({
+        place_id: s.placeId, meeting_type: "in_person", author_kind: "person", replaced: false,
+        place: { label: "Home", address: "1204 Nolana Ave" },
+        contact: { first_name: "Ana", last_name: null, phone: null, email: "ana.f046@example.com" },
+      });
+      expect(day1.rows.map((r) => r.id)).not.toContain(other);
+      // Un-hinted, both directions: a many-to-many seen through bookings (or documents) would make each of these
+      // ambiguous (PGRST201, its details naming the junction). Nothing in the app embeds them today, so they are
+      // probes only; the error, not just its absence, is printed on a failure.
+      for (const [table, select] of [["contacts", "id, places(id)"], ["places", "id, contacts(id)"], ["places", "id, bookings(id)"]] as const) {
+        const { error } = await db.from(table).select(select).eq("account_id", accountId).limit(1);
+        expect({ table, select, error }).toEqual({ table, select, error: null });
+      }
+    });
+  });
+
+  it("(d) listDueReminders skips a staff job whose hold is UNSETTLED even with hold_until past (the clock is not the gate), and lists it once claimJobHold settles it (mutation: `hold_until.lte.<now>` → listed before the claim, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id } = await createStaffJob(db, accountId,
+        job(s, "2032-03-10T15:00:00Z", "2032-03-10T15:15:00Z", { holdUntil: past() }), ACTOR);
+      // Control: a customer booking in the same window IS listed, so an empty answer cannot pass this vacuously.
+      const control = await createBooking(db, accountId,
+        { calendarId: s.calendarId, contactId: s.contactId, startsAt: at("2032-03-10T15:30:00Z"), endsAt: at("2032-03-10T16:00:00Z") }, "public", "system");
+      const now = "2032-03-09T15:30:00.000Z";   // 23.5 h before the job
+      const due = async () => (await listDueReminders(db, now)).map((d) => d.bookingId);
+      const before = await due();
+      expect(before).toContain(control.id);
+      expect(before).not.toContain(id);
+      expect(await claimJobHold(db, accountId, id, new Date().toISOString())).toMatchObject({ id, status: "booked", notice_wanted: "confirmation" });
+      expect(await due()).toContain(id);
+    });
+  });
+
+  it("(e) a customer's move of a staff job (no `job`) carries its place and meeting type (mutation: omit them → NULLs, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id } = await createStaffJob(db, accountId,
+        job(s, "2032-03-12T15:00:00Z", "2032-03-12T16:00:00Z", { meetingType: "phone" }), ACTOR);
+      // A later, non-overlapping time: the new row is the customer's, so it may not overlap the live staff row.
+      const moved = await moveBooking(db, accountId, id, { startsAt: at("2032-03-12T17:00:00Z"), endsAt: at("2032-03-12T18:00:00Z") }, "public", "system");
+      expect(await read(db, moved.id)).toMatchObject({
+        status: "booked", author_kind: "customer", place_id: s.placeId, meeting_type: "phone", hold_until: null, rescheduled_from_id: id,
+      });
+      expect((await read(db, id))?.status).toBe("cancelled");
+    });
+  });
+
+  it("(f) the claim and the Undo serialise on the row: claim first → 'settled' and the row stays; Undo first → 'deleted' and the claim answers null; a hold not yet due is never claimed", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const nowIso = () => new Date().toISOString();
+      const a = await createStaffJob(db, accountId, job(s, "2032-03-14T15:00:00Z", "2032-03-14T16:00:00Z", { holdUntil: past() }), ACTOR);
+      expect((await claimJobHold(db, accountId, a.id, nowIso()))?.id).toBe(a.id);
+      expect(await deleteUnsettledStaffJob(db, accountId, a.id, ACTOR)).toBe("settled");
+      expect((await read(db, a.id))?.status).toBe("booked");
+
+      const b = await createStaffJob(db, accountId, job(s, "2032-03-14T17:00:00Z", "2032-03-14T18:00:00Z", { holdUntil: past() }), ACTOR);
+      expect(await deleteUnsettledStaffJob(db, accountId, b.id, ACTOR)).toBe("deleted");
+      expect(await claimJobHold(db, accountId, b.id, nowIso())).toBeNull();
+      expect(await read(db, b.id)).toBeNull();
+
+      const c = await createStaffJob(db, accountId, job(s, "2032-03-14T19:00:00Z", "2032-03-14T20:00:00Z", { holdUntil: later() }), ACTOR);
+      expect(await claimJobHold(db, accountId, c.id, nowIso())).toBeNull();
+      expect(await deleteUnsettledStaffJob(db, accountId, c.id, "user_someone_else")).toBe("not_yours");
+    });
+  });
+
+  it("(g) undoStaffMove round trip: the held new row is deleted and the old row is booked again → 'undone'", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id: oldId } = await createStaffJob(db, accountId, job(s, "2032-03-16T15:00:00Z", "2032-03-16T16:00:00Z"), ACTOR);
+      const moved = await moveBooking(db, accountId, oldId, { startsAt: at("2032-03-16T17:00:00Z"), endsAt: at("2032-03-16T18:00:00Z"),
+        job: { note: "Moved", placeId: s.placeId, meetingType: "in_person", holdUntil: later(), closureKept: false } }, ACTOR);
+      expect(await undoStaffMove(db, accountId, moved.id, oldId, moved.cancelledAt, new Date())).toBe("undone");
+      expect(await read(db, moved.id)).toBeNull();
+      expect((await read(db, oldId))?.status).toBe("booked");
+    });
+  });
+
+  it("(h) plan review item 2: a held add moved with `job` writes no events and no notice on the new row; its due hold is NOT claimed while cancelled; after the move's Undo it is claimed with its confirmation (mutation: claim without the status term → the cancelled row is claimed, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id: oldId } = await createStaffJob(db, accountId,
+        job(s, "2032-03-18T15:00:00Z", "2032-03-18T16:00:00Z", { holdUntil: past(), noticeWanted: "confirmation" }), ACTOR);
+      const moved = await moveBooking(db, accountId, oldId, { startsAt: at("2032-03-18T17:00:00Z"), endsAt: at("2032-03-18T18:00:00Z"),
+        job: { note: "Fix the gate", placeId: s.placeId, meetingType: "in_person", holdUntil: later(), closureKept: false } }, ACTOR);
+      expect(await read(db, moved.id)).toMatchObject({ status: "booked", author_kind: "person", notice_wanted: null, hold_settled_at: null, rescheduled_from_id: oldId });
+      expect(await eventsFor(db, accountId, [oldId, moved.id])).toEqual([]);
+      expect(await claimJobHold(db, accountId, oldId, new Date().toISOString())).toBeNull();
+      expect(await undoStaffMove(db, accountId, moved.id, oldId, moved.cancelledAt, new Date())).toBe("undone");
+      expect(await claimJobHold(db, accountId, oldId, new Date().toISOString()))
+        .toMatchObject({ id: oldId, status: "booked", notice_wanted: "confirmation" });
+    });
+  });
+
+  it("(i) plan review item 3: the Undo of an add never deletes a move's held new row → 'is_move', both rows unchanged (mutation: drop the rescheduled_from_id term → 'deleted', FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seed(db, accountId);
+      const { id: oldId } = await createStaffJob(db, accountId, job(s, "2032-03-20T15:00:00Z", "2032-03-20T16:00:00Z"), ACTOR);
+      const moved = await moveBooking(db, accountId, oldId, { startsAt: at("2032-03-20T17:00:00Z"), endsAt: at("2032-03-20T18:00:00Z"),
+        job: { note: null, placeId: null, meetingType: "phone", holdUntil: later(), closureKept: false } }, ACTOR);
+      expect(await deleteUnsettledStaffJob(db, accountId, moved.id, ACTOR)).toBe("is_move");
+      expect((await read(db, moved.id))?.status).toBe("booked");
+      expect((await read(db, oldId))?.status).toBe("cancelled");
     });
   });
 });
