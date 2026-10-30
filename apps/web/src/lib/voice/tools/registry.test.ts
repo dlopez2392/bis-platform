@@ -1047,6 +1047,64 @@ describe("reschedule / cancel", () => {
     });
   });
 
+  // F-046 part 1 (plan Task 8): a staff job carries its own meeting type
+  // (bookings.meeting_type, migration 0107), so the room follows the BOOKING,
+  // not the calendar. NULL (every pre-0107 row) still means the calendar's.
+  describe("reschedule by the booking's own meeting type", () => {
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:30:00Z") };
+    const oldRow = (meetingType: string | null) => ({
+      id: "old1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z",
+      status: "booked", meeting_type: meetingType,
+    });
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.moveBooking.mockResolvedValue({ id: "new1", cancelToken: "t", cancelledAt: "2027-05-31T09:00:00.000123Z" });
+    });
+
+    it("a video booking on an in_person calendar mints a room for the new slot", async () => {
+      dbMocks.getBookingById.mockResolvedValue(oldRow("video"));
+      const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/job-room" });
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+
+      const { result } = await runTool(owns(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(createMeetingRoom).toHaveBeenCalledWith(expect.objectContaining({ endsAt: newSlot.endsAt }));
+      expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "old1",
+        expect.objectContaining({ meetingUrl: "https://video.example/job-room" }), "voice", "ai");
+    });
+
+    it("a phone booking on a video calendar mints no room", async () => {
+      dbMocks.getBookingById.mockResolvedValue(oldRow("phone"));
+      const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/never" });
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+
+      const { result } = await runTool(owns(),
+        { ...ctx, calendar: { ...ctx.calendar, meeting_type: "video" } as unknown as CalendarRow },
+        "reschedule_appointment", { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(meetingProviderMock).not.toHaveBeenCalled();
+      expect(createMeetingRoom).not.toHaveBeenCalled();
+      expect(dbMocks.moveBooking).toHaveBeenCalledWith({}, "a1", "old1",
+        expect.objectContaining({ meetingUrl: undefined }), "voice", "ai");
+    });
+
+    it("a NULL meeting type (a row from before 0107) falls back to the calendar's video", async () => {
+      dbMocks.getBookingById.mockResolvedValue(oldRow(null));
+      const createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/cal-room" });
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+
+      await runTool(owns(),
+        { ...ctx, calendar: { ...ctx.calendar, meeting_type: "video" } as unknown as CalendarRow },
+        "reschedule_appointment", { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+
+      expect(createMeetingRoom).toHaveBeenCalledWith(expect.objectContaining({ endsAt: newSlot.endsAt }));
+    });
+  });
+
   // 2026-08-29 (final-review Important): a reschedule minted a new room but
   // sent NOTHING — a same-day video reschedule left the customer holding the
   // OLD confirmation's expired link, with the new one existing nowhere a

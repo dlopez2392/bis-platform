@@ -1283,11 +1283,14 @@ export async function listContactCalls(
   return (data ?? []) as ContactCallRow[];
 }
 
+/** `meeting_type` (0107, F-046): this booking's own in_person | phone | video; NULL (every earlier row)
+ *  means the calendar's, so a reader coalesces with `calendars.meeting_type`. */
 export async function getBookingById(
   db: SupabaseClient, accountId: string, bookingId: string,
-): Promise<{ id: string; contact_id: string; calendar_id: string; starts_at: string; ends_at: string; status: string } | null> {
+): Promise<{ id: string; contact_id: string; calendar_id: string; starts_at: string; ends_at: string; status: string;
+  meeting_type: string | null } | null> {
   const { data, error } = await db.from("bookings")
-    .select("id, contact_id, calendar_id, starts_at, ends_at, status")
+    .select("id, contact_id, calendar_id, starts_at, ends_at, status, meeting_type")
     .eq("id", bookingId).eq("account_id", accountId).maybeSingle();
   if (error) throw new Error(`getBookingById failed: ${error.message}`);
   return (data as any) ?? null;
