@@ -32,7 +32,7 @@ export type GatheredSetupInputs = {
  * `@bis/db` reads (five original, plus the website-assistant step's own
  * `forms`/`conversations` pair). This exact read set used to live duplicated three times:
  * the sidebar's setup meter (formerly `setup-actions.ts`'s `getSetupProgress`,
- * now folded into `shell-actions.ts`'s `getShellSnapshot`), the setup
+ * now folded into `lib/shell/snapshot.ts`'s `readShellSnapshot`), the setup
  * wizard's own render (`setup/page.tsx`), and `goLiveAction`'s prerequisite
  * re-check (`setup/actions.ts`). One copy here now.
  *
@@ -43,8 +43,8 @@ export type GatheredSetupInputs = {
  * exactly which leg(s) came back that way, so a caller that needs
  * per-field granularity (`setup/page.tsx`'s own "couldn't check" cards, via
  * `buildSetupViews`'s `READS_BEHIND` mapping) gets it back byte-for-byte,
- * and a caller that wants an atomic answer instead (`shell-actions.ts`'s
- * `getShellSnapshot`: `Object.values(failed).some(Boolean)`;
+ * and a caller that wants an atomic answer instead (`lib/shell/snapshot.ts`'s
+ * `readShellSnapshot`: `Object.values(failed).some(Boolean)`;
  * `goLiveAction`: every leg it actually reads, see below) can still fold
  * `failed` down to one boolean on its own terms. Tolerates a missing
  * account row (`maybeSingle()` returns `null`) rather than throwing "not
@@ -75,7 +75,7 @@ export type GatheredSetupInputs = {
  * Tested two ways, deliberately: this file's own `setup-inputs.test.ts`
  * drives the REAL function body against a fake `db` (review round, Important
  * 3 — mocking `@bis/db`'s individual reads and letting every caller mock
- * THIS function at the import boundary, as `shell-actions.test.ts` and
+ * THIS function at the import boundary, as `lib/shell/snapshot.test.ts` and
  * `setup/actions.test.ts` both correctly do for THEIR own purposes, left a
  * real gap: a mutation inside this function's own body, e.g. hardcoding
  * `permissions: null` instead of reading `account?.permissions`, left all of

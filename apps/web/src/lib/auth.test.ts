@@ -28,7 +28,7 @@ vi.mock("./team/ensure-role", () => ({
 }));
 
 import {
-  apiAccountAccess, requireAccountAccess, requireAccountOwner, requireAgencyOnlyAccountAccess, requireNotTechnician, accountHome,
+  apiAccountAccess, apiAccountAccessWithRole, requireAccountAccess, requireAccountOwner, requireAgencyOnlyAccountAccess, requireNotTechnician, accountHome,
   seesWholeAccount,
 } from "./auth";
 
@@ -358,5 +358,51 @@ describe("a session signed in as someone else is refused (owner ruling 5, spec 2
     expect(await apiAccountAccess(OWN)).toBeNull();
     expect(getAccountByOrgId).not.toHaveBeenCalled();
     expect(agencyVisitLive).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The shell's own read (the agency refresh loop after the reason chooser, 2026-10-30): the shell's badges
+ * read through a plain GET route, which needs the caller's role (a Technician's narrow shell) but must
+ * never redirect. Same admission as apiAccountAccess, plus the role a client's server action would get.
+ */
+describe("apiAccountAccessWithRole: apiAccountAccess plus the role, never a redirect", () => {
+  it("the agency with a live visit: isAgency, role null", async () => {
+    asAgency();
+    expect(await apiAccountAccessWithRole(OWN)).toEqual({ userId: "user_agency", isAgency: true, role: null });
+  });
+
+  it("the agency with NO live visit is null, never a redirect to the chooser (mutation: call requireAgencyVisit -> FAILS)", async () => {
+    asAgency();
+    agencyVisitLive.mockResolvedValue(null);
+    requestHeaders.value = { "x-bis-path": `/dashboard/accounts/${OWN}/setup` };
+    expect(await apiAccountAccessWithRole(OWN)).toBeNull();
+  });
+
+  it("a client in their own account gets the settled role; a Technician stays a Technician", async () => {
+    asClient("technician");
+    expect(await apiAccountAccessWithRole(OWN)).toEqual({ userId: "user_client", isAgency: false, role: "technician" });
+    expect(ensureAccountRole).toHaveBeenCalledWith(OWN, "org_client", "user_client", IN_FLIGHT);
+  });
+
+  it("a client asking for another account is null, never redirected to their own, and settles no role", async () => {
+    asClient("owner");
+    expect(await apiAccountAccessWithRole(OTHER)).toBeNull();
+    expect(ensureAccountRole).not.toHaveBeenCalled();
+  });
+
+  it("a client with access switched off, or no org, is null", async () => {
+    asClient("owner");
+    getAccountByOrgId.mockResolvedValue({ id: OWN, client_access_enabled: false });
+    expect(await apiAccountAccessWithRole(OWN)).toBeNull();
+    authMock.mockResolvedValue({ userId: "user_client", sessionId: "sess_c", sessionClaims: {} });
+    expect(await apiAccountAccessWithRole(OWN)).toBeNull();
+  });
+
+  it("signed out, or signed in as someone else, is null", async () => {
+    authMock.mockResolvedValue({ userId: null, sessionId: null, sessionClaims: null });
+    expect(await apiAccountAccessWithRole(OWN)).toBeNull();
+    authMock.mockResolvedValue({ userId: "user_agency", sessionId: "sess_1", sessionClaims: { app_role: "agency_admin" }, actor: { sub: "user_x" } });
+    expect(await apiAccountAccessWithRole(OWN)).toBeNull();
   });
 });

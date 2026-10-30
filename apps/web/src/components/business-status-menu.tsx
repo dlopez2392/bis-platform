@@ -20,7 +20,7 @@ import type { MessageKey } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import { useShellData } from "@/components/shell-data";
-import type { ShellBusinessStatus } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import type { ShellBusinessStatus } from "@/lib/shell/snapshot";
 import { setBusinessStatusAction, undoBusinessStatusAction, type UndoToken } from "@/app/(dashboard)/dashboard/accounts/[accountId]/business-status-actions";
 import {
   addDays, dayKey, fromWire, type EffectiveStatus, type LateMinutes, type StatusChange, type StoredState,

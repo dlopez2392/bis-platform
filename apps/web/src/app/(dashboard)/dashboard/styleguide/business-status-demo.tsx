@@ -15,7 +15,7 @@ import { BusinessStatusCardError } from "../accounts/[accountId]/dashboard/busin
 import { toWire, type EffectiveStatus } from "@/lib/business-status/status";
 import { topbarLabels } from "@/lib/business-status/labels";
 import { m } from "@/lib/messages";
-import type { ShellBusinessStatus } from "../accounts/[accountId]/shell-actions";
+import type { ShellBusinessStatus } from "@/lib/shell/snapshot";
 import type { AffectedView } from "../accounts/[accountId]/dashboard/business-status-card-view";
 
 const ACCOUNT = "styleguide";

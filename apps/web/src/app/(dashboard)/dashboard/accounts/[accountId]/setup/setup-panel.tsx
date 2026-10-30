@@ -133,7 +133,7 @@ export function SetupPanel({
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
-  // The SAME reduction the sidebar's setup meter uses (shell-actions.ts's
+  // The SAME reduction the sidebar's setup meter uses (lib/shell/snapshot.ts's
   // `readSetupProgress` → `reduceSetupProgress`, lib/setup/setup-status.ts) —
   // this pane used to carry its own copy (`steps.filter(s => !s.skipped)
   // .length` / `steps.filter(s => s.done).length`), and a change to one

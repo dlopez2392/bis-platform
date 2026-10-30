@@ -12,7 +12,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import type { EffectiveStatus, StoredState } from "@/lib/business-status/status";
 import { cardEndLine, cardLongDate } from "@/lib/business-status/labels";
-import type { ShellBusinessStatus } from "../shell-actions";
+import type { ShellBusinessStatus } from "@/lib/shell/snapshot";
 
 export type AffectedView = { appointments: AffectedAppointment[]; capped: boolean; windowTo: Date };
 

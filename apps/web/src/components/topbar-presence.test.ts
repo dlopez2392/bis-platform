@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { onCallText, TopbarPresence } from "./topbar-presence";
 import { LocaleProvider } from "./locale-provider";
-import type { ShellBusinessStatus } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import type { ShellBusinessStatus } from "@/lib/shell/snapshot";
 
 // F-085 part 1 (spec §7.2): the snapshot TopbarPresence reads, set per test.
 // Mocked at the hook so no server action module is loaded.

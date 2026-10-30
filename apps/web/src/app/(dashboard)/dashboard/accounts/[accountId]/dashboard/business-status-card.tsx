@@ -8,7 +8,7 @@
 // as a PROP from the page's own already-resolved zone (`renderZone`), so this card never re-reads it;
 // `personaName` likewise arrives as a prop (the page's own `getVoiceProfile` call, already made for
 // the calls/activity cards) rather than a sixth @bis/db call here, for the same fault-isolation reason
-// shell-actions.ts's own doc comment gives for never sharing a profile read across two sections.
+// lib/shell/snapshot.ts's own doc comment gives for never sharing a profile read across two sections.
 //
 // Fix round D12: this file is the READS only; what the card shows is `business-status-card-view.tsx`,
 // which `/styleguide` renders with static props.
@@ -25,7 +25,7 @@ import {
   addDays, closureListWindow, coversAppointment, dayKey, effectiveStatus, hoursChain, toWire,
 } from "@/lib/business-status/status";
 import { canChangeFor } from "@/lib/business-status/guard";
-import type { ShellBusinessStatus } from "../shell-actions";
+import type { ShellBusinessStatus } from "@/lib/shell/snapshot";
 import type { AffectedAppointment } from "./affected-appointment-row";
 import { BusinessStatusCardView, type AffectedView } from "./business-status-card-view";
 
