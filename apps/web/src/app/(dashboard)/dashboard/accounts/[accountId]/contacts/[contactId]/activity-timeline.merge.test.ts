@@ -25,11 +25,12 @@ const { undoMergeOne } = await import("./merge-undo");
 const AT = "2026-10-09T16:12:00Z";
 const FUTURE = "2099-01-01T00:00:00Z";
 const PAST = "2020-01-01T00:00:00Z";
-const render = (entries: TimelineEntry[], locale: "en" | "es" = "en", canMerge = true) => {
+const render = (entries: TimelineEntry[], locale: "en" | "es" = "en", canMerge = true, nowMs?: number | null) => {
   const tr = makeTr(locale);
   const rows = timelineRows(entries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: { user_dan: "Dan López" }, personaName: null, tr } });
   const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale, emailAction: async () => {}, smsAction: async () => {}, canMerge });
-  return renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+  const clock = nowMs === null ? { nowMs: undefined } : nowMs === undefined ? {} : { nowMs };
+  return renderToStaticMarkup(createElement(ActivityTimeline, { ...base, ...clock, rows, emptyText: null } as never));
 };
 const row = (html: string, kind: string) => html.match(new RegExp(`<div data-timeline-item="${kind}"[\\s\\S]*?</li>`))?.[0] ?? "";
 const TM = (over: Record<string, unknown> = {}) => ({
@@ -88,6 +89,14 @@ describe("the merge row's own 'Undo merge' control (F-006 part 1, plan Task 11)"
   it("already undone (undoneAt set, even on a 'merge' row): no button (mutation: ignore undoneAt -> FAILS)", () => {
     const r = row(render(entry({ undoneAt: AT, undoneBy: "user_dan" })), "merge");
     expect(r).not.toContain("Undo merge");
+  });
+
+  it("the window is judged against the PAGE's clock, never the render's own: undoUntil 2026-11-01, page clock a day before -> button; a day after -> none; no clock -> none (mutation: compare with Date.now() -> FAILS)", () => {
+    const until = "2026-11-01T00:00:00Z";
+    const day = 86_400_000;
+    expect(row(render(entry({ undoUntil: until }), "en", true, Date.parse(until) - day), "merge")).toContain("Undo merge");
+    expect(row(render(entry({ undoUntil: until }), "en", true, Date.parse(until) + day), "merge")).not.toContain("Undo merge");
+    expect(row(render(entry(), "en", true, null), "merge")).not.toContain("Undo merge");
   });
 
   it("canMerge false (a Technician): no button even with a future undoUntil (mutation: ignore canMerge -> FAILS)", () => {

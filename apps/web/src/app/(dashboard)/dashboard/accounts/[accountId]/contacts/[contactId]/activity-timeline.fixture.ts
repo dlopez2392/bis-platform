@@ -48,5 +48,6 @@ export function legacyTimeline(p: Record<string, unknown>): ActivityTimelineProp
     // never pass it) keep seeing whatever a merge row already shows; the merge test file is the one
     // that exercises false.
     canMerge: p.canMerge === undefined ? true : Boolean(p.canMerge),
+    nowMs: typeof p.nowMs === "number" ? p.nowMs : Date.now(),
   };
 }

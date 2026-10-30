@@ -60,6 +60,9 @@ export type ActivityTimelineProps = {
   /** F-006 part 1 (plan Task 11): may this caller undo a merge (seesWholeAccount: Owners, Staff, the
    *  agency; never a Technician, owner ruling D9). False by default. */
   canMerge?: boolean;
+  /** The page's own clock (epoch ms), so a merge row's Undo window is judged without an impure call
+   *  during render; with none, no merge row offers Undo (the action re-checks the window anyway). */
+  nowMs?: number;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -128,7 +131,7 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
                 </div>
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
-                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} />
+                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs} />
             </li>
           ))}
         </ol>
@@ -144,10 +147,10 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang, canMerge }: {
+function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang, canMerge, nowMs }: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; tr: Tr;
-  customerLang: "" | "en" | "es"; canMerge: boolean;
+  customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -299,7 +302,7 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // Task 11: "Undo merge" while undo_until is still in the future (owner ruling D7), ghost (rule 8),
     // and only for someone who may merge (canMerge; a Technician never, owner ruling D9).
     case "merge": {
-      const canUndo = canMerge && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > Date.now();
+      const canUndo = canMerge && nowMs !== undefined && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > nowMs;
       const otherName = e.merge.otherVisible
         ? contactDisplayName({ first_name: e.merge.otherFirstName, last_name: e.merge.otherLastName })
         : tr.text("timeline.mergeOtherHidden");

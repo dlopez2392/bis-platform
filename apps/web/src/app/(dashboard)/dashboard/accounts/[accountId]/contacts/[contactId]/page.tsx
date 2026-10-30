@@ -361,6 +361,7 @@ export default async function ContactDetailPage({
             customerLang={(contact.language as "en" | "es" | null) ?? ""}
             // F-006 part 1 (plan Task 11): the merge row's own "Undo merge" (owner ruling D9).
             canMerge={seesWholeAccount(access)}
+            nowMs={now.getTime()}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}
