@@ -1,4 +1,4 @@
-import { fillContactBlanksReport, getContact, updateContact } from "@bis/db";
+import { fillContactBlanksReport, followMerge, getContact, updateContact } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import type { ContactFieldName, ContactFieldPayload } from "@bis/db/proposal-rules";
 import type { MessageKey } from "@/lib/messages";
@@ -51,11 +51,14 @@ function readRef(ref: unknown): RefT | null {
   return { field: r.field as ContactFieldName, before: r.before, value: r.value };
 }
 
-async function contactOrThrow(db: Db, accountId: string, contactId: string | null): Promise<ContactRow> {
+/** 0106 (F-006, owner ruling D8): the suggestion may still name a now-merged-away record; resolved ONCE
+ *  so the read (`before`) and the write that follows it land on the same kept record. */
+async function contactOrThrow(db: Db, accountId: string, contactId: string | null): Promise<{ contact: ContactRow; target: string }> {
   if (!contactId) throw new Error("contact_field suggestion without a customer");
-  const row = await getContact(db, accountId, contactId);
+  const target = await followMerge(db, accountId, contactId);
+  const row = await getContact(db, accountId, target);
   if (!row) throw new Error(`contact_field: no contact ${contactId}`);
-  return row as ContactRow;
+  return { contact: row as ContactRow, target };
 }
 
 const label = (field: ContactFieldName, tr: Tr) => tr.text(LABEL[field]);
@@ -121,17 +124,17 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
   },
 
   async stillHolds(db, row) {
-    const contact = await contactOrThrow(db, row.accountId, row.contactId);
+    const { contact } = await contactOrThrow(db, row.accountId, row.contactId);
     return isBlankOn(contact, row.payload.field) ? { ok: true } : { ok: false, reason: "field_filled" };
   },
 
   async apply({ db, accountId, userId, contactId }, p) {
     // `before` is read in the same request, just before the write: what Undo puts back.
-    const contact = await contactOrThrow(db, accountId, contactId);
+    const { contact, target } = await contactOrThrow(db, accountId, contactId);
     const raw = contact[COLUMN[p.field]];
     const before = typeof raw === "string" ? raw : null;
     const ref = { field: p.field, before, value: storedForm(p.field, p.value) };
-    const report = await fillContactBlanksReport(db, accountId, contactId!, { [p.field]: p.value }, userId);
+    const report = await fillContactBlanksReport(db, accountId, target, { [p.field]: p.value }, userId);
     if (report.fields.length === 0) {
       // The fill writes nothing for two reasons, and they are told apart (the old action's split): the
       // field was filled already, or a last name would graft onto a different first name on file. Only
@@ -146,7 +149,9 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
     async undo({ db, accountId, userId, contactId }, ref) {
       const r = readRef(ref);
       if (!r || !contactId) return "changed";
-      const contact = await getContact(db, accountId, contactId);
+      // 0106 (F-006, owner ruling D8): resolved ONCE, so the read and the restore land on the same record.
+      const target = await followMerge(db, accountId, contactId);
+      const contact = await getContact(db, accountId, target);
       if (!contact || !stillAsWritten(r.field, (contact as ContactRow)[COLUMN[r.field]], r.value)) return "changed";
       // A name goes back exactly as it was, null included ("Caller" stays "Caller"); email and phone
       // take a string, and updateContact stores an empty one as null (toRow, phoneFields). The phone's
@@ -154,7 +159,7 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
       const patch = r.field === "firstName" || r.field === "lastName"
         ? { [r.field]: r.before }
         : { [r.field]: r.before ?? "" };
-      await updateContact(db, accountId, contactId, patch, userId);
+      await updateContact(db, accountId, target, patch, userId);
       return "undone";
     },
   },

@@ -33,6 +33,14 @@ describe("isShared", () => {
   it("one real contact -> false", () => {
     expect(isShared({ candidates: [{ id: "a", words: ["a"], emailKey: null }], truncated: false })).toBe(false);
   });
+
+  it("0106 (owner ruling D8): a kept record and its own tombstone on one number read as ONE person, not shared; two UNRESOLVED rows naming the same number (the control listContactsOnNumber must never hand realCandidates) would", () => {
+    const resolved: NumberContactRow[] = [row({ id: "K", phone: E164 })];
+    expect(isShared({ candidates: realCandidates(resolved, E164), truncated: false })).toBe(false);
+
+    const unresolved: NumberContactRow[] = [row({ id: "K", phone: E164 }), row({ id: "T", phone: E164 })];
+    expect(isShared({ candidates: realCandidates(unresolved, E164), truncated: false })).toBe(true);
+  });
   it("two real contacts -> true", () => {
     expect(isShared({
       candidates: [{ id: "a", words: ["a"], emailKey: null }, { id: "b", words: ["b"], emailKey: null }],

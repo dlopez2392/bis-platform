@@ -73,7 +73,21 @@ const { GET } = await import("./route");
 // first_opened_at), inside the same documents source.
 // Raised 31 -> 32 on 2026-10-28 by the contact archive (plan Task 7): archiving and restoring are each a
 // timeline row, read once from 0103's contact_archive_log (under RLS), its own `archive` source.
-const MEASURED = 32; // measured 2026-10-28: 32 reads (+1 prefs), the one added is request:contact_archive_log (the archive source's, listed beside the others since the reads run concurrently); 31 measured 2026-10-18: 31 reads (+1 prefs), the two added are request:document_share_timeline twice (S-07 3b: a share at created_at, its first open at first_opened_at; listed beside request:document_requirement_skips, since the reads run concurrently); 29 measured 2026-10-17: 29 reads (+1 prefs), the one added is request:conversations, the chats source's (listed 23rd, after the documents source's reads, since the reads run concurrently); 28 measured 2026-10-16: 28 reads (+1 prefs), the two added are request:document_requirement_skips twice (S-07 2c: a skip at created_at, an un-skip at unskipped_at; listed 21st and 22nd, beside request:document_requests, since the reads run concurrently); 26 before S-07 2c, the 26th request:document_requests; 25 before S-07 2b, the 25th request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
+// Raised 32 -> 35 on 2026-10-29, found by plan Task 11 (F-006 part 1) running this fence for the first
+// time since the merge work landed: two of the three are plan Task 9's own miss, not Task 11's — the
+// `merge` source (contact_merges, read twice: merged_at, then undone_at) is UNCONDITIONAL in
+// listTimelinePage (record.ts), so it was already running on every drawer open once Task 9 shipped;
+// this fence was never bumped for it. The third is Task 11's own review carry-in: loadRecent now reads
+// mergedIdsOf first (one more request:contacts), so the drawer's five newest rows agree with the record
+// after a merge, the same tombstone id set loadTimeline already read.
+// Raised 35 -> 36 on 2026-10-29, the same Task 11: the record's "may be the same person" line reads
+// `duplicatePairsOf` (`rpc:duplicate_pairs_of`), its own bounded read, soft-caught so a failure costs
+// only the line.
+const MEASURED = 36; // measured 2026-10-29: 36 reads (+1 prefs); +4 over 32 — request:contacts (mergedIdsOf,
+  // listed 9th, right after contactNextUp's two request:tasks, since the reads run concurrently),
+  // request:rpc:duplicate_pairs_of (listed 10th, right after it, since the reads run concurrently),
+  // and request:contact_merges twice (the merge source's two reads, listed after request:contact_archive_log,
+  // since the reads run concurrently); 32 measured 2026-10-28: 32 reads (+1 prefs), the one added is request:contact_archive_log (the archive source's, listed beside the others since the reads run concurrently); 31 measured 2026-10-18: 31 reads (+1 prefs), the two added are request:document_share_timeline twice (S-07 3b: a share at created_at, its first open at first_opened_at; listed beside request:document_requirement_skips, since the reads run concurrently); 29 measured 2026-10-17: 29 reads (+1 prefs), the one added is request:conversations, the chats source's (listed 23rd, after the documents source's reads, since the reads run concurrently); 28 measured 2026-10-16: 28 reads (+1 prefs), the two added are request:document_requirement_skips twice (S-07 2c: a skip at created_at, an un-skip at unskipped_at; listed 21st and 22nd, beside request:document_requests, since the reads run concurrently); 26 before S-07 2c, the 26th request:document_requests; 25 before S-07 2b, the 25th request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
 
 describe("reads per drawer open (S-03 part 3 §5: measured, not assumed)", () => {
   it("the contact read first, the ledger only after it, and no more reads than measured (mutation: re-add the unpaged listContactMessages read -> FAILS)", async () => {

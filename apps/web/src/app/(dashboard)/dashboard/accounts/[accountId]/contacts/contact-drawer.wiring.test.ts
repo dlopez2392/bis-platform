@@ -65,6 +65,10 @@ vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAct
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
 // Contact archive (plan Task 11): the header's ArchiveControls bind these "use server" actions; nothing runs here.
 vi.mock("./archive-actions", () => ({ archiveContactsAction: vi.fn(), restoreContactsAction: vi.fn(), contactDeleteBlockersAction: vi.fn() }));
+// F-006 part 1 (plan Task 11 fix round, finding #6): a spy, not the real URL-mutating function —
+// this file runs with no `window` at all outside the one block that stubs it.
+const replacePeekMock = vi.fn();
+vi.mock("@/lib/contacts/use-peek", () => ({ replacePeek: (...a: unknown[]) => replacePeekMock(...a) }));
 
 const { ContactDrawer } = await import("./contact-drawer");
 
@@ -123,7 +127,7 @@ async function load(body: unknown, ok = true): Promise<unknown> {
 
 // A spy, not fake timers: `vi.waitFor` advances faked timers by its poll
 // interval, which would move a faked Date under the assertion.
-beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000); });
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000); replacePeekMock.mockReset(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ContactDrawer: the summary body is parsed, one section at a time (S-03 part 3 §7.4)", () => {
@@ -141,6 +145,37 @@ describe("ContactDrawer: the summary body is parsed, one section at a time (S-03
     const stored = await load(body) as { result: { status: string; body: { recent: { status: string }; nextUp: { status: string } } } };
     expect(stored.result.status).toBe("ready");
     expect([stored.result.body.recent.status, stored.result.body.nextUp.status]).toEqual(["error", "ready"]);
+  });
+});
+
+/**
+ * F-006 part 1 (plan Task 11, spec §6.4; fix round, finding #6): a `?peek=` of a merged-away id
+ * fetches the kept record's own summary (route.ts already follows the pointer); the drawer must
+ * re-key its OWN id to match, by swapping the URL's `?peek=` in place, so every inline edit, Texts,
+ * Email and the tags/assignee fields key off the KEPT id (`row.id`) from here on, never the hidden
+ * one the drawer happened to open with.
+ */
+describe("ContactDrawer: a merged-away ?peek= re-keys to the kept record (fix round, finding #6)", () => {
+  it("replaces the URL's peek with body.contactId when it differs from the id fetched for (mutation: compare to the wrong id, or drop the call entirely -> FAILS)", async () => {
+    const body = { ...JSON.parse(JSON.stringify(GOOD)), contactId: "kept9" };
+    await load(body);
+    expect(replacePeekMock).toHaveBeenCalledWith("kept9");
+  });
+
+  it("never replaces when the body's own contactId already matches what was fetched for (control; mutation: always replace -> FAILS)", async () => {
+    const body = { ...JSON.parse(JSON.stringify(GOOD)), contactId: "c1" };
+    await load(body);
+    expect(replacePeekMock).not.toHaveBeenCalled();
+  });
+
+  it("never replaces on an older server that sends no contactId at all (control)", async () => {
+    await load(GOOD);
+    expect(replacePeekMock).not.toHaveBeenCalled();
+  });
+
+  it("never replaces on the whole drawer's error state (control)", async () => {
+    await load(omit("header"));
+    expect(replacePeekMock).not.toHaveBeenCalled();
   });
 });
 
@@ -564,6 +599,20 @@ describe("ContactDrawer on the record kit (S-03 part 3)", () => {
     expect(html).toMatch(/<p lang=""[^>]*>Prefers mornings<\/p>/);
   });
 
+  it("a merge or mergeUndone recent row wears the Merge/Undo2 icon (F-006 part 1, plan Task 9 review carry-in, Task 11; mutation: swap the icons -> FAILS)", () => {
+    const merged = { key: "merge-1", kind: "merge", mark: { kind: "person", label: "Dan" }, verb: "merged Other Person into this record: 1 note moved here",
+      status: null, detail: null, time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z", excerpt: null };
+    const undone = { ...merged, key: "merge-2", kind: "mergeUndone", verb: "undid the merge with Other Person", dateTime: "2026-10-09T17:12:00Z" };
+    const body = { ...PARSED, recent: { ...PARSED.recent, rows: [undone, merged] } };
+    const html = renderOpen({ contactId: "c1", result: { status: "ready", body } });
+    const items = html.match(/<li[\s\S]*?<\/li>/g) ?? [];
+    const mergeRow = items.find((i) => i.includes("merged Other Person into this record")) ?? "";
+    const undoneRow = items.find((i) => i.includes("undid the merge with Other Person")) ?? "";
+    expect(mergeRow).toMatch(/lucide-merge\b/);
+    expect(undoneRow).toMatch(/lucide-undo-2\b/);
+    expect(undoneRow).not.toMatch(/lucide-merge\b/);
+  });
+
   it("the header is the route's: Call the only primary, the name an h2 (D2; mutation: render the list row's name -> FAILS)", () => {
     const html = renderOpen({ contactId: "c1", result: { status: "ready", body: { ...PARSED, header: { ...PARSED.header, name: "Maria G. Garcia" } } } });
     expect(html).toMatch(/<h2[^>]*>Maria G\. Garcia<\/h2>/);
@@ -710,6 +759,39 @@ describe("ContactDrawer: every section's own state, and the chrome around them (
       expect(html.match(/aria-label="Open full record"|>Open full record<\/a>/g)).toHaveLength(2);
       expect(html).toMatch(/<a [^>]*data-drawer-open-full[^>]*>Open full record<\/a>/);
     }
+  });
+
+  it("F-006 part 1 (plan Task 11): Open full record points at the summary's contactId, the KEPT record — never the tombstone the drawer was opened for (mutation: use the row's own id -> FAILS)", () => {
+    const html = renderOpen({ contactId: "c1", result: { status: "ready", body: { ...PARSED, contactId: "k1" } } });
+    const links = [...html.matchAll(/<a [^>]*>/g)].map((m) => m[0]).filter((a) => a.includes("Open full record") || a.includes("data-drawer-open-full") || a.includes('aria-label="Open full record"'));
+    expect(links).toHaveLength(2);
+    for (const a of links) expect(a).toContain('href="/dashboard/accounts/a1/contacts/k1"');
+  });
+
+  it("with no contactId on the body (an older server, or still loading), Open full record falls back to the row's own id (control; mutation: always read body.contactId -> FAILS)", () => {
+    const html = renderOpen(READY);
+    const links = [...html.matchAll(/<a [^>]*>/g)].map((m) => m[0]).filter((a) => a.includes("data-drawer-open-full") || a.includes('aria-label="Open full record"'));
+    expect(links).toHaveLength(2);
+    for (const a of links) expect(a).toContain('href="/dashboard/accounts/a1/contacts/c1"');
+  });
+
+  it("F-006 part 1 (plan Task 11): the drawer renders the duplicate line from the summary's duplicates field, in its header section (mutation: ignore duplicates -> FAILS)", () => {
+    const pair = { id: "pr1", a: { id: "c1", firstName: "Maria", lastName: "Garcia" }, b: { id: "c9", firstName: "Jose", lastName: "Ruiz" }, reason: "same_phone", strength: 1, createdAt: "2026-10-01T00:00:00Z" };
+    const html = renderOpen({ contactId: "c1", result: { status: "ready", body: { ...PARSED, duplicates: [pair] } } });
+    expect(html).toContain("May be the same person as Jose Ruiz");
+    // In the header section: before the scrollable body (data-testid="drawer-scroll"), after the header's own <header>.
+    const headerEnd = html.indexOf("</header>");
+    const lineAt = html.indexOf("May be the same person");
+    const scrollAt = html.indexOf('data-testid="drawer-scroll"');
+    expect(headerEnd).toBeGreaterThan(-1);
+    expect(lineAt).toBeGreaterThan(headerEnd);
+    expect(lineAt).toBeLessThan(scrollAt);
+    expect(html).toContain("Compare");
+  });
+
+  it("with no duplicates field on the body (an older server, or none found), no line at all (control; mutation: render even with none -> FAILS)", () => {
+    const html = renderOpen(READY);
+    expect(html).not.toContain("May be the same person");
   });
 
   it("m8: a tag shows as typed (lang=''), and See all and the bottom link are ghost, never a second primary (mutation: make either link default -> FAILS)", () => {

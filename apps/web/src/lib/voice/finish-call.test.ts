@@ -1232,11 +1232,13 @@ describe("finishCall — proposal generation", () => {
             const builder: {
               eq: () => typeof builder;
               neq: () => typeof builder;
+              is: () => typeof builder;
               maybeSingle: () => Promise<{ data: ContactRow; error: null }>;
               limit: () => Promise<{ data: never[]; error: null }>;
             } = {
               eq: () => builder,
               neq: () => builder,
+              is: () => builder,
               maybeSingle: async () => ({ data: row, error: null }),
               limit: async () => ({ data: [], error: null }),
             };

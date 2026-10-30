@@ -35,7 +35,7 @@
 //     BIS's own reply runs in `after()`, once this route has answered.
 import { NextResponse, after } from "next/server";
 import {
-  serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
+  serviceDb, ensureConversation, createMessage, createContact, incrementUnreadForMessage,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
   applyConfirmationReply, ensureHoldingContact, listOutstandingConfirmAsks, matchConfirmationReply,
   restoreContactOnSign,
@@ -204,6 +204,11 @@ async function handleInbound(
   let shared: { realContactIds: string[]; truncated: boolean } | null = null;
   /** More people on the number than one read returns (spec S6): an ask among those read may not be the only one. */
   let sharedTruncated = false;
+  // 0106 (F-006, plan review m7): the id the unread bump below needs, not the conversation id this
+  // function already has — a merge between this message's own insert and that bump can move the
+  // message off the conversation remembered here, and bumping that remembered id would be a silent
+  // no-op on a row the message no longer sits on.
+  let messageId: string | null = null;
   try {
     // S-47e (E8, S27): a text from a number several customers share carries no name, so it files on the
     // number's ONE holding record, never on a household member by phone. Staff move it. A failed read on
@@ -235,7 +240,7 @@ async function handleInbound(
       }
     }
     if (firstFiling) {
-      await createMessage(db, accountId, {
+      const created = await createMessage(db, accountId, {
         conversationId: conversation.id, channel: "sms", direction: "inbound",
         body: text, providerMessageId: providerMessageId ?? undefined,
         // Received in full, not queued to send anywhere — see NewMessage.status
@@ -243,6 +248,7 @@ async function handleInbound(
         // is right for an outbound send and wrong for an inbound text.
         status: "delivered",
       }, ACTOR_ID, ACTOR_TYPE);
+      messageId = created.id;
     }
   } catch (e) {
     // A HoldingContactUnavailable lands here too (P23): a delete raced the insert, and Telnyx's retry recovers.
@@ -253,8 +259,14 @@ async function handleInbound(
   if (firstFiling) {
     // Same invariant every other inbound writer keeps: a new inbound message
     // always bumps the conversation's unread count, right after the row that
-    // made it unread exists.
-    await incrementUnreadCount(db, accountId, conversation.id);
+    // made it unread exists. incrementUnreadForMessage (0106, Task 7) reads
+    // the message's OWN conversation_id fresh, rather than trusting the
+    // `conversation` this function resolved above — a merge landing between
+    // the insert and this call can move the message onto the kept record's
+    // own thread, and bumping the id remembered here would then be a silent
+    // no-op on a conversation the merge deleted.
+    if (messageId === null) throw new Error("firstFiling but no message id to bump unread for");
+    await incrementUnreadForMessage(db, accountId, messageId);
 
     // PART B: the appointment-confirmation answer, for a text that is
     // nothing else (a keyword or a stop sentence never reaches it; spec §4.2

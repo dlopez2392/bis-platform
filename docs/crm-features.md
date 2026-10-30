@@ -1401,9 +1401,9 @@ rest (§4.1).
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
 | **Record** | | | | |
-| S-04 | `record_changes` audit log and trash | 2–3 | History must exist before merge, and before law firms are sold the pack | F-115 (part 1), S-02 |
-| S-12 | Merge with history | 2–3 | Imports and new channels create duplicates; the import already flags them with nowhere to go | S-04 |
-| F-006 | Duplicates found the Valley way, and a merge that keeps everything | 2–3 | The merge UI and phone-key surfacing, with S-12; the nickname scorer waits for F-092 part 2 | S-04, S-12 |
+| S-04 | `record_changes` audit log and trash | 2–3 | History must exist before law firms are sold the pack; when it lands, the merge also writes one change row per overwritten field (spec 2026-10-29-dedupe-merge §8) | F-115 (part 1), S-02 |
+| S-12 | Merge with history | 2–3 | Imports and new channels create duplicates; the import already flags them with nowhere to go. Owner ruling D10 (2026-10-29): ships before S-04, with its own merge log and 30-day Undo | none |
+| F-006 | Duplicates found the Valley way, and a merge that keeps everything | 2–3 | The merge UI and phone-key surfacing, with S-12; the nickname scorer waits for F-092 part 2 | S-12 |
 | F-150 (part: a phone-contacts import) | Switch kit: move in from GoHighLevel, Jobber or HoneyBook in a day | 0.5–1 | Proposal. A Valley business keeps its customers in a phone, and phones share contacts as vCard (`.vcf`) files, not CSV. A vCard step on today's import wizard, parsed in the browser as DESIGN.md's CSV rule requires, with the existing duplicate check | none |
 | | *Record subtotal* | *6.5–10* | | |
 | **Bilingual** | | | | |

@@ -128,6 +128,13 @@ const countHeldInboundEmailsMock = vi.fn(async (): Promise<number> => {
   if (heldEmailsCount === null) throw new Error("held count read failed");
   return heldEmailsCount;
 });
+/** F-006 part 1 (plan Task 10, Step 6): the Possible duplicates count, read the same best-effort way
+ *  as the held-emails count above — never for a Technician (they cannot read the queue at all, 0068). */
+let dupCount: number | null = 0;
+const countDuplicatePairsMock = vi.fn(async (): Promise<number> => {
+  if (dupCount === null) throw new Error("duplicates count read failed");
+  return dupCount;
+});
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
@@ -137,6 +144,7 @@ vi.mock("@bis/db", async (importOriginal) => {
     readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
     listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
     countHeldInboundEmails: () => countHeldInboundEmailsMock(),
+    countDuplicatePairs: () => countDuplicatePairsMock(),
     serviceDb: () => ({
       from: () => ({
         select: () => ({
@@ -955,6 +963,61 @@ describe("TasksPage — the held-emails row (Task 12)", () => {
     );
     expect(html).not.toContain("data-held-emails-row");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("held count read failed"));
+    spy.mockRestore();
+  });
+});
+
+// F-006 part 1 (plan Task 10, Step 6): the Possible duplicates count row, shaped like the held-emails
+// row above (countHeldInboundEmails's own :76-83 shape).
+describe("TasksPage — the Possible duplicates row (F-006 part 1)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    role = null;
+    workRows = [];
+    pendingProposals = [];
+    heldEmailsCount = 0;
+    dupCount = 0;
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    countDuplicatePairsMock.mockClear();
+    resetFake();
+  });
+  afterEach(() => { dupCount = 0; });
+
+  it("a count above 0 renders the row, linking to the duplicates view (mutation: read duplicates for everyone -> the Technician case below FAILS)", async () => {
+    dupCount = 3;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+    expect(html).toContain("data-duplicates-row");
+    expect(html).toContain(`href="/dashboard/accounts/acct1/contacts?view=duplicates"`);
+    expect(renderedText(html)).toContain("3 possible duplicate customers to check");
+  });
+
+  it("a count of zero renders no row at all", async () => {
+    dupCount = 0;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+    expect(html).not.toContain("data-duplicates-row");
+  });
+
+  it("a Technician gets no read at all, not merely a hidden row (mutation: read for everyone -> FAILS)", async () => {
+    isAgency = false;
+    role = "technician";
+    dupCount = 3;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+    expect(html).not.toContain("data-duplicates-row");
+    expect(countDuplicatePairsMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed count read omits the row rather than taking the page down (rule 5; mutation: let the throw escape -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dupCount = null;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+    expect(html).not.toContain("data-duplicates-row");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("duplicates count read failed"));
     spy.mockRestore();
   });
 });

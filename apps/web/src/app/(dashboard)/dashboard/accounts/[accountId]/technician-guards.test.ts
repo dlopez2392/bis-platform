@@ -20,6 +20,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PAGES = [
   "dashboard/page.tsx", "activity/page.tsx", "pipeline/page.tsx", "website/page.tsx",
   "forms/page.tsx", "forms/[formId]/page.tsx", "contacts/import/page.tsx", "branding/page.tsx",
+  // F-006 part 1 (plan Task 10; owner ruling D9): merge, undo and dismiss are Owners, Staff and the
+  // agency only — never a Technician, who cannot read the duplicates queue at all (0068).
+  "contacts/merge/page.tsx",
 ] as const;
 
 const ACTIONS: Record<string, string[]> = {

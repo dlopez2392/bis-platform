@@ -303,3 +303,28 @@ describe("an archive/restore row on the group page (contact archive, spec §4.2)
     expect(html).toContain("lucide-archive-restore ");
   });
 });
+
+describe("a merge/mergeUndone row on the group page (F-006 part 1, plan Task 9)", () => {
+  it("renders as one: its member, its verb, its mark and the Merge/Undo2 icon (mutation: return null for the merge case -> FAILS)", () => {
+    const tr = makeTr("en");
+    const TM = (over: Record<string, unknown> = {}) => ({
+      mergeId: "1", otherId: "c9", otherFirstName: "Other", otherLastName: "Person", otherVisible: true,
+      mergedBy: "user_dan", mergedAt: AT, undoUntil: AT, undoneAt: null, undoneBy: null, counts: { notes: 1 }, ...over,
+    });
+    const entries = [
+      { kind: "merge", id: "g1", at: AT, contactId: "c-maria", merge: TM() },
+      { kind: "mergeUndone", id: "g2", at: AT, contactId: "c-maria", merge: TM({ undoneAt: AT, undoneBy: "user_dan" }) },
+    ] as TimelineEntry[];
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: { user_dan: "Dan López" }, personaName: null, tr } });
+    const html = render({ rows, tr });
+    const merged = rowHtml(html, "merge");
+    expect(merged).toContain(">Maria García</a>");
+    expect(merged).toContain(">merged Other Person into this record: 1 note moved here<");
+    expect(merged).toMatch(/data-author-mark="person"/);
+    expect(merged).toContain(">Dan López<");
+    expect(merged).toContain("lucide-merge ");
+    const undone = rowHtml(html, "mergeUndone");
+    expect(undone).toContain(">undid the merge with Other Person<");
+    expect(undone).toContain("lucide-undo-2 ");
+  });
+});

@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { ensureConversation } from "./messaging";
 import { emailKey } from "./contacts";
+// 0106 (F-006, Task 7): the backstop findReplyThread and matchSender both follow after a merge.
+import { followMerge } from "./contact-merge";
 
 /**
  * Inbound email, part 1 (S-06; 0082). Reply tokens, the account's Replies mode, the inbound rows and
@@ -121,9 +123,40 @@ export async function findReplyThread(db: SupabaseClient, token: string): Promis
     .select("id, account_id, contact_id, reply_token_revoked_at, accounts(inbound_domain)")
     .eq("reply_token", token).maybeSingle();
   if (error) throw new Error(`findReplyThread failed: ${error.message}`);
-  if (!data) return null;
-  const r = data as unknown as { id: string; account_id: string; contact_id: string; reply_token_revoked_at: string | null; accounts: { inbound_domain: string | null } | null };
-  return { conversationId: r.id, accountId: r.account_id, contactId: r.contact_id, revoked: r.reply_token_revoked_at !== null, inboundDomain: r.accounts?.inbound_domain ?? null };
+  if (data) {
+    const r = data as unknown as { id: string; account_id: string; contact_id: string; reply_token_revoked_at: string | null; accounts: { inbound_domain: string | null } | null };
+    return { conversationId: r.id, accountId: r.account_id, contactId: r.contact_id, revoked: r.reply_token_revoked_at !== null, inboundDomain: r.accounts?.inbound_domain ?? null };
+  }
+
+  // 0106 (F-006, Task 7; plan correction 7, owner ruling D8): a merge DELETES the other thread's own
+  // conversation row once its messages have moved onto the kept thread (0106's merge_contacts) — so a
+  // reply to mail sent before the merge no longer finds anything under its own token above. Its token
+  // survives only as `contact_merges.other_reply_token`, a snapshot taken at merge time; this is that
+  // fallback, and it is the whole reason that column exists (correction 7: deleting the other thread
+  // would otherwise orphan every reply to mail sent before the merge). `is("undone_at", null)` is
+  // load-bearing: an UNDONE merge restores the other thread's own row (reply_token and all), and that
+  // restored row is what the SELECT above finds directly on the very next call — this fallback must
+  // never also answer for it, or an undone merge's reply would resolve to two different threads at once.
+  const { data: merge, error: mergeErr } = await db.from("contact_merges")
+    .select("account_id, keep_id")
+    .eq("other_reply_token", token).is("undone_at", null).maybeSingle();
+  if (mergeErr) throw new Error(`findReplyThread failed: ${mergeErr.message}`);
+  if (!merge) return null;
+  const m = merge as { account_id: string; keep_id: string };
+  // followMerge again: 0106 flattens a chain of merges onto the record CURRENTLY kept, but a merge
+  // undone and then re-merged into a THIRD record is still one hop from here, never zero.
+  const resolved = await followMerge(db, m.account_id, m.keep_id);
+  const { data: kept, error: keptErr } = await db.from("conversations")
+    .select("id, accounts(inbound_domain)")
+    .eq("account_id", m.account_id).eq("contact_id", resolved).maybeSingle();
+  if (keptErr) throw new Error(`findReplyThread failed: ${keptErr.message}`);
+  if (!kept) return null;
+  const k = kept as unknown as { id: string; accounts: { inbound_domain: string | null } | null };
+  // `revoked` is always false here: this fallback exists so an old email keeps reaching the kept
+  // customer (D8), not so a dead reply address keeps advertising itself — the live token this reply
+  // arrives under is `contact_merges.other_reply_token`'s own snapshot, which the merge only ever took
+  // from a token that was live (not revoked) at merge time (merge_contacts's own v_token assignment).
+  return { conversationId: k.id, accountId: m.account_id, contactId: resolved, revoked: false, inboundDomain: k.accounts?.inbound_domain ?? null };
 }
 
 export type InboundStatus = "filed" | "held" | "dismissed";
@@ -331,6 +364,21 @@ export async function matchSender(db: SupabaseClient, accountId: string, contact
   if (error) throw new Error(`matchSender contact read failed: ${error.message}`);
   const self = me as { id: string; first_name: string | null; last_name: string | null; email_key: string | null } | null;
   if (self?.email_key === key) return { contactId: self.id, firstName: self.first_name, lastName: self.last_name, viaGroup: false };
+
+  // 0106 (F-006, Task 7; owner ruling D8): the thread's own contact may have absorbed another record's
+  // address through a merge — checked only once its own email_key has already missed, above, so this is
+  // an address the kept record never itself used. D8 is the promise the compare screen's own copy states
+  // (contacts.merge.otherEmail: mail to the other address "will still reach" the kept record); this is
+  // the read half of that promise. A merged-away (tombstone) record naming THIS contact as its
+  // `merged_into` and carrying the matched email answers the KEPT contact's own name, never the hidden
+  // record's, with `viaGroup: false` — proven below. Checked before the group fallback below: this is
+  // simply the ORDER the code takes (no test exercises both a merge-match and a group-match at once, so
+  // this does not prove which should win if they ever disagreed).
+  const { data: viaMerge, error: mergeErr } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).eq("merged_into", contactId).eq("email_key", key).limit(1).maybeSingle();
+  if (mergeErr) throw new Error(`matchSender merged-away read failed: ${mergeErr.message}`);
+  if (viaMerge && self) return { contactId: self.id, firstName: self.first_name, lastName: self.last_name, viaGroup: false };
+
   const { data: groups, error: gErr } = await db.from("client_group_members").select("client_group_id")
     .eq("account_id", accountId).eq("contact_id", contactId);
   if (gErr) throw new Error(`matchSender groups read failed: ${gErr.message}`);

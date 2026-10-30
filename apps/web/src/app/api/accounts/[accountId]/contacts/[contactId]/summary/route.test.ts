@@ -32,8 +32,14 @@ const NO_PLACES = { groups: [], places: [], placeCount: 0, equipment: [], equipm
 const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
 const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
 const dbMocks = {
-  getContact: vi.fn(), contactFacts: vi.fn(), contactNextUp: vi.fn(), listContactTimelinePage: vi.fn(), listPeopleNames: vi.fn(),
+  getContact: vi.fn(), contactFacts: vi.fn(), contactNextUp: vi.fn(), listTimelinePage: vi.fn(), listPeopleNames: vi.fn(),
   getVoiceProfile: vi.fn(), listContactTags: vi.fn(), listContactPlaces: vi.fn(), listContactMessages: vi.fn(), holdOpenTaskIds: vi.fn(),
+  // F-006 part 1 (plan Task 11 review carry-in): loadRecent now reads mergedIdsOf first (loaders.ts),
+  // the same tombstone id set loadTimeline already read, then listTimelinePage (not
+  // listContactTimelinePage, which no longer has a caller on this route).
+  mergedIdsOf: vi.fn(),
+  // F-006 part 1 (plan Task 11): the record's line (duplicatePairsOf, T5).
+  duplicatePairsOf: vi.fn(),
 };
 vi.mock("@bis/db", () => ({
   ...Object.fromEntries(Object.entries(dbMocks).map(([k, f]) => [k, (...a: unknown[]) => { order.push(k); return f(...a); }])),
@@ -72,13 +78,15 @@ beforeEach(() => {
   dbMocks.getContact.mockReset().mockResolvedValue(CONTACT);
   dbMocks.contactFacts.mockReset().mockResolvedValue(READY_FACTS);
   dbMocks.contactNextUp.mockReset().mockResolvedValue({ bookings: [], datedTasks: [], undatedCount: 0 });
-  dbMocks.listContactTimelinePage.mockReset().mockResolvedValue(EMPTY_PAGE);
+  dbMocks.listTimelinePage.mockReset().mockResolvedValue(EMPTY_PAGE);
+  dbMocks.mergedIdsOf.mockReset().mockResolvedValue([]);
   dbMocks.listPeopleNames.mockReset().mockResolvedValue({});
   dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
   dbMocks.listContactTags.mockReset().mockResolvedValue([{ id: "t1", name: "vip" }]);
   dbMocks.listContactPlaces.mockReset().mockResolvedValue(NO_PLACES);
   dbMocks.listContactMessages.mockReset().mockResolvedValue([]);
   dbMocks.holdOpenTaskIds.mockReset().mockResolvedValue([]);
+  dbMocks.duplicatePairsOf.mockReset().mockResolvedValue([]);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
@@ -127,11 +135,77 @@ describe("F-118 part 1 (plan Task 6): BIS's open of this drawer is logged", () =
   });
 });
 
+/**
+ * F-006 part 1 (plan Task 11, spec §6.4): a `?peek=` deep link to a merged-away record opens the
+ * KEPT record's drawer — the tombstone itself carries no summary of its own. `getContact` answers
+ * the tombstone first, then (on the SAME client) the kept row; everything downstream (the header,
+ * the facts, Recent, who they are, the access-log write) is the KEPT record's.
+ */
+describe("F-006 part 1 (plan Task 11): a merged-away record's drawer is the kept record's", () => {
+  it("getContact answers a tombstone, then the kept row: the summary is the kept record's, with contactId (mutation: serve the tombstone -> FAILS)", async () => {
+    dbMocks.getContact.mockReset();
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, id: "c1", merged_into: "k1" });
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, id: "k1", first_name: "Kept", last_name: "Record" });
+    const b = await body();
+    expect(b.contactId).toBe("k1");
+    expect(b.header.name).toBe("Kept Record");
+  });
+
+  it("the access-log write names the KEPT record, never the tombstone (mutation: log the route's own contactId -> FAILS)", async () => {
+    dbMocks.getContact.mockReset();
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, id: "c1", merged_into: "k1" });
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, id: "k1" });
+    await body();
+    expect(noteOpenedApi).toHaveBeenCalledWith({ userId: "u1", isAgency: true }, "a1", { kind: "contact", recordId: "k1" });
+  });
+
+  it("a tombstone whose kept record cannot be read (RLS, or it is gone) is a 404, never the tombstone's own blanks (mutation: fall back to the tombstone -> FAILS)", async () => {
+    dbMocks.getContact.mockReset();
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, id: "c1", merged_into: "k1" });
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    expect((await GET(req(), ctx())).status).toBe(404);
+    expect(noteOpenedApi).not.toHaveBeenCalled();
+  });
+
+  it("an ordinary contact (no merged_into) reads getContact only once (control; mutation: always follow -> FAILS)", async () => {
+    await body();
+    expect(dbMocks.getContact).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line's pairs. Read for every
+ * caller here (not gated on `seesWholeAccount`, which `apiAccountAccess` carries no role to compute):
+ * `duplicate_pairs_of` is an INVOKER function behind 0106's own restrictive policy on
+ * `contact_duplicate_flags` (migration comment, section 9), so a Technician's own RLS-scoped read
+ * already answers none — the same "the database refuses it" pattern the merge/dismiss definers use.
+ */
+describe("F-006 part 1 (plan Task 11): the record's duplicate line (spec §6.1)", () => {
+  it("duplicates holds duplicatePairsOf's pairs, read for the (possibly re-pointed) contact id (mutation: read for the route's own id -> FAILS)", async () => {
+    const pair = { id: "pr1", a: { id: "c1", firstName: "Maria", lastName: "Garcia" }, b: { id: "c9", firstName: "Jose", lastName: "Garcia" }, reason: "same_phone", strength: 1, createdAt: AT };
+    dbMocks.duplicatePairsOf.mockResolvedValueOnce([pair]);
+    const b = await body();
+    expect(dbMocks.duplicatePairsOf).toHaveBeenCalledWith(db, "a1", "c1");
+    expect(b.duplicates).toEqual([pair]);
+  });
+
+  it("a failed read costs only the duplicates field, never the drawer (mutation: let it throw -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      dbMocks.duplicatePairsOf.mockRejectedValueOnce(new Error("down"));
+      const res = await GET(req(), ctx());
+      expect(res.status).toBe(200);
+      const b = await res.json();
+      expect(b.duplicates).toEqual([]);
+    } finally { errors.mockRestore(); }
+  });
+});
+
 describe("the drawer's summary route: each section loads and fails on its own (C2)", () => {
   it.each([
     ["facts", () => dbMocks.contactFacts.mockRejectedValueOnce(new Error("down")), (b: Record<string, { status: string }>) => b.facts],
     ["nextUp", () => dbMocks.contactNextUp.mockRejectedValueOnce(new Error("down")), (b: Record<string, { status: string }>) => b.nextUp],
-    ["recent", () => dbMocks.listContactTimelinePage.mockRejectedValueOnce(new Error("down")), (b: Record<string, { status: string }>) => b.recent],
+    ["recent", () => dbMocks.listTimelinePage.mockRejectedValueOnce(new Error("down")), (b: Record<string, { status: string }>) => b.recent],
     ["tags", () => dbMocks.listContactTags.mockRejectedValueOnce(new Error("down")), (b: { who: { tags: { status: string } } }) => b.who.tags],
   ])("%s failing alone is that section's error and the rest are ready (mutation: one Promise.all without per-section loads -> the route 500s, FAILS)", async (name, fail, pick) => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -150,7 +224,7 @@ describe("the drawer's summary route: each section loads and fails on its own (C
     vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.contactFacts.mockRejectedValueOnce(new Error("down"));
     dbMocks.contactNextUp.mockRejectedValueOnce(new Error("down"));
-    dbMocks.listContactTimelinePage.mockRejectedValueOnce(new Error("down"));
+    dbMocks.listTimelinePage.mockRejectedValueOnce(new Error("down"));
     const b = await body();
     expect([b.facts.text, b.nextUp.text, b.recent.text]).toEqual([m["record.summary.failed"], m["record.nextUp.failed"], m["record.activity.failed"]]);
   });
@@ -161,7 +235,7 @@ describe("the drawer's summary route: each section loads and fails on its own (C
     accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
     dbMocks.contactFacts.mockRejectedValueOnce(new Error("down"));
     dbMocks.contactNextUp.mockRejectedValueOnce(new Error("down"));
-    dbMocks.listContactTimelinePage.mockRejectedValueOnce(new Error("down"));
+    dbMocks.listTimelinePage.mockRejectedValueOnce(new Error("down"));
     const b = await body();
     expect([b.facts.text, b.nextUp.text, b.recent.text]).toEqual([m["record.summary.failed.es"], m["record.nextUp.failed.es"], m["record.activity.failed.es"]]);
   });
@@ -208,19 +282,20 @@ describe("the drawer's summary route: each section loads and fails on its own (C
 describe("the drawer's summary route: Recent (D5, C6)", () => {
   it("reads the head of the timeline, five rows (mutation: drop the limit -> 30, FAILS)", async () => {
     await body();
-    expect(dbMocks.listContactTimelinePage).toHaveBeenCalledWith(db, "a1", "c1", undefined, expect.objectContaining({ limit: 5 }));
+    expect(dbMocks.listTimelinePage).toHaveBeenCalledWith(db, "a1", ["c1"], undefined, expect.objectContaining({ limit: 5 }));
+    expect(dbMocks.mergedIdsOf).toHaveBeenCalledWith(db, "a1", "c1");
   });
 
   it("the submission once, never the inbox's form copy beside it: no direct message read (mutation: re-add today's listContactMessages read -> FAILS)", async () => {
     dbMocks.listContactMessages.mockResolvedValue([{ id: "x1", channel: "form", direction: "inbound", body: "Leak", created_at: AT }]);
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING, SUBMISSION], older: null, failed: [], sources: SOURCES });
+    dbMocks.listTimelinePage.mockResolvedValueOnce({ items: [BOOKING, SUBMISSION], older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows.map((r: { kind: string }) => r.kind)).toEqual(["booking", "submission"]);
     expect(dbMocks.listContactMessages).not.toHaveBeenCalled();
   });
 
   it("every row is marked, the booking page's booking the customer's; See all opens the record's timeline", async () => {
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: [], sources: SOURCES });
+    dbMocks.listTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows[0].mark).toEqual({ kind: "customer", label: m["provenance.customer"] });
     expect(b.recent.seeAllHref).toBe("/dashboard/accounts/a1/contacts/c1#record-timeline");
@@ -229,7 +304,7 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
 
   it("empty only when nothing failed; a failed source says so and keeps the rows that loaded (rule 5: a failure is not 'nothing')", async () => {
     expect((await body()).recent.emptyText).toBe(m["timeline.empty"]);
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: ["calls"], sources: SOURCES });
+    dbMocks.listTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: ["calls"], sources: SOURCES });
     const b = await body();
     expect(b.recent.emptyText).toBeNull();
     expect(b.recent.failedText).toBe(m["timeline.someFailed"].replace("{what}", m["timeline.what.calls"]));
@@ -237,7 +312,7 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
   });
 
   it("zero rows AND a failed source is still not empty: a failure is not 'nothing' even with nothing to show (mutation: emptyText on rows.length === 0 alone -> FAILS)", async () => {
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [], older: null, failed: ["calls"], sources: SOURCES });
+    dbMocks.listTimelinePage.mockResolvedValueOnce({ items: [], older: null, failed: ["calls"], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows).toHaveLength(0);
     expect(b.recent.emptyText).toBeNull();
@@ -353,9 +428,9 @@ describe("the drawer's summary route: who they are (D6, Q1)", () => {
     expect(await body()).toHaveProperty(["who", "assignedTo"], null);
   });
 
-  it("the old shape is gone: no recent labels, no phone_country_unconfirmed, no zone (D11)", async () => {
+  it("the old shape is gone: no recent labels, no phone_country_unconfirmed, no zone (D11); contactId and duplicates are F-006 part 1's own additions (mutation: add an unlisted key -> FAILS)", async () => {
     const b = await body();
-    expect(Object.keys(b).sort()).toEqual(["facts", "header", "locale", "nextUp", "recent", "who"]);
+    expect(Object.keys(b).sort()).toEqual(["contactId", "duplicates", "facts", "header", "locale", "nextUp", "recent", "who"]);
   });
 });
 
@@ -373,7 +448,7 @@ describe("what the route sends, the drawer's parser accepts whole", () => {
       { kind: "call", id: "k1", at: AT, contactId: "c1", call: { id: "k1", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 180,
         reason: null, summary: "Roof leak, booked.", language: "en" } },
     ];
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items, older: null, failed: [], sources: SOURCES });
+    dbMocks.listTimelinePage.mockResolvedValueOnce({ items, older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows.map((r: { kind: string }) => r.kind).sort()).toEqual(["booking", "call", "deal", "message", "note", "submission", "task"]);
     const parsed = parseDrawerSummary(b)!;
@@ -393,14 +468,14 @@ describe("the drawer's summary route: who added the customer (item 8c final revi
 
   it("a person's name comes from Recent's own names read, never a read of its own; a person it did not name is left out (no extra read, the reads fence's measure)", async () => {
     dbMocks.getContact.mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_dan" });
-    dbMocks.listContactTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_dan")] });
+    dbMocks.listTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_dan")] });
     dbMocks.listPeopleNames.mockResolvedValue({ user_dan: "Dan López" });
     expect((await body()).facts.view.line).toContain("Added by Dan López");
     expect(dbMocks.listPeopleNames).toHaveBeenCalledTimes(1);
     expect([...dbMocks.listPeopleNames.mock.calls[0]![1]]).toEqual(["user_dan"]);
 
     dbMocks.listPeopleNames.mockClear();
-    dbMocks.listContactTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_ana")] });
+    dbMocks.listTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_ana")] });
     dbMocks.listPeopleNames.mockResolvedValue({ user_ana: "Ana" });
     const line: string[] = (await body()).facts.view.line;
     expect(line.some((l) => l.startsWith("Added by"))).toBe(false);

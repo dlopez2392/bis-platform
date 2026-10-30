@@ -38,7 +38,7 @@ export type MatchIndex = { byEmail: Map<string, string>; byPhone: Map<string, st
 export async function buildMatchIndex(
   db: SupabaseClient, accountId: string,
 ): Promise<MatchIndex> {
-  const { data, error } = await db.from("contacts").select("id, email, phone, holds_shared_number")
+  const { data, error } = await db.from("contacts").select("id, email, phone, holds_shared_number, merged_into")
     .eq("account_id", accountId);
   if (error) throw new Error(`buildMatchIndex failed: ${error.message}`);
   const byEmail = new Map<string, string>();
@@ -47,10 +47,14 @@ export async function buildMatchIndex(
     // S-47e (spec 5.12.3): a shared number's holding record (0098) is never a match, so an imported row
     // never updates it.
     if (row.holds_shared_number) continue;
-    if (row.email) byEmail.set(String(row.email).toLowerCase(), row.id as string);
+    // 0106 (owner ruling D8): a tombstone keeps its own email/phone, so a row's key still has to resolve
+    // to the record the merge kept — an imported row that matches a merged-away contact updates the one
+    // still on the account, never the hidden pointer.
+    const id = (row.merged_into as string | null) ?? (row.id as string);
+    if (row.email) byEmail.set(String(row.email).toLowerCase(), id);
     if (row.phone) {
       const key = phoneDigits(String(row.phone));
-      if (key) byPhone.set(key, row.id as string);
+      if (key) byPhone.set(key, id);
     }
   }
   return { byEmail, byPhone };

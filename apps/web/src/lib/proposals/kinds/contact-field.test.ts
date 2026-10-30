@@ -3,7 +3,11 @@ import type { ContactFieldPayload, Proposal } from "@bis/db/proposal-rules";
 import { makeTr } from "@/lib/record/copy";
 import type { ApplyCtx, Db, DescribeCtx, EditCtx } from "./types";
 
-const db = vi.hoisted(() => ({ getContact: vi.fn(), fillContactBlanksReport: vi.fn(), updateContact: vi.fn() }));
+// followMerge's default is identity (no merge in play); Task 6 cases override it per-call with mockResolvedValueOnce.
+const db = vi.hoisted(() => ({
+  getContact: vi.fn(), fillContactBlanksReport: vi.fn(), updateContact: vi.fn(),
+  followMerge: vi.fn(async (_db: unknown, _accountId: string, contactId: string) => contactId),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
 import { contactFieldKind } from "./contact-field";
@@ -196,6 +200,34 @@ describe("contact_field: inverse", () => {
     expect(await undo({ field: "phone", value: 5 })).toBe("changed");
     expect(await undo({ field: "phone", before: null, value: "+528990000000" }, { ...actx, contactId: null })).toBe("changed");
     expect(db.updateContact).not.toHaveBeenCalled();
+  });
+});
+
+describe("contact_field: a suggestion naming a now-merged-away record (0106, owner ruling D8)", () => {
+  it("stillHolds reads the kept record, not the tombstone (mutation: skip followMerge -> getContact called with T, FAILS)", async () => {
+    db.followMerge.mockResolvedValueOnce("K");
+    db.getContact.mockResolvedValue(contact({ phone: "+15551234567" }));
+    expect(await contactFieldKind.stillHolds(fakeDb, row(phone, "T"))).toEqual({ ok: false, reason: "field_filled" });
+    expect(db.getContact).toHaveBeenCalledWith(fakeDb, "a1", "K");
+    expect(db.followMerge).toHaveBeenCalledWith(fakeDb, "a1", "T");
+  });
+
+  it("apply reads `before` off the kept record AND writes the fill to the kept record, not the tombstone (mutation: pass contactId straight through -> FAILS)", async () => {
+    db.followMerge.mockResolvedValueOnce("K");
+    db.getContact.mockResolvedValue(contact({ phone: null }));
+    db.fillContactBlanksReport.mockResolvedValue({ fields: ["phone"], flagged: false });
+    const applied = await contactFieldKind.apply({ ...actx, contactId: "T" }, { field: "phone", value: "899 000 0000" });
+    expect(applied.ref).toEqual({ field: "phone", before: null, value: "+528990000000" });
+    expect(db.getContact).toHaveBeenCalledWith(fakeDb, "a1", "K");
+    expect(db.fillContactBlanksReport).toHaveBeenCalledWith(fakeDb, "a1", "K", { phone: "899 000 0000" }, "user_1");
+  });
+
+  it("inverse.undo reads and writes the kept record too (mutation: updateContact called with the tombstone's id -> FAILS)", async () => {
+    db.followMerge.mockResolvedValueOnce("K");
+    db.getContact.mockResolvedValue(contact({ last_name: "Smith" }));
+    expect(await undo({ field: "lastName", before: null, value: "Smith" }, { ...actx, contactId: "T" })).toBe("undone");
+    expect(db.getContact).toHaveBeenCalledWith(fakeDb, "a1", "K");
+    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "K", { lastName: null }, "user_1");
   });
 });
 

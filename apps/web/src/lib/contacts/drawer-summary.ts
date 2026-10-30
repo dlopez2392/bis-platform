@@ -1,4 +1,4 @@
-import type { AuthorKind } from "@bis/db";
+import type { AuthorKind, DuplicatePair } from "@bis/db";
 import type { RecordHeaderAction } from "@/components/record/record-header";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import type { Locale } from "@/lib/i18n/locale";
@@ -18,6 +18,10 @@ export type DrawerFields = { first_name: string | null; last_name: string | null
  */
 export type DrawerSummary = {
   locale: Locale;
+  /** F-006 part 1 (plan Task 11): the record this body is actually ABOUT — the KEPT record when a
+   *  `?peek=` named a tombstone (0106), so "Open full record" and the duplicate line both point at
+   *  it, never the id the drawer fetched for. Absent from an older server during a deploy. */
+  contactId?: string;
   header: {
     name: string; subtitle: string | null; subtitleHref: string | null; actions: RecordHeaderAction[];
     /** When the contact was archived, or null. A `?peek=` stub has no list row to say so (final review M2). */
@@ -34,6 +38,9 @@ export type DrawerSummary = {
     /** Absent when the line could not be built (review M-2): the drawer leaves it out, never "Not set.". */
     language?: LanguageView;
   };
+  /** F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line's pairs, strongest
+   *  first, naming `contactId` above. Absent from an older server; never fails the whole body. */
+  duplicates?: DuplicatePair[];
 };
 
 type Failed = { status: "error"; text: string };
@@ -63,6 +70,10 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   aiAct: true,
   // Contact archive (0103, spec §4.2, T7): the drawer's Recent reads archive/restore rows like any other source.
   archive: true,
+  // F-006 part 1 (plan Task 9 review carry-in, Task 11): merge/mergeUndone are read UNCONDITIONALLY
+  // (unlike suggestions and ai_acts), and loadRecent now reads through the tombstone id set too
+  // (loaders.ts), so the drawer's Recent can carry either row and must not drop it as unknown.
+  merge: true, mergeUndone: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,
@@ -130,6 +141,20 @@ function parseRecentRow(r: unknown): RecentRowView | "unknown" | null {
 
 const FIELD_KEYS = ["first_name", "last_name", "email", "phone", "company_name"] as const;
 
+/** One side of a pair (`@bis/db`'s `DuplicatePerson`): checked, not cast. */
+function parseDuplicatePerson(v: unknown): DuplicatePair["a"] | null {
+  return isRecord(v) && isStr(v.id) && strOrNull(v.firstName) && strOrNull(v.lastName)
+    ? { id: v.id, firstName: v.firstName, lastName: v.lastName } : null;
+}
+/** F-006 part 1 (plan Task 11): one pair, or null when malformed — dropped rather than failing the
+ *  whole `duplicates` list, as an unknown recent-row kind is dropped above. */
+function parseDuplicatePair(v: unknown): DuplicatePair | null {
+  if (!isRecord(v) || !isStr(v.id) || !isStr(v.reason) || typeof v.strength !== "number" || !isStr(v.createdAt)) return null;
+  const a = parseDuplicatePerson(v.a);
+  const b = parseDuplicatePerson(v.b);
+  return a && b ? { id: v.id, a, b, reason: v.reason, strength: v.strength, createdAt: v.createdAt } : null;
+}
+
 /**
  * The drawer's summary body, checked rather than cast (S-03 part 3 §7.4): the body comes from
  * whatever server answered, possibly older or newer than this tab's bundle, and the drawer renders
@@ -188,7 +213,15 @@ export function parseDrawerSummary(json: unknown): ParsedDrawerSummary | null {
       tags, language,
     };
   }
-  return { locale, header, facts, nextUp, recent, who };
+  // F-006 part 1 (plan Task 11): both additive and optional (an older server omits them). A
+  // malformed contactId is dropped, never the whole drawer's error — the client already falls back
+  // to the id it fetched for. `duplicates` drops a malformed pair rather than the whole list, or
+  // reads as none when the value is not an array at all; it never fails the body either.
+  const contactId = isStr(json.contactId) ? json.contactId : undefined;
+  const duplicates = json.duplicates === undefined ? undefined
+    : Array.isArray(json.duplicates) ? json.duplicates.map(parseDuplicatePair).filter((p): p is DuplicatePair => p !== null)
+    : [];
+  return { locale, ...(contactId !== undefined ? { contactId } : {}), header, facts, nextUp, recent, who, ...(duplicates !== undefined ? { duplicates } : {}) };
 }
 
 export type DrawerLoad = { status: "error" } | { status: "ready"; body: ParsedDrawerSummary };

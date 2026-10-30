@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getContact, type AuthorKind } from "@bis/db";
+import { getContact, duplicatePairsOf, type AuthorKind } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
@@ -37,12 +37,23 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ accountId: string; contactId: string }> },
 ) {
-  const { accountId, contactId } = await params;
+  const { accountId, contactId: routeContactId } = await params;
   const access = await apiAccountAccess(accountId);
   if (!access) return NextResponse.json({}, { status: 404 });
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
-  const contact = await getContact(db, accountId, contactId);
+  let contact = await getContact(db, accountId, routeContactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
+  // F-006 part 1 (plan Task 11, spec §6.4): a `?peek=` to a merged-away record is the KEPT record's
+  // drawer — the tombstone carries no summary of its own. Follow the pointer ONE hop (0106 flattens
+  // a chain) on the SAME request client, so the kept record's own RLS still decides; everything below
+  // (the header, every section, the access-log write) reads off the kept contact's id from here on.
+  let contactId = routeContactId;
+  if (contact.merged_into) {
+    const kept = await getContact(db, accountId, contact.merged_into as string);
+    if (!kept) return NextResponse.json({}, { status: 404 });
+    contact = kept;
+    contactId = kept.id as string;
+  }
   // F-118 part 1 (plan Task 6): BIS's open of this drawer is logged, after the proof and before any data
   // leaves. A client is never logged (noteOpenedApi returns at once). No live visit: this route's own 404.
   if (!(await noteOpenedApi(access, accountId, { kind: "contact", recordId: contactId }))) return NextResponse.json({}, { status: 404 });
@@ -60,7 +71,7 @@ export async function GET(
       return { kind: "unknown" };
     }
   };
-  const [prefs, account, summary, nextUp, recent, tags, places, smsGate, smsRecipient] = await Promise.all([
+  const [prefs, account, summary, nextUp, recent, tags, places, smsGate, smsRecipient, duplicates] = await Promise.all([
     getPersonPrefs(),
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
     loadSummary(db, accountId, contactId),
@@ -70,6 +81,16 @@ export async function GET(
     loadHeaderPlaces(db, accountId, contactId),
     softSmsGate(db, accountId),
     smsRead(),
+    // F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line's pairs, for the
+    // (possibly re-pointed) kept contact. Read for every caller: `duplicate_pairs_of` is an INVOKER
+    // function behind 0106's own restrictive policy on `contact_duplicate_flags`, so a Technician's
+    // own RLS-scoped read already answers none — apiAccountAccess carries no role to gate on again,
+    // and the database's own refusal is the authority (as the merge/dismiss definers rely on it too).
+    // A failed read costs only this line, never the drawer.
+    duplicatePairsOf(db, accountId, contactId).catch((e: unknown) => {
+      console.error(`contact drawer: duplicates read failed for account ${accountId}: ${loggableError(e)}`);
+      return [];
+    }),
   ]);
   if (account.error) {
     console.error(`contact drawer: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -140,6 +161,10 @@ export async function GET(
 
   const body: DrawerSummary = {
     locale,
+    // F-006 part 1 (plan Task 11): the record this body is actually about — the KEPT record when the
+    // route's own id named a tombstone, so "Open full record" and the duplicate line both point at
+    // it, never the id the drawer was opened for.
+    contactId,
     header,
     facts: facts ? { status: "ready", view: facts } : { status: "error", text: tr.text("record.summary.failed") },
     nextUp: upNext
@@ -165,6 +190,9 @@ export async function GET(
       tags: tags.status === "ready" ? { status: "ready", tags: tags.tags.map((t) => ({ id: t.id, name: t.name })) } : { status: "error" },
       ...(language ? { language } : {}),
     },
+    // F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line's pairs; never thrown
+    // (caught above), so always an array, possibly empty.
+    duplicates,
   };
   return NextResponse.json(body);
 }

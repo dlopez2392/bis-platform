@@ -299,14 +299,15 @@ describe("updateContact dedupe on edit (D-012)", () => {
   // edit that landed one contact's email or phone on another contact's key
   // created a silent duplicate — same key, two rows, nothing recorded,
   // never surfaced to the merge queue findDuplicate otherwise feeds.
-  it("flags the pair when an edit lands this contact's email on another contact's", () =>
+  it("flags the pair when an edit lands this contact's email on another contact's (0106: the database files the pair at once, reason same_email; updateContact's own check still answers flagged)", () =>
     withTestAccount(async (db, accountId) => {
       const held = await createContact(db, accountId,
         { firstName: "Held", email: "held@example.com" }, "user_test");
       const other = await createContact(db, accountId,
         { firstName: "Other", email: "other@example.com" }, "user_test");
 
-      await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, "user_test");
+      expect(await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, "user_test"))
+        .toEqual({ flagged: true });
 
       // The edit itself is never refused — the operator's edit is the truth
       // about this row, same policy as setContactPhoneCountry.
@@ -318,10 +319,10 @@ describe("updateContact dedupe on edit (D-012)", () => {
         .select("reason").eq("account_id", accountId)
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length, "exactly one flag row for the pair").toBe(1);
-      expect(data![0]!.reason).toBe("email_match_on_edit");
+      expect(data![0]!.reason).toBe("same_email");
     }));
 
-  it("flags the pair when an edit lands this contact's phone on another contact's, any formatting", () =>
+  it("flags the pair when an edit lands this contact's phone on another contact's, any formatting (0106: the database files the pair at once, reason same_phone)", () =>
     withTestAccount(async (db, accountId) => {
       const held = await createContact(db, accountId,
         { firstName: "Held", phone: "(956) 292-1696" }, "user_test");
@@ -330,14 +331,15 @@ describe("updateContact dedupe on edit (D-012)", () => {
 
       // Different punctuation, same ten digits — the dedupe key, not an
       // exact string match, is what must catch this.
-      await updateContact(db, accountId, other.id, { phone: "+19562921696" }, "user_test");
+      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, "user_test"))
+        .toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
       const { data } = await db.from("contact_duplicate_flags")
         .select("reason").eq("account_id", accountId)
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length, "exactly one flag row for the pair").toBe(1);
-      expect(data![0]!.reason).toBe("phone_match_on_edit");
+      expect(data![0]!.reason).toBe("same_phone");
     }));
 
   it("does not flag an edit that leaves the phone unchanged (re-saving the same number)", () =>
@@ -484,7 +486,7 @@ describe("fillContactBlanks", () => {
         .select("reason").eq("account_id", accountId)
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length, "exactly one flag row for the pair").toBe(1);
-      expect(data![0]!.reason).toBe("email_match_on_edit");
+      expect(data![0]!.reason).toBe("same_email");
     }));
 
   it("flags the pair when a proposal-approval fill lands a blank phone on another contact's key", () =>
@@ -502,7 +504,7 @@ describe("fillContactBlanks", () => {
         .select("reason").eq("account_id", accountId)
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length, "exactly one flag row for the pair").toBe(1);
-      expect(data![0]!.reason).toBe("phone_match_on_edit");
+      expect(data![0]!.reason).toBe("same_phone");
     }));
 });
 
@@ -1208,24 +1210,24 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         expect(data?.map((r) => r.id)).toEqual([ana.id]);
       }));
 
-    it("the new person and the phone match are filed for the merge queue as ONE pair, reason phone_shared_new_person (P29; mutation: drop the flag -> FAILS)", () =>
+    it("the new person and the phone match are filed for the merge queue as ONE pair (P29; 0106: the database files it at once, reason same_phone — beto.flagged still answers true)", () =>
       withTestAccount(async (db, accountId) => {
         const roberto = await createContact(db, accountId, { firstName: "Roberto", lastName: "Prueba", phone: P }, "user_test");
         const beto = await createContact(db, accountId,
           { firstName: "Beto", lastName: "Prueba", phone: P, matchBy: "email_only" }, "user_test");
         expect(beto.flagged).toBe(true);
         const [lo, hi] = [roberto.id, beto.id].sort();
-        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_shared_new_person" }]);
+        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_phone" }]);
       }));
 
-    it("no country-twin read on that path: +52 beside a +1 contact of the same ten digits is a new contact with no flag at all; without matchBy the same pair files phone_country_twin", () =>
+    it("no country-twin read on that path: +52 beside a +1 contact of the same ten digits is a new contact under matchBy too (0106: the database files the pair regardless of matchBy, reason same_digits in both; mx.flagged false vs mxB.flagged true is what tells the two createContact paths apart now)", () =>
       withTestAccount(async (db, accountId) => {
         await createContact(db, accountId, { firstName: "Ana", phone: "+19565550170" }, "user_test");
         const mx = await createContact(db, accountId,
           { firstName: "Mx", phone: "+529565550170", matchBy: "email_only" }, "user_test");
         expect(mx.existing).toBe(false);
         expect(mx.flagged).toBe(false);
-        expect(await flagsOf(db, accountId)).toEqual([]);
+        expect(await flagsOf(db, accountId)).toEqual([expect.objectContaining({ reason: "same_digits" })]);
 
         // The control, so the case can fail: the same pair, no matchBy, on a fresh account.
         await withTestAccount(async (_db2, accountB) => {
@@ -1234,18 +1236,18 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
           expect(mxB.existing).toBe(false);
           expect(mxB.flagged).toBe(true);
           const [lo, hi] = [anaB.id, mxB.id].sort();
-          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_twin" }]);
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_digits" }]);
         });
       }));
 
-    it("the mirrored +1 branch: a +1 number beside a +52 contact of the same ten digits is a new contact with no flag under matchBy; without matchBy the same pair files phone_country_twin (mutation: drop the +1 branch's emailOnly guard -> FAILS)", () =>
+    it("the mirrored +1 branch: a +1 number beside a +52 contact of the same ten digits is a new contact under matchBy too (mutation: drop the +1 branch's emailOnly guard -> FAILS; 0106: the database files the pair regardless of matchBy, reason same_digits in both; us.flagged false vs usB.flagged true is what tells the two createContact paths apart now)", () =>
       withTestAccount(async (db, accountId) => {
         await createContact(db, accountId, { firstName: "Mx", phone: "+529565550172" }, "user_test");
         const us = await createContact(db, accountId,
           { firstName: "Us", phone: "+19565550172", matchBy: "email_only" }, "user_test");
         expect(us.existing).toBe(false);
         expect(us.flagged).toBe(false);
-        expect(await flagsOf(db, accountId)).toEqual([]);
+        expect(await flagsOf(db, accountId)).toEqual([expect.objectContaining({ reason: "same_digits" })]);
 
         // The control, so the case can fail: the same pair, no matchBy, on a fresh account.
         await withTestAccount(async (_db2, accountB) => {
@@ -1254,7 +1256,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
           expect(usB.existing).toBe(false);
           expect(usB.flagged).toBe(true);
           const [lo, hi] = [mxB.id, usB.id].sort();
-          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_twin" }]);
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_digits" }]);
         });
       }));
 
@@ -1289,7 +1291,8 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         expect(beto.existing).toBe(false);
         expect([holding.id, ana.id]).not.toContain(beto.id);
         const [lo, hi] = [ana.id, beto.id].sort();
-        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_shared_new_person" }]);
+        // 0106: the database files this pair at once, reason same_phone (same family on both sides).
+        expect(await flagsOf(db, accountId)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_phone" }]);
         const rows = await onNumber(db, accountId, P);
         expect(rows).toHaveLength(3);
         expect(rows.find((r) => r.id === holding.id)).toEqual({ id: holding.id, first_name: "Caller", holds_shared_number: true });
@@ -1326,7 +1329,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         expect(await flagsOf(db, accountId)).toEqual([]);
       }));
 
-    it("setContactPhoneCountry picking the shared number's country files no phone_country_pick pair with its holding record; the same pick beside a real person does (Task 4 review I1; mutation: drop the twin read's holding filter -> FAILS)", () =>
+    it("setContactPhoneCountry picking the shared number's country files no pair with its holding record; the same pick beside a real person does (Task 4 review I1; mutation: drop the twin read's holding filter -> FAILS; 0106: the database files the real-person pair at once, reason same_phone)", () =>
       withTestAccount(async (db, accountId) => {
         const holding = await ensureHoldingContact(db, accountId, "+525512345678", "voice");
         const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+15512345678" }, "user_test");
@@ -1346,7 +1349,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
           expect(await setContactPhoneCountry(db, accountB, anaB.id,
             { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
           const [lo, hi] = [luz.id, anaB.id].sort();
-          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "phone_country_pick" }]);
+          expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_phone" }]);
         });
       }));
 

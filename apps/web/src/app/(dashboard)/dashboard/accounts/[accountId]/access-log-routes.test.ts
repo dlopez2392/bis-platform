@@ -38,6 +38,10 @@ const RECORD: Record<string, "noteOpened" | "noteOpenedApi"> = {
   [`${A}/calls/[callId]/page.tsx`]: "noteOpened",
   [`${A}/conversations/page.tsx`]: "noteOpened",
   [`${A}/forms/[formId]/page.tsx`]: "noteOpened",
+  // F-006 part 1 (plan Task 10/13, F-118 reconcile; spec §9): the compare screen shows two customers at
+  // once, so it notes both — after both are proven (not missing, not holding, not a tombstone) and
+  // before any markup returns, same shape as contacts/[contactId]/page.tsx's own call.
+  [`${A}/contacts/merge/page.tsx`]: "noteOpened",
   [`${A}/contacts/export/route.ts`]: "noteOpenedApi",   // review m5: a 409, never a redirect, on a download
   ...Object.fromEntries(["ai-summary", "document-requests", "document-requirements", "documents", "email", "groups", "places",
     "relationships", "summary", "texts"].map((r) => [`${API}/contacts/[contactId]/${r}/route.ts`, "noteOpenedApi" as const])),
@@ -105,6 +109,11 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
     "removeMembershipAction", "restoreMembershipAction", "renameGroupAction", "setBillingAddressAction", "setGroupPrimaryContactAction"], W),
   ...each(`${A}/contacts/groups-actions.ts`, ["searchGroupsAction"], FIND),
   ...each(`${A}/contacts/import/actions.ts`, ["importContactsBatchAction"], W),
+  // F-006 part 1 (plan Task 10/13): merge, undo and dismiss/undismiss a possible-duplicate pair are
+  // writes, each logged in contact_merges (merge/undo) or contact_duplicate_flags (dismiss/undismiss);
+  // none of them opens a customer record for the agency to look at.
+  ...each(`${A}/contacts/merge-actions.ts`, ["mergeContactsAction", "undoMergeAction", "dismissPairAction", "undismissPairAction"],
+    "a write, logged in contact_merges (merge/undo) or contact_duplicate_flags (dismiss); opens nothing"),
   ...each(`${A}/contacts/places-actions.ts`, ["addPlaceAction", "updatePlaceFieldAction", "setPlaceOwnerAction", "removePlaceAction",
     "undoRemovePlaceAction", "setPlaceArchivedAction", "addEquipmentAction", "replaceEquipmentAction", "updateEquipmentFieldAction",
     "removeEquipmentAction", "undoRemoveEquipmentAction"], W),

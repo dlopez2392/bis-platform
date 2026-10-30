@@ -8,7 +8,7 @@ const dbMocks = vi.hoisted(() => ({
   ensureConversation: vi.fn(),
   createMessage: vi.fn(),
   createContact: vi.fn(),
-  incrementUnreadCount: vi.fn(),
+  incrementUnreadForMessage: vi.fn(),
   getPhoneNumberByE164: vi.fn(),
   getAlertPhone: vi.fn(),
   applyConfirmationReply: vi.fn(),
@@ -182,8 +182,12 @@ describe("POST /api/sms/inbound", () => {
     );
     // The finding this covers: without this call an inbound text left both
     // the conversation-list badge and the sidebar unread meter at zero.
-    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith(
-      expect.anything(), "acct_1", "conv_1",
+    // 0106 (Task 7, plan review m7): the bump is called with the MESSAGE id
+    // createMessage answered, never the conversation id — a merge between the
+    // insert and this call can move the message off the conversation this
+    // route still remembers (mutation: pass conversation.id as before → FAILS).
+    expect(dbMocks.incrementUnreadForMessage).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "msg_1",
     );
   });
 
@@ -216,7 +220,7 @@ describe("POST /api/sms/inbound", () => {
       expect.objectContaining({ conversationId: "conv_1", channel: "sms", direction: "inbound", body: "hi there" }),
       expect.any(String), expect.any(String),
     );
-    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    expect(dbMocks.incrementUnreadForMessage).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
@@ -249,7 +253,7 @@ describe("POST /api/sms/inbound", () => {
     expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
     // The idempotent-skip branch returns before the increment call — a
     // replayed delivery must not double-count the same text as two unreads.
-    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    expect(dbMocks.incrementUnreadForMessage).toHaveBeenCalledTimes(1);
     // YES/NO answers "the most recent unanswered ask" and is not idempotent
     // (plan G1): a retry must not run it a second time (mutation: run it in
     // the retry/else branch too → this goes to 2, FAILS).
@@ -294,7 +298,7 @@ describe("POST /api/sms/inbound", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
-    expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadForMessage).not.toHaveBeenCalled();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -370,7 +374,7 @@ describe("an inbound text that is a one-word answer", () => {
     await POST(inbound("YES"));
     // Order matters: the customer's message is filed first, always.
     expect(dbMocks.createMessage).toHaveBeenCalled();
-    expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadForMessage).toHaveBeenCalled();
     expect(dbMocks.applyConfirmationReply).toHaveBeenCalledWith(
       expect.anything(), "acct_1", "contact_1", "YES", expect.any(Date));
     // Mutation: move the call ABOVE createMessage -> the order assertion below reds.
@@ -406,7 +410,7 @@ describe("an inbound text that is a one-word answer", () => {
     // that proves it is WHICH log line came out. Dropping the try/catch
     // lets the rejection reach the route's outer catch, which logs and STILL
     // returns `{ ok: true }` — by which time createMessage and
-    // incrementUnreadCount have each run once. So `res.status === 200` and
+    // incrementUnreadForMessage have each run once. So `res.status === 200` and
     // both call counts of 1 stay TRUE under the mutation: an earlier draft
     // of this case asserted exactly those three and could not fail.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -414,7 +418,7 @@ describe("an inbound text that is a one-word answer", () => {
     const res = await POST(inbound("no"));
     expect(res.status).toBe(200);
     expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
-    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    expect(dbMocks.incrementUnreadForMessage).toHaveBeenCalledTimes(1);
 
     const logged = spy.mock.calls.map((args) => args.join(" ")).join("\n");
     // Mutation: drop the try/catch around applyConfirmationReply -> this pair
@@ -709,7 +713,7 @@ describe("an inbound text brings an archived contact back (contact archive T9)",
     const res = await POST(inbound("Can you come Tuesday?"));
     expect(res.status).toBe(503);
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
-    expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadForMessage).not.toHaveBeenCalled();
     vi.restoreAllMocks();
   });
 });

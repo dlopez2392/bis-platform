@@ -89,12 +89,27 @@ const listAccountTeamMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(as
   { userId: "p-me", clerkUserId: "c1", email: "me@x.test", name: "Ana Me", role: "staff", language: null },
   { userId: "p-t", clerkUserId: "c2", email: "tech@x.test", name: null, role: "technician", language: null },
 ]);
+// F-006 part 1 (plan Task 10): the Possible duplicates view's own two reads.
+const listDuplicatePairsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []);
+const countDuplicatePairsMock = vi.fn<(...args: unknown[]) => Promise<number>>(async () => 0);
 vi.mock("@bis/db", () => ({
   listContacts: (...a: unknown[]) => listContactsMock(...a),
   countContacts: (...a: unknown[]) => countContactsMock(...a),
   listTags: (...a: unknown[]) => listTagsMock(...a),
   readPersonId: (...a: unknown[]) => readPersonIdMock(...a),
   listAccountTeam: (...a: unknown[]) => listAccountTeamMock(...a),
+  listDuplicatePairs: (...a: unknown[]) => listDuplicatePairsMock(...a),
+  countDuplicatePairs: (...a: unknown[]) => countDuplicatePairsMock(...a),
+  reasonLabel: (reason: string) => (reason === "same_phone" ? "samePhone" : "other"),
+}));
+// The duplicates view's own client list and the two "use server" actions it binds (a "use server"
+// module cannot be imported into a vitest render — merge-actions.ts's own test covers its behavior).
+const duplicatesListProps: Record<string, unknown>[] = [];
+vi.mock("./duplicates-list", () => ({
+  DuplicatesList: (p: Record<string, unknown>) => { duplicatesListProps.push(p); return null; },
+}));
+vi.mock("./merge-actions", () => ({
+  mergeContactsAction: vi.fn(), undoMergeAction: vi.fn(), dismissPairAction: vi.fn(), undismissPairAction: vi.fn(),
 }));
 
 const { default: ContactsPage, buildExportHref, buildNewerHref, buildOlderHref } = await import("./page");
@@ -833,5 +848,113 @@ describe("a paused account (final review M3)", () => {
     contactsTableMock.mockClear();
     renderToStaticMarkup(await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) }));
     expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ paused: false }));
+  });
+});
+
+// F-006 part 1 (plan Task 10): the Possible duplicates view.
+describe("the Possible duplicates view (?view=duplicates)", () => {
+  const STAFF = { userId: "u1", isAgency: false, role: "staff" as const, canManage: false };
+  const TECH = { userId: "u1", isAgency: false, role: "technician" as const, canManage: false };
+  // contact_duplicate_flags.id is a real uuid (0033) — parseCursor's own id check refuses anything
+  // else, so a fixture using a bare string like "flag-1" would silently cold-start every pager test.
+  const flagId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const PAIR = (n: number) => ({
+    id: flagId(n), reason: "same_phone", strength: 1, createdAt: "2026-10-29T07:00:00.000000+00:00",
+    a: { id: `a${n}`, firstName: `Maria${n}`, lastName: "Garcia" },
+    b: { id: `b${n}`, firstName: `Maria${n}`, lastName: "G." },
+  });
+  async function render(searchParams: Record<string, string>) {
+    return renderToStaticMarkup(
+      await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+  function resetMocks() {
+    listContactsMock.mockClear();
+    countContactsMock.mockClear();
+    listDuplicatePairsMock.mockClear();
+    countDuplicatePairsMock.mockClear();
+    duplicatesListProps.length = 0;
+  }
+  const controls = (html: string) => [...html.matchAll(/<(a|button)\b[^>]*>([\s\S]*?)<\/\1>/g)]
+    .map((x) => x[2]!.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim());
+  const hrefOf = (html: string, text: string) =>
+    [...html.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+      .find((x) => x[2]!.replace(/<[^>]+>/g, "").trim() === text)?.[1]?.replace(/&amp;/g, "&");
+
+  it("reads listDuplicatePairs and countDuplicatePairs, never listContacts/countContacts (mutation: fall through to the active list's reads -> FAILS)", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockResolvedValue([PAIR(1)]);
+    countDuplicatePairsMock.mockResolvedValue(7);
+    await render({ view: "duplicates" });
+    expect(listDuplicatePairsMock).toHaveBeenCalledTimes(1);
+    expect(countDuplicatePairsMock).toHaveBeenCalledTimes(1);
+    expect(listContactsMock).not.toHaveBeenCalled();
+    expect(countContactsMock).not.toHaveBeenCalled();
+  });
+
+  it("the header states the REAL total from countDuplicatePairs, never the rows shown (mutation: render rows.length -> FAILS with count 7 and 3 rows)", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockResolvedValue([PAIR(1), PAIR(2), PAIR(3)]);
+    countDuplicatePairsMock.mockResolvedValue(7);
+    const html = await render({ view: "duplicates" });
+    expect(html).toContain(">7 possible duplicates<");
+    expect(html).not.toContain(">3 possible duplicates<");
+  });
+
+  it("a Technician asking for the view gets the active list instead (mutation: read duplicates for everyone -> FAILS)", async () => {
+    resetMocks();
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    await render({ view: "duplicates" });
+    expect(listDuplicatePairsMock).not.toHaveBeenCalled();
+    expect(countDuplicatePairsMock).not.toHaveBeenCalled();
+    expect(listContactsMock).toHaveBeenCalled();
+  });
+
+  it("the active view's toolbar offers 'Possible duplicates' beside 'Archived', for those who see the whole account only", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    expect(hrefOf(await render({}), m["contacts.duplicates.link"])).toBe("?view=duplicates");
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    expect(hrefOf(await render({}), m["contacts.duplicates.link"])).toBeUndefined();
+  });
+
+  it("the empty state sells the feature (rule 5; mutation: the active list's empty state -> FAILS)", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockResolvedValue([]);
+    countDuplicatePairsMock.mockResolvedValue(0);
+    const html = await render({ view: "duplicates" });
+    expect(html).toContain(m["contacts.duplicates.emptyTitle"]);
+    expect(html).toContain(m["contacts.duplicates.emptyBody"]);
+  });
+
+  it("a failed read renders contacts.duplicates.listFailed with Retry, never throwing the page", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockRejectedValueOnce(new Error("boom"));
+    const html = await render({ view: "duplicates" });
+    expect(html.replace(/&#x27;/g, "'")).toContain(m["contacts.duplicates.listFailed"]);
+    expect(hrefOf(html, m["record.card.retry"])).toBeDefined();
+  });
+
+  it("the pager names 'Next' and 'Back to the start' (2026-10-17 amendment: not sorted by recency alone), the start link dropping the cursor", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockResolvedValue(Array.from({ length: 51 }, (_, i) => PAIR(i)));
+    const html = await render({ view: "duplicates" });
+    expect(html).toContain(`>${m["contacts.duplicates.next"]}<`);
+    const olderHref = hrefOf(html, m["contacts.duplicates.next"]);
+    expect(olderHref).toContain("view=duplicates");
+    expect(olderHref).toContain("before=");
+    const before = new URLSearchParams(olderHref!.slice(1)).get("before")!;
+    const html2 = await render({ view: "duplicates", before });
+    const startHref = hrefOf(html2, m["contacts.duplicates.first"]);
+    expect(startHref).toContain("view=duplicates");
+    expect(startHref).not.toContain("before=");
+  });
+
+  it("the list's rows bind dismiss/undismiss to this account, not a checkbox bar", async () => {
+    resetMocks();
+    listDuplicatePairsMock.mockResolvedValue([PAIR(1)]);
+    await render({ view: "duplicates" });
+    expect(duplicatesListProps.at(-1)!.rows).toHaveLength(1);
+    expect(typeof duplicatesListProps.at(-1)!.dismissAction).toBe("function");
+    expect(typeof duplicatesListProps.at(-1)!.undismissAction).toBe("function");
   });
 });

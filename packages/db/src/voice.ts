@@ -751,23 +751,70 @@ export function phoneKeysOf(e164: string): string[] {
   return ten === null ? [key] : [...new Set([key, ten, `52${ten}`, `521${ten}`])];
 }
 
+type RawNumberContactRow = NumberContactRow & { merged_into: string | null };
+
+/** The six columns `NumberContactRow` promises; strips `merged_into` and anything else off a raw row so a
+ *  kept-person substitution and a live row come back through exactly one shape (`voice.test.ts:1138` pins it). */
+function toNumberContactRow(r: { id: string; first_name: string | null; last_name: string | null; phone: string | null; email_key: string | null; holds_shared_number: boolean }): NumberContactRow {
+  return { id: r.id, first_name: r.first_name, last_name: r.last_name, phone: r.phone, email_key: r.email_key, holds_shared_number: r.holds_shared_number };
+}
+
 /**
  * Every contact of THIS account whose phone_key could be this number, oldest first, at most
  * CONTACTS_ON_NUMBER_LIMIT; `truncated` when more came back. Holding records come back flagged; the callers
  * treat them as nobody (spec 5.12.3). The rows are NOT yet filtered by isCallerIdNumber (the app does that,
  * spec S1). Throws on a read error: every caller fails closed or has a net (spec S5).
+ *
+ * 0106 (F-006, owner ruling D8): a merged-away record keeps its number, and a call or text from it reaches
+ * the kept customer; a kept record and its own tombstone on one number are ONE person (isShared must not
+ * read two). Every tombstone row the first read turns up is replaced by its kept person (one extra query,
+ * batched for every tombstone at once), carrying the TOMBSTONE's own phone (the number that actually
+ * matched, not the kept record's own number). `truncated` is decided from the raw read, before any
+ * substitution: a merge never changes how many rows share a number. The live rows come first (in their own
+ * oldest-first order), then the resolved tombstone rows, oldest tombstone first; a kept id already seen —
+ * whether from its own live row or from an earlier tombstone pointing at it — is never repeated.
  */
 export async function listContactsOnNumber(
   db: SupabaseClient, accountId: string, e164: string,
 ): Promise<{ rows: NumberContactRow[]; truncated: boolean }> {
   const { data, error } = await db.from("contacts")
-    .select("id, first_name, last_name, phone, email_key, holds_shared_number")
+    .select("id, first_name, last_name, phone, email_key, holds_shared_number, merged_into")
     .eq("account_id", accountId).in("phone_key", phoneKeysOf(e164))
     .order("created_at", { ascending: true }).order("id", { ascending: true })
     .limit(CONTACTS_ON_NUMBER_LIMIT + 1);
   if (error) throw new Error(`listContactsOnNumber failed: ${error.message}`);
-  const all = (data ?? []) as NumberContactRow[];
-  return { rows: all.slice(0, CONTACTS_ON_NUMBER_LIMIT), truncated: all.length > CONTACTS_ON_NUMBER_LIMIT };
+  const all = (data ?? []) as RawNumberContactRow[];
+  const truncated = all.length > CONTACTS_ON_NUMBER_LIMIT;
+  const limited = all.slice(0, CONTACTS_ON_NUMBER_LIMIT);
+
+  const keptIds = [...new Set(limited.filter((r) => r.merged_into !== null).map((r) => r.merged_into as string))];
+  const keptById = new Map<string, NumberContactRow>();
+  if (keptIds.length > 0) {
+    const { data: keptData, error: keptError } = await db.from("contacts")
+      .select("id, first_name, last_name, phone, email_key, holds_shared_number")
+      .eq("account_id", accountId).in("id", keptIds).is("merged_into", null);
+    if (keptError) throw new Error(`listContactsOnNumber failed: ${keptError.message}`);
+    for (const row of (keptData ?? []) as NumberContactRow[]) keptById.set(row.id, toNumberContactRow(row));
+  }
+
+  const seen = new Set<string>();
+  const rows: NumberContactRow[] = [];
+  for (const r of limited) {
+    if (r.merged_into === null) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      rows.push(toNumberContactRow(r));
+    }
+  }
+  for (const r of limited) {
+    if (r.merged_into !== null) {
+      const kept = keptById.get(r.merged_into);
+      if (!kept || seen.has(kept.id)) continue;
+      seen.add(kept.id);
+      rows.push({ ...kept, phone: r.phone });
+    }
+  }
+  return { rows, truncated };
 }
 
 /** The soonest booked, future booking of ONE contact on this account (spec S17), or null. Throws on error. */

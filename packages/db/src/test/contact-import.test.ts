@@ -179,7 +179,7 @@ describe("applyImportBatch", () => {
   // match index's EMAIL hit (an UPDATE, not a create), so only
   // updateContact's own phone check — never createContact's — is what
   // finds and flags the A/B collision.
-  it("counts a flag updateContact raised too — an index hit (by email) whose phone collides with a DIFFERENT contact's", () =>
+  it("counts a flag updateContact raised too — an index hit (by email) whose phone collides with a DIFFERENT contact's (0106: the database files the pair at once, reason same_phone; flagged: 1 still stands)", () =>
     withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId, { email: "a@example.com" }, "user_test");
       const b = await createContact(db, accountId, { phone: "956-555-0101" }, "user_test");
@@ -195,7 +195,7 @@ describe("applyImportBatch", () => {
         .select("reason").eq("account_id", accountId)
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length).toBe(1);
-      expect(data![0]!.reason).toBe("phone_match_on_edit");
+      expect(data![0]!.reason).toBe("same_phone");
     }));
 });
 

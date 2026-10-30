@@ -1,6 +1,7 @@
 import {
   contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
-  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, listPendingProposalsForContact,
+  listCustomFields, listTimelinePage, mergedIdsOf, listPeopleNames, getVoiceProfile,
+  listPendingProposalsForContact,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
   type TimelinePage, type TimelineCursor,
 } from "@bis/db";
@@ -86,9 +87,17 @@ export async function loadTimeline(
     now?: Date;
   } = {},
 ): Promise<TimelineLoad> {
+  // F-006 part 1 (plan Task 9): the kept record's timeline reads the tombstones pointing at it too (a
+  // merge is one source among the rest below, but the OTHER sources — notes, calls, Sofía's acts…—
+  // need the id set to show what the merged-away record itself carried). A failed read costs only the
+  // tombstones: the page still reads, on this one contact alone.
+  const tombstones = await mergedIdsOf(db, accountId, contactId).catch((e: unknown) => {
+    log("activity (merge set)", accountId, e);
+    return [] as string[];
+  });
   let page: TimelinePage;
   try {
-    page = await listContactTimelinePage(db, accountId, contactId, before, {
+    page = await listTimelinePage(db, accountId, [contactId, ...tombstones], before, {
       suggestions: true,
       aiActs: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
@@ -182,14 +191,23 @@ export type RecentLoad =
 
 /**
  * The list drawer's Recent (S-03 part 3 §6): the head of the record page's merged timeline, five
- * rows. No hold read and no ledger: those stand in for Done (`loadTimeline`, above), and the drawer
- * has no Done. A failed source is named in `page.failed`; every source failed is the section's error.
- * The names on person marks and the persona are soft, exactly as on the page. Never throws.
+ * rows. F-006 part 1 (plan Task 9 review carry-in): reads through the SAME tombstone id set
+ * `loadTimeline` does (`mergedIdsOf`), with the same best-effort fallback to `[contactId]` alone on
+ * a failed read, so the drawer's five newest rows agree with the record page's own timeline after a
+ * merge. No hold read and no ledger: those stand in for Done (`loadTimeline`, above), and the drawer
+ * has no Done. Still no suggestions source and no acts source (owner decision 1, 2026-10-19; spec §3
+ * Out): the drawer's Recent never reads either. A failed source is named in `page.failed`; every
+ * source failed is the section's error. The names on person marks and the persona are soft, exactly
+ * as on the page. Never throws.
  */
 export async function loadRecent(db: SupabaseClient, accountId: string, contactId: string): Promise<RecentLoad> {
+  const tombstones = await mergedIdsOf(db, accountId, contactId).catch((e: unknown) => {
+    log("recent (merge set)", accountId, e);
+    return [] as string[];
+  });
   let page: TimelinePage;
   try {
-    page = await listContactTimelinePage(db, accountId, contactId, undefined, {
+    page = await listTimelinePage(db, accountId, [contactId, ...tombstones], undefined, {
       limit: DRAWER_RECENT,
       onError: (source, e) => log(`recent (${source})`, accountId, e),
     });

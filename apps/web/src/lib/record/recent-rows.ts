@@ -60,6 +60,13 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "aiAct": return null;
     // Contact archive: the head already says it all ("archived this contact", "came back: sent you a text").
     case "archive": return null;
+    // F-006 part 1 (plan Task 9; review carry-in, Task 11): the head already says it all ("merged X
+    // into this record: …", "undid the merge with X"), same reasoning as archive's row above. Unlike
+    // suggestions and ai_acts, "merge" is read UNCONDITIONALLY by listTimelinePage (record.ts), so the
+    // drawer's Recent can show one — including one that belongs to a tombstone this record kept,
+    // since loadRecent reads through mergedIdsOf's id set too (loaders.ts). The excerpt stays null
+    // either way.
+    case "merge": case "mergeUndone": return null;
   }
 }
 

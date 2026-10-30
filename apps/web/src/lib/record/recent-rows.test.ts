@@ -189,3 +189,14 @@ describe("an archive/restore row in the drawer's Recent (contact archive)", () =
     expect(view([entry])[0]!.excerpt).toBeNull();
   });
 });
+
+describe("a merge/mergeUndone row in the drawer's Recent (F-006 part 1, plan Task 9)", () => {
+  it("both have no excerpt: the head already says it all (mutation: return a non-null excerpt -> FAILS)", () => {
+    const merge: TimelineEntry = { kind: "merge", id: "1", at: AT, contactId: "c1", merge: {
+      mergeId: "1", otherId: "c9", otherFirstName: "Other", otherLastName: null, otherVisible: true,
+      mergedBy: "user_dan", mergedAt: AT, undoUntil: AT, undoneAt: null, undoneBy: null, counts: {} } } as TimelineEntry;
+    const mergeUndone: TimelineEntry = { ...merge, kind: "mergeUndone" } as TimelineEntry;
+    expect(view([merge])[0]!.excerpt).toBeNull();
+    expect(view([mergeUndone])[0]!.excerpt).toBeNull();
+  });
+});

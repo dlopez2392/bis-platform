@@ -67,3 +67,22 @@ export function usePeek() {
 
   return { peekId, open, close };
 }
+
+/**
+ * F-006 part 1 (plan Task 11 fix round, finding #6): the peek id itself is wrong — the drawer
+ * fetched for a merged-away record (spec §6.4), and the route answered with the KEPT one. Swapped
+ * IN PLACE, no new history entry, so Back still lands where the visitor actually arrived (never
+ * `open`, which pushes); any live `usePeek()` instance's `pushed` bookkeeping is untouched, because
+ * this never pushes or pops anything, only the CURRENT entry's own query string. Standalone (not
+ * part of the hook's own return value): `contact-drawer.tsx` calls this from inside its own fetch
+ * effect, and the hook's doc already says "call `usePeek()` ONCE per page" — a second live instance
+ * just to reach this one function would double its own pushed bookkeeping.
+ */
+export function replacePeek(id: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set(PARAM, id);
+  // `null`, never `window.history.state`, for the same reason as close()'s own non-pushed branch
+  // (next@16.2.11 app-router.js:268-279): the router must learn the stripped/rewritten URL.
+  window.history.replaceState(null, "", url);
+  notify();
+}

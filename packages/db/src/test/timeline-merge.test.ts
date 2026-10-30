@@ -144,10 +144,13 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     // source reads `documents`, 0078's document_version_timeline, 0079's document_scan_timeline, 0080's
     // document_requests and 0081's two document_requirement_skips reads (a skip at created_at, an un-skip at
     // unskipped_at), and 0085's two document_share_timeline reads (a share at created_at, an open at
-    // first_opened_at), so there are seven reads more than there are sources, each at limit + 1.
+    // first_opened_at), so there are seven reads more than there are sources, each at limit + 1. F-006
+    // part 1 (plan Task 9): the `merge` source is a SECOND paged read of `contact_merges` too (one on
+    // merged_at, one on undone_at), one more than there are sources; its ONE extra names read is skipped
+    // here (no merge row, so no other id to look up).
     // 8b-2 / 8c: `sources`, not TIMELINE_SOURCES, is what this page read (the suggestions and ai_acts sources are read only when asked).
     expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions" && s !== "ai_acts"));
-    expect(paged.map((r) => r.limit)).toEqual(Array(p.sources.length + 7).fill(TIMELINE_PAGE_SIZE + 1));
+    expect(paged.map((r) => r.limit)).toEqual(Array(p.sources.length + 8).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_requirement_skips").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_version_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
@@ -194,9 +197,10 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
   });
 
   it("every source failing is still a page, not a throw (mutation: Promise.all without the per-source catch -> rejects, FAILS)", async () => {
-    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents", "contact_archive_log"];
+    // F-006 part 1 (plan Task 9): "contact_merges" throws too, so the merge source fails with the rest.
+    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents", "contact_archive_log", "contact_merges"];
     const page = await listContactTimelinePage(fakeDb({}, { throwOn: all }).db, u(100), u(99));
-    const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive"];
+    const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge"];
     expect(page).toEqual({ items: [], older: null, failed: NINE, sources: NINE });
     // 8b-2: asked for, the suggestions source is read too, and fails with the rest.
     const asked = await listContactTimelinePage(fakeDb({}, { throwOn: [...all, "proposals"] }).db, u(100), u(99), undefined, { suggestions: true });

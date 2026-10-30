@@ -159,6 +159,17 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     });
   });
 
+  it("a merge row and a mergeUndone row (F-006 part 1, plan Task 9 review carry-in) parse and are kept, never dropped as an unknown kind (mutation: drop merge or mergeUndone from ROW_KINDS -> FAILS)", () => {
+    const body = clone();
+    const merged = { key: "merge-1", kind: "merge", mark: { kind: "person", label: "Ana" }, verb: "merged Other Person into this record: 1 note moved here",
+      status: null, detail: null, time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z", excerpt: null };
+    const undone = { ...merged, key: "merge-2", kind: "mergeUndone", verb: "undid the merge with Other Person", dateTime: "2026-10-09T17:12:00Z" };
+    (body.recent as { rows: unknown[] }).rows = [undone, merged];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [undone, merged], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("a website chat row (S-06 part 3) parses and is kept, its unconfirmed line with it (mutation: drop chat from ROW_KINDS -> the row is dropped, FAILS)", () => {
     const body = clone();
     const chat = { key: "chat-m0", kind: "chat", mark: { kind: "customer", label: "Customer" }, verb: "chatted with Sofía on your website",
@@ -204,6 +215,43 @@ describe("who.language (S-09 §8.1, plan deviation 11)", () => {
     const p = parseDrawerSummary(body({ ...VIEW, value: "fr" }))!;
     expect(p).not.toBeNull();
     expect(p.who.status).toBe("error");
+  });
+});
+
+describe("contactId and duplicates (F-006 part 1, plan Task 11): a merged-away record's deep link opens the KEPT record's drawer", () => {
+  const PAIR = { id: "pr1", a: { id: "c1", firstName: "Maria", lastName: "Garcia" }, b: { id: "c9", firstName: "Jose", lastName: "Garcia" }, reason: "same_phone", strength: 1, createdAt: "2026-10-09T16:12:00Z" };
+
+  it("both pass through a good body (mutation: drop either from the parse -> FAILS)", () => {
+    const body = { ...clone(), contactId: "k1", duplicates: [PAIR] };
+    const p = parseDrawerSummary(body)!;
+    expect(p.contactId).toBe("k1");
+    expect(p.duplicates).toEqual([PAIR]);
+  });
+
+  it("absent (an older server): both read undefined, never a malformed-whole-drawer and never a guessed id (mutation: default contactId to the fetched id -> FAILS)", () => {
+    const body = clone();
+    expect(parseDrawerSummary(body)!.contactId).toBeUndefined();
+    expect(parseDrawerSummary(body)!.duplicates).toBeUndefined();
+  });
+
+  it("a malformed contactId is dropped (treated as absent), never the whole drawer's error (mutation: fail the body -> FAILS)", () => {
+    const body = { ...clone(), contactId: 42 };
+    const p = parseDrawerSummary(body);
+    expect(p).not.toBeNull();
+    expect(p!.contactId).toBeUndefined();
+  });
+
+  it("a malformed pair is dropped; the pairs around it still parse (mutation: drop the whole list on one bad pair -> FAILS)", () => {
+    const bad = { ...PAIR, id: 42 };
+    const body = { ...clone(), duplicates: [PAIR, bad] };
+    expect(parseDrawerSummary(body)!.duplicates).toEqual([PAIR]);
+  });
+
+  it("duplicates that is not an array at all reads as none, never the whole drawer's error (mutation: fail the body -> FAILS)", () => {
+    const body = { ...clone(), duplicates: "not an array" };
+    const p = parseDrawerSummary(body);
+    expect(p).not.toBeNull();
+    expect(p!.duplicates).toEqual([]);
   });
 });
 

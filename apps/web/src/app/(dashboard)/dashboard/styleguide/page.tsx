@@ -65,6 +65,7 @@ import { WebchatDemo } from "./webchat-demo";
 import { ToastDemo } from "./toast-demo";
 import { RecordDemo } from "./record-demo";
 import { ArchiveDemo } from "./archive-demo";
+import { MergeDemo } from "./merge-demo";
 import { AiActsDemo } from "./ai-acts-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -372,6 +373,12 @@ export default async function StyleguidePage({
             and in error. */}
         <Section title={t(m, "styleguide.contactArchive", "en")} file="accounts/[accountId]/contacts/{archive-controls,bulk-action-bar}.tsx">
           <ArchiveDemo />
+        </Section>
+
+        {/* F-006 part 1 (plan Task 11, spec §6.1, §6.4): the record header's duplicate line and the
+            timeline's merge/mergeUndone row with its own "Undo merge", in English and Spanish. */}
+        <Section title={t(m, "styleguide.duplicates", "en")} file="accounts/[accountId]/contacts/{duplicate-line,[contactId]/merge-undo}.tsx">
+          <MergeDemo />
         </Section>
 
         {/* item 8c (plan Task 6; Task 9 design I-8): the timeline's aiAct row and its three Undo controls — a
