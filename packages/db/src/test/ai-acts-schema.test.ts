@@ -111,14 +111,15 @@ const actRow = (s: Seeded, over: Record<string, unknown> = {}) => ({
 const insAct = async (c: Client, r: Record<string, unknown>) => (await ins(c, "ai_acts", r)).rows[0]!.id as string;
 
 let tok = 0;
-/** A booking on A's calendar, an hour long, starting `hours` from NOW. */
-async function booking(c: Client, s: Seeded, hours: number, o: { status?: string; updatedAt?: string; from?: string; contact?: string } = {}) {
+/** A booking on A's calendar, an hour long, starting `hours` from NOW. Sofia's (author_kind 'ai') unless `author`
+ *  says otherwise: 0107 lets a 'person' row (a staff job) overlap, and refuses a customer-made row over one. */
+async function booking(c: Client, s: Seeded, hours: number, o: { status?: string; updatedAt?: string; from?: string; contact?: string; author?: string } = {}) {
   tok += 1;
   return one(c,
     `insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, status, cancel_token, author_kind, updated_at, rescheduled_from_id)
-       values ($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9) returning id`,
+       values ($1,$2,$3,$4,$5,$6,$7,$10,$8,$9) returning id`,
     [s.acct, s.calendar, o.contact ?? s.mine, at(hours), at(hours + 1), o.status ?? "booked", `tok_aia_${RUN}_${tok}`,
-     o.updatedAt ?? NOW.toISOString(), o.from ?? null]);
+     o.updatedAt ?? NOW.toISOString(), o.from ?? null, o.author ?? "ai"]);
 }
 const bookingRow = async (c: Client, id: string) =>
   (await c.query<{ status: string; updated_at: Date }>("select status, updated_at from bookings where id = $1", [id])).rows[0];
@@ -490,6 +491,16 @@ describe("0091: undo_ai_booking_act, booking_cancelled (plan Task 1 case 7)", ()
       const act = await insAct(c, cancelled(s, b));
       expect(await undoBooking(c, s.acct, act)).toBe("rebooked");
     }));
+  it("a staff job that took the time answers time_taken: 0107's trigger raises exclusion_violation, not P0001 (green before 0107 too, where 0016's constraint bound a person row as well; mutation: errcode P0001 in 0107's trigger -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const b = await booking(c, s, 24, { status: "cancelled", updatedAt: V });
+      await booking(c, s, 24.5, { contact: s.theirs, author: "person" });
+      const act = await insAct(c, cancelled(s, b));
+      expect(await undoBooking(c, s.acct, act)).toBe("time_taken");
+      expect(await bookingRow(c, b)).toEqual({ status: "cancelled", updated_at: new Date(V) });
+      expect(await actUndo(c, act)).toEqual({ undone_at: null, undone_by: null });
+    }));
 });
 
 describe("0091: undo_ai_booking_act, booking_rescheduled (plan Task 1 case 8)", () => {
@@ -589,6 +600,17 @@ describe("0091: undo_ai_booking_act, booking_rescheduled (plan Task 1 case 8)", 
       await expect(undoOperatorCancel(db, accountId, old.id, BY, updatedAt)).resolves.toBeUndefined();
       const o = must(await db.from("bookings").select("status").eq("id", old.id).single(), "old read") as { status: string };
       expect(o.status).toBe("booked");
+    }));
+
+  it("the old slot taken by a staff job answers old_time_taken, the new booking still booked: 0107's trigger raises exclusion_violation, not P0001 (green before 0107 too, where 0016's constraint bound a person row as well; mutation: errcode P0001 in 0107's trigger -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const p = await pair(c, s);
+      await booking(c, s, 24.5, { contact: s.theirs, author: "person" });
+      expect(await undoBooking(c, s.acct, p.act)).toBe("old_time_taken");
+      expect((await bookingRow(c, p.neu))!.status, "the new booking").toBe("booked");
+      expect((await bookingRow(c, p.old))!.status, "the old booking").toBe("cancelled");
+      expect(await actUndo(c, p.act)).toEqual({ undone_at: null, undone_by: null });
     }));
 });
 

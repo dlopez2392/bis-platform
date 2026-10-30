@@ -62,6 +62,9 @@ describe("booking accessors", () => {
    * THE constraint test. Two bookings for overlapping ranges on one calendar:
    * the second insert must throw SlotTakenError, and the error must originate
    * from bookings_no_overlap — the database, not an app check.
+   * 0107: only a customer-made row is refused; a person-made row may overlap
+   * (R1). So both rows here are the customer's own (actor "public", type
+   * "system", which bookingAuthor maps to author_kind 'customer').
    */
   it("refuses an overlapping booking with SlotTakenError, and frees the range on cancel", async () => {
     await withTestAccount(async (db, accountId) => {
@@ -71,10 +74,10 @@ describe("booking accessors", () => {
       const t0 = new Date("2027-03-02T15:00:00Z");
       const t1 = new Date("2027-03-02T16:00:00Z");
       const first = await createBooking(db, accountId,
-        { calendarId: cal.id, contactId, startsAt: t0, endsAt: t1 }, "user_test");
+        { calendarId: cal.id, contactId, startsAt: t0, endsAt: t1 }, "public", "system");
       await expect(createBooking(db, accountId,
         { calendarId: cal.id, contactId, startsAt: new Date("2027-03-02T15:30:00Z"),
-          endsAt: new Date("2027-03-02T16:30:00Z") }, "user_test"),
+          endsAt: new Date("2027-03-02T16:30:00Z") }, "public", "system"),
       ).rejects.toThrow(SlotTakenError);
       // Cancel frees the range — the constraint binds status='booked' only.
       const cancelled = await cancelBookingByToken(db, first.cancelToken);
@@ -84,6 +87,19 @@ describe("booking accessors", () => {
       ).resolves.toBeTruthy();
       // A second cancel with the same token is a null no-op, not an error.
       expect(await cancelBookingByToken(db, first.cancelToken)).toBeNull();
+    });
+  });
+
+  it("F-046 (0107): two overlapping staff-made bookings both save (R1)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Staff" }, "user_test");
+      await expect(createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-03T15:00:00Z"),
+          endsAt: new Date("2027-03-03T16:00:00Z") }, "user_test")).resolves.toBeTruthy();
+      await expect(createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-03T15:30:00Z"),
+          endsAt: new Date("2027-03-03T16:30:00Z") }, "user_test")).resolves.toBeTruthy();
     });
   });
 
@@ -413,12 +429,22 @@ describe("booking accessors", () => {
         .toEqual(["cancelled", "booked"]);
 
       // Someone booked the freed time in between: SlotTakenError, still cancelled.
-      const b = await createBooking(db, accountId, range("02"), "user_test");
+      // 0107: only a customer-made row is refused, so `b` is the customer's own
+      // booking (actor type "system"): its un-cancel re-enters the rule.
+      const b = await createBooking(db, accountId, range("02"), "public", "system");
       await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
       await createBooking(db, accountId, range("02"), "public", "system");
       await expect(setBookingStatus(db, accountId, b.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
         .rejects.toBeInstanceOf(SlotTakenError);
       expect(await statusOf(b.id)).toBe("cancelled");
+
+      // 0107 (R1): a staff job comes back beside a customer booking made in between.
+      const c2 = await createBooking(db, accountId, range("04"), "user_test");
+      await setBookingStatus(db, accountId, c2.id, "cancelled", "user_test");
+      await createBooking(db, accountId, range("04"), "public", "system");
+      await expect(setBookingStatus(db, accountId, c2.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
+        .resolves.toBeTruthy();
+      expect(await statusOf(c2.id)).toBe("booked");
 
       // Not cancelled any more: refused, and left exactly as it was.
       const c = await createBooking(db, accountId, range("03"), "user_test");
