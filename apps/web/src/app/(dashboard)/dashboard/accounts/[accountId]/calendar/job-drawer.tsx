@@ -59,7 +59,9 @@ export type JobDrawerProps = {
 const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
 const ROW = "grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] items-baseline gap-2 border-t border-[var(--row-line)] py-2 first:border-t-0";
 const SECTION = "min-w-0 border-t border-[var(--line)] pt-3";
-const ACTION = "h-auto min-h-11 whitespace-normal md:min-h-8";
+// `min-w-0 shrink max-w-full`: buttonVariants' `shrink-0` held a long label ("Cambiar el horario de este trabajo")
+// at its one-line width inside the wrapping row, past a 375px screen; now it takes its row's width and wraps.
+const ACTION = "h-auto min-h-11 min-w-0 max-w-full shrink whitespace-normal md:min-h-8";
 
 export function JobDrawer({ accountId, view, closeHref, timezone, locale, pseudo = false, calendarMeetingType, defaultMinutes }: JobDrawerProps) {
   const router = useRouter();

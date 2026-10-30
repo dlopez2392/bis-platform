@@ -145,6 +145,26 @@ describe("styleguide: the Add job sheet and the job drawer (F-046 part 1, plan T
     }
   });
 
+  // CI phone-width.spec.ts (feat/calendar-agenda, f83cb2e8): the drawer's Spanish Move button ("Cambiar el horario
+  // de este trabajo", 258px in CI) pushed /styleguide to 388px at 375. `whitespace-normal` alone did not let it
+  // wrap: buttonVariants' `shrink-0` held it at its one-line width inside the wrapping action row. Every action
+  // there must be able to shrink to the row (min-w-0, shrink, max-w-full) and wrap its words (whitespace-normal).
+  it("375 px: every drawer action shrinks to its row and wraps, in every language (mutation: drop max-w-full or shrink -> FAILS)", () => {
+    for (const [name, slice] of drawers) {
+      const row = slice.match(/<div[^>]*\bdata-job-actions\b[^>]*>([\s\S]*?)<\/div>/)?.[1];
+      if (!row) continue; // the cancelled booking offers only Open record; checked below for the booked ones
+      const actions = [...row.matchAll(/<(?:button|a)\b[^>]*>/g)].map((x) => x[0]);
+      expect(actions.length, name).toBeGreaterThan(0);
+      for (const tag of actions) {
+        // Whole class tokens: the base's `[&_svg]:shrink-0` is a variant for its icon, not the button's own shrink.
+        const classes = (tag.match(/class="([^"]*)"/)?.[1] ?? "").split(/\s+/);
+        for (const want of ["max-w-full", "min-w-0", "shrink", "whitespace-normal"]) expect(classes, `${name}: ${want}`).toContain(want);
+        for (const never of ["shrink-0", "whitespace-nowrap"]) expect(classes, `${name}: ${never}`).not.toContain(never);
+      }
+    }
+    for (const k of ["booked-en", "booked-es", "booked-pseudo"]) expect(drawers.get(k)!, k).toMatch(/\bdata-job-actions\b/);
+  });
+
   it("is INERT: no specimen reaches a server action (mutation: wire addJobAction into the demo -> FAILS)", async () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
