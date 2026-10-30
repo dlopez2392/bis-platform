@@ -74,6 +74,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/business-status-actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",
+  // F-046: the after() settle of a hold the agenda action proved (callerCanSee on the job's own add).
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/job-hold.ts": "proven-target",
   // S-47d Task 8: planned closed days, Owners and the agency only (canManage); serviceDb only for the
   // closure To-do and the hold bump, never the insert/delete themselves (dbForRequest, the client-role
   // grant 0097 gives `authenticated`).

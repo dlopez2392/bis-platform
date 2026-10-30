@@ -21,6 +21,8 @@ const CONFIRMATION_COPY = {
     addToCalendar: "Add to your calendar",
     // F-048: the customer's own move (`app/b/[publicId]/move/[token]`).
     move: "Change the time",
+    // F-046: where a job staff put on the calendar happens (the place's label and address).
+    where: "Where",
   },
   es: {
     subject: "Tu cita quedó agendada",
@@ -30,6 +32,7 @@ const CONFIRMATION_COPY = {
     cancel: "Cancelar esta cita",
     addToCalendar: "Agregar a tu calendario",
     move: "Cambiar el horario",
+    where: "Dónde",
   },
 } as const;
 
@@ -40,6 +43,17 @@ export function bookingConfirmationSubject(locale: PublicLocale = "en"): string 
 const ROW_LABEL_STYLE =
   "padding:4px 12px 4px 0;color:#71717a;white-space:nowrap;vertical-align:top;";
 const ROW_VALUE_STYLE = "padding:4px 0;vertical-align:top;";
+
+/** F-046: the one "Where" row under the time, the place's label and address on
+ *  one line. Nothing at all without one: never an empty label. */
+function whereRow(where: string | undefined, label: string): string {
+  return where
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px;"><tr>
+        <td style="${ROW_LABEL_STYLE}">${escapeHtml(label)}</td>
+        <td style="${ROW_VALUE_STYLE}">${escapeHtml(where)}</td>
+      </tr></table>`
+    : "";
+}
 
 /** F-048: a secondary customer link (the calendar file, a change of time):
  *  plain, like the cancel link, and nothing at all without a url. */
@@ -133,6 +147,9 @@ export type BookingConfirmationInput = {
   /** F-048: where the customer moves this booking themselves (`bookingMoveUrl` in
    *  lib/booking/links.ts). "" or absent, no line. */
   moveUrl?: string;
+  /** F-046: where the job happens, one line ("label · address"). The job's own
+   *  "what" line is never passed here (owner decision 4). "" or absent, no row. */
+  where?: string;
 };
 
 /**
@@ -177,7 +194,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
 
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
-    ${whenHtml}
+    ${whenHtml}${whereRow(input.where, copy.where)}
     ${meetingHtml}
     ${calendarHtml}
     ${plainLink(input.moveUrl, copy.move)}
@@ -189,6 +206,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     "",
     input.whenBookerZone,
     ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
+    ...(input.where ? [`${copy.where}: ${input.where}`] : []),
     ...(input.meetingUrl ? ["", `${copy.join}: ${input.meetingUrl}`] : []),
     ...(input.calendarUrl ? ["", `${copy.addToCalendar}: ${input.calendarUrl}`] : []),
     ...(input.moveUrl ? ["", `${copy.move}: ${input.moveUrl}`] : []),
@@ -213,6 +231,7 @@ const RESCHEDULED_COPY = {
     cancel: "Cancel this booking",
     addToCalendar: CONFIRMATION_COPY.en.addToCalendar,
     move: CONFIRMATION_COPY.en.move,
+    where: CONFIRMATION_COPY.en.where,
   },
   es: {
     subject: "Tu cita fue reprogramada",
@@ -223,6 +242,7 @@ const RESCHEDULED_COPY = {
     cancel: "Cancelar esta cita",
     addToCalendar: CONFIRMATION_COPY.es.addToCalendar,
     move: CONFIRMATION_COPY.es.move,
+    where: CONFIRMATION_COPY.es.where,
   },
 } as const;
 
@@ -256,6 +276,9 @@ export type BookingRescheduledInput = {
   calendarUrl?: string;
   /** F-048: the NEW booking's change-of-time link. "" or absent, no line. */
   moveUrl?: string;
+  /** F-046: where the job happens, one line; same discipline as
+   *  `BookingConfirmationInput.where`. */
+  where?: string;
 };
 
 /**
@@ -293,7 +316,7 @@ export function bookingRescheduledEmail(input: BookingRescheduledInput):
 
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
-    ${whenHtml}
+    ${whenHtml}${whereRow(input.where, copy.where)}
     ${meetingHtml}
     ${plainLink(input.calendarUrl, copy.addToCalendar)}
     ${plainLink(input.moveUrl, copy.move)}
@@ -305,6 +328,7 @@ export function bookingRescheduledEmail(input: BookingRescheduledInput):
     "",
     input.whenBookerZone,
     ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
+    ...(input.where ? [`${copy.where}: ${input.where}`] : []),
     ...(input.meetingUrl
       ? ["", `${copy.join}: ${input.meetingUrl}`, copy.replaces]
       : []),
