@@ -2067,6 +2067,10 @@ export const m = {
   "calendar.job.edited.es": "Trabajo actualizado.",
   "calendar.job.moveUndone": "Back at {when}.",
   "calendar.job.moveUndone.es": "De vuelta: {when}.",
+  "calendar.job.editUndone": "Changes undone.",
+  "calendar.job.editUndone.es": "Se deshicieron los cambios.",
+  "calendar.job.accountNoEmail": "Emails from this account are turned off, so we can't send one.",
+  "calendar.job.accountNoEmail.es": "Los correos de esta cuenta están desactivados, así que no podemos enviar uno.",
   "calendar.job.moveUndoTaken": "Another job took the old time, so it can't go back.",
   "calendar.job.moveUndoTaken.es": "Otro trabajo ocupó el horario anterior, así que no puede regresar.",
   "calendar.job.emailSent": "Confirmation emailed {time}",
@@ -3889,9 +3893,11 @@ export const m = {
   "palette.group.conversations": "Conversations",
   "palette.hint": "Keep typing to search your contacts, calls and conversations.",
   "palette.empty": "Nothing matches “{query}”.",
+  "palette.empty.es": "Nada coincide con “{query}”.",
   // Names the failure instead of showing an empty list. An empty list would
   // say "you have no such contact", which is a lie about a broken request.
   "palette.error": "Couldn't search your records just now.",
+  "palette.error.es": "No pudimos buscar en sus registros en este momento.",
   "palette.retry": "Try again",
   "palette.action.toggleTheme": "Switch between light and dark",
   // Staff and roles (Task 8): the agency's own ⌘K entry point into this
