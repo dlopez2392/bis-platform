@@ -132,6 +132,19 @@ describe("styleguide: the Add job sheet and the job drawer (F-046 part 1, plan T
     expect(html).not.toMatch(/\bmin-w-\[\d+px\]/);
   });
 
+  // CI phone-width.spec.ts (feat/calendar-agenda, 5d9933c4): the customer-search trigger ("Search by name or
+  // phone") is a Button, which is `inline-flex` + `shrink-0` + `whitespace-nowrap` (buttonVariants) — its
+  // pseudo-locale label (289px) pushed /styleguide to 419px at a 375px viewport. It must opt OUT of all three
+  // itself: full width, able to shrink below its content, and its label in its own min-w-0 truncate span.
+  it("375 px: the customer-search trigger fits its container in every language (mutation: drop its shrink class -> FAILS)", () => {
+    const triggers = [...html.matchAll(/<button[^>]*\bdata-job-change-customer\b[^>]*>[\s\S]*?<\/button>/g)].map((x) => x[0]);
+    expect(triggers.length).toBeGreaterThan(0);
+    for (const btn of triggers) {
+      expect(btn).toMatch(/class="(?=[^"]*\bw-full\b)(?=[^"]*\bmin-w-0\b)[^"]*"/);
+      expect(btn).toMatch(/<span class="(?=[^"]*\bmin-w-0\b)(?=[^"]*\btruncate\b)[^"]*">/);
+    }
+  });
+
   it("is INERT: no specimen reaches a server action (mutation: wire addJobAction into the demo -> FAILS)", async () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");

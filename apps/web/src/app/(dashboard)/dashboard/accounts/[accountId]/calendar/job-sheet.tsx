@@ -279,8 +279,9 @@ export function JobForm(p: JobFormProps) {
           <div className="flex min-w-0 flex-wrap items-center gap-2" aria-labelledby={`${id}-customer`}>
             <span data-job-customer className="min-w-0 break-words text-sm text-card-foreground">{customer.name}</span>
             {mode === "add" ? (
-              <Button type="button" variant="ghost" size="sm" className={TOUCH} onClick={() => choose(null)}>
-                {tx("calendar.job.search")}
+              <Button type="button" variant="ghost" size="sm" className={cn(TOUCH, "w-full min-w-0 justify-start")}
+                onClick={() => choose(null)} title={tx("calendar.job.search")} data-job-change-customer>
+                <span className="min-w-0 truncate">{tx("calendar.job.search")}</span>
               </Button>
             ) : null}
           </div>
@@ -297,8 +298,9 @@ export function JobForm(p: JobFormProps) {
                 onChange={(e) => { touch(); setCustomer(typedCustomer(customer, { phone: e.target.value })); }} />
             </div>
             <div className="sm:col-span-2">
-              <Button type="button" variant="ghost" size="sm" className={TOUCH} onClick={() => choose(null)}>
-                {tx("calendar.job.search")}
+              <Button type="button" variant="ghost" size="sm" className={cn(TOUCH, "w-full min-w-0 justify-start")}
+                onClick={() => choose(null)} title={tx("calendar.job.search")} data-job-change-customer>
+                <span className="min-w-0 truncate">{tx("calendar.job.search")}</span>
               </Button>
             </div>
           </div>
