@@ -405,4 +405,14 @@ describe("apiAccountAccessWithRole: apiAccountAccess plus the role, never a redi
     authMock.mockResolvedValue({ userId: "user_agency", sessionId: "sess_1", sessionClaims: { app_role: "agency_admin" }, actor: { sub: "user_x" } });
     expect(await apiAccountAccessWithRole(OWN)).toBeNull();
   });
+
+  // Hotfix review: fails closed when the visit lookup itself fails — it must REJECT, never resolve to
+  // "allowed" (mutation: wrap the agency branch's read in `agencyVisitOk(...).catch(() => true)` -> FAILS,
+  // since that mutation would resolve to `{ isAgency: true, role: null }` instead of rejecting).
+  it("the agency's visit read failing rejects the call, never a fallback access grant", async () => {
+    asAgency();
+    const boom = new Error("agencyVisitLive failed: down");
+    agencyVisitLive.mockRejectedValue(boom);
+    await expect(apiAccountAccessWithRole(OWN)).rejects.toBe(boom);
+  });
 });

@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+const shellDataSrc = readFileSync(fileURLToPath(new URL("./shell-data.tsx", import.meta.url)), "utf8");
+
 /**
  * The agency refresh loop after the reason chooser (production, 2026-10-30): the shell's one background
  * read was a server action, which Next posts to the router's CURRENT url (a stale `/dashboard/enter/<id>`
@@ -31,9 +33,16 @@ describe("fetchShellSnapshot: the shell's read is a plain GET", () => {
   });
 
   it("the provider calls no server action: no import from shell-actions or any \"use server\" module (mutation: restore the getShellSnapshot import -> FAILS)", () => {
-    const src = readFileSync(fileURLToPath(new URL("./shell-data.tsx", import.meta.url)), "utf8");
-    const imports = src.split("\n").filter((l) => /^\s*(import|\}\s*from)\b/.test(l) || /from "/.test(l)).join("\n");
+    const imports = shellDataSrc.split("\n").filter((l) => /^\s*(import|\}\s*from)\b/.test(l) || /from "/.test(l)).join("\n");
     expect(imports).not.toMatch(/shell-actions|getShellSnapshot/);
-    expect(src).toMatch(/fetchShellSnapshot\(accountId\)/);
+    expect(shellDataSrc).toMatch(/fetchShellSnapshot\(accountId\)/);
+  });
+
+  // ShellDataProvider has no render harness (no jsdom/testing-library in this app's vitest config, and
+  // its effect depends on usePathname + a background fetch), so this pins the source of the one branch
+  // that decides it: a 204 (fetchShellSnapshot resolving null) must leave whatever snapshot is already on
+  // screen untouched, never clear it.
+  it("a 204 (null snapshot) keeps whatever is on screen: the resolved fetch only writes state when a snapshot actually came back (mutation: drop the `snapshot &&` guard, keeping only `!cancelled` -> FAILS)", () => {
+    expect(shellDataSrc).toMatch(/if \(snapshot && !cancelled\) \{/);
   });
 });

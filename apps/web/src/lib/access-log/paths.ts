@@ -19,7 +19,7 @@ const ENTER_PATH = /^\/dashboard\/enter\/[^/?#]+\/?$/;
 export function accountPathOf(url: { pathname: string; search: string }): string | null {
   if (ENTER_PATH.test(url.pathname)) {
     const to = new URLSearchParams(url.search).get("to");
-    return to !== null && ACCOUNT_PATH.test(to) ? to : null;
+    return to !== null && ACCOUNT_PATH.test(to) && !hasControlOrNonAscii(to) ? to : null;
   }
   if (!ACCOUNT_PATH.test(url.pathname)) return null;
   const params = new URLSearchParams(url.search);
@@ -33,6 +33,20 @@ function hasControl(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * A C0/C1 control character, DEL, or any non-ASCII character anywhere in the string. Guards the chooser's
+ * `?to=` before it is handed back verbatim: `proxy.ts` puts it straight into a request header
+ * (BIS_PATH_HEADER), and `Headers.set` throws on a newline or any char > 0xFF, which would 500 the request
+ * instead of refusing the path. Same shape as `hasControl`'s own check, widened to the whole non-ASCII range.
+ */
+function hasControlOrNonAscii(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c >= 0x7f) return true;
   }
   return false;
 }

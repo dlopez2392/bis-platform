@@ -44,6 +44,17 @@ describe("accountPathOf: the in-account path a request asked for", () => {
     "%s is not inside an account: null", (pathname) => {
       expect(accountPathOf({ pathname, search: "?x=1" })).toBeNull();
     });
+  // proxy.ts puts this value straight into a request header (BIS_PATH_HEADER); Headers.set throws on a
+  // newline or any char > 0xFF, which would 500 the request instead of refusing the path (mirrors
+  // safeReturnPath's own control-character check, extended to any non-ASCII character).
+  it("a chooser ?to= carrying a newline is null, not the raw value (mutation: drop the control/non-ASCII check -> FAILS)", () => {
+    const to = "/dashboard/accounts/A/x\ny";
+    expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}` })).toBeNull();
+  });
+  it("a chooser ?to= carrying a non-ASCII character is null, not the raw value (mutation: drop the control/non-ASCII check -> FAILS)", () => {
+    const to = "/dashboard/accounts/A/x中y";
+    expect(accountPathOf({ pathname: "/dashboard/enter/A", search: `?to=${encodeURIComponent(to)}` })).toBeNull();
+  });
 });
 
 describe("safeReturnPath: a path inside THIS account, and nothing else", () => {

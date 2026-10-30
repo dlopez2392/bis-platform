@@ -159,13 +159,13 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // toggle hadn't reached the database yet, so the reload just re-served the
     // still-untouched row. Wait for the POST's response first, matching
     // pipeline.spec.ts's dragTo() helper.
-    // The predicate must also match the BODY, not just method+URL: since the
-    // Phase-2 shell, the sidebar fires its own server-action POST
-    // (getShellSnapshot) on every account-route navigation,
-    // and server actions POST to the current page URL — so on this route a
-    // sidebar read also matches "/checklist" and can resolve this wait while
-    // the toggle's own POST is still in flight, making the reload lose the
-    // write. Only the toggle's multipart form body carries the itemKey.
+    // The predicate must also match the BODY, not just method+URL: this guarded against the Phase-2
+    // shell's badge read, which used to be its own server-action POST to the current page URL, so a
+    // sidebar read on this route could also match "/checklist" and resolve this wait while the toggle's
+    // own POST was still in flight. The shell's read is a plain GET now (fetchShellSnapshot, to
+    // /api/accounts/[accountId]/shell — the agency refresh loop fix, 2026-10-30), so it can no longer
+    // collide here on method+URL, but the body match stays: only the toggle's multipart form body carries
+    // the itemKey.
     const togglePosted = page.waitForResponse(
       (res) =>
         res.request().method() === "POST" &&
