@@ -16,6 +16,15 @@ import { listContactsOnNumber } from "../voice";
  * `merged_into`/`merged_at` write — is exactly the write T3's `merge_contacts` will eventually make
  * (`contact-merge-lookups-live.test.ts`'s own comment explains why this is not a shortcut).
  */
+/** A second contact on a number K already holds, by a DIRECT service insert: `createContact`'s own phone
+ *  match would fold it into K (then makeTombstone would point K at itself and 0106's
+ *  contacts_not_merged_into_self refuses). contacts-merge.spec.ts seeds its pair the same way. */
+async function insertTwin(db: SupabaseClient, accountId: string, firstName: string, phone: string): Promise<{ id: string }> {
+  const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, phone }).select("id").single();
+  if (error) throw new Error(`insertTwin failed: ${error.message}`);
+  return { id: data!.id as string };
+}
+
 async function makeTombstone(db: SupabaseClient, accountId: string, tombstoneId: string, keepId: string) {
   const { error } = await db.from("contacts")
     .update({ merged_into: keepId, merged_at: new Date().toISOString() })
@@ -27,7 +36,7 @@ describe("listContactsOnNumber follows a real tombstone (0106, owner ruling D8)"
   it("K's own live row and T's tombstone on the SAME number answer ONE row, K's own (mutation: no de-duplication -> two rows)", () =>
     withTestAccount(async (db, accountId) => {
       const kept = await createContact(db, accountId, { firstName: "Kept", phone: "+19565550511" }, "user_test");
-      const tomb = await createContact(db, accountId, { firstName: "Tomb", phone: "+19565550511" }, "user_test");
+      const tomb = await insertTwin(db, accountId, "Tomb", "+19565550511");
       await makeTombstone(db, accountId, tomb.id, kept.id);
 
       const { rows } = await listContactsOnNumber(db, accountId, "+19565550511");
@@ -49,7 +58,7 @@ describe("listContactsOnNumber follows a real tombstone (0106, owner ruling D8)"
     withTestAccount(async (dbA, accountA) => {
       await withTestAccount(async (dbB, accountB) => {
         const keptA = await createContact(dbA, accountA, { firstName: "KeptA", phone: "+19565550514" }, "user_test");
-        const tombA = await createContact(dbA, accountA, { firstName: "TombA", phone: "+19565550514" }, "user_test");
+        const tombA = await insertTwin(dbA, accountA, "TombA", "+19565550514");
         await makeTombstone(dbA, accountA, tombA.id, keptA.id);
         await createContact(dbB, accountB, { firstName: "InB", phone: "+19565550514" }, "user_test");
 

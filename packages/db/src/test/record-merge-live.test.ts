@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { withTestAccount } from "./fixtures";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact } from "../contacts";
 import { insertAiActs } from "../ai-acts";
+import { assignPhoneNumber } from "../voice";
 import { mergeContacts, undoContactMerge, contactMergePreview } from "../contact-merge";
 import { listTimelinePage, listContactTimelinePage } from "../record";
 
@@ -29,9 +30,13 @@ describe("the merge source on the live timeline (plan Task 9, correction 11)", (
       withTestAccount(async (dbB, accountB) => {
         const keepId = await person(db, accountId, "Keep");
         const otherId = await person(db, accountId, "Other");
-        // The tombstone's own act, seeded BEFORE the merge (ai-acts-schema.test.ts's own shape).
+        // The tombstone's own act, seeded BEFORE the merge (record.test.ts's actOn shape): a voice act
+        // must name its call (0091's ai_acts_source), so a real call on a real number comes first.
+        const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+        const { data: call, error: callErr } = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.id }).select("id").single();
+        if (callErr) throw new Error(`seed call failed: ${callErr.message}`);
         await insertAiActs(db, accountId, [{
-          kind: "contact_field_filled", actor: "voice", callId: null, chatId: null, contactId: otherId,
+          kind: "contact_field_filled", actor: "voice", callId: call!.id as string, chatId: null, contactId: otherId,
           target: { field: "firstName" }, before: { value: null }, after: { value: "Other" },
         }]);
 
