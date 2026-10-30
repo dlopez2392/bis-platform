@@ -114,7 +114,9 @@ test("find a duplicate, merge it, follow the old link, undo it and dismiss a pai
 
   // Step 2: Uno's own record carries the line and the way to the compare screen.
   await page.goto(`${base()}/contacts/${unoId}`);
-  await expect(page.getByText(m["contacts.duplicates.reason.samePhone"])).toBeVisible();
+  // Scoped to <main>: while a Suspense section streams in, Next.js briefly holds a hidden copy of it
+  // outside <main> (CI run 41011103395 matched two spans here), and a page-wide getByText is strict.
+  await expect(page.getByRole("main").getByText(m["contacts.duplicates.reason.samePhone"])).toBeVisible();
   const compareLink = page.getByRole("link", { name: m["contacts.duplicates.compare"], exact: true });
   await compareLink.click();
 
@@ -132,7 +134,7 @@ test("find a duplicate, merge it, follow the old link, undo it and dismiss a pai
   await page.getByRole("button", { name: m["contacts.merge.action"], exact: true }).click();
   await expect(toastWith(page, m["contacts.merge.done"].replace("{name}", unoName))).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/contacts/${unoId}$`));
-  await expect(page.getByText(m["timeline.mergedEmpty"].replace("{name}", dosName))).toBeVisible();
+  await expect(page.getByRole("main").getByText(m["timeline.mergedEmpty"].replace("{name}", dosName))).toBeVisible();
 
   // Step 5: the list's total is one less than step 1 — relative, never absolute (another spec in this
   // run may have its own leftovers).
