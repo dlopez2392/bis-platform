@@ -87,6 +87,9 @@ const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
 // proves what it always proved, and a 404/holding-redirect "no page read ran" case still catches it.
 const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
 const mergedIdsOfMock = vi.fn(async (..._a: unknown[]): Promise<string[]> => []);
+// F-006 part 1 (plan Task 11, spec §6.1): the record's "may be the same person" line's pairs; none
+// unless a case says so. Read only for seesWholeAccount(access) — never for a Technician.
+const duplicatePairsOfMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
 // Item 8b-2 (spec 5.3): What's next's "Waiting for you" read; none pending unless a case says so.
@@ -115,6 +118,10 @@ vi.mock("@bis/db", () => ({
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   mergedIdsOf: (...a: unknown[]) => mergedIdsOfMock(...a),
+  duplicatePairsOf: (...a: unknown[]) => duplicatePairsOfMock(...a),
+  // The duplicate line's own reason words (contacts/page.test.ts's own minimal stub, T10): this file's
+  // fixtures only ever need "same_phone".
+  reasonLabel: (reason: string) => (reason === "same_phone" ? "samePhone" : "other"),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
   listPendingProposalsForContact: (...a: unknown[]) => listPendingProposalsForContactMock(...a),
@@ -381,6 +388,104 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     await render();
     expect(findConversationForContactMock).not.toHaveBeenCalled();
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * F-006 part 1 (plan Task 11): a merged-away record is a hidden pointer (0106); a deep link to it
+   * redirects to the kept record, exactly where the page already redirects a holding record — before
+   * any of the page's own reads (same discipline as the holding-record case above).
+   */
+  it("a merged-away record redirects to the kept record, before any other read on this page (mutation: read first, redirect second -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, merged_into: "ct-kept" });
+    const reads = {
+      contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
+      listContactTimelinePage: listContactTimelinePageMock, mergedIdsOf: mergedIdsOfMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
+      listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
+      getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock, readReplyToken: readReplyTokenMock,
+      listPendingProposalsForContact: listPendingProposalsForContactMock,
+    };
+    for (const r of Object.values(reads)) r.mockClear();
+    redirectMock.mockClear();
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/accounts/acct1/contacts/ct-kept");
+    expect(renderZone).not.toHaveBeenCalled();
+    expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
+  });
+
+  it("a tombstone never calls findConversationForContact; an ordinary record never redirects to itself (control; mutation: treat every contact as merged -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, merged_into: "ct-kept" });
+    findConversationForContactMock.mockClear();
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(findConversationForContactMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-006 part 1 (plan Task 11, spec §6.1): "May be the same person as {name} · {reason} · Compare"
+ * under the record header. Read only for seesWholeAccount(access); a failed read costs only the line.
+ */
+describe("ContactDetailPage: the duplicate line (F-006 part 1, plan Task 11)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    duplicatePairsOfMock.mockReset().mockResolvedValue([]);
+    requireAccountAccessMock.mockReset().mockResolvedValue({ userId: "u1", isAgency: true, role: null, canManage: true });
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+  });
+
+  it("an Owner/agency sees the banner naming the other person and a Compare link (mutation: render false for canMerge -> FAILS)", async () => {
+    duplicatePairsOfMock.mockResolvedValueOnce([
+      { id: "pr1", a: { id: "ct1", firstName: "Ana", lastName: "Reyes" }, b: { id: "c9", firstName: "Jose", lastName: "Garcia" }, reason: "same_phone", strength: 1, createdAt: "2026-10-01T00:00:00Z" },
+    ]);
+    const html = await render();
+    expect(html).toContain("May be the same person as Jose Garcia");
+    expect(html).toContain("Compare");
+  });
+
+  // The Technician case below cannot catch a hard-coded `canMerge` on the JSX prop by itself: the
+  // SEPARATE seesWholeAccount gate on the duplicatePairsOf read already empties `pairs` for a
+  // Technician, so the line renders nothing regardless of what `canMerge` says (defense in depth).
+  // Pinned on the source instead (final review's own pattern, :1379 `page.tsx` read), so a hard-coded
+  // `canMerge` is still caught (mutation: hard-code canMerge true on the JSX -> FAILS).
+  it("canMerge is wired from seesWholeAccount(access), never hard-coded (mutation: hard-code canMerge -> FAILS)", () => {
+    const src = readFileSync(path.resolve(__dirname, "./page.tsx"), "utf8");
+    const tag = src.match(/<DuplicateLine\b[\s\S]*?\/>/)?.[0] ?? "";
+    expect(tag).toContain("canMerge={seesWholeAccount(access)}");
+  });
+
+  it("a Technician's page makes no duplicatePairsOf call, and shows no line (mutation: read for every role -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "u1", isAgency: false, role: "technician", canManage: false });
+    duplicatePairsOfMock.mockResolvedValueOnce([
+      { id: "pr1", a: { id: "ct1", firstName: "Ana", lastName: "Reyes" }, b: { id: "c9", firstName: "Jose", lastName: "Garcia" }, reason: "same_phone", strength: 1, createdAt: "2026-10-01T00:00:00Z" },
+    ]);
+    const html = await render();
+    expect(duplicatePairsOfMock).not.toHaveBeenCalled();
+    expect(html).not.toContain("May be the same person");
+  });
+
+  it("a failed read costs only the line; the page still renders (mutation: let it throw -> the page 500s, FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      duplicatePairsOfMock.mockRejectedValueOnce(new Error("down"));
+      const html = await render();
+      expect(html).toContain("data-record-layout");
+      expect(html).not.toContain("May be the same person");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("no open pairs: no line at all (control; mutation: render an empty banner -> FAILS)", async () => {
+    const html = await render();
+    expect(html).not.toContain("May be the same person");
+  });
+});
+
+describe("ContactDetailPage: the Email row's read, in the account's zone (consent PR-3)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    emailRowProps.mockClear();
   });
 
   it("an unset contact on a Spanish account names the account's language (S-09 PR 2; mutation: pass accountLanguage: undefined always -> FAILS)", async () => {
@@ -1652,6 +1757,16 @@ describe("the contact page logs BIS's open (F-118 part 1)", () => {
     getContactMock.mockResolvedValue({ ...CONTACT, holds_shared_number: true });
     findConversationForContactMock.mockResolvedValue("cv9");
     await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(noteOpenedMock).not.toHaveBeenCalled();
+  });
+
+  // F-006 part 1 (plan Task 11): a merged-away record is never logged as opened — its own page never
+  // renders, so the OPEN that gets logged is the kept record's own page load, the next time it is
+  // reached (either by this same redirect, or directly).
+  it("a merged-away record redirects to the kept record and never calls noteOpened (mutation: move the redirect after noteOpened -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, merged_into: "ct-kept" });
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/accounts/acct1/contacts/ct-kept");
     expect(noteOpenedMock).not.toHaveBeenCalled();
   });
 

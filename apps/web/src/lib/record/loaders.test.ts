@@ -12,8 +12,9 @@ const contactFactsMock = vi.fn();
 const listContactTasksMock = vi.fn();
 const holdOpenTaskIdsMock = vi.fn();
 const listContactTimelinePageMock = vi.fn();
-// F-006 part 1 (plan Task 9): loadTimeline reads through the tombstone id set; loadRecent is unchanged
-// (still listContactTimelinePage, above).
+// F-006 part 1 (plan Task 9, review carry-in): both loadTimeline and loadRecent read through the
+// tombstone id set (mergedIdsOf), so the drawer's five newest rows agree with the record after a
+// merge. loadRecent no longer calls listContactTimelinePage; listTimelinePageMock below answers both.
 const listTimelinePageMock = vi.fn();
 const mergedIdsOfMock = vi.fn();
 const listPeopleNamesMock = vi.fn();
@@ -118,7 +119,7 @@ describe("record loaders", () => {
     const seven = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
     listTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: seven, sources: [...seven, "suggestions"] });
     expect(await loadTimeline(db, ledger, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: seven } });
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: seven, sources: [...seven, "suggestions"] });
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: seven, sources: [...seven, "suggestions"] });
     expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: seven } });
   });
 
@@ -148,6 +149,22 @@ describe("record loaders", () => {
     } finally { errors.mockRestore(); }
   });
 
+  it("F-006 part 1 (plan Task 9 review carry-in): the drawer's Recent reads mergedIdsOf's tombstones too, so it agrees with the record after a merge; a failed read logs 'recent (merge set)' and reads [contactId] (mutation: ignore the tombstones -> FAILS)", async () => {
+    mergedIdsOfMock.mockResolvedValue(["other1", "other2"]);
+    await loadRecent(db, "acct1", "ct1");
+    expect(mergedIdsOfMock).toHaveBeenCalledWith(db, "acct1", "ct1");
+    expect(listTimelinePageMock.mock.calls[0]![2]).toEqual(["ct1", "other1", "other2"]);
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      mergedIdsOfMock.mockRejectedValueOnce(new Error("merge set down"));
+      await loadRecent(db, "acct1", "ct1");
+      expect(listTimelinePageMock.mock.calls[1]![2]).toEqual(["ct1"]);
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("recent (merge set)");
+    } finally { errors.mockRestore(); }
+  });
+
   it("the persona read goes through the page's own db client, never the ledger (M2; mutation: call getVoiceProfile(ledger, accountId) -> FAILS)", async () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
     expect(getVoiceProfileMock).toHaveBeenCalledWith(db, "acct1");
@@ -171,14 +188,14 @@ describe("record loaders", () => {
     } finally { errors.mockRestore(); }
   });
 
-  it("the drawer's Recent reads the head of the merged timeline, five rows, no cursor (mutation: drop limit -> 30 rows, FAILS)", async () => {
+  it("the drawer's Recent reads the head of the merged timeline, five rows, no cursor, through the tombstone id set (mutation: drop limit -> 30 rows, FAILS)", async () => {
     expect(DRAWER_RECENT).toBe(5);
     await loadRecent(db, "acct1", "ct1");
-    expect(listContactTimelinePageMock).toHaveBeenCalledWith(db, "acct1", "ct1", undefined, expect.objectContaining({ limit: 5 }));
+    expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", ["ct1"], undefined, expect.objectContaining({ limit: 5 }));
   });
 
   it("Recent reads no hold and no ledger: the drawer has no Done (mutation: build it on loadTimeline -> FAILS)", async () => {
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [{ kind: "task", id: "t1", at: "2026-10-01T00:00:00Z", contactId: "ct1",
+    listTimelinePageMock.mockResolvedValueOnce({ items: [{ kind: "task", id: "t1", at: "2026-10-01T00:00:00Z", contactId: "ct1",
       task: { id: "t1", completed_at: null, consent_event_id: "ev1", call_id: null, created_by: null } }], older: null, failed: [], sources: SOURCES });
     expect((await loadRecent(db, "acct1", "ct1")).status).toBe("ready");
     expect(holdOpenTaskIdsMock).not.toHaveBeenCalled();
@@ -186,16 +203,16 @@ describe("record loaders", () => {
 
   it("Recent is an error only when all seven sources failed; six failed is ready, naming them (mutation: error on any failure -> FAILS)", async () => {
     const all = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all, sources: all });
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all, sources: all });
     expect(await loadRecent(db, "acct1", "ct1")).toEqual({ status: "error" });
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all.slice(1), sources: all });
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all.slice(1), sources: all });
     expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: all.slice(1) } });
   });
 
   it("Recent never throws: a rejected read is the error; names and persona are soft (mutation: let the read throw -> FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      listContactTimelinePageMock.mockRejectedValueOnce(new Error("down"));
+      listTimelinePageMock.mockRejectedValueOnce(new Error("down"));
       expect(await loadRecent(db, "acct1", "ct1")).toEqual({ status: "error" });
       listPeopleNamesMock.mockRejectedValueOnce(new Error("names down"));
       getVoiceProfileMock.mockRejectedValueOnce(new Error("persona down"));
@@ -248,7 +265,7 @@ describe("record loaders: suggestions (item 8b-2)", () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
     expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ suggestions: true });
     await loadRecent(db, "acct1", "ct1");
-    expect(listContactTimelinePageMock.mock.calls[0]![4]).not.toHaveProperty("suggestions");
+    expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("suggestions");
   });
 
   it("the timeline's stage suggestions get their stage names, read on the page's client for this account (mutation: drop the stage read -> FAILS)", async () => {
@@ -355,7 +372,7 @@ describe("record loaders: Sofía's acts (item 8c)", () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
     expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ aiActs: true, suggestions: true });
     await loadRecent(db, "acct1", "ct1");
-    expect(listContactTimelinePageMock.mock.calls[0]![4]).not.toHaveProperty("aiActs");
+    expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("aiActs");
   });
 
   it("the page's acts go to ONE facts read on the page's client, with the Owner's right to remove a customer; its answer is the load's", async () => {

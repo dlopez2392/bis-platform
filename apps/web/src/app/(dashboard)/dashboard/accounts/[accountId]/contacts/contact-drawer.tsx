@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
+  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, Undo2, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -43,6 +43,7 @@ import { SourceField } from "./source-field";
 import { BusinessInlineField } from "./business-field";
 import { LanguageField } from "./language-field";
 import { ArchiveControls, ArchivedBanner } from "./archive-controls";
+import { DuplicateLine } from "./duplicate-line";
 import type { ContactRow } from "./contacts-table";
 
 // The body is PARSED (lib/contacts/drawer-summary.ts): checked, not cast, so a server older or newer
@@ -74,6 +75,10 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   // contact archive: archived / came-back rows. recent-rows.ts answers null for them, so the drawer's
   // Recent never shows one; this is the type's exhaustive case only.
   archive: Archive,
+  // F-006 part 1 (plan Task 9 review carry-in, Task 11): merge/mergeUndone render with the same icon
+  // as the record page's own timeline (activity-timeline.tsx); unlike archive, the drawer's Recent CAN
+  // show one (read unconditionally, and now through the tombstone id set too, loaders.ts's loadRecent).
+  merge: Merge, mergeUndone: Undo2,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";
@@ -181,7 +186,10 @@ export function ContactDrawer({
   const body: ParsedDrawerSummary | null = load.status === "ready" ? load.body : null;
   const locale: Locale = body?.locale ?? pageLocale;
   const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
-  const fullHref = contactId ? `/dashboard/accounts/${accountId}/contacts/${contactId}` : "#";
+  // F-006 part 1 (plan Task 11): the summary's OWN contactId, when it has one — the KEPT record,
+  // after the route followed a merged-away id's pointer (spec §6.4). An older server, or still
+  // loading, falls back to the id the drawer fetched for.
+  const fullHref = (body?.contactId ?? contactId) ? `/dashboard/accounts/${accountId}/contacts/${body?.contactId ?? contactId}` : "#";
   // C3: a section's Try again keeps the body on screen and re-reads the route.
   const retrySection = () => setRetryNonce((n) => n + 1);
   const stateOf = (s: { status: string } | undefined): SectionState =>
@@ -252,6 +260,10 @@ export function ContactDrawer({
                   }
                 />
                 <ArchivedBanner archived={archived} timezone={timezone} variant="drawer" locale={locale} />
+                {/* F-006 part 1 (plan Task 11, spec §6.1): the summary's own duplicates, already RLS-scoped
+                    to who may merge (the route reads it for every caller: migration 0106's own restrictive
+                    policy answers a Technician none). */}
+                <DuplicateLine accountId={accountId} contactId={body?.contactId ?? contactId ?? ""} pairs={body?.duplicates ?? []} canMerge locale={locale} />
                 {load.status === "loading" ? <Skeleton data-testid="drawer-skeleton" className="h-11 w-2/3 rounded-[var(--radius-ctl)]" /> : null}
                 <SheetDescription className="sr-only">{tx("drawer.description")}</SheetDescription>
               </SheetHeader>

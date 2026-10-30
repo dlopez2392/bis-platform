@@ -11,7 +11,7 @@ import { ActRow } from "@/components/ai-acts/act-row";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
-import { formatDateInZone } from "@/lib/format";
+import { formatDateInZone, contactDisplayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { splitSummaryBlocks } from "@/lib/voice/summary-blocks";
@@ -22,6 +22,7 @@ import type { TimelineRow } from "@/lib/record/timeline-rows";
 import { TIMELINE_ANCHOR } from "@/lib/record/timeline-pager";
 import { addNoteAction, addTaskAction, completeTaskAction } from "./actions";
 import { MessageComposer } from "./message-composer";
+import { UndoMergeButton } from "./merge-undo";
 import { ADD_TODO_FIELD_ID } from "./constants";
 
 export type ActivityTimelineProps = {
@@ -56,6 +57,9 @@ export type ActivityTimelineProps = {
   tr: Tr;
   /** S-09 §9: the contact's language for what the CUSTOMER typed; "" when not set (C10). */
   customerLang: "" | "en" | "es";
+  /** F-006 part 1 (plan Task 11): may this caller undo a merge (seesWholeAccount: Owners, Staff, the
+   *  agency; never a Technician, owner ruling D9). False by default. */
+  canMerge?: boolean;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -124,7 +128,7 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
                 </div>
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
-                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} />
+                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} />
             </li>
           ))}
         </ol>
@@ -140,10 +144,10 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang }: {
+function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang, canMerge }: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; tr: Tr;
-  customerLang: "" | "en" | "es";
+  customerLang: "" | "en" | "es"; canMerge: boolean;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -292,9 +296,19 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     case "archive":
       return <TimelineItem {...head} icon={e.archive.action === "archived" ? Archive : ArchiveRestore} />;
     // F-006 part 1 (plan Task 9): no body — the verb already names the other record and what moved.
-    // No Undo control yet here (T11 adds it on top of this row).
-    case "merge":
-      return <TimelineItem {...head} icon={Merge} />;
+    // Task 11: "Undo merge" while undo_until is still in the future (owner ruling D7), ghost (rule 8),
+    // and only for someone who may merge (canMerge; a Technician never, owner ruling D9).
+    case "merge": {
+      const canUndo = canMerge && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > Date.now();
+      const otherName = e.merge.otherVisible
+        ? contactDisplayName({ first_name: e.merge.otherFirstName, last_name: e.merge.otherLastName })
+        : tr.text("timeline.mergeOtherHidden");
+      return (
+        <TimelineItem {...head} icon={Merge} action={canUndo
+          ? <UndoMergeButton accountId={accountId} mergeId={e.merge.mergeId} otherName={otherName} locale={tr.locale} />
+          : null} />
+      );
+    }
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
     default:

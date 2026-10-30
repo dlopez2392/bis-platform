@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { notFound, redirect } from "next/navigation";
-import { getContact, getInboundSettings, readReplyToken, serviceDb, findConversationForContact, type AuthorKind } from "@bis/db";
+import { getContact, getInboundSettings, readReplyToken, serviceDb, findConversationForContact, duplicatePairsOf, type AuthorKind, type DuplicatePair } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -38,6 +38,7 @@ import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
 import { ArchiveControls, ArchivedBanner } from "../archive-controls";
+import { DuplicateLine } from "../duplicate-line";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { SummaryBody } from "./summary-card";
 import { AiSummary } from "./ai-summary";
@@ -102,13 +103,21 @@ export default async function ContactDetailPage({
     const thread = await findConversationForContact(db, accountId, contactId);
     redirect(`/dashboard/accounts/${accountId}/conversations${thread ? `?c=${thread}` : ""}`);
   }
+  // F-006 part 1 (plan Task 11, spec §6.4): a merged-away record is a hidden pointer (0106) with no
+  // timeline of its own; a deep link to it goes straight to the record that kept it, exactly where
+  // the holding redirect above sends a shared number's thread — before any of the page's own reads,
+  // and BEFORE noteOpened below (F-118 part 1), so a merged-away record is never logged as opened.
+  // The kept record's own page load logs the open, the next time it is reached.
+  if (contact.merged_into) {
+    redirect(`/dashboard/accounts/${accountId}/contacts/${contact.merged_into}`);
+  }
   // F-085 (spec §7.3): consent is keyed by ADDRESS and a STOP can arrive tied to no contact, so a
   // Technician's own token sees only part of the ledger. Every consent DISPLAY read (and the hold
   // check's ledger read) goes through this client, built only here, after getContact on the request
   // client proved the contact is the caller's to see: that read is the authorisation.
   const ledger = ledgerDb();
   const now = new Date();
-  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places, forwarding, waiting] = await Promise.all([
+  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places, forwarding, waiting, duplicates] = await Promise.all([
     getPersonPrefs(),
     loadTags(db, accountId, contactId),
     loadFieldDefs(db, accountId),
@@ -151,6 +160,16 @@ export default async function ContactDetailPage({
     // Item 8b-2 (spec 5.3): What's next's "Waiting for you", this customer's pending suggestions on the
     // request client (RLS decides). Never throws: a failure is the section's own error line.
     loadWaitingSuggestions(db, accountId, contactId, now),
+    // F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line's pairs — read only
+    // for seesWholeAccount(access) (Owners, Staff, the agency; never a Technician, owner ruling D9).
+    // A Technician's page makes no duplicatePairsOf call at all, never relying on the database's own
+    // RLS fence alone. A failed read costs only the line, logged by account.
+    seesWholeAccount(access)
+      ? duplicatePairsOf(db, accountId, contactId).catch((e: unknown) => {
+        console.error(`contact page: duplicates read failed for account ${accountId}: ${loggableError(e)}`);
+        return [] as DuplicatePair[];
+      })
+      : Promise.resolve([] as DuplicatePair[]),
     // F-118 part 1 (spec 4.1, ruling 4): the ONE access-log write for this record, after getContact and
     // the holding redirect above. Not destructured: a client is never logged (noteOpened returns at
     // once), and the agency's write throws on failure, which rejects this Promise.all like any other read.
@@ -340,6 +359,8 @@ export default async function ContactDetailPage({
             rows={timelineView}
             holdOpenTaskIds={timeline.holdOpen}
             customerLang={(contact.language as "en" | "es" | null) ?? ""}
+            // F-006 part 1 (plan Task 11): the merge row's own "Undo merge" (owner ruling D9).
+            canMerge={seesWholeAccount(access)}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}
@@ -417,6 +438,8 @@ export default async function ContactDetailPage({
               } />
             {/* Under the header, never beside the name: a sentence on the name's line would squeeze it at 375px. */}
             <ArchivedBanner archived={archived} timezone={zone.zone} variant="page" locale={locale} />
+            {/* F-006 part 1 (plan Task 11, spec §6.1): the "may be the same person" line, same place. */}
+            <DuplicateLine accountId={accountId} contactId={contactId} pairs={duplicates} canMerge={seesWholeAccount(access)} locale={locale} />
           </div>
         }
         columns={columns}

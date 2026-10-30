@@ -5633,6 +5633,9 @@ export const m = {
   "styleguide.recordKit.es": "Ficha del cliente",
   "styleguide.contactArchive": "Contact archive",
   "styleguide.contactArchive.es": "Archivo de contactos",
+  // F-006 part 1 (plan Task 11): the duplicate line and the merge/mergeUndone timeline row.
+  "styleguide.duplicates": "Possible duplicates and merge",
+  "styleguide.duplicates.es": "Posibles duplicados y unión",
   // S-03 part 1 (1a), continued (spec §10.1). record.nextUp.booking stands in for the calendar
   // name the schema has not got (plan Task 1).
   "record.activity.failed": "Couldn't load the activity.",
