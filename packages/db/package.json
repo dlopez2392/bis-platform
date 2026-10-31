@@ -15,7 +15,8 @@
     "./ai-act-rules": "./src/ai-act-rules.ts",
     "./never-log-rules": "./src/never-log-rules.ts",
     "./webchat-plan": "./src/webchat-plan.ts",
-    "./dedupe-keys": "./src/dedupe-keys.ts"
+    "./dedupe-keys": "./src/dedupe-keys.ts",
+    "./contact-search": "./src/contact-search.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
