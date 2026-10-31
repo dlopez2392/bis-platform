@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import { contactSearchPlan, MIN_PHONE_SEARCH_DIGITS } from "./contact-search";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 import { contactAuthor, type RowAuthor } from "./provenance";
@@ -846,7 +847,9 @@ function quoteFilterValue(value: string): string {
 export type ContactCursor = { v: string | null; id: string };
 
 /**
- * Applies the shared name/email/phone search filter, or returns `q` unchanged.
+ * The ONE search filter `listContacts` and `countContacts` apply (the whole `.or()` argument), or null for "no
+ * filter", so the list's rows, its header's real total and the export can never disagree. Exported for its pure
+ * test (contact-search-filter.test.ts); NOT barrelled through index.ts, as `phoneSearchDigits` is not.
  *
  * Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
  * both break the interpolated .or() string below (see search-term.ts, and
@@ -874,18 +877,50 @@ export type ContactCursor = { v: string | null; id: string };
  * both required: a term built entirely of phone punctuation and digits,
  * with enough of them that a short, common digit run ("2026", a year
  * someone types in an unrelated note) can't alone light up every phone
- * ending the same way by accident.
+ * ending the same way by accident. That shape and floor now live in
+ * contact-search.ts (`contactSearchPlan`, owner ruling Q2: still 4).
+ *
+ * F-092 part 1 (spec 4.1, 4.4, D4): the folded words and the national ten are ADDED arms, so nothing found
+ * before stops being found. Every word of the typed name must appear in 0108's `search_name` (first, last and
+ * business name, each folded by 0106's `app.contact_name_fold`), in any order, as `and(...)` inside the `or`;
+ * a word is `[a-z0-9]+` by construction (nameFold), so it needs no sanitizing and carries no grammar or
+ * wildcard. A phone-shaped term adds its key digits on `phone_key` (a leading "+" names a country code, so
+ * "+1 956 55" searches 95655) and, for a full +52 shape `phone_key` misses, the ten on 0106's
+ * `phone_national`. Today's own `phone_key` clause (the term's raw digits, af5976fa) is KEPT whenever the new
+ * key does not cover it (its digits do not contain the new key): "+1 956" and "+521 899 12" found a stored
+ * key holding 1956 or a pre-F-009 "+521..." number before this change and still do. The four raw arms stay
+ * first and unchanged; a name the fold empties (Chinese, Arabic) is found by them alone.
  */
-const PHONE_SEARCH_SHAPE = /^[+()\-. \d]+$/;
-const MIN_PHONE_SEARCH_DIGITS = 4;
+export function contactSearchFilter(search: string | undefined): string | null {
+  const s = search ? sanitizeSearchTerm(search) : "";
+  // "%" or "()" sanitizes to "": no filter, so the LIST shows everything (contacts.test.ts's "%" case).
+  if (!search || !s) return null;
+  const plan = contactSearchPlan(search);
+  const clauses = [`first_name.ilike.%${s}%`, `last_name.ilike.%${s}%`, `email.ilike.%${s}%`, `phone.ilike.%${s}%`];
+  const words = plan.tokens.map((t) => `search_name.ilike.%${t}%`);
+  if (words.length === 1) clauses.push(words[0]!);
+  else if (words.length > 1) clauses.push(`and(${words.join(",")})`);
+  if (plan.phone) clauses.push(`phone_key.ilike.%${plan.phone.key}%`);
+  const today = todayPhoneKeyDigits(search);
+  if (today && !(plan.phone && today.includes(plan.phone.key))) clauses.push(`phone_key.ilike.%${today}%`);
+  if (plan.phone?.national) clauses.push(`phone_national.ilike.%${plan.phone.national}%`);
+  return clauses.join(",");
+}
+
+/** af5976fa's phone_key digits, kept only so `contactSearchFilter` can keep today's clause (spec D4). */
+const TODAY_PHONE_SEARCH_SHAPE = /^[+()\-. \d]+$/;
+function todayPhoneKeyDigits(raw: string): string {
+  if (!TODAY_PHONE_SEARCH_SHAPE.test(raw)) return "";
+  const digits = phoneDigits(raw);
+  return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
+}
 
 // Exported for its own pure, DB-free test (contacts-phone.test.ts) — not
 // barrelled through index.ts, which is the public @bis/db surface; this is
-// an internal search-building helper, not part of that contract.
+// an internal search-building helper, not part of that contract. F-092: the
+// new key (plan correction 8: "+1 956 55" now gives 95655, not 195655).
 export function phoneSearchDigits(raw: string): string {
-  if (!PHONE_SEARCH_SHAPE.test(raw)) return "";
-  const digits = phoneDigits(raw);
-  return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
+  return contactSearchPlan(raw).phone?.key ?? "";
 }
 
 /**
@@ -923,15 +958,8 @@ function withArchived<T>(q: T, archived: ArchivedFilter | undefined): T {
 }
 
 function withSearch<T>(q: T, search?: string): T {
-  const s = search ? sanitizeSearchTerm(search) : undefined;
-  if (!s) return q;
-  const clauses = [
-    `first_name.ilike.%${s}%`, `last_name.ilike.%${s}%`,
-    `email.ilike.%${s}%`, `phone.ilike.%${s}%`,
-  ];
-  const digits = search ? phoneSearchDigits(search) : "";
-  if (digits) clauses.push(`phone_key.ilike.%${digits}%`);
-  return (q as { or: (f: string) => T }).or(clauses.join(","));
+  const f = contactSearchFilter(search);
+  return f ? (q as { or: (f: string) => T }).or(f) : q;
 }
 
 export async function listContacts(
