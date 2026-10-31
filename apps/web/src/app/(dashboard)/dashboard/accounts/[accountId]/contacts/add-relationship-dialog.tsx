@@ -9,12 +9,14 @@ import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocale } from "@/components/locale-provider";
+import { HighlightedText } from "@/components/highlighted-text";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import type { RelationshipKey, WordForm } from "@bis/db/relationship-keys";
 import { relationshipOptions, formChoices, chipText, personName, type FormChoice } from "@/lib/contacts/relationship-labels";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import { previewPair, type RelationshipView } from "@/lib/contacts/relationship-view";
 import {
   otherForSubmit, flagHintFor, flagHintText, hitsToShow, afterFailedAdd, type SearchAnswer, type FailedAddState,
@@ -154,15 +156,22 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
                 : shownHits.length === 0 ? <p className={hintClass}>{tt("relationships.dialog.searchEmpty")}</p>
                 : (
                   <ul className="space-y-1">
-                    {shownHits.map((h) => (
-                      <li key={h.id}>
-                        <label className="flex min-w-0 items-center gap-2 text-sm">
-                          <input type="radio" name="rel-person" className={radioClass} checked={picked?.id === h.id} onChange={() => setPicked(h)} />
-                          <span className="min-w-0 truncate">{personName(h, tt("relationships.noName"))}</span>
-                          {h.phone ? <span className={cn(hintClass, "shrink-0 tabular-nums")}>{h.phone}</span> : null}
-                        </label>
-                      </li>
-                    ))}
+                    {shownHits.map((h) => {
+                      const hName = personName(h, tt("relationships.noName"));
+                      return (
+                        <li key={h.id}>
+                          <label className="flex min-w-0 items-center gap-2 text-sm">
+                            <input type="radio" name="rel-person" className={radioClass} checked={picked?.id === h.id} onChange={() => setPicked(h)} />
+                            <span className="min-w-0 truncate"><HighlightedText text={hName} ranges={nameRanges(hName, term)} /></span>
+                            {h.phone ? (
+                              <span className={cn(hintClass, "shrink-0 tabular-nums")}>
+                                <HighlightedText text={h.phone} ranges={phoneRanges(h.phone, term)} />
+                              </span>
+                            ) : null}
+                          </label>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               <Button type="button" size="sm" variant="ghost" onClick={() => { setMode("new"); setPicked(null); }}>{tt("relationships.dialog.newPerson")}</Button>

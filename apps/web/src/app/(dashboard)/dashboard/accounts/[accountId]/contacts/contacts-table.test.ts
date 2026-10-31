@@ -26,7 +26,7 @@ function render(
   rows: ContactRow[],
   opts: {
     sort?: "name" | "company" | "created"; dir?: "asc" | "desc"; timezone?: string;
-    canDelete?: boolean;
+    canDelete?: boolean; q?: string;
   } = {},
 ) {
   return renderToStaticMarkup(createElement(ContactsTable, {
@@ -40,6 +40,7 @@ function render(
     // defaults to true (the agency/Owner case) so none of them have to name
     // it. The prop's own gating is pinned in bulk-action-bar.test.ts.
     canDelete: opts.canDelete ?? true,
+    q: opts.q,
   }));
 }
 
@@ -290,6 +291,34 @@ describe("the Archived view through the table (plan Task 10)", () => {
       timezone: "America/Chicago", canDelete: false, view: "archived", canArchive: false,
     }));
     expect(html).toContain('data-contact-row="c0"');
+  });
+});
+
+// Plan Task 8 (F-092 part 1): the list highlights which letters matched, the same way the palette
+// does — the name and phone cells wrap the matched span of the DISPLAYED text in <mark data-search-hit>,
+// driven by the server's own `q`, never a query this component invents on its own.
+describe("highlighting the matched letters (plan Task 8)", () => {
+  it("marks the matched letters of the name when q is set (mutation: render the name without HighlightedText -> FAILS)", () => {
+    const r = row(0);
+    r.first_name = "María";
+    r.last_name = "García";
+    const html = render([r], { q: "garcia" });
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>García<\/mark>/);
+  });
+
+  it("renders no <mark> at all with no search term (mutation: compute the ranges from a fixed query instead of q -> FAILS)", () => {
+    const r = row(0);
+    r.first_name = "María";
+    r.last_name = "García";
+    const html = render([r]); // no q
+    expect(html).not.toContain("<mark");
+  });
+
+  it("marks the matched digits of the phone when q is phone-shaped (mutation: render the phone without HighlightedText -> FAILS)", () => {
+    const r = row(0);
+    r.phone = "(956) 555-0199";
+    const html = render([r], { q: "0199" });
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>0199<\/mark>/);
   });
 });
 
