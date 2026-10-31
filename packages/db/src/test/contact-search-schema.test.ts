@@ -71,11 +71,12 @@ describe("0108: the catalogue", () => {
 
   // Read through pg_index and pg_opclass, never pg_get_indexdef: whether the opclass prints as gin_trgm_ops or
   // extensions.gin_trgm_ops depends on the session's search_path, which differs between the replica and Supabase.
+  // contacts_search_trgm's pin moved to contact-match-schema.test.ts with 0110, which rebuilt it account-first
+  // (account_id extensions.uuid_ops, then these seven trigram columns in this order).
   const INDEXES: [string, string[]][] = [
-    ["contacts_search_trgm", ["search_name", "first_name", "last_name", "email", "phone", "phone_key", "phone_national"]],
     ["client_groups_search_trgm", ["search_name", "name"]],
   ];
-  it.each(INDEXES)("%s is a GIN over %j, every column extensions.gin_trgm_ops (mutation: rebuild contacts_search_trgm without phone_national -> FAILS)", (index, columns) =>
+  it.each(INDEXES)("%s is a GIN over %j, every column extensions.gin_trgm_ops (mutation: rebuild client_groups_search_trgm without name -> FAILS)", (index, columns) =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select am.amname, a.attname, oc.opcname, ocn.nspname
