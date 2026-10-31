@@ -24,6 +24,8 @@ import {
 import type { SearchResults, SearchHit } from "@/app/api/accounts/[accountId]/search/route";
 import { formatDate } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 
 const DEBOUNCE_MS = 200;
 /** Must match the route's own floor, or the palette spins for a query the
@@ -66,6 +68,44 @@ const NEVER_CHANGES = () => () => {};
 
 function useIsMac(): boolean {
   return useSyncExternalStore(NEVER_CHANGES, detectMac, () => false);
+}
+
+/**
+ * One live-search hit's label and sublabel, as the dialog actually shows them. F-092 part 1: the
+ * CONTACTS group only sets the matched letters in weight 600 (DESIGN.md: weight first, colour last) —
+ * the label through `nameRanges`, the sublabel's own text through `phoneRanges`, with the " · date"
+ * join staying outside the mark since a date was never part of what was typed. Calls and conversations
+ * hits are unchanged: their sublabel is a call's or a conversation's own summary, not a contact's name
+ * or number, so the search's name/phone fold has nothing to map back onto.
+ *
+ * Exported so command-palette.test.ts can render this one row directly — the dialog around it needs
+ * `usePathname`, `useRouter`, `useTheme` and cmdk's own filtering, none of which this row depends on.
+ */
+export function PaletteHitContent({
+  groupKey, hit, query,
+}: {
+  groupKey: string;
+  hit: SearchHit;
+  query: string;
+}) {
+  const isContacts = groupKey === "contacts";
+  const sublabelText = hit.sublabel
+    ? (isContacts ? <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} /> : hit.sublabel)
+    : null;
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate">
+        {isContacts ? <HighlightedText text={hit.label} ranges={nameRanges(hit.label, query)} /> : hit.label}
+      </span>
+      {hit.sublabel || hit.at ? (
+        <span className="truncate text-xs text-muted-foreground">
+          {sublabelText}
+          {hit.sublabel && hit.at ? " · " : ""}
+          {hit.at ? formatDate(hit.at) : ""}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 /**
@@ -328,16 +368,7 @@ export function CommandPalette({
                         value={`${group.key}:${hit.id}`}
                         onSelect={() => openHit(hit)}
                       >
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate">{hit.label}</span>
-                          {hit.sublabel || hit.at ? (
-                            <span className="truncate text-xs text-muted-foreground">
-                              {[hit.sublabel, hit.at ? formatDate(hit.at) : null]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </span>
-                          ) : null}
-                        </span>
+                        <PaletteHitContent groupKey={group.key} hit={hit} query={query} />
                       </CommandItem>
                     ))}
                   </CommandGroup>

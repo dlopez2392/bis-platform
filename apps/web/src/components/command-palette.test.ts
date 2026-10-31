@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PaletteHitContent } from "./command-palette";
+import type { SearchHit } from "@/app/api/accounts/[accountId]/search/route";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +83,55 @@ describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-
     expect(src.match(/onClick=\{\(\) => setOpen\(true\)\}/g)?.length).toBe(2);
     expect(src.match(/aria-label=\{m\["shell\.search"\]\}/g)?.length).toBe(2);
     expect(src.match(/aria-keyshortcuts=\{isMac \? "Meta\+K" : "Control\+K"\}/g)?.length).toBe(2);
+  });
+});
+
+// F-092 part 1 (plan Task 7): the CONTACTS group only sets the matched letters in weight 600.
+// PaletteHitContent needs none of CommandPalette's hooks (usePathname, useRouter, useTheme,
+// useSyncExternalStore) or cmdk's own filtering, so it renders directly, unlike the rest of this file.
+describe("PaletteHitContent — F-092 part 1: the CONTACTS group highlights, calls/conversations do not", () => {
+  const contactHit: SearchHit = {
+    id: "c1", label: "María García", sublabel: "(956) 555-0199", at: null, href: "/x",
+  };
+  const callHit: SearchHit = {
+    id: "k1", label: "María García", sublabel: "Missed call", at: "2026-10-01T00:00:00Z", href: "/y",
+  };
+
+  it("a contacts hit marks the matched letters in the label (mutation: pass groupKey='calls' for a contacts row -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(PaletteHitContent, { groupKey: "contacts", hit: contactHit, query: "garcia" }));
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>García<\/mark>/);
+  });
+
+  it("a contacts hit marks the matched digits in the sublabel (mutation: use hit.label instead of hit.sublabel for phoneRanges -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(PaletteHitContent, { groupKey: "contacts", hit: contactHit, query: "0199" }));
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>0199<\/mark>/);
+  });
+
+  it("a calls hit renders no mark at all, even though its label matches the same query (mutation: drop the isContacts guard -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(PaletteHitContent, { groupKey: "calls", hit: callHit, query: "garcia" }));
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("María García");
+    // The sublabel and the date still join with " · ", exactly as before this task.
+    expect(html).toContain("Missed call");
+    expect(html).toMatch(/Missed call\s*·/);
+  });
+
+  it("the ' · date' join stays outside the mark: a query matching only the formatted date's own digits (never the phone's) marks nothing (mutation: join sublabel and date into one string before calling phoneRanges -> the date's '2026' would be found and wrongly marked -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(PaletteHitContent, {
+      groupKey: "contacts",
+      hit: { id: "c2", label: "Ana Ruiz", sublabel: "(956) 555-0199", at: "2026-10-01T00:00:00Z", href: "/z" },
+      query: "2026",
+    }));
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("2026");
+  });
+});
+
+describe("CommandPalette — wires the CONTACTS group through PaletteHitContent (source)", () => {
+  it("imports HighlightedText and the two range functions, and renders a live hit through PaletteHitContent (mutation: render {hit.label} inline again -> FAILS)", () => {
+    expect(src).toMatch(/import\s*\{\s*HighlightedText\s*\}\s*from\s*"@\/components\/highlighted-text"/);
+    expect(src).toMatch(/import\s*\{\s*nameRanges,\s*phoneRanges\s*\}\s*from\s*"@\/lib\/contacts\/search-highlight"/);
+    expect(src).toContain("<PaletteHitContent groupKey={group.key} hit={hit} query={query} />");
   });
 });
 
