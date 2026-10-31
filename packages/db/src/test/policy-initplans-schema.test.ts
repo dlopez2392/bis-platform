@@ -123,18 +123,22 @@ function perRowCalls(expr: string | null): string[] {
     return expr.length - 1;
   };
   const KEYWORDS = new Set(["SELECT", "COALESCE", "NULLIF", "true", "false", "NULL", "AND", "OR", "NOT", "IN", "IS", "ANY", "ARRAY"]);
+  /** A helper call: app.* or auth.* (any name, digits included), or a direct read of the request's claims. */
+  const CALL = /\b(?:(?:app|auth)\.[a-z0-9_]+|(?:pg_catalog\.)?current_setting)\(/g;
   const mentionsAColumn = (group: string) =>
-    (group.replace(/'(?:[^']|'')*'/g, " ").replace(/::[a-z_]+(\[\])?/g, " ").replace(/\bAS\s+("[^"]*"|\w+)/g, " ")
-      .replace(/\b(app|auth)\.[a-z_]+\(/g, "(").match(/[A-Za-z_][A-Za-z0-9_.]*/g) ?? []).some((w) => !KEYWORDS.has(w));
+    (group.replace(/'(?:[^']|'')*'/g, " ").replace(/::[a-z0-9_]+(\[\])?/g, " ").replace(/\bAS\s+("[^"]*"|\w+)/g, " ")
+      .replace(CALL, "(").match(/[A-Za-z_][A-Za-z0-9_.]*/g) ?? []).some((w) => !KEYWORDS.has(w));
   const initplans: [number, number][] = [];
   for (let i = expr.indexOf("( SELECT "); i >= 0; i = expr.indexOf("( SELECT ", i + 1)) {
     const j = close(i), group = expr.slice(i, j + 1);
     if (!/\bFROM\b/.test(group) && !mentionsAColumn(group)) initplans.push([i, j]);
   }
   const out: string[] = [];
-  for (const m of expr.matchAll(/\b(app|auth)\.([a-z_]+)\(/g)) {
-    const open = m.index + m[0].length - 1, end = close(open);
-    if (!initplans.some(([a, b]) => a < m.index && end <= b)) out.push(`${m[1]}.${m[2]}(${expr.slice(open + 1, end)})`);
+  for (const m of expr.matchAll(CALL)) {
+    const open = m.index + m[0].length - 1, end = close(open), args = expr.slice(open + 1, end);
+    // current_setting counts only when it reads the claims: current_setting('request.jwt...').
+    if (/current_setting\($/.test(m[0]) && !args.startsWith("'request.jwt")) continue;
+    if (!initplans.some(([a, b]) => a < m.index && end <= b)) out.push(`${m[0].slice(0, -1)}(${args})`);
   }
   return out;
 }
@@ -193,6 +197,9 @@ describe("0109: the 64 policies are wrapped and otherwise unchanged", () => {
 describe("0109: the guard that keeps the fast shape", () => {
   it("no policy in public calls a helper once per row, except inbound_never_log_no_technician's row-argument call (red before 0109: names the 64; mutation: leave one policy unwrapped -> FAILS naming it; rewrite the allowed one -> FAILS naming it)", () =>
     withRollback(async (c) => {
+      // Deparse under pg_catalog alone, so every app.* and auth.* call is printed schema-qualified whatever the
+      // connection's search_path is: with app on the path, app.is_agency() would print as is_agency() and pass.
+      await c.query("set local search_path = pg_catalog");
       const rows = await livePolicies(c);
       expect(offenders(rows)).toEqual([]);
       // The allow-list is not stale: the allowed call is still there, verbatim.
@@ -201,7 +208,7 @@ describe("0109: the guard that keeps the fast shape", () => {
         .toEqual(["app.sees_all_customers(account_id)"]);
     }));
 
-  it("the detector names a bare call, a call in a correlated sub-select and a row-argument call, and passes the wrapped house shape (green before and after: it tests the detector, not 0109)", () =>
+  it("the detector names a bare call, a call in a correlated sub-select, a row-argument call, a helper with a digit in its name and a bare read of the claims, and passes the wrapped shapes and other settings (green before and after: it tests the detector, not 0109)", () =>
     withRollback(async (c) => {
       await c.query(`create policy zz_probe_bare on public.tags for select to authenticated using (account_id = app.current_account_id())`);
       await c.query(`create policy zz_probe_correlated on public.tags for select to authenticated
@@ -210,10 +217,24 @@ describe("0109: the guard that keeps the fast shape", () => {
         using (exists (select 1 from public.contacts x where x.account_id = tags.account_id and x.account_id = app.current_account_id()))`);
       await c.query(`create policy zz_probe_wrapped on public.tags for select to authenticated
         using ((select app.is_agency()) or account_id = (select app.current_account_id()))`);
-      const probes = offenders((await livePolicies(c)).filter((r) => r.p.startsWith("zz_probe_")));
-      expect(probes).toEqual([
+      await c.query(`create function app.zz_probe_2() returns boolean language sql stable as 'select true'`);
+      await c.query(`create policy zz_probe_digit on public.tags for select to authenticated using (app.zz_probe_2())`);
+      await c.query(`create policy zz_probe_claims on public.tags for select to authenticated
+        using ((current_setting('request.jwt.claims', true)::jsonb ->> 'org_id') is not null)`);
+      await c.query(`create policy zz_probe_claims_wrapped on public.tags for select to authenticated
+        using ((select current_setting('request.jwt.claims', true)) is not null)`);
+      await c.query(`create policy zz_probe_other_setting on public.tags for select to authenticated
+        using (current_setting('timezone') is not null)`);
+      const probes = async () => offenders((await livePolicies(c)).filter((r) => r.p.startsWith("zz_probe_")));
+      // The blind spot the guard's own search_path closes: with app on the path the call prints unqualified.
+      await c.query("set local search_path = app, public, pg_catalog");
+      expect(await probes()).not.toContain("zz_probe_bare: app.current_account_id()");
+      await c.query("set local search_path = pg_catalog");
+      expect(await probes()).toEqual([
         "zz_probe_bare: app.current_account_id()",
+        "zz_probe_claims: current_setting('request.jwt.claims'::text, true)",
         "zz_probe_correlated: app.sees_all_customers(tags.account_id)",
+        "zz_probe_digit: app.zz_probe_2()",
         "zz_probe_exists: app.current_account_id()",
       ]);
     }));

@@ -596,7 +596,9 @@ left out and 2-character searches stay at (d)'s 588-674 ms on a 50,000-contact a
 
 ### 4.6 Tests that prove it (bis-db-schema; red before apply where marked)
 
-**For 0109**, `packages/db/src/test/search-scale-schema.test.ts`, new, `withRollback` + `actAs` / `actAsMember`:
+**For 0109**, two new files (as built in T1, 2026-10-31): `packages/db/src/test/policy-initplans-schema.test.ts` (items 1
+and 2, red before apply) and `packages/db/src/test/policy-initplans-behaviour.test.ts` (item 3, green before and after),
+`withRollback` + `actAs`:
 
 1. **Pins (red pre-apply).** For each of the 64 policies: `qual` and `with_check` equal the generated wrapped text.
    The pre-0109 text is pinned in the test as the input, and the expected text is computed from it by the same four
@@ -609,8 +611,11 @@ left out and 2-character searches stay at (d)'s 588-674 ms on a 50,000-contact a
    says so).** Two accounts, one row of each kind in contacts, conversations, messages, bookings, calls, notes,
    tasks, documents (one `owners_only`), memberships, users; roles Owner, Staff, Technician (one assigned contact),
    member with no membership, client with access disabled, agency, forged claims: for each role and table the
-   visible ids, and for each `ALL` policy one cross-account insert refused `42501`. One refusal per `withRollback`
-   (`25P02`).
+   visible ids, and for each `ALL` policy one cross-account insert refused `42501`. As built
+   (`policy-initplans-behaviour.test.ts`): nine roles, reads on 20 tables, and every write in its own savepoint, so a
+   refusal does not abort the rest; every house `ALL` table gets the same insert on the caller's account and on
+   another. Five of them (automations, calendars, calls, phone_numbers, voice_profiles) hold no INSERT grant for
+   `authenticated`, so their refusal is the GRANT's and no policy change can move it.
 4. **Two existing pins move.** `one-switch-schema.test.ts:517` and `structured-facts-schema.test.ts:429` pin the
    unwrapped house text for `business_status_member_read` and `voice_services_member_read`; both become the wrapped
    text in the same task.
@@ -677,8 +682,12 @@ every search would fail, so the order above is binding.
 
 **Locks and cost.** `alter policy` takes ACCESS EXCLUSIVE on its table (read on the replica: `AccessExclusiveLock`
 on `contacts`), so part A holds that lock on 59 tables until the file commits; at today's size the whole file is
-milliseconds. `lock_timeout` 5 s in a `do` block (0108's form) bounds each wait; a timeout aborts the whole file,
-which is then simply re-run. 0110 takes ACCESS EXCLUSIVE on `contacts` only (the index drop). Rebuilding the
+milliseconds. `accounts` is part A's third statement and `app.current_account_id()` reads `accounts`, so from that
+lock on every authenticated request waits until the file commits, whatever table it reads: about 0.3 s measured
+(0109's header). `lock_timeout` 5 s in a `do` block (0108's form) bounds each wait; a timeout aborts the whole file,
+which is then simply re-run. A deadlock between the file and a live transaction that holds one of these tables and
+waits on another aborts whichever side waited when PostgreSQL detected it: the file (re-run it), or the live
+request, which fails with `40P01`. 0110 takes ACCESS EXCLUSIVE on `contacts` only (the index drop). Rebuilding the
 index at 500,000 rows took 16.4 s (117,571,584 bytes, 3.9) on the replica; at production's 53 rows it is nothing. Header in 0108's form (WHY / WHAT / GRANTS / SEARCH PATHS / LOCKS AND COST / LOAD-BEARING /
 ROLLBACK), ASCII only. Rollback of 0110: re-create 0108's index, drop the two functions, leave `btree_gin`. Rollback
 of 0109: `alter policy` back to the pinned pre-0109 text (the test holds it verbatim).
@@ -726,7 +735,7 @@ owner on 2026-10-31, each as recommended.
 | # | Task | Owner | Tier |
 |---|---|---|---|
 | T0 | Pre-flight, read-only, on bis-ci and production: `select name from supabase_migrations.schema_migrations where name in ('policy_initplans', 'contact_match')` is empty (by NAME: `version` holds a timestamp here); the policy digest of 2.1 still reads `4f4914fcd094dbb3f13894fa6e19b3f2` (if not, regenerate 0109 from the live rows first); `btree_gin` available; `pg_stat_statements` in the CLI's images (or the fallback of 4.6) | bis-db-schema | low |
-| T1 | `0109_policy_initplans.sql` (part A, generated), `search-scale-schema.test.ts` (pins, guard, behaviour matrix), the two moved pins; on the local replica: red before, green after, and the 500,000-contact unsearched numbers into the header | bis-db-schema | **high** |
+| T1 | `0109_policy_initplans.sql` (part A, generated), `policy-initplans-schema.test.ts` (pins, guard) and `policy-initplans-behaviour.test.ts` (behaviour matrix), the two moved pins; on the local replica: red before, green after, and the 500,000-contact unsearched numbers into the header | bis-db-schema | **high** |
 | T2 | Apply 0109: bis-ci, production, parity. Post-apply: the guard query of T1 returns exactly `inbound_never_log_no_technician`; the digest of 2.1 reads the same new value on both projects (the replica's after the generated file: `960f704c23380d8d6f9e650de13826ed`, 3.9; **superseded by T1, 2026-10-31: the committed 0109 wraps each call on its own, `COALESCE((select app.is_agency()), false)` rather than the scratch generator's `(select coalesce(app.is_agency(), false))`, and reads `1597df0fa14a63845c61298f53c1413e` on the replica**) | orchestrator | **high** |
 | T3 | `0110_contact_match.sql` (parts B and C), `contact-match-schema.test.ts` (shape, direct matcher per role with its mutations, equivalence, refusals, inlining), `EXPECTED_DEFINERS` 37 -> 38, the parity fingerprint gains `btree_gin`; the replica harness of section 3 re-run on the final file, numbers into the header | bis-db-schema | **high** |
 | T4 | Security review of 0110 against 4.7, by a reviewer who did not write it, with its own probe of a cross-account and a Technician call | reviewer | **high** |

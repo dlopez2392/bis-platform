@@ -107,7 +107,16 @@ async function seed(c: Client) {
       A: await one(c, "insert into contact_duplicate_flags (account_id, contact_a, contact_b, reason) values ($1,$2,$3,'phone') returning id", [A, fa, fb]),
     },
   };
-  return { A, B, C, agency, u, ct, tg, rows };
+  // What the house ALL tables' inserts below point at: a pipeline, a stage and a place on each account.
+  const pipeline = (account: string) => one(c, "insert into pipelines (account_id, name) values ($1,'Jobs') returning id", [account]);
+  const pl = { A: await pipeline(A), B: await pipeline(B) };
+  const stage = (account: string, p: string) =>
+    one(c, "insert into pipeline_stages (account_id, pipeline_id, name, position) values ($1,$2,'New',1) returning id", [account, p]);
+  const st = { A: await stage(A, pl.A), B: await stage(B, pl.B) };
+  const place = (account: string, k: string) =>
+    one(c, "insert into places (account_id, contact_id, address) values ($1,$2,'1 Main St') returning id", [account, k]);
+  const pc = { A: await place(A, ct.Aspare), B: await place(B, ct.Bspare) };
+  return { A, B, C, agency, u, ct, tg, rows, pl, st, pc, ph };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -153,9 +162,46 @@ async function reads(c: Client, s: Seeded): Promise<Record<string, string>> {
   return out;
 }
 
+/**
+ * Every remaining house ALL table (0109 review, finding 1): the same insert on A and on B, each in its own savepoint.
+ * For a member of A, "insert B" refused 42501 next to "insert A" written proves the refusal is the policy's WITH
+ * CHECK. automations, calendars, calls, phone_numbers and voice_profiles hold no INSERT grant for authenticated, so
+ * both of theirs are refused at the GRANT (42501 for every role, the agency too): no client write reaches their
+ * policy, and no change to it can move those cells.
+ */
+async function houseInserts(c: Client, s: Seeded): Promise<Record<string, number | string>> {
+  const { A, B, ct, pl, st, pc, ph } = s;
+  const k = { A: ct.Aspare, B: ct.Bspare }, k2 = { A: ct.Amine, B: ct.Bone };
+  const out: Record<string, number | string> = {};
+  const both = async (table: string, sql: string, args: (x: "A" | "B") => unknown[]) => {
+    for (const x of ["A", "B"] as const) out[`${table} insert ${x}`] = await probe(c, sql, args(x));
+  };
+  const acct = { A, B };
+  await both("automations", "insert into automations (account_id, recipe_key) values ($1,'pi_recipe')", (x) => [acct[x]]);
+  await both("calendars", "insert into calendars (account_id, public_id) values ($1,$2)", (x) => [acct[x], `cal_pi_new_${x}_${RUN}`]);
+  await both("calls", "insert into calls (account_id, phone_number_id) values ($1,$2)", (x) => [acct[x], ph[x]]);
+  await both("checklist_items", "insert into checklist_items (account_id, item_key) values ($1,'pi_item')", (x) => [acct[x]]);
+  await both("contact_relationships",
+    "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'spouse')", (x) => [acct[x], k[x], k2[x]]);
+  await both("custom_fields",
+    "insert into custom_fields (account_id, model, field_key, name, data_type) values ($1,'contact','pi_field','Gate code','text')", (x) => [acct[x]]);
+  await both("custom_values", "insert into custom_values (account_id, value_key, name) values ($1,'pi_value','Gate')", (x) => [acct[x]]);
+  await both("equipment", "insert into equipment (account_id, place_id, name) values ($1,$2,'Boiler')", (x) => [acct[x], pc[x]]);
+  await both("forms", "insert into forms (account_id, public_id, name) values ($1,$2,'Quote')", (x) => [acct[x], `pub_pi_${x}_${RUN}`]);
+  await both("opportunities",
+    "insert into opportunities (account_id, contact_id, pipeline_id, stage_id, name) values ($1,$2,$3,$4,'Roof')", (x) => [acct[x], k[x], pl[x], st[x]]);
+  await both("phone_numbers", "insert into phone_numbers (account_id, e164) values ($1,$2)",
+    (x) => [acct[x], `+999${x === "A" ? "1" : "2"}${RUN.replace(/[^0-9]/g, "").padEnd(11, "7").slice(0, 11)}`]);
+  await both("pipeline_stages", "insert into pipeline_stages (account_id, pipeline_id, name, position) values ($1,$2,'Won',2)", (x) => [acct[x], pl[x]]);
+  await both("pipelines", "insert into pipelines (account_id, name) values ($1,'Sales')", (x) => [acct[x]]);
+  await both("places", "insert into places (account_id, contact_id, address) values ($1,$2,'2 Main St')", (x) => [acct[x], k2[x]]);
+  await both("voice_profiles", "insert into voice_profiles (account_id) values ($1)", (x) => [acct[x]]);
+  return out;
+}
+
 /** One write of each kind the client role holds a grant for, on its own account (A) and on B. */
 async function writes(c: Client, s: Seeded): Promise<Record<string, number | string>> {
-  const { A, B, ct, tg, rows } = s;
+  const { A, B, ct, tg, rows, pl, st, pc, ph } = s;
   const [bfa, bfb] = [ct.Bone, ct.Bspare].sort();
   return {
     "contacts insert A": await probe(c, "insert into contacts (account_id, first_name) values ($1,'New')", [A]),
@@ -202,6 +248,7 @@ async function writes(c: Client, s: Seeded): Promise<Record<string, number | str
     "duplicate flag insert A": await probe(c, "insert into contact_duplicate_flags (account_id, contact_a, contact_b, reason) values ($1,$2,$3,'phone')",
       [A, ...[ct.Amine, ct.Aspare].sort()]),
     "duplicate flag insert B": await probe(c, "insert into contact_duplicate_flags (account_id, contact_a, contact_b, reason) values ($1,$2,$3,'phone')", [B, bfa, bfb]),
+    ...(await houseInserts(c, s)),
   };
 }
 
@@ -264,7 +311,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": 1, "tasks insert B": "42501", "tasks update A.mine": 1, "tasks update A.theirs": 1,
       "tasks update B": 0, "tasks delete A.mine": 1, "tasks delete B": 0, "calendars update A": 1,
       "calendars update B": 0, "accounts update A": 1, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": 1, "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": 1, "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": 1, "checklist_items insert B": "42501", "contact_relationships insert A": 1,
+      "contact_relationships insert B": "42501", "custom_fields insert A": 1, "custom_fields insert B": "42501", "custom_values insert A": 1,
+      "custom_values insert B": "42501", "equipment insert A": 1, "equipment insert B": "42501", "forms insert A": 1,
+      "forms insert B": "42501", "opportunities insert A": 1, "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": 1, "pipeline_stages insert B": "42501", "pipelines insert A": 1,
+      "pipelines insert B": "42501", "places insert A": 1, "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   staffA: {
@@ -285,7 +340,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": 1, "tasks insert B": "42501", "tasks update A.mine": 1, "tasks update A.theirs": 1,
       "tasks update B": 0, "tasks delete A.mine": 1, "tasks delete B": 0, "calendars update A": 0,
       "calendars update B": 0, "accounts update A": 1, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": 1, "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": 1, "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": 1, "checklist_items insert B": "42501", "contact_relationships insert A": 1,
+      "contact_relationships insert B": "42501", "custom_fields insert A": 1, "custom_fields insert B": "42501", "custom_values insert A": 1,
+      "custom_values insert B": "42501", "equipment insert A": 1, "equipment insert B": "42501", "forms insert A": 1,
+      "forms insert B": "42501", "opportunities insert A": 1, "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": 1, "pipeline_stages insert B": "42501", "pipelines insert A": 1,
+      "pipelines insert B": "42501", "places insert A": 1, "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   techA: {
@@ -306,7 +369,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": "42501", "tasks update A.mine": 1, "tasks update A.theirs": 0,
       "tasks update B": 0, "tasks delete A.mine": 1, "tasks delete B": 0, "calendars update A": 0,
       "calendars update B": 0, "accounts update A": 0, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": "42501", "contact_relationships insert A": "42501",
+      "contact_relationships insert B": "42501", "custom_fields insert A": "42501", "custom_fields insert B": "42501", "custom_values insert A": "42501",
+      "custom_values insert B": "42501", "equipment insert A": "42501", "equipment insert B": "42501", "forms insert A": "42501",
+      "forms insert B": "42501", "opportunities insert A": "42501", "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": "42501", "pipelines insert A": "42501",
+      "pipelines insert B": "42501", "places insert A": 1, "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   loneA: {
@@ -327,7 +398,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": "42501", "tasks update A.mine": 0, "tasks update A.theirs": 0,
       "tasks update B": 0, "tasks delete A.mine": 0, "tasks delete B": 0, "calendars update A": 0,
       "calendars update B": 0, "accounts update A": 0, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": "42501", "contact_relationships insert A": "42501",
+      "contact_relationships insert B": "42501", "custom_fields insert A": "42501", "custom_fields insert B": "42501", "custom_values insert A": "42501",
+      "custom_values insert B": "42501", "equipment insert A": "42501", "equipment insert B": "42501", "forms insert A": "42501",
+      "forms insert B": "42501", "opportunities insert A": "42501", "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": "42501", "pipelines insert A": "42501",
+      "pipelines insert B": "42501", "places insert A": "42501", "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   ownerC: {
@@ -348,7 +427,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": "42501", "tasks update A.mine": 0, "tasks update A.theirs": 0,
       "tasks update B": 0, "tasks delete A.mine": 0, "tasks delete B": 0, "calendars update A": 0,
       "calendars update B": 0, "accounts update A": 0, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": "42501", "contact_relationships insert A": "42501",
+      "contact_relationships insert B": "42501", "custom_fields insert A": "42501", "custom_fields insert B": "42501", "custom_values insert A": "42501",
+      "custom_values insert B": "42501", "equipment insert A": "42501", "equipment insert B": "42501", "forms insert A": "42501",
+      "forms insert B": "42501", "opportunities insert A": "42501", "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": "42501", "pipelines insert A": "42501",
+      "pipelines insert B": "42501", "places insert A": "42501", "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   ownerB: {
@@ -369,7 +456,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": 1, "tasks update A.mine": 0, "tasks update A.theirs": 0,
       "tasks update B": 1, "tasks delete A.mine": 0, "tasks delete B": 1, "calendars update A": 0,
       "calendars update B": 1, "accounts update A": 0, "accounts update B": 1, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": 1,
+      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": 1, "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": 1, "contact_relationships insert A": "42501",
+      "contact_relationships insert B": 1, "custom_fields insert A": "42501", "custom_fields insert B": 1, "custom_values insert A": "42501",
+      "custom_values insert B": 1, "equipment insert A": "42501", "equipment insert B": 1, "forms insert A": "42501",
+      "forms insert B": 1, "opportunities insert A": "42501", "opportunities insert B": 1, "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": 1, "pipelines insert A": "42501",
+      "pipelines insert B": 1, "places insert A": "42501", "places insert B": 1, "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   agency: {
@@ -390,7 +485,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": 1, "tasks insert B": 1, "tasks update A.mine": 1, "tasks update A.theirs": 1,
       "tasks update B": 1, "tasks delete A.mine": 1, "tasks delete B": 1, "calendars update A": 1,
       "calendars update B": 1, "accounts update A": 1, "accounts update B": 1, "accounts update C": 1,
-      "agencies update": 1, "duplicate flag insert A": 1, "duplicate flag insert B": 1,
+      "agencies update": 1, "duplicate flag insert A": 1, "duplicate flag insert B": 1, "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": 1, "checklist_items insert B": 1, "contact_relationships insert A": 1,
+      "contact_relationships insert B": 1, "custom_fields insert A": 1, "custom_fields insert B": 1, "custom_values insert A": 1,
+      "custom_values insert B": 1, "equipment insert A": 1, "equipment insert B": 1, "forms insert A": 1,
+      "forms insert B": 1, "opportunities insert A": 1, "opportunities insert B": 1, "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": 1, "pipeline_stages insert B": 1, "pipelines insert A": 1,
+      "pipelines insert B": 1, "places insert A": 1, "places insert B": 1, "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   forged: {
@@ -411,7 +514,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": "42501", "tasks update A.mine": 0, "tasks update A.theirs": 0,
       "tasks update B": 0, "tasks delete A.mine": 0, "tasks delete B": 0, "calendars update A": 0,
       "calendars update B": 0, "accounts update A": 0, "accounts update B": 0, "accounts update C": 0,
-      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501",
+      "agencies update": 0, "duplicate flag insert A": "42501", "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": "42501", "contact_relationships insert A": "42501",
+      "contact_relationships insert B": "42501", "custom_fields insert A": "42501", "custom_fields insert B": "42501", "custom_values insert A": "42501",
+      "custom_values insert B": "42501", "equipment insert A": "42501", "equipment insert B": "42501", "forms insert A": "42501",
+      "forms insert B": "42501", "opportunities insert A": "42501", "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": "42501", "pipelines insert A": "42501",
+      "pipelines insert B": "42501", "places insert A": "42501", "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
   anon: {
@@ -432,7 +543,15 @@ const EXPECTED: Record<Role, { reads: Record<string, string>; writes: Record<str
       "tasks insert A.mine": "42501", "tasks insert B": "42501", "tasks update A.mine": "42501", "tasks update A.theirs": "42501",
       "tasks update B": "42501", "tasks delete A.mine": "42501", "tasks delete B": "42501", "calendars update A": "42501",
       "calendars update B": "42501", "accounts update A": "42501", "accounts update B": "42501", "accounts update C": "42501",
-      "agencies update": "42501", "duplicate flag insert A": "42501", "duplicate flag insert B": "42501",
+      "agencies update": "42501", "duplicate flag insert A": "42501", "duplicate flag insert B": "42501", "automations insert A": "42501",
+      "automations insert B": "42501", "calendars insert A": "42501", "calendars insert B": "42501", "calls insert A": "42501",
+      "calls insert B": "42501", "checklist_items insert A": "42501", "checklist_items insert B": "42501", "contact_relationships insert A": "42501",
+      "contact_relationships insert B": "42501", "custom_fields insert A": "42501", "custom_fields insert B": "42501", "custom_values insert A": "42501",
+      "custom_values insert B": "42501", "equipment insert A": "42501", "equipment insert B": "42501", "forms insert A": "42501",
+      "forms insert B": "42501", "opportunities insert A": "42501", "opportunities insert B": "42501", "phone_numbers insert A": "42501",
+      "phone_numbers insert B": "42501", "pipeline_stages insert A": "42501", "pipeline_stages insert B": "42501", "pipelines insert A": "42501",
+      "pipelines insert B": "42501", "places insert A": "42501", "places insert B": "42501", "voice_profiles insert A": "42501",
+      "voice_profiles insert B": "42501",
     },
   },
 };

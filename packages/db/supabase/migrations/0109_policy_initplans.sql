@@ -47,8 +47,12 @@
 --   after; as a Technician 58.7 + 44.4 and 17.3 + 15.2; as the agency 94.1 + 74.8 and 33.7 + 15.7; counting the
 --   Owner's 50,000 conversations 523.2 and 7.4 ms. Every answer identical before and after (the page's ids and the
 --   count). Production held 53 contacts on 2026-10-31: no off-peak rule.
---   A lock wait past 5 s, or a deadlock with a transaction holding one of these tables, aborts the whole file, which
---   is then simply run again.
+--   accounts is the third statement, and app.current_account_id() reads accounts, so from that lock on EVERY
+--   authenticated request waits until the file commits, whatever table it reads: about 0.3 s, as measured above.
+--   A lock wait past 5 s aborts the whole file, which is then simply run again. A deadlock between this file and a
+--   live transaction that already holds one of these tables and then waits on one the file holds aborts WHICHEVER
+--   side waited when PostgreSQL detected it: that can be the file (run it again) or the live request, which then
+--   fails with 40P01 and is the app's to retry.
 --
 -- LOAD-BEARING. Nothing in the app reads policy text. Every later migration that adds a tenant table copies the
 -- house shape from the live notes_member_all row: from here on pg_policies shows it as
