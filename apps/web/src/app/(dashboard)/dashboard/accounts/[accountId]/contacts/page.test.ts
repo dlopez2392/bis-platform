@@ -615,12 +615,35 @@ describe("the All · Mine · Unassigned row and its empty states (F-085)", () =>
     expect(await render({ who: "unassigned" })).toContain(m["assign.empty.unassigned"]);
   });
 
-  it("a search inside a filter that finds nothing is still 'no matches' (the search is the narrower fact)", async () => {
+  // F-092 final review I-1: the search is the narrower fact, but it searched only the filter's rows, so
+  // the empty state names THAT set. "Nobody matches" inside Mine claimed the whole account was searched
+  // (this test used to pin that false copy), and the archived link — a whole-account search of the
+  // archived customers — would widen a filtered search behind the reader's back, so Mine and
+  // Unassigned offer none.
+  it("a search inside Mine that finds nothing says none of YOUR customers match, and offers no archived link (mutation: say 'Nobody matches' -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce(STAFF);
     listContactsMock.mockResolvedValueOnce([]);
     const html = await render({ who: "mine", q: "zzz" });
-    expect(html).toContain(m["contacts.search.noMatch.title"].replace("{query}", "zzz"));
+    expect(html).toContain("None of your customers match “zzz”");
+    expect(html).not.toContain("Nobody matches “zzz”");
     expect(html).not.toContain(m["assign.empty.mine"]);
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("a search inside Unassigned that finds nothing says no unassigned customer matches, and offers no archived link (mutation: say 'Nobody matches' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ who: "unassigned", q: "zzz" });
+    expect(html).toContain("No unassigned customer matches “zzz”");
+    expect(html).not.toContain("Nobody matches “zzz”");
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("the Unassigned empty search reads Spanish for a Spanish reader (mutation: fall back to the English copy -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(await render({ who: "unassigned", q: "zzz" })).toContain("Ningún cliente sin asignar coincide con “zzz”");
   });
 
   it("a Technician's zero-row page one gets their own sentence (mutation: show the Owner's 'no contacts yet' -> FAILS)", async () => {

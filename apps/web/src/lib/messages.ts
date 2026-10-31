@@ -625,6 +625,10 @@ export const m = {
   "contacts.search.lookInArchived.es": "Buscar en clientes archivados",
   "contacts.search.noMatchMine.title": "None of your customers match “{query}”",
   "contacts.search.noMatchMine.title.es": "Ninguno de sus clientes coincide con “{query}”",
+  // F-092 final review I-1: the Unassigned filter's own empty search — it searched only the
+  // customers nobody has, so it says so rather than "Nobody matches".
+  "contacts.search.noMatchUnassigned.title": "No unassigned customer matches “{query}”",
+  "contacts.search.noMatchUnassigned.title.es": "Ningún cliente sin asignar coincide con “{query}”",
   "contacts.search.noMatchArchived.title": "No archived customer matches “{query}”",
   "contacts.search.noMatchArchived.title.es": "Ningún cliente archivado coincide con “{query}”",
   "contacts.col.name": "Contact name",

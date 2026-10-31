@@ -159,11 +159,15 @@ function emptyCopy(
 ): { title: string; body?: string } {
   if (q) {
     const params = { query: q.slice(0, 80), digits: MIN_PHONE_SEARCH_DIGITS };
+    // F-092 final review I-1: the search ran inside the filter, so a Mine or Unassigned search that
+    // found nothing names that set, never "Nobody" (which claims the whole account was searched).
     const title = view === "archived"
       ? tr.text("contacts.search.noMatchArchived.title", params)
-      : !wholeAccount
+      : !wholeAccount || who === "mine"
         ? tr.text("contacts.search.noMatchMine.title", params)
-        : tr.text("contacts.search.noMatch.title", params);
+        : who === "unassigned"
+          ? tr.text("contacts.search.noMatchUnassigned.title", params)
+          : tr.text("contacts.search.noMatch.title", params);
     return { title, body: tr.text("contacts.search.noMatch.body", params) };
   }
   // Rule 5: the Archived view's empty state says what appears there and how it gets there.
@@ -405,7 +409,9 @@ export default async function ContactsPage({
   // F-092 part 1 (plan Task 6, spec 6): a search that found nothing, from the active list, for
   // someone who sees the whole account, offers a way into the archived customers it never looked
   // at — no count, since which of them match is only known once that view runs its own search.
-  const archivedSearchHref = q && view === "active" && wholeAccount
+  // Only from All (final review I-1): the Archived view has no Mine / Unassigned filter, so from
+  // inside one the link would silently widen the search to everyone's archived customers.
+  const archivedSearchHref = q && view === "active" && wholeAccount && assign.who === "all"
     ? `?${new URLSearchParams(withView({ q }, "archived"))}` : null;
 
   return (
