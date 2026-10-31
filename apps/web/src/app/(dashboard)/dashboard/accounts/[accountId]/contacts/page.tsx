@@ -4,6 +4,7 @@ import {
   countContacts, listContacts, listTags, listDuplicatePairs, countDuplicatePairs,
   type SortKey, type SortDir, type DuplicatePair,
 } from "@bis/db";
+import { MIN_PHONE_SEARCH_DIGITS } from "@bis/db/contact-search";
 import { createContactAction } from "./actions";
 import { dismissPairAction, undismissPairAction } from "./merge-actions";
 import { ContactsTable } from "./contacts-table";
@@ -145,11 +146,26 @@ export function buildExportHref(
  * own sentence rather than the Owner's "add your first contact". In the
  * reader's own language (F-085 follow-up, Task B): the page's `tr`, never a
  * bare `m[...]` lookup.
+ *
+ * F-092 part 1 (plan Task 6): a search that found nothing names WHO it
+ * searched — the Archived view's own customers, or (for someone whose list
+ * is only their own) just theirs, or everyone's — and suggests part of the
+ * name or the last MIN_PHONE_SEARCH_DIGITS digits of a phone, since that
+ * floor (`@bis/db/contact-search`'s owner ruling, Q2) is the real reason a
+ * short phone fragment alone would not have matched.
  */
 function emptyCopy(
   q: string | undefined, who: Who, wholeAccount: boolean, view: ContactsView, tr: Tr,
 ): { title: string; body?: string } {
-  if (q) return { title: tr.text("contacts.noMatches.title"), body: tr.text("contacts.noMatches.body") };
+  if (q) {
+    const params = { query: q.slice(0, 80), digits: MIN_PHONE_SEARCH_DIGITS };
+    const title = view === "archived"
+      ? tr.text("contacts.search.noMatchArchived.title", params)
+      : !wholeAccount
+        ? tr.text("contacts.search.noMatchMine.title", params)
+        : tr.text("contacts.search.noMatch.title", params);
+    return { title, body: tr.text("contacts.search.noMatch.body", params) };
+  }
   // Rule 5: the Archived view's empty state says what appears there and how it gets there.
   if (view === "archived") return { title: tr.text("contacts.archived.emptyTitle"), body: tr.text("contacts.archived.emptyBody") };
   if (who === "mine") return { title: tr.text("assign.empty.mine") };
@@ -386,6 +402,11 @@ export default async function ContactsPage({
   // back, so the header does not repeat it: exactly one "Back to contacts" on the screen at a time.
   const showEmpty = page.length === 0 && !cursor;
   const emptyBack = view === "archived" && showEmpty && !q;
+  // F-092 part 1 (plan Task 6, spec 6): a search that found nothing, from the active list, for
+  // someone who sees the whole account, offers a way into the archived customers it never looked
+  // at — no count, since which of them match is only known once that view runs its own search.
+  const archivedSearchHref = q && view === "active" && wholeAccount
+    ? `?${new URLSearchParams(withView({ q }, "archived"))}` : null;
 
   return (
     // F-085 follow-up (Task B): every read-only word on this list comes from
@@ -498,7 +519,14 @@ export default async function ContactsPage({
           // a "Newer" link back to the head, rather than this empty state.
           <EmptyState
             icon={Users} title={empty.title} body={empty.body} lang={locale}
-            action={emptyBack ? backLink : undefined}
+            // Correction 7: a long typed search wraps instead of overflowing the card, inherited by
+            // the title and body text it wraps.
+            className="[overflow-wrap:anywhere]"
+            action={emptyBack ? backLink : archivedSearchHref ? (
+              <Link href={archivedSearchHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+                {tr.text("contacts.search.lookInArchived")}
+              </Link>
+            ) : undefined}
           />
         ) : (
           <>
