@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { nameFold, nameKey, phoneNational, phoneFamily, reasonStrength, reasonLabel, DUPLICATE_REASON_STRENGTH, MERGE_UNDO_DAYS } from "./dedupe-keys";
+import { nameFold, nameKey, phoneNational, phoneFamily, reasonStrength, reasonLabel, DUPLICATE_REASON_STRENGTH, MERGE_UNDO_DAYS, foldChar, contactSearchName } from "./dedupe-keys";
 import * as viaBarrel from "./index";
 
 describe("dedupe-keys: the TypeScript twins of 0106's key functions", () => {
@@ -65,5 +65,27 @@ describe("dedupe-keys: one home, reachable from the browser (recipient-language.
   it("is exported as the @bis/db/dedupe-keys subpath (mutation: drop the exports entry -> FAILS)", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { exports: Record<string, string> };
     expect(pkg.exports["./dedupe-keys"]).toBe("./src/dedupe-keys.ts");
+  });
+});
+
+describe("foldChar and contactSearchName (0108's twins)", () => {
+  const collapse = (s: string) => s.replace(/ +/g, " ").replace(/^ | $/g, "");
+  const CORPUS = [
+    "María García López", "JOSÉ MUÑOZ", "garcía-lópez", "O'Brien", "Ruiz\u00A0Díaz", "Ana\tRuiz", "  Inés  Peña ",
+    "Jose\u0301 Pe\u0301rez", "Zoë Brontë", "李 王", "Nguyễn Văn", "😀 Ana", "john_doe", "maria5@example.com", "",
+  ];
+  it.each(CORPUS)("nameFold(%j) is foldChar per code point, collapsed and trimmed (mutation: foldChar returns 'Ñ' unmapped -> the MUÑOZ row FAILS)", (s) => {
+    expect(collapse([...s].map(foldChar).join(""))).toBe(nameFold(s));
+  });
+  it("foldChar answers one character of [a-z0-9 ] or nothing (mutation: return the unmapped character -> FAILS on '@')", () => {
+    expect([..."ÑñÉé-.,'@\u0301😀Aa9 "].map(foldChar)).toEqual(["n", "n", "e", "e", " ", " ", " ", " ", "", "", "", "a", "a", "9", " "]);
+  });
+  it("contactSearchName joins the non-empty folds by one space, null when none (mutation: join with '|' -> FAILS)", () => {
+    expect(contactSearchName("María", "García López", null)).toBe("maria garcia lopez");
+    expect(contactSearchName("Juan", null, "Plomería Pérez")).toBe("juan plomeria perez");
+    expect(contactSearchName(null, "Ruiz", "  ")).toBe("ruiz");
+    expect(contactSearchName("李", "王", null)).toBeNull();
+    expect(contactSearchName(null, null, null)).toBeNull();
+    expect(contactSearchName("", "  ", "")).toBeNull();
   });
 });

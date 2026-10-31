@@ -192,8 +192,8 @@ describe("the parity fingerprint", () => {
       `not exists (select 1 from pg_depend dep where dep.classid = '${catalog}'::regclass and dep.objid = ${oid} and dep.deptype = 'e')`;
 
     it("compares only the extensions the migrations use", () => {
-      expect(branch("extension")).toContain("where e.extname in ('btree_gist', 'plpgsql')");
-      expect(branch("extension_version(info)")).toContain("where e.extname in ('btree_gist', 'plpgsql')");
+      expect(branch("extension")).toContain("where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')");
+      expect(branch("extension_version(info)")).toContain("where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')");
     });
 
     it("skips functions that belong to an extension", () => {

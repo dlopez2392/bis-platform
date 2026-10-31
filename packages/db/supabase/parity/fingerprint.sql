@@ -30,7 +30,7 @@
 -- migrations, the bootstrap and the manual bucket are responsible for, and
 -- leaves out rows the Supabase platform owns, which would otherwise be most
 -- of the first diff (review of PR #130):
---   - extensions: only the ones the migrations use (btree_gist, 0016) and
+--   - extensions: only the ones the migrations use (btree_gist, 0016; pg_trgm, 0108) and
 --     plpgsql, which every function body here is written in;
 --   - relations and functions that BELONG to an extension (pg_depend deptype
 --     'e'): production holds 188 btree_gist functions in public, owned by
@@ -56,10 +56,10 @@
 --     swap places between runs.
 with items(kind, key, def) as (
   select 'extension', e.extname::text, null::text
-    from pg_extension e where e.extname in ('btree_gist', 'plpgsql')
+    from pg_extension e where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')
   union all
   select 'extension_version(info)', e.extname::text, e.extversion
-    from pg_extension e where e.extname in ('btree_gist', 'plpgsql')
+    from pg_extension e where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')
   union all
   select 'schema_acl', n.nspname::text,
          case when n.nspacl is null then 'default'

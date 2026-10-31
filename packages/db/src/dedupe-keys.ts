@@ -55,6 +55,23 @@ export function nameFold(value: string | null | undefined): string {
   return out.replace(/[^a-z0-9 ]/g, "").replace(/ +/g, " ").replace(/^ | $/g, "");
 }
 
+const KEEP = /^[a-z0-9 ]$/;
+/** One character of app.contact_name_fold (0106): the FOLD table's answer if it is in [a-z0-9 ], else "". Called per
+ *  code point; nameFold equals these, joined, with runs of spaces collapsed and the ends trimmed (dedupe-keys.test.ts). */
+export function foldChar(ch: string): string {
+  const f = FOLD.get(ch) ?? ch;
+  return KEEP.test(f) ? f : "";
+}
+
+/** app.contact_search_name (0108): the non-empty folds of first, last and business name, joined by one space; null
+ *  when all three fold to nothing. contact-search-schema.test.ts compares it with the SQL shape by shape. */
+export function contactSearchName(
+  first: string | null | undefined, last: string | null | undefined, company: string | null | undefined,
+): string | null {
+  const v = [nameFold(first), nameFold(last), nameFold(company)].filter((p) => p !== "").join(" ");
+  return v === "" ? null : v;
+}
+
 /** Placeholder first names Sofía and imports write (finish-call.ts:423,435; the archive spec's "Unknown Caller"). */
 const PLACEHOLDERS: ReadonlySet<string> = new Set(["caller", "unknown", "desconocido", "cliente", "customer", "na", "none", "sin nombre"]);
 /** The first surname: leading particles kept attached, then the next word (app.contact_name_key's regex). */
