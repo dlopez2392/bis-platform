@@ -443,10 +443,18 @@ For the `search_name`, `phone_key` and `phone_national` arms, nothing: their con
 construction (`F092:72`, `:75-76`). For the four raw arms (`first_name`, `last_name`, `email`, `phone`), `C` folds
 only the ASCII letters where ICU folds every cased letter. Spanish and Portuguese names are unaffected, because the
 folded `search_name` arm still matches them ("ín" finds "ÍÑIGUEZ" through `inigue...`). What changes, for a
-2-character term only: a name in a cased script the fold drops (Cyrillic, Greek, Armenian) typed in the other
-case from the stored name ("ив" stops finding "ИВАНОВ" and "Иванов"; it still finds "иванов", and "Ив" still
-finds "Иванов"), and two symbols whose lower case is ASCII (the Kelvin
+term shorter than 3 characters only: a name in a cased script the fold drops (Cyrillic, Greek, Armenian) typed in
+the other case from the stored name ("ив" stops finding "ИВАНОВ" and "Иванов"; it still finds "иванов", and "Ив"
+still finds "Иванов"); a Latin letter outside the name fold's table typed in the other case (Vietnamese, Polish,
+Turkish and similar: "Đỗ" stops finding a stored "ĐỖ"); and two symbols whose lower case is ASCII (the Kelvin
 sign and the dotted capital I). This is owner question 2.
+
+**Corrected 2026-10-31 (0110 security review, T4).** "Shorter than 3 characters" is the rule 0110 applies, and it
+is not only the 2-character case this section first described: the ⌘K route asks for at least 2 (`MIN_QUERY`,
+`ROUTE:35`), but the contact list and its export send a 1-character term too, and it reads byte-wise as well. The
+Latin letters outside the fold table were missed in the first draft. Neither changes the measured answers (3.4: the
+seed's names are all Latin inside the fold table), and on 2026-10-31 production and bis-ci held **0** contact names
+with a letter of either kind.
 
 ### 3.9 What the migrations cost at 500,000 contacts
 
@@ -515,9 +523,14 @@ The matcher, in order (the measured body is `scale-spec/matcher.sql`; the migrat
 the defaults):
 
 1. **Who may ask about which account.** `service_role` (read as `current_setting('role', true) = 'service_role'`,
-   which inside a definer still names the CALLER's role while `current_user` is the owner, proven on the replica;
-   an `authenticated` session cannot set it, because `set role` requires membership) is answered for the named
-   account, as RLS lets it read every row. Anyone else is answered only when the house predicate holds, written
+   which inside a definer still names the CALLER's role while `current_user` is the owner, proven on the replica)
+   is answered for the named account, as RLS lets it read every row. **Corrected 2026-10-31 (0110 security
+   review, T4; 0110's header wording):** that setting is exactly as forgeable as the role itself: changing it takes
+   membership of `service_role` for the SESSION user (on Supabase, `authenticator`), and SQL able to do that could
+   `set role service_role` and read every table already; PostgREST runs no caller SQL. A claim is never trusted for
+   it (a JWT saying `role: service_role` on an `authenticated` session gets nothing). The first draft said "an
+   `authenticated` session cannot set it, because `set role` requires membership", which put the check on the wrong
+   role: `set role` checks the session user's memberships, not the current role's. Anyone else is answered only when the house predicate holds, written
    null-safe: `if not coalesce(coalesce(app.is_agency(), false) or p_account_id = app.current_account_id(), false)
    then return; end if;`. The outer `coalesce` is load-bearing: `is_agency()` is NULL for a client token, and a bare
    `if not (...)` on a NULL takes neither branch and FAILS OPEN (the plpgsql trap the schema has met before).
@@ -573,7 +586,13 @@ the `.or(filter)`; everything else in each chain stays as it is:
 p_national: plan.phone?.national }`, with an absent part left `undefined`, NEVER `null`: with `get`/`head`,
 postgrest-js puts arguments in the URL, drops `undefined`, writes an array as `{a,b}` and writes `null` as the
 string `"null"` (read from `@supabase/postgrest-js` 2.110.8, `dist/index.mjs:3837-3846`), which the matcher would
-refuse. Hence the defaults in 4.3. `get: true` matters: a POST sends the arguments in a JSON body, and the
+refuse. Hence the defaults in 4.3. **Corrected 2026-10-31 (T6, found by the live suite on the replica):**
+`p_tokens` and `p_phone_keys` are NOT handed to postgrest-js as arrays. It writes `{a,b}` with no element quoted,
+and in a PostgreSQL array literal an unquoted `null` (any case) is a NULL element: the search "null" (a real word,
+and the name "Null") sent `p_tokens={null}`, the matcher refused it (`22023`, HTTP 400) and the search failed. The
+builder (`contactMatchArgs`, `DB/contacts.ts`) writes the literal itself, every element double-quoted
+(`{"maria","garcia"}`), which is safe because a word is `[a-z0-9]+` and a key is digits; an empty part is omitted
+(the default is the same `{}`). `get: true` matters: a POST sends the arguments in a JSON body, and the
 POST-shaped call measured in section 3 is not inlined. A set-returning RPC chained with `.select().order().range()`
 already exists in the package (`DB/proposals.ts:181-183`). `contactSearchFilter` stays: it is the oracle the
 equivalence tests compare against, and the `phoneMatches` sublabel rule still reads the same plan.
@@ -628,8 +647,12 @@ and 2, red before apply) and `packages/db/src/test/policy-initplans-behaviour.te
    `anon` or `public`, on both. `EXPECTED_DEFINERS` 37 -> 38.
 6. **The matcher called DIRECTLY, per role.** Through the entry point alone RLS would hide a matcher that answered
    too much, so these call `app.contact_match_ids` itself: Owner of A asking for B -> 0 ids (mutation: drop the
-   house check -> FAILS); client with access disabled -> 0 (mutation: drop the outer `coalesce` -> FAILS, the
-   fail-open); Technician -> only their assigned ids (mutation: drop the scope -> FAILS); no-membership member -> 0;
+   house check -> FAILS); client with access disabled -> 0; an Owner whose call names no account -> nothing, not
+   `22023` (mutation: drop the outer `coalesce` -> the NULL falls through to the input check, `22023`, FAILS, the
+   fail-open). **Corrected 2026-10-31 (T4):** the first draft hung the outer-`coalesce` mutation on the
+   disabled-access case, which cannot catch it: with `current_account_id()` NULL the Technician gate (step 2)
+   returns nothing anyway, so only the "names no account" case tells the two apart; Technician -> only their
+   assigned ids (mutation: drop the scope -> FAILS); no-membership member -> 0;
    agency -> the named account's matches; `service_role` -> the named account's matches.
 7. **Equivalence, per role and term.** For every term shape in `F092:141-150` plus `ma`, `ana`, `garcía lópez`,
    `zzqx`, a `_` and a non-Latin name: ids from `public.contacts_matching(...)` with the list's filters equal ids
@@ -647,13 +670,30 @@ PostgreSQL can inline. Verified in the live suite by reading the statement Postg
 `pg_stat_statements` (**ASSUMPTION:** present in the CLI's images; if not, `log_min_duration_statement = 0` on the
 local stack) and running `explain` on it as test 9 does.
 
+**As built (T6, 2026-10-31).** `contact-search-live.test.ts` gained three cases. (1) Through `serviceDb()` (CI):
+for 40 terms in two accounts, `listContacts` and `countContacts` through the matcher equal `contactSearchFilter`'s
+`.or()` on the table, rows and count, in both views, never the other account's row; and the one designed
+difference, "ив", pinned both ways. (2) As an Owner, a Technician and the agency with signed tokens, the same
+comparison under RLS, plus A's Owner and Technician on account B getting nothing: it needs the replica's JWT secret,
+so it is SKIPPED on CI (a skip is not a pass; 4.6 item 7 holds the property per role at the SQL level on every run).
+(3) Every request to `/rpc/contacts_matching` is a GET or a HEAD (read from the client's own fetch), and every
+statement those requests produced, read from `pg_stat_statements` by the change in `calls`, binds its arguments as
+parameters (no JSON body) and plans under `explain (generic_plan)` with no `Function Scan on contacts_matching`.
+PostgREST's GET statement was confirmed on the replica (PostgREST + PostgreSQL 17.6) as
+`"public"."contacts_matching"("p_account_id" := $1::uuid, "p_text" := $2::text, ...)`. If `pg_stat_statements` is
+absent on CI's stack, case (3) FAILS saying so; it never skips.
+
 The 500,000-contact numbers are not a CI test (the seed takes minutes); the replica harness of section 3 is re-run
 on each final file before production, and its numbers go into that file's header, as 0108's did.
 
 ### 4.7 Security review points for the 38th definer
 
 - The account is admitted by the house predicate, null-safe; the Technician scope is applied inside; the service
-  role is recognised by a setting an `authenticated` session cannot forge.
+  role is recognised by the session's own role setting, which is exactly as forgeable as the role itself: changing
+  it takes the session user's membership of `service_role` (on Supabase, `authenticator`'s), and SQL able to do
+  that could already `set role service_role` and read every table; PostgREST runs no caller SQL, and a JWT claim is
+  never trusted for it (corrected 2026-10-31, T4; the first draft said "a setting an `authenticated` session cannot
+  forge", 4.3 step 1).
 - It returns ids only, and only through an INVOKER entry point that re-applies RLS: a matcher bug can at worst
   return fewer rows, or ids RLS then drops, never another tenant's row. Test 6 exists because that second gate would
   otherwise hide a matcher bug.
@@ -715,6 +755,12 @@ owner on 2026-10-31, each as recommended.
    - **(A) Recommended: yes, for two-character searches only.** Why: it brings "ma" at 50,000 contacts from about
      674 to 244 ms, inside the 300 ms line, and it changes nothing for Spanish or English names; the only names it
      stops finding are ones in another alphabet typed in the other case ("ив" for "ИВАНОВ").
+     **Corrected 2026-10-31 (0110 security review, T4), after the ruling:** the byte-wise rule also misses a Latin
+     letter outside the name fold's table typed in the other case ("Đỗ" for a stored "ĐỖ": Vietnamese, Polish,
+     Turkish and similar), and it applies to every term shorter than 3 characters, including the 1-character
+     searches the contact list and its export send, not only two letters (3.8). On 2026-10-31 production and bis-ci
+     held 0 contact names with a letter of either kind. The recommendation and the ruling stand; this is what (A)
+     means, stated whole.
    - (B) No: keep exact matching, and accept about 0.6 s for a two-letter search on a 50,000-contact account (it
      scales with the account; at today's sizes it is instant).
    - (C) Search only from three letters in the contact list (two letters show nothing until a third is typed):
@@ -739,7 +785,7 @@ owner on 2026-10-31, each as recommended.
 | T2 | Apply 0109: bis-ci, production, parity. Post-apply: the guard query of T1 returns exactly `inbound_never_log_no_technician`; the digest of 2.1 reads the same new value on both projects (the replica's after the generated file: `960f704c23380d8d6f9e650de13826ed`, 3.9; **superseded by T1, 2026-10-31: the committed 0109 wraps each call on its own, `COALESCE((select app.is_agency()), false)` rather than the scratch generator's `(select coalesce(app.is_agency(), false))`, and reads `1597df0fa14a63845c61298f53c1413e` on the replica**) | orchestrator | **high** |
 | T3 | `0110_contact_match.sql` (parts B and C), `contact-match-schema.test.ts` (shape, direct matcher per role with its mutations, equivalence, refusals, inlining), `EXPECTED_DEFINERS` 37 -> 38, the parity fingerprint gains `btree_gin`; the replica harness of section 3 re-run on the final file, numbers into the header | bis-db-schema | **high** |
 | T4 | Security review of 0110 against 4.7, by a reviewer who did not write it, with its own probe of a cross-account and a Technician call | reviewer | **high** |
-| T5 | Apply 0110: bis-ci, production, parity. Post-apply: `to_regprocedure('app.contact_match_ids(uuid,text,text[],text[],text)')` and `public.contacts_matching(...)` exist with the pinned `prosecdef`/`proconfig`; `contacts_search_trgm`'s `indexdef` leads with `account_id` | orchestrator | **high** |
+| T5 | Apply 0110: bis-ci, production, parity. Post-apply: `to_regprocedure('app.contact_match_ids(uuid,text,text[],text[],text)')` and `public.contacts_matching(...)` exist with the pinned `prosecdef`/`proconfig`; `has_function_privilege('anon', <each>, 'EXECUTE')` is false for both (added 2026-10-31, T4); `contacts_search_trgm`'s `indexdef` leads with `account_id` | orchestrator | **high** |
 | T6 | bis-crm: the `args` builder beside `contactSearchFilter`, the source swap in `listContacts` / `countContacts` / `searchContacts` (4.4), unit tests (null exactly when the filter is null; never a `null` argument), `contact-search-live.test.ts` comparisons and the GET-statement check (CI) | bis-crm | medium |
 | T7 | The F-092 e2e (`F092:555`) re-run on the branch; no new spec: nothing on screen changes | bis-e2e-qa | low |
 
