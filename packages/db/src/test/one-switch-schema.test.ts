@@ -514,7 +514,8 @@ describe("0097 RLS: closed days are the Owner's (D1, unchanged by D8)", () => {
       const { rows } = await c.query(
         `select polname, polcmd, polpermissive, pg_get_expr(polqual, polrelid) as q, pg_get_expr(polwithcheck, polrelid) as wc
            from pg_policy where polrelid in ('public.business_status'::regclass, 'public.closed_days'::regclass) order by 1`);
-      const MEMBER = "(app.is_agency() OR (account_id = app.current_account_id()))";
+      // 0109 wrapped the house policy's helper calls (one call per statement, not per row; policy-initplans-schema.test.ts).
+      const MEMBER = "(( SELECT app.is_agency() AS is_agency) OR (account_id = ( SELECT app.current_account_id() AS current_account_id)))";
       const OWNER = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND ( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner)))`;
       const UPD_USING = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND (( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner) OR (( SELECT COALESCE((app.account_role(app.current_account_id()) = 'staff'::text), false) AS "coalesce") AND ((state = ANY (ARRAY['open'::text, 'running_late'::text])) OR ((until IS NOT NULL) AND (until <= now())))))))`;
       const UPD_CHECK = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND (( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner) OR (( SELECT COALESCE((app.account_role(app.current_account_id()) = 'staff'::text), false) AS "coalesce") AND (state = ANY (ARRAY['open'::text, 'running_late'::text])) AND ((state = 'open'::text) OR (until <= (now() + '26:00:00'::interval)))))))`;

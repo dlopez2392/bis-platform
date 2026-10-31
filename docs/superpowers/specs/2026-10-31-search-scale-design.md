@@ -687,9 +687,11 @@ of 0109: `alter policy` back to the pinned pre-0109 text (the test holds it verb
 
 ## 5. Owner decisions
 
-Only genuine product or risk choices; each is recommended first, with its reason.
+Only genuine product or risk choices; each is recommended first, with its reason. All three were ruled on by the
+owner on 2026-10-31, each as recommended.
 
-1. **Which policies does 0109 wrap?**
+1. **Which policies does 0109 wrap?** **DECIDED 2026-10-31 (owner): (A), all 64 wrappable policies on 59 tables;
+   `inbound_never_log_no_technician` stays per-row, because it passes a row column (2.4 item 4).**
    - **(A) Recommended: all 64 wrappable policies, on 59 tables.** Why: the answers are identical (2.4; 81 of 81
      digests across (a) and (b)), and the same per-row cost sits on every large table: counting an account's
      50,000 conversations goes from 516 to 8 ms only when `conversations` is wrapped too (3.5), and every table
@@ -699,7 +701,8 @@ Only genuine product or risk choices; each is recommended first, with its reason
    - (C) Contacts plus the tables a contacts screen also reads (`contact_tags`, `tags`, `conversations`,
      `messages`, `calls`): six policies, a middle blast radius.
 2. **When someone types only two letters ("ma") on a very large account, may the search compare letters
-   byte-wise?**
+   byte-wise?** **DECIDED 2026-10-31 (owner): (A), yes, for two-character searches only. It lands in 0110 (PR 2),
+   not in 0109.**
    - **(A) Recommended: yes, for two-character searches only.** Why: it brings "ma" at 50,000 contacts from about
      674 to 244 ms, inside the 300 ms line, and it changes nothing for Spanish or English names; the only names it
      stops finding are ones in another alphabet typed in the other case ("ив" for "ИВАНОВ").
@@ -707,7 +710,9 @@ Only genuine product or risk choices; each is recommended first, with its reason
      scales with the account; at today's sizes it is instant).
    - (C) Search only from three letters in the contact list (two letters show nothing until a third is typed):
      a visible change to how the box behaves.
-3. **Does 0109 ship on its own, ahead of the search work?**
+3. **Does 0109 ship on its own, ahead of the search work?** **DECIDED 2026-10-31 (owner): (A), yes, on its own pull
+   request first; 0110 (the account-first trigram index, `app.contact_match_ids`, `public.contacts_matching`) and
+   bis-crm's app change follow together in PR 2.**
    - **(A) Recommended: yes, now, on its own pull request.** Why: it changes no answer, it alone takes an
      unsearched contact list plus its count at 50,000 contacts from 1,226 to 60 ms (and the dashboard tile from
      556 to 18 ms), and it is the half the 2,000-contact deadline needs most; 0110 and the app change follow.
@@ -722,7 +727,7 @@ Only genuine product or risk choices; each is recommended first, with its reason
 |---|---|---|---|
 | T0 | Pre-flight, read-only, on bis-ci and production: `select name from supabase_migrations.schema_migrations where name in ('policy_initplans', 'contact_match')` is empty (by NAME: `version` holds a timestamp here); the policy digest of 2.1 still reads `4f4914fcd094dbb3f13894fa6e19b3f2` (if not, regenerate 0109 from the live rows first); `btree_gin` available; `pg_stat_statements` in the CLI's images (or the fallback of 4.6) | bis-db-schema | low |
 | T1 | `0109_policy_initplans.sql` (part A, generated), `search-scale-schema.test.ts` (pins, guard, behaviour matrix), the two moved pins; on the local replica: red before, green after, and the 500,000-contact unsearched numbers into the header | bis-db-schema | **high** |
-| T2 | Apply 0109: bis-ci, production, parity. Post-apply: the guard query of T1 returns exactly `inbound_never_log_no_technician`; the digest of 2.1 reads the same new value on both projects (the replica's after the generated file: `960f704c23380d8d6f9e650de13826ed`, 3.9) | orchestrator | **high** |
+| T2 | Apply 0109: bis-ci, production, parity. Post-apply: the guard query of T1 returns exactly `inbound_never_log_no_technician`; the digest of 2.1 reads the same new value on both projects (the replica's after the generated file: `960f704c23380d8d6f9e650de13826ed`, 3.9; **superseded by T1, 2026-10-31: the committed 0109 wraps each call on its own, `COALESCE((select app.is_agency()), false)` rather than the scratch generator's `(select coalesce(app.is_agency(), false))`, and reads `1597df0fa14a63845c61298f53c1413e` on the replica**) | orchestrator | **high** |
 | T3 | `0110_contact_match.sql` (parts B and C), `contact-match-schema.test.ts` (shape, direct matcher per role with its mutations, equivalence, refusals, inlining), `EXPECTED_DEFINERS` 37 -> 38, the parity fingerprint gains `btree_gin`; the replica harness of section 3 re-run on the final file, numbers into the header | bis-db-schema | **high** |
 | T4 | Security review of 0110 against 4.7, by a reviewer who did not write it, with its own probe of a cross-account and a Technician call | reviewer | **high** |
 | T5 | Apply 0110: bis-ci, production, parity. Post-apply: `to_regprocedure('app.contact_match_ids(uuid,text,text[],text[],text)')` and `public.contacts_matching(...)` exist with the pinned `prosecdef`/`proconfig`; `contacts_search_trgm`'s `indexdef` leads with `account_id` | orchestrator | **high** |

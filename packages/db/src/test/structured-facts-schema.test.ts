@@ -426,7 +426,8 @@ describe("0095 RLS: Owners read, Staff and Technicians do not, other accounts do
       // Read off the plan writer's PG18 replica with this file's SQL applied (2026-10-23). If CI's PostgreSQL 17
       // deparses one differently, the implementer pastes CI's text after reading that it says the same thing.
       const OWNERS_ONLY = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND ( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner)))`;
-      const MEMBER_READ = "(app.is_agency() OR (account_id = app.current_account_id()))";
+      // 0109 wrapped the house policy's helper calls (one call per statement, not per row; policy-initplans-schema.test.ts).
+      const MEMBER_READ = "(( SELECT app.is_agency() AS is_agency) OR (account_id = ( SELECT app.current_account_id() AS current_account_id)))";
       expect(rows).toEqual([
         { polname: "voice_knowledge_snapshots_member_read", polpermissive: true, q: MEMBER_READ },
         { polname: "voice_knowledge_snapshots_owners_only", polpermissive: false, q: OWNERS_ONLY },
