@@ -56,13 +56,22 @@ function fullFixture(): ClientFixtureFull {
 
 const STAMP = Date.now();
 // Exactly MIN_PHONE_SEARCH_DIGITS — the owner's Q2 floor — so this term is itself proof that the floor,
-// not just a longer digit run, is enough to find a customer by phone. Deliberately NOT derived from
-// STAMP: both contacts' emails below embed the full STAMP, and so does auth.setup.ts's own canary
-// contact ("E2E Fixture <its own stamp>") — a digit run taken from STAMP would be guaranteed (not just
-// risked) to also appear inside those other digit-bearing fields, since a substring of STAMP is a
-// substring of anything that embeds STAMP whole. An independent random draw shares no such relationship
-// with any of them (first run of this spec hit exactly the guaranteed collision, by this reasoning).
-const PHONE_DIGITS = String(1000 + Math.floor(Math.random() * 9000));
+// not just a longer digit run, is enough to find a customer by phone. Never taken FROM the stamp (a run of
+// STAMP would be guaranteed to sit inside both seeded emails, which embed it whole), and never left to
+// chance either (F-092 final review M-3): a plain random draw still lands inside String(STAMP) about one
+// run in a thousand — and then the search finds Inés by her stamped email, step 4's "Inés is absent"
+// fails — or inside Maria's own "52899123", where it would match (and be marked) somewhere other than
+// the last four. So the draw is REDRAWN until it occurs in neither the stamp nor Maria's phone digits
+// anywhere but their end.
+const MARIA_PHONE_PREFIX_DIGITS = "52899123";
+function drawPhoneDigits(): string {
+  for (;;) {
+    const d = String(1000 + Math.floor(Math.random() * 9000));
+    const full = MARIA_PHONE_PREFIX_DIGITS + d;
+    if (!String(STAMP).includes(d) && full.indexOf(d) === full.length - d.length) return d;
+  }
+}
+const PHONE_DIGITS = drawPhoneDigits();
 const MARIA_PHONE = `+52 899 123 ${PHONE_DIGITS}`;
 const MARIA_FIRST = "María";
 const MARIA_LAST = "García López";
@@ -163,7 +172,8 @@ test(
     // in time to this file's STAMP that a coincidental 4-digit overlap is a real, observed risk, not a
     // theoretical one (first run of this spec hit exactly that: readTotal reported 2, correctly, because
     // the canary's name really did contain these four digits that run). The positive case plus Inés'
-    // absence (she has no phone and no digits in her name) is the same proof without that coincidence.
+    // absence is the same proof without that coincidence: she has no phone and no digits in her name,
+    // and her email's only digits are STAMP's, which drawPhoneDigits() never overlaps (final review M-3).
     await page.goto(`${base}?q=${PHONE_DIGITS}`);
     const mariaByPhone = rowFor(page, MARIA_NAME);
     await expect(mariaByPhone).toBeVisible();
