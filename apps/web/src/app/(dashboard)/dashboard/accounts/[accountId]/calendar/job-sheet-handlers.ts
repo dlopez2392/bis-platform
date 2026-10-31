@@ -72,6 +72,12 @@ export type SubmitOutcome =
 /** Spec 5.4: 5 to 720 minutes, in five-minute steps (the action refuses anything else). */
 export const LENGTH_OPTIONS: readonly number[] = Array.from({ length: 144 }, (_, i) => (i + 1) * 5);
 
+/** F-092 part 1 (plan Task 9): the sheet's own customer search wants the palette's GET route's `contacts` half
+ *  only — it never shows a call or a conversation, so there is no reason to pay for either search. */
+export function customerSearchUrl(accountId: string, term: string): string {
+  return `/api/accounts/${accountId}/search?q=${encodeURIComponent(term)}&types=contacts`;
+}
+
 const firstOr = (first: string, locale: Locale) => first.trim() || t(m, "calendar.job.customerFallback", locale);
 /** The QA pseudo-locale (lib/record/copy.ts's makeTr): every word the sheet draws can be padded. */
 const padded = (s: string, pseudo: boolean) => (pseudo ? pseudoLocale(s) : s);

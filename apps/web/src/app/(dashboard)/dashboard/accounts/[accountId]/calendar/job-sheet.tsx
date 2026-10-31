@@ -17,6 +17,8 @@ import { parsePlaceFields, PLACE_LIMITS } from "@/lib/contacts/place-input";
 import { placeTitle } from "@/lib/contacts/place-view";
 import type { SearchHit, SearchResults } from "@/app/api/accounts/[accountId]/search/route";
 import type { PlacesResponse } from "@/app/api/accounts/[accountId]/contacts/[contactId]/places/route";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import type { NoticeAvailability } from "./cancel-flow";
 import {
   addJobAction, undoAddJobAction, moveJobAction, undoEditJobAction, undoMoveJobAction, jobNoticeOptionAction,
@@ -24,6 +26,7 @@ import {
 } from "./agenda-actions";
 import {
   submitJob, noticeReason, warningLines, withExistingCustomer, sheetDraft, addingAsNew, typedCustomer, phoneOwnerWords, LENGTH_OPTIONS,
+  customerSearchUrl,
   type OpenedSnapshot, type PhoneOwner, type SheetCustomer, type SubmitOutcome,
 } from "./job-sheet-handlers";
 
@@ -179,7 +182,7 @@ export function JobForm(p: JobFormProps) {
     const term = q.trim();
     if (term.length < MIN_QUERY) { setHits(null); return; }
     searchTimer.current = setTimeout(() => {
-      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(term)}`)
+      fetch(customerSearchUrl(accountId, term))
         .then(async (res) => {
           if (!res.ok) throw new Error(String(res.status));
           const body = (await res.json()) as Partial<SearchResults>;
@@ -318,8 +321,14 @@ export function JobForm(p: JobFormProps) {
                         <button type="button" data-job-hit={h.id}
                           className="flex min-h-11 w-full min-w-0 flex-col items-start rounded-[var(--radius-ctl)] px-2 py-1.5 text-left outline-none hover:bg-[var(--surface-3)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
                           onClick={() => choose({ kind: "existing", id: h.id.toLowerCase(), name: h.label, first: firstWord(h.label) })}>
-                          <span className="break-words text-sm text-card-foreground">{h.label}</span>
-                          {h.sublabel ? <span className="break-all text-xs text-muted-foreground">{h.sublabel}</span> : null}
+                          <span className="break-words text-sm text-card-foreground">
+                            <HighlightedText text={h.label} ranges={nameRanges(h.label, hits.query)} />
+                          </span>
+                          {h.sublabel ? (
+                            <span className="break-all text-xs text-muted-foreground">
+                              <HighlightedText text={h.sublabel} ranges={phoneRanges(h.sublabel, hits.query)} />
+                            </span>
+                          ) : null}
                         </button>
                       </li>
                     ))}
