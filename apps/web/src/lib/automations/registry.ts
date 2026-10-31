@@ -2,6 +2,7 @@ import type { Pass } from "./context";
 import { billingPausePass } from "./passes/billing-pause";
 import { releaseHeldPass } from "./passes/release-held";
 import { cancelNoticesPass } from "./passes/cancel-notices";
+import { jobHoldsPass } from "./passes/job-holds";
 import { remindersPass } from "./passes/reminders";
 import { followupsPass } from "./passes/followups";
 import { reviewRequestPass } from "./passes/review-request";
@@ -45,6 +46,9 @@ import { opsWatchPass } from "./passes/ops-watch";
  * still waiting to hear their appointment is off is the most time-sensitive
  * thing in the tick, and it reads and writes no automation state (only
  * booking_cancel_notices, the notice's own thread row and the booking's claim).
+ * The job-hold backstop (F-046) follows it for the same reason: a customer waiting to hear about a job staff
+ * just booked. It settles the hold, which the reminder passes below wait for, so in one tick a staff job's
+ * confirmation precedes its reminder.
  * The SMS reminder reads nothing the others write. The confirmation ask
  * (part B) reads nothing the other booking passes write and writes only its
  * own stamp, so it sits WITH them rather than between them: after the text
@@ -70,4 +74,4 @@ import { opsWatchPass } from "./passes/ops-watch";
  * a pass failing for the second time is reported in the same tick.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];

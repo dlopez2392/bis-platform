@@ -146,6 +146,13 @@ they re-resolve against the accent each element inherits.
    sits beside them. The rule-8 test still binds: no two tiles write the
    same field, because each starts the visit with its own reason, so each
    tile is its own decision rather than a second primary on one.
+   **Amended 2026-10-30 (F-046 part 1, owner decision 2):** the calendar's
+   job drawer carries no primary. Move, Cancel, Mark completed and No-show
+   write the same booking, so they are one view, and none is its obvious
+   decision; Move only opens a form whose own Save is that form's one
+   primary (the chooser amendment's reasoning). The Agenda card is its own
+   view and Add job is its one primary, inside the card, never in
+   `PageHeader` above cards that carry their own.
 9. Client-customer surfaces (booking page, forms, emails) always carry the
    client's logo + brand color from the theming engine. **Login is the one
    exception and carries the platform's mark and accent instead** — nobody is

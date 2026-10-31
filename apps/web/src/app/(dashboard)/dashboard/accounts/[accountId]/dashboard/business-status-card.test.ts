@@ -189,7 +189,7 @@ describe("BusinessStatusCard — Keep (spec §5.6.2)", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("'Cancel on the calendar' links to the booking's own anchor", async () => {
+  it("'Cancel on the calendar' opens the booking's own drawer on the agenda (F-046 part 1)", async () => {
     mockDefaults();
     dbMocks.getBusinessStatusRow.mockResolvedValue(row({
       state: "closed_today", until: "2027-06-08T05:00:00.000Z", set_at: "2027-06-07T14:00:00.000Z",
@@ -197,7 +197,7 @@ describe("BusinessStatusCard — Keep (spec §5.6.2)", () => {
     dbMocks.listClosureAppointments.mockResolvedValue([appt({})]);
     try {
       const html = await render();
-      expect(html).toContain(`/dashboard/accounts/${ACCOUNT}/calendar#booking-bk_1`);
+      expect(html).toContain(`/dashboard/accounts/${ACCOUNT}/calendar?job=bk_1`);
     } finally { vi.useRealTimers(); }
   });
 });

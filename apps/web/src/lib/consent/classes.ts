@@ -59,10 +59,11 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites then; twenty-nine kinds now, with the operational
+ * twenty-two send sites then; thirty-one kinds now, with the operational
  * floor's ops alert, F-048's cancel notice, the two emails of F-048's
- * customer move (the customer's and the business's), and S-06's reply
- * forward, each named at exactly one send site, which scans.test.ts pins).
+ * customer move (the customer's and the business's), S-06's reply
+ * forward, and F-046's staff confirmation and moved email, each named at
+ * exactly one send site, which scans.test.ts pins).
  * The email gate (email-gate.ts) throws on a kind
  * that is not here, and scan 2 fails on any kind literal handed to it that
  * is not here.
@@ -78,9 +79,10 @@ export function isSmsKind(kind: string): kind is SmsKind {
  * email, a person's own reply (danlo's decision Q4, 2026-09-30; spec §4.3,
  * choice 22). Operator mail carries neither.
  *
- * `transactional` (item 8c, owner Q2, 2026-10-19) holds exactly one kind: the
- * customer's notice when staff undo one of Sofía's booking changes. It is a
- * correction about their own appointment, so an unsubscribe does not stop it
+ * `transactional` (item 8c, owner Q2, 2026-10-19) holds three kinds: the
+ * customer's notice when staff undo one of Sofía's booking changes (item 8c),
+ * and the confirmation and the moved email for a job staff put on the
+ * calendar (F-046). Each is news about their own appointment, so an unsubscribe does not stop it
  * (decision 7 is unchanged: the gate still reads the ledger for the two
  * automated classes alone) and it may go at any hour; its words are ours, not
  * a person's, so it carries the unsubscribe footer. A hard bounce or a
@@ -131,6 +133,11 @@ export const EMAIL_KINDS = {
   "operator.reply_forward": { class: "operator", hours: "any", footer: "none" },
   // item 8c (owner Q2): staff undid one of Sofía's booking changes and chose to tell the customer.
   "booking.undo_notice": { class: "transactional", hours: "any", footer: "unsubscribe" },
+  // F-046 part 1 (spec 6.6, owner decision 3): a person put a job on the calendar (or moved one) and chose
+  // to tell the customer, sent once the Undo window has closed (CAL/job-hold.ts). News about their own
+  // appointment in our words: an unsubscribe does not stop it, any hour, the unsubscribe footer.
+  "staff.booking_confirmation": { class: "transactional", hours: "any", footer: "unsubscribe" },
+  "staff.booking_moved": { class: "transactional", hours: "any", footer: "unsubscribe" },
 } as const satisfies Record<string, EmailKindSpec>;
 
 export type EmailKind = keyof typeof EMAIL_KINDS;

@@ -56,7 +56,12 @@ const dbMocks = vi.hoisted(() => ({
   getOrCreateCalendar: vi.fn(),
   // S-47d Task 8 ("Keep"): the write, the event and the hold bump.
   setBookingClosureKept: vi.fn(), bumpHeldForAccount: vi.fn(), emit: vi.fn(),
+  // F-046 T10 (carry-in 2): the cancel reads the row as it left it (a staff job's unsettled hold), walks the
+  // chain for a time the customer knows, and reads the calendar id for the hold's events.
+  readAgendaJob: vi.fn(), getCalendarForAccount: vi.fn(),
 }));
+const holdEvents = vi.hoisted(() => ({ emitJobHoldEvents: vi.fn() }));
+vi.mock("./job-hold-events", () => ({ emitJobHoldEvents: holdEvents.emitJobHoldEvents }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
@@ -95,6 +100,13 @@ beforeEach(() => {
   owner.allowed = true;
   owner.calls = [];
   access.value = { userId: "user_1", isAgency: true, role: null };
+  // F-046 T10: by default every booking here is an ordinary one, with no staff hold.
+  dbMocks.readAgendaJob.mockReset().mockResolvedValue({
+    id: "bk_1", contact_id: "contact_1", status: "cancelled", author_kind: "customer", author_id: null,
+    hold_until: null, hold_settled_at: null, notice_sent_at: null, rescheduled_from_id: null,
+  });
+  dbMocks.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1" });
+  holdEvents.emitJobHoldEvents.mockReset().mockResolvedValue(undefined);
 });
 
 /**
@@ -693,6 +705,148 @@ describe("cancelNoticeOptionAction — the server's answer before the dialog ope
 });
 
 /**
+ * F-046 T10, carry-in 2 (plan review item 3 sends a held move's Cancel here). A staff job's email (its
+ * confirmation, or a move's new time) goes only when its Undo hold settles, and a cancelled row is never claimed,
+ * so a job cancelled inside its hold was never told to the customer and never will be. Its events were never
+ * written either (D8: the settle writes them). So the cancel: decides on the row AS THE CANCEL LEFT IT (final:
+ * nothing claims a cancelled row); emails nobody about the cancelled time; tells the customer only about a time
+ * they DO know, earlier in the chain (one they made, Sofía made with them, or one they were emailed); and writes
+ * the hold's missing events.
+ */
+describe("cancelBookingAction — a staff job cancelled inside its Undo hold (F-046 T10 carry-in 2)", () => {
+  const VERSION = "2026-10-30T18:00:00.123Z";
+  const NOTICE = { send: true, locale: "en", message: "Sorry!" };
+  const QUEUED = { messageId: "msg_1", email: { to: "maria@example.com" } };
+  type Row = Record<string, unknown>;
+  const rows = new Map<string, Row>();
+  const row = (id: string, over: Row = {}): Row => ({
+    id, contact_id: "contact_1", status: "cancelled", author_kind: "person", author_id: "user_2",
+    hold_until: null, hold_settled_at: null, notice_sent_at: null, rescheduled_from_id: null, ...over,
+  });
+  /** B: the held move's new row, cancelled by this cancel; A: the row it replaced; R: A's own root. */
+  const heldMove = (aOver: Row = {}, rOver: Row | null = null) => {
+    rows.set("bk_B", row("bk_B", { hold_until: "2026-10-30T18:00:10Z", rescheduled_from_id: "bk_A" }));
+    rows.set("bk_A", row("bk_A", { rescheduled_from_id: rOver ? "bk_R" : null, ...aOver }));
+    if (rOver) rows.set("bk_R", row("bk_R", rOver));
+  };
+
+  beforeEach(() => {
+    rows.clear();
+    dbMocks.readAgendaJob.mockReset().mockImplementation(async (_db: unknown, _a: string, id: string) => rows.get(id) ?? null);
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: VERSION });
+    dbMocks.savePendingCancelNotice.mockReset().mockResolvedValue(undefined);
+    notice.availability.mockReset().mockResolvedValue("available");
+    notice.queue.mockReset().mockResolvedValue(QUEUED);
+    notice.send.mockReset().mockResolvedValue("sent");
+    nextMocks.after.mockReset();
+    nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("a held move the customer knows nothing of: cancelled, nobody emailed even when asked, and nothing promised (mutation: queue the ordinary notice → FAILS)", async () => {
+    heldMove();
+    expect(await cancelBookingAction("acct_1", "bk_B", NOTICE)).toEqual({ ok: true, version: VERSION, notice: "none" });
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(nextMocks.after).not.toHaveBeenCalled();
+    expect(dbMocks.savePendingCancelNotice).not.toHaveBeenCalled();
+  });
+
+  it("a held move writes the two events its settle never will: the new row's booking.created and the old row's cancel, as its author (mutation: no events → FAILS)", async () => {
+    heldMove();
+    await cancelBookingAction("acct_1", "bk_B", { ...NOTICE, send: false });
+    expect(holdEvents.emitJobHoldEvents).toHaveBeenCalledTimes(1);
+    expect(holdEvents.emitJobHoldEvents).toHaveBeenCalledWith({}, "acct_1", {
+      id: "bk_B", author_id: "user_2", calendar_id: "cal_1", contact_id: "contact_1", rescheduled_from_id: "bk_A",
+    });
+  });
+
+  it("a held move whose earlier time WAS emailed to them: the notice names THAT time, from the row they were told (mutation: name the cancelled row's own time → FAILS)", async () => {
+    heldMove({ notice_sent_at: "2026-10-29T12:00:00Z" });
+    const r = await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(r).toEqual({ ok: true, version: VERSION, notice: "scheduled", noticeMessageId: "msg_1" });
+    expect(notice.queue).toHaveBeenCalledWith({}, expect.objectContaining({ bookingId: "bk_B", whenFrom: "bk_A" }));
+  });
+
+  it.each(["customer", "ai"])("a time the customer made themselves (%s-made, earlier in the chain) is one they know: the notice names it", async (kind) => {
+    heldMove({}, { author_kind: kind, author_id: null });
+    await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(notice.queue).toHaveBeenCalledWith({}, expect.objectContaining({ bookingId: "bk_B", whenFrom: "bk_R" }));
+  });
+
+  // T10 review minor (M13 survived): why untoldHold walks row by row instead of calling jobWasTold, which reads
+  // only the chain ROOT's author. Here the root R is a staff job nobody was emailed about, and the customer moved
+  // it themselves by link (A, customer-made, MID-chain); staff then moved A inside a hold (B). The customer knows
+  // A's time.
+  it("a customer's own move in the MIDDLE of a chain is a time they know: the notice names it (mutation: count only the root's author → FAILS)", async () => {
+    heldMove({ author_kind: "customer", author_id: null }, { author_kind: "person", author_id: "user_2" });
+    const r = await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(r).toMatchObject({ notice: "scheduled" });
+    expect(notice.queue).toHaveBeenCalledWith({}, expect.objectContaining({ bookingId: "bk_B", whenFrom: "bk_A" }));
+  });
+
+  it("the newest time they know wins: a move of a customer-made booking, emailed, names the emailed row, not the root", async () => {
+    heldMove({ notice_sent_at: "2026-10-29T12:00:00Z" }, { author_kind: "customer", author_id: null });
+    await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(notice.queue.mock.calls[0]![1]).toMatchObject({ whenFrom: "bk_A" });
+  });
+
+  it("a held ADD someone else cancels (no chain): nobody emailed, and its booking.created is written", async () => {
+    rows.set("bk_B", row("bk_B", { hold_until: "2026-10-30T18:00:10Z" }));
+    expect(await cancelBookingAction("acct_1", "bk_B", NOTICE)).toEqual({ ok: true, version: VERSION, notice: "none" });
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(holdEvents.emitJobHoldEvents).toHaveBeenCalledWith({}, "acct_1", expect.objectContaining({ id: "bk_B", rescheduled_from_id: null }));
+  });
+
+  it("decided on the row AS THE CANCEL LEFT IT: a hold the settle claimed just before the cancel landed is an ordinary cancel (its email may have gone), so the notice is the ordinary one and no events are written twice (mutation: decide before the cancel → FAILS)", async () => {
+    heldMove();
+    dbMocks.setBookingStatus.mockImplementation(async () => {
+      rows.set("bk_B", { ...rows.get("bk_B")!, hold_settled_at: "2026-10-30T18:00:10Z" });
+      return { updatedAt: VERSION };
+    });
+    const r = await cancelBookingAction("acct_1", "bk_B", NOTICE);
+    expect(r).toMatchObject({ notice: "scheduled" });
+    expect(notice.queue.mock.calls[0]![1]).not.toHaveProperty("whenFrom");
+    expect(holdEvents.emitJobHoldEvents).not.toHaveBeenCalled();
+    expect(dbMocks.readAgendaJob.mock.invocationCallOrder[0]!).toBeGreaterThan(dbMocks.setBookingStatus.mock.invocationCallOrder[0]!);
+  });
+
+  it("an ordinary booking (no hold): the ordinary notice, no whenFrom, no events", async () => {
+    rows.set("bk_1", row("bk_1", { author_kind: "customer", author_id: null }));
+    await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    expect(notice.queue).toHaveBeenCalledWith({}, {
+      accountId: "acct_1", bookingId: "bk_1", userId: "user_1", locale: "en", message: "Sorry!", origin: "https://app.example.com",
+    });
+    expect(holdEvents.emitJobHoldEvents).not.toHaveBeenCalled();
+  });
+
+  it("the row cannot be read after the cancel: the cancel stands, nobody is emailed, nothing is promised", async () => {
+    dbMocks.readAgendaJob.mockRejectedValue(new Error("db down"));
+    expect(await cancelBookingAction("acct_1", "bk_B", NOTICE)).toEqual({ ok: true, version: VERSION, notice: "none" });
+    expect(notice.queue).not.toHaveBeenCalled();
+  });
+
+  it("events that cannot be written are logged; the cancel and its answer stand", async () => {
+    heldMove({ notice_sent_at: "2026-10-29T12:00:00Z" });
+    holdEvents.emitJobHoldEvents.mockRejectedValue(new Error("db down"));
+    expect(await cancelBookingAction("acct_1", "bk_B", NOTICE)).toMatchObject({ ok: true, notice: "scheduled" });
+  });
+
+  it("the Cancel button's probe: a held job they know nothing of opens no notice dialog (answered as no address, cancel at once)", async () => {
+    heldMove();
+    rows.set("bk_B", { ...rows.get("bk_B")!, status: "booked" });
+    expect(await cancelNoticeOptionAction("acct_1", "bk_B")).toEqual({ ok: true, notice: "no_email" });
+    expect(notice.availability).not.toHaveBeenCalled();
+  });
+
+  it("the probe for a held job whose earlier time they know is the ordinary availability", async () => {
+    heldMove({ notice_sent_at: "2026-10-29T12:00:00Z" });
+    rows.set("bk_B", { ...rows.get("bk_B")!, status: "booked" });
+    notice.availability.mockResolvedValue("address_blocked");
+    expect(await cancelNoticeOptionAction("acct_1", "bk_B")).toEqual({ ok: true, notice: "address_blocked" });
+  });
+});
+
+/**
  * F-085 part 1, spec §7.3: "prove the target through the request client, then
  * write through the service client". These four actions write (or read) with
  * serviceDb(), which RLS does not bind, so a Technician whose 0068 policies
@@ -754,6 +908,63 @@ describe("booking actions prove the booking through the caller's own client firs
     const r = await run();
     expect(r.ok).toBe(true);
     expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+  });
+});
+
+/**
+ * T10 review I3, spec §8.1: a Technician never cancels (nor puts a cancel back). Cancel through either door
+ * (`cancelBookingAction`, or `setBookingStatusAction` with "cancelled") and the Undo are refused BEFORE anything is
+ * read or written, the proof included. Completed and No-show stay theirs on their OWN customers' jobs (owner
+ * decision 1): RLS behind `proveBooking` bounds which jobs those are.
+ */
+describe("a Technician cannot cancel or undo a cancel; Completed and No-show stay theirs (T10 review I3, spec §8.1)", () => {
+  const V = "2026-10-09T18:00:00.123Z";
+  const REFUSED = { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  const TECH = { userId: "tech_1", isAgency: false, role: "technician" as const };
+
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: V });
+    dbMocks.undoOperatorCancel.mockReset().mockResolvedValue(undefined);
+    dbMocks.discardQueuedNotice.mockReset().mockResolvedValue(true);
+    dbMocks.deletePendingCancelNotice.mockReset().mockResolvedValue(undefined);
+    notice.availability.mockReset().mockResolvedValue("available");
+    notice.queue.mockReset().mockResolvedValue({ messageId: "msg_1", email: { to: "maria@example.com" } });
+    nextMocks.after.mockReset();
+    nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
+  });
+
+  function expectNothingTouched() {
+    expect(visible.callerCanSee).not.toHaveBeenCalled();
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.undoOperatorCancel).not.toHaveBeenCalled();
+    expect(dbMocks.readAgendaJob).not.toHaveBeenCalled();
+    expect(notice.availability).not.toHaveBeenCalled();
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(nextMocks.after).not.toHaveBeenCalled();
+  }
+
+  const refused = [
+    ["cancelBookingAction (mutation: drop its role check → FAILS)", () => cancelBookingAction("acct_1", "bk_1", { send: true, locale: "en", message: "" })],
+    ["setBookingStatusAction with \"cancelled\" (mutation: drop its role check → FAILS)", () => setBookingStatusAction("acct_1", "bk_1", "cancelled")],
+    ["undoCancelBookingAction (mutation: drop its role check → FAILS)", () => undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")],
+  ] as const;
+
+  it.each(refused)("%s: a Technician is refused before anything is read or written", async (_name, run) => {
+    access.value = TECH;
+    expect(await run()).toEqual(REFUSED);
+    expectNothingTouched();
+  });
+
+  it.each(["completed", "no_show"] as const)("a Technician may still mark their own customer's job %s, proven first (mutation: refuse every status → FAILS)", async (status) => {
+    access.value = TECH;
+    expect(await setBookingStatusAction("acct_1", "bk_1", status)).toEqual({ ok: true });
+    expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "acct_1", "bk_1", status, "tech_1", "user", expect.anything());
+  });
+
+  it.each(refused)("%s: Staff still may", async (_name, run) => {
+    access.value = { userId: "user_1", isAgency: false, role: "staff" };
+    expect((await run()).ok).toBe(true);
   });
 });
 

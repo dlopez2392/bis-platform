@@ -89,7 +89,7 @@ export function CalendarSettings({
   const notifyEmailsEmpty = parseNotifyEmails(notifyEmailsText).length === 0;
 
   return (
-    <Card>
+    <Card id="booking-settings">
       <CardHeader>
         <CardTitle>{isAgency ? m["calendar.settings.title"] : m["calendar.settings.clientTitle"]}</CardTitle>
         <CardDescription>{isAgency ? m["calendar.settings.body"] : m["calendar.settings.clientBody"]}</CardDescription>

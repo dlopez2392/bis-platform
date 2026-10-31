@@ -33,7 +33,7 @@ function ancestors(key: string, seen = new Set<string>()): Set<string> {
 const RELEASED = ["reminders", "followups", "noShowNudges", "smsReminders", "appointmentConfirms", "quoteFollowups"];
 const TRANSITIVELY_BLOCKED = ["reviewRequests", "referralAsks", "reactivations"];
 const NOT_AFTER_RELEASE = [
-  "billingPause", "releaseHeld", "cancelNotices", "siteTraffic", "documentsSweep", "documentsScan",
+  "billingPause", "releaseHeld", "cancelNotices", "jobHolds", "siteTraffic", "documentsSweep", "documentsScan",
   "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", JOBS_DRAIN_KEY, "usageReport", "opsWatch",
 ];
 
@@ -43,7 +43,7 @@ describe("PLAN — the registry as a dependency graph", () => {
     expected.splice(expected.indexOf("weeklyAgencyReport") + 1, 0, JOBS_DRAIN_KEY);
     expect(keys(PLAN)).toEqual(expected);
     expect(new Set(keys(PLAN)).size).toBe(PLAN.length);
-    expect(PLAN).toHaveLength(21);
+    expect(PLAN).toHaveLength(22);
   });
 
   it("2. every edge between two registered passes runs earlier -> later in PASSES, and jobsDrain's only dependants are usageReport and opsWatch (mutation: add \"reminders\" to releaseHeld's after -> FAILS)", () => {
@@ -188,7 +188,7 @@ describe("runFanout — what starts, and when", () => {
   it("7. no recipe starts before releaseHeld answers, while everything not after it runs", async () => {
     const h = harness({ hold: ["releaseHeld"] });
     await flush();
-    for (const k of ["cancelNotices", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry",
+    for (const k of ["cancelNotices", "jobHolds", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry",
       "weeklyClientReport", "weeklyAgencyReport", JOBS_DRAIN_KEY]) expect(h.invoked(k), k).toBe(true);
     for (const k of [...RELEASED, ...TRANSITIVELY_BLOCKED]) expect(h.invoked(k), k).toBe(false);
     expect(h.invoked("usageReport")).toBe(false);
@@ -275,14 +275,14 @@ describe("runFanout — what starts, and when", () => {
     }
   });
 
-  it("9d. billingPause gives no answer -> only billingPause, usageReport and opsWatch run, 18 nodes never start, each released recipe's beat names the billing pause as the cause, then cron.tick (mutation: drop the root cause from the blocked wording -> FAILS)", async () => {
+  it("9d. billingPause gives no answer -> only billingPause, usageReport and opsWatch run, 19 nodes never start, each released recipe's beat names the billing pause as the cause, then cron.tick (mutation: drop the root cause from the blocked wording -> FAILS)", async () => {
     const h = harness({ answers: { billingPause: "reject" } });
     const results = await h.run;
     expect(h.events.filter((e) => e.startsWith("invoke:"))).toEqual(["invoke:billingPause", "invoke:usageReport", "invoke:opsWatch"]);
     expect(results.billingPause).toEqual({ errored: 1, noAnswer: 1 });
     const notStarted = keys(PLAN).filter((k) => results[k]?.notStarted === 1);
     expect(notStarted).toEqual(keys(PLAN).filter((k) => !["billingPause", "usageReport", "opsWatch"].includes(k)));
-    expect(notStarted).toHaveLength(18);
+    expect(notStarted).toHaveLength(19);
     expect(h.beats).toEqual([
       ["cron.pass.billingPause", { ok: false, error: "the pass's function did not answer: Error: socket hang up" }],
       ...RELEASED.map((k) => [`cron.pass.${k}`, { ok: false, error: "not started: the release pass was not started because the billingPause pass did not answer" }]),

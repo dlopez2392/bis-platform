@@ -123,6 +123,7 @@ export {
   type PendingCancelNotice, type PendingCancelNoticeWrite,
 } from "./booking";
 export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
+export { createStaffJob, listAgendaBookings, readAgendaJob, jobWasTold, countAwaitingOutcomeBefore, claimJobHold, stampJobNoticeSent, setJobNotice, listDueJobHolds, deleteUnsettledStaffJob, undoStaffMove, editJobDetails, AGENDA_ROW_CAP, type BookingMeetingType, type NoticeWanted, type StaffJobInput, type StaffMoveJob, type AgendaBookingRow, type JobHoldClaim, type UndoAddOutcome, type UndoStaffMoveOutcome, type JobDetails } from "./booking";
 export { countContactBookingsMade, listContactUpcomingBookings, countBookingsMadeFor, type UpcomingBooking } from "./booking";
 export { rescheduleRoots, listFeedBookings, FEED_PAST_DAYS, FEED_FUTURE_DAYS, FEED_FUTURE_CAP, FEED_PAST_CAP, type FeedBookingRow } from "./booking";
 export {

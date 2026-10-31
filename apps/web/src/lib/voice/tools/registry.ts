@@ -740,8 +740,11 @@ export async function runTool(
       // five lines up in that case: an absent or throwing provider never
       // costs the caller their reschedule, `meetingUrl` simply stays
       // `undefined` on either path, and neither path ever logs a url.
+      // The BOOKING's own type decides (F-046: a staff job can be video on
+      // an in_person calendar, or phone on a video one); NULL, every row
+      // from before 0107, means the calendar's, exactly as before.
       let meetingUrl: string | undefined;
-      if (ctx.calendar.meeting_type === "video") {
+      if ((old.meeting_type ?? ctx.calendar.meeting_type) === "video") {
         const meetingProvider = getMeetingProvider();
         if (meetingProvider) {
           try {

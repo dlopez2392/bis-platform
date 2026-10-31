@@ -69,7 +69,7 @@ export function AffectedAppointmentRow({
         <div className="flex items-center gap-2">
           {a.kept ? kept : keep}
           <Link
-            href={`/dashboard/accounts/${accountId}/calendar#booking-${a.id}`}
+            href={`/dashboard/accounts/${accountId}/calendar?job=${a.id}`}
             className={`${TAP} px-2 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline`}
           >
             {tr.text("business.card.cancelOnCalendar")}

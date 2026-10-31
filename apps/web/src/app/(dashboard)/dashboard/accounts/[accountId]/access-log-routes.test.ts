@@ -42,6 +42,9 @@ const RECORD: Record<string, "noteOpened" | "noteOpenedApi"> = {
   // once, so it notes both — after both are proven (not missing, not holding, not a tombstone) and
   // before any markup returns, same shape as contacts/[contactId]/page.tsx's own call.
   [`${A}/contacts/merge/page.tsx`]: "noteOpened",
+  // F-046 part 1 (spec 8.2): the agenda is a list; opening a job's drawer (`?job=`) shows its customer's name, phone
+  // and address, so the page notes that customer, after the job is read on the caller's own client.
+  [`${A}/calendar/page.tsx`]: "noteOpened",
   [`${A}/contacts/export/route.ts`]: "noteOpenedApi",   // review m5: a 409, never a redirect, on a download
   ...Object.fromEntries(["ai-summary", "document-requests", "document-requirements", "documents", "email", "groups", "places",
     "relationships", "summary", "texts"].map((r) => [`${API}/contacts/[contactId]/${r}/route.ts`, "noteOpenedApi" as const])),
@@ -51,7 +54,7 @@ const LIST = "a list (owner ruling 2)";
 const SETTINGS = "settings";
 const NOT_A_RECORD: Record<string, string> = {
   [`${A}/layout.tsx`]: "the account's chrome (name, language, billing banner); the gate runs here too",
-  [`${A}/activity/page.tsx`]: LIST, [`${A}/calendar/page.tsx`]: LIST, [`${A}/calls/page.tsx`]: LIST,
+  [`${A}/activity/page.tsx`]: LIST, [`${A}/calls/page.tsx`]: LIST,
   [`${A}/contacts/page.tsx`]: `${LIST}; its drawer's routes are records`, [`${A}/forms/page.tsx`]: LIST,
   [`${A}/pipeline/page.tsx`]: LIST, [`${A}/tasks/page.tsx`]: LIST,
   [`${A}/documents/page.tsx`]: `${LIST}; opening a file is logged by getDocumentUrlAction`,
@@ -86,6 +89,8 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
   ...each(`${A}/calendar/actions.ts`, ["updateCalendarSettingsAction"], CFG),
   ...each(`${A}/calendar/actions.ts`, ["setBookingStatusAction", "cancelBookingAction", "keepAppointmentAction", "undoCancelBookingAction"], W),
   ...each(`${A}/calendar/actions.ts`, ["cancelNoticeOptionAction"], "Cancel's notice check, from the calendar (a list, owner ruling 2)"),
+  ...each(`${A}/calendar/agenda-actions.ts`, ["addJobAction", "undoAddJobAction", "moveJobAction", "undoMoveJobAction", "undoEditJobAction"], W),
+  ...each(`${A}/calendar/agenda-actions.ts`, ["jobNoticeOptionAction"], "the Add job sheet's notice check, from the calendar (a list, owner ruling 2)"),
   ...each(`${A}/calendar/closed-days-actions.ts`, ["addClosedDayAction", "removeClosedDayAction"], CFG),
   ...each(`${A}/calendar/feed-actions.ts`, ["makeFeedLinkAction", "replaceFeedLinkAction", "turnOffFeedLinkAction", "undoFeedLinkAction"], CFG),
   ...each(`${A}/checklist/actions.ts`, ["setChecklistItemAction", "setA2pRegistrationAction", "addChecklistItemAction"], AG),

@@ -13,6 +13,8 @@ export type FeedContentRow = {
   first_name: string | null;
   /** `rescheduleRoots`' answer for this row. */
   rootId: string; depth: number;
+  /** F-046 part 1 (0107): this booking's own kind; NULL reads the calendar's (`FeedOptions.meetingType`). */
+  meeting_type: MeetingKind | null;
 };
 export type MeetingKind = "in_person" | "phone" | "video";
 export type FeedOptions = { locale: Locale; meetingType: MeetingKind; origin: string | null; accountId: string };
@@ -30,13 +32,14 @@ const deeper = (a: FeedContentRow, b: FeedContentRow) => (a.depth !== b.depth ? 
 
 export function feedEvents(rows: readonly FeedContentRow[], o: FeedOptions): FeedEvent[] {
   const s = feedStrings(o.locale);
-  const kind = s[`kind_${o.meetingType}`];
-  const description = o.origin
-    ? s.openIn.replace("{url}", () => `${o.origin}/dashboard/accounts/${o.accountId}/calendar`)
-    : undefined;
   const byUid = new Map<string, { row: FeedContentRow; event: FeedEvent }>();
   for (const row of rows) {
     const name = feedFirstName(row.first_name, o.locale);
+    const kind = s[`kind_${row.meeting_type ?? o.meetingType}`];
+    // F-046 part 1: the link opens THIS booking's drawer on the agenda.
+    const description = o.origin
+      ? s.openIn.replace("{url}", () => `${o.origin}/dashboard/accounts/${o.accountId}/calendar?job=${row.id}`)
+      : undefined;
     const base = s.summary.replace("{kind}", () => kind).replace("{name}", () => name);
     const event: FeedEvent = {
       uid: bookingUid(row.rootId), sequence: row.depth,

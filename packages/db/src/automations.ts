@@ -616,6 +616,10 @@ export type DueSmsReminder = {
   bodyEs: string | null;
 };
 
+/** F-046 (0107): no Undo hold, or a hold already claimed. booking.ts's filter of the same name, for the two text
+ *  due-lists (spec 6.5, section 17; plan Task 9). */
+const HOLD_SETTLED_OR_NONE = "hold_until.is.null,hold_settled_at.not.is.null";
+
 /** No gate follows this list: a text reminder is tied to the appointment,
  *  not to a morning, so the window IS the moment. */
 const SMS_REMINDER_SELECT =
@@ -649,10 +653,14 @@ export async function listDueSmsReminders(
   const windowStart = new Date(now + SMS_REMINDER_WINDOW_START_MS).toISOString();
   const windowEnd = new Date(now + SMS_REMINDER_WINDOW_END_MS).toISOString();
 
+  // F-046: a staff job is texted only once its Undo hold is SETTLED, so the confirmation (the settle sends it)
+  // always comes first, and a job undone before its claim never gets a text. Gated on the claim, never on
+  // hold_until: the clock passing proves nothing was settled (plan review item 4). The by-id twin deliberately
+  // does not filter (plan correction 3).
   const { data, error } = await db.from("bookings")
     .select(SMS_REMINDER_SELECT)
     .in("account_id", [...enabled.keys()])
-    .eq("status", "booked").is("sms_reminder_sent_at", null)
+    .eq("status", "booked").is("sms_reminder_sent_at", null).or(HOLD_SETTLED_OR_NONE)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueSmsReminders failed: ${error.message}`);
@@ -799,10 +807,12 @@ export async function listDueAppointmentConfirms(
   const windowStart = new Date(now + APPOINTMENT_CONFIRM_WINDOW_START_MS).toISOString();
   const windowEnd = new Date(now + APPOINTMENT_CONFIRM_WINDOW_END_MS).toISOString();
 
+  // F-046: the same hold filter as listDueSmsReminders, for the same reason: a staff job is asked to confirm
+  // only once its Undo hold is SETTLED, never on the clock. The by-id twin does not filter (plan correction 3).
   const { data, error } = await db.from("bookings")
     .select(APPOINTMENT_CONFIRM_SELECT)
     .in("account_id", [...enabled.keys()])
-    .eq("status", "booked").is("confirm_asked_at", null)
+    .eq("status", "booked").is("confirm_asked_at", null).or(HOLD_SETTLED_OR_NONE)
     .gte("starts_at", windowStart).lte("starts_at", windowEnd)
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueAppointmentConfirms failed: ${error.message}`);

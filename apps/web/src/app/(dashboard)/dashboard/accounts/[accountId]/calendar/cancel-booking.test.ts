@@ -157,3 +157,32 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
     expect(m["calendar.bookings.cancelledToastNotice"]).toMatch(/undo/i);
   });
 });
+
+describe("runCancelWithUndo in the drawer's language (T11/T12 review: a Spanish drawer spoke English)", () => {
+  it("every toast is the Spanish twin: the cancel, the Undo label, the restore, and the server's refusals mapped by key (mutation: m[...] -> FAILS)", async () => {
+    const { toast, clickUndo } = fakeToast();
+    await runCancelWithUndo(cancelled(true), async () => ({ ok: true as const }), toast, { schedule: fakeSchedule().schedule, locale: "es" });
+    expect(toast.success).toHaveBeenCalledWith(
+      m["calendar.bookings.cancelledToastNotice.es"],
+      { action: { label: m["common.undo.es"], onClick: expect.any(Function) }, duration: UNDO_WINDOW_MS },
+    );
+    clickUndo();
+    await flush();
+    expect(toast.success).toHaveBeenLastCalledWith(m["calendar.bookings.restored.es"]);
+
+    const refused = fakeToast();
+    await runCancelWithUndo(cancelled(), async () => ({ ok: false as const, error: m["calendar.bookings.restoreSlotTaken"] }), refused.toast,
+      { schedule: fakeSchedule().schedule, locale: "es", noNoticeMessage: m["calendar.bookings.cancelledToastAddressBlocked"] });
+    expect(refused.toast.success.mock.calls[0]![0]).toBe(m["calendar.bookings.cancelledToastAddressBlocked.es"]);
+    refused.clickUndo();
+    await flush();
+    expect(refused.toast.error).toHaveBeenCalledWith(m["calendar.bookings.restoreSlotTaken.es"]);
+
+    const failed = fakeToast();
+    await runCancelWithUndo(async () => ({ ok: false as const, error: m["calendar.bookings.statusUpdateFailed"] }), async () => ({ ok: true as const }), failed.toast, { locale: "es" });
+    expect(failed.toast.error).toHaveBeenCalledWith(m["calendar.bookings.statusUpdateFailed.es"]);
+    const crashed = fakeToast();
+    await runCancelWithUndo(async () => { throw new Error("x"); }, async () => ({ ok: true as const }), crashed.toast, { locale: "es" });
+    expect(crashed.toast.error).toHaveBeenCalledWith(m["common.actionCrashed.es"]);
+  });
+});

@@ -1,12 +1,19 @@
+import { Suspense } from "react";
 import { headers } from "next/headers";
 import {
-  serviceDb, getOrCreateCalendar, listCalendarBookings, getVoiceProfile,
+  serviceDb, getOrCreateCalendar, getVoiceProfile,
   listClosedDaysFrom, listClosureAppointmentsForRanges, CLOSURE_APPOINTMENTS_LIMIT, countHeldByBooking,
-  type ClosureAppointment,
+  readAgendaJob, listPeopleNames, jobWasTold, getContact,
+  type AgendaBookingRow, type ClosureAppointment,
 } from "@bis/db";
+import { recipientLanguage } from "@bis/db/spanish-box";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
+import { noteOpened } from "@/lib/access-log/note";
+import { isUuid } from "@/lib/assign/action-guards";
+import { makeTr } from "@/lib/record/copy";
+import { parseAgendaParams } from "@/lib/booking/agenda-window";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
@@ -15,16 +22,16 @@ import { seesWholeAccount } from "@/lib/auth-role";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { dayKey, startOfDay, addDays } from "@/lib/business-status/status";
 import { CalendarSettings } from "./calendar-settings";
-import { BookingsList } from "./bookings-list";
+import { AgendaCard } from "./agenda-card";
+import { AgendaSkeleton } from "./agenda-skeleton";
+import { agendaHref, buildJobDrawerView } from "./agenda-view";
+import { JobDrawer, type JobDrawerView } from "./job-drawer";
 import { ClosedDaysCard, type ClosedDaysRangeView } from "./closed-days-card";
 import { EmbedSnippet } from "./embed-snippet";
 import { FeedCard } from "./feed-card";
 import { loadFeedCardView } from "./feed-card-data";
 import { makeFeedLinkAction, replaceFeedLinkAction, turnOffFeedLinkAction, undoFeedLinkAction } from "./feed-actions";
-import {
-  updateCalendarSettingsAction, setBookingStatusAction, cancelNoticeOptionAction, cancelBookingAction,
-  undoCancelBookingAction, keepAppointmentAction,
-} from "./actions";
+import { updateCalendarSettingsAction, keepAppointmentAction } from "./actions";
 import { addClosedDayAction, removeClosedDayAction } from "./closed-days-actions";
 
 export const dynamic = "force-dynamic";
@@ -42,14 +49,16 @@ export default async function CalendarPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string; closedDay?: string; locale?: string }>;
+  searchParams: Promise<{ from?: string; closedDay?: string; locale?: string; view?: string; day?: string; job?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
   // below appears only for someone who arrived mid-flow. `closedDay`: a
   // To-do's `?closedDay={date}` (S-47d spec 5.5.1, 5.6.3) — the Closed days
   // card's own range opens already expanded.
-  const { from, closedDay, locale: localeParam } = await searchParams;
+  // F-046 part 1 (spec 5.1, 5.5): `view`, `day` and `job` drive the agenda and its drawer; a `job` that is not
+  // a uuid is ignored, never read.
+  const { from, closedDay, locale: localeParam, view: viewParam, day: dayParam, job: jobParam } = await searchParams;
   // Both audiences — calendar is the client's own business data, the same
   // class of surface `requireAccountAccess` already gates contacts with.
   // `canManage` (Task 7, staff and roles): the agency and a client Owner
@@ -70,17 +79,16 @@ export default async function CalendarPage({
   // account scope).
   const calendar = await getOrCreateCalendar(serviceDb(), accountId, userId);
 
-  // ONE instant for the list and for the rows' "has it started?" (D-030), so
-  // a row the list carries as started always offers its outcome buttons.
+  // ONE instant for the agenda, the drawer's "has it started?" (D-030) and today's key: nothing below reads
+  // the clock again (Global constraint: no `Date.now()` during render).
   const nowIso = new Date().toISOString();
-  const [account, bookings, h] = await Promise.all([
+  const [account, h] = await Promise.all([
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`calendar: account lookup failed: ${error.message}`);
         if (!data) throw new Error("calendar: account not found");
         return data as { timezone: string; language: string | null };
       }),
-    listCalendarBookings(db, accountId, nowIso),
     headers(),
   ]);
 
@@ -178,11 +186,58 @@ export default async function CalendarPage({
     }
   }
 
+  // F-046 part 1 (spec 5.5, 8.2; plan correction 7): `?job=` opens one job's drawer. The job is read on the
+  // CALLER's client (RLS: a Technician reads only their customers' jobs, R5) and, once it is known to be
+  // theirs to see, its customer is noted as opened HERE, in the page, before any markup carries their name,
+  // phone or address (the route walk pins the logger to the guard's own answer in this function). A job
+  // the caller cannot see draws no drawer and notes nothing.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  let job: AgendaBookingRow | null = null;
+  let jobRead: "none" | "ok" | "gone" | "failed" = "none";
+  if (isUuid(jobParam)) {
+    try {
+      job = await readAgendaJob(db, accountId, jobParam);
+      jobRead = job ? "ok" : "gone";
+    } catch (e) {
+      console.error(`calendar: job read failed for account ${accountId}: ${String(e)}`);
+      jobRead = "failed";
+    }
+  }
+  if (job) await noteOpened(access, accountId, { kind: "contact", recordId: job.contact_id });
+  // A job with no `day` opens on its own day (spec 5.5).
+  const { view, day } = parseAgendaParams(
+    { view: viewParam, day: dayParam ?? (job ? dayKey(new Date(job.starts_at), account.timezone) : undefined) }, today,
+  );
+  const base = `/dashboard/accounts/${accountId}/calendar`;
+  const canWrite = seesWholeAccount(access);
+  let drawerView: JobDrawerView | null = null;
+  if (job) {
+    const row = job;
+    const soft = <T,>(what: string, fallback: T) => (e: unknown): T => {
+      console.error(`calendar: job drawer ${what} read failed for account ${accountId}: ${String(e)}`);
+      return fallback;
+    };
+    const [names, jobPersona, told, contact] = await Promise.all([
+      row.author_kind === "person" && row.author_id
+        ? listPeopleNames(db, [row.author_id]).catch(soft<Record<string, string>>("names", {}))
+        : Promise.resolve({}),
+      row.author_kind === "ai"
+        ? getVoiceProfile(db, accountId).then((v) => v?.persona_name?.trim() || null).catch(soft<string | null>("persona", null))
+        : Promise.resolve(null),
+      // Move's "Email {first} the new time" tick: unticked when we cannot tell (nothing proves they were told).
+      jobWasTold(db, accountId, row.id).catch(soft("told", false)),
+      getContact(db, accountId, row.contact_id).catch(soft<unknown>("contact", null)),
+    ]);
+    drawerView = buildJobDrawerView({
+      row, now: new Date(nowIso), timezone: account.timezone, locale, pseudo, names, viewerId: userId, persona: jobPersona,
+      calendarMeetingType: calendar.meeting_type, canWrite, told, accountId,
+      // The Cancel dialog's starting language (Task 17, C18): the customer's, else the account's.
+      language: recipientLanguage((contact as { language?: string | null } | null)?.language, account.language),
+    });
+  }
+  const tr = makeTr(locale, pseudo);
+
   const boundUpdateSettings = updateCalendarSettingsAction.bind(null, accountId);
-  const boundSetStatus = setBookingStatusAction.bind(null, accountId);
-  const boundNoticeOption = cancelNoticeOptionAction.bind(null, accountId);
-  const boundCancel = cancelBookingAction.bind(null, accountId);
-  const boundUndoCancel = undoCancelBookingAction.bind(null, accountId);
   const boundAddClosedDay = addClosedDayAction.bind(null, accountId);
   const boundRemoveClosedDay = removeClosedDayAction.bind(null, accountId);
   const boundKeepAppointment = keepAppointmentAction.bind(null, accountId);
@@ -191,51 +246,63 @@ export default async function CalendarPage({
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader title={m["calendar.title"]} />
-      <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-6">
-          {canManage ? (
-            <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
-          ) : null}
-          <ClosedDaysCard
-            accountId={accountId}
-            locale={locale}
-            pseudo={requestPseudoMode({ locale: localeParam })}
-            canManage={canManage}
-            canAct={seesWholeAccount(access)}
-            persona={persona}
-            today={today}
-            timezone={account.timezone}
-            ranges={closedDaysView}
-            initialOpenClosedDay={closedDay ?? null}
-            addAction={boundAddClosedDay}
-            removeAction={boundRemoveClosedDay}
-            keepAction={boundKeepAppointment}
+      <div className="space-y-6 p-6">
+        {jobRead === "gone" || jobRead === "failed" ? (
+          <p data-job-gone role="status" className="text-sm text-muted-foreground">
+            {/* The job's own words: never the agenda's "Couldn't load your schedule" over an agenda that loaded. */}
+            {tr.text(jobRead === "gone" ? "calendar.job.gone" : "calendar.job.readFailed")}
+          </p>
+        ) : null}
+        {/* F-046 part 1 (spec 5.1): the agenda first and full width, streaming behind its own skeleton; Add job
+            is its one primary, inside the card, never in PageHeader (rule 8, spec 14.1). */}
+        <Suspense fallback={<AgendaSkeleton />}>
+          <AgendaCard
+            db={db} accountId={accountId} view={view} day={day} today={today} nowIso={nowIso}
+            timezone={account.timezone} locale={locale} pseudo={pseudo} canAdd={canWrite} viewerId={userId}
+            calendar={calendar} job={job ? job.id : null}
           />
-          <BookingsList
-            accountId={accountId}
-            timezone={account.timezone}
-            bookings={bookings}
-            nowIso={nowIso}
-            accountLanguage={account.language === "en" || account.language === "es" ? account.language : null}
-            statusAction={boundSetStatus}
-            noticeOptionAction={boundNoticeOption}
-            cancelAction={boundCancel}
-            undoCancelAction={boundUndoCancel}
-          />
-        </div>
-        <div className="space-y-6">
-          <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
-          <FeedCard
-            view={feedView}
-            locale={locale}
-            pseudo={requestPseudoMode({ locale: localeParam })}
-            make={makeFeedLinkAction.bind(null, accountId)}
-            replace={replaceFeedLinkAction.bind(null, accountId)}
-            turnOff={turnOffFeedLinkAction.bind(null, accountId)}
-            undo={undoFeedLinkAction.bind(null, accountId)}
-          />
+        </Suspense>
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="space-y-6">
+            {canManage ? (
+              <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
+            ) : null}
+            <ClosedDaysCard
+              accountId={accountId}
+              locale={locale}
+              pseudo={pseudo}
+              canManage={canManage}
+              canAct={canWrite}
+              persona={persona}
+              today={today}
+              timezone={account.timezone}
+              ranges={closedDaysView}
+              initialOpenClosedDay={closedDay ?? null}
+              addAction={boundAddClosedDay}
+              removeAction={boundRemoveClosedDay}
+              keepAction={boundKeepAppointment}
+            />
+          </div>
+          <div className="space-y-6">
+            <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
+            <FeedCard
+              view={feedView}
+              locale={locale}
+              pseudo={pseudo}
+              make={makeFeedLinkAction.bind(null, accountId)}
+              replace={replaceFeedLinkAction.bind(null, accountId)}
+              turnOff={turnOffFeedLinkAction.bind(null, accountId)}
+              undo={undoFeedLinkAction.bind(null, accountId)}
+            />
+          </div>
         </div>
       </div>
+      {drawerView ? (
+        <JobDrawer
+          key={drawerView.id} accountId={accountId} view={drawerView} closeHref={agendaHref(base, { view, day })} timezone={account.timezone}
+          locale={locale} pseudo={pseudo} calendarMeetingType={calendar.meeting_type} defaultMinutes={calendar.slot_duration_minutes}
+        />
+      ) : null}
     </>
   );
 }

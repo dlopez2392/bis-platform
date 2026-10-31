@@ -702,3 +702,37 @@ describe("the reminder in Spanish (spec §11.1, C11)", () => {
     expect(text).toBe("This is a reminder for your upcoming booking.\n\nSat, Oct 17\n\nCancel this booking: https://x/c");
   });
 });
+
+/**
+ * F-046 part 1 (spec 6.6, owner decision 4): a job staff put on the calendar tells the customer WHERE, on one
+ * line ("Where" / "Dónde"), in both parts. Only the address: the job's own "what" line never reaches them
+ * (the templates have no field for it). No address, no row: never an empty label.
+ */
+describe("the Where line on the confirmation and the moved email (F-046)", () => {
+  const WHERE = "Home · 1 Main St & 2nd <Apt>";
+  const base = { brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_BOOKER, cancelUrl: CANCEL_URL };
+  const templates = [
+    ["bookingConfirmationEmail", bookingConfirmationEmail],
+    ["bookingRescheduledEmail", bookingRescheduledEmail],
+  ] as const;
+
+  for (const [name, render] of templates) {
+    for (const locale of ["en", "es"] as const) {
+      const label = locale === "es" ? "Dónde" : "Where";
+      it(`${name}, ${locale}: a where renders a "${label}" row in the html (escaped) and the text (mutation: drop the row → FAILS)`, () => {
+        const { html, text } = render({ ...base, locale, where: WHERE });
+        expect(html).toContain(`>${label}</td>`);
+        expect(html).toContain("Home · 1 Main St &amp; 2nd &lt;Apt&gt;");
+        expect(html).not.toContain("<Apt>");
+        expect(text).toContain(`${label}: ${WHERE}`);
+      });
+
+      it(`${name}, ${locale}: no where, or "", renders no row at all (mutation: always render the row → FAILS)`, () => {
+        const without = render({ ...base, locale });
+        expect(render({ ...base, locale, where: "" })).toEqual(without);
+        expect(without.html).not.toContain(`>${label}</td>`);
+        expect(without.text).not.toContain(`${label}:`);
+      });
+    }
+  }
+});

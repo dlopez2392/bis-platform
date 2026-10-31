@@ -27,7 +27,8 @@ export type MoveAccount = {
 
 export type MoveContext = {
   row: Pick<BookingRow,
-    "id" | "account_id" | "calendar_id" | "contact_id" | "starts_at" | "ends_at" | "status" | "booker_timezone">;
+    "id" | "account_id" | "calendar_id" | "contact_id" | "starts_at" | "ends_at" | "status" | "booker_timezone"
+    | "meeting_type">;
   calendar: CalendarRow;
   account: MoveAccount;
   /** How many moves this appointment has had (`rescheduleChain`), for the

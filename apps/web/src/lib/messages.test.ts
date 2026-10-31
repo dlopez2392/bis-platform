@@ -2663,6 +2663,269 @@ describe("duplicates and merge copy, English and Spanish (F-006 plan Task 2)", (
   });
 });
 
+describe("F-046 part 1: the agenda and job copy, English and Spanish (plan Task 2)", () => {
+  const WANT: Record<string, string> = {
+    "calendar.agenda.title": "Schedule",
+    "calendar.agenda.title.es": "Agenda",
+    "calendar.agenda.day": "Day",
+    "calendar.agenda.day.es": "Día",
+    "calendar.agenda.week": "Week",
+    "calendar.agenda.week.es": "Semana",
+    "calendar.agenda.viewLabel": "Schedule view",
+    "calendar.agenda.viewLabel.es": "Vista de la agenda",
+    "calendar.agenda.back": "Back",
+    "calendar.agenda.back.es": "Anterior",
+    "calendar.agenda.today": "Today",
+    "calendar.agenda.today.es": "Hoy",
+    "calendar.agenda.next": "Next",
+    "calendar.agenda.next.es": "Siguiente",
+    "calendar.agenda.daysLabel": "Days of this week",
+    "calendar.agenda.daysLabel.es": "Días de esta semana",
+    "calendar.agenda.addJob": "Add job",
+    "calendar.agenda.addJob.es": "Agregar trabajo",
+    "calendar.agenda.addAt": "Add job at {time}",
+    "calendar.agenda.addAt.es": "Agregar trabajo a las {time}",
+    "calendar.agenda.emptyTitle": "Nothing booked on {day}.",
+    "calendar.agenda.emptyTitle.es": "No hay nada agendado para el {day}.",
+    "calendar.agenda.emptyBody": "Jobs you add and bookings customers make show here. Add the first one.",
+    "calendar.agenda.emptyBody.es":
+      "Aquí aparecen los trabajos que usted agrega y las citas que hacen sus clientes. Agregue el primero.",
+    "calendar.agenda.emptyTechnician": "None of your customers have a job on {day}.",
+    "calendar.agenda.emptyTechnician.es": "Ninguno de sus clientes tiene trabajo el {day}.",
+    "calendar.agenda.error": "Couldn't load your schedule.",
+    "calendar.agenda.error.es": "No se pudo cargar su agenda.",
+    "calendar.agenda.retry": "Try again",
+    "calendar.agenda.retry.es": "Intentar de nuevo",
+    "calendar.agenda.closed": "Closed · {reason}",
+    "calendar.agenda.closed.es": "Cerrado · {reason}",
+    "calendar.agenda.closedPlain": "Closed",
+    "calendar.agenda.closedPlain.es": "Cerrado",
+    "calendar.agenda.outsideHours": "Outside open hours",
+    "calendar.agenda.outsideHours.es": "Fuera del horario",
+    "calendar.agenda.overlaps": "Overlaps",
+    "calendar.agenda.overlaps.es": "Se empalma",
+    "calendar.agenda.addedBy": "Added by {name}",
+    "calendar.agenda.addedBy.es": "Agregado por {name}",
+    "calendar.agenda.addedByYou": "Added by you",
+    "calendar.agenda.addedByYou.es": "Agregado por usted",
+    "calendar.agenda.bookedOnline": "Booked online",
+    "calendar.agenda.bookedOnline.es": "Reservada en línea",
+    "calendar.agenda.bookedBy": "Booked by {persona}",
+    "calendar.agenda.bookedBy.es": "Agendada por {persona}",
+    "calendar.agenda.pastOpen": "{count} past jobs still need Completed or No-show · To do",
+    "calendar.agenda.pastOpen.es": "{count} trabajos pasados aún necesitan Terminado o No llegó · Pendientes",
+    "calendar.agenda.pastOpenOne": "1 past job still needs Completed or No-show · To do",
+    "calendar.agenda.pastOpenOne.es": "1 trabajo pasado aún necesita Terminado o No llegó · Pendientes",
+    "calendar.agenda.truncated": "Only the first {cap} jobs are shown here. Open a single day to see them all.",
+    "calendar.agenda.truncated.es": "Aquí solo se muestran los primeros {cap} trabajos. Abra un solo día para verlos todos.",
+    "calendar.job.titleAdd": "Add a job",
+    "calendar.job.titleAdd.es": "Agregar un trabajo",
+    "calendar.job.titleMove": "Move this job",
+    "calendar.job.titleMove.es": "Cambiar el horario de este trabajo",
+    "calendar.job.customer": "Customer",
+    "calendar.job.customer.es": "Cliente",
+    "calendar.job.search": "Search by name or phone",
+    "calendar.job.search.es": "Busque por nombre o teléfono",
+    "calendar.job.newCustomer": "New customer",
+    "calendar.job.newCustomer.es": "Cliente nuevo",
+    "calendar.job.name": "Name",
+    "calendar.job.name.es": "Nombre",
+    "calendar.job.phone": "Phone",
+    "calendar.job.phone.es": "Teléfono",
+    "calendar.job.phoneOwner": "{name} already has this number. Use {first}?",
+    "calendar.job.phoneOwner.es": "{name} ya tiene este número. ¿Usar a {first}?",
+    "calendar.job.useExisting": "Use {first}",
+    "calendar.job.useExisting.es": "Usar a {first}",
+    "calendar.job.addAsNew": "Add as new",
+    "calendar.job.addAsNew.es": "Agregar como nuevo",
+    "calendar.job.customerFallback": "the customer",
+    "calendar.job.customerFallback.es": "el cliente",
+    "calendar.job.date": "Date",
+    "calendar.job.date.es": "Fecha",
+    "calendar.job.start": "Starts",
+    "calendar.job.start.es": "Empieza",
+    "calendar.job.length": "How long",
+    "calendar.job.length.es": "Duración",
+    "calendar.job.minutes": "{minutes} min",
+    "calendar.job.minutes.es": "{minutes} min",
+    "calendar.job.what": "What's the job?",
+    "calendar.job.what.es": "¿Qué trabajo es?",
+    "calendar.job.whatHint": "Fix a leaking water heater",
+    "calendar.job.whatHint.es": "Arreglar un calentador que gotea",
+    "calendar.job.address": "Address",
+    "calendar.job.address.es": "Dirección",
+    "calendar.job.noAddress": "No address",
+    "calendar.job.noAddress.es": "Sin dirección",
+    "calendar.job.newAddress": "New address",
+    "calendar.job.newAddress.es": "Dirección nueva",
+    "calendar.job.meet": "How you'll meet",
+    "calendar.job.meet.es": "Cómo se verán",
+    "calendar.job.inPerson": "In person",
+    "calendar.job.inPerson.es": "En persona",
+    "calendar.job.byPhone": "Phone",
+    "calendar.job.byPhone.es": "Por teléfono",
+    "calendar.job.byVideo": "Video",
+    "calendar.job.byVideo.es": "Por video",
+    "calendar.job.sendConfirmation": "Send {first} a confirmation",
+    "calendar.job.sendConfirmation.es": "Enviarle una confirmación a {first}",
+    "calendar.job.sendMoved": "Email {first} the new time",
+    "calendar.job.sendMoved.es": "Enviarle a {first} el nuevo horario por correo",
+    "calendar.job.noEmail": "{first} has no email on file, so we can't send one.",
+    "calendar.job.noEmail.es": "{first} no tiene correo registrado, así que no podemos enviarle uno.",
+    "calendar.job.emailBlocked": "{first}'s email can't receive our emails.",
+    "calendar.job.emailBlocked.es": "El correo de {first} no puede recibir nuestros mensajes.",
+    "calendar.job.checkFirst": "Check before you save:",
+    "calendar.job.checkFirst.es": "Revise antes de guardar:",
+    "calendar.job.warn.outsideHours": "Outside your open hours",
+    "calendar.job.warn.outsideHours.es": "Fuera de su horario",
+    "calendar.job.warn.notice": "Sooner than your usual notice",
+    "calendar.job.warn.notice.es": "Antes de su aviso habitual",
+    "calendar.job.warn.closed": "You're closed that day",
+    "calendar.job.warn.closed.es": "Ese día está cerrado",
+    "calendar.job.warn.overlaps": "Overlaps {count} jobs",
+    "calendar.job.warn.overlaps.es": "Se empalma con {count} trabajos",
+    "calendar.job.warn.overlapsOne": "Overlaps a job at {time}",
+    "calendar.job.warn.overlapsOne.es": "Se empalma con un trabajo a las {time}",
+    "calendar.job.warn.noVideo": "Video calls aren't set up, so this job won't have a link.",
+    "calendar.job.warn.noVideo.es": "Las videollamadas no están configuradas, así que este trabajo no tendrá enlace.",
+    "calendar.job.past": "That time has already passed. Pick a time from now on.",
+    "calendar.job.past.es": "Esa hora ya pasó. Elija una hora de ahora en adelante.",
+    "calendar.job.noSuchTime": "That time doesn't exist that day because the clocks change. Pick another.",
+    "calendar.job.noSuchTime.es": "Esa hora no existe ese día porque cambia el horario. Elija otra.",
+    "calendar.job.changed": "Something changed while you were looking. Check the notes and save again.",
+    "calendar.job.changed.es": "Algo cambió mientras revisaba. Revise los avisos y guarde de nuevo.",
+    "calendar.job.save": "Add job",
+    "calendar.job.save.es": "Agregar trabajo",
+    "calendar.job.saveMove": "Save new time",
+    "calendar.job.saveMove.es": "Guardar nuevo horario",
+    "calendar.job.saveAnyway": "Add it anyway",
+    "calendar.job.saveAnyway.es": "Agregarlo de todos modos",
+    "calendar.job.moveAnyway": "Move it anyway",
+    "calendar.job.moveAnyway.es": "Cambiarlo de todos modos",
+    "calendar.job.saveFailed": "Couldn't save this job. Nothing changed. Try again.",
+    "calendar.job.saveFailed.es": "No se pudo guardar este trabajo. No cambió nada. Intente de nuevo.",
+    "calendar.job.added": "Job added for {first}, {when}. We'll email the confirmation when this closes.",
+    "calendar.job.added.es":
+      "Trabajo agregado para {first}, {when}. Le enviaremos la confirmación cuando se cierre este aviso.",
+    "calendar.job.addedQuiet": "Job added for {first}, {when}.",
+    "calendar.job.addedQuiet.es": "Trabajo agregado para {first}, {when}.",
+    "calendar.job.undo": "Undo",
+    "calendar.job.undo.es": "Deshacer",
+    "calendar.job.undone": "Job removed. {first} wasn't told.",
+    "calendar.job.undone.es": "Trabajo eliminado. No se le avisó a {first}.",
+    "calendar.job.undoTooLate": "Too late to undo: the confirmation already went to {first}. Cancel the job instead.",
+    "calendar.job.undoTooLate.es":
+      "Ya es tarde para deshacer: la confirmación ya le llegó a {first}. Mejor cancele el trabajo.",
+    "calendar.job.undoMovedSince": "This job was moved since, so it can't be undone from here.",
+    "calendar.job.undoMovedSince.es":
+      "Este trabajo se cambió de horario después, así que no se puede deshacer desde aquí.",
+    "calendar.job.moved": "Moved to {when}. We'll email {first} when this closes.",
+    "calendar.job.moved.es": "Se cambió a {when}. Le enviaremos un correo a {first} cuando se cierre este aviso.",
+    "calendar.job.movedQuiet": "Moved to {when}.",
+    "calendar.job.movedQuiet.es": "Se cambió a {when}.",
+    "calendar.job.edited": "Job updated.",
+    "calendar.job.edited.es": "Trabajo actualizado.",
+    "calendar.job.moveUndone": "Back at {when}.",
+    "calendar.job.moveUndone.es": "De vuelta: {when}.",
+    "calendar.job.moveUndoTaken": "Another job took the old time, so it can't go back.",
+    "calendar.job.moveUndoTaken.es": "Otro trabajo ocupó el horario anterior, así que no puede regresar.",
+    "calendar.job.emailSent": "Confirmation emailed {time}",
+    "calendar.job.emailSent.es": "Confirmación enviada {time}",
+    "calendar.job.emailPending": "We'll email the confirmation in a few seconds",
+    "calendar.job.emailPending.es": "Enviaremos la confirmación en unos segundos",
+    "calendar.job.emailFailed": "Couldn't email the confirmation",
+    "calendar.job.emailFailed.es": "No se pudo enviar la confirmación",
+    "calendar.job.movedEmailSent": "New time emailed {time}",
+    "calendar.job.movedEmailSent.es": "Nuevo horario enviado {time}",
+    "calendar.job.movedEmailPending": "We'll email the new time in a few seconds",
+    "calendar.job.movedEmailPending.es": "Enviaremos el nuevo horario en unos segundos",
+    "calendar.job.movedEmailFailed": "Couldn't email the new time",
+    "calendar.job.movedEmailFailed.es": "No se pudo enviar el nuevo horario",
+    "calendar.job.openRecord": "Open record",
+    "calendar.job.openRecord.es": "Abrir ficha",
+    "calendar.job.gone": "This job isn't on the calendar any more.",
+    "calendar.job.gone.es": "Este trabajo ya no está en la agenda.",
+    // The twelve existing booking words the drawer reuses: English unchanged, Spanish added.
+    "calendar.bookings.join": "Join",
+    "calendar.bookings.join.es": "Unirse",
+    "calendar.bookings.cancel": "Cancel",
+    "calendar.bookings.cancel.es": "Cancelar",
+    "calendar.bookings.markCompleted": "Mark completed",
+    "calendar.bookings.markCompleted.es": "Marcar como terminado",
+    "calendar.bookings.markNoShow": "No-show",
+    "calendar.bookings.markNoShow.es": "No llegó",
+    "calendar.bookings.statusUpdated": "Booking updated",
+    "calendar.bookings.statusUpdated.es": "Cita actualizada",
+    "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
+    "calendar.bookings.cancelledToast.es": "Cita cancelada. No le avisamos al cliente, así que avísele usted.",
+    "calendar.bookings.restored": "Appointment is back on.",
+    "calendar.bookings.restored.es": "La cita sigue en pie.",
+    "calendar.bookings.restoreSlotTaken":
+      "Someone else booked that time after you cancelled, so this appointment can't be put back.",
+    "calendar.bookings.restoreSlotTaken.es":
+      "Alguien más agendó ese horario después de que la canceló, así que esta cita no se puede restaurar.",
+    "calendar.bookings.restoreRescheduled":
+      "This appointment was moved to a new time, so the old one can't be put back.",
+    "calendar.bookings.restoreRescheduled.es":
+      "Esta cita se cambió a otro horario, así que la anterior no se puede restaurar.",
+    "calendar.bookings.restoreNotOurs":
+      "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
+    "calendar.bookings.restoreNotOurs.es":
+      "El cliente la canceló, por enlace o en una llamada, así que no se puede restaurar desde aquí.",
+    "calendar.bookings.confirmed": "Confirmed by text",
+    "calendar.bookings.confirmed.es": "Confirmó por mensaje",
+    "calendar.bookings.confirmDeclined": "Asked for a different time",
+    "calendar.bookings.confirmDeclined.es": "Pidió otro horario",
+  };
+
+  it("holds both tables of the plan: 88 new English keys and the 12 reused ones, each with its Spanish (positive control: the WANT is not empty or half-filled)", () => {
+    const keys = Object.keys(WANT);
+    expect(keys.filter((k) => !k.endsWith(".es")).length).toBe(100);
+    expect(keys.filter((k) => k.endsWith(".es")).length).toBe(100);
+    expect(keys.filter((k) => k.startsWith("calendar.bookings.") && !k.endsWith(".es")).length).toBe(12);
+    for (const k of keys.filter((x) => !x.endsWith(".es"))) expect(WANT, k).toHaveProperty([`${k}.es`]);
+  });
+
+  it("has every key with exactly this text (mutation: write 'Agrega trabajo' into calendar.agenda.addJob.es → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("every English key has its .es twin on the very next line, the twelve reused booking words included (mutation: move calendar.job.save.es one line down → FAILS naming it)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      // A long value wraps onto the line after its key; the twin follows the value's own line.
+      const valueLine = src[i]!.trimEnd().endsWith(":") ? i + 1 : i;
+      expect(src[valueLine + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("every {count} key has its One twin, in both languages (mutation: drop calendar.job.warn.overlapsOne → FAILS)", () => {
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es") && WANT[x]!.includes("{count}"))) {
+      expect(m, k).toHaveProperty([`${k}One`]);
+      expect(m, k).toHaveProperty([`${k}One.es`]);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'Revisa' in calendar.job.changed.es → FAILS)", () => {
+    // "agrega" is NOT on this list: "los trabajos que usted agrega" is usted's own indicative.
+    const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(WANT[k]!), k).toBe(false);
+      const en = WANT[k.slice(0, -3)]!;
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(WANT[k]!), k).toEqual(ph(en));
+    }
+  });
+
+  it("no copy draws an arrow, leaks template syntax, says 'survivor', uses tú, or names the persona (it is always {persona}) (mutation: write 'Agendada por Sofía' into calendar.agenda.bookedBy.es → FAILS)", () => {
+    for (const [k, v] of Object.entries(WANT)) {
+      for (const bad of ["→", "{{", "survivor", "tú", " tu ", "Sofía"]) expect(v.includes(bad), `${k}: ${bad}`).toBe(false);
+    }
+  });
+});
+
 describe("the BIS access copy (F-118 part 1)", () => {
   const keys = Object.keys(m).filter((k) => k.startsWith("accessLog.") && !k.endsWith(".es"));
   it("exists, and every key has its Spanish twin (positive control: the family is not empty)", () => {

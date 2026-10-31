@@ -367,9 +367,25 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     // message" label.
     await expect(thread).toContainText("Booking");
 
-    await page.goto(`/dashboard/accounts/${accountId}/calendar`);
-    await expect(page.getByText(bookerFullName)).toBeVisible();
-    await expect(page.getByText(noteText)).toBeVisible();
+    // F-046 part 1 (plan Task 14, correction 15): `BookingsList` is gone — the agenda's job drawer, opened
+    // by `?job=<id>`, is where a booking's details and its Cancel now live. The id is read by its own
+    // cancel token (cancelHref's last path segment), not guessed from a row: there is no row left to guess
+    // from, and `cancelHref` is already held above from step 2.
+    const cancelToken = new URL(cancelHref!, "http://placeholder").pathname.split("/").pop()!;
+    const { data: bookingRow, error: bookingLookupErr } = await serviceDb()
+      .from("bookings").select("id").eq("cancel_token", cancelToken).maybeSingle();
+    if (bookingLookupErr || !bookingRow) {
+      throw new Error(
+        `booking e2e: could not read the booking id for cancel_token ${cancelToken}: ` +
+        `${bookingLookupErr?.message ?? "no row"}`,
+      );
+    }
+    const bookingId = bookingRow.id as string;
+
+    await page.goto(`/dashboard/accounts/${accountId}/calendar?job=${bookingId}`);
+    const drawer = page.getByRole("dialog");
+    await expect(drawer).toContainText(bookerFullName);
+    await expect(drawer).toContainText(noteText);
 
     // --- F-048: Cancel composes the customer's email, then Undo -------------
     // This booker has an email, so Cancel opens the dialog that composes the
@@ -377,8 +393,7 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     // inside that window, puts the booking back before anything is sent, so
     // the steps below still find it live (and the notice is never sent: its
     // queued thread row is removed, which purgeBooking would sweep anyway).
-    const row = page.locator("li").filter({ hasText: bookerFullName });
-    await row.getByRole("button", { name: "Cancel", exact: true }).click();
+    await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `Cancel ${bookerFullName}'s appointment` });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByLabel(`Email ${bookerFullName} that it's cancelled`)).toBeChecked();

@@ -75,6 +75,8 @@ import { t } from "@/lib/i18n/t";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
+import { AgendaDemo } from "./agenda-demo";
+import { JobDemo } from "./job-demo";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
 import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
 import {
@@ -964,6 +966,20 @@ export default async function StyleguidePage({
               link, Copy link, or Make a new link; agency, not set up and error have none (error offers a ghost
               Try again). The long link scrolls inside its Input at 375px. */}
           <FeedCardStates />
+        </Section>
+
+        {/* F-046 part 1 (plan Task 12, spec 5.2-5.6): the Agenda card, first on the Calendar page: a Day with two jobs
+            side by side, one outside open hours, a cancelled one and two free hours; a closed Day in Spanish; a Week
+            (one day under a strip of seven below md); a Technician's empty day; the error; the skeleton. Add job is
+            each card's one primary. */}
+        <Section title={t(m, "calendar.agenda.title", "en")} file="accounts/[accountId]/calendar/agenda-{card,day,week,skeleton}.tsx">
+          <AgendaDemo />
+        </Section>
+
+        {/* F-046 part 1 (plan Task 11, spec 5.4-5.5): the Add job sheet (its one primary, a warnings block, the
+            phone owner's offer) and the job drawer, which carries no primary (DESIGN.md rule 8, 2026-10-30). */}
+        <Section title={t(m, "calendar.job.titleAdd", "en")} file="accounts/[accountId]/calendar/job-{sheet,drawer}.tsx">
+          <JobDemo />
         </Section>
 
         <Section title="Settings cards that stream (loading)" file="accounts/[accountId]/settings/page.tsx">

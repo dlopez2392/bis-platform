@@ -303,6 +303,8 @@ async function writeArchived(db: SupabaseClient, accountId: string, placeId: str
  * C5: an empty place is deleted (Undo re-inserts it); a place with equipment is archived, so its
  * units and their history stay. Counts the units FIRST (plan deviation 5): the service role
  * bypasses places_delete_empty, and its delete would cascade every unit away.
+ * F-046: a place a job names (bookings.place_id, 0107, NO ACTION) is archived too: a job's address
+ * cannot vanish.
  */
 export async function removePlace(
   db: SupabaseClient, accountId: string, placeId: string, ctx: PlaceCtx,
@@ -310,24 +312,33 @@ export async function removePlace(
   assertActorAllowed(db, ctx.actorType ?? "user");
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
-  const { count, error: cErr } = await db.from("equipment").select("id", { count: "exact", head: true })
+  const { count: unitCount, error: uErr } = await db.from("equipment").select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("place_id", placeId);
-  if (cErr) throw dbError("removePlace unit count failed", cErr);
-  if (count === null) throw dbError("removePlace unit count failed", { message: "no count returned" });
-  if (count === 0) {
+  if (uErr) throw dbError("removePlace unit count failed", uErr);
+  if (unitCount === null) throw dbError("removePlace unit count failed", { message: "no count returned" });
+  const { count: bookingCount, error: bErr } = await db.from("bookings").select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("place_id", placeId);
+  if (bErr) throw dbError("removePlace booking count failed", bErr);
+  if (bookingCount === null) throw dbError("removePlace booking count failed", { message: "no count returned" });
+  if (unitCount === 0 && bookingCount === 0) {
     const { data, error } = await db.from("places").delete()
       .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
-    if (error) throw dbError("removePlace delete failed", error);
-    const deleted = ((data ?? []) as unknown as PlaceRow[])[0];
-    if (deleted) {
-      await event(db, accountId, "place.removed", ctx, { placeId, mode: "deleted" });
-      return { mode: "deleted", snapshot: deleted };
+    if (error && !(error.code === "23503" && error.message.includes("bookings_place_fkey"))) {
+      throw dbError("removePlace delete failed", error);
     }
-    // 0 rows. On a REQUEST client, places_delete_empty refused because a unit arrived since the
+    if (!error) {
+      const deleted = ((data ?? []) as unknown as PlaceRow[])[0];
+      if (deleted) {
+        await event(db, accountId, "place.removed", ctx, { placeId, mode: "deleted" });
+        return { mode: "deleted", snapshot: deleted };
+      }
+    }
+    // 0 rows, or a booking landed between the count and the delete (bookings_place_fkey, 23503). On
+    // a REQUEST client, places_delete_empty refused because a unit or a booking arrived since the
     // count, or the caller may not delete the place at all: keep it and archive instead, which RLS
     // refuses in turn when the caller may not write. A SERVICE client (the demo seed, tests) bypasses
-    // that policy, so for it a unit inserted between the count and the delete is cascaded away with
-    // the place: only the request client is protected against that race (spec §12).
+    // that policy, so for it a unit or a booking inserted between the count and the delete is
+    // cascaded away with the place: only the request client is protected against that race (spec §12).
   }
   // Already archived: nothing to write, no event, the stored row as it is (review round 1).
   if (current.archived_at !== null) return { mode: "archived", row: current };

@@ -71,7 +71,7 @@ export const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = 
  *  settings screen is how a guided flow loses people. */
 export const STEP_PATH: Partial<Record<SetupStepKey, string>> = {
   branding: "/branding?from=setup",
-  hours: "/calendar?from=setup",
+  hours: "/calendar?from=setup#booking-settings",
   voice_profile: "/voice?from=setup",
   number: "/voice?from=setup",
   email: "/settings?from=setup",

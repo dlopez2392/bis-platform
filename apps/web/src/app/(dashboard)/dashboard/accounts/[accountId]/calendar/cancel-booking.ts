@@ -1,4 +1,7 @@
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { inDrawerLanguage } from "./server-words";
 import type { ActionResult, CancelBookingResult } from "./actions";
 import { UNDO_WINDOW_MS } from "./undo-window";
 
@@ -20,6 +23,9 @@ export type CancelOptions = {
   /** The toast when no notice goes, for a cancel made at once
    *  (`cancelStep`'s words). Defaults to "we haven't told the customer". */
   noNoticeMessage?: string;
+  /** The drawer's language (T11/T12 review): every toast, and the server's English refusals said back in it
+   *  (server-words.ts). English when absent. */
+  locale?: Locale;
   schedule?: (fn: () => void, ms: number) => unknown;
 };
 
@@ -52,36 +58,39 @@ export async function runCancelWithUndo(
   opts: CancelOptions = {},
 ): Promise<boolean> {
   const schedule = opts.schedule ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const locale = opts.locale ?? "en";
+  const say = (key: MessageKey) => t(m, key, locale);
   let r: CancelBookingResult;
   try {
     r = await cancel();
   } catch {
-    toast.error(m["common.actionCrashed"]);
+    toast.error(say("common.actionCrashed"));
     return false;
   }
   if (!r.ok) {
-    toast.error(r.error);
+    toast.error(inDrawerLanguage(r.error, locale));
     return false;
   }
   const { version } = r;
   const noticeMessageId = r.notice === "scheduled" ? r.noticeMessageId : undefined;
-  const message = r.notice === "scheduled" ? m["calendar.bookings.cancelledToastNotice"]
-    : r.notice === "address_blocked" ? m["calendar.bookings.cancelledToastAddressBlocked"]
-    : opts.noNoticeMessage ?? m["calendar.bookings.cancelledToast"];
+  const message = r.notice === "scheduled" ? say("calendar.bookings.cancelledToastNotice")
+    : r.notice === "address_blocked" ? say("calendar.bookings.cancelledToastAddressBlocked")
+    : opts.noNoticeMessage !== undefined ? inDrawerLanguage(opts.noNoticeMessage, locale, "calendar.bookings.cancelledToast")
+    : say("calendar.bookings.cancelledToast");
   const id = toast.success(message, {
     action: {
-      label: m["common.undo"],
+      label: say("common.undo"),
       onClick: () => {
         void (async () => {
           let u: ActionResult;
           try {
             u = await undo(version, noticeMessageId);
           } catch {
-            toast.error(m["common.actionCrashed"]);
+            toast.error(say("common.actionCrashed"));
             return;
           }
-          if (u.ok) toast.success(m["calendar.bookings.restored"]);
-          else toast.error(u.error);
+          if (u.ok) toast.success(say("calendar.bookings.restored"));
+          else toast.error(inDrawerLanguage(u.error, locale));
         })();
       },
     },

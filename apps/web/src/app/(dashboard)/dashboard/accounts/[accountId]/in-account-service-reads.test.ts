@@ -74,6 +74,13 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/business-status-actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",
+  // F-046: the after() settle of a hold the agenda action proved (callerCanSee on the job's own add).
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/job-hold.ts": "proven-target",
+  // F-046 T10: the agenda's add, move and undo. seesWholeAccount first; the customer, the places, the live
+  // ranges and the closures are read on the request client, a booking id is proven (callerCanSee) before it is
+  // named, and serviceDb serves only the bookings writes (0053: no client-role write on bookings), the move's
+  // re-read of the row it just cancelled, and jobNoticeAvailability's two suppression reads.
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/agenda-actions.ts": "proven-target",
   // S-47d Task 8: planned closed days, Owners and the agency only (canManage); serviceDb only for the
   // closure To-do and the hold bump, never the insert/delete themselves (dbForRequest, the client-role
   // grant 0097 gives `authenticated`).

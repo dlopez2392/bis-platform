@@ -9,7 +9,9 @@ import {
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { m } from "@/lib/messages";
+import type { MessageKey } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 import type { PublicLocale } from "@/lib/forms/public-strings";
 import type { CancelNoticeChoice } from "./actions";
 import { initialDraft, withLanguage, draftToChoice, type NoticeDraft } from "./cancel-notice-draft";
@@ -25,11 +27,12 @@ import { NOTICE_MESSAGE_MAX } from "./undo-window";
  * (`cancel-notice.ts`).
  *
  * The caller mounts it only while open, so each opening starts from a fresh
- * draft. English today; every string here has its written-out Spanish twin
- * in `messages.ts` (`.es`).
+ * draft. Its words follow the drawer's language (`locale`, T11/T12 review:
+ * a Spanish drawer opened an English dialog); the notice's own language is
+ * the separate choice inside it (`defaultLocale`).
  */
 export function CancelDialog({
-  contactName, when, defaultLocale, onOpenChange, onConfirm,
+  contactName, when, defaultLocale, locale = "en", pseudo = false, onOpenChange, onConfirm,
 }: {
   contactName: string;
   /** The appointment's time, already formatted in the account's zone. */
@@ -38,11 +41,16 @@ export function CancelDialog({
    *  by the booking list from the row's contact, else the account), so the
    *  dialog opens already speaking to them in it. The owner still chooses. */
   defaultLocale: PublicLocale;
+  /** The drawer's language, which the dialog's own words speak (English when absent). */
+  locale?: Locale;
+  /** The QA pseudo-locale (lib/record/copy.ts). */
+  pseudo?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (choice: CancelNoticeChoice) => void;
 }) {
   const [draft, setDraft] = useState<NoticeDraft>(() => initialDraft(defaultLocale));
-  const name = (key: keyof typeof m) => m[key].replace("{name}", contactName);
+  const tr = makeTr(locale, pseudo);
+  const name = (key: MessageKey) => tr.text(key, { name: contactName });
 
   function confirm() {
     onOpenChange(false);
@@ -51,7 +59,7 @@ export function CancelDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent data-testid="cancel-dialog">
+      <DialogContent data-testid="cancel-dialog" lang={locale}>
         <DialogHeader>
           <DialogTitle>{name("calendar.cancelDialog.title")}</DialogTitle>
           <DialogDescription className="tabular-nums">{when}</DialogDescription>
@@ -70,7 +78,7 @@ export function CancelDialog({
           {draft.send ? (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="cancel-notice-language">{m["calendar.cancelDialog.language"]}</Label>
+                <Label htmlFor="cancel-notice-language">{tr.text("calendar.cancelDialog.language")}</Label>
                 <Select
                   value={draft.locale}
                   onValueChange={(v) => setDraft((d) => withLanguage(d, v as PublicLocale))}
@@ -79,13 +87,13 @@ export function CancelDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="en">{m["calendar.cancelDialog.languageEnglish"]}</SelectItem>
-                    <SelectItem value="es">{m["calendar.cancelDialog.languageSpanish"]}</SelectItem>
+                    <SelectItem value="en">{tr.text("calendar.cancelDialog.languageEnglish")}</SelectItem>
+                    <SelectItem value="es">{tr.text("calendar.cancelDialog.languageSpanish")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="cancel-notice-message">{m["calendar.cancelDialog.message"]}</Label>
+                <Label htmlFor="cancel-notice-message">{tr.text("calendar.cancelDialog.message")}</Label>
                 <Textarea
                   id="cancel-notice-message"
                   // The customer reads this; `lang` lets a screen reader say it right.
@@ -98,7 +106,7 @@ export function CancelDialog({
                     setDraft((d) => ({ ...d, message }));
                   }}
                 />
-                <p className="text-xs text-muted-foreground">{m["calendar.cancelDialog.messageHint"]}</p>
+                <p className="text-xs text-muted-foreground">{tr.text("calendar.cancelDialog.messageHint")}</p>
               </div>
             </>
           ) : null}
@@ -106,9 +114,9 @@ export function CancelDialog({
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button type="button" variant="ghost">{m["calendar.cancelDialog.keep"]}</Button>
+            <Button type="button" variant="ghost">{tr.text("calendar.cancelDialog.keep")}</Button>
           </DialogClose>
-          <Button type="button" onClick={confirm}>{m["calendar.cancelDialog.confirm"]}</Button>
+          <Button type="button" onClick={confirm}>{tr.text("calendar.cancelDialog.confirm")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

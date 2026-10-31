@@ -424,7 +424,12 @@ export function DocumentsCardView(p: {
           </summary>
           <ul className="mt-1">
             {data.trashed.map((doc) => (
-              <li key={doc.id} data-document-trashed={doc.id} className={cn("flex items-center gap-2 py-1.5", rowLine)}>
+              /* phone-width.spec.ts (CI, dd817ec3): "Borrar para siempre" (and "Restaurar" beside it) are
+                 shrink-0/whitespace-nowrap Buttons that cannot fit this row's fixed-width total at 375px
+                 in Spanish once the title has shrunk to nothing — `flex-wrap` lets Restore/Delete forever
+                 flow onto their own line instead of pushing the page wider than its own viewport; the
+                 title span's accessible/visible text is unchanged either way. */
+              <li key={doc.id} data-document-trashed={doc.id} className={cn("flex flex-wrap items-center gap-2 py-1.5", rowLine)}>
                 <span className="min-w-0 flex-1">
                   <span lang="" className="block truncate text-card-foreground">{doc.title}</span>
                   <span className="text-xs text-muted-foreground">{purgeText(purgeDaysLeft(doc.deletedAt ?? data.now, data.now), p.locale)}</span>

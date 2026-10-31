@@ -6,8 +6,10 @@ import "dotenv/config";
  * 0105: start_agency_visit's advisory lock makes two simultaneous starts for one person, session and account
  * into ONE visit. Two real connections; the first holds its transaction open with the lock and its
  * uncommitted visit, so the second must WAIT, then see that visit once the first commits. Commits its own
- * account and agency (a second connection cannot see uncommitted rows) and deletes both in finally; the
- * account's delete cascades the visit away.
+ * account (a second connection cannot see uncommitted rows) under the stack's existing agency and deletes it
+ * in finally; the delete cascades the visit away. It never commits an agency of its own: ~70 other files run
+ * `select id from agencies limit 1` in parallel, and one that picked a committed test agency and committed an
+ * account under it made this file's agency delete fail on accounts_agency_id_fkey (twice in a row on #309).
  *
  * Because it COMMITS, it runs only against a database on this machine (review r3): the local replica, or CI
  * verify's in-runner stack, whose SUPABASE_DB_URL ci-target-guard.sh pins to 127.0.0.1 or localhost. Any
@@ -58,9 +60,8 @@ describe("0105: concurrent starts", () => {
     const c1 = await connect();
     const c2 = await connect();
     let accountId: string | null = null;
-    let agencyId: string | null = null;
     try {
-      agencyId = (await admin.query<{ id: string }>("insert into public.agencies (name) values ('Race') returning id")).rows[0]!.id;
+      const agencyId = (await admin.query<{ id: string }>("select id from public.agencies limit 1")).rows[0]!.id;
       accountId = (await admin.query<{ id: string }>(
         "insert into public.accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Race') returning id",
         [agencyId, `org_test_race_${Math.random().toString(36).slice(2, 10)}`])).rows[0]!.id;
@@ -78,7 +79,6 @@ describe("0105: concurrent starts", () => {
       await c1.query("rollback").catch(() => undefined);
       await c2.query("rollback").catch(() => undefined);
       if (accountId) await admin.query("delete from public.accounts where id = $1", [accountId]);
-      if (agencyId) await admin.query("delete from public.agencies where id = $1", [agencyId]);
       await Promise.all([c1.end(), c2.end(), admin.end()]);
     }
   });

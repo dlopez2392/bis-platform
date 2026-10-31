@@ -55,3 +55,13 @@ describe("CalendarSettings — the follow-up card's Spanish box (Task 17)", () =
     expect(matches.length).toBe(1);
   });
 });
+
+describe("CalendarSettings — the setup step's anchor (F-046 part 1)", () => {
+  // The setup wizard's hours link lands on `#booking-settings` (step-shared.tsx's STEP_PATH): the agenda card
+  // now comes first on the page, so a bare `/calendar` would leave the owner above the card they came for.
+  it("the outer card carries id=\"booking-settings\", exactly once (mutation: drop the id → FAILS)", () => {
+    const html = render();
+    expect(html).toMatch(/^<div [^>]* id="booking-settings"/);
+    expect(html.match(/id="booking-settings"/g)).toHaveLength(1);
+  });
+});
