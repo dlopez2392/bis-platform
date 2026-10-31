@@ -60,6 +60,17 @@ describe("phoneRanges", () => {
     expect(phoneRanges("(956) 555-0199", "garcia")).toEqual([]);
   });
 
+  // T5's keptKey (ContactSearchPlan): af5976fa's digits for this term, when the new key/national
+  // pair does not cover them — a row the list found through that kept clause, so its digits still
+  // get marked (mutation: drop keptKey from the needle list -> both these return []).
+  it("falls back to the kept af5976fa digits for a short +1 term the new key strips too much to find", () => {
+    expect(phoneRanges("+19562195612", "+1 956")).toEqual([[1, 5]]);
+  });
+
+  it("falls back to the kept af5976fa digits for a short +521 term the new key strips too much to find", () => {
+    expect(phoneRanges("+5218991234567", "+521 899 12")).toEqual([[1, 9]]);
+  });
+
   it("empty displayed text means no ranges", () => {
     expect(phoneRanges("", "0199")).toEqual([]);
   });

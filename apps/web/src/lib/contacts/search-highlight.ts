@@ -47,11 +47,13 @@ export function nameRanges(text: string, query: string): HighlightRange[] {
 }
 
 /** Where the searched digits sit in a number as it is DISPLAYED (with its own punctuation): the matched key's
- *  digits first, else the national ten (the legacy-Mexican-mobile fallback `contactSearchPlan` already computed).
- *  At most one range: a phone search matches a single contiguous run of digits, never several. */
+ *  digits first, else the national ten (the legacy-Mexican-mobile fallback `contactSearchPlan` already computed),
+ *  else `keptKey` (af5976fa's own digits, kept for a row the list found through that clause when the new key
+ *  does not cover them: a short "+1 956" or "+521 899 12" term, T5's `ContactSearchPlan.keptKey`). At most one
+ *  range: a phone search matches a single contiguous run of digits, never several. */
 export function phoneRanges(text: string, query: string): HighlightRange[] {
-  const { phone } = contactSearchPlan(query);
-  if (!phone || text === "") return [];
+  const { phone, keptKey } = contactSearchPlan(query);
+  if ((!phone && !keptKey) || text === "") return [];
   const pos: number[] = [];
   let digits = "";
   for (let i = 0; i < text.length; i++) {
@@ -61,7 +63,7 @@ export function phoneRanges(text: string, query: string): HighlightRange[] {
       pos.push(i);
     }
   }
-  for (const needle of [phone.key, phone.national]) {
+  for (const needle of [phone?.key, phone?.national, keptKey]) {
     if (!needle) continue;
     const at = digits.indexOf(needle);
     if (at !== -1) return [[pos[at]!, pos[at + needle.length - 1]! + 1]];
