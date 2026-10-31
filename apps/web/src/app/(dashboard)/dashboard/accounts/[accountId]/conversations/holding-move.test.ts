@@ -22,7 +22,7 @@ const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
 
 type Results = Parameters<typeof HoldingFindResults>[0];
 const render = (p: Partial<Results>) => renderToStaticMarkup(createElement(HoldingFindResults, {
-  pending: false, failed: false, hits: null, busy: false, onPick: () => {}, tr: makeTr("en"), ...p,
+  pending: false, failed: false, hits: null, busy: false, query: "", onPick: () => {}, tr: makeTr("en"), ...p,
 }));
 
 describe("HoldingFindResults", () => {
@@ -59,6 +59,27 @@ describe("HoldingFindResults", () => {
 
   it("a failed search says so as an alert (control)", () => {
     expect(render({ failed: true })).toMatch(/<p role="alert"[^>]*>Couldn&#x27;t search customers\. Try again\.<\/p>/);
+  });
+
+  it("the matched letters set apart, against the query these hits answered (F-092 part 1, plan Task 10; mutation: highlight against a fixed query instead of the query prop -> FAILS)", () => {
+    const html = render({
+      query: "garcia",
+      hits: [{ id: "a1", firstName: "Ana", lastName: "García", phone: "+19565550199" }],
+    });
+    expect(html).toContain('<mark data-search-hit="true" class="bg-transparent font-semibold text-inherit">García</mark>');
+    const none = render({ query: "zzzz", hits: [{ id: "a1", firstName: "Ana", lastName: "García", phone: "+19565550199" }] });
+    expect(none).not.toContain("<mark");
+  });
+
+  it("a nameless customer's stand-in '(no name)' marks nothing (final review M-4a; mutation: highlight the stand-in -> FAILS)", () => {
+    const html = render({ query: "name", hits: [{ id: "n1", firstName: null, lastName: null, phone: "+19565550199" }] });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("(no name)");
+  });
+
+  it("a phone's matched digits are marked in the FORMATTED number (M-3's own display), punctuation and all", () => {
+    const html = render({ query: "0199", hits: [{ id: "a1", firstName: "Ana", lastName: "Prueba", phone: "+19565550199" }] });
+    expect(html).toContain('<mark data-search-hit="true" class="bg-transparent font-semibold text-inherit">0199</mark>');
   });
 });
 

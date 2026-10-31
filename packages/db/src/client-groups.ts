@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import { contactSearchPlan } from "./contact-search";
 import { isTimelineInstant, type TimelineCursor } from "./timeline-cursor";
 
 /**
@@ -127,6 +128,11 @@ export async function listContactGroups(db: SupabaseClient, accountId: string, c
   }));
 }
 
+/**
+ * F-092 part 1 (plan Task 11, owner ruling Q4): a household or business is found the same way a contact is
+ * (T4's `contactSearchFilter` shape) — ignoring accents and word order — by ADDING the folded search_name
+ * words (0108) beside today's raw `name` arm, never replacing it, so nothing findable today is lost.
+ */
 export async function searchGroups(db: SupabaseClient, accountId: string, term: string): Promise<GroupSearchHit[]> {
   const trimmed = term.trim();
   if (!trimmed) return [];
@@ -137,8 +143,13 @@ export async function searchGroups(db: SupabaseClient, accountId: string, term: 
   // idiom, :744-746). Same reasoning as the `!trimmed` guard above, one
   // step later: no real content left after sanitizing means no query.
   if (!s) return [];
+  const { tokens } = contactSearchPlan(trimmed);
+  const words = tokens.map((t) => `search_name.ilike.%${t}%`);
+  const clauses = [`name.ilike.%${s}%`];
+  if (words.length === 1) clauses.push(words[0]!);
+  else if (words.length > 1) clauses.push(`and(${words.join(",")})`);
   const { data, error } = await db.from("client_groups").select("id, kind, name")
-    .eq("account_id", accountId).ilike("name", `%${s}%`).order("name_key", { ascending: true }).limit(8);
+    .eq("account_id", accountId).or(clauses.join(",")).order("name_key", { ascending: true }).limit(8);
   if (error) throw new Error(`searchGroups failed: ${error.message}`);
   return (data ?? []) as GroupSearchHit[];
 }

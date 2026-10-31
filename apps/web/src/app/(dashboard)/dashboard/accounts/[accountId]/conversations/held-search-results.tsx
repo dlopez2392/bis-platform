@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import type { HeldSearchState, SearchHitLite } from "./held-email-search";
 
 /**
@@ -34,6 +36,9 @@ export function HeldSearchResults({
   if (state.hits.length === 0) {
     return <p className="text-xs text-muted-foreground">{t(m, "conversations.held.searchEmpty", locale)}</p>;
   }
+  // F-092 part 1 (plan Task 10): the matched letters/digits, against the QUERY THESE HITS ANSWERED
+  // (state.query), never a query typed since — a stale render would otherwise mark the wrong thing.
+  const { query } = state;
   return (
     <div className="flex flex-wrap gap-1.5">
       {state.hits.map((hit) => (
@@ -43,8 +48,13 @@ export function HeldSearchResults({
           disabled={pending}
           onClick={() => onPick(hit)}
         >
-          <span>{hit.label}</span>
-          {hit.sublabel ? <span className="text-xs text-muted-foreground">{hit.sublabel}</span> : null}
+          {/* The route's stand-in for a nameless customer is not their name: nothing in it is marked (final review M-4a). */}
+          <span><HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} /></span>
+          {hit.sublabel ? (
+            <span className="text-xs text-muted-foreground">
+              <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} />
+            </span>
+          ) : null}
         </Button>
       ))}
     </div>

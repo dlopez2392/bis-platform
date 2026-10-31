@@ -11,7 +11,7 @@ vi.mock("next/cache", () => ({ revalidatePath }));
 const addContactByHand = vi.fn();
 vi.mock("@/lib/contacts/add-contact-by-hand", () => ({ addContactByHand: (...a: unknown[]) => addContactByHand(...a) }));
 const dbMocks = {
-  getContact: vi.fn(), listContacts: vi.fn(), getRelationship: vi.fn(), addRelationship: vi.fn(),
+  getContact: vi.fn(), searchContacts: vi.fn(), getRelationship: vi.fn(), addRelationship: vi.fn(),
   setRelationshipSides: vi.fn(), removeRelationship: vi.fn(), restoreRelationship: vi.fn(),
 };
 vi.mock("@bis/db", () => dbMocks);
@@ -318,18 +318,33 @@ describe("remove and its Undo", () => {
 describe("searchRelatableContactsAction", () => {
   it("needs two characters, leaves out the record's own customer, and stops at eight (mutation: drop the subject filter -> FAILS)", async () => {
     expect(await searchRelatableContactsAction(A, S, "a")).toEqual({ ok: true, hits: [] });
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
-    dbMocks.listContacts.mockResolvedValue([S, ...Array.from({ length: 9 }, (_, i) => `2222222${i}-2222-4222-8222-222222222222`)]
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
+    dbMocks.searchContacts.mockResolvedValue([S, ...Array.from({ length: 9 }, (_, i) => `2222222${i}-2222-4222-8222-222222222222`)]
       .map((id) => ({ id, first_name: "Ana", last_name: null, phone: null })));
     const r = await searchRelatableContactsAction(A, S, "Ana");
-    expect(dbMocks.listContacts).toHaveBeenCalledWith(REQUEST, A, { search: "Ana", limit: 9 });
+    // F-092: the best match first (searchContacts' tiers), on the request client so RLS decides who is found.
+    expect(dbMocks.searchContacts).toHaveBeenCalledWith(REQUEST, A, { term: "Ana", limit: 9 });
     expect(r.ok && r.hits.map((h) => h.id)).not.toContain(S);
     expect(r.ok && r.hits).toHaveLength(8);
   });
   it("leaves out the record's own customer even when the record's id arrives in another case", async () => {
-    dbMocks.listContacts.mockResolvedValue([{ id: LETTERED, first_name: "Sofía", last_name: null, phone: null }]);
+    dbMocks.searchContacts.mockResolvedValue([{ id: LETTERED, first_name: "Sofía", last_name: null, phone: null }]);
     const r = await searchRelatableContactsAction(A, LETTERED.toUpperCase(), "Sof");
     expect(r).toEqual({ ok: true, hits: [] });
+  });
+});
+
+describe("searchRelatableContactsAction keeps the box's best-first order", () => {
+  it("F-092: the hits come back in searchContacts' order, never re-sorted (mutation: sort the hits by name -> FAILS)", async () => {
+    dbMocks.searchContacts.mockResolvedValue([
+      { id: O, first_name: "Ana", last_name: "García", phone: null },
+      { id: R, first_name: "Aaron", last_name: "García", phone: "+19565550199" },
+    ]);
+    const r = await searchRelatableContactsAction(A, S, "ana garcia");
+    expect(r).toEqual({ ok: true, hits: [
+      { id: O, firstName: "Ana", lastName: "García", phone: null },
+      { id: R, firstName: "Aaron", lastName: "García", phone: "+19565550199" },
+    ] });
   });
 });
 

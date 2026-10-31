@@ -31,6 +31,8 @@ import { makeTr, type Tr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import type { MessageKey } from "@/lib/messages";
 import { formatPhone } from "@/lib/document-requests/customer-state";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import { moveHoldingThreadAction, undoMoveHoldingThreadAction } from "./actions";
 import { searchRelatableContactsAction, type RelatableHit } from "../contacts/relationship-actions";
 import { moveAndToast } from "./holding-move-handlers";
@@ -42,9 +44,12 @@ export function moveOtherKey(peopleCount: number): MessageKey {
   return peopleCount > 0 ? "conversation.holding.moveOther" : "conversation.holding.findCustomer";
 }
 
-/** What the search shows: rows of skeleton while it runs, its failure, nobody, or the people found. */
-export function HoldingFindResults({ pending, failed, hits, busy, onPick, tr }: {
-  pending: boolean; failed: boolean; hits: RelatableHit[] | null; busy: boolean;
+/** What the search shows: rows of skeleton while it runs, its failure, nobody, or the people found. `query`:
+ *  F-092 part 1 (plan Task 10) — the term these hits answered, so the matched letters/digits can be set apart
+ *  (never a query typed since: the caller only ever passes hits once `answer.term === term`, so this is always
+ *  the exact term that produced them). */
+export function HoldingFindResults({ pending, failed, hits, busy, query, onPick, tr }: {
+  pending: boolean; failed: boolean; hits: RelatableHit[] | null; busy: boolean; query: string;
   onPick: (contactId: string) => void; tr: Tr;
 }) {
   if (pending) {
@@ -59,14 +64,19 @@ export function HoldingFindResults({ pending, failed, hits, busy, onPick, tr }: 
   if (hits.length === 0) return <p className="text-sm text-muted-foreground">{tr.text("conversation.holding.findNone")}</p>;
   return (
     <ul className="space-y-1">
-      {hits.map((h) => (
-        <li key={h.id}>
-          <Button variant="ghost" className="w-full min-w-0 justify-start" disabled={busy} onClick={() => onPick(h.id)}>
-            <span className="min-w-0 truncate">{[h.firstName, h.lastName].filter(Boolean).join(" ") || tr.text("contact.noName")}</span>
-            {h.phone ? <span className="shrink-0 tabular-nums text-muted-foreground">{formatPhone(h.phone)}</span> : null}
-          </Button>
-        </li>
-      ))}
+      {hits.map((h) => {
+        const given = [h.firstName, h.lastName].filter(Boolean).join(" ");
+        const name = given || tr.text("contact.noName");
+        const phone = h.phone ? formatPhone(h.phone) : null;
+        return (
+          <li key={h.id}>
+            <Button variant="ghost" className="w-full min-w-0 justify-start" disabled={busy} onClick={() => onPick(h.id)}>
+              <span className="min-w-0 truncate"><HighlightedText text={name} ranges={given ? nameRanges(name, query) : []} /></span>
+              {phone ? <span className="shrink-0 tabular-nums text-muted-foreground"><HighlightedText text={phone} ranges={phoneRanges(phone, query)} /></span> : null}
+            </Button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -153,7 +163,7 @@ export function HoldingMove({ accountId, conversationId, holdingContactId, peopl
             }}
           />
           <HoldingFindResults
-            pending={searching && !tooShort} failed={failed} hits={hits} busy={busy}
+            pending={searching && !tooShort} failed={failed} hits={hits} busy={busy} query={term}
             onPick={(id) => { void moveTo(id); }} tr={tr}
           />
         </DialogContent>

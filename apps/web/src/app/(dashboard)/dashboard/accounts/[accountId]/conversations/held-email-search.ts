@@ -10,11 +10,13 @@ import { m } from "@/lib/messages";
  *  (only the two fields this UI shows). `sublabel` is that route's email-or-
  *  phone line — rendered under the name so two contacts who share a first
  *  and last name are never offered as though they were one. */
-export type SearchHitLite = { id: string; label: string; sublabel: string | null };
+export type SearchHitLite = { id: string; label: string; sublabel: string | null; unnamed?: true };
 
 export type HeldSearchState =
   | { status: "idle" }
-  | { status: "ok"; hits: SearchHitLite[] }
+  /** `query`: the raw term these hits answered (F-092 part 1, plan Task 10), so the results component can mark
+   *  the letters/digits that matched without the caller threading a second prop through. */
+  | { status: "ok"; hits: SearchHitLite[]; query: string }
   | { status: "error" };
 
 /**
@@ -43,8 +45,10 @@ export async function searchHeldContacts(
   locale: Locale,
   signal: AbortSignal,
 ): Promise<HeldSearchState> {
-  const res = await fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(query)}`, { signal });
+  // F-092 part 1 (plan Task 10): this box offers a contact, never a call or a conversation — `types=contacts`
+  // keeps it from paying for the other two searches.
+  const res = await fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(query)}&types=contacts`, { signal });
   if (!res.ok) return { status: "error" };
   const payload = (await res.json()) as { contacts?: SearchHitLite[] };
-  return { status: "ok", hits: (payload.contacts ?? []).map((hit) => localizeHit(hit, locale)) };
+  return { status: "ok", hits: (payload.contacts ?? []).map((hit) => localizeHit(hit, locale)), query };
 }

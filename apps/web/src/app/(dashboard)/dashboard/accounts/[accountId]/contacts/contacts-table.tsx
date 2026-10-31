@@ -14,11 +14,13 @@ import {
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ListPanel } from "@/components/ui/list-panel";
+import { HighlightedText } from "@/components/highlighted-text";
 import { contactDisplayName, formatDateInZone, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
 import { usePeek } from "@/lib/contacts/use-peek";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
 import { focusAfterBar, nextRowId } from "@/lib/contacts/drawer-focus";
 import { withWho, type Who } from "@/lib/assign/who";
@@ -320,14 +322,17 @@ export function ContactsTable({
                     <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">
                       {initials(name)}
                     </span>
-                    <span className="truncate">{name}</span>
+                    <span className="truncate">
+                      {/* "(no name)" is a stand-in, not their name: nothing in it is marked (final review M-4a). */}
+                      <HighlightedText text={name} ranges={q && (c.first_name || c.last_name) ? nameRanges(name, q) : []} />
+                    </span>
                   </span>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {c.phone ? (
                     <span className="flex items-center gap-1.5">
                       <Phone className="size-3.5" aria-hidden />
-                      {c.phone}
+                      <HighlightedText text={c.phone} ranges={q ? phoneRanges(c.phone, q) : []} />
                     </span>
                   ) : null}
                 </TableCell>

@@ -6,7 +6,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import {
-  getContact, listContacts, getRelationship, addRelationship, setRelationshipSides, removeRelationship,
+  getContact, searchContacts, getRelationship, addRelationship, setRelationshipSides, removeRelationship,
   restoreRelationship, type RelationshipRow, type RelationshipSidesPatch,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -235,7 +235,8 @@ export async function searchRelatableContactsAction(
   if ([...q].length < 2) return { ok: true, hits: [] };
   const db = await dbForRequest();
   try {
-    const rows = await listContacts(db, accountId, { search: q, limit: 9 });
+    // F-092: the best match first (exact, every word starts a word, contains), as every pick-a-customer box.
+    const rows = await searchContacts(db, accountId, { term: q, limit: 9 });
     return {
       ok: true,
       hits: rows.filter((r) => String(r.id).toLowerCase() !== subject).slice(0, 8)

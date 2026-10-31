@@ -557,6 +557,10 @@ describe("the All · Mine · Unassigned row and its empty states (F-085)", () =>
   }
   const navOf = (html: string) => html.match(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
   const hrefs = (nav: string) => [...nav.matchAll(/href="([^"]*)"/g)].map((x) => x[1]!.replace(/&amp;/g, "&"));
+  // F-092 (plan Task 6): the search empty state's "Look in archived customers" link, by its visible text.
+  const hrefOf = (html: string, text: string) =>
+    [...html.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+      .find((x) => x[2]!.replace(/<[^>]+>/g, "").trim() === text)?.[1]?.replace(/&amp;/g, "&");
 
   it("Owner, Staff and the agency get the filter row (mutation: render it for nobody -> FAILS)", async () => {
     for (const who of [OWNER, STAFF]) {
@@ -611,12 +615,35 @@ describe("the All · Mine · Unassigned row and its empty states (F-085)", () =>
     expect(await render({ who: "unassigned" })).toContain(m["assign.empty.unassigned"]);
   });
 
-  it("a search inside a filter that finds nothing is still 'no matches' (the search is the narrower fact)", async () => {
+  // F-092 final review I-1: the search is the narrower fact, but it searched only the filter's rows, so
+  // the empty state names THAT set. "Nobody matches" inside Mine claimed the whole account was searched
+  // (this test used to pin that false copy), and the archived link — a whole-account search of the
+  // archived customers — would widen a filtered search behind the reader's back, so Mine and
+  // Unassigned offer none.
+  it("a search inside Mine that finds nothing says none of YOUR customers match, and offers no archived link (mutation: say 'Nobody matches' -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce(STAFF);
     listContactsMock.mockResolvedValueOnce([]);
     const html = await render({ who: "mine", q: "zzz" });
-    expect(html).toContain(m["contacts.noMatches.title"]);
+    expect(html).toContain("None of your customers match “zzz”");
+    expect(html).not.toContain("Nobody matches “zzz”");
     expect(html).not.toContain(m["assign.empty.mine"]);
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("a search inside Unassigned that finds nothing says no unassigned customer matches, and offers no archived link (mutation: say 'Nobody matches' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ who: "unassigned", q: "zzz" });
+    expect(html).toContain("No unassigned customer matches “zzz”");
+    expect(html).not.toContain("Nobody matches “zzz”");
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("the Unassigned empty search reads Spanish for a Spanish reader (mutation: fall back to the English copy -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(await render({ who: "unassigned", q: "zzz" })).toContain("Ningún cliente sin asignar coincide con “zzz”");
   });
 
   it("a Technician's zero-row page one gets their own sentence (mutation: show the Owner's 'no contacts yet' -> FAILS)", async () => {
@@ -642,6 +669,65 @@ describe("the All · Mine · Unassigned row and its empty states (F-085)", () =>
     }
     requireAccountAccessMock.mockResolvedValueOnce(STAFF);
     expect(await render({})).toContain(m["contacts.import"]);
+  });
+
+  // F-092 part 1 (plan Task 6): the search empty state now names WHO matched nothing, suggests part of
+  // the name or the last MIN_PHONE_SEARCH_DIGITS digits of a phone, and — only for the active view and
+  // only for someone who sees the whole account — offers a way into the archived customers it never
+  // looked at. The link promises no count (spec 6): which archived contacts actually match is never
+  // known until that view runs its own search.
+  it("an Owner's empty search names who matched nothing, suggests part of the name or the last 4 digits, and offers the archived customers (mutation: say plain 'No matches' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ q: "garcía" });
+    expect(html).toContain("Nobody matches “garcía”");
+    expect(html).toContain("the last 4 digits");
+    const href = hrefOf(html, m["contacts.search.lookInArchived"]);
+    expect(href).toBeDefined();
+    const qs = new URLSearchParams(href!.slice(1));
+    expect(qs.get("view")).toBe("archived");
+    expect(qs.get("q")).toBe("garcía");
+  });
+
+  it("that same empty search reads Spanish for a Spanish reader (mutation: fall back to the English copy -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ q: "garcía" });
+    expect(html).toContain("Nadie coincide con “garcía”");
+  });
+
+  it("a Technician's empty search names only their own customers, and offers no archived link (mutation: show the link to everyone -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ q: "garcía" });
+    expect(html).toContain("None of your customers match “garcía”");
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("the Archived view's empty search names archived customers and offers no further link (mutation: reuse the Mine wording there -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ q: "garcía", view: "archived" });
+    expect(html).toContain("No archived customer matches “garcía”");
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeUndefined();
+  });
+
+  it("the archived-search link's own text carries no count (mutation: append a count to it -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ q: "garcía" });
+    // Scoped to THIS link's own visible text — not the header's unrelated "Archived" link, whose
+    // href also carries "view=archived" (that link is always there and would make the assertion
+    // pass whether or not this task's own link exists). matchAll pairs each <a> with its OWN
+    // closing </a> (same mechanism hrefOf above already relies on), so one anchor's text is never
+    // mistaken for another's.
+    expect(hrefOf(html, m["contacts.search.lookInArchived"])).toBeDefined();
+    const anchorText = [...html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/g)]
+      .map((x) => x[1]!.replace(/<[^>]+>/g, ""))
+      .find((text) => text.includes("Look in archived customers"));
+    expect(anchorText).toBeDefined();
+    expect(anchorText).not.toMatch(/\d/);
   });
 });
 
@@ -799,7 +885,7 @@ describe("the Archived view (?view=archived)", () => {
     expect(hrefOf(html, m["contacts.archived.back"])).toBe("/dashboard/accounts/a1/contacts");
     // A search that found nothing in it is still "no matches", the narrower fact.
     listContactsMock.mockResolvedValueOnce([]);
-    expect(await render({ view: "archived", q: "zzz" })).toContain(m["contacts.noMatches.title"]);
+    expect(await render({ view: "archived", q: "zzz" })).toContain(m["contacts.search.noMatchArchived.title"].replace("{query}", "zzz"));
   });
 
   it("exactly ONE Back to contacts link in every state of the Archived view, so the e2e's getByRole link locator is never ambiguous (mutation: keep the header's link beside the empty state's -> FAILS)", async () => {

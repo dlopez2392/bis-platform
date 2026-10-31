@@ -59,6 +59,7 @@ import { PlacesDemo } from "./places-demo";
 import { DocumentsDemo } from "./documents-demo";
 import { DocumentsPageDemo } from "./documents-page-demo";
 import { HeldEmailsDemo } from "./held-emails-demo";
+import { SearchHighlightDemo } from "./search-highlight-demo";
 import { NeverLogDemo } from "./never-log-demo";
 import { ForwardingDemo } from "./forwarding-demo";
 import { WebchatDemo } from "./webchat-demo";
@@ -346,6 +347,14 @@ export default async function StyleguidePage({
             items (one not on record, one unverified), empty and loading. */}
         <Section title={t(m, "conversations.held.title", "en")} file="accounts/[accountId]/conversations/held-email-list.tsx">
           <HeldEmailsDemo />
+        </Section>
+
+        {/* F-092 part 1: search hits set the matched letters in weight 600, colour and background
+            inherited (DESIGN.md: hierarchy by weight first, colour last) — the command palette's
+            contacts row and a list row, across a full name in any word order, the n/ñ fold (Q1) and
+            a phone search by its last digits (Q2). */}
+        <Section title={m["shell.search"]} file="components/highlighted-text.tsx">
+          <SearchHighlightDemo />
         </Section>
 
         {/* S-06 part 2: the Never record list — loaded (English and Spanish), empty, and a failed read. */}

@@ -5,7 +5,7 @@ import { formatWhen } from "@/lib/booking/time";
 import { agendaTime } from "@/lib/booking/agenda-window";
 import { UNDO_WINDOW_MS } from "./undo-window";
 import {
-  submitJob, warningLines, withExistingCustomer, noticeReason, LENGTH_OPTIONS,
+  submitJob, warningLines, withExistingCustomer, noticeReason, LENGTH_OPTIONS, customerSearchUrl,
   sheetDraft, addingAsNew, typedCustomer, phoneOwnerWords,
   type AddRun, type MoveRun, type JobToast, type OpenedSnapshot, type SheetCustomer,
 } from "./job-sheet-handlers";
@@ -302,6 +302,12 @@ describe("T11/T12 review: the sheet's draft is built from the customer it holds"
     expect(en.button).toBe(t(m, "calendar.job.useExisting", "en", { first: "this customer" }));
     expect(phoneOwnerWords({ id: "x", name: "", first: "" }, "es").button).toBe(t(m, "calendar.job.useExisting", "es", { first: "este cliente" }));
     expect(phoneOwnerWords({ id: "x", name: "Ana García", first: "Ana" }, "en").question).toBe(t(m, "calendar.job.phoneOwner", "en", { name: "Ana García", first: "Ana" }));
+  });
+});
+
+describe("customerSearchUrl (F-092 part 1, plan Task 9): the sheet's search asks for contacts only", () => {
+  it("builds the palette's own GET route with types=contacts and an encoded term (mutation: drop &types=contacts -> FAILS)", () => {
+    expect(customerSearchUrl("a1", "garcía maria")).toBe("/api/accounts/a1/search?q=garc%C3%ADa%20maria&types=contacts");
   });
 });
 

@@ -107,6 +107,30 @@ describe("AddRelationshipDialog's markup (final review item 7)", () => {
   });
 });
 
+// Plan Task 8 (F-092 part 1): the "find" picker's rows highlight which letters or digits matched,
+// the same way the palette and the contact list do — driven by the term the row actually answered,
+// never a query the row invents on its own.
+describe("the find picker highlights the matched letters and digits (plan Task 8)", () => {
+  it("marks the matched letters of a hit's name (mutation: render the row's name without HighlightedText -> FAILS)", () => {
+    const hits = [{ id: ANA, firstName: "Ana", lastName: "Ramírez", phone: null }];
+    const html = render({ mode: "find", term: "ramirez", answer: { term: "ramirez", hits } });
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>Ramírez<\/mark>/);
+  });
+
+  it("a nameless hit's stand-in '(no name)' marks nothing (final review M-4a; mutation: highlight the stand-in -> FAILS)", () => {
+    const hits = [{ id: ANA, firstName: null, lastName: null, phone: null }];
+    const html = render({ mode: "find", term: "name", answer: { term: "name", hits } });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain(m["relationships.noName"]);
+  });
+
+  it("marks the matched digits of a hit's phone (mutation: render the row's phone without HighlightedText -> FAILS)", () => {
+    const hits = [{ id: ANA, firstName: "Ana", lastName: "Ramírez", phone: "(956) 555-0199" }];
+    const html = render({ mode: "find", term: "0199", answer: { term: "0199", hits } });
+    expect(html).toMatch(/<mark data-search-hit="true"[^>]*>0199<\/mark>/);
+  });
+});
+
 describe("the submit hands the created id to the retry (final review B Minor 1: step 5 of the e2e cannot tell a retry-by-id from a re-match by phone)", () => {
   it("the submit passes this dialog's createdId to otherForSubmit (mutation: createdId: null -> FAILS)", async () => {
     const { readFileSync } = await import("node:fs");

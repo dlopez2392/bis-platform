@@ -38,6 +38,19 @@ describe("client-groups.ts over PostgREST", () => {
       expect(await searchGroups(db, accountId, "  ")).toEqual([]);
     }));
 
+  // F-092 part 1 (plan Task 11, owner ruling Q4): a household is found the same way a contact is -
+  // ignoring accents and word order - because 0108's client_groups.search_name folds the stored name the
+  // same way app.contact_name_fold does. "garcia" alone already worked before this plan; what is new is
+  // finding the accented, multi-word name by typing its folded words in either order, or in capitals.
+  it("a household is found ignoring accents and word order (owner Q4)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana", email: "ana.q4@example.com" }, A)).id;
+      await createGroupWithMember(db, accountId, ana, "household", "Familia García", null, A);
+      expect((await searchGroups(db, accountId, "familia garcia")).map((h) => h.name)).toEqual(["Familia García"]);
+      expect((await searchGroups(db, accountId, "garcia familia")).map((h) => h.name)).toEqual(["Familia García"]);
+      expect((await searchGroups(db, accountId, "GARCIA")).map((h) => h.name)).toEqual(["Familia García"]);
+    }));
+
   it("the business name write keeps the column in step, and its undo restores it", () => withTestAccount(async (db, accountId) => {
     const ana = (await createContact(db, accountId, { firstName: "Ana", email: "ana.b@example.com" }, A)).id;
     const [first] = await setContactsBusiness(db, accountId, [{ contactId: ana, name: "Acme Roofing" }], A);

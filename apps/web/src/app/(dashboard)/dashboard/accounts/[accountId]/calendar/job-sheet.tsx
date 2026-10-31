@@ -17,6 +17,8 @@ import { parsePlaceFields, PLACE_LIMITS } from "@/lib/contacts/place-input";
 import { placeTitle } from "@/lib/contacts/place-view";
 import type { SearchHit, SearchResults } from "@/app/api/accounts/[accountId]/search/route";
 import type { PlacesResponse } from "@/app/api/accounts/[accountId]/contacts/[contactId]/places/route";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import type { NoticeAvailability } from "./cancel-flow";
 import {
   addJobAction, undoAddJobAction, moveJobAction, undoEditJobAction, undoMoveJobAction, jobNoticeOptionAction,
@@ -24,6 +26,7 @@ import {
 } from "./agenda-actions";
 import {
   submitJob, noticeReason, warningLines, withExistingCustomer, sheetDraft, addingAsNew, typedCustomer, phoneOwnerWords, LENGTH_OPTIONS,
+  customerSearchUrl,
   type OpenedSnapshot, type PhoneOwner, type SheetCustomer, type SubmitOutcome,
 } from "./job-sheet-handlers";
 
@@ -106,6 +109,28 @@ export function JobSheet(props: JobSheetProps) {
   );
 }
 
+/** One customer the Add job search found (F-092 final review M-1: its own component so the matched letters and
+ *  digits it sets apart are drawn from props in a test, since the hits themselves only ever arrive by fetch).
+ *  `query` is the term these hits answered, never one typed since. */
+export function JobSearchHit({ hit, query, onChoose }: { hit: SearchHit; query: string; onChoose: () => void }) {
+  return (
+    <li className="border-t border-[var(--row-line)] first:border-t-0">
+      <button type="button" data-job-hit={hit.id}
+        className="flex min-h-11 w-full min-w-0 flex-col items-start rounded-[var(--radius-ctl)] px-2 py-1.5 text-left outline-none hover:bg-[var(--surface-3)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        onClick={onChoose}>
+        <span className="break-words text-sm text-card-foreground">
+          <HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} />
+        </span>
+        {hit.sublabel ? (
+          <span className="break-all text-xs text-muted-foreground">
+            <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} />
+          </span>
+        ) : null}
+      </button>
+    </li>
+  );
+}
+
 /** The form itself: the sheet's body, and the drawer's body while it moves a job (spec 5.5). */
 export function JobForm(p: JobFormProps) {
   const { accountId, timezone, locale, mode, prefill, job, specimen, pseudo = false } = p;
@@ -179,7 +204,7 @@ export function JobForm(p: JobFormProps) {
     const term = q.trim();
     if (term.length < MIN_QUERY) { setHits(null); return; }
     searchTimer.current = setTimeout(() => {
-      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(term)}`)
+      fetch(customerSearchUrl(accountId, term))
         .then(async (res) => {
           if (!res.ok) throw new Error(String(res.status));
           const body = (await res.json()) as Partial<SearchResults>;
@@ -314,14 +339,8 @@ export function JobForm(p: JobFormProps) {
                 : hits ? (
                   <ul className="flex flex-col">
                     {hits.contacts.map((h) => (
-                      <li key={h.id} className="border-t border-[var(--row-line)] first:border-t-0">
-                        <button type="button" data-job-hit={h.id}
-                          className="flex min-h-11 w-full min-w-0 flex-col items-start rounded-[var(--radius-ctl)] px-2 py-1.5 text-left outline-none hover:bg-[var(--surface-3)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                          onClick={() => choose({ kind: "existing", id: h.id.toLowerCase(), name: h.label, first: firstWord(h.label) })}>
-                          <span className="break-words text-sm text-card-foreground">{h.label}</span>
-                          {h.sublabel ? <span className="break-all text-xs text-muted-foreground">{h.sublabel}</span> : null}
-                        </button>
-                      </li>
+                      <JobSearchHit key={h.id} hit={h} query={hits.query}
+                        onChoose={() => choose({ kind: "existing", id: h.id.toLowerCase(), name: h.label, first: firstWord(h.label) })} />
                     ))}
                   </ul>
                 ) : null}

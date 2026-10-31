@@ -610,6 +610,27 @@ export const m = {
   "contacts.search": "Search name, email, phone…",
   // Short in Spanish: the longer line truncated in the box at phone width.
   "contacts.search.es": "Buscar contactos",
+  // F-092 part 1 (plan Task 6): a search that found nothing, worded by who it searched and what view
+  // it searched in. {query} is the typed search, trimmed to the same 80-character cap the search
+  // itself reads (contact-search.ts's MAX_SEARCH_LENGTH); {digits} is MIN_PHONE_SEARCH_DIGITS
+  // (@bis/db/contact-search), so the hint always names the real floor rather than a hard-coded guess.
+  "contacts.search.noMatch.title": "Nobody matches “{query}”",
+  "contacts.search.noMatch.title.es": "Nadie coincide con “{query}”",
+  "contacts.search.noMatch.body": "Try part of the name, or the last {digits} digits of their phone.",
+  "contacts.search.noMatch.body.es": "Pruebe con parte del nombre o con los últimos {digits} dígitos del teléfono.",
+  // The active view's own empty-search action (Owner/Staff/the agency only): a search found nothing
+  // HERE, but the archived customers were never looked at — it names no count (spec 6), since which
+  // of them actually match is only known once that view runs its own search.
+  "contacts.search.lookInArchived": "Look in archived customers",
+  "contacts.search.lookInArchived.es": "Buscar en clientes archivados",
+  "contacts.search.noMatchMine.title": "None of your customers match “{query}”",
+  "contacts.search.noMatchMine.title.es": "Ninguno de sus clientes coincide con “{query}”",
+  // F-092 final review I-1: the Unassigned filter's own empty search — it searched only the
+  // customers nobody has, so it says so rather than "Nobody matches".
+  "contacts.search.noMatchUnassigned.title": "No unassigned customer matches “{query}”",
+  "contacts.search.noMatchUnassigned.title.es": "Ningún cliente sin asignar coincide con “{query}”",
+  "contacts.search.noMatchArchived.title": "No archived customer matches “{query}”",
+  "contacts.search.noMatchArchived.title.es": "Ningún cliente archivado coincide con “{query}”",
   "contacts.col.name": "Contact name",
   // "Nombre" and "Negocio", not "Nombre del contacto" / "Nombre del negocio":
   // the long pair pushed the Spanish table past its panel at 1280px.
@@ -628,10 +649,6 @@ export const m = {
     "Contacts show up when Sofía takes a call, a form is submitted, or you add one yourself.",
   "contacts.empty.body.es":
     "Los contactos aparecen cuando Sofía atiende una llamada, se envía un formulario o usted agrega uno.",
-  "contacts.noMatches.title": "No matches",
-  "contacts.noMatches.title.es": "Sin coincidencias",
-  "contacts.noMatches.body": "Try a different name, email, or phone number.",
-  "contacts.noMatches.body.es": "Pruebe con otro nombre, correo o número de teléfono.",
   "contacts.firstName": "First name",
   "contacts.firstName.es": "Nombre",
   "contacts.lastName": "Last name",

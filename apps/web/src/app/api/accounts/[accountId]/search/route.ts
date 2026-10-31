@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { listContacts, searchCalls, searchConversations, sanitizeSearchTerm, searchTermLength } from "@bis/db";
+import { searchContacts, searchCalls, searchConversations, searchTermLength } from "@bis/db";
+import { contactSearchPlan, phoneMatches } from "@bis/db/contact-search";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { callerLabel, OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
 export type SearchHit = {
   id: string;
   label: string;
+  /** F-092 final review M-4a: set (only ever `true`) when `label` is this route's stand-in for a contact with no
+   *  name ("Unnamed contact"), never the customer's own words, so no client marks a search's letters in it. */
+  unnamed?: true;
   sublabel: string | null;
   /** Raw ISO, formatted by the CLIENT. Never formatted here: Intl on the
    *  server formats in the SERVER's zone (UTC on Vercel), which renders the
@@ -33,6 +37,16 @@ const MIN_QUERY = 2;
 const EMPTY: SearchResults = { contacts: [], calls: [], conversations: [] };
 
 const UNNAMED = "Unnamed contact";
+
+/** F-092: `types` narrows which searches run (Add job and held email want contacts only, and should not pay for
+ *  the other two). A comma list kept to the three known names; none left (or no `types`) means all three. */
+const SOURCES = ["contacts", "calls", "conversations"] as const;
+type Source = (typeof SOURCES)[number];
+function sourcesOf(types: string | null): ReadonlySet<Source> {
+  const named = (types ?? "").split(",").map((t) => t.trim())
+    .filter((t): t is Source => (SOURCES as readonly string[]).includes(t));
+  return new Set(named.length > 0 ? named : SOURCES);
+}
 
 function joinName(first: string | null, last: string | null): string {
   return [first, last].map((p) => p?.trim() ?? "").filter(Boolean).join(" ");
@@ -63,27 +77,30 @@ export async function GET(
   // The floor is applied to the SANITIZED term's length, not the raw one,
   // and that distinction is load-bearing twice over.
   //
-  // `listContacts` is a LIST function with an optional search — an empty term
-  // legitimately means "no filter, return the list", which is what the
-  // contacts page depends on. Its two siblings here are SEARCH functions and
-  // return [] instead. So a query of "%%" or "()", which sanitizes away to
-  // nothing, would have reached listContacts as "no filter" and rendered the
-  // account's five most recent contacts as if they had MATCHED — a lie about
-  // a search. Gating here keeps listContacts' contract intact for its other
-  // callers while never handing it an empty term from this route.
+  // A query of "%%" or "()" sanitizes away to nothing. This route once called
+  // `listContacts`, a LIST function for which an empty term means "no filter,
+  // return the list", and would have rendered the account's five most recent
+  // contacts as if they had MATCHED. `searchContacts` answers [] for it now,
+  // as its two siblings always did, but the floor still says so here first,
+  // without a round trip.
   //
   // It also closes the raw-length hole: "(a)" is three characters and clears
   // a raw floor, but carries one character of actual query.
   //
-  // REVIEW CORRECTION: measured with `searchTermLength`, not `q.length` —
-  // `q` is the ESCAPED form `sanitizeSearchTerm` hands to the database, and
-  // a lone "_" escapes to "\_" (two characters), which cleared this floor
-  // on one real character. The palette (command-palette.tsx) measures the
-  // SAME way, off the same raw query, so the two sides still agree on which
-  // of them rejected it.
-  const raw = (new URL(req.url).searchParams.get("q") ?? "").trim();
-  const q = sanitizeSearchTerm(raw);
+  // REVIEW CORRECTION: measured with `searchTermLength`, not the escaped
+  // term's length — `sanitizeSearchTerm` escapes a lone "_" to "\_" (two
+  // characters), which cleared this floor on one real character. The palette
+  // (command-palette.tsx) measures the SAME way, off the same raw query, so
+  // the two sides still agree on which of them rejected it.
+  //
+  // F-092: the RAW term goes to all three searches. Each sanitizes for itself
+  // (searchCalls, searchConversations, and searchContacts through the contact
+  // list's own filter, which also folds accents and reads phone digits off the
+  // raw term), so sanitizing here as well only ever did it twice.
+  const query = new URL(req.url).searchParams;
+  const raw = (query.get("q") ?? "").trim();
   if (searchTermLength(raw) < MIN_QUERY) return NextResponse.json(EMPTY);
+  const sources = sourcesOf(query.get("types"));
 
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
   const base = `/dashboard/accounts/${accountId}`;
@@ -91,20 +108,27 @@ export async function GET(
   // No try/catch: a source that throws must 500 so the palette can show its
   // honest error row. Swallowing it here would render as "no matches", which
   // tells the user their contact does not exist when the read actually failed.
+  // A source `types` left out answers [] without being asked.
   const [contacts, calls, conversations] = await Promise.all([
-    listContacts(db, accountId, { search: q, limit: PER_SOURCE }),
-    searchCalls(db, accountId, { search: q, limit: PER_SOURCE }),
-    searchConversations(db, accountId, { search: q, limit: PER_SOURCE }),
+    sources.has("contacts") ? searchContacts(db, accountId, { term: raw, limit: PER_SOURCE }) : [],
+    sources.has("calls") ? searchCalls(db, accountId, { search: raw, limit: PER_SOURCE }) : [],
+    sources.has("conversations") ? searchConversations(db, accountId, { search: raw, limit: PER_SOURCE }) : [],
   ]);
+  // F-092: a phone search shows the number it matched, not the email beside it.
+  const plan = contactSearchPlan(raw);
 
   const body: SearchResults = {
-    contacts: (contacts ?? []).slice(0, PER_SOURCE).map((c): SearchHit => ({
-      id: c.id,
-      label: joinName(c.first_name, c.last_name) || UNNAMED,
-      sublabel: c.email ?? c.phone ?? null,
-      at: null,
-      href: `${base}/contacts/${c.id}`,
-    })),
+    contacts: (contacts ?? []).slice(0, PER_SOURCE).map((c): SearchHit => {
+      const name = joinName(c.first_name, c.last_name);
+      return {
+        id: c.id,
+        label: name || UNNAMED,
+        ...(name ? {} : { unnamed: true as const }),
+        sublabel: phoneMatches(plan, c.phone) ? c.phone : c.email ?? c.phone ?? null,
+        at: null,
+        href: `${base}/contacts/${c.id}`,
+      };
+    }),
     calls: calls.slice(0, PER_SOURCE).map((c): SearchHit => ({
       id: c.id,
       label: callerLabel(c),

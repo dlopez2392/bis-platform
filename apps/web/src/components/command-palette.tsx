@@ -16,7 +16,7 @@ import { setMyThemeAction } from "@/app/(dashboard)/dashboard/preferences/action
 import { t } from "@/lib/i18n/t";
 // The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
 // this is a client component. search-term.ts is a standalone pure module.
-import { sanitizeSearchTerm, searchTermLength } from "@bis/db/search-term";
+import { searchTermLength } from "@bis/db/search-term";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import {
   buildPaletteEntries, filterEntries, type PaletteEntry,
@@ -24,6 +24,8 @@ import {
 import type { SearchResults, SearchHit } from "@/app/api/accounts/[accountId]/search/route";
 import { formatDate } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { HighlightedText } from "@/components/highlighted-text";
+import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 
 const DEBOUNCE_MS = 200;
 /** Must match the route's own floor, or the palette spins for a query the
@@ -68,6 +70,51 @@ function useIsMac(): boolean {
   return useSyncExternalStore(NEVER_CHANGES, detectMac, () => false);
 }
 
+/** The live search's URL: the trimmed RAW query, as typed (F-092 final review M-5). Exported so the test can see
+ *  exactly what reaches the route; the route sanitizes it for each search itself. */
+export function paletteSearchUrl(accountId: string, query: string): string {
+  return `/api/accounts/${accountId}/search?q=${encodeURIComponent(query.trim())}`;
+}
+
+/**
+ * One live-search hit's label and sublabel, as the dialog actually shows them. F-092 part 1: the
+ * CONTACTS group only sets the matched letters in weight 600 (DESIGN.md: weight first, colour last) —
+ * the label through `nameRanges`, the sublabel's own text through `phoneRanges`, with the " · date"
+ * join staying outside the mark since a date was never part of what was typed. Calls and conversations
+ * hits are unchanged: their sublabel is a call's or a conversation's own summary, not a contact's name
+ * or number, so the search's name/phone fold has nothing to map back onto.
+ *
+ * Exported so command-palette.test.ts can render this one row directly — the dialog around it needs
+ * `usePathname`, `useRouter`, `useTheme` and cmdk's own filtering, none of which this row depends on.
+ */
+export function PaletteHitContent({
+  groupKey, hit, query,
+}: {
+  groupKey: string;
+  hit: SearchHit;
+  query: string;
+}) {
+  const isContacts = groupKey === "contacts";
+  const sublabelText = hit.sublabel
+    ? (isContacts ? <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} /> : hit.sublabel)
+    : null;
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate">
+        {/* A stand-in label ("Unnamed contact") is not the customer's name: nothing in it is marked (final review M-4a). */}
+        {isContacts ? <HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} /> : hit.label}
+      </span>
+      {hit.sublabel || hit.at ? (
+        <span className="truncate text-xs text-muted-foreground">
+          {sublabelText}
+          {hit.sublabel && hit.at ? " · " : ""}
+          {hit.at ? formatDate(hit.at) : ""}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /**
  * DESIGN.md's ⌘K key pattern: finds contacts/calls/conversations, jumps to any
  * settings section by name, runs safe actions.
@@ -108,18 +155,24 @@ export function CommandPalette({
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
   const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query);
 
-  // Sanitized, not merely trimmed, and measured against the SAME floor the
-  // route applies to the SAME transform. Gating on the raw string instead let
+  // The floor is measured on the SANITIZED length (searchTermLength), the
+  // SAME floor the route applies to the SAME transform. Gating on the raw
+  // string's length instead let
   // "(a)" — three characters, one of them real — clear the floor here, fetch,
   // come back empty, and print "Nothing matches “(a)”" when the honest answer
   // was "keep typing". The two sides must agree or the palette lies about
   // which of them rejected the query.
   //
-  // REVIEW CORRECTION: `searchTermLength(query)`, not `q.length` — `q` is
-  // sanitizeSearchTerm's ESCAPED form (an underscore becomes two characters,
-  // "\_"), which cleared this floor on a single real character. The route
-  // measures the same way, off the same raw query.
-  const q = sanitizeSearchTerm(query);
+  // REVIEW CORRECTION: `searchTermLength(query)`, not `q.length` — an
+  // escaped underscore ("\_", two characters) once cleared this floor on a
+  // single real character. The route measures the same way, off the same raw
+  // query.
+  //
+  // F-092 final review M-5: what is SENT is the trimmed raw query, never the
+  // sanitized one. Sanitizing here escaped "john_doe@x.com" to
+  // "john\_doe@x.com", so the search's exact-email tier never fired from ⌘K;
+  // the route sanitizes for itself, once (its own F-092 comment).
+  const q = query.trim();
   const wantsLive = accountId !== null && searchTermLength(query) >= MIN_QUERY;
   /** Only a settled response FOR THIS EXACT QUERY counts. Anything else —
    *  never fetched, still debouncing, in flight, or answering an older
@@ -154,7 +207,7 @@ export function CommandPalette({
     if (!open || !wantsLive || !accountId) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(q)}`, {
+      fetch(paletteSearchUrl(accountId, q), {
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -328,16 +381,7 @@ export function CommandPalette({
                         value={`${group.key}:${hit.id}`}
                         onSelect={() => openHit(hit)}
                       >
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate">{hit.label}</span>
-                          {hit.sublabel || hit.at ? (
-                            <span className="truncate text-xs text-muted-foreground">
-                              {[hit.sublabel, hit.at ? formatDate(hit.at) : null]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </span>
-                          ) : null}
-                        </span>
+                        <PaletteHitContent groupKey={group.key} hit={hit} query={query} />
                       </CommandItem>
                     ))}
                   </CommandGroup>

@@ -14,10 +14,10 @@
 -- ASCII only, no backslashes (memory bis-mcp-sql-escapes).
 with items(kind, key, def) as (
   select 'extension', e.extname::text, null::text
-    from pg_extension e where e.extname in ('btree_gist', 'plpgsql')
+    from pg_extension e where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')
   union all
   select 'extension_version(info)', e.extname::text, e.extversion
-    from pg_extension e where e.extname in ('btree_gist', 'plpgsql')
+    from pg_extension e where e.extname in ('btree_gist', 'pg_trgm', 'plpgsql')
   union all
   select 'schema_acl', n.nspname::text,
          case when n.nspacl is null then 'default'
