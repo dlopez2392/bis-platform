@@ -1,7 +1,9 @@
 # Contacts search that ignores accents and finds full names and phone digits (F-092 part 1): design
 
 Date: 2026-10-31. Author: bis-crm. Base: `af5976fa` (branch `feat/search-accents`).
-Status: design. Nothing here is built. Four owner questions are open (section 9).
+Status: design, owner-approved. Nothing here is built. The four owner questions were answered on 2026-10-31, each as
+recommended (section 9); the design below states the answers, not the options. Plan:
+`docs/superpowers/plans/2026-10-31-search-accents.md`.
 Migration number: **0108** (0107, the calendar agenda, is the newest file in `packages/db/supabase/migrations/`).
 
 Every claim about current code cites `path:line` at `af5976fa`. Short forms: `ACCT/` =
@@ -51,7 +53,7 @@ palette's "Ver los 42 resultados" page, which are F-095 (`:1434`, `:2689-2691`).
 | 5 | **Held email: choose a record** (Owner, Staff, agency) | `ACCT/conversations/held-email-search.ts:40-49` | The same route, contacts only | **Yes**, via the route |
 | 6 | **Add a relationship: find a person** (record page) | `ACCT/contacts/add-relationship-dialog.tsx:91` → `ACCT/contacts/relationship-actions.ts:227-249` | Server action, `listContacts(..., { search, limit: 9 })` on the RLS client (`:236-238`) | **Yes**: filter + best-first |
 | 7 | **Shared number: move a thread to a customer** (inbox) | `ACCT/conversations/holding-move.tsx:35`, `:105` | The same server action as #6 | **Yes**, via #6 |
-| 8 | **Household or business: find one** (record page's groups card) | `ACCT/contacts/groups-card.tsx:381` → `groups-actions.ts:87-92` → `DB/client-groups.ts:130-144` | `client_groups.name ilike '%term%'`, 8 rows by `name_key`; `name_key` is `lower(btrim(name))` (`MIG/0069_client_groups.sql:36-38`), so no accent folding | **Owner question 4** |
+| 8 | **Household or business: find one** (record page's groups card) | `ACCT/contacts/groups-card.tsx:381` → `groups-actions.ts:87-92` → `DB/client-groups.ts:130-144` | `client_groups.name ilike '%term%'`, 8 rows by `name_key`; `name_key` is `lower(btrim(name))` (`MIG/0069_client_groups.sql:36-38`), so no accent folding | **Yes** (Q4, decided 2026-10-31): the same folded words, on a stored `client_groups.search_name` in 0108 |
 | 9 | ⌘K palette, calls half | `DB/voice.ts:1311-1322` | `caller_e164` or `summary` ilike the sanitized term | No (section 10) |
 | 10 | ⌘K palette, conversations half | `DB/messaging.ts:967-985` | Message `body` ilike, newest 200 matches, archived-and-read threads out | No: a message body is not a customer name; part 2's one index |
 | 11 | New deal: pick the customer (pipeline) | `ACCT/pipeline/page.tsx:26`; `ACCT/pipeline/add-opportunity-dialog.tsx:78-89` | No search at all: a Select of the newest 200 contacts | No; recorded as a finding (section 13) |
@@ -97,7 +99,8 @@ three independent parts. Each part is a way to match; a contact matches when ANY
    reaches). A contact matches when EVERY token appears somewhere in its `search_name` (4.3): the words in any
    order, each as a substring.
    - Accents and case: folded on both sides by the same table. "Garcia", "GARCÍA" and "garcía" are one query.
-   - **ñ**: the shipped fold maps ñ to n, so "Pena" finds "Peña" AND "Peña" finds "Pena" (owner question 1).
+   - **ñ**: the shipped fold maps ñ to n, so "Pena" finds "Peña" AND "Peña" finds "Pena" (Q1, decided 2026-10-31:
+     both ways, as the duplicates queue already treats them).
    - Hyphens, periods, commas and apostrophes are word breaks: "García-López" is stored `garcia lopez`, so
      "garcia lopez", "lopez garcia" and "garcia-lopez" all find it. "O'Brien" is `o brien`: "o'brien" and
      "brien" find it, "obrien" does not (a known gap, section 10).
@@ -123,7 +126,7 @@ still find it exactly as they do now. A db test pins the superset (section 11, T
 ### 4.2 Phone digits in any format
 
 The phone part runs only when the term looks like a phone: today's shape rule (digits and `+ ( ) - . space` only,
-`DB/contacts.ts:879`) and today's floor of **4 digits** (`:880`; owner question 2). Letters anywhere ("Suite 9",
+`DB/contacts.ts:879`) and today's floor of **4 digits** (`:880`; Q2, decided 2026-10-31: 4, today's rule). Letters anywhere ("Suite 9",
 "maria5@…") keep it off, as now. Then:
 
 - **A leading "+" names a country code**, which is dropped before matching partial digits: `+1` drops the `1`;
@@ -160,6 +163,13 @@ Decided: **a stored generated document plus a trigram index**, not `unaccent()` 
    own migration run proves the Docker images. It also reads where 0016 put `btree_gist`
    (`select extnamespace::regnamespace from pg_extension where extname = 'btree_gist'`) and follows that
    placement if `extensions` is missing anywhere.
+   **Pre-flight, measured 2026-10-31 by the orchestrator (read-only), identical on production and bis-ci:** the
+   `extensions` schema exists; `pg_trgm` is NOT installed and is available at default version 1.6;
+   `app.contact_name_fold` exists and is IMMUTABLE (`provolatile = 'i'`); contacts: production 53, bis-ci 41. So
+   0108 creates the extension `with schema extensions` and names the operator class `extensions.gin_trgm_ops`.
+   Still an ASSUMPTION, proven by CI `verify` applying 0108 in its own stack: the Supabase CLI's Docker images
+   carry `pg_trgm` and an `extensions` schema. The local PG17.6 replica's unpacked binaries carry only
+   `btree_gist`; the plan unpacks the full archive, which holds `pg_trgm` and `btree_gin`.
 2. `app.contact_search_name(p_first text, p_last text, p_company text) returns text`, `plpgsql immutable parallel
    safe set search_path = pg_catalog, pg_temp`: `contact_name_fold` of each, joined by one space, empty parts
    skipped, NULL when all three are empty. plpgsql, not sql, for 0106's measured reason: a sql function calling a
@@ -177,8 +187,8 @@ Decided: **a stored generated document plus a trigram index**, not `unaccent()` 
    of the search's OR is on one indexed column, so the planner can answer it with one bitmap scan per arm and a
    BitmapOr; one unindexed arm would force a scan of the account's rows. A trigram index serves `ILIKE '%x%'` for
    any term of 3 or more characters; a 2-character term cannot use it and scans the account's rows (section 4.5).
-5. If owner question 4 says yes: `client_groups.search_name` generated as `app.contact_name_fold(name)` and a
-   trigram GIN on it.
+5. `client_groups.search_name` generated as `app.contact_name_fold(name)` and a trigram GIN on it (Q4, decided
+   2026-10-31).
 6. The parity fingerprint gains `pg_trgm` in both extension lists (`parity/fingerprint.sql:59`,
    `parity/fingerprint-detail.sql:17`), so a project missing it is a parity difference, not a surprise.
 7. Header in 0098/0103/0106 form (WHY / WHAT / GRANTS / SEARCH PATHS / LOCKS AND COST / LOAD-BEARING / ROLLBACK),
@@ -232,7 +242,7 @@ budget is most likely to catch, and it is measured explicitly.
 
 ## 5. Order and paging
 
-**The contact list keeps its own order** while a search is on (owner question 3, recommended): the sort the person
+**The contact list keeps its own order** while a search is on (Q3, decided 2026-10-31): the sort the person
 chose, newest first by default (`DB/contacts.ts:944`), the same cursor (`:963-984`), exactly one pager and the real
 total from `countContacts`. Search stays a filter and sort stays the other, independent axis, as the list already
 promises (`ACCT/contacts/page.tsx:461-467`; DESIGN.md "Paged lists", line 197). Nothing about paging changes,
@@ -325,7 +335,7 @@ show their own skeleton or nothing while a request is out (rule 7). Every new st
 | D2 | Words in any order, each a substring, all required | "garcia maria" and "maria lopez" must work; one word that is not in the name narrows rather than widens |
 | D3 | `company_name` is part of the searched name | The list shows and sorts by it; a business's name should find its people |
 | D4 | The match set is a superset of today's | No customer found today stops being found (section 4.1) |
-| D5 | List keeps its chosen order; boxes rank exact, word-start, contains | Section 5; owner question 3 can overturn the first half |
+| D5 | List keeps its chosen order; boxes rank exact, word-start, contains | Section 5; Q3 decided 2026-10-31 |
 | D6 | The route takes `types=contacts` and the raw term | Section 5 |
 | D7 | Highlight by weight, not colour | DESIGN.md line 67 |
 | D8 | Exact lookups (dedupe, caller ID, forms) unchanged | Section 2 row 13 |
@@ -333,27 +343,21 @@ show their own skeleton or nothing while a request is out (rule 7). Every new st
 
 ---
 
-## 9. Owner questions
+## 9. Owner questions: DECIDED 2026-10-31 (all four as recommended)
 
-1. **When someone types "n", should search find "ñ"?**
-   - **(A) Yes, both ways: "Pena" finds "Peña", and "Peña" finds "Pena". Recommended:** staff on an English
-     keyboard type "Pena", and the duplicates queue already treats the two as the same name, so search agrees with it.
-   - (B) One way: "Pena" finds "Peña", but typing "Peña" finds only "Peña". Costs a second stored name.
-   - (C) No: ñ and n are different letters, and "Pena" never finds "Peña".
-2. **How many digits before search treats what was typed as a phone number?**
-   - **(A) 4. Recommended:** it is today's rule, and "the one ending in 0199" is how people remember a number.
-   - (B) 3: finds by area code ("956"), but in the Valley nearly everyone shares one, so it finds everyone.
-   - (C) 7: fewer accidental matches, but the last four digits alone no longer work.
-3. **While a search is on, what order does the contact list show?**
-   - **(A) The order already chosen (newest first unless changed); the ⌘K box and the pick-a-customer boxes show
-     the best match first. Recommended:** the pager and the total work exactly as they do now, and the small boxes,
-     which show 5 to 8 names, are where order decides whether you find the person.
-   - (B) Best match first in the list too, while a search is on. Needs a database function and a new kind of page
-     marker; about 3 more days.
-4. **Should the household and business search follow the same rules in this part?**
-   - **(A) Yes: "Familia Garcia" finds "Familia García". Recommended:** it is one more stored name in the same
-     migration (under a day), and otherwise the record page finds "García" the person but not "García" the family.
-   - (B) No: customers only; households and businesses wait for part 2.
+1. **When someone types "n", should search find "ñ"?** **DECIDED 2026-10-31: (A) yes, both ways.** "Pena" finds
+   "Peña" and "Peña" finds "Pena": the existing `app.contact_name_fold` / `nameFold` behaviour, unchanged, so search
+   agrees with the duplicates queue. (Not chosen: B, one way, which cost a second stored name; C, ñ and n distinct.)
+2. **How many digits before search treats what was typed as a phone number?** **DECIDED 2026-10-31: (A) 4**,
+   today's rule (`MIN_PHONE_SEARCH_DIGITS`), so "the one ending in 0199" works. (Not chosen: B, 3; C, 7.)
+3. **While a search is on, what order does the contact list show?** **DECIDED 2026-10-31: (A).** The contact list
+   keeps the order already chosen (newest first unless changed), its cursor paging, its one pager and its real
+   total while searching; the ⌘K box and the pick-a-customer boxes rank the best match first (exact, every word
+   starts a word, contains). (Not chosen: B, best match first in the list too, which needed a database function and
+   a new page marker.)
+4. **Should the household and business search follow the same rules in this part?** **DECIDED 2026-10-31: (A)
+   yes.** "Familia Garcia" finds "Familia García": `client_groups.search_name`, stored and trigram-indexed, lands in
+   the same migration 0108. (Not chosen: B, customers only.)
 
 ---
 
@@ -384,7 +388,7 @@ show their own skeleton or nothing while a request is out (rule 7). Every new st
 | T6 | Empty-state copy EN/ES (section 6), the archived link, the Technician variant; copy-catalogue tests incl. the milestone guard | bis-crm | low |
 | T7 | Palette rows use the highlight helper | bis-frontend | low |
 | T8 | The 50,000-contact measurement (4.5) on the replica, numbers into 0108's header; `btree_gin` fallback only if the budget is missed | bis-db-schema with bis-crm | medium |
-| T9 | If question 4 is A: `searchGroups` on `client_groups.search_name` tokens, accent test | bis-crm | low |
+| T9 | (Q4 decided) `searchGroups` on `client_groups.search_name` tokens, accent test | bis-crm | low |
 | T10 | e2e (bis-e2e-qa): typing "garcia maria" in the list and in ⌘K finds a "María García" made on the per-run fixture account, never on Test Client One, whose Maria Garcia carries no accent and must stay read-only | bis-e2e-qa | medium |
 
 ---
