@@ -8,7 +8,8 @@
 -- Owner (spec 3.3, column b). A matcher that runs the arms with no RLS above it, over a trigram index that leads with
 -- the account, brings every searched list line but the two-letter "ma" under 150 ms (column d), and reading one- and
 -- two-character terms byte-wise brings "ma" from 588-674 ms to 211-244 ms (column e). The owner ruled (spec section 5):
--- two-character searches compare byte-wise; this file and bis-crm's app change ship together, after 0109.
+-- searches shorter than three typed characters compare byte-wise; this file and bis-crm's app change ship together,
+-- after 0109.
 --
 -- WHAT.
 --   btree_gin, in the extensions schema (read on both projects 2026-10-31: version 1.3 available, not installed,
@@ -47,8 +48,10 @@
 --        backslash-underscore counted as one character) is shorter than 3 characters, every arm compares under
 --        collate "C" (owner ruling Q2): no trigram index can serve such a term, and a C comparison costs about a
 --        third of an ICU one. What that changes, for those terms only: the raw arms fold case for ASCII letters
---        alone, so "iv" typed in Cyrillic finds only the same case; Spanish names are still found through
---        search_name, which is ASCII by construction (spec 3.8).
+--        alone, so "iv" typed in Cyrillic finds only the same case, and so does a Latin letter outside the name
+--        fold's table (Vietnamese, Polish, Turkish and similar letters typed in the other case; 0 such names on
+--        production or bis-ci on 2026-10-31); Spanish names are still found through search_name, which is ASCII by
+--        construction (spec 3.8). The contacts list and export send one-character terms too; they read byte-wise.
 --        Run as one dynamic statement on purpose: EXECUTE plans it with the real patterns, so for a term of 3 or more
 --        characters each arm becomes a bitmap scan of contacts_search_trgm, and an absent arm is absent (no "is null
 --        or" the planner cannot index). Its text is assembled ONLY from fixed
