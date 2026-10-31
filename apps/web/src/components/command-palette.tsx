@@ -16,7 +16,7 @@ import { setMyThemeAction } from "@/app/(dashboard)/dashboard/preferences/action
 import { t } from "@/lib/i18n/t";
 // The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
 // this is a client component. search-term.ts is a standalone pure module.
-import { sanitizeSearchTerm, searchTermLength } from "@bis/db/search-term";
+import { searchTermLength } from "@bis/db/search-term";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import {
   buildPaletteEntries, filterEntries, type PaletteEntry,
@@ -68,6 +68,12 @@ const NEVER_CHANGES = () => () => {};
 
 function useIsMac(): boolean {
   return useSyncExternalStore(NEVER_CHANGES, detectMac, () => false);
+}
+
+/** The live search's URL: the trimmed RAW query, as typed (F-092 final review M-5). Exported so the test can see
+ *  exactly what reaches the route; the route sanitizes it for each search itself. */
+export function paletteSearchUrl(accountId: string, query: string): string {
+  return `/api/accounts/${accountId}/search?q=${encodeURIComponent(query.trim())}`;
 }
 
 /**
@@ -149,18 +155,24 @@ export function CommandPalette({
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
   const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query);
 
-  // Sanitized, not merely trimmed, and measured against the SAME floor the
-  // route applies to the SAME transform. Gating on the raw string instead let
+  // The floor is measured on the SANITIZED length (searchTermLength), the
+  // SAME floor the route applies to the SAME transform. Gating on the raw
+  // string's length instead let
   // "(a)" — three characters, one of them real — clear the floor here, fetch,
   // come back empty, and print "Nothing matches “(a)”" when the honest answer
   // was "keep typing". The two sides must agree or the palette lies about
   // which of them rejected the query.
   //
-  // REVIEW CORRECTION: `searchTermLength(query)`, not `q.length` — `q` is
-  // sanitizeSearchTerm's ESCAPED form (an underscore becomes two characters,
-  // "\_"), which cleared this floor on a single real character. The route
-  // measures the same way, off the same raw query.
-  const q = sanitizeSearchTerm(query);
+  // REVIEW CORRECTION: `searchTermLength(query)`, not `q.length` — an
+  // escaped underscore ("\_", two characters) once cleared this floor on a
+  // single real character. The route measures the same way, off the same raw
+  // query.
+  //
+  // F-092 final review M-5: what is SENT is the trimmed raw query, never the
+  // sanitized one. Sanitizing here escaped "john_doe@x.com" to
+  // "john\_doe@x.com", so the search's exact-email tier never fired from ⌘K;
+  // the route sanitizes for itself, once (its own F-092 comment).
+  const q = query.trim();
   const wantsLive = accountId !== null && searchTermLength(query) >= MIN_QUERY;
   /** Only a settled response FOR THIS EXACT QUERY counts. Anything else —
    *  never fetched, still debouncing, in flight, or answering an older
@@ -195,7 +207,7 @@ export function CommandPalette({
     if (!open || !wantsLive || !accountId) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(q)}`, {
+      fetch(paletteSearchUrl(accountId, q), {
         signal: controller.signal,
       })
         .then(async (res) => {

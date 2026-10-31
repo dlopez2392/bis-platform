@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as palette from "./command-palette";
 import { PaletteHitContent } from "./command-palette";
 import type { SearchHit } from "@/app/api/accounts/[accountId]/search/route";
 
@@ -161,5 +162,28 @@ describe("CommandPalette — threads isOwner to buildPaletteEntries (staff and r
   it("takes an isTechnician prop and passes it as buildPaletteEntries' fourth argument (mutation: drop it → FAILS)", () => {
     expect(src).toMatch(/isTechnician: boolean;/);
     expect(src).toContain("buildPaletteEntries(base, isAgency, isOwner, isTechnician)");
+  });
+});
+
+// F-092 final review M-5: the palette sent sanitizeSearchTerm(query), which escapes "_" to "\_", so
+// "john_doe@x.com" reached the route as "john\_doe@x.com" and the exact-email tier (which compares the typed
+// address to email_key) could never fire from ⌘K. The route sanitizes for itself (its own F-092 comment); the
+// palette sends the trimmed RAW query, and keeps the floor on searchTermLength.
+describe("CommandPalette — sends the trimmed raw query, never a sanitized one (F-092 final review M-5)", () => {
+  const url = (accountId: string, query: string) =>
+    (palette as unknown as { paletteSearchUrl: (a: string, q: string) => string }).paletteSearchUrl(accountId, query);
+
+  it("an email with an underscore reaches the route exactly as typed, trimmed (mutation: sanitizeSearchTerm(query) -> FAILS)", () => {
+    expect(typeof (palette as Record<string, unknown>).paletteSearchUrl).toBe("function");
+    const sent = new URL(url("a1", "  john_doe@x.com "), "http://x");
+    expect(sent.pathname).toBe("/api/accounts/a1/search");
+    expect(sent.searchParams.get("q")).toBe("john_doe@x.com");
+  });
+
+  it("the live fetch builds its URL through paletteSearchUrl, and nothing in the palette sanitizes (mutation: fetch with encodeURIComponent(sanitizeSearchTerm(query)) -> FAILS)", () => {
+    expect(src).not.toContain("sanitizeSearchTerm(");
+    expect(src).toMatch(/fetch\(paletteSearchUrl\(accountId, q\)/);
+    expect(src).toMatch(/const q = query\.trim\(\);/);
+    expect(src).toMatch(/searchTermLength\(query\) >= MIN_QUERY/);
   });
 });
