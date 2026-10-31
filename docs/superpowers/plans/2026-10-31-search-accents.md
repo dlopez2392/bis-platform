@@ -106,7 +106,7 @@ export const MAX_SEARCH_LENGTH = 80;          // search-term.ts's MAX_TERM_LENGT
 export const MAX_NAME_TOKENS = 6;
 export const MIN_PHONE_SEARCH_DIGITS = 4;     // owner ruling Q2
 export type PhoneSearch = { key: string; national: string | null };
-export type ContactSearchPlan = { tokens: string[]; phone: PhoneSearch | null };
+export type ContactSearchPlan = { tokens: string[]; phone: PhoneSearch | null; keptKey: string | null };
 export function contactSearchPlan(raw: string): ContactSearchPlan;
 /** True when `phone` (as stored) is what a phone-shaped search matched. Drives the route's sublabel. */
 export function phoneMatches(plan: ContactSearchPlan, phone: string | null | undefined): boolean;
@@ -582,7 +582,7 @@ export const MIN_PHONE_SEARCH_DIGITS = 4;     // owner ruling Q2 (2026-10-31): t
 const PHONE_SHAPE = /^[+()\-. \d]+$/;         // contacts.ts:879's PHONE_SEARCH_SHAPE, restated (this file imports nothing else)
 
 export type PhoneSearch = { key: string; national: string | null };
-export type ContactSearchPlan = { tokens: string[]; phone: PhoneSearch | null };
+export type ContactSearchPlan = { tokens: string[]; phone: PhoneSearch | null; keptKey: string | null };
 
 /** Digits for phone_key (0033: the digits, an 11-digit leading 1 folded off). A leading "+" names a country code:
  *  "+1" drops its 1; "+521" (the legacy Mexican mobile prefix) becomes "52", as phone_key stores a Mexican number. */
