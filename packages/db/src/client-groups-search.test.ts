@@ -66,6 +66,15 @@ describe("searchGroups: the exact .or() argument (mutation: drop the token arm -
     expect(calls.length).toBe(0);
   });
 
+  // F-092 final review M-2: the account scope is the one line between this search and every other account's
+  // households that RLS alone stands behind for an agency session (which reads every account).
+  it("reads client_groups scoped to the asked account, once (mutation: drop .eq(\"account_id\", …) -> FAILS)", async () => {
+    const { db, calls } = recordingDb();
+    await searchGroups(db, "acct-7", "familia");
+    expect(calls.filter(([m]) => m === "from")).toEqual([["from", ["client_groups"]]]);
+    expect(calls.filter(([m]) => m === "eq")).toEqual([["eq", ["account_id", "acct-7"]]]);
+  });
+
   it("order and limit are unchanged: name_key ascending, limit 8", async () => {
     const { db, calls } = recordingDb();
     await searchGroups(db, "acct", "familia");
