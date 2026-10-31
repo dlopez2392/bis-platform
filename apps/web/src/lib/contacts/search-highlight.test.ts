@@ -63,8 +63,15 @@ describe("phoneRanges", () => {
   // T5's keptKey (ContactSearchPlan): af5976fa's digits for this term, when the new key/national
   // pair does not cover them — a row the list found through that kept clause, so its digits still
   // get marked (mutation: drop keptKey from the needle list -> both these return []).
-  it("falls back to the kept af5976fa digits for a short +1 term the new key strips too much to find", () => {
-    expect(phoneRanges("+19562195612", "+1 956")).toEqual([[1, 5]]);
+  // F-092 final review M-4b: the row was found because its STORED key (country code folded off: "9562195612")
+  // holds "1956" — at "...2 1956 12", the later run, never the "+1 956" at the front (which spans the country
+  // code the stored key does not have). This test used to pin [[1, 5]], the front run the server did not match.
+  it("falls back to the kept af5976fa digits for a short +1 term the new key strips too much to find, marking the run the stored key holds", () => {
+    expect(phoneRanges("+19562195612", "+1 956")).toEqual([[6, 10]]);
+  });
+
+  it("marks the last occurrence, after the country code, never one that spans it (mutation: indexOf instead of lastIndexOf -> [[1, 7]])", () => {
+    expect(phoneRanges("+1 (956) 555-1956", "1956")).toEqual([[13, 17]]);
   });
 
   it("falls back to the kept af5976fa digits for a short +521 term the new key strips too much to find", () => {

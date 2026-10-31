@@ -50,7 +50,7 @@ export function nameRanges(text: string, query: string): HighlightRange[] {
  *  digits first, else the national ten (the legacy-Mexican-mobile fallback `contactSearchPlan` already computed),
  *  else `keptKey` (af5976fa's own digits, kept for a row the list found through that clause when the new key
  *  does not cover them: a short "+1 956" or "+521 899 12" term, T5's `ContactSearchPlan.keptKey`). At most one
- *  range: a phone search matches a single contiguous run of digits, never several. */
+ *  range: a phone search matches a single contiguous run of digits, never several — the last such run. */
 export function phoneRanges(text: string, query: string): HighlightRange[] {
   const { phone, keptKey } = contactSearchPlan(query);
   if ((!phone && !keptKey) || text === "") return [];
@@ -65,7 +65,11 @@ export function phoneRanges(text: string, query: string): HighlightRange[] {
   }
   for (const needle of [phone?.key, phone?.national, keptKey]) {
     if (!needle) continue;
-    const at = digits.indexOf(needle);
+    // The LAST run, never the first (final review M-4b): the search matched the stored key, which has the
+    // country code folded off, so a first run that starts on that "1" ("+1 (956) 555-1956" for "1956") is not
+    // what matched. The last run always starts as late as any run can, so it sits after the country code
+    // whenever any run does.
+    const at = digits.lastIndexOf(needle);
     if (at !== -1) return [[pos[at]!, pos[at + needle.length - 1]! + 1]];
   }
   return [];
