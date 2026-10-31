@@ -702,10 +702,9 @@ export function contactSearchFilter(search: string | undefined): string | null {
   const words = plan.tokens.map((t) => `search_name.ilike.%${t}%`);   // [a-z0-9]+ only: no grammar, no wildcard
   if (words.length === 1) clauses.push(words[0]!);
   else if (words.length > 1) clauses.push(`and(${words.join(",")})`);
-  if (plan.phone) {
-    clauses.push(`phone_key.ilike.%${plan.phone.key}%`);
-    if (plan.phone.national) clauses.push(`phone_national.ilike.%${plan.phone.national}%`);
-  }
+  if (plan.phone) clauses.push(`phone_key.ilike.%${plan.phone.key}%`);
+  if (plan.keptKey) clauses.push(`phone_key.ilike.%${plan.keptKey}%`);
+  if (plan.phone?.national) clauses.push(`phone_national.ilike.%${plan.phone.national}%`);
   return clauses.join(",");
 }
 function withSearch<T>(q: T, search?: string): T {

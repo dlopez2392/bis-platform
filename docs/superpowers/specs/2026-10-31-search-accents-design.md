@@ -132,9 +132,11 @@ The phone part runs only when the term looks like a phone: today's shape rule (d
 - **A leading "+" names a country code**, which is dropped before matching partial digits: `+1` drops the `1`;
   `+521` becomes `52` (the legacy mobile `1` dropped, matching how `phone_key` stores a Mexican number). The floor
   is counted after this, so "+1 956" (3 digits left) is not a phone search.
-- Two clauses, either matching: the digits as a substring of `phone_key` (today's clause, which already handles
-  "+1" full numbers through `phoneDigits`' NANP fold), and `phoneNational(digits)` as a substring of
-  `phone_national` whenever that differs (it differs exactly for the full +52 shapes `phone_key` misses).
+- Three clauses, any of which can match: the new key as a substring of `phone_key` (today's clause, which already
+  handles "+1" full numbers through `phoneDigits`' NANP fold); `keptKey` — the pre-F-092 (`af5976fa`) digits,
+  matched against `phone_key` whenever they do not already contain the new key (keeps "+1 956" and "+521 899 12"
+  finding what they did); and `phoneNational(digits)` against `phone_national`, only when it is exactly 10 digits
+  and differs from the new key (the full +52 shapes `phone_key` misses).
 
 | Typed | Matches the stored number | Through |
 |---|---|---|
@@ -147,7 +149,8 @@ The phone part runs only when the term looks like a phone: today's shape rule (d
 | `+1 956 55` | +19565550199 | `phone_key` after dropping the `+1` (**new**: today `195655` misses) |
 | `956` | nothing by phone (3 digits, under the floor); still a name/email substring | |
 
-Highlighting a phone match (section 6) shows the digits in the number as the screen formats it.
+Highlighting a phone match (section 6) shows the digits in the number as the screen formats it: it marks the last
+run of the digits, the one the stored key holds.
 
 ### 4.3 The database: migration 0108
 
@@ -374,6 +377,16 @@ arms' share there is about a third of what this replica shows; cause 2's share d
   RLS (`uuid` equality is leakproof). Its floor is the superuser plan, 16.6 ms for `garcia`'s count; it is not
   measured end to end, and it would move `EXPECTED_DEFINERS` from 37 to 38.
 
+**Decision (owner, 2026-10-31).** Ship F-092 part 1 as is. Production's largest single account holds 40 contacts
+on 2026-10-31, and the per-row arithmetic above keeps a list page plus its count under the 150 ms budget for any
+account below about 4,400 contacts, so today's shipped 0108 already meets the budget everywhere it runs. A
+follow-up item makes lists and search fast at 50,000 contacts per account by doing both fixes together: wrapping
+the account-scoped policies' `app.current_account_id()` calls in `(select ...)` (removes cause 2), and a
+server-side search that can use `contacts_search_trgm` (for example a SECURITY DEFINER id matcher, moving
+`EXPECTED_DEFINERS` from 37 to 38; removes cause 1). That item is measured on the replica first and is done before
+any account passes about 2,000 contacts, half the estimated ceiling. Each fix lands as its own new migration
+(0109+); 0108 stays exactly as applied.
+
 ---
 
 ## 5. Order and paging
@@ -399,9 +412,10 @@ assignee helpers, `order by sort_name, id` and `limit`:
 The rows are merged in tier order, de-duplicated by id, and cut to `limit`. Tiers 1 and 2 are subsets of the full
 match set, so a later "see all results" (F-095) that links to the list with `?q=` will show every row the box did,
 and more. The route switches to `searchContacts` and passes the RAW trimmed term (today it passes the already
-sanitized one, `ROUTE:85`, `:95`, which only works because sanitizing twice happens to be harmless). The route
-also accepts `types=contacts`, which Add job and held email send, so they stop paying for the calls and
-conversations searches they never read (`job-sheet.tsx:186`, `held-email-search.ts:48`).
+sanitized one, `ROUTE:85`, `:95`, which only works because sanitizing twice happens to be harmless). The ⌘K palette
+sends the trimmed raw query too (final review M-5, `paletteSearchUrl`), so "john_doe@x.com" reaches the exact-email
+tier. The route also accepts `types=contacts`, which Add job and held email send, so they stop paying for the calls
+and conversations searches they never read (`job-sheet.tsx:186`, `held-email-search.ts:48`).
 
 **The hit says why it matched.** The route's `sublabel` is today `email ?? phone` (`ROUTE:104`); when the match
 came through the phone part it shows the phone, so a search by number shows the number. The `SearchHit` type
@@ -430,10 +444,15 @@ with the floor from section 4.2:
 | Active list, nothing matches | **Nobody matches “{query}”** — Try part of the name, or the last {digits} digits of their phone. | **Nadie coincide con “{query}”** — Pruebe con parte del nombre o con los últimos {digits} dígitos del teléfono. |
 | Same, with a ghost link (archived contacts leave search by the owner's 2026-10-28 ruling; this does not bring them back, it offers to look) | Look in archived customers | Buscar en clientes archivados |
 | Technician, nothing matches (their list is only theirs, `ACCT/contacts/page.tsx:152-157`) | **None of your customers match “{query}”** | **Ninguno de sus clientes coincide con “{query}”** |
+| Mine, nothing matches (the voluntary Mine filter, same copy as the Technician row: both searched only the signed-in person's own customers) | **None of your customers match “{query}”** | **Ninguno de sus clientes coincide con “{query}”** |
+| Unassigned, nothing matches | **No unassigned customer matches “{query}”** | **Ningún cliente sin asignar coincide con “{query}”** |
 | Archived view, nothing matches | **No archived customer matches “{query}”** | **Ningún cliente archivado coincide con “{query}”** |
 
-The link carries `?view=archived&q=…` and states no count: how many archived customers match is not known without
-a query the empty state has no reason to run ("never promise a number the screen cannot know"). The palette's and
+The “Look in archived customers” link appears only in the whole-account, All, active view (`view === "active" &&
+wholeAccount && assign.who === "all"`): from inside Mine, Unassigned or the Archived view itself it would silently
+widen the search to everyone's archived customers. The link carries `?view=archived&q=…` and states no count: how
+many archived customers match is not known without a query the empty state has no reason to run (“never promise a
+number the screen cannot know”). The palette's and
 Add job's existing "Nothing matches “{query}”." / "Nada coincide con “{query}”." (`messages.ts:3899-3900`) and
 their error rows (`:3903-3904`) stay. Loading stays as it is: the list renders on the server, and the boxes already
 show their own skeleton or nothing while a request is out (rule 7). Every new string passes the pseudo-locale's
@@ -507,6 +526,14 @@ show their own skeleton or nothing while a request is out (rule 7). Every new st
   calls hang off the record, as that function's own comment says (`DB/voice.ts:1305-1306`).
 - **Message bodies** (`DB/messaging.ts:967-985`): accent folding over message text belongs to the one index.
 - Joined-up words ("obrien" for "O'Brien", "garcialopez"), and a name and a number in one query ("maria 0199").
+- `&`, `_` and `+` inside a word lose the word boundary, the same gap as the joined-up case above: "Smith&Sons" is
+  stored `smithsons`, one token, not two.
+- A curly apostrophe "’" is dropped while a straight `'` becomes a space, so the two spellings of the same name
+  rank differently: "O'Brien" (straight) folds to two tokens, "o brien"; "O’Brien" (curly) folds to one, "obrien".
+- A query of more than 6 words (`MAX_NAME_TOKENS`) never reaches the exact tier: only the first 6 folded words
+  build tier 1's equality, so a seven-word typed name cannot equal a stored `search_name` of more words.
+- A placeholder label ("Unnamed contact") is never highlighted (`SearchHit.unnamed`): nothing in it is the
+  customer's own name, so no client marks letters in it.
 - The deal picker that cannot reach past the newest 200 contacts (section 13).
 
 ---
