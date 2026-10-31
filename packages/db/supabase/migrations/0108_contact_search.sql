@@ -38,14 +38,17 @@
 --     file: every contact read and write waits for it. MEASURED on a real PostgreSQL 17.6 replica (pre = 0001-0107,
 --     one account, laptop SSD, psql -1, three runs each): 10,000 contacts, the whole file 0.95 to 1.07 s (the contacts
 --     rewrite 0.38 to 0.42 s, contacts_search_trgm 0.21 to 0.25 s); 50,000 contacts, the whole file 3.96 to 4.17 s
---     (the rewrite 2.41 to 2.71 s, the index 1.17 to 1.22 s). <T12 fills: 500,000 contacts over ten accounts, the
---     whole file X to Y s; index size>.
+--     (the rewrite 2.41 to 2.71 s, the index 1.17 to 1.22 s). The search's own timings at 50,000 contacts per
+--     account are in the spec (plan Task 12), not here, so this file stays fixed once it is applied.
 --     Production held 53 contacts on 2026-10-31: no off-peak rule.
 --   client_groups: the same rewrite, of a table production holds a handful of rows of.
 --   Every contact insert, and every update of a name or a phone, computes search_name and updates the GIN index.
 --
 -- LOAD-BEARING. From plan Task 4 on, the app's contact search names search_name and phone_national in its filter;
--- the app merges only after this file is on production.
+-- the app merges only after this file is on production. Both search_name columns, like 0106's name_key, STORE
+-- app.contact_name_fold's answer: PostgreSQL does not track function bodies, so a later create or replace of
+-- app.contact_name_fold changes future writes only. Changing the fold means dropping and re-adding search_name and
+-- name_key (a full rewrite) in the same migration.
 --
 -- ROLLBACK (roll the app back first):
 --   drop index public.client_groups_search_trgm;
