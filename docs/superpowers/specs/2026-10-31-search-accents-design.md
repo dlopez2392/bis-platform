@@ -238,6 +238,142 @@ index, decided with the numbers in hand, not now. A 2-character term ("ma") cann
 filters the account's own rows through the existing `(account_id, …)` indexes; at 50,000 rows that is the case the
 budget is most likely to catch, and it is measured explicitly.
 
+### 4.6 Performance, measured (plan Task 12, 2026-10-31): the budget is NOT met
+
+Measured by bis-db-schema at `7afbad50`. 0108 is already on bis-ci and is not edited; its header points here.
+
+**Verdict.** At 50,000 contacts on one account, as a signed-in Owner under RLS, **every line of the budget fails**,
+for every term and both sorts, including `ma`'s 300 ms line. The plan's `btree_gin` fallback does not change that.
+Two causes, neither in 0108's index definition: (1) ILIKE is not LEAKPROOF, so under RLS PostgreSQL cannot use
+`contacts_search_trgm` for any ILIKE arm, whatever index exists; (2) the house policy on `contacts` calls
+`app.current_account_id()` once per ROW, which already costs about 660 ms on an unsearched list at this size,
+before and without 0108. Any fix is a new migration (0109) and an owner decision; none is written. At today's size
+(53 contacts in production) all of this is sub-millisecond: the cost is per row of the account.
+
+**Where.** PostgreSQL 17.6 (x86_64-windows, the full archive T1 unpacked, its binaries run in place) in its own
+cluster, initdb `--locale=C --locale-provider=icu --icu-locale=en-US` (T1's flags), `pre` = the worktree's
+0001-0107 (107 files, each `psql -1`). Seed (plan Task 12, deterministic `setseed`, triggers off, generated columns
+computed): one agency, 10 accounts x 50,000 = 500,000 contacts; 40 first names (20 accented) x 40 surnames (20
+accented); measured mix 70.0 % two surnames, 60.0 % with an email, 5.0 % with no phone, 3.0 % archived, phones 40 %
+`+1956...`, 20 % `(956) ...`, 25 % `+52899...`, 10 % `+52 1 899 ...`; created over 2024-10-31 to 2026-10-31; no
+`client_groups` rows. `vacuum analyze` before each measurement.
+
+**0108 on 500,000 contacts** (`perf` re-created from the seeded template for each run; `psql -1`, `\timing`):
+
+| Run | Whole file (wall) | `alter table contacts add column search_name` (the rewrite) | `create index contacts_search_trgm` |
+|---|---|---|---|
+| 1 | 74,562 ms | 40,372.6 ms | 33,456.1 ms |
+| 2 | 77,255 ms | 41,555.2 ms | 35,049.5 ms |
+| 3 | 84,469 ms | 44,479.4 ms | 39,306.7 ms |
+
+Index sizes after `vacuum analyze`: `contacts_search_trgm` **111 MB** (116,891,648 bytes, about 234 bytes per
+contact; the `contacts` heap is 124 MB); `client_groups_search_trgm` 16 kB (empty table). Every contact read and
+write would wait for the whole file, about 75 to 85 s at this size, under ACCESS EXCLUSIVE.
+
+**How.** The queries are the app's own, not retyped: `listContacts` (limit 51, `archived: "exclude"`, newest first
+and by name, as `contacts/page.tsx:347-348` calls it), `countContacts`, and `searchContacts` (limit 5, the route's
+`PER_SOURCE`, `ROUTE:29`, `:110`) were run against a recording client and each recorded chain was translated to the
+SQL PostgREST sends: filters as bound parameters, the list as `json_agg` over a `pgrst_source` CTE with a literal
+`limit`, the count as `count(*)` over the unlimited source. Every captured `.or()` string equals T4's and T5's pinned
+strings where they overlap (for example `(956) 555-0199`'s `...,and(search_name.ilike.%956%,search_name.ilike.%555%,
+search_name.ilike.%0199%),phone_key.ilike.%9565550199%` and its tier 1 `search_name.eq.956 555 0199,
+phone_national.eq.9565550199`), including the kept `phone_key` arm (`+52 1 899 123` sends both `%52899123%` and
+`%521899123%`). Each run is its own transaction, as PostgREST's: `set_config('request.jwt.claims', {org_id, sub},
+true)` for an Owner membership made as `actAsMember` makes one, then `set local role authenticated`. Before any
+timing the harness proved the refusal it relies on: role `authenticated`, `app.current_account_id()` = the account,
+50,000 contacts visible (the superuser sees 500,000), 0 rows of a second account. 5 warm-up and 40 timed runs per
+query, nearest-rank p50 and p95, wall time on localhost. The three tiers are timed one after another and summed (the
+route runs them in parallel, so the sum is the conservative reading). Custom plans only: PostgREST's prepared
+statements may switch to a generic plan after five runs, not measured, because no plan here can use the trigram
+index for an ILIKE arm whatever its parameters (cause 1).
+
+**p50 / p95, ms, Owner under RLS, quiet machine** (a first run, with another agent's tests on the same machine, gave
+the same pass or fail on every line):
+
+| Term | Matches | List, newest first | List, by name | Count | Tier 1 exact | Tier 2 word starts | Tier 3 contains |
+|---|---|---|---|---|---|---|---|
+| `garcia` | 2099 | 733.8 / 839.2 | 814.6 / 1209.2 | 922.3 / 2168.7 | 24.2 / 34.8 | 631.6 / 868.3 | 719.5 / 794.6 |
+| `maria lopez` | 78 | 811.5 / 1131.8 | 718.6 / 773.6 | 740.0 / 2009.2 | 13.1 / 17.9 | 725.5 / 2248.8 | 1037.3 / 1161.9 |
+| `garcía lópez` | 50 | 1008.4 / 1294.8 | 746.2 / 946.9 | 759.9 / 1139.9 | 14.0 / 16.3 | 620.0 / 903.7 | 779.8 / 1444.6 |
+| `ana` | 6118 | 959.0 / 1115.5 | 41.2 / 54.6 | 739.9 / 1002.4 | 20.7 / 28.1 | 33.2 / 50.7 | 37.6 / 46.0 |
+| `0199` | 18 | 801.8 / 1141.9 | 753.0 / 846.7 | 785.0 / 1207.7 | 1.4 / 1.7 | 888.9 / 1125.2 | 297.4 / 346.4 |
+| `(956) 555-0199` | 0 | 1059.6 / 2526.3 | 950.8 / 1868.6 | 2743.4 / 2936.3 | 1.1 / 1.4 | 892.3 / 994.6 | 1110.4 / 1202.6 |
+| `+52 1 899 123` | 18 | 1147.7 / 1484.1 | 803.2 / 887.5 | 793.0 / 832.4 | 0.8 / 1.0 | 592.0 / 619.1 | 788.3 / 834.9 |
+| `zzqx` | 0 | 704.6 / 773.0 | 707.7 / 747.1 | 704.4 / 761.7 | 0.8 / 1.2 | 593.1 / 666.1 | 754.1 / 893.3 |
+| `ma` | 6718 | 686.4 / 750.8 | 18.8 / 26.2 | 684.1 / 727.7 | 0.9 / 1.2 | 4.3 / 5.1 | 4.8 / 6.0 |
+
+**The lines** (sums of p95, ms):
+
+| Term | List newest + count | List by name + count | Line | Tiers 1+2+3 | Line |
+|---|---|---|---|---|---|
+| `garcia` | 3007.9 | 3377.9 | < 150: **fail**, **fail** | 1697.7 | < 100: **fail** |
+| `maria lopez` | 3141.0 | 2782.8 | < 150: **fail**, **fail** | 3428.6 | < 100: **fail** |
+| `garcía lópez` | 2434.7 | 2086.8 | < 150: **fail**, **fail** | 2364.6 | < 100: **fail** |
+| `ana` | 2117.9 | 1057.0 | < 150: **fail**, **fail** | 124.8 | < 100: **fail** |
+| `0199` | 2349.6 | 2054.4 | < 150: **fail**, **fail** | 1473.3 | < 100: **fail** |
+| `(956) 555-0199` | 5462.6 | 4804.9 | < 150: **fail**, **fail** | 2198.6 | < 100: **fail** |
+| `+52 1 899 123` | 2316.5 | 1719.9 | < 150: **fail**, **fail** | 1455.0 | < 100: **fail** |
+| `zzqx` | 1534.7 | 1508.8 | < 150: **fail**, **fail** | 1560.6 | < 100: **fail** |
+| `ma` | 1478.5 | 753.9 | < 300: **fail**, **fail** | 12.3 | not budgeted |
+
+**The plans' top nodes.** Every list, count, tier 2 and tier 3 query that does not fill early is `Bitmap Heap Scan
+on contacts` over `Bitmap Index Scan on contacts_account_assigned` with `Index Cond: (account_id = ...)` only: all
+50,000 of the account's rows are fetched, and the RLS conditions and every search arm run as a per-row `Filter`
+(`zzqx`'s count: `Rows Removed by Filter: 50000`, 741 ms). A name-ordered page whose term is common fills early
+through `Index Scan using contacts_account_sort_name` (`ana` by name: 51 rows after `Rows Removed by Filter: 2550`,
+37 ms); the worst case is a rare or absent term, which visits every row. Of the 54 queries, 37 take the first shape
+and 8 the second. `contacts_search_trgm` appears in exactly one shape, the other 9: tier 1's `search_name = '...'`
+(`texteq` is leakproof), as `Bitmap Index Scan on contacts_search_trgm`, `Index Cond: (search_name =
+'garcia'::text)`, joined for `(956) 555-0199` by `contacts_account_phone_national` for its `phone_national = ...`.
+None of the 216 plans read (this run, the first run, the fallback and the diagnostic) has an ILIKE index condition.
+
+**Cause 1: ILIKE is not LEAKPROOF.** `texticlike` has `proleakproof = false`, as do `textlike`, the regex matches,
+pg_trgm's similarity operators, array containment and full-text `@@`; of the operators read, only `texteq`,
+`text_ge` and `text_le` are leakproof. PostgreSQL never runs a non-leakproof condition of the query ahead of a
+table's RLS conditions, so it cannot become an index condition, and for an `authenticated` caller no "contains"
+search on `contacts` can be index-served. The same statement as the superuser (no RLS) is a `BitmapAnd` of
+`account_id` with a `BitmapOr` of five `contacts_search_trgm` scans: `garcia`, list newest first, 30.3 ms against
+989 ms as the Owner. `contacts_search_trgm` is right for the superuser and the service role, and unused by the
+app's searches, all of which run on the request client.
+
+**Cause 2: the policy runs per row.** `contacts_member_all` is `app.is_agency() OR account_id =
+app.current_account_id()` (0003's house shape, read from the replica's `pg_policy`), not wrapped in `(select ...)`,
+so `app.current_account_id()` (SECURITY DEFINER, a lookup) runs once per row; only `contacts_technician_scope`
+(0068) is wrapped and runs once. Medians of 10, quiet: the Owner's count with NO search term (today's unsearched
+`countContacts`) **676.7 ms**, with `garcia` 718.5 ms; the superuser's 13.4 and 16.6 ms. That is about 13 microseconds
+per row of the account, paid by every contacts read that visits the account's rows, searched or not. The house
+shape is on every account-scoped table; whether they show the same cost at this size is not measured here.
+
+**The plan's fallback, measured.** `btree_gin` 1.3's uuid operator class is `uuid_ops` (`btree_gin--1.2--1.3.sql:22`),
+not `gin_uuid_ops` as the plan guessed. On a scratch copy, `contacts_search_trgm` rebuilt as `(account_id
+extensions.uuid_ops, search_name ... phone_national extensions.gin_trgm_ops)`: 112 MB (117,563,392 bytes), built in
+18.4 s. The planner uses it for `account_id = ...` only (`Bitmap Index Scan on contacts_search_trgm`, `rows=50000`),
+which is the same per-account bitmap as before; the ILIKE arms stay filters, for cause 1. Every list line fails
+(for example `garcia` 3542.6 / 2567.8 ms, `zzqx` 2083.2 / 2287.7 ms); of the palette lines only `ana` passes (94.9 ms).
+
+**A diagnostic, not a proposal.** On another scratch copy only, `contacts_member_all` with both helpers wrapped,
+`(select app.is_agency()) or account_id = (select app.current_account_id())`: the unsearched count drops from
+676.7 ms to **18.2 ms**, and `garcia`'s from 718.5 ms to 200.5 ms. Every list line still fails (for example
+`garcia` 462.7 / 486.7 ms, `zzqx` 468.7 / 475.2 ms, `ma` 972.5 / 340.1 ms); the palette passes for `ana` (45.1 ms)
+only. What remains is cause 1: the search arms evaluated row by row.
+
+**Collation, an ASSUMPTION.** The search arms' own cost depends on the collation: the five ILIKE arms over the
+account's 50,000 rows take 183.8 ms on this ICU `en-US` replica and 62.4 ms with `COLLATE "C"` (superuser, the bare
+scan 3.3 ms). Production's and bis-ci's collation was not read for this measurement. If either is libc, the search
+arms' share there is about a third of what this replica shows; cause 2's share does not depend on it.
+
+**For the owner** (each would be a 0109; nothing here is decided or written):
+- By arithmetic from the per-row costs above (not measured at that size), list plus count stays under 150 ms on
+  this replica only while an account holds fewer than about 4,400 contacts: 2 queries x N rows x (13.3 + 3.7)
+  microseconds.
+- Wrapping the policy helpers in `(select ...)` removes cause 2 (measured above) but not cause 1, and it changes the
+  house shape every account-scoped table copies.
+- Only a path that does not put ILIKE under RLS can use the trigram index: for example a SECURITY DEFINER function
+  that takes the account from `app.current_account_id()` (never from a parameter), applies the technician scope
+  itself, and returns the matching ids from `contacts_search_trgm`, with the list then reading `id in (...)` under
+  RLS (`uuid` equality is leakproof). Its floor is the superuser plan, 16.6 ms for `garcia`'s count; it is not
+  measured end to end, and it would move `EXPECTED_DEFINERS` from 37 to 38.
+
 ---
 
 ## 5. Order and paging
