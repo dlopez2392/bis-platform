@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
-import { contactSearchPlan } from "./contact-search";
+import { contactSearchPlan, type ContactSearchPlan } from "./contact-search";
 import { phoneNational } from "./dedupe-keys";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
@@ -848,9 +848,14 @@ function quoteFilterValue(value: string): string {
 export type ContactCursor = { v: string | null; id: string };
 
 /**
- * The ONE search filter `listContacts` and `countContacts` apply (the whole `.or()` argument), or null for "no
- * filter", so the list's rows, its header's real total and the export can never disagree. Exported for its pure
- * test (contact-search-filter.test.ts); NOT barrelled through index.ts, as `phoneSearchDigits` is not.
+ * The contact search's match rule, written as one PostgREST `.or()` argument, or null for "no filter". Since the
+ * F-092 scale follow-up (0110, plan T6) no reader sends it: `listContacts`, `countContacts` and `searchContacts`
+ * read a search through public.contacts_matching with `contactMatchArgs` (below), and 0110's matcher runs these
+ * same arms in this same order. It stays as the ORACLE: contact-match-schema.test.ts holds the matcher to it (rows
+ * and count, per role), contact-search-live.test.ts holds the app's reads to it through the real PostgREST, and
+ * `contactMatchArgs` is null exactly when this is. A change to the arms is a change to BOTH this and the matcher, in
+ * one pull request, with a new migration (0110's LOAD-BEARING). Exported for those tests; NOT barrelled through
+ * index.ts, as `phoneSearchDigits` is not.
  *
  * Was a local `.replace(/[%,()]/g, "")`, which left `"` and `\` in place —
  * both break the interpolated .or() string below (see search-term.ts, and
@@ -896,10 +901,9 @@ export type ContactCursor = { v: string | null; id: string };
  * first and unchanged; a name the fold empties (Chinese, Arabic) is found by them alone.
  */
 export function contactSearchFilter(search: string | undefined): string | null {
-  const s = search ? sanitizeSearchTerm(search) : "";
-  // "%" or "()" sanitizes to "": no filter, so the LIST shows everything (contacts.test.ts's "%" case).
-  if (!search || !s) return null;
-  const plan = contactSearchPlan(search);
+  const parts = searchParts(search);
+  if (!parts) return null;
+  const { s, plan } = parts;
   const clauses = [`first_name.ilike.%${s}%`, `last_name.ilike.%${s}%`, `email.ilike.%${s}%`, `phone.ilike.%${s}%`];
   const words = plan.tokens.map((t) => `search_name.ilike.%${t}%`);
   if (words.length === 1) clauses.push(words[0]!);
@@ -908,6 +912,83 @@ export function contactSearchFilter(search: string | undefined): string | null {
   if (plan.keptKey) clauses.push(`phone_key.ilike.%${plan.keptKey}%`);
   if (plan.phone?.national) clauses.push(`phone_national.ilike.%${plan.phone.national}%`);
   return clauses.join(",");
+}
+
+/** The one reading of a typed search both `contactSearchFilter` and `contactMatchArgs` start from, so they are
+ *  null for exactly the same terms. "%" or "()" sanitizes to "": no search, so the LIST shows everything
+ *  (contacts.test.ts's "%" case). */
+function searchParts(search: string | undefined): { s: string; plan: ContactSearchPlan } | null {
+  const s = search ? sanitizeSearchTerm(search) : "";
+  if (!search || !s) return null;
+  return { s, plan: contactSearchPlan(search) };
+}
+
+/** public.contacts_matching's named arguments (0110). An absent part is ABSENT (the function's defaults), never
+ *  null and never an empty array; `p_tokens` and `p_phone_keys` are text[] written as a PostgreSQL array literal
+ *  with every element quoted: see `contactMatchArgs`. */
+export type ContactMatchArgs = {
+  p_account_id: string; p_text: string; p_tokens?: string; p_phone_keys?: string; p_national?: string;
+};
+
+/** `{"a","b"}`: a text[] literal with every element double-quoted, so a word that is an array-input keyword (null,
+ *  in any case) stays a word. Only for elements that are [a-z0-9]+ (a folded word) or digits (a key), which hold no
+ *  quote or backslash to escape; anything else throws rather than build a literal that could mean something else. */
+function quotedTextArray(values: string[]): string {
+  for (const v of values) if (!/^[a-z0-9]+$/.test(v)) throw new Error(`quotedTextArray: unexpected element ${JSON.stringify(v)}`);
+  return `{${values.map((v) => `"${v}"`).join(",")}}`;
+}
+
+/**
+ * F-092 scale follow-up (spec 4.4, plan T6): the arguments for public.contacts_matching (0110), or null exactly
+ * when `contactSearchFilter` is null (no search: the reader stays on `from("contacts")`). Built from the same
+ * sanitized text and plan: the text for the four raw arms; the folded words for search_name; the new phone key and
+ * today's kept key, the present ones, for phone_key; the national ten for phone_national.
+ *
+ * Every reader calls it as a GET (or a HEAD for the count), so postgrest-js puts these in the URL: it drops an
+ * `undefined`, writes `null` as the STRING "null" (which the matcher refuses, 22023, or reads as a malformed array),
+ * and writes an array as `{a,b}` with nothing quoted (@supabase/postgrest-js 2.110.8, rpc()). Hence a missing part
+ * is left out, an empty array is left out too (the default is the same `{}`), and the two array parts are sent as a
+ * literal written here, every element quoted: in a bare `{a,b}` the word null is a NULL ELEMENT, so the search
+ * "null" (a real word; the name "Null") was refused and failed (found by contact-search-live.test.ts on the replica).
+ */
+export function contactMatchArgs(accountId: string, search: string | undefined): ContactMatchArgs | null {
+  const parts = searchParts(search);
+  if (!parts) return null;
+  const { s, plan } = parts;
+  const keys = [plan.phone?.key, plan.keptKey].filter((k): k is string => typeof k === "string" && k !== "");
+  const national = plan.phone?.national;
+  return {
+    p_account_id: accountId,
+    p_text: s,
+    ...(plan.tokens.length > 0 ? { p_tokens: quotedTextArray(plan.tokens) } : {}),
+    ...(keys.length > 0 ? { p_phone_keys: quotedTextArray(keys) } : {}),
+    ...(national ? { p_national: national } : {}),
+  };
+}
+
+/**
+ * The rows a contact read starts from: `from("contacts")` when there is no search, else the contacts the search
+ * matches, through public.contacts_matching (0110) called as a GET. A GET passes the arguments as plain parameters,
+ * which is what lets PostgreSQL inline the function into the statement, so the caller's eq, or, order and limit
+ * reach contacts and its indexes directly (a POST is not inlined; spec 3.6). The function returns
+ * `setof public.contacts` under the caller's RLS, so the row type is the table's and every filter after this is the
+ * one an unsearched read applies. Its matcher answers every matching row of the account the caller may see
+ * (archived, merged-away and holding records included): the account, holding, archive, merge and assignee rules
+ * stay the caller's, outside, exactly as before.
+ */
+function contactRows(db: SupabaseClient, accountId: string, search: string | undefined) {
+  const table = () => db.from("contacts").select(COLS);
+  const args = contactMatchArgs(accountId, search);
+  if (!args) return table();
+  return db.rpc("contacts_matching", args, { get: true }).select(COLS) as unknown as ReturnType<typeof table>;
+}
+
+/** `contactRows` for a header total: the same source, as a HEAD with an exact count and no body. */
+function contactCount(db: SupabaseClient, accountId: string, search: string | undefined) {
+  const table = () => db.from("contacts").select("id", { count: "exact", head: true });
+  const args = contactMatchArgs(accountId, search);
+  if (!args) return table();
+  return db.rpc("contacts_matching", args, { head: true, count: "exact" }) as unknown as ReturnType<typeof table>;
 }
 
 // Exported for its own pure, DB-free test (contacts-phone.test.ts) — not
@@ -952,11 +1033,6 @@ function withArchived<T>(q: T, archived: ArchivedFilter | undefined): T {
   return (archived === "only" ? f.not("archived_at", "is", null) : f.is("archived_at", null)).is("merged_into", null);
 }
 
-function withSearch<T>(q: T, search?: string): T {
-  const f = contactSearchFilter(search);
-  return f ? (q as { or: (f: string) => T }).or(f) : q;
-}
-
 export async function listContacts(
   db: SupabaseClient, accountId: string,
   opts: {
@@ -969,7 +1045,8 @@ export async function listContacts(
   const ascending = sort.dir === "asc";
 
   // S-47e (spec 5.12.4, S29): a shared number's holding record is not a customer; the list never shows it.
-  let q = db.from("contacts").select(COLS).eq("account_id", accountId).eq("holds_shared_number", false)
+  // F-092 scale (0110): a search reads through the matcher (contactRows); everything after the source is unchanged.
+  let q = contactRows(db, accountId, opts.search).eq("account_id", accountId).eq("holds_shared_number", false)
     // Two-key ordering: the sort column alone is not unique — two contacts
     // can share a name or a company, and a CSV import (Task 6) writes
     // thousands of rows in the same created_at millisecond — so id breaks
@@ -980,7 +1057,6 @@ export async function listContacts(
     .order(column, { ascending, nullsFirst: false })
     .order("id", { ascending })
     .limit(opts.limit ?? 50);
-  q = withSearch(q, opts.search);
   q = withAssignee(q, opts.assignee);
   q = withArchived(q, opts.archived);
   if (opts.before) {
@@ -1076,10 +1152,10 @@ export async function countContacts(
   db: SupabaseClient, accountId: string,
   opts: { search?: string; assignee?: AssigneeFilter; archived?: ArchivedFilter } = {},
 ): Promise<number> {
-  // S-47e: the same holding skip as listContacts, so the header total and the rows agree.
-  let q = db.from("contacts").select("id", { count: "exact", head: true })
+  // S-47e: the same holding skip as listContacts, so the header total and the rows agree. F-092 scale (0110): the
+  // same source as listContacts too (contactCount, the matcher for a search), so rows and total share one match rule.
+  let q = contactCount(db, accountId, opts.search)
     .eq("account_id", accountId).eq("holds_shared_number", false);
-  q = withSearch(q, opts.search);
   q = withAssignee(q, opts.assignee);
   // 0103: the same archive rule as listContacts, so the header total and the rows agree in both views.
   q = withArchived(q, opts.archived);
@@ -1094,11 +1170,12 @@ type ContactListRow = NonNullable<Awaited<ReturnType<typeof listContacts>>>[numb
 /**
  * F-092 part 1 (spec 5, owner ruling Q3): the small boxes (⌘K, the relationship picker, Add job, held email) show
  * the best match first; the contact list keeps its own chosen sort and paging (`listContacts`). Three tiers, each
- * the list's own filter (`contactSearchFilter`, so a box never finds anyone the list would not) plus:
+ * the list's own match set (since 0110 the matcher, public.contacts_matching with `contactMatchArgs`, as the list
+ * reads it; `contactSearchFilter` is its oracle), so a box never finds anyone the list would not, plus:
  *   1. exact: the folded words ARE the whole search name, or the national ten is the whole number, or the email
  *      key is the whole email;
  *   2. every word starts a word of the search name (one `or` per word, so they AND);
- *   3. contains: the filter alone.
+ *   3. contains: the match set alone.
  * Each ordered by sort_name then id and limited, merged in tier order, each person once, cut to `limit`. The
  * same holding, archive and merge rules as listContacts. Any tier's error throws: a shorter list would read as
  * fewer matches, not as a failed read. Runs on whatever client it is handed: callers pass the request client.
@@ -1109,12 +1186,12 @@ type ContactListRow = NonNullable<Awaited<ReturnType<typeof listContacts>>>[numb
 export async function searchContacts(
   db: SupabaseClient, accountId: string, opts: { term: string; limit: number },
 ): Promise<ContactListRow[]> {
-  const filter = contactSearchFilter(opts.term);
-  if (!filter) return [];
+  // F-092 scale (0110, plan T6): every tier reads the matcher's match set (contactRows, a GET), where it read
+  // from("contacts") plus the list's .or(filter); tiers 1 and 2 still narrow it with their own or().
+  if (!contactMatchArgs(accountId, opts.term)) return [];
   const plan = contactSearchPlan(opts.term);
   const base = () => withArchived(
-    db.from("contacts").select(COLS).eq("account_id", accountId).eq("holds_shared_number", false)
-      .or(filter)
+    contactRows(db, accountId, opts.term).eq("account_id", accountId).eq("holds_shared_number", false)
       .order("sort_name", { ascending: true, nullsFirst: false })
       .order("id", { ascending: true })
       .limit(opts.limit),

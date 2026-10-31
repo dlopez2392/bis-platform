@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { contactSearchFilter, listContacts, countContacts, phoneDigits } from "./contacts";
+import { contactSearchFilter, contactMatchArgs, listContacts, countContacts, phoneDigits } from "./contacts";
 import { sanitizeSearchTerm } from "./search-term";
 import { contactSearchName, phoneNational } from "./dedupe-keys";
 
@@ -186,37 +186,83 @@ describe("contactSearchFilter is a superset of today's filter", () => {
   });
 });
 
-/** A fake client that records every call; awaiting it answers an empty page with a zero count. */
-function recordingDb() {
+/** A fake client that records every call; awaiting it answers `answer` (by default an empty page with a zero count). */
+function recordingDb(answer: { data: unknown; error: unknown; count: number | null } = { data: [], error: null, count: 0 }) {
   const calls: [string, unknown[]][] = [];
   const proxy: unknown = new Proxy({}, {
     get(_t, prop) {
-      if (prop === "then") return (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: 0 });
+      if (prop === "then") return (resolve: (v: unknown) => void) => resolve(answer);
       return (...args: unknown[]) => { calls.push([String(prop), args]); return proxy; };
     },
   });
   return { db: proxy as SupabaseClient, calls };
 }
 
-describe("listContacts and countContacts hand the SAME filter to .or()", () => {
-  it('with "María García" each records exactly one or(), with contactSearchFilter\'s string (mutation: countContacts skips withSearch -> FAILS)', async () => {
+/**
+ * F-092 scale follow-up (spec 4.4, plan T6): a searched list and its real total read public.contacts_matching (0110)
+ * with the SAME arguments, as a GET (so PostgreSQL inlines it) and a HEAD count; everything after the source is
+ * the chain an unsearched read builds, so the sort, the cursor, the archive, merge, holding and assignee rules,
+ * and the rows-equal-total property are untouched. An unsearched read stays on from("contacts").
+ */
+describe("listContacts and countContacts read a search through the matcher, with the SAME arguments", () => {
+  it('"María García": the list calls contacts_matching as a GET, the count as a HEAD with an exact count, the same args; neither touches from() or a search or() (mutations: list without get: true -> FAILS; count left on from("contacts") -> FAILS)', async () => {
     const list = recordingDb();
     const count = recordingDb();
     await listContacts(list.db, "acct", { search: "María García" });
     await countContacts(count.db, "acct", { search: "María García" });
-    const expected = contactSearchFilter("María García");
-    expect(expected).not.toBeNull();
-    expect(list.calls.filter(([m]) => m === "or")).toEqual([["or", [expected]]]);
-    expect(count.calls.filter(([m]) => m === "or")).toEqual([["or", [expected]]]);
+    const args = contactMatchArgs("acct", "María García");
+    expect(args).not.toBeNull();
+    expect(list.calls.filter(([m]) => m === "rpc")).toEqual([["rpc", ["contacts_matching", args, { get: true }]]]);
+    expect(count.calls.filter(([m]) => m === "rpc")).toEqual([["rpc", ["contacts_matching", args, { head: true, count: "exact" }]]]);
+    for (const { calls } of [list, count]) {
+      expect(calls.some(([m]) => m === "from")).toBe(false);
+      expect(calls.some(([m]) => m === "or")).toBe(false);
+    }
   });
 
-  it('with "%" neither records an or()', async () => {
-    const list = recordingDb();
-    const count = recordingDb();
-    await listContacts(list.db, "acct", { search: "%" });
-    await countContacts(count.db, "acct", { search: "%" });
-    expect(list.calls.some(([m]) => m === "or")).toBe(false);
-    expect(count.calls.some(([m]) => m === "or")).toBe(false);
-    expect(list.calls.some(([m]) => m === "from")).toBe(true);
+  it("after the source, each chain is EXACTLY the unsearched one: account, holding, assignee, archive and merge rules, both orders, the limit, the cursor (mutation: drop withArchived on the searched path -> FAILS)", async () => {
+    const before = { v: "garcia maria", id: "00000000-0000-0000-0000-000000000009" };
+    const opts = { sort: { key: "name", dir: "asc" } as const, limit: 51, assignee: { who: "mine", userId: "u1" } as const, before };
+    for (const archived of ["exclude", "only"] as const) {
+      const searched = recordingDb();
+      const plain = recordingDb();
+      await listContacts(searched.db, "acct", { ...opts, archived, search: "garcia" });
+      await listContacts(plain.db, "acct", { ...opts, archived });
+      expect(searched.calls[0]![0]).toBe("rpc");
+      expect(plain.calls.slice(0, 2)).toEqual([["from", ["contacts"]], ["select", [expect.any(String)]]]);
+      expect(searched.calls[1]).toEqual(plain.calls[1]);
+      expect(searched.calls.slice(2), archived).toEqual(plain.calls.slice(2));
+      expect(plain.calls.slice(2), "the chain under test is the full one").toEqual(expect.arrayContaining([
+        ["eq", ["account_id", "acct"]], ["eq", ["holds_shared_number", false]], ["eq", ["assigned_to", "u1"]],
+        ["is", ["merged_into", null]], ["limit", [51]],
+        ["order", ["sort_name", { ascending: true, nullsFirst: false }]], ["order", ["id", { ascending: true }]],
+      ]));
+
+      const sc = recordingDb();
+      const pc = recordingDb();
+      await countContacts(sc.db, "acct", { search: "garcia", assignee: opts.assignee, archived });
+      await countContacts(pc.db, "acct", { assignee: opts.assignee, archived });
+      expect(pc.calls.slice(0, 2)).toEqual([["from", ["contacts"]], ["select", ["id", { count: "exact", head: true }]]]);
+      expect(sc.calls.slice(1), archived).toEqual(pc.calls.slice(2));
+    }
+  });
+
+  it('a term the sanitizer empties ("%", "()") is no search: both stay on from("contacts"), no rpc, no or()', async () => {
+    for (const term of ["%", "()"]) {
+      const list = recordingDb();
+      const count = recordingDb();
+      await listContacts(list.db, "acct", { search: term });
+      await countContacts(count.db, "acct", { search: term });
+      for (const { calls } of [list, count]) {
+        expect(calls[0], term).toEqual(["from", ["contacts"]]);
+        expect(calls.some(([m]) => m === "rpc" || m === "or"), term).toBe(false);
+      }
+    }
+  });
+
+  it("a refusal from the matcher (22023) throws, never an empty page or a zero total (mutation: read a 22023 as no rows -> FAILS)", async () => {
+    const refused = { data: null, error: { code: "22023", message: "contact_match_ids: refused input" }, count: null };
+    await expect(listContacts(recordingDb(refused).db, "acct", { search: "garcia" })).rejects.toThrow("contact_match_ids: refused input");
+    await expect(countContacts(recordingDb(refused).db, "acct", { search: "garcia" })).rejects.toThrow("contact_match_ids: refused input");
   });
 });
