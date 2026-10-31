@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
-vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+/** The request client: a sentinel, so a test can prove it (not serviceDb()) is what reaches each search. */
+const REQUEST = { tag: "request-db" };
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 
 const dbMocks = {
-  listContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
+  searchContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
 };
 // The three READS are mocked; `sanitizeSearchTerm`/`searchTermLength` are
 // the REAL ones. Stubbing them would make this file assert against a
@@ -19,15 +21,16 @@ vi.mock("@bis/db", async (importOriginal) => {
 
 const { GET } = await import("./route");
 
-function req(q: string) {
-  return new Request(`http://x/api/accounts/a1/search?q=${encodeURIComponent(q)}`);
+function req(q: string, types?: string) {
+  const t = types === undefined ? "" : `&types=${encodeURIComponent(types)}`;
+  return new Request(`http://x/api/accounts/a1/search?q=${encodeURIComponent(q)}${t}`);
 }
 function ctx() { return { params: Promise.resolve({ accountId: "a1" }) }; }
 
 beforeEach(() => {
   access.mockReset();
   for (const fn of Object.values(dbMocks)) fn.mockReset();
-  dbMocks.listContacts.mockResolvedValue([]);
+  dbMocks.searchContacts.mockResolvedValue([]);
   dbMocks.searchCalls.mockResolvedValue([]);
   dbMocks.searchConversations.mockResolvedValue([]);
 });
@@ -36,14 +39,14 @@ describe("account search route", () => {
   it("404s without access — same answer for no-access and unknown account", async () => {
     access.mockResolvedValueOnce(null);
     expect((await GET(req("rosa"), ctx())).status).toBe(404);
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
   });
 
   it("returns empty groups for a too-short query without touching the database", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     const body = await (await GET(req("a"), ctx())).json();
     expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
     expect(dbMocks.searchCalls).not.toHaveBeenCalled();
     expect(dbMocks.searchConversations).not.toHaveBeenCalled();
   });
@@ -64,13 +67,14 @@ describe("account search route", () => {
       const body = await (await GET(req(hostile), ctx())).json();
       expect(body, `query ${hostile}`).toEqual({ contacts: [], calls: [], conversations: [] });
     }
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
   });
 
-  it("D-009: an underscore query is escaped, not deleted, so it clears the floor and reaches the database literally", async () => {
+  it("D-009: an underscore query clears the floor and reaches every search as typed; each escapes it for itself", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     await GET(req("__"), ctx());
-    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "\\_\\_", limit: 5 });
+    expect(dbMocks.searchContacts).toHaveBeenCalledWith(REQUEST, "a1", { term: "__", limit: 5 });
+    expect(dbMocks.searchCalls).toHaveBeenCalledWith(REQUEST, "a1", { search: "__", limit: 5 });
   });
 
   // Review correction: the floor used to be measured on `sanitizeSearchTerm`'s
@@ -81,7 +85,7 @@ describe("account search route", () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     const body = await (await GET(req("_"), ctx())).json();
     expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
   });
 
   it("measures the query floor after sanitizing, not before", async () => {
@@ -89,20 +93,81 @@ describe("account search route", () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     const body = await (await GET(req("(a)"), ctx())).json();
     expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
-    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
   });
 
-  it("passes the SANITIZED term to the database, not the raw one", async () => {
+  it("F-092: passes the RAW term to all three, each of which sanitizes for itself, so nothing is sanitized twice (mutation: sanitize here again -> FAILS)", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     await GET(req(`ro"sa`), ctx());
-    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
+    expect(dbMocks.searchContacts).toHaveBeenCalledWith(REQUEST, "a1", { term: `ro"sa`, limit: 5 });
+    expect(dbMocks.searchCalls).toHaveBeenCalledWith(REQUEST, "a1", { search: `ro"sa`, limit: 5 });
+    expect(dbMocks.searchConversations).toHaveBeenCalledWith(REQUEST, "a1", { search: `ro"sa`, limit: 5 });
   });
 
-  it("contacts-archive Task 12: asks listContacts with no archived override, so its own default (exclude) holds (mutation: pass archived: \"only\" -> FAILS)", async () => {
+  it("contacts-archive Task 12 / F-092: asks searchContacts for the term and the limit only, so its own archive rule (exclude) holds (mutation: pass archived: \"only\" -> FAILS)", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     await GET(req("rosa"), ctx());
-    const [, , opts] = dbMocks.listContacts.mock.calls[0]!;
-    expect(opts).not.toHaveProperty("archived");
+    const [, , opts] = dbMocks.searchContacts.mock.calls[0]!;
+    expect(opts).toEqual({ term: "rosa", limit: 5 });
+  });
+
+  it("F-092 (plan correction 1): every search runs on the REQUEST client, so RLS decides who is found (mutation: hand searchContacts serviceDb() -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    await GET(req("rosa"), ctx());
+    expect(dbMocks.searchContacts.mock.calls[0]![0]).toBe(REQUEST);
+    expect(dbMocks.searchCalls.mock.calls[0]![0]).toBe(REQUEST);
+    expect(dbMocks.searchConversations.mock.calls[0]![0]).toBe(REQUEST);
+  });
+
+  it("F-092: types=contacts runs the contacts search only and answers the other two empty (mutation: ignore types -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.searchContacts.mockResolvedValue([{ id: "c1", first_name: "Ana", last_name: null, email: null, phone: null }]);
+    const body = await (await GET(req("ana", "contacts"), ctx())).json();
+    expect(dbMocks.searchContacts).toHaveBeenCalledTimes(1);
+    expect(dbMocks.searchCalls).not.toHaveBeenCalled();
+    expect(dbMocks.searchConversations).not.toHaveBeenCalled();
+    expect(body.contacts.map((h: { id: string }) => h.id)).toEqual(["c1"]);
+    expect(body.calls).toEqual([]);
+    expect(body.conversations).toEqual([]);
+  });
+
+  it("F-092: types is a comma list; calls,conversations skips contacts", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    const body = await (await GET(req("ana", "calls,conversations"), ctx())).json();
+    expect(dbMocks.searchContacts).not.toHaveBeenCalled();
+    expect(dbMocks.searchCalls).toHaveBeenCalledTimes(1);
+    expect(dbMocks.searchConversations).toHaveBeenCalledTimes(1);
+    expect(body.contacts).toEqual([]);
+  });
+
+  it("F-092: a types list naming none of the three (or empty) runs all three, as no types does", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    for (const types of ["bogus", "", ","]) {
+      for (const fn of Object.values(dbMocks)) fn.mockClear();
+      await GET(req("ana", types), ctx());
+      expect(dbMocks.searchContacts, types).toHaveBeenCalledTimes(1);
+      expect(dbMocks.searchCalls, types).toHaveBeenCalledTimes(1);
+      expect(dbMocks.searchConversations, types).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("F-092: a phone search shows the phone it matched; a name search shows the email first, as before (mutation: always email first -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    const hit = { id: "c1", first_name: "Maria", last_name: "Garcia", email: "a@b.c", phone: "+19565550199" };
+    dbMocks.searchContacts.mockResolvedValue([hit]);
+    expect((await (await GET(req("0199"), ctx())).json()).contacts[0].sublabel).toBe("+19565550199");
+    expect((await (await GET(req("(956) 555-0199"), ctx())).json()).contacts[0].sublabel).toBe("+19565550199");
+    expect((await (await GET(req("ana"), ctx())).json()).contacts[0].sublabel).toBe("a@b.c");
+    // A phone-shaped term the stored phone does not hold (the hit matched on something else): the email, as before.
+    expect((await (await GET(req("5550123"), ctx())).json()).contacts[0].sublabel).toBe("a@b.c");
+  });
+
+  it("F-092 (T4 review, Minor 3): a number found only by today's kept phone digits still shows as the match", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.searchContacts.mockResolvedValue([{ id: "c1", first_name: "C", last_name: null, email: "c@d.e", phone: "+19562195612" }]);
+    expect((await (await GET(req("+1 956"), ctx())).json()).contacts[0].sublabel).toBe("+19562195612");
+    dbMocks.searchContacts.mockResolvedValue([{ id: "c2", first_name: "L", last_name: null, email: "l@d.e", phone: "+5218991234567" }]);
+    expect((await (await GET(req("+521 899 12"), ctx())).json()).contacts[0].sublabel).toBe("+5218991234567");
   });
 
   it("caps every source at five and asks the database for no more", async () => {
@@ -111,19 +176,19 @@ describe("account search route", () => {
       Array.from({ length: n }, (_, i) => ({
         id: `c${i}`, first_name: "A", last_name: `B${i}`, email: null, phone: null,
       }));
-    dbMocks.listContacts.mockResolvedValue(many(9));
+    dbMocks.searchContacts.mockResolvedValue(many(9));
     const body = await (await GET(req("rosa"), ctx())).json();
     expect(body.contacts).toHaveLength(5);
-    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
-    expect(dbMocks.searchCalls).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
-    expect(dbMocks.searchConversations).toHaveBeenCalledWith({}, "a1", { search: "rosa", limit: 5 });
+    expect(dbMocks.searchContacts).toHaveBeenCalledWith(REQUEST, "a1", { term: "rosa", limit: 5 });
+    expect(dbMocks.searchCalls).toHaveBeenCalledWith(REQUEST, "a1", { search: "rosa", limit: 5 });
+    expect(dbMocks.searchConversations).toHaveBeenCalledWith(REQUEST, "a1", { search: "rosa", limit: 5 });
   });
 
-  it("tolerates listContacts returning null, which its signature allows", async () => {
-    // listContacts has no return annotation and hands back PostgREST's raw
-    // `data`, so `null` is in its inferred type. A palette must not 500 on it.
+  it("tolerates the contacts search answering null rather than 500ing", async () => {
+    // listContacts, which this route called before F-092, handed back PostgREST's raw `data` (null in its
+    // type); searchContacts answers an array, but a palette must still never 500 on a null.
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    dbMocks.listContacts.mockResolvedValue(null);
+    dbMocks.searchContacts.mockResolvedValue(null);
     const res = await GET(req("rosa"), ctx());
     expect(res.status).toBe(200);
     expect((await res.json()).contacts).toEqual([]);
@@ -131,7 +196,7 @@ describe("account search route", () => {
 
   it("builds a working href and a localized sublabel for each kind", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    dbMocks.listContacts.mockResolvedValue([
+    dbMocks.searchContacts.mockResolvedValue([
       { id: "c1", first_name: "Rosa", last_name: "Trevino", email: "rosa@x.com", phone: null },
     ]);
     dbMocks.searchCalls.mockResolvedValue([
@@ -202,7 +267,7 @@ describe("account search route", () => {
 
   it("names an unnamed contact instead of rendering a blank row", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    dbMocks.listContacts.mockResolvedValue([
+    dbMocks.searchContacts.mockResolvedValue([
       { id: "c2", first_name: null, last_name: null, email: null, phone: "+19565550000" },
     ]);
     const body = await (await GET(req("956"), ctx())).json();

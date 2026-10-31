@@ -122,3 +122,54 @@ describe("phoneMatches", () => {
     expect(phoneMatches(plan, "+19565550199")).toBe(false);
   });
 });
+
+/** af5976fa's phone_key digits, frozen (the oracle T4's filter test also restates): shape, all digits, an 11-digit
+ *  leading 1 folded off, the 4-digit floor, 20 digits at most. */
+function af5976faDigits(term: string): string {
+  if (!/^[+()\-. \d]+$/.test(term)) return "";
+  const d = phoneDigits(term);
+  return d.length >= 4 ? d.slice(0, 20) : "";
+}
+
+describe("contactSearchPlan — keptKey: today's phone_key digits, kept where the new key does not cover them (T4 review, Minor 3)", () => {
+  it.each([
+    ["+1 956", "1956"],
+    ["+521 899 12", "52189912"],
+    ["+52 1 899 123 4567", "5218991234567"],
+  ] as const)("%j keeps %j", (term, kept) => {
+    expect(contactSearchPlan(term).keptKey).toBe(kept);
+  });
+
+  it.each(["+1 956 55", "(956) 555-0199", "0199", "044 899 123 4567", "956", "+1 95", "garcia", "Suite 9", ""])(
+    "%j keeps nothing: today's digits are the new key, contain it, or there are none",
+    (term) => {
+      expect(contactSearchPlan(term).keptKey).toBeNull();
+    },
+  );
+
+  it.each(["+1 956", "+521 899 12", "+52 1 899 123 4567", "+1 956 55", "(956) 555-0199", "0199", "19565550199",
+    "1-800", "+1 (956) 555-0199", "956", "maria5@example.com"])(
+    "%j: every number today's digits reached, the plan still reaches (the new key or the kept one)",
+    (term) => {
+      const today = af5976faDigits(term);
+      const plan = contactSearchPlan(term);
+      if (today === "") return expect(plan.keptKey).toBeNull();
+      expect(plan.keptKey === today || (plan.phone !== null && today.includes(plan.phone.key))).toBe(true);
+    },
+  );
+});
+
+describe("phoneMatches — a number found only by the kept clause still shows as the match (T4 review, Minor 3)", () => {
+  it('"+1 956" matches a stored key that merely holds 1956, not one that does not (mutation: drop the keptKey fallback -> FAILS)', () => {
+    const plan = contactSearchPlan("+1 956");
+    expect(phoneMatches(plan, "+19562195612")).toBe(true);
+    expect(phoneMatches(plan, "+19565550123")).toBe(false);
+  });
+
+  it('"+521 899 12" matches a pre-F-009 "+521..." number (mutation: drop the keptKey fallback -> FAILS)', () => {
+    const plan = contactSearchPlan("+521 899 12");
+    expect(phoneMatches(plan, "+5218991234567")).toBe(true);
+    expect(phoneMatches(plan, "+528991234567")).toBe(true);
+    expect(phoneMatches(plan, "+528881234567")).toBe(false);
+  });
+});

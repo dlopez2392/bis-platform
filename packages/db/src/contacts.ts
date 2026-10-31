@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
-import { contactSearchPlan, MIN_PHONE_SEARCH_DIGITS } from "./contact-search";
+import { contactSearchPlan } from "./contact-search";
+import { phoneNational } from "./dedupe-keys";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 import { contactAuthor, type RowAuthor } from "./provenance";
@@ -867,8 +868,9 @@ export type ContactCursor = { v: string | null; id: string };
  * too, but reading `search` keeps this branch legible without depending on
  * what the OTHER branches' sanitizer happened to leave behind.
  *
- * GATED ON THE TERM LOOKING LIKE A PHONE (`phoneSearchDigits` below), not
- * merely on having any digit in it at all — review finding (first pass):
+ * GATED ON THE TERM LOOKING LIKE A PHONE (`contactSearchPlan`'s `phone`, the
+ * new key, and its `keptKey`, today's kept clause: both in contact-search.ts),
+ * not merely on having any digit in it at all — review finding (first pass):
  * "maria5@example.com" or "Suite 9" each carry one digit, and an
  * unconditional `phone_key.ilike.%5%`/`%9%` matched almost every contact
  * with a phone containing that digit, turning a name/email search into a
@@ -888,7 +890,9 @@ export type ContactCursor = { v: string | null; id: string };
  * "+1 956 55" searches 95655) and, for a full +52 shape `phone_key` misses, the ten on 0106's
  * `phone_national`. Today's own `phone_key` clause (the term's raw digits, af5976fa) is KEPT whenever the new
  * key does not cover it (its digits do not contain the new key): "+1 956" and "+521 899 12" found a stored
- * key holding 1956 or a pre-F-009 "+521..." number before this change and still do. The four raw arms stay
+ * key holding 1956 or a pre-F-009 "+521..." number before this change and still do. That kept key is the plan's
+ * `keptKey` (contact-search.ts), so the route's `phoneMatches` reads the same rule and shows such a number as
+ * the match (T4 review, Minor 3). The four raw arms stay
  * first and unchanged; a name the fold empties (Chinese, Arabic) is found by them alone.
  */
 export function contactSearchFilter(search: string | undefined): string | null {
@@ -901,18 +905,9 @@ export function contactSearchFilter(search: string | undefined): string | null {
   if (words.length === 1) clauses.push(words[0]!);
   else if (words.length > 1) clauses.push(`and(${words.join(",")})`);
   if (plan.phone) clauses.push(`phone_key.ilike.%${plan.phone.key}%`);
-  const today = todayPhoneKeyDigits(search);
-  if (today && !(plan.phone && today.includes(plan.phone.key))) clauses.push(`phone_key.ilike.%${today}%`);
+  if (plan.keptKey) clauses.push(`phone_key.ilike.%${plan.keptKey}%`);
   if (plan.phone?.national) clauses.push(`phone_national.ilike.%${plan.phone.national}%`);
   return clauses.join(",");
-}
-
-/** af5976fa's phone_key digits, kept only so `contactSearchFilter` can keep today's clause (spec D4). */
-const TODAY_PHONE_SEARCH_SHAPE = /^[+()\-. \d]+$/;
-function todayPhoneKeyDigits(raw: string): string {
-  if (!TODAY_PHONE_SEARCH_SHAPE.test(raw)) return "";
-  const digits = phoneDigits(raw);
-  return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
 }
 
 // Exported for its own pure, DB-free test (contacts-phone.test.ts) — not
@@ -1092,6 +1087,65 @@ export async function countContacts(
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   if (count === null) throw new Error("countContacts failed: no count returned");
   return count;
+}
+
+type ContactListRow = NonNullable<Awaited<ReturnType<typeof listContacts>>>[number];
+
+/**
+ * F-092 part 1 (spec 5, owner ruling Q3): the small boxes (⌘K, the relationship picker, Add job, held email) show
+ * the best match first; the contact list keeps its own chosen sort and paging (`listContacts`). Three tiers, each
+ * the list's own filter (`contactSearchFilter`, so a box never finds anyone the list would not) plus:
+ *   1. exact: the folded words ARE the whole search name, or the national ten is the whole number, or the email
+ *      key is the whole email;
+ *   2. every word starts a word of the search name (one `or` per word, so they AND);
+ *   3. contains: the filter alone.
+ * Each ordered by sort_name then id and limited, merged in tier order, each person once, cut to `limit`. The
+ * same holding, archive and merge rules as listContacts. Any tier's error throws: a shorter list would read as
+ * fewer matches, not as a failed read. Runs on whatever client it is handed: callers pass the request client.
+ *
+ * Known limit (T1 review): a word joined by & or _ loses its boundary in the fold ("Smith&Sons" is stored as
+ * "smithsons"), so tier 2 does not see "sons" start a word there; tier 3 still finds it.
+ */
+export async function searchContacts(
+  db: SupabaseClient, accountId: string, opts: { term: string; limit: number },
+): Promise<ContactListRow[]> {
+  const filter = contactSearchFilter(opts.term);
+  if (!filter) return [];
+  const plan = contactSearchPlan(opts.term);
+  const base = () => withArchived(
+    db.from("contacts").select(COLS).eq("account_id", accountId).eq("holds_shared_number", false)
+      .or(filter)
+      .order("sort_name", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true })
+      .limit(opts.limit),
+    "exclude",
+  );
+  const exact: string[] = [];
+  // Tokens are [a-z0-9]+ joined by one space (nameFold): no PostgREST grammar to quote.
+  if (plan.tokens.length) exact.push(`search_name.eq.${plan.tokens.join(" ")}`);
+  const digits = opts.term.replace(/[^0-9]/g, "");
+  if (plan.phone && digits.length >= 10) {
+    const n = phoneNational(digits);
+    if (n !== null && n.length === 10) exact.push(`phone_national.eq.${n}`);
+  }
+  if (opts.term.includes("@")) exact.push(`email_key.eq.${quoteFilterValue(emailKey(opts.term))}`);
+  const tiers = [
+    exact.length ? base().or(exact.join(",")) : null,
+    plan.tokens.length
+      ? plan.tokens.reduce((q, t) => q.or(`search_name.ilike.${t}%,search_name.ilike.% ${t}%`), base())
+      : null,
+    base(),
+  ];
+  const answers = await Promise.all(tiers.map((q) => q ?? Promise.resolve({ data: [] as ContactListRow[], error: null })));
+  const seen = new Set<string>();
+  const out: ContactListRow[] = [];
+  for (const { data, error } of answers) {
+    if (error) throw new Error(`searchContacts failed: ${error.message}`);
+    for (const row of (data ?? []) as ContactListRow[]) {
+      if (!seen.has(row.id)) { seen.add(row.id); out.push(row); }
+    }
+  }
+  return out.slice(0, opts.limit);
 }
 
 /**

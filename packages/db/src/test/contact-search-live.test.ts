@@ -2,7 +2,9 @@ import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
-import { createContact, listContacts, countContacts, archiveContacts, phoneDigits, type ArchivedFilter } from "../contacts";
+import {
+  createContact, listContacts, countContacts, searchContacts, archiveContacts, phoneDigits, type ArchivedFilter,
+} from "../contacts";
 import { sanitizeSearchTerm } from "../search-term";
 import { setContactsBusiness } from "../client-groups";
 import { ensureHoldingContact } from "../voice";
@@ -125,5 +127,42 @@ describe("contact search: accents, full names and phone shapes (F-092)", () => {
       expect(await todayIds(db, a, "044 899 123 4567")).toEqual([]);
       expect(await found(db, a, "044 899 123 4567")).toEqual([legacy]);
       expect(await found(db, a, "0123")).toEqual([other]);
+    }));
+});
+
+describe("searchContacts: the small boxes show the best match first (F-092, plan Task 5)", () => {
+  it("exact, then every word starts a word, then contains, each by sort_name; never an archived record; PostgREST took every tier's string", () =>
+    withTestAccount(async (db, a) => {
+      const anaG = await make(db, a, "Ana", "García");
+      const juana = await make(db, a, "Juana", "Ana Pérez");
+      const mariana = await make(db, a, "Mariana", "Ruiz");
+      const susana = await make(db, a, "Susana", "Díaz");
+      // Sorts BEFORE Ana García ("adriana garcía" < "ana garcía") but only contains "ana": a box that ranked by
+      // sort_name alone would put her first.
+      const adriana = await make(db, a, "Adriana", "García");
+      // Sorts first of all and has a business word "Ana": every word of "ana garcia" starts a word, but the
+      // whole name is not "ana garcia", so the exact tier puts Ana García ahead of him.
+      const aaron = await make(db, a, "Aaron", "García");
+      const [biz] = await setContactsBusiness(db, a, [{ contactId: aaron, name: "Ana Taller" }], "user_test");
+      expect(biz?.status).toBe("ok");
+      // An archived "Ana" would be the one exact match for "ana": the box must never show her.
+      const archivedAna = await make(db, a, "Ana");
+      expect((await archiveContacts(db, a, [archivedAna])).changedIds).toEqual([archivedAna]);
+
+      const ids = async (term: string, limit: number) =>
+        (await searchContacts(db, a, { term, limit })).map((r) => r.id as string);
+
+      // Tier 2 (Aaron, Ana García, Juana Ana Pérez by sort_name), then tier 3's rest (Adriana, Mariana, Susana).
+      expect(await ids("ana", 10)).toEqual([aaron, anaG, juana, adriana, mariana, susana]);
+      expect(await ids("ana", 4)).toEqual([aaron, anaG, juana, adriana]);
+      // Exact first, though Aaron sorts ahead of her; then tier 2's Aaron; then Adriana, who only contains "ana".
+      expect(await ids("ana garcia", 5)).toEqual([anaG, aaron, adriana]);
+      expect(await ids("ANA GARCÍA", 5)).toEqual([anaG, aaron, adriana]);
+      // Whoever the box finds, the list's own filter finds (the same filter, so never a stranger).
+      for (const t of ["ana", "ana garcia"]) {
+        const list = (await listContacts(db, a, { search: t, limit: 200 })).map((r) => r.id as string);
+        expect(list, t).toEqual(expect.arrayContaining(await ids(t, 50)));
+        expect(list, t).not.toContain(archivedAna);
+      }
     }));
 });

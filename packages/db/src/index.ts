@@ -16,7 +16,7 @@ export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
          countRecentAlertPhoneVerifications, startAlertPhoneVerification,
          discardAlertPhoneVerification,
          verifyAlertPhoneCode, type AlertPhoneVerificationOutcome } from "./alert-phone-verification";
-export { createContact, updateContact, listContacts, getContact,
+export { createContact, updateContact, listContacts, searchContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks, fillContactBlanksReport,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          listTagNamesForContacts, flagMatchesOf,
