@@ -166,3 +166,23 @@ describe("searchContacts: the small boxes show the best match first (F-092, plan
       }
     }));
 });
+
+describe("searchContacts never reaches into another account (F-092 final review T5-M1)", () => {
+  // `db` is serviceDb(), which RLS does not narrow, so `.eq("account_id", …)` in searchContacts is the ONLY thing that
+  // keeps account B's Ana García out of account A's box — the same filter the agency's own session leans on, since
+  // the agency reads every account. Every tier is asked: exact name, every-word-starts, contains, and a phone.
+  it("an Ana García in another account is never returned, by any tier (mutation: drop searchContacts' .eq(\"account_id\", accountId) -> FAILS)", () =>
+    withTestAccount(async (db, a) => {
+      const mine = await make(db, a, "Ana", "Ruiz", "+19565550111");
+      await withTestAccount(async (_db, b) => {
+        const theirs = await make(db, b, "Ana", "García", "+19565550142");
+        const ids = async (account: string, term: string) =>
+          (await searchContacts(db, account, { term, limit: 50 })).map((r) => r.id as string);
+        // Account A's box never finds her; "ana" still finds A's own Ana Ruiz, so the call itself works.
+        for (const t of ["ana garcia", "garc", "0142", "(956) 555-0142"]) expect(await ids(a, t), `A, "${t}"`).toEqual([]);
+        expect(await ids(a, "ana")).toEqual([mine]);
+        // Control: account B's own box finds her by every one of those terms, so each one could have leaked.
+        for (const t of ["ana garcia", "ana", "garc", "0142", "(956) 555-0142"]) expect(await ids(b, t), `B, "${t}"`).toEqual([theirs]);
+      });
+    }));
+});
