@@ -129,8 +129,8 @@ describe("RLS tenant isolation", () => {
     }));
 
   // `checklist_items` (migration 0007) follows the ordinary account-scoped
-  // shape (app.is_agency() or account_id = app.current_account_id()), same
-  // as contacts above, but nothing else in this file exercised it.
+  // shape ((select app.is_agency()) or account_id = (select app.current_account_id())),
+  // wrapped since 0109, same as contacts above, but nothing else in this file exercised it.
   it("checklist_items are tenant-isolated like other account-scoped tables", () =>
     withRollback(async (c) => {
       const { a, b } = await seedTwoAccounts(c);

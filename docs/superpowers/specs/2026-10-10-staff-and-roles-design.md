@@ -45,7 +45,8 @@ memberships ("no member sync" reversed) and raising Clerk's five-membership cap 
 | Calendar settings (hours, buffers, notice, horizon, services) | yes | **no** | yes |
 | Billing page | yes | **no** | n/a (agency sees Plans) |
 | Team: invite, change role or language, remove, revoke invitation | yes | **no** | yes |
-| Agency-only surfaces (Settings, Voice, Automations, Branding, Checklist) | no | no | yes |
+| Agency-only surfaces (Settings, Voice, Automations, Checklist) | no | no | yes |
+| Branding (name, logo, colour and the rest of the look, reply-to, mailing address): corrected 2026-10-31, the row above was stale; one write, `setBrandingAction`, behind `requireNotTechnician` (`branding/actions.ts:41-49`) | yes | yes | yes |
 
 Existing client logins become **Owner**, so nobody loses a capability on the day it ships.
 
