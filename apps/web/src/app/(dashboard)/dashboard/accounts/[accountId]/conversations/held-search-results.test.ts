@@ -25,13 +25,13 @@ describe("HeldSearchResults", () => {
   });
 
   it("ok with zero hits renders searchEmpty, never searchFailed", () => {
-    const html = render({ status: "ok", hits: [] });
+    const html = render({ status: "ok", hits: [], query: "an" });
     expect(renderedText(html)).toContain("No customer matches that.");
     expect(renderedText(html)).not.toContain("Couldn't search right now");
   });
 
   it("two hits sharing a name are told apart by their own sublabel (mutation: drop sublabel -> FAILS)", () => {
-    const html = render({ status: "ok", hits: [
+    const html = render({ status: "ok", query: "", hits: [
       { id: "c1", label: "Ana Ruiz", sublabel: "ana1@example.com" },
       { id: "c2", label: "Ana Ruiz", sublabel: "ana2@example.com" },
     ] });
@@ -42,7 +42,7 @@ describe("HeldSearchResults", () => {
   });
 
   it("a hit with no sublabel (null) renders the name alone, no stray empty line", () => {
-    const html = render({ status: "ok", hits: [{ id: "c1", label: "Pat Nguyen", sublabel: null }] });
+    const html = render({ status: "ok", hits: [{ id: "c1", label: "Pat Nguyen", sublabel: null }], query: "" });
     expect(renderedText(html).trim()).toBe("Pat Nguyen");
   });
 
@@ -54,9 +54,22 @@ describe("HeldSearchResults", () => {
     // jsdom harness exists in this suite for a real click). Here we only
     // pin that the function IS passed through, not swallowed.
     const html = renderToStaticMarkup(createElement(HeldSearchResults, {
-      state: { status: "ok", hits: [hit] }, pending: false, locale: "en", onPick,
+      state: { status: "ok", hits: [hit], query: "" }, pending: false, locale: "en", onPick,
     }));
     expect(html).toContain("Ana Ruiz");
     expect(onPick).not.toHaveBeenCalled(); // never fired by rendering alone
+  });
+
+  it("the matched letters are set apart from the rest, against the query the hits answered (F-092 part 1, plan Task 10; mutation: highlight against a fixed query instead of state.query -> FAILS)", () => {
+    const html = render({ status: "ok", query: "garcia", hits: [{ id: "c1", label: "Ana García", sublabel: "(956) 555-0199" }] });
+    expect(html).toContain('<mark data-search-hit="true" class="bg-transparent font-semibold text-inherit">García</mark>');
+    // A query that cannot match this hit's own text draws no mark at all.
+    const none = render({ status: "ok", query: "zzzz", hits: [{ id: "c1", label: "Ana García", sublabel: null }] });
+    expect(none).not.toContain("<mark");
+  });
+
+  it("a phone sublabel marks the matched digits, punctuation and all (F-092 part 1, plan Task 10)", () => {
+    const html = render({ status: "ok", query: "0199", hits: [{ id: "c1", label: "Ana Ruiz", sublabel: "(956) 555-0199" }] });
+    expect(html).toContain('<mark data-search-hit="true" class="bg-transparent font-semibold text-inherit">0199</mark>');
   });
 });

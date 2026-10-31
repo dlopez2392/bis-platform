@@ -9,16 +9,23 @@ afterEach(() => {
 });
 
 describe("searchHeldContacts", () => {
-  it("ok: localizes every hit's label and passes sublabel through (mutation: drop sublabel -> FAILS)", async () => {
+  it("ok: localizes every hit's label, passes sublabel through, and answers the query the hits answered (mutation: drop sublabel -> FAILS)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
       json: async () => ({ contacts: [{ id: "c1", label: "Unnamed contact", sublabel: "ana@example.com" }, { id: "c2", label: "Pat Nguyen", sublabel: "555-1234" }] }),
     })));
     const r = await searchHeldContacts("a1", "an", "es", controller().signal);
-    expect(r).toEqual({ status: "ok", hits: [
+    expect(r).toEqual({ status: "ok", query: "an", hits: [
       { id: "c1", label: m["contact.noName.es"], sublabel: "ana@example.com" },
       { id: "c2", label: "Pat Nguyen", sublabel: "555-1234" },
     ] });
+  });
+
+  it("asks the palette's own GET route for contacts only, with the term encoded (F-092 part 1, plan Task 10; mutation: drop &types=contacts -> FAILS)", async () => {
+    const fetchSpy = vi.fn(async (_url: string) => ({ ok: true, json: async () => ({ contacts: [] }) }));
+    vi.stubGlobal("fetch", fetchSpy);
+    await searchHeldContacts("a1", "garcía maria", "en", controller().signal);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("/api/accounts/a1/search?q=garc%C3%ADa%20maria&types=contacts");
   });
 
   it("a non-ok response answers error, never empty hits (mutation: answer ok with [] -> FAILS)", async () => {
