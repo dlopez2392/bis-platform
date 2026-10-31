@@ -314,6 +314,15 @@ describe("highlighting the matched letters (plan Task 8)", () => {
     expect(html).not.toContain("<mark");
   });
 
+  it("a nameless customer's stand-in '(no name)' marks nothing, even when q matches it (final review M-4a; mutation: highlight the stand-in -> FAILS)", () => {
+    const r = row(0);
+    r.first_name = null;
+    r.last_name = null;
+    const html = render([r], { q: "name" });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain(m["contact.noName"]);
+  });
+
   it("marks the matched digits of the phone when q is phone-shaped (mutation: render the phone without HighlightedText -> FAILS)", () => {
     const r = row(0);
     r.phone = "(956) 555-0199";

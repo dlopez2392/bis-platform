@@ -323,7 +323,8 @@ export function ContactsTable({
                       {initials(name)}
                     </span>
                     <span className="truncate">
-                      <HighlightedText text={name} ranges={q ? nameRanges(name, q) : []} />
+                      {/* "(no name)" is a stand-in, not their name: nothing in it is marked (final review M-4a). */}
+                      <HighlightedText text={name} ranges={q && (c.first_name || c.last_name) ? nameRanges(name, q) : []} />
                     </span>
                   </span>
                 </TableCell>

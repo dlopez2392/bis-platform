@@ -93,7 +93,7 @@ describe("the drawer's details sit under a mono section label (design review M3)
 // F-092 final review M-1: Add job's own search hit row sets the matched letters and digits apart. Its hits arrive by
 // fetch, so the row is its own component (JobSearchHit) and is drawn here from props.
 describe("Add job's search hit marks what matched (F-092 final review M-1)", () => {
-  const hitRow = (hit: { id: string; label: string; sublabel: string | null }, query: string) =>
+  const hitRow = (hit: { id: string; label: string; sublabel: string | null; unnamed?: true }, query: string) =>
     renderToStaticMarkup(createElement(JobSearchHit, { hit: { at: null, href: "#", ...hit }, query, onChoose: noop }));
   const marks = (html: string) => [...html.matchAll(/<mark\b[^>]*data-search-hit[^>]*>([^<]*)<\/mark>/g)].map((x) => x[1]);
 
@@ -103,5 +103,11 @@ describe("Add job's search hit marks what matched (F-092 final review M-1)", () 
 
   it("a phone search marks the phone's digits in the sublabel (mutation: ranges=[] for the sublabel -> FAILS)", () => {
     expect(marks(hitRow({ id: "c1", label: "Ana García", sublabel: "(956) 555-0100" }, "5550100"))).toEqual(["555-0100"]);
+  });
+
+  it("a nameless customer's stand-in label marks nothing (final review M-4a; mutation: ignore hit.unnamed -> FAILS)", () => {
+    const html = hitRow({ id: "c3", label: "Unnamed contact", unnamed: true, sublabel: "contact@roofs.example" }, "contact");
+    expect(marks(html)).toEqual([]);
+    expect(html).toContain("Unnamed contact");
   });
 });

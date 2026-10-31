@@ -95,7 +95,8 @@ export function PaletteHitContent({
   return (
     <span className="flex min-w-0 flex-col">
       <span className="truncate">
-        {isContacts ? <HighlightedText text={hit.label} ranges={nameRanges(hit.label, query)} /> : hit.label}
+        {/* A stand-in label ("Unnamed contact") is not the customer's name: nothing in it is marked (final review M-4a). */}
+        {isContacts ? <HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} /> : hit.label}
       </span>
       {hit.sublabel || hit.at ? (
         <span className="truncate text-xs text-muted-foreground">

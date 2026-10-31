@@ -275,6 +275,19 @@ describe("account search route", () => {
     expect(body.contacts[0].sublabel).toBe("+19565550000");
   });
 
+  // F-092 final review M-4a: "Unnamed contact" is the route's own stand-in, not the customer's name, so it says
+  // so on the hit and no client marks "contact" in it as though the search had matched a name.
+  it("flags the unnamed contact's label as a stand-in, and only that one (mutation: never set unnamed -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.searchContacts.mockResolvedValue([
+      { id: "c2", first_name: null, last_name: null, email: "contact@roofs.example", phone: null },
+      { id: "c3", first_name: "Contact", last_name: "Ruiz", email: null, phone: null },
+    ]);
+    const body = await (await GET(req("contact"), ctx())).json();
+    expect(body.contacts[0]).toMatchObject({ label: "Unnamed contact", unnamed: true });
+    expect(body.contacts[1].unnamed).toBeUndefined();
+  });
+
   it("500s rather than reporting an empty result when a source throws", async () => {
     // Silence would render as "nothing found" — a lie about a failure. The
     // route must fail loudly so the palette can show its error row.

@@ -119,7 +119,7 @@ export function JobSearchHit({ hit, query, onChoose }: { hit: SearchHit; query: 
         className="flex min-h-11 w-full min-w-0 flex-col items-start rounded-[var(--radius-ctl)] px-2 py-1.5 text-left outline-none hover:bg-[var(--surface-3)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
         onClick={onChoose}>
         <span className="break-words text-sm text-card-foreground">
-          <HighlightedText text={hit.label} ranges={nameRanges(hit.label, query)} />
+          <HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} />
         </span>
         {hit.sublabel ? (
           <span className="break-all text-xs text-muted-foreground">

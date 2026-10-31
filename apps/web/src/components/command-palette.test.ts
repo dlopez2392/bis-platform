@@ -127,6 +127,19 @@ describe("PaletteHitContent — F-092 part 1: the CONTACTS group highlights, cal
   });
 });
 
+// F-092 final review M-4a: a stand-in label is not the customer's name, so nothing in it is marked.
+describe("PaletteHitContent — a nameless contact's stand-in label is never marked", () => {
+  it("'Unnamed contact' found by its email 'contact@…' marks nothing in the label (mutation: ignore hit.unnamed -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(PaletteHitContent, {
+      groupKey: "contacts",
+      hit: { id: "c3", label: "Unnamed contact", unnamed: true, sublabel: "contact@roofs.example", at: null, href: "/c" },
+      query: "contact",
+    }));
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("Unnamed contact");
+  });
+});
+
 describe("CommandPalette — wires the CONTACTS group through PaletteHitContent (source)", () => {
   it("imports HighlightedText and the two range functions, and renders a live hit through PaletteHitContent (mutation: render {hit.label} inline again -> FAILS)", () => {
     expect(src).toMatch(/import\s*\{\s*HighlightedText\s*\}\s*from\s*"@\/components\/highlighted-text"/);

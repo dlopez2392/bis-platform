@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 export type SearchHit = {
   id: string;
   label: string;
+  /** F-092 final review M-4a: set (only ever `true`) when `label` is this route's stand-in for a contact with no
+   *  name ("Unnamed contact"), never the customer's own words, so no client marks a search's letters in it. */
+  unnamed?: true;
   sublabel: string | null;
   /** Raw ISO, formatted by the CLIENT. Never formatted here: Intl on the
    *  server formats in the SERVER's zone (UTC on Vercel), which renders the
@@ -115,13 +118,17 @@ export async function GET(
   const plan = contactSearchPlan(raw);
 
   const body: SearchResults = {
-    contacts: (contacts ?? []).slice(0, PER_SOURCE).map((c): SearchHit => ({
-      id: c.id,
-      label: joinName(c.first_name, c.last_name) || UNNAMED,
-      sublabel: phoneMatches(plan, c.phone) ? c.phone : c.email ?? c.phone ?? null,
-      at: null,
-      href: `${base}/contacts/${c.id}`,
-    })),
+    contacts: (contacts ?? []).slice(0, PER_SOURCE).map((c): SearchHit => {
+      const name = joinName(c.first_name, c.last_name);
+      return {
+        id: c.id,
+        label: name || UNNAMED,
+        ...(name ? {} : { unnamed: true as const }),
+        sublabel: phoneMatches(plan, c.phone) ? c.phone : c.email ?? c.phone ?? null,
+        at: null,
+        href: `${base}/contacts/${c.id}`,
+      };
+    }),
     calls: calls.slice(0, PER_SOURCE).map((c): SearchHit => ({
       id: c.id,
       label: callerLabel(c),

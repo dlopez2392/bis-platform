@@ -3,7 +3,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { HeldSearchResults } from "./held-search-results";
-import type { HeldSearchState } from "./held-email-search";
+import { localizeHit, type HeldSearchState } from "./held-email-search";
+import { m } from "@/lib/messages";
 
 const render = (state: HeldSearchState, locale: "en" | "es" = "en") =>
   renderToStaticMarkup(createElement(HeldSearchResults, { state, pending: false, locale, onPick: vi.fn() }));
@@ -66,6 +67,13 @@ describe("HeldSearchResults", () => {
     // A query that cannot match this hit's own text draws no mark at all.
     const none = render({ status: "ok", query: "zzzz", hits: [{ id: "c1", label: "Ana García", sublabel: null }] });
     expect(none).not.toContain("<mark");
+  });
+
+  it("a nameless customer's stand-in label marks nothing, in either language (final review M-4a; mutation: ignore hit.unnamed -> FAILS)", () => {
+    const hit = localizeHit({ id: "c3", label: "Unnamed contact", unnamed: true, sublabel: "name@roofs.example" }, "en");
+    const html = render({ status: "ok", query: "name", hits: [hit] });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain(m["contact.noName"]);
   });
 
   it("a phone sublabel marks the matched digits, punctuation and all (F-092 part 1, plan Task 10)", () => {

@@ -71,6 +71,12 @@ describe("HoldingFindResults", () => {
     expect(none).not.toContain("<mark");
   });
 
+  it("a nameless customer's stand-in '(no name)' marks nothing (final review M-4a; mutation: highlight the stand-in -> FAILS)", () => {
+    const html = render({ query: "name", hits: [{ id: "n1", firstName: null, lastName: null, phone: "+19565550199" }] });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("(no name)");
+  });
+
   it("a phone's matched digits are marked in the FORMATTED number (M-3's own display), punctuation and all", () => {
     const html = render({ query: "0199", hits: [{ id: "a1", firstName: "Ana", lastName: "Prueba", phone: "+19565550199" }] });
     expect(html).toContain('<mark data-search-hit="true" class="bg-transparent font-semibold text-inherit">0199</mark>');

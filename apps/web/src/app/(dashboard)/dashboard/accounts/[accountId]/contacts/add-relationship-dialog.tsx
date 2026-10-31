@@ -157,12 +157,14 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
                 : (
                   <ul className="space-y-1">
                     {shownHits.map((h) => {
-                      const hName = personName(h, tt("relationships.noName"));
+                      // A stand-in "(no name)" is not their name: nothing in it is marked (final review M-4a).
+                      const given = personName(h, "");
+                      const hName = given || tt("relationships.noName");
                       return (
                         <li key={h.id}>
                           <label className="flex min-w-0 items-center gap-2 text-sm">
                             <input type="radio" name="rel-person" className={radioClass} checked={picked?.id === h.id} onChange={() => setPicked(h)} />
-                            <span className="min-w-0 truncate"><HighlightedText text={hName} ranges={nameRanges(hName, term)} /></span>
+                            <span className="min-w-0 truncate"><HighlightedText text={hName} ranges={given ? nameRanges(hName, term) : []} /></span>
                             {h.phone ? (
                               <span className={cn(hintClass, "shrink-0 tabular-nums")}>
                                 <HighlightedText text={h.phone} ranges={phoneRanges(h.phone, term)} />

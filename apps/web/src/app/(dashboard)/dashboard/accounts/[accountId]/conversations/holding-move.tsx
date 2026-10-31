@@ -65,12 +65,13 @@ export function HoldingFindResults({ pending, failed, hits, busy, query, onPick,
   return (
     <ul className="space-y-1">
       {hits.map((h) => {
-        const name = [h.firstName, h.lastName].filter(Boolean).join(" ") || tr.text("contact.noName");
+        const given = [h.firstName, h.lastName].filter(Boolean).join(" ");
+        const name = given || tr.text("contact.noName");
         const phone = h.phone ? formatPhone(h.phone) : null;
         return (
           <li key={h.id}>
             <Button variant="ghost" className="w-full min-w-0 justify-start" disabled={busy} onClick={() => onPick(h.id)}>
-              <span className="min-w-0 truncate"><HighlightedText text={name} ranges={nameRanges(name, query)} /></span>
+              <span className="min-w-0 truncate"><HighlightedText text={name} ranges={given ? nameRanges(name, query) : []} /></span>
               {phone ? <span className="shrink-0 tabular-nums text-muted-foreground"><HighlightedText text={phone} ranges={phoneRanges(phone, query)} /></span> : null}
             </Button>
           </li>

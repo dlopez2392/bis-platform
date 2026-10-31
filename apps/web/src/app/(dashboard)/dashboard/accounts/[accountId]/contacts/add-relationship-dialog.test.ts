@@ -117,6 +117,13 @@ describe("the find picker highlights the matched letters and digits (plan Task 8
     expect(html).toMatch(/<mark data-search-hit="true"[^>]*>Ramírez<\/mark>/);
   });
 
+  it("a nameless hit's stand-in '(no name)' marks nothing (final review M-4a; mutation: highlight the stand-in -> FAILS)", () => {
+    const hits = [{ id: ANA, firstName: null, lastName: null, phone: null }];
+    const html = render({ mode: "find", term: "name", answer: { term: "name", hits } });
+    expect(html).not.toContain("<mark");
+    expect(html).toContain(m["relationships.noName"]);
+  });
+
   it("marks the matched digits of a hit's phone (mutation: render the row's phone without HighlightedText -> FAILS)", () => {
     const hits = [{ id: ANA, firstName: "Ana", lastName: "Ramírez", phone: "(956) 555-0199" }];
     const html = render({ mode: "find", term: "0199", answer: { term: "0199", hits } });

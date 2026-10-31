@@ -48,7 +48,8 @@ export function HeldSearchResults({
           disabled={pending}
           onClick={() => onPick(hit)}
         >
-          <span><HighlightedText text={hit.label} ranges={nameRanges(hit.label, query)} /></span>
+          {/* The route's stand-in for a nameless customer is not their name: nothing in it is marked (final review M-4a). */}
+          <span><HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} /></span>
           {hit.sublabel ? (
             <span className="text-xs text-muted-foreground">
               <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} />

@@ -10,7 +10,7 @@ import { m } from "@/lib/messages";
  *  (only the two fields this UI shows). `sublabel` is that route's email-or-
  *  phone line — rendered under the name so two contacts who share a first
  *  and last name are never offered as though they were one. */
-export type SearchHitLite = { id: string; label: string; sublabel: string | null };
+export type SearchHitLite = { id: string; label: string; sublabel: string | null; unnamed?: true };
 
 export type HeldSearchState =
   | { status: "idle" }
