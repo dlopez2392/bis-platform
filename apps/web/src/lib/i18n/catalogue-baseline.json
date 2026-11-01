@@ -563,13 +563,7 @@
   "website.updatedOn",
   "website.waiting.body",
   "website.waiting.title",
-  "work.linesDown.action",
-  "work.linesDown.many",
-  "work.linesDown.one",
   "work.row.count",
   "work.row.countOne",
-  "work.row.overdue",
-  "work.usageStale.action",
-  "work.usageStale.many",
-  "work.usageStale.one"
+  "work.row.overdue"
 ]

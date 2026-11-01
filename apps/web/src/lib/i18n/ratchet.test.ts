@@ -244,12 +244,27 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect([...agencyOnlyFiles(imports)]).toEqual([`${A}page.tsx`]);
   });
 
-  it("...and neither is what that file imports in turn (mutation: follow one level of imports only → FAILS)", () => {
+  it("...and neither is what that file imports in turn, through a shared component (mutation: follow one level of imports only → FAILS)", () => {
     const imports = new Map<string, string[]>([
       [`${A}card.tsx`, [`${A}helper.ts`]], [`${A}helper.ts`, []],
       ["src/components/x.tsx", [`${A}card.tsx`]],
+      ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", ["src/components/x.tsx"]],
     ]);
     expect([...agencyOnlyFiles(imports)]).toEqual([]);
+  });
+
+  it("a shared component that only agency routes render is agency-only (mutation: treat every file outside the routes as a client way in → FAILS)", () => {
+    const imports = new Map<string, string[]>([
+      ["src/app/(dashboard)/dashboard/work/page.tsx", ["src/components/line-down-banner.tsx"]],
+      ["src/components/line-down-banner.tsx", []],
+      ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", []],
+    ]);
+    expect([...agencyOnlyFiles(imports)].sort()).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx", "src/components/line-down-banner.tsx"]);
+  });
+
+  it("a file nothing reaches is not agency-only (mutation: return every file the client side does not reach → FAILS)", () => {
+    const imports = new Map<string, string[]>([["src/lib/orphan.ts", []], ["src/app/(dashboard)/dashboard/work/page.tsx", []]]);
+    expect([...agencyOnlyFiles(imports)]).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx"]);
   });
 
   it("the routes include the five in-account agency screens (mutation: drop checklist from the pattern → FAILS by name)", () => {

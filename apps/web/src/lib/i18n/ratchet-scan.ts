@@ -278,16 +278,10 @@ export function scanSources(baseDir: string, catalogueKeys: ReadonlySet<string>)
   return scan;
 }
 
-/** Files under an agency-only route that nothing outside those routes
- *  reaches through imports. A file a client screen imports, or one that such
- *  a file imports in turn, is client-reachable and is NOT agency-only. */
-export function agencyOnlyFiles(
-  imports: ReadonlyMap<string, readonly string[]>,
-  routes: readonly RegExp[] = AGENCY_ONLY_ROUTES,
-): Set<string> {
-  const inRoute = (f: string) => routes.some((re) => re.test(f));
-  const reached = new Set<string>();
-  const queue = [...imports.keys()].filter((f) => !inRoute(f));
+/** The files `entries` reach through imports, the entries included. */
+function closure(imports: ReadonlyMap<string, readonly string[]>, entries: readonly string[]): Set<string> {
+  const reached = new Set(entries);
+  const queue = [...entries];
   while (queue.length > 0) {
     const f = queue.pop()!;
     for (const dep of imports.get(f) ?? []) {
@@ -296,7 +290,26 @@ export function agencyOnlyFiles(
       queue.push(dep);
     }
   }
-  return new Set([...imports.keys()].filter((f) => inRoute(f) && !reached.has(f)));
+  return reached;
+}
+
+/** Every file under `src/app` is a way in: a page, a layout, a route
+ *  handler (crons and webhooks included). A file is client-reachable when a
+ *  way in outside the agency routes reaches it through imports, and
+ *  agency-only when only agency routes do: so ACCT/settings/ files that
+ *  ACCT/documents imports are client-reachable, and a banner in
+ *  components/ that only /dashboard/work renders is agency-only. A file
+ *  nothing reaches (dead, or reached only from outside the scan, such as
+ *  src/proxy.ts) is NOT agency-only: nothing proves a client cannot see it. */
+export function agencyOnlyFiles(
+  imports: ReadonlyMap<string, readonly string[]>,
+  routes: readonly RegExp[] = AGENCY_ONLY_ROUTES,
+): Set<string> {
+  const inRoute = (f: string) => routes.some((re) => re.test(f));
+  const ways = [...imports.keys()].filter((f) => f.startsWith("src/app/"));
+  const client = closure(imports, ways.filter((f) => !inRoute(f)));
+  const agency = closure(imports, ways.filter(inRoute));
+  return new Set([...agency].filter((f) => !client.has(f)));
 }
 
 /** Keys every literal reference to which sits in an agency-only file. A key
