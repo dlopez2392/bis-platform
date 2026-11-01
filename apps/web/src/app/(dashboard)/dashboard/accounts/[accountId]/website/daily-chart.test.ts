@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DailyChart } from "./daily-chart";
+import { DailyChart, dayTooltipText } from "./daily-chart";
+import { LocaleProvider } from "@/components/locale-provider";
+
+/** Same shape as topbar-presence.test.ts's own `renderLocale` helper: a
+ *  real `LocaleProvider`, not a prop DailyChart doesn't take — it is a
+ *  client component that reads `useLocale()` directly. */
+function renderEs<P extends object>(element: (props: P) => React.ReactElement, props: P) {
+  return renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as never, createElement(element, props)));
+}
 
 const DAYS = [
   { day: "2026-09-01", visitors: 100, pageviews: 300, isWeekend: false },
@@ -128,5 +136,43 @@ describe("DailyChart second series (spec §5): same axis, --accent-2, mono legen
     // Both swatches are the mockup's 10px rounded SQUARE — no circle.
     expect(legend.match(/size-2\.5 rounded-\[3px\]/g)?.length).toBe(2);
     expect(legend).not.toContain("rounded-full");
+  });
+});
+
+// S-10 T2 (spec §3.1 row 13): the per-bar aria-label was a raw template
+// literal — unseen by the JSX ratchet (which only counts a string-literal
+// attribute, not a template expression), English regardless of the
+// reader's locale — and the axis label stripped the year by matching a
+// COMMA, which the Spanish date format never has. `useLocale()` reads a
+// real `LocaleProvider` (DailyChart is already "use client"), so no new
+// prop reaches it; every test above renders outside one and stays English.
+describe("DailyChart in Spanish (usted register)", () => {
+  it("every bar's aria-label renders in Spanish, with the year still named (unlike the axis label below) and es-US digit grouping (mutation: leave the template literal English → FAILS)", () => {
+    const html = renderEs(DailyChart, { days: DAYS });
+    // "sept" (not "sep"), measured on this machine (Node 24.13.0/ICU 77.1) —
+    // see day-label.test.ts's own note on month-abbreviation irregularities.
+    expect(html).toContain('aria-label="1 sept 2026: 100 visitantes, 300 páginas vistas"');
+  });
+
+  it("the axis label strips the year even with no comma in the date string (mutation: match only a leading comma → FAILS, '1 sept 2026' stays)", () => {
+    const html = renderEs(DailyChart, { days: DAYS });
+    const axis = html.match(/data-slot="chart-axis"[\s\S]*?<\/div>\s*<\/div>/)![0]!;
+    expect(axis).toContain("1 sept");
+    expect(axis).not.toContain("2026");
+  });
+
+  it("the legend's default primary label is Visitors' Spanish twin when the caller supplies none (mutation: leave the default pinned to English → FAILS)", () => {
+    const html = renderEs(DailyChart, { days: DAYS, secondSeries: { label: "x", values: [1, 2, 3, 4] } });
+    const legend = html.match(/data-slot="chart-legend"[\s\S]*?<\/div>/)![0]!;
+    expect(legend).toContain("Visitantes");
+    expect(legend).not.toContain(">Visitors<");
+  });
+
+  // dayTooltipText backs the hover/focus tooltip, which `active` gates on —
+  // untestable through a static render (no event ever fires). Tested
+  // directly instead.
+  it("dayTooltipText renders Spanish with es-US digit grouping (mutation: hard-code en-US in the .toLocaleString calls → FAILS)", () => {
+    expect(dayTooltipText({ day: "2026-09-01", visitors: 1234, pageviews: 300, isWeekend: false }, "es"))
+      .toBe("1,234 visitantes · 300 páginas vistas");
   });
 });

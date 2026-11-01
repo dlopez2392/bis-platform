@@ -2,10 +2,24 @@
 
 import { useState } from "react";
 import { m } from "@/lib/messages";
-import { formatDateUTC } from "@/lib/format";
+import { t } from "@/lib/i18n/t";
+import { formatDateUTC, tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
+import { useLocale } from "@/components/locale-provider";
 
 type Day = { day: string; visitors: number; pageviews: number; isWeekend: boolean };
 export type SecondSeries = { label: string; values: number[] };
+
+/** "{visitors} visitors · {pageviews} pageviews" (es: "{visitors}
+ *  visitantes · {pageviews} páginas vistas") — the hover/focus tooltip's
+ *  text. Exported and pure so it has a test seam that doesn't need the
+ *  hover/focus state `active` gates on (this repo's test convention is
+ *  `renderToStaticMarkup`, which never fires a mouse or focus event). */
+export function dayTooltipText(day: Day, locale: Locale): string {
+  return t(m, "website.chart.tooltip", locale, {
+    visitors: day.visitors.toLocaleString(tag(locale)), pageviews: day.pageviews.toLocaleString(tag(locale)),
+  });
+}
 
 /**
  * Thin accent-gradient bars, 4px tops and 2px feet, weekend bars muted
@@ -18,15 +32,24 @@ export type SecondSeries = { label: string; values: number[] };
  * --accent-2 on the SAME axis — its y is scaled by the bars' max, never its
  * own — with a mono legend naming both. Never a second axis.
  */
-export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.visitors"] }: {
+export function DailyChart({ days, secondSeries, primaryLabel }: {
   days: Day[];
   secondSeries?: SecondSeries;
-  /** What the BARS are. Defaults to Visitors because both callers plot
-   *  visitors today — but the chart is generic and must not name its
-   *  caller's domain, the way `secondSeries` already carries its own label. */
+  /** What the BARS are. Defaults to Visitors (in the reader's own locale)
+   *  because both callers plot visitors today — but the chart is generic
+   *  and must not name its caller's domain, the way `secondSeries` already
+   *  carries its own label. */
   primaryLabel?: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
+  // S-10 T2: this component is already a client component (the bars drive
+  // React hover/focus state), so it reads its own locale from context
+  // rather than taking it as a prop every caller would have to thread
+  // through — the account dashboard's own already-converted parts
+  // (calls-chart-card.tsx) take an explicit prop instead because they are
+  // server components with no context to read.
+  const locale = useLocale();
+  const label = primaryLabel ?? t(m, "website.tile.visitors", locale);
   // ONE axis for both series: the scale is the larger of the bars' max and
   // the second series' max. Scaling by the bars alone clipped the line flat
   // at the top whenever pageviews ÷ 3 exceeded visitors (any site averaging
@@ -44,7 +67,11 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
   const hotIndex = days.some((d) => d.visitors > 0)
     ? days.reduce((best, d, i) => (d.visitors > days[best]!.visitors ? i : best), 0)
     : -1;
-  const shortDate = (day: string) => formatDateUTC(day).replace(/,.*$/, "");
+  // S-10 T2: this used to strip the year by matching a trailing COMMA
+  // ("Sep 1, 2026" → "Sep 1"), but `formatDateUTC`'s Spanish rendering has
+  // no comma before the year ("1 sept 2026") — an optional comma, then
+  // whitespace, then the four digits, strips either form.
+  const shortDate = (day: string) => formatDateUTC(day, locale).replace(/,?\s*\d{4}$/, "");
   const xAt = (i: number) => ((i + 0.5) / days.length) * 100;
   const yAt = (v: number) => 100 - Math.min(100, Math.max(0, (v / max) * 100));
   const points = secondSeries
@@ -60,9 +87,9 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
       {active !== null ? (
         <div role="tooltip" className="pointer-events-none absolute -top-1 z-10 rounded-[7px] border border-[var(--tip-line)] glass-overlay px-2 py-[5px] font-mono text-[10.5px]"
              style={{ left: `${xAt(active)}%`, transform: "translateX(-50%)" }}>
-          <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{formatDateUTC(days[active]!.day)}</span>
+          <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{formatDateUTC(days[active]!.day, locale)}</span>
           <span className="text-card-foreground">
-            {m["website.chart.tooltip"].replace("{visitors}", days[active]!.visitors.toLocaleString("en-US")).replace("{pageviews}", days[active]!.pageviews.toLocaleString("en-US"))}
+            {dayTooltipText(days[active]!, locale)}
           </span>
         </div>
       ) : null}
@@ -83,7 +110,10 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
             <button
               type="button"
               data-slot="chart-bar"
-              aria-label={`${formatDateUTC(d.day)}: ${d.visitors} visitors, ${d.pageviews} pageviews`}
+              aria-label={t(m, "website.chart.barAriaLabel", locale, {
+                date: formatDateUTC(d.day, locale),
+                visitors: d.visitors.toLocaleString(tag(locale)), pageviews: d.pageviews.toLocaleString(tag(locale)),
+              })}
               onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)} onBlur={() => setActive(null)}
               className={`relative w-full rounded-t-[4px] rounded-b-[2px] outline-none transition-[opacity,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${d.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent"} ${i === hotIndex ? "bar-hot" : ""} ${active !== null && active !== i ? "opacity-70" : ""}`}
               style={{ height: `${Math.max(2, (d.visitors / max) * 100)}%` }}
@@ -114,7 +144,7 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
       </div>
       {secondSeries ? (
         <div data-slot="chart-legend" className="mt-2 flex items-center gap-[14px] font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-          <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent)]" />{primaryLabel}</span>
+          <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent)]" />{label}</span>
           <span className="flex items-center gap-1.5"><span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--accent-2)]" />{secondSeries.label}</span>
         </div>
       ) : null}
