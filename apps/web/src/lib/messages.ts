@@ -524,10 +524,21 @@ export const m = {
   // the same replace-by-hand convention as the tooltip strings above.
   "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. {name} flagged {count} {unit} as likely spam.",
   "dashboard.calls.screenedSpam.es": "Ninguna llamada atendida en los últimos 14 días. {name} marcó {count} {unit} como probable spam.",
+  // I-1 (review): English's "hung up" does not conjugate, but Spanish's
+  // "colgaron" does — it was invariant even for exactly one caller ("1
+  // persona colgaron"). `${key}One` is the plural pair's singular twin
+  // (t.ts's `plural()`, selected by the ABANDONED count, which is the one
+  // this verb agrees with — the spam count in screenedBoth governs "marcó",
+  // whose subject is {name}, not {spamCount}). English text is identical
+  // between the two forms (its own verb never changes); only the .es differs.
   "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before {name} could help.",
   "dashboard.calls.screenedAbandoned.es": "Ninguna llamada atendida en los últimos 14 días. {count} {unit} colgaron antes de que {name} pudiera ayudar.",
+  "dashboard.calls.screenedAbandonedOne": "No calls answered in the last 14 days. {count} {unit} hung up before {name} could help.",
+  "dashboard.calls.screenedAbandonedOne.es": "Ninguna llamada atendida en los últimos 14 días. {count} {unit} colgó antes de que {name} pudiera ayudar.",
   "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. {name} flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before {name} could help.",
   "dashboard.calls.screenedBoth.es": "Ninguna llamada atendida en los últimos 14 días. {name} marcó {spamCount} {spamUnit} como probable spam, y {otherCount} {otherUnit} colgaron antes de que {name} pudiera ayudar.",
+  "dashboard.calls.screenedBothOne": "No calls answered in the last 14 days. {name} flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before {name} could help.",
+  "dashboard.calls.screenedBothOne.es": "Ninguna llamada atendida en los últimos 14 días. {name} marcó {spamCount} {spamUnit} como probable spam, y {otherCount} {otherUnit} colgó antes de que {name} pudiera ayudar.",
   "dashboard.calls.unit.caller": "caller",
   "dashboard.calls.unit.caller.es": "persona",
   "dashboard.calls.unit.callers": "callers",

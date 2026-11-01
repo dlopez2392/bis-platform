@@ -365,6 +365,18 @@ describe("CallsChartCard in Spanish (usted register)", () => {
     expect(html).toContain("Fines de semana atenuados");
   });
 
+  // I-4 (review): scoped to the axis's own data-slot, same as
+  // daily-chart.test.ts's own axis assertion — a bare html.toContain("18
+  // ago") would also pass if ONLY the tooltip (not the axis) carried the
+  // locale, since the tooltip already contains "18 ago" too.
+  it("the axis itself (not just the tooltip) renders every label in Spanish, with no English month name left in it (mutation: drop locale from the axis's shortDayLabel call → FAILS)", () => {
+    const html = render({ locale: "es" });
+    const axis = html.match(/data-slot="chart-axis"[\s\S]*?<\/div>/)![0]!;
+    expect(axis).toContain("18 ago");
+    expect(axis).toContain("31 ago");
+    expect(axis).not.toMatch(/\bAug\b/);
+  });
+
   it("the mini table's clock renders in es-US wording (mutation: leave the Intl.DateTimeFormat pinned to en-US → FAILS)", () => {
     const html = render({ timezone: "America/Chicago", locale: "es" });
     expect(html).toContain("2:15 p.m.");
@@ -375,5 +387,22 @@ describe("CallsChartCard in Spanish (usted register)", () => {
     expect(both).toContain(
       "Ninguna llamada atendida en los últimos 14 días. Max marcó 1 llamada como probable spam, y 2 personas colgaron antes de que Max pudiera ayudar.",
     );
+  });
+
+  // I-1 (review): "colgaron" (plural) was invariant even when only ONE
+  // caller hung up — "1 persona colgaron" (mutation: revert to tr.text →
+  // FAILS, "colgaron" for count 1).
+  it("the abandoned-only screened state conjugates the verb for ONE caller, not just the unit noun", () => {
+    const one = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 1, locale: "es" });
+    expect(one).toContain("1 persona colgó antes de que Sofía pudiera ayudar.");
+    expect(one).not.toContain("colgaron");
+    const two = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 2, locale: "es" });
+    expect(two).toContain("2 personas colgaron antes de que Sofía pudiera ayudar.");
+  });
+
+  it("the BOTH screened state also conjugates the verb for exactly ONE abandoned caller", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 3, abandonedCount: 1, locale: "es" });
+    expect(html).toContain("1 persona colgó antes de que Sofía pudiera ayudar.");
+    expect(html).not.toContain("1 persona colgaron");
   });
 });

@@ -181,7 +181,9 @@ function callerUnit(count: number, tr: Tr): string {
  *  old by-hand `withName` helper existed to guarantee. */
 function screenedCopy(state: { spamCount: number; abandonedCount: number }, name: string, tr: Tr): string {
   if (state.spamCount > 0 && state.abandonedCount > 0) {
-    return tr.text("dashboard.calls.screenedBoth", {
+    // I-1 (review): plural-keyed on the ABANDONED count — that is the verb
+    // "hung up"/"colgó(aron)" agrees with; "marcó" agrees with {name}.
+    return tr.count("dashboard.calls.screenedBoth", state.abandonedCount, {
       name,
       spamCount: state.spamCount, spamUnit: callsUnit(state.spamCount, tr),
       otherCount: state.abandonedCount, otherUnit: callerUnit(state.abandonedCount, tr),
@@ -190,7 +192,9 @@ function screenedCopy(state: { spamCount: number; abandonedCount: number }, name
   if (state.spamCount > 0) {
     return tr.text("dashboard.calls.screenedSpam", { name, count: state.spamCount, unit: callsUnit(state.spamCount, tr) });
   }
-  return tr.text("dashboard.calls.screenedAbandoned", { name, count: state.abandonedCount, unit: callerUnit(state.abandonedCount, tr) });
+  return tr.count("dashboard.calls.screenedAbandoned", state.abandonedCount, {
+    name, count: state.abandonedCount, unit: callerUnit(state.abandonedCount, tr),
+  });
 }
 
 /**
