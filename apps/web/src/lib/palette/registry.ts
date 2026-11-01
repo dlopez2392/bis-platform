@@ -1,5 +1,7 @@
 import { buildNavGroups } from "@/lib/nav-groups";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type PaletteGroup = "navigation" | "settings" | "actions";
 
@@ -33,25 +35,25 @@ export type PaletteEntry = {
  * `requireAgencyOnlyAccountAccess` (settings/page.tsx), so every entry here is
  * agency-only.
  */
-const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[] = [
-  { anchor: "client-access", label: m["palette.settings.clientAccess"], keywords: ["login", "invite", "portal"] },
-  { anchor: "sending-address", label: m["palette.settings.sendingAddress"], keywords: ["email", "from", "domain", "never record", "block", "ignore sender"] },
-  { anchor: "custom-fields", label: m["palette.settings.customFields"], keywords: ["field", "crm"] },
-  { anchor: "custom-values", label: m["palette.settings.customValues"], keywords: ["value", "variable", "merge"] },
-  { anchor: "alert-phone", label: m["palette.settings.alertPhone"], keywords: ["sms", "text", "notify", "lead alert"] },
-  { anchor: "billing", label: m["palette.settings.billing"], keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment"] },
+const SETTINGS_SECTIONS: { anchor: string; labelKey: MessageKey; keywords: string[] }[] = [
+  { anchor: "client-access", labelKey: "palette.settings.clientAccess", keywords: ["login", "invite", "portal"] },
+  { anchor: "sending-address", labelKey: "palette.settings.sendingAddress", keywords: ["email", "from", "domain", "never record", "block", "ignore sender"] },
+  { anchor: "custom-fields", labelKey: "palette.settings.customFields", keywords: ["field", "crm"] },
+  { anchor: "custom-values", labelKey: "palette.settings.customValues", keywords: ["value", "variable", "merge"] },
+  { anchor: "alert-phone", labelKey: "palette.settings.alertPhone", keywords: ["sms", "text", "notify", "lead alert"] },
+  { anchor: "billing", labelKey: "palette.settings.billing", keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment"] },
   // D-080: three real cards on this same page (settings/page.tsx's
   // <BrandingPanel>, <WeeklyReportCard id="weekly-report">, <LinkSiteCard
   // id="website">) had no entry here at all.
-  { anchor: "branding", label: m["palette.settings.branding"], keywords: ["logo", "colors", "theme", "brand name"] },
-  { anchor: "weekly-report", label: m["palette.settings.weeklyReport"], keywords: ["email report", "monday", "recipients"] },
-  { anchor: "website", label: m["palette.settings.website"], keywords: ["analytics", "traffic", "vercel", "domain", "link site"] },
+  { anchor: "branding", labelKey: "palette.settings.branding", keywords: ["logo", "colors", "theme", "brand name"] },
+  { anchor: "weekly-report", labelKey: "palette.settings.weeklyReport", keywords: ["email report", "monday", "recipients"] },
+  { anchor: "website", labelKey: "palette.settings.website", keywords: ["analytics", "traffic", "vercel", "domain", "link site"] },
   // S-07 2c: the required-documents list (settings/required-documents-card.tsx)
-  { anchor: "required-documents", label: m["palette.settings.requiredDocuments"], keywords: ["documents", "checklist", "required", "missing", "vault", "documentos", "requeridos"] },
+  { anchor: "required-documents", labelKey: "palette.settings.requiredDocuments", keywords: ["documents", "checklist", "required", "missing", "vault", "documentos", "requeridos"] },
   // Item 8a-1: the agency's AI card (settings/ai-card.tsx, #ai).
-  { anchor: "ai", label: m["palette.settings.ai"], keywords: ["ai", "budget", "spend", "switch", "summaries", "suggestions", "ia", "presupuesto"] },
+  { anchor: "ai", labelKey: "palette.settings.ai", keywords: ["ai", "budget", "spend", "switch", "summaries", "suggestions", "ia", "presupuesto"] },
   // S-53: the company's trade (settings/trade-card.tsx, #trade).
-  { anchor: "trade", label: m["palette.settings.trade"], keywords: ["trade", "industry", "business type", "vetting", "giro", "restaurant", "sofia", "web chat"] },
+  { anchor: "trade", labelKey: "palette.settings.trade", keywords: ["trade", "industry", "business type", "vetting", "giro", "restaurant", "sofia", "web chat"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this
@@ -108,9 +110,15 @@ function keywordsFor(href: string, base: string | null): string[] {
  * agency top level where there is no account in scope.
  */
 export function buildPaletteEntries(
-  base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false,
+  base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false, locale: Locale = "en",
 ): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
+  // S-10: the label is in the reader's language; in Spanish its English
+  // twin joins the keywords, so a bilingual owner who types "contacts" still
+  // finds Contactos. (Spanish KEYWORDS for every entry are F-095.)
+  const label = (key: MessageKey) => t(m, key, locale);
+  const words = (key: MessageKey, keywords: string[]) =>
+    locale === "en" ? keywords : [...keywords, m[key].toLowerCase()];
 
   // A Technician (F-085 part 1, spec §9): the nav already leaves out every
   // route they cannot enter, so deriving from it leaves them out here too.
@@ -119,10 +127,10 @@ export function buildPaletteEntries(
       entries.push({
         kind: "href",
         id: `nav:${item.href}`,
-        label: m[item.labelKey],
+        label: label(item.labelKey),
         group: "navigation",
         agencyOnly: false, // buildNavGroups already withheld agency-only items
-        keywords: keywordsFor(item.href, base),
+        keywords: words(item.labelKey, keywordsFor(item.href, base)),
         href: item.href,
       });
     }
@@ -132,7 +140,7 @@ export function buildPaletteEntries(
   // account's, so it is offered to every caller, with or without an account
   // in scope. Not a nav item (it lives in the user menu), so registered here.
   entries.push({
-    kind: "href", id: "nav:preferences", label: m["prefs.palette"], group: "navigation", agencyOnly: false,
+    kind: "href", id: "nav:preferences", label: label("prefs.palette"), group: "navigation", agencyOnly: false,
     keywords: ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my"],
     href: "/dashboard/preferences",
   });
@@ -146,7 +154,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href",
       id: "nav:team",
-      label: m["nav.team"],
+      label: label("nav.team"),
       group: "navigation",
       agencyOnly: false,
       keywords: ["team", "staff", "people", "invite", "users", "logins", "employees"],
@@ -159,7 +167,7 @@ export function buildPaletteEntries(
   // Settings' card (SETTINGS_SECTIONS); Staff and a Technician get neither.
   if (base && !isAgency && isOwner) {
     entries.push({
-      kind: "href", id: "nav:required-documents", label: m["palette.settings.requiredDocuments"], group: "navigation", agencyOnly: false,
+      kind: "href", id: "nav:required-documents", label: label("palette.settings.requiredDocuments"), group: "navigation", agencyOnly: false,
       keywords: ["documents", "checklist", "required", "missing", "documentos", "requeridos"],
       href: `${base}/documents#required-documents`,
     });
@@ -174,7 +182,7 @@ export function buildPaletteEntries(
   // every other entry in this file).
   if (base && (isAgency || isOwner)) {
     entries.push({
-      kind: "href", id: "nav:bis-access", label: m["accessLog.title"], group: "navigation", agencyOnly: false,
+      kind: "href", id: "nav:bis-access", label: label("accessLog.title"), group: "navigation", agencyOnly: false,
       keywords: ["bis", "access", "log", "visits", "who looked", "acceso", "registro", "visitas"],
       href: `${base}/team#bis-access`,
     });
@@ -184,7 +192,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href",
       id: "nav:settings",
-      label: m["nav.settings"],
+      label: label("nav.settings"),
       group: "navigation",
       agencyOnly: true,
       keywords: ["configuration", "preferences"],
@@ -193,7 +201,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href",
       id: "nav:setup",
-      label: m["nav.setup"],
+      label: label("nav.setup"),
       group: "navigation",
       agencyOnly: true,
       keywords: ["wizard", "activation", "onboarding", "go live"],
@@ -213,7 +221,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href",
       id: "settings:team",
-      label: m["palette.settings.team"],
+      label: label("palette.settings.team"),
       group: "navigation",
       agencyOnly: true,
       keywords: ["team", "staff", "invite", "logins", "people"],
@@ -223,10 +231,10 @@ export function buildPaletteEntries(
       entries.push({
         kind: "href",
         id: `settings:${section.anchor}`,
-        label: section.label,
+        label: label(section.labelKey),
         group: "settings",
         agencyOnly: true,
-        keywords: section.keywords,
+        keywords: words(section.labelKey, section.keywords),
         href: `${base}/settings#${section.anchor}`,
       });
     }
@@ -235,7 +243,7 @@ export function buildPaletteEntries(
   entries.push({
     kind: "action",
     id: "action:toggle-theme",
-    label: m["palette.action.toggleTheme"],
+    label: label("palette.action.toggleTheme"),
     group: "actions",
     agencyOnly: false,
     keywords: ["dark", "light", "appearance", "theme"],

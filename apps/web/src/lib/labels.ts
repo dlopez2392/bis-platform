@@ -3,38 +3,57 @@ import type { Locale } from "./i18n/locale";
 import { t } from "./i18n/t";
 import { m, type MessageKey } from "./messages";
 
-/** Opportunity `status` column -> display label. Shared so the pipeline drawer,
+// S-10 T1: each table maps a DB value to its catalogue KEY, so a label can be
+// read in either language (`labelIn`); the English `*_LABEL` constants are
+// kept, built from the same keys, for the callers that have not moved yet.
+
+/** Opportunity `status` column -> its key. Shared so the pipeline drawer,
  *  contact detail page, and activity timeline never drift on wording (the raw
  *  DB value is lowercase, e.g. "won" — never render it directly). */
-export const STATUS_LABEL: Record<string, string> = {
-  open: m["pipeline.status.open"],
-  won: m["pipeline.status.won"],
-  lost: m["pipeline.status.lost"],
-};
+export const OPPORTUNITY_STATUS_KEY = {
+  open: "pipeline.status.open",
+  won: "pipeline.status.won",
+  lost: "pipeline.status.lost",
+} as const satisfies Record<string, MessageKey>;
 
-/** Account `status` column -> display label. */
-export const ACCOUNT_STATUS_LABEL: Record<string, string> = {
-  active: m["accounts.status.active"],
-  paused: m["accounts.status.paused"],
-  archived: m["accounts.status.archived"],
-};
+/** Account `status` column -> its key. */
+export const ACCOUNT_STATUS_KEY = {
+  active: "accounts.status.active",
+  paused: "accounts.status.paused",
+  archived: "accounts.status.archived",
+} as const satisfies Record<string, MessageKey>;
 
-/** Message `status` column -> display label. */
-export const MESSAGE_STATUS_LABEL: Record<string, string> = {
-  queued: m["conversations.status.queued"],
-  sent: m["conversations.status.sent"],
-  delivered: m["conversations.status.delivered"],
-  opened: m["conversations.status.opened"],
-  bounced: m["conversations.status.bounced"],
-  failed: m["conversations.status.failed"],
-};
+/** Message `status` column -> its key. */
+export const MESSAGE_STATUS_KEY = {
+  queued: "conversations.status.queued",
+  sent: "conversations.status.sent",
+  delivered: "conversations.status.delivered",
+  opened: "conversations.status.opened",
+  bounced: "conversations.status.bounced",
+  failed: "conversations.status.failed",
+} as const satisfies Record<string, MessageKey>;
 
-/** Form `status` column -> display label. */
-export const FORM_STATUS_LABEL: Record<string, string> = {
-  draft: m["forms.status.draft"],
-  published: m["forms.status.published"],
-  archived: m["forms.status.archived"],
-};
+/** Form `status` column -> its key. */
+export const FORM_STATUS_KEY = {
+  draft: "forms.status.draft",
+  published: "forms.status.published",
+  archived: "forms.status.archived",
+} as const satisfies Record<string, MessageKey>;
+
+/** A DB value's label in the reader's language, through the table's key;
+ *  a value the table does not know comes back as itself, the same fallback
+ *  `messageChannelLabel` has always had. */
+export function labelIn(table: Readonly<Record<string, MessageKey>>, value: string, locale: Locale = "en"): string {
+  return Object.hasOwn(table, value) ? t(m, table[value]!, locale) : value;
+}
+
+const english = (table: Readonly<Record<string, MessageKey>>): Record<string, string> =>
+  Object.fromEntries(Object.entries(table).map(([value, key]) => [value, t(m, key, "en")]));
+
+export const STATUS_LABEL: Record<string, string> = english(OPPORTUNITY_STATUS_KEY);
+export const ACCOUNT_STATUS_LABEL: Record<string, string> = english(ACCOUNT_STATUS_KEY);
+export const MESSAGE_STATUS_LABEL: Record<string, string> = english(MESSAGE_STATUS_KEY);
+export const FORM_STATUS_LABEL: Record<string, string> = english(FORM_STATUS_KEY);
 
 /** Message `channel` column -> its catalogue key (S-06 part 3, spec G8), so a label can be read in
  *  either language; exhaustive over the union for the same reason as the map below. */
@@ -58,11 +77,11 @@ const CHANNEL_KEY: Record<NewMessage["channel"], MessageKey> = {
  *  gap. S-06 part 3: these are the English labels; a reader in another
  *  language goes through `messageChannelLabel(channel, locale)`. */
 export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
-  email: m["conversations.channel.email"],
-  form: m["conversations.channel.form"],
-  voice: m["conversations.channel.voice"],
-  sms: m["conversations.channel.sms"],
-  webchat: m["conversations.channel.webchat"],
+  email: t(m, CHANNEL_KEY.email, "en"),
+  form: t(m, CHANNEL_KEY.form, "en"),
+  voice: t(m, CHANNEL_KEY.voice, "en"),
+  sms: t(m, CHANNEL_KEY.sms, "en"),
+  webchat: t(m, CHANNEL_KEY.webchat, "en"),
 };
 
 /** The one place that widens an untyped DB `channel` string against
@@ -76,5 +95,5 @@ export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
  *  still a compile error. S-06 part 3 (spec G8): in the reader's `locale` (English by default, so
  *  every existing caller reads exactly what it did), through the catalogue's `.es` twins. */
 export function messageChannelLabel(channel: string, locale: Locale = "en"): string {
-  return Object.hasOwn(CHANNEL_KEY, channel) ? t(m, CHANNEL_KEY[channel as NewMessage["channel"]], locale) : channel;
+  return labelIn(CHANNEL_KEY, channel, locale);
 }

@@ -73,8 +73,8 @@ export function ThemeToggle() {
       variant="ghost"
       size="icon"
       data-testid="theme-toggle"
-      aria-label={m["theme.toggle"]}
-      title={m["theme.toggle"]}
+      aria-label={t(m, "theme.toggle", locale)}
+      title={t(m, "theme.toggle", locale)}
       onClick={() =>
         toggleTheme(
           resolvedTheme,

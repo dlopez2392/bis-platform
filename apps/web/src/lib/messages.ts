@@ -107,9 +107,13 @@ export const m = {
   // label, not because this string itself differs.
   "shell.brand.es": "BIS",
   "shell.switchAccount": "Switch company",
+  "shell.switchAccount.es": "Cambiar de empresa",
   "shell.searchAccounts": "Search companies…",
+  "shell.searchAccounts.es": "Buscar empresas…",
   "shell.noAccounts": "No companies yet",
+  "shell.noAccounts.es": "Todavía no hay empresas",
   "shell.search": "Search",
+  "shell.search.es": "Buscar",
   "shell.collapse": "Collapse sidebar",
   "shell.collapse.es": "Contraer panel lateral",
   "shell.expand": "Expand sidebar",
@@ -127,6 +131,7 @@ export const m = {
   // clients rename theirs. The caller falls back to "Sofía" only when the
   // persona name is missing or blank.
   "shell.presence.onCall": "{name} · on a call",
+  "shell.presence.onCall.es": "{name} · en una llamada",
   // "the last 7 days", not "this week" (2026-10-26): the count is the
   // dashboard tile's own rolling window (lib/voice/presence.ts).
   "shell.presence.idle": "✓ {count} calls handled in the last 7 days",
@@ -1258,14 +1263,21 @@ export const m = {
   "settings.requiredDocuments.failed.es": "No se pudo guardar la lista. Intente de nuevo.",
 
   "error.title": "Something went wrong",
+  "error.title.es": "Algo salió mal",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
+  "error.body.es": "No pudimos completar esa acción. Es posible que sus cambios no se hayan guardado.",
   "error.retry": "Try again",
+  "error.retry.es": "Intentar de nuevo",
 
   "notFound.title": "Page not found",
+  "notFound.title.es": "No encontramos esta página",
   "notFound.body": "That page doesn't exist or may have moved.",
+  "notFound.body.es": "Esa página no existe o cambió de lugar.",
   "notFound.back": "Back to dashboard",
+  "notFound.back.es": "Volver al panel",
 
   "theme.toggle": "Toggle light and dark mode",
+  "theme.toggle.es": "Cambiar entre modo claro y oscuro",
   // Mis preferencias (F-096, D5): the toggle applies the new mode at once and
   // saves it in the background; this is shown only if that background save
   // fails, so the chosen mode keeps working this visit but may not survive a
@@ -3735,6 +3747,7 @@ export const m = {
   "setup.railLabel": "Setup steps",
   "setup.backToSetup": "Back to setup",
   "setup.progress": "{done} of {total} steps done",
+  "setup.progress.es": "{done} de {total} pasos listos",
   "setup.progressLabel": "Setup progress",
   "setup.nextUp": "Next up",
   "setup.state.done": "Done",
@@ -3890,17 +3903,28 @@ export const m = {
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",
+  "palette.placeholder.es": "Buscar contactos, llamadas, páginas…",
   "palette.searchHint": "Search",
+  "palette.searchHint.es": "Buscar",
   // Two, because the hint has to name the key this machine actually has.
   "palette.shortcut.mac": "⌘K",
+  "palette.shortcut.mac.es": "⌘K",
   "palette.shortcut.other": "Ctrl K",
+  "palette.shortcut.other.es": "Ctrl K",
   "palette.group.navigation": "Go to",
+  "palette.group.navigation.es": "Ir a",
   "palette.group.settings": "Settings",
+  "palette.group.settings.es": "Ajustes",
   "palette.group.actions": "Actions",
+  "palette.group.actions.es": "Acciones",
   "palette.group.contacts": "Contacts",
+  "palette.group.contacts.es": "Contactos",
   "palette.group.calls": "Calls",
+  "palette.group.calls.es": "Llamadas",
   "palette.group.conversations": "Conversations",
+  "palette.group.conversations.es": "Conversaciones",
   "palette.hint": "Keep typing to search your contacts, calls and conversations.",
+  "palette.hint.es": "Siga escribiendo para buscar en sus contactos, llamadas y conversaciones.",
   "palette.empty": "Nothing matches “{query}”.",
   "palette.empty.es": "Nada coincide con “{query}”.",
   // Names the failure instead of showing an empty list. An empty list would
@@ -3908,21 +3932,32 @@ export const m = {
   "palette.error": "Couldn't search your records just now.",
   "palette.error.es": "No pudimos buscar en sus registros en este momento.",
   "palette.retry": "Try again",
+  "palette.retry.es": "Intentar de nuevo",
   "palette.action.toggleTheme": "Switch between light and dark",
+  "palette.action.toggleTheme.es": "Cambiar entre claro y oscuro",
   // Staff and roles (Task 8): the agency's own ⌘K entry point into this
   // client's team management (registry.ts's own comment on why this is a
   // plain navigation entry, not a SETTINGS_SECTIONS anchor).
   "palette.settings.team": "Team",
   "palette.settings.team.es": "Equipo",
   "palette.settings.clientAccess": "Client access",
+  "palette.settings.clientAccess.es": "Acceso del negocio",
   "palette.settings.sendingAddress": "Sending address",
+  "palette.settings.sendingAddress.es": "Correo de envío",
   "palette.settings.customFields": "Custom fields",
+  "palette.settings.customFields.es": "Campos personalizados",
   "palette.settings.customValues": "Custom values",
+  "palette.settings.customValues.es": "Valores personalizados",
   "palette.settings.alertPhone": "Alert texts",
+  "palette.settings.alertPhone.es": "Textos de aviso",
   "palette.settings.billing": "Billing",
+  "palette.settings.billing.es": "Facturación",
   "palette.settings.branding": "Branding",
+  "palette.settings.branding.es": "Marca",
   "palette.settings.weeklyReport": "Weekly report",
+  "palette.settings.weeklyReport.es": "Reporte semanal",
   "palette.settings.website": "Website",
+  "palette.settings.website.es": "Sitio web",
   "palette.settings.requiredDocuments": "Required documents",
   "palette.settings.requiredDocuments.es": "Documentos requeridos",
 
