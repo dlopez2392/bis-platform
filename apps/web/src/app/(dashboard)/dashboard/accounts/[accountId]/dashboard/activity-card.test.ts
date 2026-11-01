@@ -177,6 +177,21 @@ describe("ActivityCard in Spanish (usted register)", () => {
     expect(html).toContain("Las citas, los clientes potenciales de formularios y los resultados de llamadas aparecen aquí a medida que ocurren.");
   });
 
+  // I-2 (review): OUTCOMES[...].label is `m["calls.outcome.x"]` read ONCE
+  // at module load, always English — tr.text(`calls.outcome.${outcome}`)
+  // reads the SAME already-twinned key in the reader's own locale instead
+  // (mutation: revert to treatment.label → "Resultado de la llamada:
+  // Booked." FAILS, English leaking through).
+  it("call.recorded's outcome renders in Spanish, through the same calls.outcome.* key the Calls list itself twins", () => {
+    const html = renderToStaticMarkup(createElement(ActivityCard, {
+      accountId: "acct1",
+      events: [row({ id: "e1", type: "call.recorded", payload: { callId: "c1", outcome: "booked" } })],
+      now: NOW, personaName: null, locale: "es",
+    }));
+    expect(html).toContain("Resultado de la llamada: Agendó.");
+    expect(html).not.toContain("Booked");
+  });
+
   it("names the account's own receptionist in the forward lines, in Spanish", () => {
     const html = renderToStaticMarkup(createElement(ActivityCard, {
       accountId: "acct1",

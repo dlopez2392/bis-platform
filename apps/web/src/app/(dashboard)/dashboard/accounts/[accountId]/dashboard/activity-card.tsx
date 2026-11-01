@@ -153,10 +153,14 @@ function curate(event: EventRow, personaName: string, tr: Tr): CuratedRow | null
     case "call.recorded": {
       const outcome = typeof payload.outcome === "string" ? (payload.outcome as CallOutcome) : null;
       const treatment = outcome ? OUTCOMES[outcome] : undefined;
-      if (!treatment) return null; // unrecognized outcome — never render it raw
+      if (!treatment || !outcome) return null; // unrecognized outcome — never render it raw
+      // I-2 (review): `treatment.label` is `m["calls.outcome.x"]`, read once
+      // at module load — always English, whatever the reader's locale. The
+      // SAME `calls.outcome.*` key (already twinned by the calls lane) read
+      // through `tr.text` instead, keyed by the outcome itself.
       return {
         key: event.id, icon: Phone, tone: "accent",
-        summary: tr.text("dashboard.activity.callRecorded", { outcome: treatment.label }),
+        summary: tr.text("dashboard.activity.callRecorded", { outcome: tr.text(`calls.outcome.${outcome}`) }),
         createdAtIso: event.createdAt,
       };
     }
@@ -261,7 +265,7 @@ export function ActivityCard({
                 {row.summary}
               </p>
               <span className="shrink-0 pt-1 font-mono text-[9.5px] text-muted-foreground">
-                {relativeTime(row.createdAtIso, nowMs)}
+                {relativeTime(row.createdAtIso, nowMs, locale)}
               </span>
             </div>
           ))}
