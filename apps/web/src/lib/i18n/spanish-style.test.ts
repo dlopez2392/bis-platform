@@ -26,6 +26,10 @@ describe("G4 registerViolations — usted, never tú", () => {
     ["tus", "Tus preferencias"], ["ti", "Solo son para ti."], ["te", "Le escribimos y te contactamos."],
     ["inténtalo", "Recárguela e inténtalo de nuevo."], ["recárgala", "Recárgala, por favor."],
     ["verás", "Verás el tema."], ["agregaste", "Si agregaste la hora…"], ["has", "Aún no has elegido."],
+    // S-10 review M-4.
+    ["estás", "Ya estás dentro."], ["eres", "Ya eres el dueño."], ["podrás", "Podrás verlo mañana."],
+    ["recibirás", "Recibirás un aviso."], ["puedas", "Cuando puedas, revisa."], ["tengas", "Si tengas dudas…"],
+    ["quieras", "Lo que quieras."], ["hayas", "Cuando hayas terminado."], ["tuyo", "Es tuyo."],
   ])("flags %s (mutation: drop it from TU_WORDS → FAILS by name)", (_word, es) => {
     expect(registerViolations(cat(es))).toEqual(["k.es"]);
   });
@@ -36,6 +40,8 @@ describe("G4 registerViolations — usted, never tú", () => {
     ["'existe' (a suffix rule's false hit)", "Esta versión no existe."],
     ["'té' is not 'te'", "Un té para el equipo."],
     ["a {tu} placeholder", "Hola {tu}"],
+    ["'eres' inside 'caracteres'", "Use 120 caracteres como máximo."],
+    ["'eres' inside 'quieres' is still caught by 'quieres', not by 'eres': here none of it", "Mujeres y hombres."],
   ])("passes %s (mutation: match -iste as a suffix, or drop the letter boundaries → FAILS)", (_why, es) => {
     expect(registerViolations(cat(es))).toEqual([]);
   });
@@ -63,6 +69,10 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
       "try-again": ["Try again", "Reintentar"], estimate: ["Estimate", "Presupuesto"], add: ["Add", "Añadir"],
       email: ["Email", "E-mail"], text: ["Text", "SMS"], lead: ["Lead", "Prospecto"], staff: ["Staff", "Personal"],
       owner: ["Owner", "Propietario"], upload: ["Upload", "Cargar"],
+      dashboard: ["Back to dashboard", "Volver al tablero"], deal: ["Open deals", "Tratos abiertos"],
+      appointment: ["Appointment", "Reserva"], reschedule: ["Reschedule", "Reprogramar"],
+      answered: ["Calls answered", "Llamadas contestadas"], trade: ["Business trade", "Oficio del negocio"],
+      "to-do": ["To do", "Tareas"],
     };
     const [en, es] = samples[r.id]!;
     expect(glossaryViolations({ "k": en, "k.es": es }, [r])).toEqual([`k.es|${r.id}`]);
@@ -70,9 +80,15 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
   });
 
   it("every rule has a sample above (mutation: add a rule without one → FAILS)", () => {
-    expect(GLOSSARY_RULES.map((r) => r.id).sort()).toEqual(
-      ["add", "book", "delete", "email", "estimate", "lead", "owner", "settings", "staff", "text", "try-again", "upload"],
-    );
+    expect(GLOSSARY_RULES.map((r) => r.id).sort()).toEqual([
+      "add", "answered", "appointment", "book", "dashboard", "deal", "delete", "email", "estimate", "lead", "owner",
+      "reschedule", "settings", "staff", "text", "to-do", "trade", "try-again", "upload",
+    ]);
+  });
+
+  it("the S-10 review's rules have no breach today, so they are hard: none of them is on the frozen list (mutation: freeze one → FAILS)", () => {
+    const hard = ["dashboard", "deal", "reschedule", "answered", "trade", "to-do"];
+    expect(frozen.glossary.filter((e) => hard.includes(e.split("|")[1]!))).toEqual([]);
   });
 
   it("ignores placeholders, so {email} is not the word 'email' (mutation: test the raw strings → FAILS)", () => {

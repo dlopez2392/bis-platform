@@ -18,6 +18,7 @@
     "aiSettings.loadError.es|settings",
     "aiSettings.saved.es|settings",
     "aiSettings.undone.es|settings",
+    "business.toast.open.es|appointment",
     "business.toast.open.es|book",
     "calendar.agenda.bookedOnline.es|book",
     "calendar.feed.retry.es|try-again",

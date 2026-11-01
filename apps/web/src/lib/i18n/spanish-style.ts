@@ -31,6 +31,11 @@ export const TU_WORDS: readonly string[] = [
   "puedes", "tienes", "quieres", "necesitas", "debes", "sabes", "prefieres", "verás", "elijas", "has",
   "volviste", "agregaste", "elegiste", "escribiste", "cambiaste", "recibiste", "hiciste",
   "recárgala", "inténtalo", "cámbiala", "avísanos", "escríbenos", "llámanos", "dinos", "revísalo", "agrégalo",
+  // S-10 review M-4: present "estar"/"ser", the -rás futures listed one by
+  // one (a "-rás" suffix would also catch "atrás"), present subjunctives, and
+  // the possessive.
+  "estás", "eres", "podrás", "tendrás", "recibirás", "sabrás", "harás", "deberás", "estarás", "encontrarás",
+  "puedas", "tengas", "quieras", "hayas", "tuyo", "tuya", "tuyos", "tuyas",
 ];
 const TU_RE = new RegExp(`(?<![\\p{L}])(${TU_WORDS.join("|")})(?![\\p{L}])`, "iu");
 
@@ -68,6 +73,19 @@ export const GLOSSARY_RULES: readonly GlossaryRule[] = [
   { id: "staff", en: /(?<!agency )\bstaff\b/i, never: /\bpersonal\b/i, use: "empleado" },
   { id: "owner", en: /\bowners?\b/i, never: /\bpropietari/i, use: "dueño" },
   { id: "upload", en: /\bupload/i, never: /\bcarg(ar|ue)\b/i, use: "subir" },
+  // S-10 review I-4: the glossary's other "Never" entries. None has a breach
+  // today, so each is hard from the day it lands. Left out on purpose
+  // (spec §4.3): "servicio" for job (it is also "service", as in Services &
+  // prices), "registro" for record (it is also a log, the access log's word),
+  // "inicio" for dashboard (also "inicio de sesión", sign-in), and
+  // "contacto" for customer in prose (a contact row is legitimately one).
+  { id: "dashboard", en: /\bdashboard\b/i, never: /\btablero\b/i, use: "panel" },
+  { id: "deal", en: /\bdeals?\b/i, never: /\btratos?\b/i, use: "oportunidad" },
+  { id: "appointment", en: /\b(appointments?|bookings?)\b/i, never: /\breserva(s|ci[oó]n|ciones)?\b/i, use: "cita" },
+  { id: "reschedule", en: /\breschedul/i, never: /\breprogram/i, use: "cambiar la cita" },
+  { id: "answered", en: /\banswered\b/i, never: /\bcontestad[oa]s?\b/i, use: "atendida" },
+  { id: "trade", en: /\btrades?\b/i, never: /\boficios?\b/i, use: "giro" },
+  { id: "to-do", en: /\bto do\b/i, never: /\btareas?\b/i, use: "pendientes" },
 ];
 
 /** `key|rule` pairs that break a glossary rule, sorted. */
