@@ -567,6 +567,8 @@ export const m = {
   // legitimately be 1.
   "contacts.import.title": "Import contacts",
   "contacts.import.title.es": "Importar contactos",
+  "contacts.import.intro": "Bring your contacts over from a spreadsheet. Export from anywhere, match the columns, and we will add what is new and update what is not.",
+  "contacts.import.intro.es": "Traiga sus contactos desde una hoja de cálculo. Expórtelos de donde sea, haga coincidir las columnas, y agregaremos lo nuevo y actualizaremos lo que ya existe.",
   "contacts.import.drop": "Choose a CSV file",
   "contacts.import.drop.es": "Elija un archivo CSV",
   "contacts.import.mapTitle": "Match your columns",

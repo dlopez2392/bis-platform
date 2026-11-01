@@ -123,3 +123,26 @@ describe("importContactsBatchAction business writer", () => {
     expect("businessTooLong" in r).toBe(false);
   });
 });
+
+// S-10 T3: the wizard already knows the reader's own language (useLocale, in context from the
+// dashboard shell); passed straight through rather than re-resolved on the server.
+describe("importContactsBatchAction in the reader's language (S-10 T3)", () => {
+  it("too many rows is said in Spanish when the caller passes es (mutation: read m[...] directly -> FAILS)", async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => ({ line: i + 2, values: { email: `a${i}@b.com` } }));
+    const r = await importContactsBatchAction("acct_9", rows, { mapping: { email: "email" }, createTags: false }, "es");
+    expect(r).toEqual({ ok: false, error: "Son demasiadas filas a la vez. Intente con un archivo más pequeño." });
+  });
+
+  it("a thrown write is said in Spanish too", async () => {
+    dbMocks.applyImportBatch.mockRejectedValue(new Error("db down"));
+    const r = await importContactsBatchAction("acct_9",
+      [{ line: 2, values: { email: "a@b.com" } }], { mapping: { email: "email" }, createTags: false }, "es");
+    expect(r).toEqual({ ok: false, error: "Esa importación no se completó. No se cambió nada. Inténtelo de nuevo." });
+  });
+
+  it("defaults to English when no locale is passed", async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => ({ line: i + 2, values: { email: `a${i}@b.com` } }));
+    const r = await importContactsBatchAction("acct_9", rows, { mapping: { email: "email" }, createTags: false });
+    expect(r).toEqual({ ok: false, error: "That's too many rows at once. Try a smaller file." });
+  });
+});

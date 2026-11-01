@@ -4,6 +4,11 @@ import { dbForRequest } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { ImportWizard } from "./import-wizard";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { LocaleProvider } from "@/components/locale-provider";
 
 export const dynamic = "force-dynamic";
 
@@ -23,15 +28,25 @@ export default async function ImportContactsPage(
   { params }: { params: Promise<{ accountId: string }> },
 ) {
   const { accountId } = await params;
-  await requireNotTechnician(accountId);
-  const tags = await listTags(await dbForRequest(), accountId);
+  const access = await requireNotTechnician(accountId);
+  const db = await dbForRequest();
+  // S-10 T3: this screen had no locale at all — resolved the same way the record, pipeline
+  // and To do pages do.
+  const prefs = await getPersonPrefs();
+  const { data: accountRow } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  const tags = await listTags(db, accountId);
 
   return (
-    <>
-      <PageHeader title={m["contacts.import.title"]} />
-      <div className="mx-auto max-w-2xl">
-        <ImportWizard accountId={accountId} existingTags={tags.map((t) => t.name)} />
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
+        <PageHeader title={t(m, "contacts.import.title", locale)} />
+        <div className="mx-auto max-w-2xl">
+          <ImportWizard accountId={accountId} existingTags={tags.map((tag) => tag.name)} />
+        </div>
       </div>
-    </>
+    </LocaleProvider>
   );
 }
