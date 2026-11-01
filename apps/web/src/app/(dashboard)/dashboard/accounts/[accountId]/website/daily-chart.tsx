@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import { formatDateUTC, tag } from "@/lib/format";
+import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
-import { useLocale } from "@/components/locale-provider";
 
 type Day = { day: string; visitors: number; pageviews: number; isWeekend: boolean };
 export type SecondSeries = { label: string; values: number[] };
@@ -15,8 +13,8 @@ export type SecondSeries = { label: string; values: number[] };
  *  text. Exported and pure so it has a test seam that doesn't need the
  *  hover/focus state `active` gates on (this repo's test convention is
  *  `renderToStaticMarkup`, which never fires a mouse or focus event). */
-export function dayTooltipText(day: Day, locale: Locale): string {
-  return t(m, "website.chart.tooltip", locale, {
+export function dayTooltipText(day: Day, locale: Locale, pseudo = false): string {
+  return makeTr(locale, pseudo).text("website.chart.tooltip", {
     visitors: day.visitors.toLocaleString(tag(locale)), pageviews: day.pageviews.toLocaleString(tag(locale)),
   });
 }
@@ -32,7 +30,7 @@ export function dayTooltipText(day: Day, locale: Locale): string {
  * --accent-2 on the SAME axis — its y is scaled by the bars' max, never its
  * own — with a mono legend naming both. Never a second axis.
  */
-export function DailyChart({ days, secondSeries, primaryLabel }: {
+export function DailyChart({ days, secondSeries, primaryLabel, locale = "en", pseudo = false }: {
   days: Day[];
   secondSeries?: SecondSeries;
   /** What the BARS are. Defaults to Visitors (in the reader's own locale)
@@ -40,16 +38,17 @@ export function DailyChart({ days, secondSeries, primaryLabel }: {
    *  and must not name its caller's domain, the way `secondSeries` already
    *  carries its own label. */
   primaryLabel?: string;
+  /** M-1 (review): taken as an explicit prop from the page, same as every
+   *  other converted component on this screen — NOT `useLocale()`, even
+   *  though this is already a client component (the bars drive React
+   *  hover/focus state): the caller (website-section.tsx) already resolves
+   *  both and should be the one source of truth for them. */
+  locale?: Locale;
+  pseudo?: boolean;
 }) {
   const [active, setActive] = useState<number | null>(null);
-  // S-10 T2: this component is already a client component (the bars drive
-  // React hover/focus state), so it reads its own locale from context
-  // rather than taking it as a prop every caller would have to thread
-  // through — the account dashboard's own already-converted parts
-  // (calls-chart-card.tsx) take an explicit prop instead because they are
-  // server components with no context to read.
-  const locale = useLocale();
-  const label = primaryLabel ?? t(m, "website.tile.visitors", locale);
+  const tr = makeTr(locale, pseudo);
+  const label = primaryLabel ?? tr.text("website.tile.visitors");
   // ONE axis for both series: the scale is the larger of the bars' max and
   // the second series' max. Scaling by the bars alone clipped the line flat
   // at the top whenever pageviews ÷ 3 exceeded visitors (any site averaging
@@ -89,7 +88,7 @@ export function DailyChart({ days, secondSeries, primaryLabel }: {
              style={{ left: `${xAt(active)}%`, transform: "translateX(-50%)" }}>
           <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{formatDateUTC(days[active]!.day, locale)}</span>
           <span className="text-card-foreground">
-            {dayTooltipText(days[active]!, locale)}
+            {dayTooltipText(days[active]!, locale, pseudo)}
           </span>
         </div>
       ) : null}
@@ -110,7 +109,7 @@ export function DailyChart({ days, secondSeries, primaryLabel }: {
             <button
               type="button"
               data-slot="chart-bar"
-              aria-label={t(m, "website.chart.barAriaLabel", locale, {
+              aria-label={tr.text("website.chart.barAriaLabel", {
                 date: formatDateUTC(d.day, locale),
                 visitors: d.visitors.toLocaleString(tag(locale)), pageviews: d.pageviews.toLocaleString(tag(locale)),
               })}

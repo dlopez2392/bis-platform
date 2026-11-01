@@ -98,6 +98,8 @@ export function WebsiteSection({
           days={view.days}
           primaryLabel={tr.text("website.tile.visitors")}
           secondSeries={{ label: tr.text("website.chart.series.pageviewsThird"), values: view.days.map((d) => Math.round(d.pageviews / 3)) }}
+          locale={locale}
+          pseudo={pseudo}
         />
         {showPlaces ? <DeviceStrip devices={view.devices} locale={locale} /> : null}
       </section>
