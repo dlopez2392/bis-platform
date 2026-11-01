@@ -107,4 +107,11 @@ describe("HoldingMove's overlays (source pins: Radix mounts none of them in a cl
     expect(src).toContain('<span className="min-w-0 truncate">{p.name}</span>');
     expect(src.match(/tr\.text\(moveOtherKey\(people\.length\)\)/g)?.length).toBe(2);
   });
+
+  // Review fix round, I-1: moveHoldingThreadAction's own answer (the Move toast's {name}) now
+  // depends entirely on this component actually sending its own `locale` — nothing in a static
+  // render (the action is mocked) can catch a regression to a hard-coded "en".
+  it("moveHoldingThreadAction's second argument is `locale`, not a literal (mutation: pass \"en\" instead -> FAILS)", () => {
+    expect(src).toMatch(/moveHoldingThreadAction\(accountId,\s*locale,\s*conversationId,\s*contactId\)/);
+  });
 });
