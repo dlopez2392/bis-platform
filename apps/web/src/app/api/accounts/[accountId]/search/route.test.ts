@@ -358,4 +358,22 @@ describe("account search route — the reader's language for a shared number's h
     expect(body.conversations[0].label).toBe("Número compartido (956) 555-0142");
     expect(body.conversations[0].label).not.toBe("Shared number (956) 555-0142");
   });
+
+  // Review fix round, Minor 2: the account-language read used to be skipped whenever `calls` wasn't
+  // among the requested `types` — fine while only the call hits read `locale`, wrong now that the
+  // conversations hits' holdingLabel reads it too. A client (non-agency) request for
+  // types=conversations alone must still resolve the account's own Spanish.
+  it("a client's types=conversations-only request still reads the account's Spanish for the holding hit (mutation: skip the account read unless types includes calls -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    localeFixture.account = "es";
+    dbMocks.searchConversations.mockResolvedValue([
+      {
+        id: "vH", contactId: "ctH", contactFirstName: "Caller", contactLastName: null,
+        lastMessageAt: "2026-09-01T10:00:00Z", lastMessagePreview: "hi",
+        unreadCount: 0, holdsSharedNumber: true, sharedNumber: "+19565550142",
+      },
+    ]);
+    const body = await (await GET(req("rosa", "conversations"), ctx())).json();
+    expect(body.conversations[0].label).toBe("Número compartido (956) 555-0142");
+  });
 });
