@@ -16,6 +16,12 @@ const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =
   ({ data: { timezone: "America/Chicago" }, error: null }));
 // F-085 part 1: the page now calls requireNotTechnician first (spec §7.1).
 vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: true, role: null, canManage: true }) }));
+// S-10 T5: the page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
+// same reason contacts/page.test.ts and calls/page.test.ts already use.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
+}));
 
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
@@ -39,8 +45,8 @@ vi.mock("@bis/db", () => ({ listForms: () => listFormsMock() }));
 
 const { default: FormsPage } = await import("./page");
 
-function route() {
-  return { params: Promise.resolve({ accountId: "acct1" }) };
+function route(locale?: string) {
+  return { params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale }) };
 }
 
 describe("FormsPage's row timestamp renders in the ACCOUNT's zone, not the runtime's", () => {
@@ -56,5 +62,20 @@ describe("FormsPage's row timestamp renders in the ACCOUNT's zone, not the runti
     // 05:00 UTC is 7:00 AM in Berlin but 12:00 AM (midnight) in Chicago.
     expect(text).toContain("7:00 AM");
     expect(text).not.toContain("12:00 AM");
+  });
+});
+
+// S-10 T5: the whole page used to be bare m[] reads, English regardless of the reader's own
+// choice (`prefs.language`).
+describe("FormsPage — Spanish (S-10 T5)", () => {
+  afterEach(() => { prefsFixture.language = null; });
+
+  it("renders the title and the status chip in Spanish for a Spanish-reading operator (mutation: hard-code English -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const html = renderToStaticMarkup((await FormsPage(route())) as React.ReactElement);
+    const text = renderedText(html);
+    expect(text).toContain("Formularios");
+    expect(text).toContain("Publicado");
+    expect(text).not.toContain("Published");
   });
 });
