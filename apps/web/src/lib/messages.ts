@@ -762,6 +762,13 @@ export const m = {
   "pipeline.name": "Opportunity name",
   "pipeline.value": "Value",
   "pipeline.contact": "Contact",
+  // The new-deal picker searches as you type (deal-contact-picker.tsx), where it listed the newest 200.
+  "pipeline.contactSearch": "Search by name, phone or email",
+  "pipeline.contactSearch.es": "Busque por nombre, teléfono o correo",
+  "pipeline.contactChange": "Choose someone else",
+  "pipeline.contactChange.es": "Elegir a otra persona",
+  "pipeline.contactRequired": "Choose who this opportunity is for first.",
+  "pipeline.contactRequired.es": "Primero elija para quién es esta oportunidad.",
   "pipeline.status": "Status",
   "pipeline.status.open": "Open",
   "pipeline.status.open.es": "Abierta",

@@ -1,11 +1,11 @@
-import { ensureDefaultPipeline, listBoard, listContacts, sumOpenOpportunities } from "@bis/db";
+import { ensureDefaultPipeline, listBoard, sumOpenOpportunities } from "@bis/db";
 import { moveOppToStageAction, updateOpportunityAction, createOpportunityAction } from "./actions";
 import { PipelineBoard } from "./pipeline-board";
 import { AddOpportunityDialog } from "./add-opportunity-dialog";
 import { PageHeader } from "@/components/page-header";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { formatCurrency, contactDisplayName } from "@/lib/format";
+import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -21,9 +21,10 @@ export default async function PipelinePage({
   await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-  const [board, contacts, openTotals] = await Promise.all([
+  // The new-deal dialog searches for its customer as you type (deal-contact-picker.tsx): no contact list is
+  // read here, where the newest 200 used to be, which left everyone older unpickable.
+  const [board, openTotals] = await Promise.all([
     listBoard(db, accountId, pipelineId),
-    listContacts(db, accountId, { limit: 200 }),
     // The board itself still shows every stage's own total (won + lost
     // included — a closed deal must still show where it closed), but this
     // header figure is "what's in the pipeline": the exact same call the
@@ -50,8 +51,8 @@ export default async function PipelinePage({
         count={m["pipeline.openTotal"].replace("{count}", String(count)).replace("{value}", formatCurrency(total))}
         actions={
           <AddOpportunityDialog
+            accountId={accountId}
             pipelineId={pipelineId}
-            contacts={contacts.map((c) => ({ id: c.id, name: contactDisplayName(c) }))}
             action={boundCreate}
           />
         }
