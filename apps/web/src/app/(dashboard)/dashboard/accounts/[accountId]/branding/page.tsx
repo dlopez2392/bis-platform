@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { requireNotTechnician } from "@/lib/auth";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { loggableError } from "@/lib/loggable-error";
 import { requestLocale } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
@@ -44,11 +45,16 @@ export const dynamic = "force-dynamic";
  * as a second gate). Every read above stays unconditional.
  *
  * S-06 part 2 adds ONE conditional read, gated on `access.canManage` (the
- * agency, or this account's Owner; plan G8): the account's Never record list,
- * with the reader's language and the account's to draw it in. Staff read
- * nothing of it and see nothing of it. Its write path is the two
+ * agency, or this account's Owner; plan G8): the Never record LIST itself.
+ * Staff never read it and never see it. Its write path is the two
  * Owner-guarded actions in ../never-log-actions.ts (`requireAccountOwner`
  * before any database call), never this page.
+ *
+ * S-10 T6: the person's own preference and the account's language (the same
+ * `accounts.language` read the Never record card used to make only for the
+ * Owner) are now read UNCONDITIONALLY, for every role — the resolved locale
+ * drives the page's own title, `BrandingPanel` and `AlertPhoneCard` too, not
+ * only the Owner-only list.
  */
 export default async function BrandingPage({
   params,
@@ -69,19 +75,14 @@ export default async function BrandingPage({
   // rather than 404ing in a way someone would later have to debug.
   const access = await requireNotTechnician(accountId);
 
-  // S-06 part 2: the Never record list, for the agency and Owners only (plan G8), read beside the
-  // page's own reads. A failed list read is the list's own error state, never the page's; a failed
-  // language read draws the list in the reader's default language rather than failing anything.
-  const neverLogReads = access.canManage
-    ? Promise.all([
-        getPersonPrefs(),
-        serviceDb().from("accounts").select("language").eq("id", accountId).maybeSingle(),
-        listNeverLog(serviceDb(), accountId).then(
-          (rows) => rows.map((e) => ({ id: e.id, pattern: e.pattern, kind: e.kind })),
-          (e: unknown) => { console.error(`branding: account ${accountId} never-record list read failed: ${loggableError(e)}`); return null; },
-        ),
-      ])
-    : null;
+  // S-06 part 2: the Never record LIST, for the agency and Owners only (plan G8); a failed list
+  // read is the list's own error state, never the page's.
+  const neverLogRows = access.canManage
+    ? listNeverLog(serviceDb(), accountId).then(
+        (rows) => rows.map((e) => ({ id: e.id, pattern: e.pattern, kind: e.kind })),
+        (e: unknown) => { console.error(`branding: account ${accountId} never-record list read failed: ${loggableError(e)}`); return null; },
+      )
+    : Promise.resolve(null);
 
   // serviceDb for the READS, matching every other in-account read of this
   // row. It changes no boundary: accounts_member_read already returns the
@@ -89,7 +90,12 @@ export default async function BrandingPage({
   // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
   // has no write here at all — AlertPhoneCard renders with no `action`,
   // which is what makes it read-only rather than merely disabled-looking.
-  const [branding, mailingAddress, alertPhone, smsGate, replies, ownerReads] = await Promise.all([
+  //
+  // S-10 T6: `prefs` and `accountRead` used to be read only inside the
+  // Owner-only Never record branch; every role now needs them for the
+  // page's OWN locale, so they move up here, beside every other
+  // unconditional read.
+  const [branding, mailingAddress, alertPhone, smsGate, replies, prefs, accountRead, neverLogEntries] = await Promise.all([
     getBranding(serviceDb(), accountId),
     getMailingAddress(serviceDb(), accountId),
     getAlertPhone(serviceDb(), accountId),
@@ -101,26 +107,25 @@ export default async function BrandingPage({
     // replies go" line under the reply-to hint. No write path exists on
     // this page, same shape as alert_phone above.
     getInboundSettings(serviceDb(), accountId),
-    neverLogReads,
+    getPersonPrefs(),
+    serviceDb().from("accounts").select("language").eq("id", accountId).maybeSingle(),
+    neverLogRows,
   ]);
 
-  let neverLogCard: { entries: NeverLogView[] | null; locale: Locale } | undefined;
-  if (ownerReads) {
-    const [prefs, accountRead, entries] = ownerReads;
-    if (accountRead.error) {
-      console.error(`branding: account ${accountId} language read failed: ${loggableError(accountRead.error)}`);
-    }
-    const accountRow = accountRead.data as { language?: string | null } | null;
-    // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
-    const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
-    const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-    neverLogCard = { entries, locale };
+  if (accountRead.error) {
+    console.error(`branding: account ${accountId} language read failed: ${loggableError(accountRead.error)}`);
   }
+  const accountRow = accountRead.data as { language?: string | null } | null;
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const neverLogCard: { entries: NeverLogView[] | null; locale: Locale } | undefined =
+    access.canManage ? { entries: neverLogEntries, locale } : undefined;
 
   return (
     <div className="space-y-6">
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
-      <PageHeader title={m["branding.clientTitle"]} />
+      <PageHeader title={t(m, "branding.clientTitle", locale)} />
       <BrandingPanel
         // Remount when the ACCOUNT changes, so the panel's own state cannot
         // carry one account's unsaved selections into another's fields on a
@@ -141,9 +146,15 @@ export default async function BrandingPage({
         brandMode={branding.brandMode}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
         replyRoute={replies}
-        action={setBrandingAction.bind(null, accountId)}
-        removeLogoAction={removeBrandLogoAction.bind(null, accountId)}
-        restoreLogoAction={restoreBrandLogoAction.bind(null, accountId)}
+        // Not .bind() for these two: setBrandingAction's shape is (accountId,
+        // formData, locale) and restoreBrandLogoAction's is (accountId, path,
+        // locale) — in both, the single remaining arg this prop supplies
+        // sits BETWEEN the two bound ones, which .bind() cannot skip over.
+        // removeBrandLogoAction has no such middle argument, so .bind() still works for it.
+        action={(formData: FormData) => setBrandingAction(accountId, formData, locale)}
+        removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}
+        restoreLogoAction={(path: string) => restoreBrandLogoAction(accountId, path, locale)}
+        locale={locale}
       />
       {/* S-06 part 2: its own card, OUTSIDE the branding form (plan G6), and no primary of its own. */}
       {neverLogCard !== undefined ? (
@@ -166,6 +177,7 @@ export default async function BrandingPage({
         // phone loops back to the account's own number, so `!smsGate.ok`
         // alone was the narrow, pre-widening comparison read back in here.
         smsNotReady={!smsGate.ok || (alertPhone !== null && smsGate.ownedNumbers.includes(alertPhone))}
+        locale={locale}
       />
     </div>
   );

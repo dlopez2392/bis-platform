@@ -27,9 +27,10 @@ const accessFixture = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   requireNotTechnician: async () => accessFixture.access,
 }));
-// getPersonPrefs reads Clerk; the person here has no language of their own.
+// getPersonPrefs reads Clerk; mutable so a Spanish-preference test can set it.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({
-  getPersonPrefs: async () => ({ language: null, theme: null }),
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
 }));
 
 const dbFixture = vi.hoisted(() => ({
@@ -89,17 +90,22 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 
 const captured = vi.hoisted(() => ({
-  props: null as { alertPhone: string | null; smsNotReady?: boolean } | null,
-  panel: null as { mailingAddress?: string | null } | null,
+  props: null as { alertPhone: string | null; smsNotReady?: boolean; locale?: string } | null,
+  panel: null as {
+    mailingAddress?: string | null; locale?: string;
+    action?: (fd: FormData) => Promise<unknown>;
+    removeLogoAction?: () => Promise<unknown>;
+    restoreLogoAction?: (p: string) => Promise<unknown>;
+  } | null,
 }));
 vi.mock("@/components/branding-panel", () => ({
-  BrandingPanel: (props: { mailingAddress?: string | null }) => {
+  BrandingPanel: (props: NonNullable<typeof captured.panel>) => {
     captured.panel = props;
     return null;
   },
 }));
 vi.mock("@/components/alert-phone-card", () => ({
-  AlertPhoneCard: (props: { alertPhone: string | null; smsNotReady?: boolean }) => {
+  AlertPhoneCard: (props: NonNullable<typeof captured.props>) => {
     captured.props = props;
     return null;
   },
@@ -110,10 +116,15 @@ vi.mock("../never-log-actions", () => ({
   addNeverLogAction: async () => ({ ok: false, error: "failed" }),
   removeNeverLogAction: async () => ({ ok: false, error: "failed" }),
 }));
+// Echoes the args it was called with, so a test can see what the PAGE bound
+// (S-10 T6: the locale the page resolved, alongside accountId), without
+// asserting these actions' own Spanish text — that is each action's own
+// test file's job.
+const actionCalls = vi.hoisted(() => ({ setBranding: [] as unknown[][], removeLogo: [] as unknown[][], restoreLogo: [] as unknown[][] }));
 vi.mock("./actions", () => ({
-  setBrandingAction: async () => ({ ok: true }),
-  removeBrandLogoAction: async () => ({ ok: true, path: "acct/logo.png" }),
-  restoreBrandLogoAction: async () => ({ ok: true }),
+  setBrandingAction: async (...a: unknown[]) => { actionCalls.setBranding.push(a); return { ok: true }; },
+  removeBrandLogoAction: async (...a: unknown[]) => { actionCalls.removeLogo.push(a); return { ok: true, path: "acct/logo.png" }; },
+  restoreBrandLogoAction: async (...a: unknown[]) => { actionCalls.restoreLogo.push(a); return { ok: true }; },
 }));
 
 const { default: BrandingPage } = await import("./page");
@@ -142,6 +153,10 @@ beforeEach(() => {
   dbFixture.languageReads = [];
   dbFixture.neverLogReads = [];
   dbFixture.neverLogFails = false;
+  prefsFixture.language = null;
+  actionCalls.setBranding = [];
+  actionCalls.removeLogo = [];
+  actionCalls.restoreLogo = [];
 });
 
 describe("branding page — the mailing address field", () => {
@@ -197,12 +212,17 @@ describe("branding page — the Never record card (S-06 part 2; plan G8)", () =>
     expect(dbFixture.languageReads).toEqual([["accounts", "language", "id", "a1"]]);
   });
 
-  it("staff sees no list and nothing is read for them (mutation: drop the canManage gate → FAILS twice)", async () => {
+  it("staff sees no list and the list itself is never read for them (mutation: drop the canManage gate → FAILS)", async () => {
     accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
     await render();
     expect(lastHtml).not.toContain("data-never-log");
     expect(dbFixture.neverLogReads).toEqual([]);
-    expect(dbFixture.languageReads).toEqual([]);
+    // S-10 T6: the account-language read moved OUT of the canManage gate —
+    // it now also drives the page's own title, BrandingPanel and
+    // AlertPhoneCard for Staff, not just the Owner-only Never record list —
+    // so staff DOES trigger exactly this one read now, same shape as every
+    // other role (mutation: gate it behind canManage again → FAILS).
+    expect(dbFixture.languageReads).toEqual([["accounts", "language", "id", "a1"]]);
   });
 
   it("an Owner whose account reads Spanish gets the list in Spanish, lang=es (mutation: pass locale=\"en\" → FAILS)", async () => {
@@ -269,5 +289,53 @@ describe("branding page — the Never record card's language (review fix round 1
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// S-10 T6: the page's own title, and what it hands AlertPhoneCard and
+// BrandingPanel, stayed English regardless of the reader's own stored
+// choice — only the Owner-only Never record list read a locale at all.
+describe("branding page — the whole page's own locale (S-10 T6)", () => {
+  it("resolves person, then account, then English, for BOTH an Owner and Staff (mutation: gate the resolution behind canManage → FAILS)", async () => {
+    for (const role of ["owner", "staff"] as const) {
+      accessFixture.access = { userId: "user_1", isAgency: false, role, canManage: role === "owner" };
+      dbFixture.accountLanguage = "es";
+      prefsFixture.language = null;
+      await render();
+      expect(captured.props?.locale, role).toBe("es");
+      expect(captured.panel?.locale, role).toBe("es");
+    }
+  });
+
+  it("the person's own choice wins over the account's (mutation: swap the precedence → FAILS)", async () => {
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    prefsFixture.language = "en";
+    await render();
+    expect(captured.props?.locale).toBe("en");
+  });
+
+  it("the page's own title reads in Spanish (mutation: hard-code m[key] in the page → FAILS)", async () => {
+    const { m } = await import("@/lib/messages");
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    await render();
+    expect(lastHtml).toContain(m["branding.clientTitle.es"]);
+    expect(lastHtml).not.toContain(m["branding.clientTitle"]);
+  });
+
+  it("binds setBrandingAction, removeBrandLogoAction and restoreBrandLogoAction with the resolved locale, alongside accountId (mutation: bind only accountId → FAILS)", async () => {
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    await render();
+    await captured.panel!.action!(new FormData());
+    await captured.panel!.removeLogoAction!();
+    await captured.panel!.restoreLogoAction!("a/logo-x.png");
+    // setBrandingAction's own shape is (accountId, formData, locale) — the
+    // caller's one remaining arg (formData) sits BETWEEN the two the page
+    // supplies, so only the first and last positions are asserted here.
+    expect([actionCalls.setBranding[0]![0], actionCalls.setBranding[0]![2]]).toEqual(["a1", "es"]);
+    expect(actionCalls.removeLogo[0]).toEqual(["a1", "es"]);
+    expect(actionCalls.restoreLogo[0]).toEqual(["a1", "a/logo-x.png", "es"]);
   });
 });

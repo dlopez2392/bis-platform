@@ -106,6 +106,17 @@ describe("setBrandingAction — brand name is required", () => {
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
 
+  // S-10 T6: every refusal below was a bare m["…"] read — English regardless
+  // of the reader's own locale. `locale` is now an optional third parameter
+  // (default "en", every call above unaffected), bound by the page alongside
+  // accountId.
+  it("reads the refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param from any refusal → FAILS)", async () => {
+    expect(await setBrandingAction("acct_1", fd({ brandName: "" }), "es"))
+      .toEqual({ ok: false, error: m["branding.nameRequired.es"] });
+    expect(await setBrandingAction("acct_1", fd({ brandName: "x", brandColor: "notacolor" }), "es"))
+      .toEqual({ ok: false, error: m["branding.badColor.es"] });
+  });
+
   it("saves a normal, trimmed name", async () => {
     expect(await setBrandingAction("acct_1", fd({ brandName: "  Acme Dental  " })))
       .toEqual({ ok: true });
@@ -302,6 +313,12 @@ describe("removeBrandLogoAction", () => {
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
 
+  // S-10 T6.
+  it("reads that refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param → FAILS)", async () => {
+    dbMocks.getBranding.mockResolvedValue({ brandLogoPath: null });
+    expect(await removeBrandLogoAction("acct_1", "es")).toEqual({ ok: false, error: m["branding.noLogoToRemove.es"] });
+  });
+
   it("answers the generic save-failed message, in plain language, when the write throws", async () => {
     dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo.png" });
     dbMocks.setBranding.mockRejectedValue(new Error("boom"));
@@ -345,6 +362,13 @@ describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
     dbMocks.restoreBrandLogoIfCleared.mockResolvedValue(false);
     expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.logoGone"] });
+  });
+
+  // S-10 T6.
+  it("reads that refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param → FAILS)", async () => {
+    dbMocks.restoreBrandLogoIfCleared.mockResolvedValue(false);
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png", "es"))
+      .toEqual({ ok: false, error: m["branding.logoGone.es"] });
   });
 
   // I1 (near-Critical, 2026-10-04): Remove → upload → Remove → stale Undo

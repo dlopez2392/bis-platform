@@ -31,6 +31,8 @@ import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted }
 import { isValidEmail } from "@/lib/forms/guards";
 import { syncClerkOrgName } from "@/lib/accounts/clerk-org-name";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /** accounts_mailing_address_check's upper bound (migration 0048). Not
  *  exported: a "use server" module may export only async functions. */
@@ -39,6 +41,10 @@ const MAX_MAILING_ADDRESS = 300;
 export async function setBrandingAction(
   accountId: string,
   formData: FormData,
+  // S-10 T6: optional, defaulting to "en" — every error below was a bare
+  // English m["…"] read; the page binds the reader's own resolved locale
+  // alongside accountId (`.bind(null, accountId, locale)`).
+  locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // Widened from agency-only: this action is now the ONE branding write,
   // reached from the agency's Settings card and from the client's own
@@ -51,7 +57,7 @@ export async function setBrandingAction(
   const brandName = String(formData.get("brandName") ?? "").trim();
   // Customers see this name on every email, text and the booking page; it
   // is never blank from here on (spec 2026-09-07-brand-name-resolver).
-  if (!brandName) return { ok: false, error: m["branding.nameRequired"] };
+  if (!brandName) return { ok: false, error: t(m, "branding.nameRequired", locale) };
 
   // Empty clears it — unlike brandName above, which now refuses a blank
   // rather than clearing. Anything present must be a real hex color: this
@@ -60,7 +66,7 @@ export async function setBrandingAction(
   const rawColor = String(formData.get("brandColor") ?? "").trim();
   const brandColor = rawColor === "" ? null : parseHexColor(rawColor);
   if (rawColor !== "" && brandColor === null) {
-    return { ok: false, error: m["branding.badColor"] };
+    return { ok: false, error: t(m, "branding.badColor", locale) };
   }
 
   // Empty clears it, like brandColor above (brandName above is the one
@@ -71,7 +77,7 @@ export async function setBrandingAction(
   const rawReplyTo = String(formData.get("replyToEmail") ?? "").trim();
   const replyToEmail = rawReplyTo === "" ? null : rawReplyTo;
   if (replyToEmail !== null && !isValidEmail(replyToEmail)) {
-    return { ok: false, error: m["branding.badReplyTo"] };
+    return { ok: false, error: t(m, "branding.badReplyTo", locale) };
   }
 
   // The postal address the reactivation email prints (migration 0048; the
@@ -93,7 +99,7 @@ export async function setBrandingAction(
     .trim();
   const mailingAddress = rawMailing === "" ? null : rawMailing;
   if (mailingAddress !== null && mailingAddress.length > MAX_MAILING_ADDRESS) {
-    return { ok: false, error: m["branding.mailingAddressTooLong"] };
+    return { ok: false, error: t(m, "branding.mailingAddressTooLong", locale) };
   }
 
   // A closed set on the way in as well as in the column. The constraint is the
@@ -110,22 +116,22 @@ export async function setBrandingAction(
   const brandType = pickOne("brandType", TYPE_NAMES);
   const brandMode = pickOne("brandMode", MODE_NAMES);
   if (brandNeutral === false || brandCorners === false || brandType === false || brandMode === false) {
-    return { ok: false, error: m["branding.badTheme"] };
+    return { ok: false, error: t(m, "branding.badTheme", locale) };
   }
 
   const file = formData.get("logo");
 
   let brandLogoPath: string | undefined;
   if (file instanceof File && file.size > 0) {
-    if (file.size > MAX_LOGO_BYTES) return { ok: false, error: m["branding.tooLarge"] };
+    if (file.size > MAX_LOGO_BYTES) return { ok: false, error: t(m, "branding.tooLarge", locale) };
     const bytes = new Uint8Array(await file.arrayBuffer());
     // Re-check against what actually arrived. file.size is metadata; this is
     // the payload, and only one of the two is what gets stored.
-    if (bytes.length > MAX_LOGO_BYTES) return { ok: false, error: m["branding.tooLarge"] };
+    if (bytes.length > MAX_LOGO_BYTES) return { ok: false, error: t(m, "branding.tooLarge", locale) };
     // Sniff the real bytes. file.type is browser-supplied and the filename is
     // client-controlled; neither is evidence of anything.
     const contentType = sniffImageType(bytes);
-    if (!contentType) return { ok: false, error: m["branding.badFormat"] };
+    if (!contentType) return { ok: false, error: t(m, "branding.badFormat", locale) };
     try {
       brandLogoPath = await uploadBrandLogo(serviceDb(), accountId, bytes, contentType);
     } catch (e) {
@@ -133,7 +139,7 @@ export async function setBrandingAction(
       // screen — the panel renders this inline and the rest of the page, which
       // includes the client-access switch, stays usable.
       console.error(`setBranding: logo upload failed for account ${accountId}: ${String(e)}`);
-      return { ok: false, error: m["branding.saveFailed"] };
+      return { ok: false, error: t(m, "branding.saveFailed", locale) };
     }
   }
 
@@ -168,7 +174,7 @@ export async function setBrandingAction(
     );
   } catch (e) {
     console.error(`setBranding: write failed for account ${accountId}: ${String(e)}`);
-    return { ok: false, error: m["branding.saveFailed"] };
+    return { ok: false, error: t(m, "branding.saveFailed", locale) };
   }
 
   // D-005: Clerk names the organisation in every invitation email, so it
@@ -235,6 +241,7 @@ function isOwnLogoPath(accountId: string, path: string): boolean {
  */
 export async function removeBrandLogoAction(
   accountId: string,
+  locale: Locale = "en",
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const { userId } = await requireNotTechnician(accountId);
 
@@ -244,13 +251,13 @@ export async function removeBrandLogoAction(
   const requestDb = await dbForRequest();
   const current = await getBranding(requestDb, accountId);
   const path = current.brandLogoPath;
-  if (!path) return { ok: false, error: m["branding.noLogoToRemove"] };
+  if (!path) return { ok: false, error: t(m, "branding.noLogoToRemove", locale) };
 
   try {
     await setBranding(requestDb, accountId, { brandLogoPath: null }, userId);
   } catch (e) {
     console.error(`removeBrandLogo: write failed for account ${accountId}: ${String(e)}`);
-    return { ok: false, error: m["branding.saveFailed"] };
+    return { ok: false, error: t(m, "branding.saveFailed", locale) };
   }
 
   try {
@@ -292,23 +299,23 @@ export async function removeBrandLogoAction(
  * different account's stored object.
  */
 export async function restoreBrandLogoAction(
-  accountId: string, path: string,
+  accountId: string, path: string, locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireNotTechnician(accountId);
 
   if (!isOwnLogoPath(accountId, path)) {
-    return { ok: false, error: m["branding.saveFailed"] };
+    return { ok: false, error: t(m, "branding.saveFailed", locale) };
   }
 
   try {
     const stillThere = await logoExists(serviceDb(), path);
-    if (!stillThere) return { ok: false, error: m["branding.logoGone"] };
+    if (!stillThere) return { ok: false, error: t(m, "branding.logoGone", locale) };
 
     const restored = await restoreBrandLogoIfCleared(await dbForRequest(), accountId, path, userId);
-    if (!restored) return { ok: false, error: m["branding.logoGone"] };
+    if (!restored) return { ok: false, error: t(m, "branding.logoGone", locale) };
   } catch (e) {
     console.error(`restoreBrandLogo: write failed for account ${accountId}: ${String(e)}`);
-    return { ok: false, error: m["branding.saveFailed"] };
+    return { ok: false, error: t(m, "branding.saveFailed", locale) };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
