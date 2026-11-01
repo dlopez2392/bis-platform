@@ -18,6 +18,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { useLocale } from "@/components/locale-provider";
 import { EmptyState } from "@/components/empty-state";
 import { ListPanel } from "@/components/ui/list-panel";
 import { OpportunityDrawer } from "./opportunity-drawer";
@@ -54,6 +57,7 @@ export function PipelineBoard({
   moveAction: (formData: FormData) => Promise<void>;
   updateAction: (formData: FormData) => Promise<void>;
 }) {
+  const locale = useLocale();
   const [, startTransition] = useTransition();
   const [dragging, setDragging] = useState<BoardOpportunity | null>(null);
   const [editing, setEditing] = useState<BoardOpportunity | null>(null);
@@ -107,7 +111,7 @@ export function PipelineBoard({
       try {
         await moveAction(formData);
       } catch {
-        toast.error(m["pipeline.moveFailed"]);
+        toast.error(t(m, "pipeline.moveFailed", locale));
       }
     });
   }
@@ -120,8 +124,8 @@ export function PipelineBoard({
         <div className="mb-4">
           <EmptyState
             icon={Inbox}
-            title={m["pipeline.empty.title"]}
-            body={m["pipeline.empty.body"]}
+            title={t(m, "pipeline.empty.title", locale)}
+            body={t(m, "pipeline.empty.body", locale)}
           />
         </div>
       ) : null}
@@ -137,7 +141,7 @@ export function PipelineBoard({
       >
         <div className="flex gap-4 overflow-x-auto pb-4">
           {optimistic.map((col, i) => (
-            <Column key={col.stage.id} column={col} index={i} onOpen={setEditing} />
+            <Column key={col.stage.id} column={col} index={i} onOpen={setEditing} locale={locale} />
           ))}
         </div>
         <DragOverlay>
@@ -157,10 +161,12 @@ function Column({
   column,
   index,
   onOpen,
+  locale,
 }: {
   column: BoardColumn;
   index: number;
   onOpen?: (opp: BoardOpportunity) => void;
+  locale: Locale;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.stage.id });
   return (
@@ -193,7 +199,7 @@ function Column({
       >
         {column.opportunities.length === 0 ? (
           <p className="m-auto px-2 text-center text-xs text-muted-foreground">
-            {m["pipeline.dropHere"]}
+            {t(m, "pipeline.dropHere", locale)}
           </p>
         ) : (
           column.opportunities.map((opp) => (

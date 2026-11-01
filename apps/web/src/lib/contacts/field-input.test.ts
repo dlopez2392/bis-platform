@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { m } from "@/lib/messages";
 import { normalizeFieldInput, EDITABLE_FIELDS, FIELD_TO_INPUT_KEY } from "./field-input";
 
 describe("normalizeFieldInput", () => {
@@ -33,5 +34,20 @@ describe("normalizeFieldInput", () => {
   it("company_name stays editable (trimmed) but has no ContactInput key: it is a group now", () => {
     expect(EDITABLE_FIELDS).toContain("company_name");
     expect("company_name" in FIELD_TO_INPUT_KEY).toBe(false);
+  });
+
+  // S-10 T3: the inline-edited email/phone shape refusal (shown directly by inline-field.tsx's
+  // toast, unlike the Add contact dialog's own fixed errorKey) now reads the reader's language —
+  // the SAME two catalogue sentences contacts.add.badEmail/badPhone already carry (2026-10-28).
+  describe("in the reader's language (S-10 T3)", () => {
+    it("the email refusal is said in Spanish when the caller passes es (mutation: read the raw English literal -> FAILS)", () => {
+      expect(normalizeFieldInput("email", "not-an-email", "es")).toEqual({ ok: false, error: m["contacts.add.badEmail.es"] });
+    });
+    it("the phone refusal is said in Spanish too", () => {
+      expect(normalizeFieldInput("phone", "call me", "es")).toEqual({ ok: false, error: m["contacts.add.badPhone.es"] });
+    });
+    it("defaults to English when no locale is passed", () => {
+      expect(normalizeFieldInput("email", "not-an-email")).toEqual({ ok: false, error: m["contacts.add.badEmail"] });
+    });
   });
 });

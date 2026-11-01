@@ -41,7 +41,7 @@ export function SourceField({
           value={source}
           locale={locale}
           save={async (v) => {
-            const saved = await updateContactFieldAction(accountId, contactId, "source", v);
+            const saved = await updateContactFieldAction(accountId, contactId, "source", v, locale);
             if (saved.ok) onSaved?.();
             return saved;
           }}

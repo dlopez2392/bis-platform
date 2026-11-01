@@ -33,8 +33,8 @@ export function BusinessInlineField({ accountId, contactId, value }: { accountId
       value={value}
       locale={locale}
       onEditingChange={setEditing}
-      save={(v) => setContactBusinessAction(accountId, contactId, v)}
-      undoWith={(payload) => undoContactBusinessAction(accountId, contactId, payload as BusinessUndo)}
+      save={(v) => setContactBusinessAction(accountId, contactId, v, locale)}
+      undoWith={(payload) => undoContactBusinessAction(accountId, contactId, payload as BusinessUndo, locale)}
     />
   );
 }
