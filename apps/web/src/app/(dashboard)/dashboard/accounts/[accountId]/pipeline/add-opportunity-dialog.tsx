@@ -26,6 +26,26 @@ function Submit({ pending }: { pending: boolean }) {
   );
 }
 
+/**
+ * One press of Save, as a plain function (review M1) so it is tested without a DOM: no customer chosen never
+ * reaches the action and says why; a failed action says so and the dialog stays open; success closes it.
+ */
+export async function submitNewDeal(formData: FormData, deps: {
+  action: (formData: FormData) => Promise<void>; notify: (message: string) => void; close: () => void;
+}): Promise<void> {
+  const block = dealSubmitBlock(formData);
+  if (block) {
+    deps.notify(m[block]);
+    return;
+  }
+  try {
+    await deps.action(formData);
+    deps.close();
+  } catch {
+    deps.notify(m["pipeline.createFailed"]);
+  }
+}
+
 export function AddOpportunityDialog({
   accountId,
   pipelineId,
@@ -36,19 +56,8 @@ export function AddOpportunityDialog({
   action: (formData: FormData) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const { pending, onSubmit } = useFormSubmit(async (formData) => {
-    const block = dealSubmitBlock(formData);
-    if (block) {
-      toast.error(m[block]);
-      return;
-    }
-    try {
-      await action(formData);
-      setOpen(false);
-    } catch {
-      toast.error(m["pipeline.createFailed"]);
-    }
-  });
+  const { pending, onSubmit } = useFormSubmit((formData) =>
+    submitNewDeal(formData, { action, notify: (message) => toast.error(message), close: () => setOpen(false) }));
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
