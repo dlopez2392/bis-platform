@@ -115,6 +115,13 @@ describe("GroupsCardView", () => {
     expect(view({ status: "error" }, true, "es")).toContain(m["groups.loadFailed.es"]);
     expect(view({ status: "ready", groups: [] }, true, "es")).toContain(m["groups.empty.es"]);
   });
+  // S-10 leftovers (#317 follow-up): the other co-member's name is built with
+  // contactDisplayName with no locale — a nameless co-member read English on a Spanish card.
+  it("a nameless co-member's stand-in reads the Spanish placeholder (mutation: call contactDisplayName with no locale -> FAILS)", () => {
+    const html = view({ status: "ready", groups: [group({ others: [{ contactId: "c2", firstName: null, lastName: null }] })] }, true, "es");
+    expect(html).toContain(m["contact.noName.es"]);
+    expect(html).not.toContain(m["contact.noName"]);
+  });
   it("headingHidden: no empty row under RecordCard's title, and the Add control stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
     const hidden = (load: unknown) => renderToStaticMarkup(createElement(GroupsCardView, {
       accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: load as never, onRetry: () => {}, onChanged: () => {},

@@ -139,7 +139,7 @@ describe("undoReplyStopAction", () => {
 
     expect(await undoReplyStopAction(ACCOUNT, CONV, "ev_1")).toEqual({ ok: true });
     expect(dbMock.listMessages).toHaveBeenCalledWith(expect.objectContaining({ tag: "request-db" }), ACCOUNT, CONV);
-    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER);
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "en");
     expect(staffMock.undoInboundStop).toHaveBeenCalledWith(CTX, "ev_1");
   });
 
@@ -172,7 +172,7 @@ describe("undoReplyStopAction", () => {
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
 
     expect(await undoReplyStopAction(ACCOUNT, CONV, "ev_1")).toEqual({ ok: true });
-    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "ana", USER);
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "ana", USER, "en");
   });
 
   it("passes undoInboundStop's typed expired flag through, never by matching the error string (mutation: drop the pass-through → FAILS)", async () => {
@@ -220,7 +220,7 @@ describe("stopEmailsFromReplyAction", () => {
     staffMock.stopEmails.mockResolvedValue({ ok: true, view: {} });
 
     expect(await stopEmailsFromReplyAction(ACCOUNT, CONV, "luis")).toEqual({ ok: true });
-    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER);
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "en");
   });
 
   it("a contactId that is neither the thread's own contact nor any sender on this thread is refused before any service read (mutation: drop the binding check → FAILS)", async () => {
@@ -362,7 +362,7 @@ describe("dismiss and the Undos", () => {
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
     dbMock.unfileInboundEmail.mockResolvedValue(true);
     expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: true });
-    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, HELD_CONTACT, USER);
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, HELD_CONTACT, USER, "en");
     expect(staffMock.undoInboundStop).toHaveBeenCalledWith(CTX, "ev_1");
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
     // The reversal ran strictly AFTER the unfile call, not before it.

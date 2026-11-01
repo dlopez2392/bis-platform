@@ -3,6 +3,8 @@ import {
   type ConsentAction, type ConsentAppend, type ConsentHistoryRow, type ConsentMethod, type SupabaseClient,
 } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { UNDO_WINDOW_MS } from "./staff-actions";
 import { emailViewOf, EMAIL_RESUMABLE_METHODS, type EmailView } from "./email-view";
@@ -37,6 +39,9 @@ export type EmailContext = {
   /** The contact's address as the ledger keys it (emailLedgerAddress). */
   address: string;
   now: Date;
+  /** The reader's own language (S-10 leftovers item 7), the Texts row's own fix mirrored for
+   *  email — every error line below reads through it, rather than `m[...]` directly. */
+  locale: Locale;
 };
 
 // By address, on the service client (F-085, spec §7.3): the contact was proven on ctx.db first.
@@ -50,10 +55,10 @@ function undoable(ctx: EmailContext, row: { actor_id: string | null; occurred_at
 
 async function changed(ctx: EmailContext): Promise<EmailActionResult> {
   try {
-    return { ok: false, error: m["contact.email.changed"], view: await view(ctx) };
+    return { ok: false, error: t(m, "contact.email.changed", ctx.locale), view: await view(ctx) };
   } catch (e) {
     console.error(`email row: account ${ctx.accountId} contact ${ctx.contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.email.changed"] };
+    return { ok: false, error: t(m, "contact.email.changed", ctx.locale) };
   }
 }
 
@@ -62,7 +67,7 @@ async function guarded(label: string, ctx: EmailContext, work: () => Promise<Ema
     return await work();
   } catch (e) {
     console.error(`${label}: account ${ctx.accountId} contact ${ctx.contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.email.failed"] };
+    return { ok: false, error: t(m, "contact.email.failed", ctx.locale) };
   }
 }
 
@@ -102,7 +107,7 @@ export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<Emai
     // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
-    if (!undoable(ctx, row)) return { ok: false, error: m["contact.email.undoExpired"] };
+    if (!undoable(ctx, row)) return { ok: false, error: t(m, "contact.email.undoExpired", ctx.locale) };
     const r = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
     return r.outcome === "appended" ? { ok: true, view: await view(ctx) } : changed(ctx);
   });
@@ -170,7 +175,7 @@ export function undoInboundStop(ctx: EmailContext, eventId: string): Promise<Ema
     // has closed — not merely "some inbound_email row" (a different, newer stop would also be
     // `method: 'inbound_email'` but is a stale click, not an expiry).
     if (r.outcome === "refused" && r.prior && r.prior.id === eventId && r.prior.method === "inbound_email") {
-      return { ok: false, error: m["contact.email.replyExpiredExplain"], expired: true };
+      return { ok: false, error: t(m, "contact.email.replyExpiredExplain", ctx.locale), expired: true };
     }
     return changed(ctx);
   });
@@ -179,7 +184,7 @@ export function undoInboundStop(ctx: EmailContext, eventId: string): Promise<Ema
 /** "Resume emails" with the required note: only a stop staff may lift (choice 19). */
 export async function resumeEmails(ctx: EmailContext, expectEventId: string, note: string): Promise<EmailActionResult> {
   const text = note.trim();
-  if (!text) return { ok: false, error: m["contact.email.resumeNoteRequired"] };
+  if (!text) return { ok: false, error: t(m, "contact.email.resumeNoteRequired", ctx.locale) };
   return guarded("resumeEmails", ctx, async () => {
     const newest = newestDecidingRow(await history(ctx));
     if (!newest || newest.id !== expectEventId || newest.action !== "revoked" || !EMAIL_RESUMABLE_METHODS.includes(newest.method)) {

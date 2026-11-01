@@ -115,8 +115,8 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
     queueMicrotask(() => status.current?.focus());
   };
   const undo = (u: TextsUndo): Promise<TextsActionResult> => u.kind === "stop"
-    ? undoStopTextsAction(accountId, contactId, u.eventId)
-    : undoHoldDecisionAction(accountId, contactId, u.eventId, u.reopenTaskIds);
+    ? undoStopTextsAction(accountId, contactId, u.eventId, locale)
+    : undoHoldDecisionAction(accountId, contactId, u.eventId, u.reopenTaskIds, locale);
   const act = (call: () => Promise<TextsActionResult>, success: string, withUndo = true) => {
     if (pending || busy.current) return;
     run(async () => {
@@ -182,7 +182,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
 
       {view.kind === "allowed" ? (
         <Button size="sm" variant="ghost" disabled={pending}
-          onClick={() => act(() => stopTextsAction(accountId, contactId, view.newestId), t(m, "contact.texts.stoppedToast", locale))}>
+          onClick={() => act(() => stopTextsAction(accountId, contactId, view.newestId, locale), t(m, "contact.texts.stoppedToast", locale))}>
           {t(m, "contact.texts.stopTexts", locale)}
         </Button>
       ) : null}
@@ -203,7 +203,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
       {view.kind === "stopped" && view.canResume && resuming ? (
         <form className="space-y-2" data-testid="texts-resume-form" onSubmit={(e) => {
           e.preventDefault();
-          act(() => resumeTextsAction(accountId, contactId, view.eventId, note), t(m, "contact.texts.resumedToast", locale), false);
+          act(() => resumeTextsAction(accountId, contactId, view.eventId, note, locale), t(m, "contact.texts.resumedToast", locale), false);
         }}>
           <Label htmlFor={`texts-resume-${contactId}`}>{t(m, "contact.texts.resumeNoteLabel", locale)}</Label>
           <Input id={`texts-resume-${contactId}`} name="note" value={note} required aria-required="true" autoFocus
@@ -224,11 +224,11 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
       {view.kind === "held" ? (
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" disabled={pending}
-            onClick={() => act(() => confirmStopAction(accountId, contactId, view.eventId), t(m, "contact.texts.confirmedToast", locale))}>
+            onClick={() => act(() => confirmStopAction(accountId, contactId, view.eventId, locale), t(m, "contact.texts.confirmedToast", locale))}>
             {t(m, "contact.texts.confirmStop", locale)}
           </Button>
           <Button size="sm" variant="ghost" disabled={pending}
-            onClick={() => act(() => notAStopAction(accountId, contactId, view.eventId), t(m, "contact.texts.releasedToast", locale))}>
+            onClick={() => act(() => notAStopAction(accountId, contactId, view.eventId, locale), t(m, "contact.texts.releasedToast", locale))}>
             {t(m, "contact.texts.notAStop", locale)}
           </Button>
         </div>

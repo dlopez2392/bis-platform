@@ -57,4 +57,30 @@ describe("ImportContactsPage reads the reader's language (S-10 T3)", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  // S-10 leftovers (#317 follow-up, item 6, "forged-locale" assertion): a value neither the
+  // dropdown nor any real caller would ever send ("fr", picked by hand in the URL bar) must
+  // fall back to the page's normal resolution — never crash, never leak through as `lang`, and
+  // never be treated as if it were "es". requestLocale's own isLocale() guard (request-locale.ts)
+  // is what makes this safe; this proves it end to end on a real page, with the QA flag ON so
+  // the override path is actually exercised (never a Vercel deployment either way).
+  it("a forged ?locale= value (never 'en' or 'es') falls back to the normal resolution, never crashing or leaking through as lang (mutation: drop the isLocale() guard in requestLocale -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      isAgency = true;
+      accountLanguage = null;
+      await expect(ImportContactsPage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "fr" }),
+      })).resolves.toBeDefined();
+      const html = renderToStaticMarkup(await ImportContactsPage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "fr" }),
+      }));
+      expect(html).toContain('lang="en"');
+      expect(html).not.toContain('lang="fr"');
+      expect(html).toContain(m["contacts.import.title"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

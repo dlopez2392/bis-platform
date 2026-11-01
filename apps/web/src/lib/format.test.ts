@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { formatCurrency, formatDateInZone, formatDateTimeInZone, formatRelativeTime } from "./format";
+import { formatCurrency, formatDateInZone, formatDateTimeInZone, formatRelativeTime, contactDisplayName } from "./format";
+import { m } from "./messages";
 
 // `vi.spyOn`'s default call-through does not preserve a native Intl
 // constructor's internal slots (observed on Vitest 4.1.10 / Node v24.13.0
@@ -98,6 +99,23 @@ describe("formatDateInZone locale", () => {
     formatDateInZone("2026-10-10T12:00:00Z", "America/Chicago", "es");
     expect(spy.mock.calls.at(-1)?.[0]).toBe("es-US");
     spy.mockRestore();
+  });
+});
+
+// S-10 leftovers (#317 follow-up): "(no name)" was always English, whatever the
+// reader's own language — the fallback never took a locale at all.
+describe("contactDisplayName locale", () => {
+  it("falls back to the Spanish placeholder when asked (mutation: read m[\"contact.noName\"] directly, ignoring the locale param -> FAILS)", () => {
+    expect(contactDisplayName({ first_name: null, last_name: null }, "es")).toBe(m["contact.noName.es"]);
+    expect(contactDisplayName({ first_name: null, last_name: null }, "es")).not.toBe(m["contact.noName"]);
+  });
+
+  it("defaults to English when no locale is given, so every caller that predates this param is unchanged", () => {
+    expect(contactDisplayName({ first_name: null, last_name: null })).toBe(m["contact.noName"]);
+  });
+
+  it("a real name wins over the placeholder regardless of locale", () => {
+    expect(contactDisplayName({ first_name: "Ana", last_name: "Lopez" }, "es")).toBe("Ana Lopez");
   });
 });
 

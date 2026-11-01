@@ -15,6 +15,22 @@ const undoMergeActionMock = vi.fn();
 vi.mock("../merge-actions", () => ({ undoMergeAction: (...a: unknown[]) => undoMergeActionMock(...a) }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toasts }));
+// Review fix round (M-1): `UndoMergeButton`'s own `otherName` prop (what activity-timeline.tsx:318
+// itself computes) is never serialized into renderToStaticMarkup's output — it is only read inside
+// an onClick closure, which a static render cannot capture. This real-component-passthrough wrapper
+// captures the prop as a side effect while rendering EXACTLY what the real component would (every
+// other test in this file that asserts the button's own markup is unaffected).
+const undoMergeButtonProps: Record<string, unknown>[] = [];
+vi.mock("./merge-undo", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./merge-undo")>();
+  return {
+    ...actual,
+    UndoMergeButton: (props: Parameters<typeof actual.UndoMergeButton>[0]) => {
+      undoMergeButtonProps.push(props);
+      return actual.UndoMergeButton(props);
+    },
+  };
+});
 
 const { ActivityTimeline } = await import("./activity-timeline");
 const { legacyTimeline } = await import("./activity-timeline.fixture");
@@ -61,6 +77,23 @@ describe("a merge/mergeUndone row renders as one: its verb, its mark and the Mer
   it("in Spanish", () => {
     const entries: TimelineEntry[] = [{ kind: "merge", id: "1", at: AT, contactId: "c1", merge: TM() } as TimelineEntry];
     expect(row(render(entries, "es"), "merge")).toContain(">unió a Other Person con este registro: 1 nota pasaron aquí<");
+  });
+
+  // S-10 leftovers (#317 follow-up): the row's VERB text ("unió a X con este registro") is built by
+  // lib/record/timeline-rows.ts:219's own contactDisplayName call, with no locale — a nameless other
+  // record read English even in Spanish. (Review fix round, M-1: this test's own mutation note used
+  // to point at activity-timeline.tsx:318, which it cannot reach — that file's otherName feeds only
+  // the Undo button's onClick closure, never this rendered verb text. The real target is
+  // lib/record/timeline-rows.ts:219, retitled here; a dedicated pin for activity-timeline.tsx:318
+  // follows in the "Undo merge" describe block below.)
+  it("a nameless OTHER record's stand-in reads the Spanish placeholder in the row's VERB TEXT (lib/record/timeline-rows.ts:219; mutation: call contactDisplayName with no locale there -> FAILS)", () => {
+    const entries: TimelineEntry[] = [{
+      kind: "merge", id: "1", at: AT, contactId: "c1",
+      merge: TM({ otherFirstName: null, otherLastName: null }),
+    } as TimelineEntry];
+    const r = row(render(entries, "es"), "merge");
+    expect(r).toContain(">unió a (sin nombre) con este registro: 1 nota pasaron aquí<");
+    expect(r).not.toContain("(no name)");
   });
 });
 
@@ -121,6 +154,19 @@ describe("the merge row's own 'Undo merge' control (F-006 part 1, plan Task 11)"
   it("is a ghost button, never a second primary (rule 8; mutation: default variant -> FAILS)", () => {
     const r = row(render(entry()), "merge");
     expect(r).toMatch(/data-variant="ghost"[^>]*>Undo merge/);
+  });
+
+  // Review fix round (M-1): activity-timeline.tsx:318's own `otherName` (handed to
+  // UndoMergeButton, read only inside its onClick closure — never serialized into static
+  // markup, so no string-matching test on `r` could ever pin it) is captured directly from
+  // the real component's own props (mutation: call contactDisplayName with no locale at
+  // activity-timeline.tsx:318 -> FAILS).
+  it("a nameless OTHER record's UndoMergeButton otherName prop reads the Spanish placeholder (activity-timeline.tsx:318)", () => {
+    undoMergeButtonProps.length = 0;
+    const entries = entry({ otherFirstName: null, otherLastName: null });
+    render(entries, "es");
+    expect(undoMergeButtonProps).toHaveLength(1);
+    expect(undoMergeButtonProps[0]!.otherName).toBe("(sin nombre)");
   });
 });
 

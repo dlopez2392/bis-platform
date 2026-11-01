@@ -289,7 +289,7 @@ export function ContactsTable({
         </TableHeader>
         <TableBody>
           {rows.map((c) => {
-            const name = contactDisplayName(c);
+            const name = contactDisplayName(c, locale);
             return (
               <TableRow
                 key={c.id}

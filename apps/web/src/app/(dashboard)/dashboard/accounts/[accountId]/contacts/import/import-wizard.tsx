@@ -4,8 +4,8 @@ import Link from "next/link";
 import Papa from "papaparse";
 import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
-import { autoMap, mapRows, IMPORT_FIELDS, type ParsedRow } from "@/lib/contacts/csv";
-import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, type ImportTotals } from "@/lib/contacts/import-summary";
+import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel, type ParsedRow } from "@/lib/contacts/csv";
+import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, doneLine, flaggedLine, type ImportTotals } from "@/lib/contacts/import-summary";
 import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { Button } from "@/components/ui/button";
@@ -73,7 +73,7 @@ export function ImportWizard(
 
   // The same mapRows the server re-runs. This copy drives the preview only;
   // nothing here is trusted on the way in.
-  const { mapped, errors } = useMemo(() => mapRows(rows, mapping), [rows, mapping]);
+  const { mapped, errors } = useMemo(() => mapRows(rows, mapping, locale), [rows, mapping, locale]);
 
   const ignoredCount = useMemo(
     () => headers.filter((h) => !mapping[h]).length, [headers, mapping]);
@@ -126,14 +126,17 @@ export function ImportWizard(
   });
 
   if (phase.name === "done") {
+    // Review fix round (M-7): computed once, not twice (the condition and the body used to
+    // call flaggedLine separately).
+    const flagged = flaggedLine(phase.totals, locale);
     return (
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
-          {t(m, "contacts.import.done", locale, { created: phase.totals.created, updated: phase.totals.updated })}
+          {doneLine(phase.totals, locale)}
         </p>
-        {phase.totals.flagged > 0 ? (
+        {flagged ? (
           <p className="mt-2 text-sm text-text-2">
-            {t(m, "contacts.import.flagged", locale, { flagged: phase.totals.flagged })}
+            {flagged}
           </p>
         ) : null}
         {importBusinessNotes(phase.totals, locale).map((note) => (
@@ -214,7 +217,7 @@ export function ImportWizard(
               >
                 <option value={IGNORE}>{t(m, "contacts.import.ignore", locale)}</option>
                 {IMPORT_FIELDS.map((field) => (
-                  <option key={field} value={field}>{field}</option>
+                  <option key={field} value={field}>{importFieldLabel(field, locale)}</option>
                 ))}
               </select>
             </li>

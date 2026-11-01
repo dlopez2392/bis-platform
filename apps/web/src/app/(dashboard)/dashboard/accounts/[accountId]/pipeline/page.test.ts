@@ -129,36 +129,72 @@ describe("PipelinePage header total", () => {
 // and the header's title and count read it.
 describe("PipelinePage reads the reader's language (S-10 T3)", () => {
   it("a client-role person on a Spanish account reads the header in Spanish (mutation: read m[...] directly -> FAILS)", async () => {
+    // Review fix round (M-4): reset INSIDE finally — an assertion failure above must never
+    // leave isAgency/accountLanguage dirty for the next test to inherit silently.
     isAgency = false;
     personLanguage = null;
     accountLanguage = "es";
-    sumOpenOpportunitiesMock.mockReset();
-    sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
-    const html = renderToStaticMarkup(await PipelinePage(route()));
-    expect(html).toContain(m["pipeline.title.es"]);
-    expect(html).toContain(m["pipeline.openTotal.es"].replace("{count}", "2").replace("{value}", formatCurrency(500)));
-    expect(html).not.toContain(m["pipeline.title"]);
-    isAgency = true;
-    accountLanguage = null;
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage(route()));
+      expect(html).toContain(m["pipeline.title.es"]);
+      expect(html).toContain(m["pipeline.openTotal.es"].replace("{count}", "2").replace("{value}", formatCurrency(500)));
+      expect(html).not.toContain(m["pipeline.title"]);
+    } finally {
+      isAgency = true;
+      accountLanguage = null;
+    }
   });
   it("an agency operator reads English even on a Spanish account (requestLocale's role split)", async () => {
     isAgency = true;
     accountLanguage = "es";
-    sumOpenOpportunitiesMock.mockReset();
-    sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
-    const html = renderToStaticMarkup(await PipelinePage(route()));
-    expect(html).toContain(m["pipeline.title"]);
-    accountLanguage = null;
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage(route()));
+      expect(html).toContain(m["pipeline.title"]);
+    } finally {
+      accountLanguage = null;
+    }
   });
   it("a single open deal reads the singular form, in Spanish too (mutation: drop pipeline.openTotalOne -> FAILS)", async () => {
     isAgency = false;
     accountLanguage = "es";
-    sumOpenOpportunitiesMock.mockReset();
-    sumOpenOpportunitiesMock.mockResolvedValue({ count: 1, value: 500 });
-    const html = renderToStaticMarkup(await PipelinePage(route()));
-    expect(html).toContain(m["pipeline.openTotalOne.es"].replace("{value}", formatCurrency(500)));
-    isAgency = true;
-    accountLanguage = null;
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 1, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage(route()));
+      expect(html).toContain(m["pipeline.openTotalOne.es"].replace("{value}", formatCurrency(500)));
+    } finally {
+      isAgency = true;
+      accountLanguage = null;
+    }
+  });
+
+  // S-10 leftovers (#317 follow-up): the header's own money figure was built with
+  // formatCurrency(total) — no locale — so a Spanish reader's header still carried an
+  // en-US-tagged amount even once the surrounding words were Spanish.
+  it("the header's own total passes es-US to Intl.NumberFormat, not the en-US default (mutation: call formatCurrency(total) with no locale -> FAILS)", async () => {
+    isAgency = false;
+    accountLanguage = "es";
+    const Original = Intl.NumberFormat;
+    const spy = vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
+      this: unknown, ...args: unknown[]
+    ) {
+      return new (Original as new (...a: unknown[]) => unknown)(...args);
+    } as never);
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      renderToStaticMarkup(await PipelinePage(route()));
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      for (const call of spy.mock.calls) expect(call[0]).toBe("es-US");
+    } finally {
+      spy.mockRestore();
+      isAgency = true;
+      accountLanguage = null;
+    }
   });
   // The QA override (`?locale=`, BIS_I18N_QA only) reaches this page's own locale resolution,
   // the same mechanism the record and To do pages already prove end to end.
@@ -172,6 +208,34 @@ describe("PipelinePage reads the reader's language (S-10 T3)", () => {
         params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "es" }),
       }));
       expect(html).toContain(m["pipeline.title.es"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // S-10 leftovers (#317 follow-up, item 6, "forged-locale" assertion): a value nothing in the
+  // product ever sends ("fr", typed into the URL bar by hand) must fall back to the page's
+  // normal resolution, never crash and never leak through as `lang` — requestLocale's own
+  // isLocale() guard (request-locale.ts), proved end to end on this page.
+  it("a forged ?locale= value (never 'en' or 'es') falls back to the normal resolution, never crashing or leaking through as lang (mutation: drop the isLocale() guard in requestLocale -> FAILS)", async () => {
+    // Review fix round (M-4): sets its OWN isAgency/personLanguage/accountLanguage rather than
+    // inheriting whatever an earlier test's cleanup (or failure to clean up) left behind — the
+    // assertion below (English output) must hold because THIS test asked for it, not by accident
+    // of test order.
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    isAgency = true;
+    personLanguage = null;
+    accountLanguage = null;
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "fr" }),
+      }));
+      expect(html).toContain('lang="en"');
+      expect(html).not.toContain('lang="fr"');
+      expect(html).toContain(m["pipeline.title"]);
     } finally {
       vi.unstubAllEnvs();
     }
