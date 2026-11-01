@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { encodeCursor } from "@/lib/cursor";
@@ -7,11 +8,19 @@ import { m } from "@/lib/messages";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 const authFixture = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }) }));
+// S-10 T5: this page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
+// same reason contacts/page.test.ts and calls/page.test.ts already use.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
+}));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }) }) }) }) }),
 }));
 vi.mock("@/lib/zone", () => ({ renderZone: async () => ({ zone: "America/Chicago", label: "Central Time", guessed: false, source: "account" }) }));
-vi.mock("@/components/zone-note", () => ({ ZoneNote: () => null }));
+// S-10 fix round I1: the REAL ZoneNote renders here. Mocked to null, the
+// note's language was never on screen in this file, which is how the page
+// shipped a Spanish table under an English "Times shown in" line.
 const dbMocks = vi.hoisted(() => ({ listAutomationLog: vi.fn(), countAutomationUsage: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
@@ -28,6 +37,7 @@ beforeEach(() => {
   dbMocks.listAutomationLog.mockReset().mockResolvedValue([]);
   dbMocks.countAutomationUsage.mockReset().mockResolvedValue(USAGE);
   authFixture.isAgency = true;
+  prefsFixture.language = null;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -68,6 +78,50 @@ describe("the Activity page", () => {
   it("the cold-start empty state offers the agency an action: a link to Automations (mutation: drop the action → FAILS)", async () => {
     const html = await render();
     expect(html).toMatch(new RegExp(`href="/dashboard/accounts/a1/automations"[^>]*>[^<]*Set up automations`));
+  });
+
+  // S-10 T5: the whole page used to be bare m[] reads, English regardless of the reader's own
+  // choice (`prefs.language`).
+  it("renders the title, usage card and empty state in Spanish for a Spanish-reading operator (mutation: hard-code English -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const text = renderedText(await render());
+    expect(text).toContain(m["activity.title.es"]);
+    expect(text).toContain(m["activity.usage.title.es"]);
+    expect(text).toContain(m["activity.empty.title.es"]);
+    expect(text).not.toContain("What went out");
+  });
+
+  it("names the zone in the reader's Spanish, through the real ZoneNote (mutation: drop locale from <ZoneNote> -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const text = renderedText(await render());
+    expect(text).toContain(m["zone.note.es"].replace("{zone}", "Central Time"));
+    expect(text).not.toContain(m["zone.note"].replace("{zone}", "Central Time"));
+  });
+
+  it("names this month in the reader's Spanish on the usage card (mutation: monthWindow without locale -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const text = renderedText(await render());
+    const expected = new Intl.DateTimeFormat("es-US", { timeZone: "America/Chicago", month: "long", year: "numeric" }).format(new Date());
+    const english = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "long", year: "numeric" }).format(new Date());
+    expect(text).toContain(expected);
+    expect(text).not.toContain(english);
+  });
+
+  // S-10 fix round M1: pseudo was resolved but never reached the title,
+  // the empty state or a row's status pill.
+  it("the QA pseudo-locale reaches the title, the empty state and a row's status pill (mutation: t(m, ...) / drop pseudo from <LogStatusPill> -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1"); vi.stubEnv("VERCEL", "");
+    try {
+      const pseudoRender = async () => renderToStaticMarkup(await ActivityPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({ locale: "pseudo" }) }));
+      let text = renderedText(await pseudoRender());
+      expect(text).toContain(pseudoLocale(m["activity.title"]));
+      expect(text).toContain(pseudoLocale(m["activity.empty.title"]));
+      dbMocks.listAutomationLog.mockResolvedValue([ROW]);
+      text = renderedText(await pseudoRender());
+      expect(text).toContain(pseudoLocale(m["activity.status.sent"]));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("gives a client reader no agency-only action — Automations is agency-only", async () => {

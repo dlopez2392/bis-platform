@@ -1,4 +1,6 @@
 import { wallInstant } from "@/lib/automations/quiet-hours";
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type MonthWindow = { fromIso: string; toIso: string; label: string };
 
@@ -20,8 +22,13 @@ export type MonthWindow = { fromIso: string; toIso: string; label: string };
  * reconciles minutes and falls back to the first wall reading at or after
  * the requested time when the requested minute doesn't exist.
  * `weekly-window.ts`'s own callers (the weekly report) are untouched.
+ *
+ * `locale` shapes the LABEL only (S-10: "septiembre de 2026" for a Spanish
+ * reader). The year/month parts below stay pinned to en-US because they are
+ * arithmetic, not display — a locale's own digits or ordering must never
+ * move a month edge.
  */
-export function monthWindow(now: Date, zone: string): MonthWindow {
+export function monthWindow(now: Date, zone: string, locale: Locale = "en"): MonthWindow {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone, year: "numeric", month: "2-digit" }).formatToParts(now);
   const year = Number(parts.find((p) => p.type === "year")!.value);
   const month = Number(parts.find((p) => p.type === "month")!.value);
@@ -30,6 +37,6 @@ export function monthWindow(now: Date, zone: string): MonthWindow {
   return {
     fromIso: wallInstant(year, month, 1, 0, zone).toISOString(),
     toIso: wallInstant(nextYear, nextMonth, 1, 0, zone).toISOString(),
-    label: new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "long", year: "numeric" }).format(now),
+    label: new Intl.DateTimeFormat(tag(locale), { timeZone: zone, month: "long", year: "numeric" }).format(now),
   };
 }

@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -21,6 +22,14 @@ vi.mock("next/navigation", () => ({
  *  the whole suite green while offering a client a link to a route
  *  `requireAgencyOnlyAccountAccess` would bounce them from. */
 const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
+// S-10 T5: this page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
+// same reason contacts/page.test.ts already uses — person-prefs pulls in @/lib/auth's
+// resolveClientAccessState through tenant-theme-reader.ts, which this file's own @/lib/auth mock
+// below does not define.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
+}));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role }),
 }));
@@ -71,10 +80,10 @@ vi.mock("@/lib/zone", () => ({
 
 const { default: CallsPage } = await import("./page");
 
-function route(before?: string) {
+function route(before?: string, locale?: string) {
   return {
     params: Promise.resolve({ accountId: "acct1" }),
-    searchParams: Promise.resolve({ before }),
+    searchParams: Promise.resolve({ before, locale }),
   };
 }
 
@@ -106,6 +115,7 @@ describe("CallsPage", () => {
   beforeEach(() => {
     listFailedOutboundSmsMock.mockReset();
     listFailedOutboundSmsMock.mockResolvedValue([]);
+    prefsFixture.language = null;
   });
 
   it("renders the cold-start EmptyState for a genuinely empty, uncursored account", async () => {
@@ -116,6 +126,25 @@ describe("CallsPage", () => {
     // `CallsTable`'s own header — its absence is what proves EmptyState, not
     // an empty table, is what rendered.
     expect(html).not.toContain("Outcome");
+  });
+
+  // S-10 T5: the whole page used to be bare m[] reads, English regardless of the reader's own
+  // choice (`prefs.language`).
+  it("renders the title, table headers and empty state in Spanish for a Spanish-reading operator (mutation: hard-code English -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    listCallsMock.mockResolvedValue([]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain(m["calls.title.es"]);
+    expect(html).toContain(m["calls.empty.title.es"]);
+    expect(html).not.toContain(m["calls.empty.title"]);
+  });
+
+  it("renders the table headers in Spanish once there are rows", async () => {
+    prefsFixture.language = "es";
+    listCallsMock.mockResolvedValue([{ ...ROW }]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain(m["calls.col.caller.es"]);
+    expect(html).toContain(m["calls.col.outcome.es"]);
   });
 
   /**
@@ -286,6 +315,42 @@ describe("CallsPage — the zone note", () => {
     expect(renderedText(html)).toContain(m["zone.guessed.client"]);
     expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
     expect(html).not.toContain("/settings");
+  });
+
+  // S-10 fix round I1: the page resolved the reader's locale and then rendered the
+  // note without it, so a Spanish page carried one English line under its meter.
+  it("names the zone in the reader's Spanish (mutation: drop locale from <ZoneNote> -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    try {
+      const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined))));
+      expect(text).toContain(m["zone.note.es"].replace("{zone}", "America/Chicago"));
+      expect(text).not.toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+    } finally {
+      prefsFixture.language = null;
+    }
+  });
+});
+
+// S-10 fix round M1: the QA pseudo-locale (?locale=pseudo, BIS_I18N_QA) was
+// resolved and handed to the table but never reached the title, the empty
+// state or the row's pills, so +35% length was never exercised on them.
+describe("CallsPage — the pseudo-locale (M1)", () => {
+  beforeEach(() => { vi.stubEnv("BIS_I18N_QA", "1"); vi.stubEnv("VERCEL", ""); prefsFixture.language = null; });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("reaches the title and the empty state (mutation: t(m, ...) instead of tr.text -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([]);
+    const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined, "pseudo"))));
+    expect(text).toContain(pseudoLocale(m["calls.title"]));
+    expect(text).toContain(pseudoLocale(m["calls.empty.title"]));
+  });
+
+  it("reaches a row's outcome pill and text-back badge (mutation: drop pseudo from <OutcomePill>/<TextbackFailedBadge> -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([ROW]);
+    listFailedOutboundSmsMock.mockResolvedValue([{ callId: "c1", conversationId: "cv1", messageId: "m1", body: "x", failedAt: "2026-08-25T19:16:00Z", supersededAt: null }]);
+    const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined, "pseudo"))));
+    expect(text).toContain(pseudoLocale(m["calls.outcome.abandoned"]));
+    expect(text).toContain(pseudoLocale(m["calls.textbackFailed"]));
   });
 });
 
