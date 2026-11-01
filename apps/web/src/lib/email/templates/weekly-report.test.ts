@@ -193,4 +193,71 @@ describe("weeklyReportSubject (D-064, review round 2)", () => {
     expect(weeklyReportSubject({ calls: 12, leads: 4, bookings: 2, visitors: 86 }))
       .toBe("Last week: 12 calls, 4 new leads");
   });
+
+  // S-10 T8: `locale` as a SECOND argument, English by default, so every
+  // 1-arg call above keeps its exact prior output.
+  it("in Spanish (mutation: drop the locale argument from any t()/plural() call → FAILS)", () => {
+    expect(weeklyReportSubject({ calls: 12, leads: 4, bookings: 2, visitors: 86 }, "es"))
+      .toBe("La semana pasada: 12 llamadas, 4 nuevos clientes potenciales");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 50 }, "es"))
+      .toBe("La semana pasada: 50 visitantes del sitio web");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 1 }, "es"))
+      .toBe("La semana pasada: 1 visitante del sitio web");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: null }, "es"))
+      .toBe("La semana pasada estuvo tranquila");
+  });
+});
+
+describe("S-10 T8: weeklyReportEmail and weeklyReportSubject in Spanish, usted, subject through footer", () => {
+  it("renders a non-quiet week's subject, body and CTA in Spanish, in both the html and text parts (mutation: pass \"en\" at any one t()/plural() call site → FAILS)", () => {
+    const { html, text } = weeklyReportEmail({
+      brand, now: week, prior: { calls: 9, leads: 4, bookings: 3, visitors: 74 },
+      dashboardUrl: "https://x.example/dashboard", reassurance: nothingOn, locale: "es",
+    });
+    expect(weeklyReportSubject(week, "es")).toBe("La semana pasada: 12 llamadas, 4 nuevos clientes potenciales");
+    expect(text).toContain("Así le fue la semana pasada.");
+    expect(text).toContain("llamadas atendidas");
+    expect(text).toContain("clientes potenciales captados");
+    expect(text).toContain("citas");
+    expect(text).toContain("visitantes del sitio web");
+    expect(text).toContain("3 más que la semana anterior");
+    expect(text).toContain("igual que la semana anterior");
+    expect(text).toContain("1 menos que la semana anterior");
+    expect(text).toContain("Abrir su panel: https://x.example/dashboard");
+    expect(html).toContain("Así le fue la semana pasada.");
+    expect(html).toContain("Abrir su panel");
+    // usted, never tú.
+    expect(text).not.toMatch(/\btu\b|\btus\b|\binténtalo\b/i);
+  });
+
+  it("renders the quiet-week body in Spanish, with the reassurance and a real visitor count, in both parts", () => {
+    const { html, text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 50 }, prior: null,
+      dashboardUrl: null, reassurance: { receptionist: true, textBack: true, receptionistName: "Max" },
+      locale: "es",
+    });
+    expect(text).toBe(
+      "No llegó nada la semana pasada — sin llamadas, sin clientes potenciales, sin citas.\n\n"
+      + "Su sitio web tuvo 50 visitantes la semana pasada.\n\n"
+      + "Max sigue atendiendo y su texto por llamada perdida sigue activo.",
+    );
+    expect(html).toContain("La semana pasada estuvo tranquila");
+    expect(html).toContain("Max sigue atendiendo");
+  });
+
+  it("singular visitor count stays grammatical in Spanish: 1 visitante, not 1 visitantes", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 1 }, prior: null,
+      dashboardUrl: null, reassurance: nothingOn, locale: "es",
+    });
+    expect(text).toContain("Su sitio web tuvo 1 visitante la semana pasada.");
+    expect(text).not.toContain("1 visitantes");
+  });
+
+  it("the CTA is omitted from the text footer when there is no dashboard url, in Spanish too", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: week, prior: null, dashboardUrl: null, reassurance: nothingOn, locale: "es",
+    });
+    expect(text).not.toContain("Abrir su panel");
+  });
 });

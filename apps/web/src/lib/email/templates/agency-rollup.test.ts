@@ -79,4 +79,23 @@ describe("agencyRollupEmail", () => {
     expect(text).not.toMatch(/visitors/i);
     expect(html).not.toMatch(/visitors/i);
   });
+
+  // S-10 T8 (spec §3.3, Q4): the client weekly report and the lead/call
+  // alerts moved to `accounts.language ?? "en"`; the agency roll-up did NOT
+  // — `AgencyRollupInput`/`RollupRow` carry no locale field, and `lines()`
+  // calls `deltaPhrase` with no third argument, so it keeps that function's
+  // own "en" default regardless of what any one account's language is.
+  it("stays English — no locale field on its input, and its deltas are English even with a prior week (mutation: pass \"es\" to the module's deltaPhrase call → FAILS)", () => {
+    const { text } = agencyRollupEmail({
+      brand: BRAND,
+      rows: [row({ brandName: "Rio Roofing", numbers: WEEK, prior: { calls: 9, leads: 4, bookings: 1, visitors: 74 } })],
+    });
+    expect(text).toContain("more than the week before");
+    expect(text).not.toMatch(/más que la semana anterior|menos que la semana anterior/);
+    // @ts-expect-error — AgencyRollupInput has no locale: the roll-up has no
+    // per-row language to read in the first place (its own row type never
+    // carried one), so there is nowhere for a caller to even ask for Spanish.
+    const bad: Parameters<typeof agencyRollupEmail>[0] = { brand: BRAND, rows: [], locale: "es" };
+    void bad;
+  });
 });

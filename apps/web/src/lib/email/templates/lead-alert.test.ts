@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
 import { emailBrand } from "./shell";
-import { leadAlertEmail } from "./lead-alert";
+import { leadAlertEmail, leadAlertSubject } from "./lead-alert";
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -65,5 +65,32 @@ describe("leadAlertEmail", () => {
     });
     expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
+  });
+
+  // S-10 T8: subject, heading, body and button in Spanish, in both parts
+  // (mutation: call t() with a hard-coded "en" at any one of the four
+  // template call sites → FAILS, because that site's English string would
+  // then show up instead of its Spanish twin below).
+  it("renders in Spanish — subject, heading, body and button, in both html and text (mutation: hard-code \"en\" at any t() call in the file → FAILS)", () => {
+    expect(leadAlertSubject("Roof quote", "es")).toBe("Nuevo cliente potencial: Roof quote");
+    const { html, text } = leadAlertEmail({
+      brand, formName: "Roof quote", answers, contactUrl: URL, locale: "es",
+    });
+    expect(html).toContain("Nuevo cliente potencial");
+    expect(html).toContain("De su formulario &ldquo;Roof quote&rdquo;.");
+    expect(html).toContain(`href="${URL}"`);
+    expect(html).toContain(">Abrir este contacto<");
+    expect(text).toBe(
+      'Nuevo cliente potencial de su formulario "Roof quote".\n\n'
+      + "Email: customer@example.com\nMessage: Need a quote for a new roof\n\n"
+      + `Abrir este contacto: ${URL}`,
+    );
+  });
+
+  it("English is unaffected when locale is omitted (mutation: change the default param to \"es\" → FAILS)", () => {
+    expect(leadAlertSubject("Roof quote")).toBe("New lead: Roof quote");
+    const { html, text } = leadAlertEmail({ brand, formName: "Roof quote", answers, contactUrl: URL });
+    expect(html).toContain("New lead");
+    expect(text).toContain('New lead from your form "Roof quote".');
   });
 });
