@@ -675,6 +675,13 @@ export const m = {
   "contacts.import.tooMany.es": "Son demasiadas filas a la vez. Intente con un archivo más pequeño.",
   "contacts.import.empty": "That file has no rows we can read.",
   "contacts.import.empty.es": "Ese archivo no tiene filas que podamos leer.",
+  // S-10 leftovers (#317 follow-up, item 4): the per-row reasons mapRows attaches to a skipped
+  // row (the inline "won't be imported" list and the downloaded skipped-rows.csv) — lowercase,
+  // matching the plain style a spreadsheet cell reads.
+  "contacts.import.reason.noEmailOrPhone": "no email or phone",
+  "contacts.import.reason.noEmailOrPhone.es": "sin correo ni teléfono",
+  "contacts.import.reason.invalidEmail": "invalid email",
+  "contacts.import.reason.invalidEmail.es": "correo inválido",
   "contacts.import.back": "Back to contacts",
   "contacts.import.back.es": "Volver a contactos",
   // The downloaded file's own name (Task 4) — "{date}" is the house

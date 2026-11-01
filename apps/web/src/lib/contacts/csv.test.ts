@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel } from "./csv";
 import { CSV_COLUMNS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route";
-import { m } from "@/lib/messages";
+// Aliased: the `mapRows` describe block below already owns the name `m` for its own
+// column-mapping fixture (Email -> email, etc.) — the catalogue is `messages` here instead.
+import { m as messages } from "@/lib/messages";
 
 describe("autoMap", () => {
   it("matches ignoring case, spaces, underscores and hyphens", () => {
@@ -50,17 +52,17 @@ describe("importFieldLabel", () => {
   });
 
   it("reads Spanish when asked (mutation: ignore the locale param -> FAILS)", () => {
-    expect(importFieldLabel("first_name", "es")).toBe(m["contacts.firstName.es"]);
-    expect(importFieldLabel("last_name", "es")).toBe(m["contacts.lastName.es"]);
-    expect(importFieldLabel("email", "es")).toBe(m["contacts.email.es"]);
-    expect(importFieldLabel("phone", "es")).toBe(m["contacts.phone.es"]);
-    expect(importFieldLabel("company_name", "es")).toBe(m["contact.company.es"]);
-    expect(importFieldLabel("source", "es")).toBe(m["contact.source.label.es"]);
-    expect(importFieldLabel("tags", "es")).toBe(m["contact.tags.es"]);
+    expect(importFieldLabel("first_name", "es")).toBe(messages["contacts.firstName.es"]);
+    expect(importFieldLabel("last_name", "es")).toBe(messages["contacts.lastName.es"]);
+    expect(importFieldLabel("email", "es")).toBe(messages["contacts.email.es"]);
+    expect(importFieldLabel("phone", "es")).toBe(messages["contacts.phone.es"]);
+    expect(importFieldLabel("company_name", "es")).toBe(messages["contact.company.es"]);
+    expect(importFieldLabel("source", "es")).toBe(messages["contact.source.label.es"]);
+    expect(importFieldLabel("tags", "es")).toBe(messages["contact.tags.es"]);
   });
 
   it("defaults to English with no locale given", () => {
-    expect(importFieldLabel("first_name")).toBe(m["contacts.firstName"]);
+    expect(importFieldLabel("first_name")).toBe(messages["contacts.firstName"]);
   });
 });
 
@@ -87,6 +89,25 @@ describe("mapRows", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]!.line).toBe(2);
     expect(mapped).toHaveLength(1);
+  });
+
+  // S-10 leftovers (#317 follow-up, item 4): the skipped-row reasons a person sees after an
+  // import (the inline "won't be imported" list and the downloaded skipped-rows.csv) were
+  // English-only literals — never routed through the catalogue at all.
+  describe("skipped-row reasons in the reader's language", () => {
+    it("reads the Spanish reason when asked, for both skip reasons (mutation: ignore the locale param -> FAILS)", () => {
+      const { errors: noContact } = mapRows([{ line: 5, values: { First: "Ada" } }], m, "es");
+      expect(noContact[0]!.reason).toBe(messages["contacts.import.reason.noEmailOrPhone.es"]);
+      const { errors: badEmail } = mapRows([{ line: 2, values: { Email: "not-an-email" } }], m, "es");
+      expect(badEmail[0]!.reason).toBe(messages["contacts.import.reason.invalidEmail.es"]);
+    });
+
+    it("defaults to the same plain-English reasons as before with no locale given (mutation: change the English default wording -> FAILS)", () => {
+      const { errors: noContact } = mapRows([{ line: 5, values: { First: "Ada" } }], m);
+      expect(noContact[0]!.reason).toBe("no email or phone");
+      const { errors: badEmail } = mapRows([{ line: 2, values: { Email: "not-an-email" } }], m);
+      expect(badEmail[0]!.reason).toBe("invalid email");
+    });
   });
 
   it("strips the leading quote our own export adds to a formula-looking cell", () => {

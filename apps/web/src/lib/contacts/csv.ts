@@ -135,6 +135,10 @@ export function autoMap(headers: string[]): Record<string, string | null> {
  */
 export function mapRows(
   rows: ParsedRow[], mapping: Record<string, string | null>,
+  // S-10 leftovers (#317 follow-up, item 4): default "en" so a caller that predates this param
+  // (applyImportBatch's own server-side re-validation, which never shows these reasons to anyone)
+  // is unchanged.
+  locale: Locale = "en",
 ): { mapped: MappedRow[]; errors: RowError[] } {
   const mapped: MappedRow[] = [];
   const errors: RowError[] = [];
@@ -163,11 +167,11 @@ export function mapRows(
     }
 
     if (!input.email && !input.phone) {
-      errors.push({ line: row.line, reason: "no email or phone" });
+      errors.push({ line: row.line, reason: t(m, "contacts.import.reason.noEmailOrPhone", locale) });
       continue;
     }
     if (input.email && !EMAIL_SHAPE.test(input.email)) {
-      errors.push({ line: row.line, reason: "invalid email" });
+      errors.push({ line: row.line, reason: t(m, "contacts.import.reason.invalidEmail", locale) });
       continue;
     }
 

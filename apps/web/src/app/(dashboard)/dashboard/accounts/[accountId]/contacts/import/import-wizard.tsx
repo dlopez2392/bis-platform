@@ -73,7 +73,7 @@ export function ImportWizard(
 
   // The same mapRows the server re-runs. This copy drives the preview only;
   // nothing here is trusted on the way in.
-  const { mapped, errors } = useMemo(() => mapRows(rows, mapping), [rows, mapping]);
+  const { mapped, errors } = useMemo(() => mapRows(rows, mapping, locale), [rows, mapping, locale]);
 
   const ignoredCount = useMemo(
     () => headers.filter((h) => !mapping[h]).length, [headers, mapping]);
