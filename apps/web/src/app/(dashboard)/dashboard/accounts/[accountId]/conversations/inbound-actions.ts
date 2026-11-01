@@ -12,6 +12,8 @@ import { emailContextFor } from "@/lib/consent/email-context";
 import { undoInboundStop, stopEmails } from "@/lib/consent/email-staff-actions";
 import { fileInboundEmail } from "@/lib/email/inbound/file";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * The thread's inbound-email actions (S-06 part 1). Every one proves the CONVERSATION on the request
@@ -42,20 +44,22 @@ async function provedThread(accountId: string, conversationId: string): Promise<
   return { db, contactId: (data as { contact_id: string }).contact_id };
 }
 
-export async function undoReplyStopAction(accountId: string, conversationId: string, eventId: string): Promise<ReplyActionResult> {
+export async function undoReplyStopAction(accountId: string, locale: Locale, conversationId: string, eventId: string): Promise<ReplyActionResult> {
   const { userId } = await requireAccountAccess(accountId);
   const thread = await provedThread(accountId, conversationId);
-  if (!thread) return { ok: false, error: m["conversations.held.changed"] };
+  if (!thread) return { ok: false, error: t(m, "conversations.held.changed", locale) };
   // The browser sent an eventId; prove it names a stop recorded on THIS thread before anyone acts on
   // it, and take the stop's own contact (a household member's, when the reply came from one) rather
   // than the thread's own contact, which may be someone else's address entirely.
   const messages = await listMessages(thread.db, accountId, conversationId);
   const owning = messages.find((msg) => metaOf(msg)?.consent?.kind === "stopped" && metaOf(msg)?.consent?.eventId === eventId);
-  if (!owning) return { ok: false, error: m["conversations.held.changed"] };
+  if (!owning) return { ok: false, error: t(m, "conversations.held.changed", locale) };
   const targetContactId = metaOf(owning)?.sender?.contact_id ?? thread.contactId;
-  // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
-  // silent default, until this screen resolves one of its own.
-  const ctx = await emailContextFor(accountId, targetContactId, userId, "en");
+  // S-10 T9a: the caller's own reader locale (the inbox bubble's `locale` prop), passed through to
+  // emailContextFor so every error consent/email-staff-actions.ts builds with it (including
+  // undoInboundStop's replyExpiredExplain) is ALREADY in the reader's language by the time it
+  // reaches the client — never the explicit "en" this action used before this screen resolved one.
+  const ctx = await emailContextFor(accountId, targetContactId, userId, locale);
   if ("ok" in ctx) return { ok: false, error: ctx.error };
   const r = await undoInboundStop(ctx, eventId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -65,21 +69,20 @@ export async function undoReplyStopAction(accountId: string, conversationId: str
   return r.ok ? { ok: true } : { ok: false, error: r.error, ...(r.expired ? { expired: true as const } : {}) };
 }
 
-export async function stopEmailsFromReplyAction(accountId: string, conversationId: string, contactId: string): Promise<ReplyActionResult> {
+export async function stopEmailsFromReplyAction(accountId: string, locale: Locale, conversationId: string, contactId: string): Promise<ReplyActionResult> {
   const { userId } = await requireAccountAccess(accountId);
   const thread = await provedThread(accountId, conversationId);
-  if (!thread) return { ok: false, error: m["conversations.held.changed"] };
+  if (!thread) return { ok: false, error: t(m, "conversations.held.changed", locale) };
   // The chip's "Stop emails" sends whichever contactId the bubble rendered for (the thread's own
   // contact, or a household member's when that message carried one) — prove it is actually one of
   // those two before building a context for it, rather than trusting the browser's own claim.
   if (contactId !== thread.contactId) {
     const messages = await listMessages(thread.db, accountId, conversationId);
     const onThread = messages.some((msg) => metaOf(msg)?.sender?.contact_id === contactId);
-    if (!onThread) return { ok: false, error: m["conversations.held.changed"] };
+    if (!onThread) return { ok: false, error: t(m, "conversations.held.changed", locale) };
   }
-  // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
-  // silent default, until this screen resolves one of its own.
-  const ctx = await emailContextFor(accountId, contactId, userId, "en");
+  // S-10 T9a: the caller's own reader locale, same fix as undoReplyStopAction above.
+  const ctx = await emailContextFor(accountId, contactId, userId, locale);
   if ("ok" in ctx) return { ok: false, error: ctx.error };
   const newest = newestDecidingRow(await readConsentHistory(ctx.writer, accountId, "email", ctx.address));
   const r = await stopEmails(ctx, newest?.id ?? null);
@@ -198,7 +201,7 @@ export async function dismissHeldEmailAction(accountId: string, id: string): Pro
   }
 }
 
-export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Promise<HeldUndoResult> {
+export async function undoHeldEmailAction(accountId: string, locale: Locale, undo: HeldUndo): Promise<HeldUndoResult> {
   const { userId } = await requireAccountAccess(accountId);
   try {
     const p = await provedRow(accountId, undo.id);
@@ -226,14 +229,16 @@ export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Pr
       if (owning) {
         reversalTarget = { contactId: metaOf(owning)?.sender?.contact_id ?? p.suggestion };
       } else {
-        stopNotReversed = m["conversations.held.changed"];
+        stopNotReversed = t(m, "conversations.held.changed", locale);
       }
     }
     const ok = await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId);
     if (ok && reversalTarget) {
-      // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
-      // silent default, until this screen resolves one of its own.
-      const ctx = await emailContextFor(accountId, reversalTarget.contactId, userId, "en");
+      // S-10 T9a: the caller's own reader locale, same fix as undoReplyStopAction above.
+      // `stopNotReversed`'s own value is never shown verbatim (held-email-handlers.ts only checks
+      // its presence), but it is now fully localized internally too, for the same reason: nothing
+      // downstream should ever have to re-derive a locale this action already has.
+      const ctx = await emailContextFor(accountId, reversalTarget.contactId, userId, locale);
       if ("ok" in ctx) {
         stopNotReversed = ctx.error;
       } else {

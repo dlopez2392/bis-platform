@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -137,7 +138,7 @@ describe("undoReplyStopAction", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
 
-    expect(await undoReplyStopAction(ACCOUNT, CONV, "ev_1")).toEqual({ ok: true });
+    expect(await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1")).toEqual({ ok: true });
     expect(dbMock.listMessages).toHaveBeenCalledWith(expect.objectContaining({ tag: "request-db" }), ACCOUNT, CONV);
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "en");
     expect(staffMock.undoInboundStop).toHaveBeenCalledWith(CTX, "ev_1");
@@ -146,11 +147,32 @@ describe("undoReplyStopAction", () => {
   it("a conversation the caller cannot see is refused before any thread read (mutation: skip the proof → FAILS)", async () => {
     CONV_ROW.value = null;
 
-    const result = await undoReplyStopAction(ACCOUNT, CONV, "ev_1");
+    const result = await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1");
     expect(result.ok).toBe(false);
     expect(dbMock.listMessages).not.toHaveBeenCalled();
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
+  });
+
+  // S-10 T9a: the inbox bubble's own reader locale, not the explicit "en" this action used before
+  // Conversations resolved one of its own — both the action's own fallback string AND the context it
+  // hands downstream (so undoInboundStop's replyExpiredExplain reaches a Spanish reader too).
+  it("in Spanish: the own-fallback 'changed' error is Spanish, and emailContextFor is called with 'es', never a hard-coded 'en' (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
+    CONV_ROW.value = null;
+
+    const result = await undoReplyStopAction(ACCOUNT, "es", CONV, "ev_1");
+    expect(result).toEqual({ ok: false, error: t(m, "conversations.held.changed", "es") });
+  });
+
+  it("in Spanish: a bound stop's context is built with the reader's own locale, not English (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
+    dbMock.listMessages.mockResolvedValue([
+      message({ meta: { sender: { contact_id: "luis" }, consent: { kind: "stopped", eventId: "ev_1" } } }),
+    ]);
+    ctxMock.emailContextFor.mockResolvedValue(CTX);
+    staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
+
+    await undoReplyStopAction(ACCOUNT, "es", CONV, "ev_1");
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "es");
   });
 
   it("an eventId not carried by any message on this thread is refused, never reaching emailContextFor (mutation: skip the binding check → FAILS)", async () => {
@@ -158,7 +180,7 @@ describe("undoReplyStopAction", () => {
       message({ meta: { consent: { kind: "stopped", eventId: "ev_OTHER" } } }),
     ]);
 
-    const result = await undoReplyStopAction(ACCOUNT, CONV, "ev_1");
+    const result = await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1");
     expect(result.ok).toBe(false);
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
@@ -171,7 +193,7 @@ describe("undoReplyStopAction", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
 
-    expect(await undoReplyStopAction(ACCOUNT, CONV, "ev_1")).toEqual({ ok: true });
+    expect(await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1")).toEqual({ ok: true });
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "ana", USER, "en");
   });
 
@@ -182,7 +204,7 @@ describe("undoReplyStopAction", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Only the customer can turn these emails back on.", expired: true });
 
-    expect(await undoReplyStopAction(ACCOUNT, CONV, "ev_1")).toEqual({
+    expect(await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1")).toEqual({
       ok: false, error: "Only the customer can turn these emails back on.", expired: true,
     });
   });
@@ -194,7 +216,7 @@ describe("undoReplyStopAction", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
 
-    const result = await undoReplyStopAction(ACCOUNT, CONV, "ev_1");
+    const result = await undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1");
     expect(result).toEqual({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
     expect(result).not.toHaveProperty("expired");
   });
@@ -207,7 +229,7 @@ describe("stopEmailsFromReplyAction", () => {
     dbMock.newestDecidingRow.mockReturnValue({ id: "ev_0", action: "resubscribed" });
     staffMock.stopEmails.mockResolvedValue({ ok: true, view: {} });
 
-    expect(await stopEmailsFromReplyAction(ACCOUNT, CONV, "ana")).toEqual({ ok: true });
+    expect(await stopEmailsFromReplyAction(ACCOUNT, "en", CONV, "ana")).toEqual({ ok: true });
     expect(dbMock.readConsentHistory).toHaveBeenCalledWith(CTX.writer, ACCOUNT, "email", CTX.address);
     expect(staffMock.stopEmails).toHaveBeenCalledWith(CTX, "ev_0");
   });
@@ -219,14 +241,14 @@ describe("stopEmailsFromReplyAction", () => {
     dbMock.newestDecidingRow.mockReturnValue(null);
     staffMock.stopEmails.mockResolvedValue({ ok: true, view: {} });
 
-    expect(await stopEmailsFromReplyAction(ACCOUNT, CONV, "luis")).toEqual({ ok: true });
+    expect(await stopEmailsFromReplyAction(ACCOUNT, "en", CONV, "luis")).toEqual({ ok: true });
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "en");
   });
 
   it("a contactId that is neither the thread's own contact nor any sender on this thread is refused before any service read (mutation: drop the binding check → FAILS)", async () => {
     dbMock.listMessages.mockResolvedValue([message({ meta: { sender: { contact_id: "luis" } } })]);
 
-    const result = await stopEmailsFromReplyAction(ACCOUNT, CONV, "someone-else");
+    const result = await stopEmailsFromReplyAction(ACCOUNT, "en", CONV, "someone-else");
     expect(result.ok).toBe(false);
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(dbMock.readConsentHistory).not.toHaveBeenCalled();
@@ -236,11 +258,30 @@ describe("stopEmailsFromReplyAction", () => {
   it("a conversation the caller cannot see is refused before any service read (mutation: skip the proof → FAILS)", async () => {
     CONV_ROW.value = null;
 
-    const result = await stopEmailsFromReplyAction(ACCOUNT, CONV, "ana");
+    const result = await stopEmailsFromReplyAction(ACCOUNT, "en", CONV, "ana");
     expect(result.ok).toBe(false);
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(dbMock.readConsentHistory).not.toHaveBeenCalled();
     expect(staffMock.stopEmails).not.toHaveBeenCalled();
+  });
+
+  // S-10 T9a: same fix as undoReplyStopAction.
+  it("in Spanish: the own-fallback 'changed' error is Spanish, and emailContextFor is called with 'es' (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
+    CONV_ROW.value = null;
+
+    const result = await stopEmailsFromReplyAction(ACCOUNT, "es", CONV, "ana");
+    expect(result).toEqual({ ok: false, error: t(m, "conversations.held.changed", "es") });
+  });
+
+  it("in Spanish: a bound member's context is built with the reader's own locale (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
+    dbMock.listMessages.mockResolvedValue([message({ meta: { sender: { contact_id: "luis" } } })]);
+    ctxMock.emailContextFor.mockResolvedValue(CTX);
+    dbMock.readConsentHistory.mockResolvedValue([]);
+    dbMock.newestDecidingRow.mockReturnValue(null);
+    staffMock.stopEmails.mockResolvedValue({ ok: true, view: {} });
+
+    await stopEmailsFromReplyAction(ACCOUNT, "es", CONV, "luis");
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "es");
   });
 });
 
@@ -343,11 +384,11 @@ describe("dismiss and the Undos", () => {
     dbMock.decideInboundEmail.mockResolvedValue(true);
     expect(await dismissHeldEmailAction(ACCOUNT, "ie_1")).toEqual({ ok: true, undo: { kind: "undismiss", id: "ie_1" } });
     requestRow.mockResolvedValue({ ...HELD, status: "dismissed" });
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "undismiss", id: "ie_1" })).toEqual({ ok: true });
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "undismiss", id: "ie_1" })).toEqual({ ok: true });
     expect(dbMock.decideInboundEmail).toHaveBeenLastCalledWith(SERVICE, ACCOUNT, "ie_1", "dismissed", { status: "held", decidedBy: null });
     requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
     dbMock.unfileInboundEmail.mockResolvedValue(true);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1" })).toEqual({ ok: true });
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1" })).toEqual({ ok: true });
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
     // No eventId on this undo payload (the File recorded no stop) — the reversal step never runs.
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
@@ -361,7 +402,7 @@ describe("dismiss and the Undos", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
     dbMock.unfileInboundEmail.mockResolvedValue(true);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: true });
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: true });
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, HELD_CONTACT, USER, "en");
     expect(staffMock.undoInboundStop).toHaveBeenCalledWith(CTX, "ev_1");
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
@@ -377,7 +418,7 @@ describe("dismiss and the Undos", () => {
       message({ id: "msg_1", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
     ]);
     dbMock.unfileInboundEmail.mockResolvedValue(false);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: false });
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: false });
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
   });
@@ -390,7 +431,7 @@ describe("dismiss and the Undos", () => {
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
     dbMock.unfileInboundEmail.mockResolvedValue(true);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
       .toEqual({ ok: true, stopNotReversed: "Their emails changed while you were looking. This is where they stand now." });
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
   });
@@ -401,17 +442,42 @@ describe("dismiss and the Undos", () => {
       message({ id: "msg_DIFFERENT", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
     ]);
     dbMock.unfileInboundEmail.mockResolvedValue(true);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
       .toEqual({ ok: true, stopNotReversed: m["conversations.held.changed"] });
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
+  });
+
+  // S-10 T9a: `stopNotReversed`'s own value is internal (never shown verbatim — see
+  // held-email-handlers.ts), but it is now built with the reader's own locale too, same as every
+  // other string this file returns (mutation: build it with "en" regardless of locale → FAILS).
+  it("in Spanish: the unbound-reversal fallback is Spanish (mutation: build it with \"en\" regardless of locale → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.listMessages.mockResolvedValue([
+      message({ id: "msg_DIFFERENT", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+    ]);
+    dbMock.unfileInboundEmail.mockResolvedValue(true);
+    expect(await undoHeldEmailAction(ACCOUNT, "es", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+      .toEqual({ ok: true, stopNotReversed: t(m, "conversations.held.changed", "es") });
+  });
+
+  it("in Spanish: the stop reversal's own context is built with the reader's locale, never a hard-coded \"en\" (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.listMessages.mockResolvedValue([
+      message({ id: "msg_1", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+    ]);
+    ctxMock.emailContextFor.mockResolvedValue(CTX);
+    staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
+    dbMock.unfileInboundEmail.mockResolvedValue(true);
+    await undoHeldEmailAction(ACCOUNT, "es", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" });
+    expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, HELD_CONTACT, USER, "es");
   });
 
   it("no message on the thread carries the eventId at all (listMessages answers []): no reversal, stopNotReversed set to the changed sentence (fix round 2 item 3; mutation: skip setting stopNotReversed when unbound → FAILS)", async () => {
     requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
     dbMock.listMessages.mockResolvedValue([]);
     dbMock.unfileInboundEmail.mockResolvedValue(true);
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
       .toEqual({ ok: true, stopNotReversed: m["conversations.held.changed"] });
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
@@ -430,7 +496,7 @@ describe("dismiss and the Undos", () => {
 
   it("undoHeldEmailAction: any throw anywhere in the body answers { ok: false }, never { ok: false, error } (fix round 1 item 5; mutation: let the throw escape → FAILS)", async () => {
     requestRow.mockRejectedValue(new Error("db outage"));
-    expect(await undoHeldEmailAction(ACCOUNT, { kind: "undismiss", id: "ie_1" })).toEqual({ ok: false });
+    expect(await undoHeldEmailAction(ACCOUNT, "en", { kind: "undismiss", id: "ie_1" })).toEqual({ ok: false });
   });
 
   it("provedRow's own conversation read failing (an outage, not a miss) answers 'failed', never 'changed' (fix round 1 minor; mutation: ignore the read's error → FAILS)", async () => {
