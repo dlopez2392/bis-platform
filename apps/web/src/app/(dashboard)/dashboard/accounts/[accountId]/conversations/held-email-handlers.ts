@@ -63,10 +63,12 @@ export async function runHeldAction(
  *  email came back to Needs a look, but the customer's own emailed stop
  *  (which Undo also tries to reverse) could not be, because it had already
  *  expired or changed since. Coordinator round 1 (2026-10-16): its VALUE
- *  (one of a few English server strings) is never matched or shown —
- *  `conversations.held.undoneStopped` covers every reason the same way,
- *  reported as a SECOND, separate info toast, because the main one still
- *  has to say the Undo itself worked — it did. */
+ *  (one of a few server strings, already localized by inbound-actions.ts's
+ *  own `locale` since the review fix round that retired `localizedError`)
+ *  is still never matched or shown — `conversations.held.undoneStopped`
+ *  covers every reason the same way, reported as a SECOND, separate info
+ *  toast, because the main one still has to say the Undo itself worked —
+ *  it did. */
 export async function runUndoHeldEmail(
   run: () => Promise<HeldUndoResult>,
   toast: HeldToast,
