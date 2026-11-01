@@ -3,7 +3,7 @@ import type { AccountBilling, BillingLink, Plan, Reconciliation } from "@bis/db"
 import { m } from "@/lib/messages";
 import {
   billingStatusOf, BILLING_STATUS_TREATMENTS, usageLines, includedLine, monthStartInZone, usagePeriodStart, billingCardView,
-  showsPaymentFailedBanner, formatDay, formatMoment,
+  showsPaymentFailedBanner, formatDay, formatMoment, priceLine, billingStatusTreatment,
   type BillingStatus,
 } from "./billing-view";
 
@@ -264,5 +264,58 @@ describe("billingCardView: pause, lift and reconciliation (G3, G13, G19; M7a PR-
         .replace("{meter}", m["billing.card.reconcile.meter.ai_chats"]).replace("{stripe}", "7").replace("{bis}", "3")
         .replace("{when}", formatMoment(new Date("2026-10-16T01:00:00+00:00"), ZONE)),
     ]);
+  });
+});
+
+// S-10 T6: the client Billing page's own words, read through m[...] directly
+// (English regardless of the reader's own choice). priceLine, includedLine,
+// usageLines and billingCardView now take an optional trailing/field locale
+// (default "en", every existing caller above unaffected) and read through
+// t(); formatDay/formatMoment already took one (M7a PR-4), but billingCardView
+// never passed it through to them.
+describe("billing-view: Spanish (S-10 T6)", () => {
+  it("priceLine reads '{price}/mes' in Spanish (mutation: drop the locale arg from the template lookup → FAILS)", () => {
+    expect(priceLine(14900)).toBe("$149.00/month");
+    expect(priceLine(14900, "es")).toBe("$149.00/mes");
+  });
+
+  it("includedLine and usageLines read in Spanish, with the same meter order and the same none-included rule (mutation: hard-code m[key] → FAILS)", () => {
+    expect(includedLine({ voice_minutes: 500, sms: 1000, ai_chats: 200 }, "es"))
+      .toBe("Incluye 500 minutos de llamadas, 1,000 mensajes de texto y 200 chats del sitio web cada mes.");
+    expect(includedLine({ voice_minutes: 0, sms: 0, ai_chats: 0 }, "es")).toBe(m["billing.includes.none.es"]);
+    const lines = usageLines({ voice_minutes: 500, sms: 1000, ai_chats: 0 }, { voice_minutes: 312, sms: 0, ai_chats: 4 }, "es");
+    expect(lines.map((l) => l.text)).toEqual([
+      "312 de 500 minutos", "0 de 1,000 mensajes de texto", "4 chats del sitio web (ninguno incluido)",
+    ]);
+  });
+
+  it("billingCardView's since/nextInvoice read in the reader's language, with the date itself formatted in Spanish (mutation: thread locale into the t() call but not into formatDay → FAILS)", () => {
+    const esView = billingCardView({
+      billing: row(), link: null, plan: plan("p1"), activePlans: [plan("p1")],
+      used: { voice_minutes: 312, sms: 0, ai_chats: 0 }, zone: ZONE, now: NOW, defaultEmail: "owner@example.com",
+      stripeReady: true, webhookReady: true, locale: "es",
+    });
+    expect(esView.since).toBe(`Desde el ${formatDay(new Date("2026-10-12T17:00:00Z"), ZONE, "es")}`);
+    expect(esView.nextInvoice).toBe(`Próxima factura el ${formatDay(new Date("2026-11-12T17:00:00Z"), ZONE, "es")}`);
+  });
+
+  it("billingCardView's pause and lifted lines read in Spanish, reusing the twins billing-paused-banner.tsx already ships (mutation: read m[key] directly → FAILS)", () => {
+    const paused = row({ subscriptionStatus: "past_due", pastDueSince: "2026-10-01T17:00:00+00:00", billingPausedAt: "2026-10-08T17:00:00+00:00" });
+    const v = billingCardView({
+      billing: paused, link: null, plan: plan("p1"), activePlans: [plan("p1")],
+      used: { voice_minutes: 0, sms: 0, ai_chats: 0 }, zone: ZONE, now: NOW, defaultEmail: "x@example.com",
+      stripeReady: true, webhookReady: true, locale: "es",
+    });
+    expect(v.pause?.line).toBe(m["billing.card.pausedPayment.es"].replace("{date}", "8 oct").replace("{failed}", "1 oct"));
+  });
+
+  it("billingStatusTreatment translates the label only, keeping the same token classes BILLING_STATUS_TREATMENTS already carries (mutation: return the English label for es → FAILS)", () => {
+    for (const status of Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]) {
+      const es = billingStatusTreatment(status, "es");
+      expect(es.label).toBe(m[`billing.status.${status}.es`]);
+      expect(es.dot).toBe(BILLING_STATUS_TREATMENTS[status].dot);
+      expect(es.chip).toBe(BILLING_STATUS_TREATMENTS[status].chip);
+    }
+    expect(billingStatusTreatment("active", "en")).toEqual(BILLING_STATUS_TREATMENTS.active);
   });
 });

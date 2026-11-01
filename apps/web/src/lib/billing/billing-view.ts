@@ -4,6 +4,9 @@ import {
 } from "@bis/db";
 import { localMidnightInstant } from "@/lib/reports/weekly-window";
 import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
 import { formatCents } from "./plan-form";
 import { PAUSE_FORWARD_MS, pauseCause } from "./standing";
 
@@ -60,6 +63,22 @@ export const BILLING_STATUS_TREATMENTS: Record<BillingStatus, { label: string; d
   unbilled: { label: m["billing.status.unbilled"], dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
 };
 
+const BILLING_STATUS_KEY: Record<BillingStatus, MessageKey> = {
+  active: "billing.status.active", payment_failed: "billing.status.payment_failed", paused: "billing.status.paused",
+  canceled: "billing.status.canceled", complimentary: "billing.status.complimentary", link_sent: "billing.status.link_sent",
+  unbilled: "billing.status.unbilled",
+};
+
+/**
+ * S-10 T6: BILLING_STATUS_TREATMENTS above is a module-level English
+ * constant — correct for its agency-only and styleguide readers (Q4 stays
+ * English), wrong for the client Billing page, which reads the SAME status
+ * word. Same dot/chip token classes; only the label is re-read through t().
+ */
+export function billingStatusTreatment(status: BillingStatus, locale: Locale): { label: string; dot: string; chip: string } {
+  return { ...BILLING_STATUS_TREATMENTS[status], label: t(m, BILLING_STATUS_KEY[status], locale) };
+}
+
 /** The zone a billing date is shown in: the account's own, when usable. */
 export const FALLBACK_ZONE = "America/Chicago";
 export function safeZone(tz: string | null | undefined): string {
@@ -96,20 +115,20 @@ export function usagePeriodStart(billing: AccountBilling, zone: string, now: Dat
  *  that character and an ordinary no-break space to a plain one either way. */
 const plainSpaces = (s: string): string => s.replace(/[\u00A0\u202F]/g, " ");
 
-export function formatDay(d: Date, zone: string): string {
-  return plainSpaces(new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" }).format(d));
+export function formatDay(d: Date, zone: string, locale: Locale = "en"): string {
+  return plainSpaces(new Intl.DateTimeFormat(tag(locale), { timeZone: zone, month: "short", day: "numeric" }).format(d));
 }
 
-export function formatMoment(d: Date, zone: string): string {
-  return plainSpaces(new Intl.DateTimeFormat("en-US", {
+export function formatMoment(d: Date, zone: string, locale: Locale = "en"): string {
+  return plainSpaces(new Intl.DateTimeFormat(tag(locale), {
     timeZone: zone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   }).format(d));
 }
 
-const count = (n: number): string => n.toLocaleString("en-US");
+const count = (n: number, locale: Locale = "en"): string => n.toLocaleString(tag(locale));
 
-export function priceLine(cents: number): string {
-  return m["billing.price"].replace("{price}", formatCents(cents));
+export function priceLine(cents: number, locale: Locale = "en"): string {
+  return t(m, "billing.price", locale, { price: formatCents(cents) });
 }
 
 const INCLUDED_COPY: Record<MeterKey, MessageKey> = {
@@ -118,12 +137,16 @@ const INCLUDED_COPY: Record<MeterKey, MessageKey> = {
 
 /** "It includes 500 minutes of calls, 1,000 texts and 200 website chats each
  *  month." Only what the plan includes: a zero allowance is left out (never
- *  "0 minutes of calls"), and a plan that includes nothing says so plainly. */
-export function includedLine(a: MeterAmounts): string {
-  const parts = METER_KEYS.filter((k) => a[k] > 0).map((k) => m[INCLUDED_COPY[k]].replace("{n}", count(a[k])));
-  if (parts.length === 0) return m["billing.includes.none"];
-  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]!}`;
-  return m["billing.includes"].replace("{list}", list);
+ *  "0 minutes of calls"), and a plan that includes nothing says so plainly.
+ *  The English join word ("and") stays literal only on the "en" branch; the
+ *  Spanish list joins with a bare " y " (no serial comma, the glossary's own
+ *  convention for a generated list — the website sentence's precedent). */
+export function includedLine(a: MeterAmounts, locale: Locale = "en"): string {
+  const parts = METER_KEYS.filter((k) => a[k] > 0).map((k) => t(m, INCLUDED_COPY[k], locale, { n: count(a[k], locale) }));
+  if (parts.length === 0) return t(m, "billing.includes.none", locale);
+  const join = locale === "es" ? " y " : " and ";
+  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")}${join}${parts[parts.length - 1]!}`;
+  return t(m, "billing.includes", locale, { list });
 }
 
 export type UsageLine = { meter: MeterKey; used: number; included: number; over: boolean; text: string };
@@ -135,12 +158,12 @@ const USAGE_COPY: Record<MeterKey, { of: MessageKey; none: MessageKey }> = {
 };
 
 /** "312 of 500 minutes", one line per meter, in METER_KEYS order. */
-export function usageLines(allowances: MeterAmounts, used: MeterAmounts): UsageLine[] {
+export function usageLines(allowances: MeterAmounts, used: MeterAmounts, locale: Locale = "en"): UsageLine[] {
   return METER_KEYS.map((meter) => {
     const included = allowances[meter];
     const text = included === 0
-      ? m[USAGE_COPY[meter].none].replace("{used}", count(used[meter]))
-      : m[USAGE_COPY[meter].of].replace("{used}", count(used[meter])).replace("{included}", count(included));
+      ? t(m, USAGE_COPY[meter].none, locale, { used: count(used[meter], locale) })
+      : t(m, USAGE_COPY[meter].of, locale, { used: count(used[meter], locale), included: count(included, locale) });
     return { meter, used: used[meter], included, over: used[meter] > included, text };
   });
 }
@@ -201,13 +224,18 @@ export function billingCardView(input: {
    *  caller (Task 11) wires it — unenforced, the card makes no claim about
    *  calls or automations the switch is not actually acting on. */
   enforced?: boolean;
+  /** S-10 T6: the reader's own locale. Optional, defaulting to "en" — the
+   *  agency's Settings card and styleguide never pass one (Q4 keeps those
+   *  screens English); the client Billing page passes its resolved locale. */
+  locale?: Locale;
 }): BillingCardView {
   const { billing, link, plan, activePlans, used, zone, now, stripeReady, webhookReady } = input;
+  const locale = input.locale ?? "en";
   const reconciliationUnchecked = input.reconciliations === null;
   const reconciliations = input.reconciliations ?? [];
   const enforced = input.enforced ?? false;
   const status = billingStatusOf(billing, link, now);
-  const option = (p: Plan): PlanOption => ({ id: p.id, name: p.name, price: priceLine(p.monthlyPriceCents) });
+  const option = (p: Plan): PlanOption => ({ id: p.id, name: p.name, price: priceLine(p.monthlyPriceCents, locale) });
   const live = billing !== null && liveSubscription(billing);
   // A live link can coexist with a `complimentary` row (Send is offered on
   // complimentary, G1's complimentary→paid): the status word is `complimentary`,
@@ -221,34 +249,37 @@ export function billingCardView(input: {
   const pause = pausedAt && billing
     ? {
         line: pauseCause(billing) === "ended"
-          ? m["billing.card.pausedEnded"].replace("{date}", formatDay(new Date(pausedAt), zone))
-          : m["billing.card.pausedPayment"].replace("{date}", formatDay(new Date(pausedAt), zone))
-              .replace("{failed}", formatDay(new Date(billing.pastDueSince ?? pausedAt), zone)),
+          ? t(m, "billing.card.pausedEnded", locale, { date: formatDay(new Date(pausedAt), zone, locale) })
+          : t(m, "billing.card.pausedPayment", locale, {
+              date: formatDay(new Date(pausedAt), zone, locale),
+              failed: formatDay(new Date(billing.pastDueSince ?? pausedAt), zone, locale),
+            }),
         // m3: a claim about calls, so only while the switch enforces it.
-        noForward: enforced && now.getTime() - Date.parse(pausedAt) >= PAUSE_FORWARD_MS ? m["billing.card.noForward"] : null,
+        noForward: enforced && now.getTime() - Date.parse(pausedAt) >= PAUSE_FORWARD_MS ? t(m, "billing.card.noForward", locale) : null,
       }
     : null;
   // M10: on a still-unpaid OR an ended plan.
   const lifted = !pausedAt && billing?.pauseLiftedAt && (status === "payment_failed" || status === "canceled")
-    ? m["billing.card.lifted"].replace("{date}", formatDay(new Date(billing.pauseLiftedAt), zone)) : null;
+    ? t(m, "billing.card.lifted", locale, { date: formatDay(new Date(billing.pauseLiftedAt), zone, locale) }) : null;
   const reconciliation = reconciliations
     .filter((r) => ALERTING_VERDICTS.includes(r.verdict))
-    .map((r) => m["billing.card.reconcile.line"]
-      .replace("{meter}", m[`billing.card.reconcile.meter.${r.meter}` as MessageKey])
-      .replace("{stripe}", count(r.stripeTotal)).replace("{bis}", count(r.bisSettled + r.bisInFlight + r.bisHeld))
-      .replace("{when}", formatMoment(new Date(r.checkedAt), zone)));
+    .map((r) => t(m, "billing.card.reconcile.line", locale, {
+      meter: t(m, `billing.card.reconcile.meter.${r.meter}` as MessageKey, locale),
+      stripe: count(r.stripeTotal, locale), bis: count(r.bisSettled + r.bisInFlight + r.bisHeld, locale),
+      when: formatMoment(new Date(r.checkedAt), zone, locale),
+    }));
   return {
     status,
     plan: plan ? option(plan) : null,
-    usage: plan && used ? usageLines(plan.allowances, used) : [],
-    since: period ? m["billing.usage.since"].replace("{date}", formatDay(period.start, zone)) : null,
+    usage: plan && used ? usageLines(plan.allowances, used, locale) : [],
+    since: period ? t(m, "billing.usage.since", locale, { date: formatDay(period.start, zone, locale) }) : null,
     // Not while `incomplete`: the first payment hasn't gone through, so
     // promising a next invoice date would be a guess (G21's same reasoning).
     nextInvoice: live && billing?.subscriptionStatus !== "incomplete" && billing?.currentPeriodEnd
-      ? m["billing.nextInvoice"].replace("{date}", formatDay(new Date(billing.currentPeriodEnd), zone))
+      ? t(m, "billing.nextInvoice", locale, { date: formatDay(new Date(billing.currentPeriodEnd), zone, locale) })
       : null,
     link: linkLive && !live && link
-      ? { sentTo: link.sentTo, expires: formatMoment(new Date(link.expiresAt), zone), url: link.checkoutUrl }
+      ? { sentTo: link.sentTo, expires: formatMoment(new Date(link.expiresAt), zone, locale), url: link.checkoutUrl }
       : null,
     planOptions: activePlans.map(option),
     defaultEmail: input.defaultEmail,
