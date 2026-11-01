@@ -50,3 +50,20 @@ describe("longDayLabel", () => {
     expect(longDayLabel("2027-12-31")).toBe("December 31");
   });
 });
+
+// S-10 T2: the dashboard's calls chart (bar tooltip + axis labels) was pinned
+// to "en-US" regardless of the reader's own locale (spec §3.1 row 2). Both
+// helpers now take an optional `locale`, defaulting to "en" so every case
+// above stays byte-for-byte unchanged (mutation: drop the default → every
+// existing call site above FAILS to compile).
+describe("shortDayLabel/longDayLabel in Spanish", () => {
+  it("shortDayLabel renders es-US month abbreviations, no trailing period (measured on Node 24.13.0/ICU 77.1)", () => {
+    expect(shortDayLabel("2027-06-15", "es")).toBe("15 jun");
+    expect(shortDayLabel("2027-07-01", "es")).toBe("1 jul");
+  });
+
+  it("longDayLabel renders the full Spanish month name", () => {
+    expect(longDayLabel("2027-08-18", "es")).toBe("18 de agosto");
+    expect(longDayLabel("2027-12-31", "es")).toBe("31 de diciembre");
+  });
+});

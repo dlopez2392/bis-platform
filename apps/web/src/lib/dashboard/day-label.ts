@@ -16,6 +16,9 @@
 // of any DST edge, though none applies to a pure calendar read) and format
 // with an EXPLICIT `timeZone: "UTC"` — a pure calendar-date operation,
 // provably independent of whatever zone the process happens to run in.
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
+
 function parseDayKey(dayKey: string): { y: number; m: number; d: number } {
   const [y, m, d] = dayKey.split("-").map(Number);
   return { y: y!, m: m!, d: d! };
@@ -26,26 +29,28 @@ function anchor(dayKey: string): Date {
   return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 }
 
-const SHORT_FORMAT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "UTC",
-  month: "short",
-  day: "numeric",
-});
+// S-10 T2 (spec §3.1 row 2): these two formatters were pinned to "en-US"
+// regardless of the reader's own locale — cached per-locale rather than
+// constructed fresh per call, the same `Intl.DateTimeFormat` reuse the
+// original "en-US"-only constants already did.
+const SHORT_FORMAT: Record<Locale, Intl.DateTimeFormat> = {
+  en: new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }),
+  es: new Intl.DateTimeFormat(tag("es"), { timeZone: "UTC", month: "short", day: "numeric" }),
+};
 
-const LONG_FORMAT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "UTC",
-  month: "long",
-  day: "numeric",
-});
+const LONG_FORMAT: Record<Locale, Intl.DateTimeFormat> = {
+  en: new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", day: "numeric" }),
+  es: new Intl.DateTimeFormat(tag("es"), { timeZone: "UTC", month: "long", day: "numeric" }),
+};
 
-/** "Aug 18" — the chart axis's window-start label, and the visible half of
- *  each bar's hover tooltip ("Aug 18 · 5 calls"). */
-export function shortDayLabel(dayKey: string): string {
-  return SHORT_FORMAT.format(anchor(dayKey));
+/** "Aug 18" ("15 jun" in Spanish) — the chart axis's window-start label, and
+ *  the visible half of each bar's hover tooltip ("Aug 18 · 5 calls"). */
+export function shortDayLabel(dayKey: string, locale: Locale = "en"): string {
+  return SHORT_FORMAT[locale].format(anchor(dayKey));
 }
 
-/** "August 18" — the date half of each bar's `sr-only` text ("August 18, 5
- *  calls"). */
-export function longDayLabel(dayKey: string): string {
-  return LONG_FORMAT.format(anchor(dayKey));
+/** "August 18" ("18 de agosto" in Spanish) — the date half of each bar's
+ *  `sr-only` text ("August 18, 5 calls"). */
+export function longDayLabel(dayKey: string, locale: Locale = "en"): string {
+  return LONG_FORMAT[locale].format(anchor(dayKey));
 }

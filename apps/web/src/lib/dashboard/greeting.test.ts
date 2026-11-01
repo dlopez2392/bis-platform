@@ -83,4 +83,13 @@ describe("formatLocalLongDate", () => {
       "Wednesday, June 16, 2027",
     );
   });
+
+  // S-10 T2 (spec §3.1 row 2): this was pinned to "en-US" regardless of the
+  // reader's own locale. Optional `locale`, defaulting to "en" so every case
+  // above is unaffected.
+  it("in Spanish: the same zone-local calendar date, in es-US wording (measured on Node 24.13.0/ICU 77.1)", () => {
+    expect(formatLocalLongDate(new Date("2027-07-03T16:00:00.000Z"), "America/New_York", "es")).toBe(
+      "sábado, 3 de julio de 2027",
+    );
+  });
 });

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@bis/db";
 import { getSiteForAccount, listTrafficDays, listTrafficBreakdown } from "@bis/db";
 import { safeZone } from "@/lib/booking/time";
+import type { Locale } from "@/lib/i18n/locale";
 import { buildWebsiteView, windowDayKeys, type Period, type WebsiteView } from "./view-model";
 
 export type WebsiteState =
@@ -16,6 +17,9 @@ export type WebsiteState =
  */
 export async function loadWebsiteState(
   db: SupabaseClient, accountId: string, period: Period, now: Date,
+  // S-10 T2: the reader's own locale, for the sentence panel only. Optional,
+  // default "en", so every pre-existing call site renders exactly as before.
+  locale: Locale = "en",
 ): Promise<WebsiteState> {
   const site = await getSiteForAccount(db, accountId);
   if (!site) return { state: "unlinked" };
@@ -34,6 +38,6 @@ export async function loadWebsiteState(
   ]);
   return {
     state: "ready", domain: site.domain,
-    view: buildWebsiteView({ now, timezone, period, daily, breakdown, lastSyncedDay: site.lastSyncedDay }),
+    view: buildWebsiteView({ now, timezone, period, daily, breakdown, lastSyncedDay: site.lastSyncedDay, locale }),
   };
 }

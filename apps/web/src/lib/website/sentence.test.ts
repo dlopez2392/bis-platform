@@ -50,3 +50,63 @@ describe("websiteSentence", () => {
     expect(text(websiteSentence({ ...base, topSource: { name: "Direct", visitors: 700, share: 0.6 }, runnerUpSourceShare: 0.2 }))).not.toContain("found you on");
   });
 });
+
+// S-10 T2 (spec §3.1 row 13): the sentence panel is generated prose, not a
+// catalogue read, and was English-only regardless of the reader's locale.
+// `locale` is a new, optional third parameter (default "en") so every test
+// above is byte-for-byte unaffected (mutation: drop the default → every
+// existing call site above fails to compile).
+describe("websiteSentence in Spanish (usted register, Valley trades Spanish)", () => {
+  it("the full sentence, with the same bold fragments as the English mockup", () => {
+    const s = websiteSentence(base, "es");
+    expect(text(s)).toBe(
+      "1,284 personas visitaron su sitio web, 18% más que las dos semanas anteriores. "
+      + "La mayoría llegó desde Google, la página que más leyeron fue Services, y siete de cada diez estaban en el celular.",
+    );
+    expect(strong(s)).toEqual(["1,284 personas", "18% más", "Google", "Services"]);
+  });
+
+  it("under 5% change reads 'casi igual que'", () => {
+    expect(text(websiteSentence({ ...base, visitors: 1100, priorVisitors: 1088 }, "es")))
+      .toMatch(/^1,100 personas visitaron su sitio web, casi igual que las dos semanas anteriores\./);
+  });
+
+  it("fewer is 'menos', and the period phrase follows the period", () => {
+    expect(text(websiteSentence({ ...base, period: 7, visitors: 500, priorVisitors: 1000 }, "es")))
+      .toContain("50% menos que la semana anterior");
+    expect(text(websiteSentence({ ...base, period: 30 }, "es"))).toContain("que el mes anterior");
+  });
+
+  it("names the top page only with a 10-point lead over the runner-up; the top source likewise", () => {
+    expect(text(websiteSentence({ ...base, runnerUpPageShare: 0.30 }, "es"))).not.toContain("la página que más leyeron");
+    expect(text(websiteSentence({ ...base, runnerUpPageShare: 0.20 }, "es"))).toContain("la página que más leyeron fue Services");
+    expect(text(websiteSentence({ ...base, runnerUpSourceShare: 0.55 }, "es"))).not.toContain("llegó desde");
+  });
+
+  it("names a device only at 60% share, in tenths ('de cada diez'), and 'la computadora' for desktop", () => {
+    expect(text(websiteSentence({ ...base, topDevice: { name: "desktop", visitors: 1, share: 0.64 } }, "es"))).toContain("seis de cada diez estaban en la computadora");
+    expect(text(websiteSentence({ ...base, topDevice: { name: "mobile", visitors: 1, share: 0.55 } }, "es"))).not.toContain("de cada diez");
+    expect(text(websiteSentence({ ...base, topDevice: { name: "mobile", visitors: 1, share: 0.97 } }, "es"))).toContain("casi todos estaban en el celular");
+  });
+
+  it("under 20 visitors: the plain count and nothing else, with singular/plural agreement", () => {
+    expect(text(websiteSentence({ ...base, visitors: 14, priorVisitors: 3 }, "es"))).toBe("14 personas visitaron su sitio web en las últimas dos semanas.");
+    expect(text(websiteSentence({ ...base, visitors: 1, priorVisitors: 0 }, "es"))).toBe("1 persona visitó su sitio web en las últimas dos semanas.");
+    expect(text(websiteSentence({ ...base, visitors: 0, priorVisitors: 0 }, "es"))).toBe("Todavía nadie ha visitado su sitio web en las últimas dos semanas.");
+  });
+
+  it("a zero prior period never divides: it reads as a plain count too", () => {
+    expect(text(websiteSentence({ ...base, visitors: 40, priorVisitors: 0 }, "es")))
+      .toMatch(/^40 personas visitaron su sitio web en las últimas dos semanas\./);
+  });
+
+  it("a Direct lead is never announced as 'llegó desde'", () => {
+    expect(text(websiteSentence({ ...base, topSource: { name: "Direct", visitors: 700, share: 0.6 }, runnerUpSourceShare: 0.2 }, "es")))
+      .not.toContain("llegó desde");
+  });
+
+  it("never switches to tú (usted everywhere): no bare tú-only word appears", () => {
+    const TU = /\b(tu|tus|te|vos|visitaste)\b/i;
+    expect(TU.test(text(websiteSentence(base, "es")))).toBe(false);
+  });
+});
