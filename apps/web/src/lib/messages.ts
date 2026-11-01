@@ -423,8 +423,11 @@ export const m = {
   // from `greetingPeriod` (lib/dashboard/greeting.ts), read from the
   // ACCOUNT's timezone, never the viewer's.
   "dashboard.greeting.morning": "Good morning, {name}",
+  "dashboard.greeting.morning.es": "Buenos días, {name}",
   "dashboard.greeting.afternoon": "Good afternoon, {name}",
+  "dashboard.greeting.afternoon.es": "Buenas tardes, {name}",
   "dashboard.greeting.evening": "Good evening, {name}",
+  "dashboard.greeting.evening.es": "Buenas noches, {name}",
   // D-072: an unbranded client's greeting must never fall back to
   // `accounts.name` (the agency's own private label) — brandDisplayName's
   // own rule, extended here. The case this covers is effectively
@@ -433,8 +436,11 @@ export const m = {
   // is not "never", so the nameless greeting below is real, written copy —
   // never a dangling ", {name}".
   "dashboard.greeting.morningNoName": "Good morning",
+  "dashboard.greeting.morningNoName.es": "Buenos días",
   "dashboard.greeting.afternoonNoName": "Good afternoon",
+  "dashboard.greeting.afternoonNoName.es": "Buenas tardes",
   "dashboard.greeting.eveningNoName": "Good evening",
+  "dashboard.greeting.eveningNoName.es": "Buenas noches",
   // Sub-line, appended only when the account has an ENABLED voice profile —
   // never a blanket claim about what the receptionist did (that isn't
   // honestly derivable this phase; see the task brief). "{name}" (D-063
@@ -442,6 +448,7 @@ export const m = {
   // (voice_profiles.persona_name), not a hard-coded "Sofía" — page.tsx falls
   // back to "Sofía" only when the persona name is missing or blank.
   "dashboard.sub.voice": "{name} is answering your calls.",
+  "dashboard.sub.voice.es": "{name} está contestando sus llamadas.",
 
   // The KPI row (Task 5): rolling 7-local-day metrics, each with a delta vs
   // the prior 7 days and a sparkline over that SAME 7 days (D-077: three of
@@ -484,16 +491,26 @@ export const m = {
   // 2026-10-06), and the title says so: under a bare "Calls" beside a table
   // of every recent call, a robocall-free bar would read as a missing call.
   "dashboard.calls.title": "Calls answered",
+  "dashboard.calls.title.es": "Llamadas atendidas",
   "dashboard.calls.caption": "Last 14 days",
+  "dashboard.calls.caption.es": "Últimos 14 días",
   "dashboard.calls.axis.weekendsMuted": "Weekends muted",
+  "dashboard.calls.axis.weekendsMuted.es": "Fines de semana atenuados",
   "dashboard.calls.tooltip": "{date} · {count} {unit}",
+  "dashboard.calls.tooltip.es": "{date} · {count} {unit}",
   "dashboard.calls.tooltipSr": "{date}, {count} {unit}",
+  "dashboard.calls.tooltipSr.es": "{date}, {count} {unit}",
   "dashboard.calls.unit.call": "call",
+  "dashboard.calls.unit.call.es": "llamada",
   "dashboard.calls.unit.calls": "calls",
+  "dashboard.calls.unit.calls.es": "llamadas",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   "dashboard.calls.empty": "When {name} answers, every call lands here with its outcome.",
+  "dashboard.calls.empty.es": "Cuando {name} contesta, cada llamada aparece aquí con su resultado.",
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
+  "dashboard.calls.emptySetupVoice.es": "Configure su recepcionista de voz",
   "dashboard.calls.emptyViewCalls": "View all calls",
+  "dashboard.calls.emptyViewCalls.es": "Ver todas las llamadas",
   // The "screened, not empty" state (#182 follow-up): the window had calls,
   // just none that counted as answered. Review fix: the lead sentence used
   // to claim "No customer calls" — more than this card measures. Spam is a
@@ -506,10 +523,15 @@ export const m = {
   // "{count}"/"{unit}" (the "both" variant takes two of each, spam first),
   // the same replace-by-hand convention as the tooltip strings above.
   "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. {name} flagged {count} {unit} as likely spam.",
+  "dashboard.calls.screenedSpam.es": "Ninguna llamada atendida en los últimos 14 días. {name} marcó {count} {unit} como probable spam.",
   "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before {name} could help.",
+  "dashboard.calls.screenedAbandoned.es": "Ninguna llamada atendida en los últimos 14 días. {count} {unit} colgaron antes de que {name} pudiera ayudar.",
   "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. {name} flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before {name} could help.",
+  "dashboard.calls.screenedBoth.es": "Ninguna llamada atendida en los últimos 14 días. {name} marcó {spamCount} {spamUnit} como probable spam, y {otherCount} {otherUnit} colgaron antes de que {name} pudiera ayudar.",
   "dashboard.calls.unit.caller": "caller",
+  "dashboard.calls.unit.caller.es": "persona",
   "dashboard.calls.unit.callers": "callers",
+  "dashboard.calls.unit.callers.es": "personas",
 
   // The activity feed card (Task 7) — the events ledger's first READ
   // consumer. Each `dashboard.activity.*` line is a CURATED, generic
@@ -521,20 +543,34 @@ export const m = {
   // filled from `OUTCOMES[outcome].label` (calls/format.ts) — itself
   // already m[]-sourced, so no raw enum value ever reaches this string.
   "dashboard.activity.title": "Activity",
+  "dashboard.activity.title.es": "Actividad",
   "dashboard.activity.caption": "Recent",
+  "dashboard.activity.caption.es": "Reciente",
   "dashboard.activity.bookingCreated": "A new appointment was booked.",
+  "dashboard.activity.bookingCreated.es": "Se agendó una cita nueva.",
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
+  "dashboard.activity.bookingCancelled.es": "Se canceló una cita.",
   "dashboard.activity.bookingCompleted": "An appointment was completed.",
+  "dashboard.activity.bookingCompleted.es": "Se completó una cita.",
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  // "No llegó" matches the status's own shipped Spanish everywhere else in
+  // the catalogue (calendar.bookings.status.no_show.es, work.booking.noShow.es).
+  "dashboard.activity.bookingNoShow.es": "La cita se marcó como “No llegó”.",
   // D-036: the Calendar page's Undo on a Cancel (status_changed → booked).
   "dashboard.activity.bookingRestored": "An appointment that was cancelled is back on.",
+  "dashboard.activity.bookingRestored.es": "Una cita que se había cancelado volvió a estar activa.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
+  "dashboard.activity.formSubmitted.es": "Llegó un cliente potencial nuevo por su formulario.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
+  "dashboard.activity.callRecorded.es": "Resultado de la llamada: {outcome}.",
   "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
+  "dashboard.activity.forwardOn.es": "Las llamadas empezaron a ir directo a su número de transferencia en vez de a {name}.",
   "dashboard.activity.forwardOff": "{name} started answering calls again.",
+  "dashboard.activity.forwardOff.es": "{name} volvió a contestar las llamadas.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
+  "dashboard.activity.empty.es": "Las citas, los clientes potenciales de formularios y los resultados de llamadas aparecen aquí a medida que ocurren.",
 
   "contacts.title": "Contacts",
   "contacts.title.es": "Contactos",
@@ -3979,40 +4015,91 @@ export const m = {
   "styleguide.toasts.es": "Avisos emergentes",
   // ── Website (the traffic section; spec 2026-09-07-website-traffic-design) ──
   "website.title": "Website",
+  "website.title.es": "Sitio web",
+  // 7D/14D/30D stay identical in Spanish (section 0's "legitimate identical
+  // twins" category): the pill is an abbreviation, not a sentence, and "D"
+  // reads as días there as readily as it reads as days here.
   "website.period.7": "7D",
+  "website.period.7.es": "7D",
   "website.period.14": "14D",
+  "website.period.14.es": "14D",
   "website.period.30": "30D",
+  "website.period.30.es": "30D",
+  // S-10 T2: the nav wrapping the three period pills above had a raw
+  // aria-label="Period" (the ratchet's JSX scan missed nothing here — this
+  // one just had no catalogue key yet).
+  "website.periodNav": "Period",
+  "website.periodNav.es": "Periodo",
   "website.periodLabel.7": "The last 7 days",
+  "website.periodLabel.7.es": "Últimos 7 días",
   "website.periodLabel.14": "The last 14 days",
+  "website.periodLabel.14.es": "Últimos 14 días",
   "website.periodLabel.30": "The last 30 days",
+  "website.periodLabel.30.es": "Últimos 30 días",
   "website.updated": "Updated this morning",
+  "website.updated.es": "Actualizado esta mañana",
   "website.updatedOn": "Last updated {date}",
+  "website.updatedOn.es": "Última actualización: {date}",
   "website.stale": "We haven't been able to update these numbers since {date}. They're still right up to then.",
+  "website.stale.es": "No hemos podido actualizar estos números desde el {date}. Siguen siendo correctos hasta esa fecha.",
+  // S-10 T2: the summary card's own aria-label="Summary" had no catalogue key.
+  "website.summaryLabel": "Summary",
+  "website.summaryLabel.es": "Resumen",
   "website.tile.visitors": "Visitors",
+  "website.tile.visitors.es": "Visitantes",
   "website.tile.pageviews": "Pageviews",
+  "website.tile.pageviews.es": "Páginas vistas",
   "website.tile.fromGoogle": "From Google",
+  "website.tile.fromGoogle.es": "Desde Google",
   "website.tile.topPage": "Top page",
+  "website.tile.topPage.es": "Página más vista",
   "website.tile.topPageDetail": "{visitors} visitors · {share} of all",
+  "website.tile.topPageDetail.es": "{visitors} visitantes · {share} del total",
   "website.tile.noTopPage": "No page stood out yet",
+  "website.tile.noTopPage.es": "Ninguna página destacó todavía",
   "website.summary.detail": "{visitors} people, {pageviews} pages. Your busiest day was {day}.",
+  "website.summary.detail.es": "{visitors} personas, {pageviews} páginas. Su día más activo fue el {day}.",
   "website.chart.title": "Visitors by day",
+  "website.chart.title.es": "Visitantes por día",
   "website.chart.tooltip": "{visitors} visitors · {pageviews} pageviews",
+  "website.chart.tooltip.es": "{visitors} visitantes · {pageviews} páginas vistas",
+  // S-10 T2: the per-bar aria-label template (daily-chart.tsx) was a raw
+  // template literal, which the ratchet's JSX scan cannot see (only a plain
+  // string-literal attribute counts) — real English copy all the same.
+  "website.chart.barAriaLabel": "{date}: {visitors} visitors, {pageviews} pageviews",
+  "website.chart.barAriaLabel.es": "{date}: {visitors} visitantes, {pageviews} páginas vistas",
   "website.chart.series.pageviewsThird": "Pageviews ÷ 3",
+  "website.chart.series.pageviewsThird.es": "Páginas vistas ÷ 3",
   "website.devices.phone": "Phone",
+  "website.devices.phone.es": "Celular",
   "website.devices.desktop": "Desktop",
+  "website.devices.desktop.es": "Computadora",
   "website.devices.tablet": "Tablet",
+  "website.devices.tablet.es": "Tableta",
   "website.panel.pages": "Pages people read",
+  "website.panel.pages.es": "Páginas que la gente leyó",
   "website.panel.sources": "Where visitors came from",
+  "website.panel.sources.es": "De dónde vinieron los visitantes",
   "website.panel.places": "Where they were",
+  "website.panel.places.es": "Dónde estaban",
   "website.panel.devices": "Devices",
+  "website.panel.devices.es": "Dispositivos",
   "website.panel.empty": "Nothing here yet",
+  "website.panel.empty.es": "Todavía no hay nada aquí",
   "website.empty.title": "See who visits your website",
+  "website.empty.title.es": "Vea quién visita su sitio web",
   "website.empty.body": "Where they come from, what they read, and how many there are, every morning.",
+  "website.empty.body.es": "De dónde vienen, qué leen y cuántos son, cada mañana.",
   "website.empty.askAgency": "Ask BIS about a website",
+  "website.empty.askAgency.es": "Pregúntele a BIS sobre un sitio web",
   "website.empty.askSubject": "A website for my business",
+  "website.empty.askSubject.es": "Un sitio web para mi negocio",
   "website.empty.link": "Link a site",
+  "website.empty.link.es": "Vincular un sitio",
   "website.waiting.title": "Your first numbers arrive tomorrow morning",
+  "website.waiting.title.es": "Sus primeros números llegan mañana por la mañana",
   "website.waiting.body": "{domain} is connected. We collect a full day before showing anything, so nothing here is a guess.",
+  "website.waiting.body.es": "{domain} está conectado. Reunimos un día completo antes de mostrar algo, así que nada aquí es una suposición.",
   "website.link.title": "Website",
   "website.link.body": "Connect the site BIS built for this client so their traffic shows up here every morning.",
   "website.link.project": "Vercel project",
