@@ -1,19 +1,12 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Geist, Geist_Mono, Inter, Source_Serif_4 } from "next/font/google";
-import { headers } from "next/headers";
 import { ClerkProvider } from "@clerk/nextjs";
-import { auth } from "@clerk/nextjs/server";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ActivateSoleOrganization } from "@/components/activate-sole-organization";
 import { Toaster } from "@/components/ui/sonner";
 import { deriveTheme } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
 import { getRequestTheme } from "@/lib/branding/tenant-theme-reader";
-import { resolveClientAccessState } from "@/lib/auth";
-import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
-import { resolveRootLang } from "@/lib/i18n/accept-language";
-import type { Locale } from "@/lib/i18n/locale";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -112,37 +105,19 @@ export default async function RootLayout({
   // -- by never having a theme to emit, so there is no branch to invert later.
   const theme = deriveTheme(inputs, serverMode);
 
-  // S-10 T7 (spec §6 T7, §7 Q5): <html lang> is the resolved locale (DESIGN.md
-  // amendment, replacing decision D of 2026-10-10, which put `lang` on
-  // converted subtrees only). Signed in: the SAME resolution
-  // dashboard/layout.tsx's own shell already uses for its LocaleProvider —
-  // the person's own choice, then (for a client only) the account's
-  // language, English for an operator with no choice. Signed out (no
-  // userId; this covers /sign-in, /, /no-access and /billing-done, where
-  // every real session was already redirected to its own dashboard before
-  // reaching this far): the browser's own Accept-Language.
-  //
-  // Agency-only pages and Clerk's own widgets carry their OWN `lang="en"`
-  // override on their own wrapping element (same pattern every other
-  // converted subtree in this app already uses) — this is the coarse,
-  // outer default they override, not a value every descendant must match.
-  const { userId } = await auth();
-  let sessionLocale: Locale | null = null;
-  if (userId) {
-    const [clientState, prefs] = await Promise.all([resolveClientAccessState(), getPersonPrefs()]);
-    const isAgency = clientState.status === "agency";
-    sessionLocale = requestLocale({
-      account: clientState.status === "ok" ? { language: clientState.language as Locale | null } : null,
-      isOperator: isAgency,
-      userLanguage: prefs.language,
-    });
-  }
-  const lang = resolveRootLang(sessionLocale, (await headers()).get("accept-language"));
+  // S-10 T7 (spec §6 T7, split 2026-11-01): <html lang> stays "en" for every
+  // request, and this layout makes NO session, account or preference read to
+  // decide it. It wraps /sign-in and /no-access and every path outside the
+  // proxy matcher, where a bare auth() throws and an account lookup failing
+  // would 500 the very pages that explain a failure. The signed-out pages set
+  // their own `lang` from Accept-Language on AuthShell's <main>; a signed-in
+  // person's <html lang> (and lang="en" on agency-only pages and Clerk's
+  // topbar menus) is T9's. Pinned in layout.test.ts, whose readers all throw.
 
   return (
     <ClerkProvider>
       <html
-        lang={lang}
+        lang="en"
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${sourceSerif.variable} ${bricolage.variable} h-full antialiased`}
       >

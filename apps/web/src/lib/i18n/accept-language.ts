@@ -10,8 +10,10 @@ type Range = { tag: string; q: number; index: number };
 
 /** `Accept-Language: es-MX,en;q=0.5` → ranges `[{tag:"es-mx",q:1,index:0},
  *  {tag:"en",q:0.5,index:1}]`. A missing `;q=` defaults to 1 (RFC 9110 §12.4.2).
- *  Malformed q-values (non-numeric, out of 0-1) fall back to 0 rather than
- *  throwing — a header is attacker-controlled input, never trusted raw. */
+ *  A range with q=0 is "not acceptable" (RFC 9110 §12.4.2) and is DROPPED, so
+ *  `es;q=0` can never select Spanish. A malformed q-value (non-numeric, out of
+ *  0-1) is dropped too, rather than throwing or being ranked — a header is
+ *  attacker-controlled input, never trusted raw. */
 function parseRanges(header: string): Range[] {
   return header.split(",").map((part, index) => {
     const [rawTag, ...params] = part.trim().split(";").map((s) => s.trim());
@@ -25,7 +27,7 @@ function parseRanges(header: string): Range[] {
       }
     }
     return { tag, q, index };
-  }).filter((r) => r.tag !== "");
+  }).filter((r) => r.tag !== "" && r.q > 0);
 }
 
 /** The language SUBTAG only — "es-mx" and "es" both read as "es", "*" reads
@@ -51,19 +53,4 @@ export function localeFromAcceptLanguage(header: string | null | undefined): Loc
     if (lang === "es" || lang === "en") return lang;
   }
   return "en";
-}
-
-/**
- * G8: the root layout's own locale helper, unit-tested directly rather than
- * through the (async, Clerk-reading) layout component itself. `sessionLocale`
- * is the person's own resolved locale when signed in, `null` when nobody is
- * — the root layout is the one caller that decides which of those two it is
- * and passes the right one in; this function makes no such decision itself.
- */
-export function resolveRootLang(
-  sessionLocale: Locale | null,
-  acceptLanguageHeader: string | null | undefined,
-): Locale {
-  if (sessionLocale) return sessionLocale;
-  return localeFromAcceptLanguage(acceptLanguageHeader);
 }

@@ -1,12 +1,9 @@
 // S-10 T7 (spec §6 T7, §7 Q5): the browser's language picks ONLY the
 // signed-out pages (/sign-in, /, /no-access, /billing-done) — never after
 // sign-in, where the person's own choice or the account's language governs
-// (decision 1/3, unchanged). `localeFromAcceptLanguage` is the pure parser;
-// `resolveRootLang` is the root layout's own locale helper (G8): a resolved
-// session locale wins when one exists, Accept-Language only when it does not
-// (nobody signed in).
+// (decision 1/3, unchanged). `localeFromAcceptLanguage` is the pure parser.
 import { describe, it, expect } from "vitest";
-import { localeFromAcceptLanguage, resolveRootLang } from "./accept-language";
+import { localeFromAcceptLanguage } from "./accept-language";
 
 describe("localeFromAcceptLanguage", () => {
   it("any es/es-* range ranked above every en range gives Spanish (spec's own example)", () => {
@@ -51,20 +48,21 @@ describe("localeFromAcceptLanguage", () => {
   it("the wildcard range matches neither es nor en, so it defers to a later real range", () => {
     expect(localeFromAcceptLanguage("*;q=0.8,es;q=0.3")).toBe("es");
   });
+
+  it("a range with q=0 means 'not acceptable' and can never select its language (RFC 9110 §12.4.2)", () => {
+    expect(localeFromAcceptLanguage("es;q=0")).toBe("en");
+    expect(localeFromAcceptLanguage("es;q=0.0, fr")).toBe("en");
+    expect(localeFromAcceptLanguage("fr, es;q=0.000")).toBe("en");
+  });
+
+  it("a malformed q-value is dropped, not ranked, so it can never select its language", () => {
+    expect(localeFromAcceptLanguage("fr, es;q=abc")).toBe("en");
+    expect(localeFromAcceptLanguage("es;q=1.5")).toBe("en");
+    expect(localeFromAcceptLanguage("es;q=-1")).toBe("en");
+  });
+
+  it("an en range at q=0 does not stop a lower-ranked but acceptable es range", () => {
+    expect(localeFromAcceptLanguage("en;q=0, es;q=0.1")).toBe("es");
+  });
 });
 
-describe("resolveRootLang (G8: the root layout's own locale helper)", () => {
-  it("a resolved session locale wins outright, no header consulted", () => {
-    expect(resolveRootLang("es", "en-US")).toBe("es");
-    expect(resolveRootLang("en", "es-MX")).toBe("en");
-  });
-
-  it("no session (signed out): Accept-Language decides, spec's own two examples", () => {
-    expect(resolveRootLang(null, "es-MX,en;q=0.5")).toBe("es");
-    expect(resolveRootLang(null, "en-US,es;q=0.9")).toBe("en");
-  });
-
-  it("no session and no header: English (mutation: default to es → FAILS)", () => {
-    expect(resolveRootLang(null, null)).toBe("en");
-  });
-});

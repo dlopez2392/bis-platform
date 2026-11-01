@@ -243,8 +243,8 @@ export default async function Page() {
       </h1>
       {/* Q6 (decided 2026-10-31): Clerk's own widget stays English until
           F-117's part — its component localization is experimental and does
-          not reach its hosted pages. Marked explicitly, since the <html> and
-          the heading above it may now both be Spanish. */}
+          not reach its hosted pages. Marked explicitly, since AuthShell's
+          <main lang> and the heading above it may now both be Spanish. */}
       <div lang="en">
         <SignIn appearance={appearance} />
       </div>

@@ -1,25 +1,34 @@
-// S-10 T7 (spec §6 T7, §7 Q5). G8 itself (the pure locale helper) is tested
-// directly in lib/i18n/accept-language.test.ts; this file exercises the
-// root layout's OWN wiring of real inputs into that helper — auth(),
-// resolveClientAccessState(), getPersonPrefs() and the Accept-Language
-// header — the same mocking shape dashboard/layout.test.ts already uses for
-// its own render-body cases.
+// S-10 T7 (spec §6 T7, orchestrator split 2026-11-01). The root layout wraps
+// EVERY route, including /sign-in and /no-access, and paths outside the
+// proxy matcher where a bare auth() throws. So its <html lang> makes NO
+// session, account or preference read: it stays "en" for every request. The
+// signed-out pages set their own `lang` on AuthShell's <main> from
+// Accept-Language (auth-shell.test.ts); the signed-in <html lang> is T9's.
+//
+// Every session/DB reader below is mocked to THROW: if the layout ever calls
+// one again, rendering it throws and these cases fail by name.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const h = vi.hoisted(() => ({
-  userId: null as string | null,
-  clientState: { status: "none" as const },
-  userLanguage: null as string | null,
   acceptLanguage: null as string | null,
+  reads: [] as string[],
 }));
+
+function forbidden(name: string): never {
+  h.reads.push(name);
+  throw new Error(`root layout must not call ${name}`);
+}
 
 vi.mock("next/font/google", () => {
   const stub = () => ({ variable: "--font-stub" });
   return { Bricolage_Grotesque: stub, Geist: stub, Geist_Mono: stub, Inter: stub, Source_Serif_4: stub };
 });
 vi.mock("@clerk/nextjs", () => ({ ClerkProvider: ({ children }: { children: unknown }) => children }));
-vi.mock("@clerk/nextjs/server", () => ({ auth: async () => ({ userId: h.userId }) }));
+vi.mock("@clerk/nextjs/server", () => ({
+  auth: async () => forbidden("auth"),
+  currentUser: async () => forbidden("currentUser"),
+}));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers(h.acceptLanguage ? { "accept-language": h.acceptLanguage } : {}),
 }));
@@ -31,51 +40,37 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
 }));
 vi.mock("@/lib/branding/theme", () => ({ deriveTheme: () => null }));
 vi.mock("@/lib/branding/theme-style", () => ({ themeStyle: () => ({}) }));
-vi.mock("@/lib/auth", () => ({ resolveClientAccessState: async () => h.clientState }));
-vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: h.userLanguage, theme: null }) }));
+vi.mock("@/lib/auth", () => ({
+  resolveClientAccessState: async () => forbidden("resolveClientAccessState"),
+  requireAccountAccess: async () => forbidden("requireAccountAccess"),
+}));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => forbidden("getPersonPrefs") }));
+vi.mock("@/lib/db", () => ({
+  dbForRequest: async () => forbidden("dbForRequest"),
+  serviceDb: () => forbidden("serviceDb"),
+}));
 
 const { default: RootLayout } = await import("./layout");
 
 async function htmlLang(): Promise<string | null> {
-  const html = renderToStaticMarkup(await RootLayout({ children: "x" }) as Parameters<typeof renderToStaticMarkup>[0]);
+  const html = renderToStaticMarkup((await RootLayout({ children: "x" })) as Parameters<typeof renderToStaticMarkup>[0]);
   return html.match(/<html[^>]*\blang="([^"]*)"/)?.[1] ?? null;
 }
 
 beforeEach(() => {
-  h.userId = null;
-  h.clientState = { status: "none" };
-  h.userLanguage = null;
   h.acceptLanguage = null;
+  h.reads = [];
 });
 
-describe("the root layout's <html lang> (S-10 T7, G8)", () => {
-  it("signed out, no Accept-Language: English", async () => {
+describe("the root layout's <html lang> makes no session or DB read (S-10 T7 split)", () => {
+  it("renders lang=\"en\" while every session, account and preference reader throws", async () => {
     expect(await htmlLang()).toBe("en");
+    expect(h.reads).toEqual([]);
   });
 
-  it("signed out, a Spanish-ranked Accept-Language: es (mutation: drop the signed-out branch → FAILS)", async () => {
+  it("stays lang=\"en\" under a Spanish-ranked Accept-Language (AuthShell's <main> carries the signed-out lang, not <html>)", async () => {
     h.acceptLanguage = "es-MX,en;q=0.5";
-    expect(await htmlLang()).toBe("es");
-  });
-
-  it("signed in, the person's own stored language wins outright, no header consulted", async () => {
-    h.userId = "user_1";
-    h.userLanguage = "es";
-    h.acceptLanguage = "en-US";
-    expect(await htmlLang()).toBe("es");
-  });
-
-  it("signed in, no stored preference: English, even with a Spanish header (session wins, Q5)", async () => {
-    h.userId = "user_1";
-    h.userLanguage = null;
-    h.acceptLanguage = "es-MX";
     expect(await htmlLang()).toBe("en");
-  });
-
-  it("a signed-in CLIENT with no stored preference inherits their account's language (mutation: pass account: null unconditionally → FAILS)", async () => {
-    h.userId = "user_1";
-    h.userLanguage = null;
-    h.clientState = { status: "ok", id: "acc_1", name: "Rio", timezone: "America/Chicago", language: "es" } as never;
-    expect(await htmlLang()).toBe("es");
+    expect(h.reads).toEqual([]);
   });
 });
