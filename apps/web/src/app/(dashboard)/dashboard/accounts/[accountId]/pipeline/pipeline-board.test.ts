@@ -11,9 +11,9 @@ const EMPTY: BoardColumn[] = [{ stage: { id: "s1", name: "New", position: 0 }, t
 
 function render(board: BoardColumn[], locale: "en" | "es") {
   return renderToStaticMarkup(
-    createElement(LocaleProvider, { locale, children: createElement(PipelineBoard, {
+    createElement(LocaleProvider, { locale }, createElement(PipelineBoard, {
       board, moveAction: vi.fn(async () => {}), updateAction: vi.fn(async () => {}),
-    }) }),
+    })),
   );
 }
 

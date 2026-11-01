@@ -134,7 +134,7 @@ export function InlineField(
     rule ? validateInlineRule(rule, raw, locale)
     : options ? validateEnumValue(options, raw)
     : required ? normalizeRequired(raw)
-    : normalizeFieldInput(field as EditableField, raw);
+    : normalizeFieldInput(field as EditableField, raw, locale);
   const [editing, setEditingState] = useState(false);
   // The ONE way editing changes, so onEditingChange hears every path: click, commit and Esc.
   const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };

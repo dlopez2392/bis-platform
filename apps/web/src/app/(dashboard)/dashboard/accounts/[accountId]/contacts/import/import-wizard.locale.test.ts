@@ -38,7 +38,7 @@ const { ImportWizard } = await import("./import-wizard");
 function render(locale: "en" | "es", existingTags: string[] = []) {
   callCounter.n = 0;
   return renderToStaticMarkup(
-    createElement(LocaleProvider, { locale, children: createElement(ImportWizard, { accountId: "a1", existingTags }) }),
+    createElement(LocaleProvider, { locale }, createElement(ImportWizard, { accountId: "a1", existingTags })),
   );
 }
 

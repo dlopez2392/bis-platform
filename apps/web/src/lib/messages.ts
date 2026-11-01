@@ -698,6 +698,25 @@ export const m = {
   "contacts.add.existing.es": "Esta persona ya está en sus contactos.",
   "contacts.add.viewContact": "View contact",
   "contacts.add.viewContact.es": "Ver contacto",
+  // S-10 T3: the 16 server-action sentences contacts/actions.ts used to return as raw literals
+  // (never in the catalogue, so never said in the reader's language) — named here so t() can read
+  // them. "Save failed"/"Undo failed" each cover several call sites that all said the exact same
+  // English sentence; field-input.ts's own two shape refusals are contacts.add.badEmail/badPhone
+  // above (2026-10-28) and contact.business.tooLong (already catalogued) for the business name.
+  "contacts.action.saveFailed": "Save failed — please try again.",
+  "contacts.action.saveFailed.es": "No se pudo guardar. Inténtelo de nuevo.",
+  "contacts.action.undoFailed": "Undo failed — please try again.",
+  "contacts.action.undoFailed.es": "No se pudo deshacer. Inténtelo de nuevo.",
+  "contacts.action.unknownField": "Unknown field.",
+  "contacts.action.unknownField.es": "Campo desconocido.",
+  "contacts.action.nothingSelected": "Nothing selected.",
+  "contacts.action.nothingSelected.es": "No hay nada seleccionado.",
+  "contacts.action.tagFailed": "Tagging failed — please try again.",
+  "contacts.action.tagFailed.es": "No se pudo aplicar la etiqueta. Inténtelo de nuevo.",
+  "contacts.action.undoTagFailed": "Undo failed — the tag is still applied.",
+  "contacts.action.undoTagFailed.es": "No se pudo deshacer. La etiqueta sigue aplicada.",
+  "contacts.action.deleteFailed": "Delete failed — please try again.",
+  "contacts.action.deleteFailed.es": "No se pudo borrar. Inténtelo de nuevo.",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
