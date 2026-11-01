@@ -126,14 +126,17 @@ export function ImportWizard(
   });
 
   if (phase.name === "done") {
+    // Review fix round (M-7): computed once, not twice (the condition and the body used to
+    // call flaggedLine separately).
+    const flagged = flaggedLine(phase.totals, locale);
     return (
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
           {doneLine(phase.totals, locale)}
         </p>
-        {flaggedLine(phase.totals, locale) ? (
+        {flagged ? (
           <p className="mt-2 text-sm text-text-2">
-            {flaggedLine(phase.totals, locale)}
+            {flagged}
           </p>
         ) : null}
         {importBusinessNotes(phase.totals, locale).map((note) => (
