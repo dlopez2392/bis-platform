@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE,
+  FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_BLUEPRINT_RE, FIXTURE_CLIENT_ES_ACCOUNT_RE,
+  FIXTURE_CO_ACCOUNT_RE,
   FIXTURE_FORM_RE, FIXTURE_NAME_PREFILTER, FIXTURE_PLAN_RE, STALE_AFTER_MS,
   isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm, isStaleFixturePlan,
 } from "./stale";
@@ -252,7 +253,8 @@ describe("the network prefilter each leg's .like() sends actually admits what it
     // no prefilter applies to them at all.
     if (NOT_SWEPT_BY_NAME[found.key] !== undefined) continue;
 
-    const isAccount = FIXTURE_ACCOUNT_RE.test(found.sample) || FIXTURE_CO_ACCOUNT_RE.test(found.sample);
+    const isAccount = FIXTURE_ACCOUNT_RE.test(found.sample) || FIXTURE_CO_ACCOUNT_RE.test(found.sample)
+      || FIXTURE_CLIENT_ES_ACCOUNT_RE.test(found.sample);
     const isForm = FIXTURE_FORM_RE.test(found.sample);
     const isBlueprint = FIXTURE_BLUEPRINT_RE.test(found.sample);
     const isPlan = FIXTURE_PLAN_RE.test(found.sample);
