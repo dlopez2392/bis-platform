@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   state: { status: "none" } as State,
   claims: {} as Record<string, string>,
   userId: "user_1" as string | null,
+  acceptLanguage: null as string | null,
 }));
 
 class Redirect extends Error {
@@ -33,6 +34,9 @@ vi.mock("next/navigation", () => ({
   redirect: (to: string) => {
     throw new Redirect(to);
   },
+}));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers(h.acceptLanguage ? { "accept-language": h.acceptLanguage } : {}),
 }));
 vi.mock("@clerk/nextjs/server", () => ({
   auth: async () => ({ userId: h.userId, sessionClaims: h.claims }),
@@ -64,6 +68,7 @@ beforeEach(() => {
   h.userId = "user_1";
   h.claims = {};
   h.state = { status: "none" };
+  h.acceptLanguage = null;
 });
 
 describe("/ (landing) for a signed-in client (D-001)", () => {
@@ -84,5 +89,14 @@ describe("/ (landing) for a signed-in client (D-001)", () => {
     h.state = { status: "none" };
     const result = await visit();
     expect("text" in result && result.text).toContain(m["landing.noAccess.body"]);
+  });
+
+  // S-10 T7 (spec §7 Q5): "/" is part of the signed-out family — no stored
+  // preference exists here, only the browser's own Accept-Language.
+  it("a Spanish-ranked Accept-Language renders the invitation advice in Spanish (mutation: read m[...] directly → FAILS)", async () => {
+    h.state = { status: "none" };
+    h.acceptLanguage = "es-MX,en;q=0.5";
+    const result = await visit();
+    expect("text" in result && result.text).toContain(m["landing.noAccess.body.es"]);
   });
 });

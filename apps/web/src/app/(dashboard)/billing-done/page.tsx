@@ -1,6 +1,9 @@
+import { headers } from "next/headers";
 import { CheckCircle2, CircleSlash } from "lucide-react";
 import { AuthShell } from "@/components/auth-shell";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { localeFromAcceptLanguage } from "@/lib/i18n/accept-language";
 
 /**
  * Where Stripe Checkout returns the payer (G17). PUBLIC (proxy.ts protects
@@ -14,15 +17,18 @@ export default async function BillingDone({ searchParams }: { searchParams: Prom
   const { result } = await searchParams;
   const success = result === "success";
   const Icon = success ? CheckCircle2 : CircleSlash;
+  // S-10 T7 (spec §7 Q5): signed out, part of the same family as /sign-in,
+  // / and /no-access — the browser's own language.
+  const locale = localeFromAcceptLanguage((await headers()).get("accept-language"));
   return (
-    <AuthShell>
+    <AuthShell locale={locale}>
       <div className="flex flex-col items-start gap-3">
         <Icon className="size-8 text-muted-foreground" aria-hidden />
         <p className="text-sm font-medium text-foreground">
-          {success ? m["billing.done.success.title"] : m["billing.done.cancelled.title"]}
+          {success ? t(m, "billing.done.success.title", locale) : t(m, "billing.done.cancelled.title", locale)}
         </p>
         <p className="text-sm text-muted-foreground">
-          {success ? m["billing.done.success.body"] : m["billing.done.cancelled.body"]}
+          {success ? t(m, "billing.done.success.body", locale) : t(m, "billing.done.cancelled.body", locale)}
         </p>
       </div>
     </AuthShell>
