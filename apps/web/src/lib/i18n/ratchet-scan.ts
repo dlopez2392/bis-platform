@@ -87,16 +87,20 @@ export const AGENCY_ONLY_KEY_PREFIXES: readonly string[] = [
  * The base keys of `catalogue` with no Spanish twin, sorted. A key "x" is
  * twinned by "x.es"; a key "x.en" (the English half of an explicit en/es
  * pair, e.g. sms.consentReply.help.contact.fallback.en) is twinned by
- * "x.es". Agency-only keys are skipped.
+ * "x.es". Agency-only keys are skipped: those under `agencyPrefixes`, and
+ * (S-10, owner decision Q4 of 2026-10-31) those in `agencyOnly`, the keys
+ * `agencyOnlyKeys` finds read ONLY from agency-only files.
  */
 export function keysMissingSpanish(
   catalogue: Readonly<Record<string, string>>,
   agencyPrefixes: readonly string[] = AGENCY_ONLY_KEY_PREFIXES,
+  agencyOnly: ReadonlySet<string> = new Set(),
 ): string[] {
   const missing: string[] = [];
   for (const key of Object.keys(catalogue)) {
     if (key.endsWith(".es")) continue;
     if (agencyPrefixes.some((prefix) => key.startsWith(prefix))) continue;
+    if (agencyOnly.has(key)) continue;
     const twin = key.endsWith(".en") ? `${key.slice(0, -3)}.es` : `${key}.es`;
     if (!(twin in catalogue)) missing.push(key);
   }
@@ -144,6 +148,10 @@ export const AGENCY_ONLY_ALLOWLIST: RegExp[] = [
   /dashboard\/numbers\//,
   /dashboard\/screened\//,
   /dashboard\/plans\//,
+  // S-10 T0: the design reference, requireAgency at its first line
+  // (styleguide/page.tsx:2). Its prose is notes to ourselves; its component
+  // demos render EN and ES through the components' own t() reads.
+  /dashboard\/styleguide\//,
 ];
 
 // The ONE place the scan's roots are named (plan-review I2) — relative to
@@ -166,5 +174,151 @@ export function countsByFile(
     }
   }
   for (const root of SCAN_ROOTS) walk(path.join(baseDir, root));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// S-10 T0 (spec docs/superpowers/specs/2026-10-31-spanish-dashboard-design.md
+// §5.2): the agency-only exemption by where a key is READ (G1) and the
+// direct-read ratchet (G3). One parse of every source file feeds both.
+// ---------------------------------------------------------------------------
+
+/** The routes only BIS staff can open (owner decision Q4, 2026-10-31: they
+ *  stay English). A file under one of these is agency-only UNLESS a file
+ *  outside them imports it, directly or through other agency files
+ *  (`agencyOnlyFiles`): ACCT/documents/page.tsx imports two files from
+ *  ACCT/settings/, so a directory alone is not enough. */
+export const AGENCY_ONLY_ROUTES: RegExp[] = [
+  ...AGENCY_ONLY_ALLOWLIST,
+  /^src\/app\/\(dashboard\)\/dashboard\/page\.tsx$/, // the agency home, requireAgency
+  /^src\/app\/\(dashboard\)\/dashboard\/accounts\/[^/[][^/]*$/, // the Companies list's own files
+  /^src\/app\/\(dashboard\)\/dashboard\/enter\//, // the reason-for-entry chooser, requireAgency
+  /\/accounts\/\[accountId\]\/(settings|setup|checklist|voice|automations)\//, // requireAgencyOnlyAccountAccess
+];
+
+/** Roots for the source scan: the JSX scan's two plus `src/lib`, where the
+ *  copy builders and module-level label tables live. */
+export const SOURCE_ROOTS: string[] = ["src/app", "src/components", "src/lib"];
+
+/** The catalogue itself: its keys are definitions, not reads. */
+const CATALOGUE_FILE = "src/lib/messages.ts";
+
+export type SourceScan = {
+  /** repo-relative file → the repo-relative files it imports (resolved, in-tree only) */
+  imports: Map<string, string[]>;
+  /** catalogue key → the files whose string literals name it */
+  refs: Map<string, Set<string>>;
+  /** file → its count of `m[...]` reads, for files that import `m` from the catalogue */
+  directReads: Map<string, number>;
+};
+
+export function resolveImport(baseDir: string, fromKey: string, spec: string, known: Set<string>): string | null {
+  let target: string;
+  if (spec.startsWith("@/")) target = `src/${spec.slice(2)}`;
+  else if (spec.startsWith(".")) target = path.posix.normalize(path.posix.join(path.posix.dirname(fromKey), spec));
+  else return null;
+  for (const c of [target, `${target}.ts`, `${target}.tsx`, `${target}/index.ts`, `${target}/index.tsx`]) {
+    if (known.has(c)) return c;
+  }
+  return null;
+}
+
+/** True for an import specifier that names the catalogue module. */
+function isCatalogueModule(spec: string): boolean {
+  return /(^|\/)messages$/.test(spec);
+}
+
+export function scanSourceText(
+  key: string, source: string, catalogueKeys: ReadonlySet<string>,
+): { specs: string[]; refs: string[]; directReads: number } {
+  const sf = ts.createSourceFile(key, source, ts.ScriptTarget.Latest, true, key.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const specs: string[] = [];
+  const refs: string[] = [];
+  let importsM = false;
+  let directReads = 0;
+  function visit(node: ts.Node) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const spec = node.moduleSpecifier.text;
+      specs.push(spec);
+      const named = ts.isImportDeclaration(node) ? node.importClause?.namedBindings : undefined;
+      if (isCatalogueModule(spec) && named && ts.isNamedImports(named) && named.elements.some((e) => e.name.text === "m" && !e.isTypeOnly)) importsM = true;
+    }
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && catalogueKeys.has(node.text)) refs.push(node.text);
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "m") directReads += 1;
+    ts.forEachChild(node, visit);
+  }
+  visit(sf);
+  return { specs, refs, directReads: importsM ? directReads : 0 };
+}
+
+export function scanSources(baseDir: string, catalogueKeys: ReadonlySet<string>): SourceScan {
+  const files: string[] = [];
+  function walk(dir: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.tsx?$/.test(full) || /\.test\.tsx?$/.test(full) || full.endsWith(".d.ts")) continue;
+      files.push(full);
+    }
+  }
+  for (const root of SOURCE_ROOTS) walk(path.join(baseDir, root));
+  const known = new Set(files.map((f) => relativeKey(baseDir, f)));
+  const scan: SourceScan = { imports: new Map(), refs: new Map(), directReads: new Map() };
+  for (const full of files) {
+    const key = relativeKey(baseDir, full);
+    if (key === CATALOGUE_FILE) continue;
+    const r = scanSourceText(key, fs.readFileSync(full, "utf8"), catalogueKeys);
+    scan.imports.set(key, r.specs.map((s) => resolveImport(baseDir, key, s, known)).filter((x): x is string => x !== null));
+    for (const k of r.refs) {
+      if (!scan.refs.has(k)) scan.refs.set(k, new Set());
+      scan.refs.get(k)!.add(key);
+    }
+    if (r.directReads > 0) scan.directReads.set(key, r.directReads);
+  }
+  return scan;
+}
+
+/** Files under an agency-only route that nothing outside those routes
+ *  reaches through imports. A file a client screen imports, or one that such
+ *  a file imports in turn, is client-reachable and is NOT agency-only. */
+export function agencyOnlyFiles(
+  imports: ReadonlyMap<string, readonly string[]>,
+  routes: readonly RegExp[] = AGENCY_ONLY_ROUTES,
+): Set<string> {
+  const inRoute = (f: string) => routes.some((re) => re.test(f));
+  const reached = new Set<string>();
+  const queue = [...imports.keys()].filter((f) => !inRoute(f));
+  while (queue.length > 0) {
+    const f = queue.pop()!;
+    for (const dep of imports.get(f) ?? []) {
+      if (reached.has(dep)) continue;
+      reached.add(dep);
+      queue.push(dep);
+    }
+  }
+  return new Set([...imports.keys()].filter((f) => inRoute(f) && !reached.has(f)));
+}
+
+/** Keys every literal reference to which sits in an agency-only file. A key
+ *  no literal names (built from a template, or read through a variable) is
+ *  never exempt: nothing proves a client cannot see it. */
+export function agencyOnlyKeys(
+  refs: ReadonlyMap<string, ReadonlySet<string>>,
+  agencyFiles: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const [key, files] of refs) {
+    if (files.size > 0 && [...files].every((f) => agencyFiles.has(f))) out.add(key);
+  }
+  return out;
+}
+
+/** G3's live counts: `m[...]` reads per file, agency-only files left out
+ *  (they stay English by decision). A read through `m["x"]` is English
+ *  whatever the locale, even when "x.es" exists; only t(), plural() and
+ *  makeTr ask for the reader's language. */
+export function directReadCounts(scan: SourceScan, agencyFiles: ReadonlySet<string>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [file, n] of scan.directReads) if (!agencyFiles.has(file)) out[file] = n;
   return out;
 }

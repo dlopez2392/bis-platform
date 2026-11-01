@@ -9,13 +9,16 @@
 // in JSX, nonzero files only) and catalogue-baseline.json (the frozen list
 // of messages.ts keys that had no ".es" twin on the day it was run), both
 // from scratch, so stale entries are pruned by the regeneration itself.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import {
   scanFile, relativeKey, AGENCY_ONLY_ALLOWLIST, countsByFile, ratchetViolations,
   keysMissingSpanish, parityViolations, COPY_ATTRIBUTE_NAMES, AGENCY_ONLY_KEY_PREFIXES,
+  scanSourceText, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts, resolveImport,
+  AGENCY_ONLY_ROUTES, type SourceScan,
 } from "./ratchet-scan";
 import baseline from "./ratchet-baseline.json";
+import directReadBaseline from "./direct-read-baseline.json";
 import catalogueBaseline from "./catalogue-baseline.json";
 import { m } from "@/lib/messages";
 
@@ -106,7 +109,7 @@ describe("relativeKey", () => {
   });
 });
 
-describe("AGENCY_ONLY_ALLOWLIST — exactly the six agency-only top-level routes", () => {
+describe("AGENCY_ONLY_ALLOWLIST — the six agency-only top-level routes and the styleguide", () => {
   const excluded = (key: string) => AGENCY_ONLY_ALLOWLIST.filter((re) => re.test(key)).length;
 
   it.each([
@@ -116,12 +119,13 @@ describe("AGENCY_ONLY_ALLOWLIST — exactly the six agency-only top-level routes
     ["phone numbers", "src/app/(dashboard)/dashboard/numbers/numbers-table.tsx"],
     ["screened calls", "src/app/(dashboard)/dashboard/screened/screened-table.tsx"],
     ["plans", "src/app/(dashboard)/dashboard/plans/plan-dialog.tsx"],
+    ["the styleguide (S-10 T0)", "src/app/(dashboard)/dashboard/styleguide/page.tsx"],
   ])("excludes %s, by exactly one pattern (mutation: delete that pattern → FAILS by name)", (_route, key) => {
     expect(excluded(key)).toBe(1);
   });
 
-  it("has exactly six patterns (mutation: add a seventh without a test row → FAILS)", () => {
-    expect(AGENCY_ONLY_ALLOWLIST).toHaveLength(6);
+  it("has exactly seven patterns (mutation: add an eighth without a test row → FAILS)", () => {
+    expect(AGENCY_ONLY_ALLOWLIST).toHaveLength(7);
   });
 
   it("keeps every client-reachable account route scanned — billing, tasks, the dashboard's work row, contacts (mutation: widen the accounts pattern to /dashboard\\/accounts\\// → FAILS) (plan-review I1)", () => {
@@ -180,8 +184,98 @@ describe("the i18n ratchet, live", () => {
     // rest of the suite, which tripped vitest's 5 s default in three runs on 2026-10-11.
   }, 30_000);
 
-  it("every catalogue key added from today has a Spanish twin unless it is agency-only (mutation: add \"nav.newThing\": \"New thing\" to messages.ts with no .es twin → FAILS naming the key)", () => {
-    const violations = parityViolations(keysMissingSpanish(m), catalogueBaseline as string[]);
+  // One parse of every source file (~2 s alone) feeds G1's exemption and G3.
+  let scan: SourceScan;
+  let agencyFiles: Set<string>;
+  beforeAll(() => {
+    scan = scanSources(baseDir, new Set(Object.keys(m)));
+    agencyFiles = agencyOnlyFiles(scan.imports);
+  }, 60_000);
+
+  it("every catalogue key added from today has a Spanish twin unless only agency-only screens read it (mutation: add \"nav.newThing\": \"New thing\" to messages.ts with no .es twin → FAILS naming the key)", () => {
+    const exempt = agencyOnlyKeys(scan.refs, agencyFiles);
+    const violations = parityViolations(keysMissingSpanish(m, AGENCY_ONLY_KEY_PREFIXES, exempt), catalogueBaseline as string[]);
     expect(violations, `add a ".es" twin for: ${violations.join(", ")}`).toEqual([]);
+  });
+
+  it("G3: no file's direct m[...] reads rise above its baseline, and no new file has any (mutation: add m[\"nav.tasks\"] to src/components/app-sidebar.tsx → FAILS naming that file)", () => {
+    const violations = ratchetViolations(directReadCounts(scan, agencyFiles), directReadBaseline as Record<string, number>);
+    expect(violations, violations.map((v) => `${v.file}: ${v.live} m[...] reads > baseline ${v.allowed}; read it through t(m, key, locale)`).join("\n")).toEqual([]);
+  });
+});
+
+describe("G1's exemption and G3's scan — the pieces", () => {
+  it("scanSourceText counts m[...] in a file that imports m from the catalogue, and the catalogue keys its literals name", () => {
+    const src = `import { m } from "@/lib/messages";\nexport const a = m["nav.tasks"] + m["nav.calls"];\nexport const k = "nav.contacts";`;
+    const r = scanSourceText("src/x.ts", src, new Set(["nav.tasks", "nav.calls", "nav.contacts"]));
+    expect(r.directReads).toBe(2);
+    expect(r.refs.sort()).toEqual(["nav.calls", "nav.contacts", "nav.tasks"]);
+  });
+
+  it("scanSourceText does not count m[...] when m is not the catalogue — a regex match named m (mutation: drop the import check → FAILS)", () => {
+    const src = `export function f(s: string) { const m = s.match(/(a)/); return m ? m[1] : ""; }`;
+    expect(scanSourceText("src/x.ts", src, new Set()).directReads).toBe(0);
+  });
+
+  it("scanSourceText counts a relative import of the catalogue too (mutation: match only \"@/lib/messages\" → FAILS)", () => {
+    const src = `import { m } from "../messages";\nexport const a = m["nav.tasks"];`;
+    expect(scanSourceText("src/lib/x/y.ts", src, new Set()).directReads).toBe(1);
+  });
+
+  it("resolveImport resolves @/ and relative specifiers, with .ts, .tsx and index files (mutation: drop the index candidates → FAILS)", () => {
+    const known = new Set(["src/lib/a.ts", "src/components/b.tsx", "src/lib/c/index.ts"]);
+    expect(resolveImport("/base", "src/app/p.tsx", "@/lib/a", known)).toBe("src/lib/a.ts");
+    expect(resolveImport("/base", "src/components/x.tsx", "./b", known)).toBe("src/components/b.tsx");
+    expect(resolveImport("/base", "src/lib/z.ts", "./c", known)).toBe("src/lib/c/index.ts");
+    expect(resolveImport("/base", "src/lib/z.ts", "react", known)).toBeNull();
+  });
+
+  const A = "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/";
+  it("a file under an agency route is agency-only when only agency files import it", () => {
+    const imports = new Map([[`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []]]);
+    expect([...agencyOnlyFiles(imports)].sort()).toEqual([`${A}card.tsx`, `${A}page.tsx`]);
+  });
+
+  it("a file under an agency route that a client screen imports is NOT agency-only (mutation: return every in-route file → FAILS)", () => {
+    const imports = new Map<string, string[]>([
+      [`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []],
+      ["src/app/(dashboard)/dashboard/accounts/[accountId]/documents/page.tsx", [`${A}card.tsx`]],
+    ]);
+    expect([...agencyOnlyFiles(imports)]).toEqual([`${A}page.tsx`]);
+  });
+
+  it("...and neither is what that file imports in turn (mutation: follow one level of imports only → FAILS)", () => {
+    const imports = new Map<string, string[]>([
+      [`${A}card.tsx`, [`${A}helper.ts`]], [`${A}helper.ts`, []],
+      ["src/components/x.tsx", [`${A}card.tsx`]],
+    ]);
+    expect([...agencyOnlyFiles(imports)]).toEqual([]);
+  });
+
+  it("the routes include the five in-account agency screens (mutation: drop checklist from the pattern → FAILS by name)", () => {
+    for (const r of ["settings", "setup", "checklist", "voice", "automations"]) {
+      expect(AGENCY_ONLY_ROUTES.some((re) => re.test(`src/app/(dashboard)/dashboard/accounts/[accountId]/${r}/page.tsx`)), r).toBe(true);
+    }
+    for (const r of ["dashboard", "tasks", "contacts", "billing", "branding", "team", "calendar", "calls"]) {
+      expect(AGENCY_ONLY_ROUTES.some((re) => re.test(`src/app/(dashboard)/dashboard/accounts/[accountId]/${r}/page.tsx`)), r).toBe(false);
+    }
+  });
+
+  it("agencyOnlyKeys exempts a key only when EVERY reference is agency-only, and never an unreferenced key (mutation: some() for every() → FAILS; drop the size check → FAILS)", () => {
+    const refs = new Map([
+      ["a.agency", new Set(["ag.tsx"])],
+      ["a.both", new Set(["ag.tsx", "client.tsx"])],
+      ["a.none", new Set<string>()],
+    ]);
+    expect([...agencyOnlyKeys(refs, new Set(["ag.tsx"]))]).toEqual(["a.agency"]);
+  });
+
+  it("keysMissingSpanish skips an exempt key and still lists the rest (mutation: ignore the agencyOnly set → FAILS)", () => {
+    expect(keysMissingSpanish({ "x.a": "A", "x.b": "B" }, [], new Set(["x.a"]))).toEqual(["x.b"]);
+  });
+
+  it("directReadCounts leaves agency-only files out (mutation: count every file → FAILS)", () => {
+    const s: SourceScan = { imports: new Map(), refs: new Map(), directReads: new Map([["ag.tsx", 3], ["client.tsx", 2]]) };
+    expect(directReadCounts(s, new Set(["ag.tsx"]))).toEqual({ "client.tsx": 2 });
   });
 });
