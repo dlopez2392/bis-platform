@@ -23,7 +23,7 @@ export default function DashboardError({
   }, [error]);
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center p-6">
+    <div lang={locale} className="flex min-h-[60vh] items-center justify-center p-6">
       <EmptyState
         icon={AlertTriangle}
         title={t(m, "error.title", locale)}

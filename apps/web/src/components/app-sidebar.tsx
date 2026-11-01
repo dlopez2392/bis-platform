@@ -640,6 +640,7 @@ function SetupMeterLink({
   return (
     <Link
       href={`${base}/setup`}
+      lang={locale}
       // Unconditional for the same reason SidebarLink's own title is now
       // unconditional (F-107 r1 review): the label/count row below is
       // `hidden` below `sm` even when `collapsed` is false, so sighted

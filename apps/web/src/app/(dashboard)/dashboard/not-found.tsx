@@ -13,7 +13,7 @@ import { useLocale } from "@/components/locale-provider";
 export default function DashboardNotFound() {
   const locale = useLocale();
   return (
-    <div className="flex min-h-[60vh] items-center justify-center p-6">
+    <div lang={locale} className="flex min-h-[60vh] items-center justify-center p-6">
       <EmptyState
         icon={SearchX}
         title={t(m, "notFound.title", locale)}

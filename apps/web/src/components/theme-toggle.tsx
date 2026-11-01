@@ -75,6 +75,7 @@ export function ThemeToggle() {
       data-testid="theme-toggle"
       aria-label={t(m, "theme.toggle", locale)}
       title={t(m, "theme.toggle", locale)}
+      lang={locale}
       onClick={() =>
         toggleTheme(
           resolvedTheme,

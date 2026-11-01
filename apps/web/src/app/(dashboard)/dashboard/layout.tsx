@@ -209,13 +209,15 @@ export default async function DashboardLayout({
     // separate per-navigation POSTs.
     <ShellDataProvider>
       <LocaleProvider locale={locale}>
-        {/* No `lang` on the shell (decision D, 2026-10-10): most of it —
-            the account switcher, the search, the Clerk menus — is still
-            English. `lang={locale}` sits on the converted parts only: the
-            sidebar's <nav> and toggle (app-sidebar.tsx), the presence
-            wrapper (topbar-presence.tsx) and the dashboard KPI row
-            ([accountId]/dashboard/page.tsx). Everything else inherits the
-            root <html lang="en">. */}
+        {/* No `lang` on the shell as a whole yet (decision D, 2026-10-10):
+            the account switcher and the Clerk menus are still English, and
+            the root is still <html lang="en"> until S-10 T7 sets it from the
+            locale. `lang={locale}` sits on each converted part instead: the
+            sidebar's <nav> and toggle and its setup meter (app-sidebar.tsx),
+            the presence wrapper (topbar-presence.tsx), the ⌘K search
+            triggers and its portalled dialog (command-palette.tsx), the
+            theme toggle, the dashboard's error and not-found pages, and the
+            dashboard KPI row ([accountId]/dashboard/page.tsx). */}
         <div className="relative flex min-h-screen">
           <Ground />
           <AppSidebar

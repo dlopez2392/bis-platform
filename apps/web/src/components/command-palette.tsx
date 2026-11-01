@@ -284,6 +284,7 @@ export function CommandPalette({
         size="icon-sm"
         onClick={() => setOpen(true)}
         aria-label={t(m, "shell.search", locale)}
+        lang={locale}
         aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
         className="sm:hidden"
       >
@@ -294,6 +295,7 @@ export function CommandPalette({
         size="sm"
         onClick={() => setOpen(true)}
         aria-label={t(m, "shell.search", locale)}
+        lang={locale}
         // Names the shortcut this machine actually honours, for the same
         // reason the visible chip below does.
         aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
@@ -312,6 +314,7 @@ export function CommandPalette({
       </Button>
 
       <CommandDialog
+        lang={locale}
         open={open}
         onOpenChange={(next) => (next ? setOpen(true) : close())}
         title={t(m, "shell.search", locale)}

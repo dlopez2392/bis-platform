@@ -197,3 +197,10 @@ describe("AppSidebar threads isTechnician to buildNavGroups (F-085 part 1)", () 
     expect(src).toContain("buildNavGroups(base, isAgency, isOwner, isTechnician)");
   });
 });
+
+// S-10 review I-3: the setup meter sits in the footer, outside <nav lang>.
+describe("AppSidebar — the setup meter's lang (S-10 review I-3)", () => {
+  it("the meter link carries lang={locale} (mutation: drop it → FAILS)", () => {
+    expect(src).toMatch(/href=\{`\$\{base\}\/setup`\}\s*lang=\{locale\}/);
+  });
+});

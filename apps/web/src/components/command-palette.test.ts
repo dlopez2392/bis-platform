@@ -193,3 +193,17 @@ describe("CommandPalette — sends the trimmed raw query, never a sanitized one 
     expect(src).toMatch(/searchTermLength\(query\) >= MIN_QUERY/);
   });
 });
+
+// S-10 review I-3: the palette's dialog portals into <body>, under
+// <html lang="en">, so it carries the reader's language itself; so do both
+// triggers. CommandDialog passes `lang` to its DialogContent.
+describe("CommandPalette — lang (S-10 review I-3)", () => {
+  it("the dialog and both search triggers carry lang={locale} (mutation: drop it from any one → FAILS)", () => {
+    expect(src).toMatch(/<CommandDialog[\s\S]{0,80}lang=\{locale\}/);
+    expect(src.match(/aria-label=\{t\(m, "shell\.search", locale\)\}\s*lang=\{locale\}/g)?.length).toBe(2);
+  });
+  it("CommandDialog puts lang on the portalled DialogContent (mutation: spread it onto Dialog instead → FAILS)", () => {
+    const ui = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "ui/command.tsx"), "utf8");
+    expect(ui).toMatch(/<DialogContent\s+lang=\{lang\}/);
+  });
+});
