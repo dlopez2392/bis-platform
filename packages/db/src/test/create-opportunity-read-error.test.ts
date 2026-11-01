@@ -41,3 +41,30 @@ describe("createOpportunity: a failed contact read", () => {
     expect(inserted).toEqual([]);
   });
 });
+
+/**
+ * Review M5 of fix/batch-oct31: a deal is only ever for someone live. The new-deal picker searches live
+ * customers only (the search route's rule: archived_at is null and merged_into is null), but the action takes
+ * whatever id the form carries, so the same rule holds here, where the deal is written, with its own words.
+ */
+describe("createOpportunity: an archived or merged-away contact", () => {
+  const input = { contactId: "ct-1", pipelineId: "pipe-1", name: "Roof" };
+
+  it("refuses an archived contact and inserts nothing (mutation: skip the archived check -> FAILS)", async () => {
+    const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: "2026-10-01T00:00:00Z", merged_into: null }, error: null });
+    await expect(createOpportunity(db, "acct-1", input, "user_1")).rejects.toThrow("createOpportunity: the contact is archived");
+    expect(inserted).toEqual([]);
+  });
+
+  it("refuses a merged-away contact and inserts nothing (mutation: skip the merged check -> FAILS)", async () => {
+    const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: null, merged_into: "ct-kept" }, error: null });
+    await expect(createOpportunity(db, "acct-1", input, "user_1")).rejects.toThrow("createOpportunity: the contact was merged into another");
+    expect(inserted).toEqual([]);
+  });
+
+  it("a live contact gets the deal", async () => {
+    const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: null, merged_into: null }, error: null });
+    await expect(createOpportunity(db, "acct-1", input, "user_1")).resolves.toEqual({ id: "opp-1" });
+    expect(inserted).toContain("opportunities");
+  });
+});
