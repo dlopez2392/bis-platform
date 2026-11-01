@@ -4182,12 +4182,18 @@ export const m = {
   // The callback To do a call leaves when the caller wants a person to call
   // them back. The English line is written into tasks.title when the To do is
   // made (the `todo.consent.*` precedent); the Spanish waits for an operator
-  // locale. "{number}" is the number as the caller said it, or their caller
-  // ID; "{reason}" is what they called about. The bare line is for a call
-  // with no reason recorded.
-  "todo.callback.en": "Call back at {number}: {reason}",
+  // locale (`callbackTaskTitle`, call-card.ts, still reads only the English
+  // half). The SAME pair now also backs the call-alert EMAIL's own callback
+  // line (`callbackAlertLine`, S-10 T8 review round 1 finding 1), which DOES
+  // follow `accounts.language` — read there through `t()`, the reason this
+  // pair was renamed off its old `.en`/`.es`-suffixed-on-both-sides shape (no
+  // bare English key) to the ordinary base/`.es` one `t()` expects.
+  // "{number}" is the number as the caller said it, or their caller ID;
+  // "{reason}" is what they called about. The bare line is for a call with
+  // no reason recorded.
+  "todo.callback": "Call back at {number}: {reason}",
   "todo.callback.es": "Devuelva la llamada al {number}: {reason}",
-  "todo.callback.bare.en": "Call back at {number}",
+  "todo.callback.bare": "Call back at {number}",
   "todo.callback.bare.es": "Devuelva la llamada al {number}",
 
   "setup.title": "Client setup",
@@ -6767,6 +6773,94 @@ export const m = {
   "email.replyForward.attachments.es": "Este correo traía {count} archivos adjuntos. Aún no se guardan en BIS.",
   "email.replyForward.attachmentsOne": "This email had 1 attachment. It is not saved in BIS yet.",
   "email.replyForward.attachmentsOne.es": "Este correo traía 1 archivo adjunto. Aún no se guarda en BIS.",
+  // S-10 T8: the owner's own mail (the weekly report, the lead alert, the
+  // call alert) in `accounts.language ?? "en"` — one email, one language,
+  // subject through footer (DESIGN.md's "A customer's language", applied to
+  // the owner's mail per spec §3.3). The agency roll-up (agency-rollup.ts)
+  // stays English on purpose and is not touched here.
+  "email.weeklyReport.delta.same": "same as the week before",
+  "email.weeklyReport.delta.same.es": "igual que la semana anterior",
+  "email.weeklyReport.delta.more": "{size} more than the week before",
+  "email.weeklyReport.delta.more.es": "{size} más que la semana anterior",
+  "email.weeklyReport.delta.moreOne": "{size} more than the week before",
+  "email.weeklyReport.delta.moreOne.es": "{size} más que la semana anterior",
+  "email.weeklyReport.delta.fewer": "{size} fewer than the week before",
+  "email.weeklyReport.delta.fewer.es": "{size} menos que la semana anterior",
+  "email.weeklyReport.delta.fewerOne": "{size} fewer than the week before",
+  "email.weeklyReport.delta.fewerOne.es": "{size} menos que la semana anterior",
+  // S-10 T8 review round 1, finding 2: each row label agrees with its own
+  // count at 1 ("1 call answered", not "1 calls answered") in both
+  // languages — rendered through plural(), never t().
+  "email.weeklyReport.label.calls": "calls answered",
+  "email.weeklyReport.label.calls.es": "llamadas atendidas",
+  "email.weeklyReport.label.callsOne": "call answered",
+  "email.weeklyReport.label.callsOne.es": "llamada atendida",
+  "email.weeklyReport.label.leads": "leads captured",
+  "email.weeklyReport.label.leads.es": "clientes potenciales captados",
+  "email.weeklyReport.label.leadsOne": "lead captured",
+  "email.weeklyReport.label.leadsOne.es": "cliente potencial captado",
+  "email.weeklyReport.label.bookings": "bookings",
+  "email.weeklyReport.label.bookings.es": "citas",
+  "email.weeklyReport.label.bookingsOne": "booking",
+  "email.weeklyReport.label.bookingsOne.es": "cita",
+  "email.weeklyReport.label.visitors": "website visitors",
+  "email.weeklyReport.label.visitors.es": "visitantes del sitio web",
+  "email.weeklyReport.label.visitorsOne": "website visitor",
+  "email.weeklyReport.label.visitorsOne.es": "visitante del sitio web",
+  "email.weeklyReport.visitors": "Your website had {count} visitors last week.",
+  "email.weeklyReport.visitors.es": "Su sitio web tuvo {count} visitantes la semana pasada.",
+  "email.weeklyReport.visitorsOne": "Your website had {count} visitor last week.",
+  "email.weeklyReport.visitorsOne.es": "Su sitio web tuvo {count} visitante la semana pasada.",
+  "email.weeklyReport.reassurance.receptionist": "{persona} is still answering",
+  "email.weeklyReport.reassurance.receptionist.es": "{persona} sigue atendiendo",
+  "email.weeklyReport.reassurance.textBack": "your missed-call text-back is still on",
+  "email.weeklyReport.reassurance.textBack.es": "su texto por llamada perdida sigue activo",
+  "email.weeklyReport.reassurance.join": ", and ",
+  "email.weeklyReport.reassurance.join.es": " y ",
+  "email.weeklyReport.quiet.heading": "Last week was quiet",
+  "email.weeklyReport.quiet.heading.es": "La semana pasada estuvo tranquila",
+  "email.weeklyReport.quiet.body": "Nothing came in last week — no calls, no leads, no bookings.",
+  "email.weeklyReport.quiet.body.es": "No llegó nada la semana pasada — sin llamadas, sin clientes potenciales, sin citas.",
+  "email.weeklyReport.heading": "Here's how last week went.",
+  "email.weeklyReport.heading.es": "Así le fue la semana pasada.",
+  "email.weeklyReport.cta": "Open your dashboard",
+  "email.weeklyReport.cta.es": "Abrir su panel",
+  "email.weeklyReport.subject.visitors": "Last week: {count} website visitors",
+  "email.weeklyReport.subject.visitors.es": "La semana pasada: {count} visitantes del sitio web",
+  "email.weeklyReport.subject.visitorsOne": "Last week: {count} website visitor",
+  "email.weeklyReport.subject.visitorsOne.es": "La semana pasada: {count} visitante del sitio web",
+  // S-10 T8 review round 1, finding 2: {calls} and {leads} are now the
+  // ALREADY-PLURALIZED phrases below, each agreeing with its own count —
+  // "1 call" and "3 new leads" can both appear in the same subject, so each
+  // noun needs its own One/Other pair, not the sentence as a whole.
+  "email.weeklyReport.subject.pipeline": "Last week: {calls}, {leads}",
+  "email.weeklyReport.subject.pipeline.es": "La semana pasada: {calls}, {leads}",
+  "email.weeklyReport.subject.pipeline.calls": "{count} calls",
+  "email.weeklyReport.subject.pipeline.calls.es": "{count} llamadas",
+  "email.weeklyReport.subject.pipeline.callsOne": "{count} call",
+  "email.weeklyReport.subject.pipeline.callsOne.es": "{count} llamada",
+  "email.weeklyReport.subject.pipeline.leads": "{count} new leads",
+  "email.weeklyReport.subject.pipeline.leads.es": "{count} nuevos clientes potenciales",
+  "email.weeklyReport.subject.pipeline.leadsOne": "{count} new lead",
+  "email.weeklyReport.subject.pipeline.leadsOne.es": "{count} nuevo cliente potencial",
+  "email.leadAlert.subject": "New lead: {formName}",
+  "email.leadAlert.subject.es": "Nuevo cliente potencial: {formName}",
+  "email.leadAlert.heading": "New lead",
+  "email.leadAlert.heading.es": "Nuevo cliente potencial",
+  "email.leadAlert.fromFormHtml": "From your form {quoted}.",
+  "email.leadAlert.fromFormHtml.es": "De su formulario {quoted}.",
+  "email.leadAlert.fromFormText": "New lead from your form {quoted}.",
+  "email.leadAlert.fromFormText.es": "Nuevo cliente potencial de su formulario {quoted}.",
+  "email.callAlert.heading": "Call — {outcome}",
+  "email.callAlert.heading.es": "Llamada — {outcome}",
+  "email.callAlert.outcome.booked": "booked",
+  "email.callAlert.outcome.booked.es": "cita",
+  "email.callAlert.outcome.lead": "lead",
+  "email.callAlert.outcome.lead.es": "cliente potencial",
+  "email.callAlert.outcome.message": "message",
+  "email.callAlert.outcome.message.es": "mensaje",
+  "email.alert.openContact": "Open this contact",
+  "email.alert.openContact.es": "Abrir este contacto",
   "contact.forwarding.label": "Forwarding address",
   "contact.forwarding.label.es": "Dirección para reenviar",
   "contact.forwarding.hint": "Forward an email here to save it on this customer.",

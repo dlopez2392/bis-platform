@@ -83,3 +83,29 @@ describe("listAccountsDueWeeklyReport — pages past a short page, stopping only
     expect(ranges).toEqual([[0, 999], [2, 1001], [3, 1002]]);
   });
 });
+
+// S-10 T8: the client weekly report email, in the account's own language
+// (spec §3.3). `language` rides the SAME select this function already
+// makes (ACCOUNT_BRAND_COLS already carries it, 0076) — no second column,
+// no second query.
+describe("listAccountsDueWeeklyReport — carries the account's own language (S-10 T8)", () => {
+  it("maps a Spanish account's language onto the row (mutation: drop the `language` mapping -> FAILS)", async () => {
+    const f = fakeDb([
+      { data: [{ ...acctRow("a"), language: "es" }], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
+    const rows = await listAccountsDueWeeklyReport(f.db);
+    expect(rows[0]!.language).toBe("es");
+  });
+
+  it("a null language on the row is English at the send site, never defaulted here (mutation: default to \"es\" here -> FAILS)", async () => {
+    const f = fakeDb([
+      { data: [{ ...acctRow("a"), language: null }], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
+    const rows = await listAccountsDueWeeklyReport(f.db);
+    expect(rows[0]!.language).toBeNull();
+  });
+});

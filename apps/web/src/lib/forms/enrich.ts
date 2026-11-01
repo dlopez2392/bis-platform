@@ -10,12 +10,13 @@ import { recordActs } from "@/lib/ai-acts/record";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
+import { leadAlertEmail, leadAlertSubject } from "@/lib/email/templates/lead-alert";
 import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead-receipt";
 import { isValidEmail } from "@/lib/forms/guards";
 import { e164Of } from "@/lib/voice/phone-number";
 import { sendInstantReply } from "@/lib/automations/instant-reply";
 import { pageLanguageSignal } from "@/lib/contacts/language";
+import { resolveLocale } from "@/lib/i18n/locale";
 
 /**
  * Everything that happens to a form submission AFTER its row is durably
@@ -454,8 +455,11 @@ async function notify(
   // to a row this query already returns. `name` is NOT selected: that column
   // is the agency's internal label and `emailBrand` has no parameter left to
   // receive it.
+  // `language` added for S-10 T8 (the lead alert in the account's own
+  // language) — one more column on a read this function already makes,
+  // never a second accounts lookup.
   const { data: account } = await db.from("accounts")
-    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .select("brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode, language")
     .eq("id", form.account_id).maybeSingle();
 
   const brand = emailBrand({
@@ -469,6 +473,10 @@ async function notify(
     replyToEmail: null,
   });
 
+  // The ACCOUNT's own language, never the submitter's — this alert goes to
+  // the client's staff, not the person who filled the form in.
+  const locale = resolveLocale(undefined, (account?.language as "en" | "es" | null) ?? null);
+
   const { html, text: body } = leadAlertEmail({
     brand,
     formName: form.name,
@@ -478,6 +486,7 @@ async function notify(
     contactUrl: origin && contactId
       ? `${origin}/dashboard/accounts/${form.account_id}/contacts/${contactId}`
       : null,
+    locale,
   });
 
   // Each recipient is independent. Awaiting them in a bare loop meant the first
@@ -493,7 +502,7 @@ async function notify(
         // brand.name, not account.name: `accounts.name` is the agency's
         // internal label for this company and is not for the client's eyes.
         to, fromName: brand.name,
-        subject: `New lead: ${form.name}`, body, html,
+        subject: leadAlertSubject(form.name, locale), body, html,
         replyTo: normalizeReplyTo(leadEmail),
       });
     } catch (e) {

@@ -686,6 +686,41 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
     expect(sendMock.mock.calls[1]![0].body).toContain("Hi Maria,");
   });
 
+  // S-10 T8: the ALERT (the client's own staff) follows `accounts.language`,
+  // never the page the stranger submitted from — unrelated to the RECEIPT
+  // above, which keeps following the page's own locale (C6/S-09). A Spanish
+  // account's alert is Spanish even though this submission's own page was
+  // English, and the receipt beside it stays English because the page was.
+  it("the lead alert is in the ACCOUNT's language, independent of the page the submission came from (mutation: read the submission's locale instead of accountRow.language → FAILS)", async () => {
+    accountRow.language = "es";
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    const alert = sendMock.mock.calls[0]![0];
+    expect(alert.to).toBe("owner@rioroofing.com");
+    expect(alert.subject).toBe("Nuevo cliente potencial: Test Form");
+    expect(alert.body).toContain("Nuevo cliente potencial de su formulario");
+    expect(alert.html).toContain("Nuevo cliente potencial");
+    // The receipt is a different reader on a different page: still English,
+    // because this submission's OWN page was English.
+    expect(sendMock.mock.calls[1]![0].subject).toBe("We received your message — Rio Roofing");
+  });
+
+  it("no language on the account (null) keeps the lead alert in English (mutation: default the alert locale to es → FAILS)", async () => {
+    accountRow.language = null;
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(sendMock.mock.calls[0]![0].subject).toBe("New lead: Test Form");
+  });
+
   it("a suppressed account: neither the company's alert nor the person's receipt is sent (D-061, through the real gate; mutation: drop the chokepoint check → both sent, FAILS)", async () => {
     accountRow.outbound_suppressed = true;
     getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));

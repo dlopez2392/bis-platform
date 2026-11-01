@@ -956,16 +956,65 @@ describe("finishCall — the staff alert SMS", () => {
 
   // Owner decision B (2026-10-10): the call alert TEXT is in the account's
   // language — ctx.accountLanguage, read off the account row route.ts already
-  // loads — Spanish with accents dropped, GSM-7, one segment. The alert
-  // EMAIL stays English (owner decision A).
-  it("a Spanish account's call alert text is Spanish, GSM-7 and one segment, while the alert email stays English (owner decision B; mutation: call composeCallAlertSms without the account's language → FAILS)", async () => {
+  // loads — Spanish with accents dropped, GSM-7, one segment. S-10 T8
+  // (spec §3.3) extended the SAME field to the alert EMAIL's subject and
+  // body — superseding owner decision A's "the alert email stays English"
+  // for this one field; the call SUMMARY and the conversation body still do.
+  it("a Spanish account's call alert text is Spanish, GSM-7 and one segment, and the alert email is Spanish too (owner decision B, extended by S-10 T8; mutation: call composeCallAlertSms without the account's language → FAILS)", async () => {
     dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
     await finishCall(leadState(), { ...ctx, accountLanguage: "es" }, meta);
     const body = smsRefs.send.mock.calls[0]![0].body as string;
     expect(body).toBe("Nueva llamada: nuevo cliente potencial. Revise su correo para mas detalles.");
     expect(segmentsFor(body)).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
+    const email = emailRefs.send.mock.calls[0]![0] as { subject: string; html: string; body: string };
+    expect(email.subject).toMatch(/^Llamada — cliente potencial — /);
+    expect(email.body).toContain("Llamada — cliente potencial");
+    expect(email.html).toContain("Llamada — cliente potencial");
+  });
+
+  it("no language on the account (null or absent) keeps the call alert EMAIL English too (mutation: default the alert email locale to es → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: null }, meta);
     const email = emailRefs.send.mock.calls[0]![0] as { subject: string };
     expect(email.subject).toMatch(/^Call — lead — /);
+  });
+
+  // S-10 T8 review round 1, finding 1: the callback line LEADS the alert
+  // (owner ruling, 2026-10-09) — leading with English on a Spanish alert
+  // defeats the whole point of translating the rest of it. `leadState()`'s
+  // lead carries its own `need: "roof quote"` and `callbackNumber`, so
+  // `callbackWanted` is true and the callback line is the FIRST line of
+  // both parts (voice.ts: `callback` is unshifted ahead of the heading).
+  it("the Spanish alert's FIRST line is the callback line, in Spanish, in both text and html (mutation: reuse the English `callbackLine` for the email → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: "es" }, meta);
+    const email = emailRefs.send.mock.calls[0]![0] as { body: string; html: string };
+    const firstLine = email.body.split("\n")[0]!;
+    expect(firstLine.startsWith("Devuelva la llamada al")).toBe(true);
+    expect(firstLine).toContain("roof quote");
+    expect(firstLine).not.toContain("Call back at");
+    expect(email.html).toContain("Devuelva la llamada al");
+  });
+
+  it("a withheld caller number in a Spanish alert reads \"Desconocido\", never the English \"Unknown caller\" — subject, body and html (mutation: fall back to the bare literal regardless of locale → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: "es", callerNumber: null }, meta);
+    const email = emailRefs.send.mock.calls[0]![0] as { subject: string; body: string; html: string };
+    expect(email.subject).toContain("Desconocido");
+    expect(email.body).toContain("Desconocido");
+    expect(email.html).toContain("Desconocido");
+    expect(email.subject).not.toContain("Unknown caller");
+    expect(email.body).not.toContain("Unknown caller");
+    expect(email.html).not.toContain("Unknown caller");
+  });
+
+  it("English is unaffected: the callback line and \"Unknown caller\" stay exactly as before (mutation: change the English default → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, callerNumber: null }, meta);
+    const email = emailRefs.send.mock.calls[0]![0] as { body: string; html: string };
+    const firstLine = email.body.split("\n")[0]!;
+    expect(firstLine.startsWith("Call back at")).toBe(true);
+    expect(email.body).toContain("Unknown caller");
   });
 
   it("no language on the account (null or absent) keeps the call alert text English (mutation: default the alert language to es → FAILS)", async () => {

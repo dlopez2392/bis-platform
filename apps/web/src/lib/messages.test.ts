@@ -853,6 +853,75 @@ describe("S-07 3b: share links (plan Task 2)", () => {
   });
 });
 
+describe("S-10 T8: the owner's own mail (weekly report, lead alert, call alert) in the account's language (spec §3.3)", () => {
+  const KEYS_T8 = [
+    "email.weeklyReport.delta.same", "email.weeklyReport.delta.more", "email.weeklyReport.delta.moreOne",
+    "email.weeklyReport.delta.fewer", "email.weeklyReport.delta.fewerOne",
+    "email.weeklyReport.label.calls", "email.weeklyReport.label.callsOne",
+    "email.weeklyReport.label.leads", "email.weeklyReport.label.leadsOne",
+    "email.weeklyReport.label.bookings", "email.weeklyReport.label.bookingsOne",
+    "email.weeklyReport.label.visitors", "email.weeklyReport.label.visitorsOne",
+    "email.weeklyReport.visitors", "email.weeklyReport.visitorsOne",
+    "email.weeklyReport.reassurance.receptionist", "email.weeklyReport.reassurance.textBack",
+    "email.weeklyReport.reassurance.join", "email.weeklyReport.quiet.heading", "email.weeklyReport.quiet.body",
+    "email.weeklyReport.heading", "email.weeklyReport.cta",
+    "email.weeklyReport.subject.visitors", "email.weeklyReport.subject.visitorsOne", "email.weeklyReport.subject.pipeline",
+    "email.weeklyReport.subject.pipeline.calls", "email.weeklyReport.subject.pipeline.callsOne",
+    "email.weeklyReport.subject.pipeline.leads", "email.weeklyReport.subject.pipeline.leadsOne",
+    "email.leadAlert.subject", "email.leadAlert.heading", "email.leadAlert.fromFormHtml", "email.leadAlert.fromFormText",
+    "email.callAlert.heading", "email.callAlert.outcome.booked", "email.callAlert.outcome.lead", "email.callAlert.outcome.message",
+    "email.alert.openContact",
+  ] as const;
+
+  it("every key has a Spanish twin that differs from the English (mutation: drop one .es line -> FAILS naming it)", () => {
+    const missing = KEYS_T8.filter((k) => !(k in m) || !(`${k}.es` in m));
+    expect(missing).toEqual([]);
+    for (const k of KEYS_T8) {
+      expect(m[`${k}.es` as keyof typeof m], k).not.toBe(m[k]);
+    }
+  });
+
+  it("every English key has its .es twin on the very next line (mutation: move a twin -> FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of KEYS_T8) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, never tú (mutation: put a tú form in any .es -> FAILS)", () => {
+    const TU = /\b(tu|tus|ti|contigo|puedes|tienes|verás|elijas|recárgala|inténtalo|agregaste|cámbiala)\b/i;
+    for (const k of KEYS_T8) {
+      const es = m[`${k}.es` as keyof typeof m] as string;
+      expect(TU.test(es), `${k}.es: ${es}`).toBe(false);
+    }
+  });
+
+  it("deltaPhrase's Spanish agrees across One/Other, both directions (mutation: swap más/menos -> FAILS)", () => {
+    expect(t(m, "email.weeklyReport.delta.moreOne", "es", { size: 1 })).toBe("1 más que la semana anterior");
+    expect(t(m, "email.weeklyReport.delta.more", "es", { size: 3 })).toBe("3 más que la semana anterior");
+    expect(t(m, "email.weeklyReport.delta.fewerOne", "es", { size: 1 })).toBe("1 menos que la semana anterior");
+    expect(t(m, "email.weeklyReport.delta.fewer", "es", { size: 2 })).toBe("2 menos que la semana anterior");
+    expect(m["email.weeklyReport.delta.same.es"]).toBe("igual que la semana anterior");
+  });
+
+  it("the outcome words glossary-match the Calls page's own concepts (mutation: 'Reserva' for booked, or 'Prospecto' for lead -> would FAIL the live G6 gate)", () => {
+    expect(m["email.callAlert.outcome.booked.es"]).toBe("cita");
+    expect(m["email.callAlert.outcome.lead.es"]).toBe("cliente potencial");
+    expect(m["email.callAlert.outcome.message.es"]).toBe("mensaje");
+  });
+
+  it("every placeholder set survives translation (mutation: drop {formName} from leadAlert.subject.es -> FAILS)", () => {
+    const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+    for (const k of KEYS_T8) {
+      const en = m[k];
+      const es = m[`${k}.es` as keyof typeof m] as string;
+      expect(ph(es), `${k}.es`).toEqual(ph(en));
+    }
+  });
+});
+
 describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
   const KEYS_8A1 = [
     "aiSettings.title", "aiSettings.description", "aiSettings.account.label", "aiSettings.account.help", "aiSettings.budget.label",

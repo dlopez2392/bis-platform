@@ -8,7 +8,7 @@ import {
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
-import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
+import { voiceCallAlertEmail, voiceCallAlertSubject } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { readCandidates, isShared } from "./identity/candidates";
@@ -26,9 +26,11 @@ import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
 import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
-  callbackWanted, callbackNumberOf, callbackTaskTitle, recordedReason,
+  callbackWanted, callbackNumberOf, callbackTaskTitle, callbackAlertLine, recordedReason,
   cardReadable, readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { maskIdNumbers, maskTranscript } from "./id-mask";
 import { isPlaceholderName } from "./tools/placeholders";
 import type { TradeModuleId } from "@/lib/voice/modules";
@@ -82,13 +84,16 @@ export interface FinishContext {
    *  included, in English — C11, via `chooseBody` inside `prepareTextback`. */
   textbackBodyEs: string | null;
   /** `accounts.language` (0065), read off the account row route.ts already
-   *  loads (ACCOUNT_COLS, no extra query). Used for ONE thing: the staff
-   *  call-alert TEXT (`composeCallAlertSms`, owner decision B, 2026-10-10 —
-   *  Spanish with accents dropped for a Spanish account). The call SUMMARY,
-   *  the conversation body and the alert EMAIL stay English regardless
-   *  (owner decision A). Unrelated to `profileLanguage` above (what Sofía
-   *  may SPEAK) and to `calls.language` (what the caller spoke). NULL or
-   *  absent means English, via `resolveLocale`. */
+   *  loads (ACCOUNT_COLS, no extra query). Used for the staff call-alert TEXT
+   *  (`composeCallAlertSms`, owner decision B, 2026-10-10 — Spanish with
+   *  accents dropped for a Spanish account) and, since S-10 T8, the staff
+   *  call-alert EMAIL (`voiceCallAlertEmail`/`voiceCallAlertSubject`), which
+   *  superseded owner decision A's "the alert email stays English" for this
+   *  one field — spec §3.3 names the call alert explicitly. The call SUMMARY
+   *  and the conversation body still stay English regardless. Unrelated to
+   *  `profileLanguage` above (what Sofía may SPEAK) and to `calls.language`
+   *  (what the caller spoke). NULL or absent means English, via
+   *  `resolveLocale`. */
   accountLanguage?: Locale | null;
   /** S-47b: the trade module this call ran under, from the SAME profile read that stamped the row and
    *  built the prompt (route.ts's `tradeStamp`). `insurance_pc` masks SSN- and licence-shaped numbers
@@ -655,21 +660,36 @@ export async function finishCall(
   let notified = false;
   if (meaningful) {
     try {
-      const callerDisplay = ctx.callerNumber ?? "Unknown caller";
+      // S-10 T8: the account's own language, matching the alert SMS's locale
+      // below (owner decision B) — same field, now the same email too.
+      // Computed before `callerDisplay` so the "no caller id" fallback below
+      // can read it.
+      const alertLocale = resolveLocale(undefined, ctx.accountLanguage ?? null);
+      // S-10 T8 review round 1, finding 1: English on a Spanish alert — this
+      // used to be the bare literal "Unknown caller" regardless of locale.
+      const callerDisplay = ctx.callerNumber ?? t(m, "calls.unknownCaller", alertLocale);
       const brand = emailBrand(ctx.branding);
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
-      // The callback line LEADS the alert (owner ruling, 2026-10-09): exactly
-      // the To do's own title (`callbackLine`, computed once above) —
-      // "Call back at {number}: {reason}" from what Sofía wrote down, or the
-      // bare "Call back at {number}" when she wrote nothing. Where no person
+      // The callback line LEADS the alert (owner ruling, 2026-10-09) — "Call
+      // back at {number}: {reason}" from what Sofía wrote down, or the bare
+      // "Call back at {number}" when she wrote nothing. Where no person
       // needs to call back (a booked call, whose appointment is the
       // follow-up) the alert is today's. A pure read of `state`: nothing here
       // waits on the card's post-call reading, and this leg's place and
       // isolation are unchanged.
+      //
+      // S-10 T8 review round 1, finding 1: this is NOT `callbackLine` (the
+      // To do's own, English-only title, computed once above) — it is built
+      // fresh, in THIS alert's own language, from the same `callbackNumber`
+      // and `reason` the title reads. Reusing `callbackLine` here put English
+      // into a Spanish alert's first line regardless of the account's
+      // language; `callbackLine` itself is untouched, so `ensureCallbackTask`
+      // below still stores and reads the one English value it always has.
+      const alertCallbackLine = callbackNumber ? callbackAlertLine(callbackNumber, reason, alertLocale) : null;
       const { html, text } = voiceCallAlertEmail({
-        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine,
+        brand, outcome, summary, callerDisplay, contactUrl, callback: alertCallbackLine, locale: alertLocale,
       });
 
       const failures: string[] = [];
@@ -681,7 +701,8 @@ export async function finishCall(
           // corporate filters treat as spoofing. Platform From only.
           await sendEmailOrThrow({
             accountId: ctx.accountId, kind: "operator.call_alert",
-            to, fromName: brand.name, subject: `Call — ${outcome} — ${callerDisplay}`, body: text, html,
+            to, fromName: brand.name,
+            subject: voiceCallAlertSubject(outcome, callerDisplay, alertLocale), body: text, html,
           });
           notified = true;
         } catch (e) {

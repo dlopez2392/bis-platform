@@ -36,9 +36,11 @@ import { classifyOutcome, wasTransferred, callerSpoke } from "./call-state";
 import { spokenPhone } from "./phone-number";
 import { groundedEvidence } from "@/lib/proposals/grounding";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { aiComplete } from "@/lib/ai/gateway";
 import { aiSafeError } from "@/lib/ai/log";
 import { ID_RULE } from "./id-mask";
+import type { Locale } from "@/lib/i18n/locale";
 
 /** What the post-call reading found. Both null = nothing (no key, a failed
  *  request, or a call that never said why). */
@@ -124,10 +126,44 @@ export function callbackWanted(state: CallState): boolean {
  */
 export function callbackTaskTitle(number: string, reason: string | null): string {
   const why = trimmed(reason);
-  if (!why) return m["todo.callback.bare.en"].replace("{number}", () => number);
-  return m["todo.callback.en"]
+  if (!why) return m["todo.callback.bare"].replace("{number}", () => number);
+  return m["todo.callback"]
     .replace("{number}", () => number)
     .replace("{reason}", () => clamp(why, MAX_REASON_LEN));
+}
+
+/**
+ * The SAME line, in the account's OWN language, for the call-alert EMAIL
+ * only (S-10 T8 review round 1, finding 1) — never reused for the stored To
+ * do title above, which stays English on purpose (that function's own doc:
+ * `tasks.title` is stored text, and its `.es` twin waits for an operator
+ * locale). Computing this separately, from the same `number` and `reason`
+ * the title itself reads, is what keeps "one value, read twice" true for
+ * the To do while still letting the email that leads with this line follow
+ * `accounts.language` — reusing `callbackTaskTitle`'s own English output
+ * here would have put English into a Spanish alert regardless of locale.
+ *
+ * `reason` itself is left UNTRANSLATED here, in both languages, on purpose:
+ * it is free text Sofía wrote down live (`recordedReason`, finish-call.ts),
+ * in whichever language the call itself was in, and no catalogue template
+ * can rewrite someone else's sentence after the fact — the SAME restraint
+ * `readCallForCard`'s post-call reading already takes for its own `reason`
+ * field two steps above (its SYSTEM prompt, `~:150`, pins that ONE value to
+ * English on purpose, precisely because it is generated fresh per call
+ * rather than quoted, and a model asked to re-render it in two languages
+ * would drift). Only the surrounding shell — "Call back at {number}: …" /
+ * "Devuelva la llamada al {number}: …" — is this function's own to
+ * translate; the reason riding inside it is quoted, not composed.
+ */
+export function callbackAlertLine(number: string, reason: string | null, locale: Locale): string {
+  const why = trimmed(reason);
+  // Through `t()`, not a raw `m[...]` lookup (G3) — its own `interpolate`
+  // already uses a replacer FUNCTION for every `{param}`, the same
+  // `$&`-safety `callbackTaskTitle`'s manual `.replace()` calls exist for,
+  // so there is nothing this function needs to do by hand that `t()`
+  // doesn't already do.
+  if (!why) return t(m, "todo.callback.bare", locale, { number });
+  return t(m, "todo.callback", locale, { number, reason: clamp(why, MAX_REASON_LEN) });
 }
 
 /**

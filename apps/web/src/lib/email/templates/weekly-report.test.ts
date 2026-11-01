@@ -114,6 +114,19 @@ describe("weeklyReportEmail", () => {
     expect(on.text).toMatch(/still answering/i);
   });
 
+  // S-10 T8 review round 1, finding 5: text-back ALONE (no receptionist) is
+  // a continuation clause ("your missed-call text-back is still on") used
+  // as the whole sentence — it must start with a capital, not run on
+  // lower-case the way it reads mid-sentence after the receptionist clause.
+  it("text-back alone starts the reassurance sentence with a capital (mutation: drop the capitalisation step → \"your missed-call…\" FAILS)", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: quiet, prior: null, dashboardUrl: null,
+      reassurance: { receptionist: false, textBack: true },
+    });
+    expect(text).toContain("Your missed-call text-back is still on.");
+    expect(text).not.toContain("your missed-call text-back is still on.");
+  });
+
   // D-063: the quiet-week reassurance names whichever persona THIS account
   // configured, not a hard-coded "Sofía" — some clients rename their
   // receptionist on the voice profile (persona_name).
@@ -192,5 +205,169 @@ describe("weeklyReportSubject (D-064, review round 2)", () => {
   it("leads with calls/leads, unaffected, when the pipeline itself is not quiet", () => {
     expect(weeklyReportSubject({ calls: 12, leads: 4, bookings: 2, visitors: 86 }))
       .toBe("Last week: 12 calls, 4 new leads");
+  });
+
+  // S-10 T8: `locale` as a SECOND argument, English by default, so every
+  // 1-arg call above keeps its exact prior output.
+  it("in Spanish (mutation: drop the locale argument from any t()/plural() call → FAILS)", () => {
+    expect(weeklyReportSubject({ calls: 12, leads: 4, bookings: 2, visitors: 86 }, "es"))
+      .toBe("La semana pasada: 12 llamadas, 4 nuevos clientes potenciales");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 50 }, "es"))
+      .toBe("La semana pasada: 50 visitantes del sitio web");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 1 }, "es"))
+      .toBe("La semana pasada: 1 visitante del sitio web");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: null }, "es"))
+      .toBe("La semana pasada estuvo tranquila");
+  });
+});
+
+describe("S-10 T8: weeklyReportEmail and weeklyReportSubject in Spanish, usted, subject through footer", () => {
+  // S-10 T8 review round 1, finding 3: narrowed from "renders a non-quiet
+  // week's subject, body and CTA ... in both the html and text parts" —
+  // the subject has no html/text split (it is one string), so the title
+  // claimed coverage this test never had.
+  it("renders a non-quiet week's body and CTA in Spanish, in both the html and text parts, and its own subject in Spanish too (mutation: pass \"en\" at any one t()/plural() call site → FAILS)", () => {
+    const { html, text } = weeklyReportEmail({
+      brand, now: week, prior: { calls: 9, leads: 4, bookings: 3, visitors: 74 },
+      dashboardUrl: "https://x.example/dashboard", reassurance: nothingOn, locale: "es",
+    });
+    expect(weeklyReportSubject(week, "es")).toBe("La semana pasada: 12 llamadas, 4 nuevos clientes potenciales");
+    expect(text).toContain("Así le fue la semana pasada.");
+    expect(text).toContain("llamadas atendidas");
+    expect(text).toContain("clientes potenciales captados");
+    expect(text).toContain("citas");
+    expect(text).toContain("visitantes del sitio web");
+    expect(text).toContain("3 más que la semana anterior");
+    expect(text).toContain("igual que la semana anterior");
+    expect(text).toContain("1 menos que la semana anterior");
+    expect(text).toContain("Abrir su panel: https://x.example/dashboard");
+    expect(html).toContain("Así le fue la semana pasada.");
+    expect(html).toContain("Abrir su panel");
+    // usted, never tú.
+    expect(text).not.toMatch(/\btu\b|\btus\b|\binténtalo\b/i);
+  });
+
+  it("renders the quiet-week body in Spanish, with the reassurance and a real visitor count, in both parts (mutation: hard-code \"en\" in quietBody's html branch → FAILS, where the text-only check above could not)", () => {
+    const { html, text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 50 }, prior: null,
+      dashboardUrl: null, reassurance: { receptionist: true, textBack: true, receptionistName: "Max" },
+      locale: "es",
+    });
+    expect(text).toBe(
+      "No llegó nada la semana pasada — sin llamadas, sin clientes potenciales, sin citas.\n\n"
+      + "Su sitio web tuvo 50 visitantes la semana pasada.\n\n"
+      + "Max sigue atendiendo y su texto por llamada perdida sigue activo.",
+    );
+    expect(html).toContain("La semana pasada estuvo tranquila");
+    // S-10 T8 review round 1, finding 3: the QUIET BODY SENTENCE itself,
+    // asserted in the HTML part — only the heading and the reassurance were
+    // checked in html before this, so a hard-coded "en" surviving just this
+    // one sentence's html branch had nothing to catch it.
+    expect(html).toContain("No llegó nada la semana pasada &mdash; sin llamadas, sin clientes potenciales, sin citas.");
+    expect(html).toContain("Su sitio web tuvo 50 visitantes la semana pasada.");
+    expect(html).toContain("Max sigue atendiendo");
+  });
+
+  it("text-back alone starts the Spanish reassurance sentence with a capital too (mutation: drop the capitalisation step → \"su texto…\" FAILS)", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: null }, prior: null,
+      dashboardUrl: null, reassurance: { receptionist: false, textBack: true }, locale: "es",
+    });
+    expect(text).toContain("Su texto por llamada perdida sigue activo.");
+    expect(text).not.toContain("su texto por llamada perdida sigue activo.");
+  });
+
+  it("singular visitor count stays grammatical in Spanish: 1 visitante, not 1 visitantes", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 1 }, prior: null,
+      dashboardUrl: null, reassurance: nothingOn, locale: "es",
+    });
+    expect(text).toContain("Su sitio web tuvo 1 visitante la semana pasada.");
+    expect(text).not.toContain("1 visitantes");
+  });
+
+  it("the CTA is omitted from the text footer when there is no dashboard url, in Spanish too", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: week, prior: null, dashboardUrl: null, reassurance: nothingOn, locale: "es",
+    });
+    expect(text).not.toContain("Abrir su panel");
+  });
+});
+
+// S-10 T8 review round 1, finding 2: "1 llamadas" and "1 calls answered" are
+// both wrong — every row label and the pipeline subject now agree with
+// their OWN count at 1, in both languages, through plural() rather than a
+// flat t() lookup. Each row tested at 1 (singular) and 2 (plural) so one
+// cannot regress without the other noticing (the same discipline the
+// existing visitors singular/plural tests already use).
+describe("S-10 T8 review round 1, finding 2: row labels and the pipeline subject agree with their count at 1", () => {
+  // `toContain` on the LINE ARRAY (exact-element match), never on the raw
+  // string: "booking"/"cita" are genuine substrings of "bookings"/"citas",
+  // so a loose string .toContain would pass even for the wrong (plural)
+  // row — splitting into lines first and matching a whole line is what
+  // makes this assertion able to fail on exactly the bug finding 2 named.
+  it("English: each row reads singular at 1 and plural at 2 (mutation: use t() instead of plural() for any row → \"1 calls answered\" etc. FAILS)", () => {
+    const linesAt = (n: number) => weeklyReportEmail({
+      brand, now: { calls: n, leads: n, bookings: n, visitors: n }, prior: null,
+      dashboardUrl: null, reassurance: nothingOn,
+    }).text.split("\n");
+
+    const one = linesAt(1);
+    expect(one).toContain("1 call answered");
+    expect(one).toContain("1 lead captured");
+    expect(one).toContain("1 booking");
+    expect(one).toContain("1 website visitor");
+    expect(one).not.toContain("1 calls answered");
+    expect(one).not.toContain("1 leads captured");
+    expect(one).not.toContain("1 bookings");
+    expect(one).not.toContain("1 website visitors");
+
+    const two = linesAt(2);
+    expect(two).toContain("2 calls answered");
+    expect(two).toContain("2 leads captured");
+    expect(two).toContain("2 bookings");
+    expect(two).toContain("2 website visitors");
+  });
+
+  it("Spanish: each row reads singular at 1 and plural at 2", () => {
+    const linesAt = (n: number) => weeklyReportEmail({
+      brand, now: { calls: n, leads: n, bookings: n, visitors: n }, prior: null,
+      dashboardUrl: null, reassurance: nothingOn, locale: "es",
+    }).text.split("\n");
+
+    const one = linesAt(1);
+    expect(one).toContain("1 llamada atendida");
+    expect(one).toContain("1 cliente potencial captado");
+    expect(one).toContain("1 cita");
+    expect(one).toContain("1 visitante del sitio web");
+    expect(one).not.toContain("1 llamadas atendidas");
+    expect(one).not.toContain("1 clientes potenciales captados");
+    expect(one).not.toContain("1 citas");
+    expect(one).not.toContain("1 visitantes del sitio web");
+
+    const two = linesAt(2);
+    expect(two).toContain("2 llamadas atendidas");
+    expect(two).toContain("2 clientes potenciales captados");
+    expect(two).toContain("2 citas");
+    expect(two).toContain("2 visitantes del sitio web");
+  });
+
+  it("the pipeline subject agrees independently for calls and leads, at 1 and at 2, in English", () => {
+    expect(weeklyReportSubject({ calls: 1, leads: 1, bookings: 0, visitors: null }))
+      .toBe("Last week: 1 call, 1 new lead");
+    expect(weeklyReportSubject({ calls: 2, leads: 2, bookings: 0, visitors: null }))
+      .toBe("Last week: 2 calls, 2 new leads");
+    // Independent counts: one call, three new leads — neither borrows the other's form.
+    expect(weeklyReportSubject({ calls: 1, leads: 3, bookings: 0, visitors: null }))
+      .toBe("Last week: 1 call, 3 new leads");
+  });
+
+  it("the pipeline subject agrees independently for calls and leads, at 1 and at 2, in Spanish (mutation: drive both nouns off one count → FAILS)", () => {
+    expect(weeklyReportSubject({ calls: 1, leads: 1, bookings: 0, visitors: null }, "es"))
+      .toBe("La semana pasada: 1 llamada, 1 nuevo cliente potencial");
+    expect(weeklyReportSubject({ calls: 2, leads: 2, bookings: 0, visitors: null }, "es"))
+      .toBe("La semana pasada: 2 llamadas, 2 nuevos clientes potenciales");
+    expect(weeklyReportSubject({ calls: 1, leads: 3, bookings: 0, visitors: null }, "es"))
+      .toBe("La semana pasada: 1 llamada, 3 nuevos clientes potenciales");
   });
 });

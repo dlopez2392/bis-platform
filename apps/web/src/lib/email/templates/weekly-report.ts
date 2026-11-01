@@ -1,5 +1,8 @@
 import { shell, button, escapeHtml, type EmailBrand } from "./shell";
 import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
+import { m } from "@/lib/messages";
+import { t, plural } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type WeeklyReportInput = {
   brand: EmailBrand;
@@ -20,6 +23,10 @@ export type WeeklyReportInput = {
    *  caller omits it or passes an empty string — never silently to a blank
    *  sentence. */
   reassurance: { receptionist: boolean; textBack: boolean; receptionistName?: string };
+  /** S-10 T8: `accounts.language ?? "en"` — one email, one language, subject
+   *  through footer (spec §3.3). Never the recipient's own language: none of
+   *  these addresses is a `users` row. English when absent. */
+  locale?: Locale;
 };
 
 /**
@@ -29,31 +36,52 @@ export type WeeklyReportInput = {
  * text/plain alternative, unreadable to a screen reader, and renders
  * inconsistently across mail clients. Empty string when there is no prior
  * week — the caller renders the number alone rather than inventing a baseline.
+ *
+ * Spanish's "más"/"menos" do not inflect by count the way some languages'
+ * quantity words do, but the One/Other split still runs through `plural()`
+ * (not a plain `t()` call) so the mechanism this catalogue uses for every
+ * other counted phrase stays uniform here too, and so a future language that
+ * DOES need a different singular form has somewhere to put it.
  */
-export function deltaPhrase(now: number, prior: number | null): string {
+export function deltaPhrase(now: number, prior: number | null, locale: Locale = "en"): string {
   if (prior === null) return "";
   const diff = now - prior;
-  if (diff === 0) return "same as the week before";
+  if (diff === 0) return t(m, "email.weeklyReport.delta.same", locale);
   const size = Math.abs(diff);
-  return `${size} ${diff > 0 ? "more" : "fewer"} than the week before`;
+  const key: "email.weeklyReport.delta.more" | "email.weeklyReport.delta.fewer" =
+    diff > 0 ? "email.weeklyReport.delta.more" : "email.weeklyReport.delta.fewer";
+  return plural(m, key, size, locale, { size });
 }
 
 type Line = { value: number; label: string; delta: string };
 
+// S-10 T8 review round 1, finding 2: each row label agrees with its own
+// value at 1 ("1 call answered", never "1 calls answered"), in both
+// languages — `plural()`, never a flat `t()` lookup, picks the word form.
 function lines(input: WeeklyReportInput): Line[] {
   const { now, prior } = input;
+  const locale = input.locale ?? "en";
   const out: Line[] = [
-    { value: now.calls, label: "calls answered", delta: deltaPhrase(now.calls, prior?.calls ?? null) },
-    { value: now.leads, label: "leads captured", delta: deltaPhrase(now.leads, prior?.leads ?? null) },
-    { value: now.bookings, label: "bookings", delta: deltaPhrase(now.bookings, prior?.bookings ?? null) },
+    {
+      value: now.calls, label: plural(m, "email.weeklyReport.label.calls", now.calls, locale),
+      delta: deltaPhrase(now.calls, prior?.calls ?? null, locale),
+    },
+    {
+      value: now.leads, label: plural(m, "email.weeklyReport.label.leads", now.leads, locale),
+      delta: deltaPhrase(now.leads, prior?.leads ?? null, locale),
+    },
+    {
+      value: now.bookings, label: plural(m, "email.weeklyReport.label.bookings", now.bookings, locale),
+      delta: deltaPhrase(now.bookings, prior?.bookings ?? null, locale),
+    },
   ];
   // OMITTED, not zeroed. `visitors === null` means no site is linked, and a
   // client without one would otherwise read "0 visitors" every Monday and
   // conclude their website is dead.
   if (now.visitors !== null) {
     out.push({
-      value: now.visitors, label: "website visitors",
-      delta: deltaPhrase(now.visitors, prior?.visitors ?? null),
+      value: now.visitors, label: plural(m, "email.weeklyReport.label.visitors", now.visitors, locale),
+      delta: deltaPhrase(now.visitors, prior?.visitors ?? null, locale),
     });
   }
   return out;
@@ -76,34 +104,54 @@ function isQuietPipeline(now: WeeklyNumbers): boolean {
 /** A measured, nonzero visitor count is never omitted, even inside the
  *  quiet-pipeline body — only a metric we didn't measure (`null`) or one
  *  that was genuinely quiet too (`0`) stays silent about it. */
-function visitorsSentence(now: WeeklyNumbers): string | null {
+function visitorsSentence(now: WeeklyNumbers, locale: Locale): string | null {
   if (now.visitors === null || now.visitors === 0) return null;
-  const noun = now.visitors === 1 ? "visitor" : "visitors";
-  return `Your website had ${now.visitors} ${noun} last week.`;
+  return plural(m, "email.weeklyReport.visitors", now.visitors, locale, { count: now.visitors });
+}
+
+/** Escapes, then swaps the plain em dash for its HTML entity — the same
+ *  rendering the hand-written English literal used, now applied to whatever
+ *  locale's catalogue string is in play. */
+function withMdash(s: string): string {
+  return escapeHtml(s).replace(/—/g, "&mdash;");
 }
 
 function quietBody(input: WeeklyReportInput): { html: string; text: string } {
+  const locale = input.locale ?? "en";
   const { receptionist, textBack, receptionistName } = input.reassurance;
+  // The persona's OWN name is never translated — it is what the account
+  // typed in, not platform copy.
   const persona = receptionistName?.trim() || "Sofía";
+  const join = t(m, "email.weeklyReport.reassurance.join", locale);
   const running = [
-    receptionist ? `${persona} is still answering` : null,
-    textBack ? "your missed-call text-back is still on" : null,
+    receptionist ? t(m, "email.weeklyReport.reassurance.receptionist", locale, { persona }) : null,
+    textBack ? t(m, "email.weeklyReport.reassurance.textBack", locale) : null,
   ].filter(Boolean) as string[];
 
-  const reassurance = running.length > 0
-    ? `${running.join(", and ")}.`
+  // S-10 T8 review round 1, finding 5: when the receptionist clause is OFF
+  // and only the text-back one runs, the sentence used to start with that
+  // clause's own lower-case first word ("your…"/"su…") — a continuation
+  // clause, never meant to stand alone as a sentence. Capitalised here,
+  // once, after the join, rather than in either catalogue entry: the
+  // receptionist clause already starts with a capitalised persona name, so
+  // this is a no-op there and fixes only the case that needed it.
+  const joined = running.join(join);
+  const reassurance = joined
+    ? `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
     : "";
-  const visitors = visitorsSentence(input.now);
+  const visitors = visitorsSentence(input.now, locale);
+  const quietHeading = t(m, "email.weeklyReport.quiet.heading", locale);
+  const quietBodySentence = t(m, "email.weeklyReport.quiet.body", locale);
 
   const text = [
-    "Nothing came in last week — no calls, no leads, no bookings.",
+    quietBodySentence,
     visitors,
     reassurance,
   ].filter(Boolean).join("\n\n");
 
   const html = [
-    `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">Last week was quiet</p>`,
-    `<p style="margin:0 0 16px;color:#71717a;">Nothing came in last week &mdash; no calls, no leads, no bookings.</p>`,
+    `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">${escapeHtml(quietHeading)}</p>`,
+    `<p style="margin:0 0 16px;color:#71717a;">${withMdash(quietBodySentence)}</p>`,
     visitors ? `<p style="margin:0 0 16px;color:#71717a;">${escapeHtml(visitors)}</p>` : "",
     reassurance ? `<p style="margin:0 0 16px;color:#71717a;">${escapeHtml(reassurance)}</p>` : "",
   ].filter(Boolean).join("");
@@ -120,16 +168,18 @@ function quietBody(input: WeeklyReportInput): { html: string; text: string } {
  * quiet week from a broken product.
  */
 export function weeklyReportEmail(input: WeeklyReportInput): { html: string; text: string } {
+  const locale = input.locale ?? "en";
   const { now } = input;
   const isQuiet = isQuietPipeline(now);
 
   const body = isQuiet ? quietBody(input) : (() => {
     const rows = lines(input);
-    const text = ["Here's how last week went.", "",
+    const heading = t(m, "email.weeklyReport.heading", locale);
+    const text = [heading, "",
       ...rows.map((l) => `${l.value} ${l.label}${l.delta ? ` — ${l.delta}` : ""}`),
     ].join("\n");
     const html = [
-      `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">Here's how last week went.</p>`,
+      `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">${escapeHtml(heading)}</p>`,
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">`,
       ...rows.map((l) =>
         `<tr>`
@@ -142,16 +192,17 @@ export function weeklyReportEmail(input: WeeklyReportInput): { html: string; tex
     return { html, text };
   })();
 
-  const cta = input.dashboardUrl
-    ? button(input.brand, input.dashboardUrl, "Open your dashboard")
+  const cta = t(m, "email.weeklyReport.cta", locale);
+  const ctaHtml = input.dashboardUrl
+    ? button(input.brand, input.dashboardUrl, cta)
     : "";
 
   return {
-    html: shell(input.brand, body.html + cta),
+    html: shell(input.brand, body.html + ctaHtml),
     // The text alternative is composed deliberately rather than derived by
     // stripping tags — it is what keeps a branded message out of the spam
     // bucket and readable in a text client.
-    text: [body.text, input.dashboardUrl ? `\nOpen your dashboard: ${input.dashboardUrl}` : ""]
+    text: [body.text, input.dashboardUrl ? `\n${cta}: ${input.dashboardUrl}` : ""]
       .filter(Boolean).join("\n"),
   };
 }
@@ -163,13 +214,18 @@ export function weeklyReportEmail(input: WeeklyReportInput): { html: string; tex
  * falling back to "0 calls, 0 new leads" (round 1's mistake — that's the
  * four-zero-row framing the body itself refuses to send).
  */
-export function weeklyReportSubject(now: WeeklyNumbers): string {
+export function weeklyReportSubject(now: WeeklyNumbers, locale: Locale = "en"): string {
   if (isQuietPipeline(now)) {
     if (now.visitors !== null && now.visitors > 0) {
-      const noun = now.visitors === 1 ? "visitor" : "visitors";
-      return `Last week: ${now.visitors} website ${noun}`;
+      return plural(m, "email.weeklyReport.subject.visitors", now.visitors, locale, { count: now.visitors });
     }
-    return "Last week was quiet";
+    return t(m, "email.weeklyReport.quiet.heading", locale);
   }
-  return `Last week: ${now.calls} calls, ${now.leads} new leads`;
+  // S-10 T8 review round 1, finding 2: calls and leads agree with their OWN
+  // counts independently ("1 call, 3 new leads" is a real case) — each
+  // phrase is built through its own plural() before the sentence composes
+  // them, never a single count driving the whole template's number.
+  const calls = plural(m, "email.weeklyReport.subject.pipeline.calls", now.calls, locale, { count: now.calls });
+  const leads = plural(m, "email.weeklyReport.subject.pipeline.leads", now.leads, locale, { count: now.leads });
+  return t(m, "email.weeklyReport.subject.pipeline", locale, { calls, leads });
 }
