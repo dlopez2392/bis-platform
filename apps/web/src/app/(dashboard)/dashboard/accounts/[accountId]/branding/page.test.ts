@@ -346,8 +346,27 @@ describe("branding page — the whole page's own locale (S-10 T6)", () => {
 // props are pinned to .bind() at the source.
 describe("branding/page.tsx passes BrandingPanel bound server actions, never arrow wrappers (mutation: wrap any one in an arrow → FAILS)", () => {
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "page.tsx"), "utf8");
-  it("no JSX prop on this server page is an arrow function", () => {
-    expect(src).not.toMatch(/[A-Za-z]+=\{\s*(async\s*)?\([^)]*\)\s*=>/);
+  // Review fix round: the first guard only matched a PARENTHESIZED arrow
+  // param ("(x) =>"), never a bracketless single-param arrow ("x =>") or a
+  // `function` expression — both fail at render the same way an arrow
+  // wrapper does, and NeverLogList's own `remove` prop is exactly the shape
+  // ("id => removeNeverLogAction(accountId, id)") a careless edit could
+  // reach for here. Widened to catch all three forms.
+  const JSX_FUNCTION_PROP = /[A-Za-z]+=\{\s*(async\s*)?(\([^)]*\)\s*=>|\w+\s*=>|function\b)/;
+  it("the widened guard catches a bracketless arrow and a function expression the original (parens-only) regex missed (mutation: narrow it back to parens-only → FAILS)", () => {
+    const original = /[A-Za-z]+=\{\s*(async\s*)?\([^)]*\)\s*=>/;
+    const bracketless = 'remove={id => removeNeverLogAction(accountId, id)}';
+    const fn = 'remove={function (id) { return removeNeverLogAction(accountId, id); }}';
+    expect(original.test(bracketless)).toBe(false);
+    expect(original.test(fn)).toBe(false);
+    expect(JSX_FUNCTION_PROP.test(bracketless)).toBe(true);
+    expect(JSX_FUNCTION_PROP.test(fn)).toBe(true);
+    // Still passes a real .bind() call and a plain prop — no false positive.
+    expect(JSX_FUNCTION_PROP.test('action={setBrandingAction.bind(null, accountId, locale)}')).toBe(false);
+    expect(JSX_FUNCTION_PROP.test('locale={locale}')).toBe(false);
+  });
+  it("no JSX prop on this server page is an arrow function or a function expression", () => {
+    expect(src).not.toMatch(JSX_FUNCTION_PROP);
   });
   it("each of the three branding actions is bound with accountId and the reader's locale", () => {
     expect(src).toContain("action={setBrandingAction.bind(null, accountId, locale)}");

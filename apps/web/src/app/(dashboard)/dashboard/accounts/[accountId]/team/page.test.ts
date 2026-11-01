@@ -25,11 +25,25 @@ vi.mock("@/lib/auth", () => ({
     return { userId: "user_x", isAgency: guard.isAgency };
   },
 }));
-const accountRow = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+const accountRow = vi.hoisted(() => ({
+  language: null as "en" | "es" | null,
+  error: null as { code: string; message: string } | null,
+}));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => {
     guard.order.push("db");
-    return { from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { clerk_org_id: "org_9", language: accountRow.language }, error: null }) }; return c; } };
+    return {
+      from: () => {
+        const c = {
+          select: () => c,
+          eq: () => c,
+          maybeSingle: async () => (accountRow.error
+            ? { data: null, error: accountRow.error }
+            : { data: { clerk_org_id: "org_9", language: accountRow.language }, error: null }),
+        };
+        return c;
+      },
+    };
   },
 }));
 // S-10 T6: the page now resolves its own locale (requestLocale +
@@ -65,6 +79,7 @@ beforeEach(() => {
   guard.isAgency = false;
   guard.order = [];
   accountRow.language = null;
+  accountRow.error = null;
   prefs.language = null;
 });
 
@@ -127,6 +142,32 @@ describe("the Team page", () => {
     const boundary = els.find((e) => e.type === Suspense)!;
     const child = boundary.props.children as ReactElement<Record<string, unknown>>;
     expect(child.props.locale).toBe("en");
+  });
+
+  // Review fix round (S-10 T6, I-2): a failed account-language read used to
+  // THROW (the .then() callback's `if (error) throw`), which rejects the
+  // Promise.all and replaces the whole page — header, Team card and BIS
+  // access section alike — with the dashboard's error boundary. Fails soft
+  // like branding/page.tsx's own equivalent read: log it, fall back to no
+  // account language (English, absent the person's own choice), and keep
+  // rendering everything else.
+  it("a failed account-language read logs it and still renders the header and the Team card, in English (mutation: throw instead of falling back -> FAILS)", async () => {
+    accountRow.error = { code: "XX000", message: "internal error" };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const tree = await page();
+    const els = all(tree);
+    const { PageHeader } = await import("@/components/page-header");
+    const { m } = await import("@/lib/messages");
+    const header = els.find((e) => e.type === PageHeader)!;
+    expect(header.props).toMatchObject({ title: m["team.title"], subtitle: m["team.page.subtitle"] });
+    const boundary = els.find((e) => e.type === Suspense)!;
+    expect((boundary.props.children as ReactElement<Record<string, unknown>>).type).toBe(section.TeamSection);
+    expect((boundary.props.children as ReactElement<Record<string, unknown>>).props).toMatchObject({ locale: "en" });
+    const lines = err.mock.calls.map((c) => String(c[0]));
+    const line = lines.find((l) => l.startsWith("team page: account a1 language read failed:"));
+    expect(line, lines.join("\n")).toBeDefined();
+    expect(line).toContain("XX000");
+    err.mockRestore();
   });
 });
 

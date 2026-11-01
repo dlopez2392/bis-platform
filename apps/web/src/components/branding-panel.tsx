@@ -148,7 +148,7 @@ export function BrandingPanel({
   const removeLogo = () => {
     if (!removeLogoAction || !restoreLogoAction) return;
     runGuarded(removeBusy, startRemoveTransition, async () => {
-      await runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast);
+      await runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast, locale);
     });
   };
 
@@ -529,7 +529,7 @@ export function BrandingPanel({
             )}
           </div>
 
-          <SubmitButton pending={pending}>{t(m, "common.save", locale)}</SubmitButton>
+          <SubmitButton pending={pending} locale={locale}>{t(m, "common.save", locale)}</SubmitButton>
         </form>
       </CardContent>
     </Card>

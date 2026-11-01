@@ -133,8 +133,8 @@ function MemberRow({
   // NULL means "follows the company's language" (spec §5); it is shown as
   // the language it resolves to.
   const language = member.language ?? defaultLanguage;
-  const ROLE_PILL = rolePill(locale);
-  const LANGUAGE_NAME = languageName(locale);
+  const rolePills = rolePill(locale);
+  const languageNames = languageName(locale);
   return (
     <li className={ROW} data-team-row={member.userId}>
       <div className="min-w-0 flex-1">
@@ -150,11 +150,11 @@ function MemberRow({
       >
         <SelectTrigger size="sm" aria-label={fill(t(m, "team.roleFor", locale), { name })} className={INLINE_TRIGGER}>
           <SelectValue>
-            <DotPill dense {...ROLE_PILL[member.role]} data-status={member.role} />
+            <DotPill dense {...rolePills[member.role]} data-status={member.role} />
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
+          {(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)}
         </SelectContent>
       </Select>
       <DotPill dense {...statusPill(locale).active} data-status="active" />
@@ -166,10 +166,10 @@ function MemberRow({
         }}
       >
         <SelectTrigger size="sm" aria-label={fill(t(m, "team.languageFor", locale), { name })} className={INLINE_TRIGGER}>
-          <SelectValue>{LANGUAGE_NAME[language]}</SelectValue>
+          <SelectValue>{languageNames[language]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {(["en", "es"] as const).map((l) => <SelectItem key={l} value={l}>{LANGUAGE_NAME[l]}</SelectItem>)}
+          {(["en", "es"] as const).map((l) => <SelectItem key={l} value={l}>{languageNames[l]}</SelectItem>)}
         </SelectContent>
       </Select>
       <Button
@@ -202,14 +202,14 @@ function InviteRow({
   invite, viewer, actions, locale = "en",
 }: { invite: PendingInvite; viewer: TeamViewer; actions: BoundTeamActions; locale?: Locale }) {
   const [busy, startTransition] = useTransition();
-  const ROLE_PILL = rolePill(locale);
-  const LANGUAGE_NAME = languageName(locale);
+  const rolePills = rolePill(locale);
+  const languageNames = languageName(locale);
   return (
     <li className={INVITE_ROW} data-team-invite={invite.id}>
       <p className="min-w-0 flex-1 truncate text-muted-foreground">{invite.email}</p>
-      <span className="px-1.5"><DotPill dense {...ROLE_PILL[invite.role]} data-status={invite.role} /></span>
+      <span className="px-1.5"><DotPill dense {...rolePills[invite.role]} data-status={invite.role} /></span>
       <DotPill dense {...statusPill(locale).invited} data-status="invited" />
-      <span className="px-1.5 text-[13px] text-muted-foreground">{LANGUAGE_NAME[invite.language]}</span>
+      <span className="px-1.5 text-[13px] text-muted-foreground">{languageNames[invite.language]}</span>
       <Button
         variant="ghost" size="sm" disabled={busy} className="justify-self-end"
         aria-label={fill(t(m, "team.revokeFor", locale), { email: invite.email })}
@@ -251,8 +251,8 @@ function InviteDialog({
   const [error, setError] = useState<string | null>(null);
   const defaultRole: AccountRole = "staff";
   const [role, setRole] = useState<AccountRole>(defaultRole);
-  const ROLE_PILL = rolePill(locale);
-  const LANGUAGE_NAME = languageName(locale);
+  const rolePills = rolePill(locale);
+  const languageNames = languageName(locale);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     const refusal = await inviteMember(actions, formData, viewer, locale);
     if (refusal) { setError(refusal); return; }
@@ -283,7 +283,7 @@ function InviteDialog({
               <Select name="role" value={role} onValueChange={(v) => { if (isAccountRole(v)) setRole(v); }}>
                 <SelectTrigger id="team-invite-role" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
+                  {(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)}
                 </SelectContent>
               </Select>
               <RoleHelp role={role} locale={locale} />
@@ -293,7 +293,7 @@ function InviteDialog({
               <Select name="language" defaultValue={defaultLanguage}>
                 <SelectTrigger id="team-invite-language" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(["en", "es"] as const).map((l) => <SelectItem key={l} value={l}>{LANGUAGE_NAME[l]}</SelectItem>)}
+                  {(["en", "es"] as const).map((l) => <SelectItem key={l} value={l}>{languageNames[l]}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

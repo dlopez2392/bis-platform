@@ -106,15 +106,32 @@ describe("setBrandingAction — brand name is required", () => {
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
 
-  // S-10 T6: every refusal below was a bare m["…"] read — English regardless
-  // of the reader's own locale. `locale` is now an optional third parameter
-  // (default "en", every call above unaffected), bound by the page alongside
-  // accountId.
-  it("reads the refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param from any refusal → FAILS)", async () => {
-    expect(await setBrandingAction("acct_1", "es", fd({ brandName: "" })))
-      .toEqual({ ok: false, error: m["branding.nameRequired.es"] });
-    expect(await setBrandingAction("acct_1", "es", fd({ brandName: "x", brandColor: "notacolor" })))
-      .toEqual({ ok: false, error: m["branding.badColor.es"] });
+  // Review fix round: every refusal setBrandingAction can return was a bare
+  // m["…"] read — English regardless of the reader's own locale. `locale`
+  // is a required second parameter now, bound by the page alongside
+  // accountId. Loops over EVERY distinct refusal key the action returns
+  // (actions.ts: nameRequired, badColor, badReplyTo, mailingAddressTooLong,
+  // badTheme, tooLarge, badFormat), not just the first two — a key added
+  // later without its own case here would otherwise ship silently English.
+  const OVERSIZED_LOGO = new File([new Uint8Array(513 * 1024)], "logo.png", { type: "image/png" });
+  const BAD_FORMAT_LOGO = new File([new Uint8Array([0, 0, 0, 0])], "logo.bin", { type: "image/png" });
+  it.each([
+    ["branding.nameRequired", () => fd({ brandName: "" })],
+    ["branding.badColor", () => fd({ brandName: "x", brandColor: "notacolor" })],
+    ["branding.badReplyTo", () => fd({ brandName: "x", replyToEmail: "not-an-email" })],
+    ["branding.mailingAddressTooLong", () => fd({ brandName: "x", mailingAddress: "a".repeat(301) })],
+    ["branding.badTheme", () => fd({ brandName: "x", brandNeutral: "bogus" })],
+    ["branding.tooLarge", () => { const f = fd({ brandName: "x" }); f.set("logo", OVERSIZED_LOGO); return f; }],
+    ["branding.badFormat", () => { const f = fd({ brandName: "x" }); f.set("logo", BAD_FORMAT_LOGO); return f; }],
+  ] as const)("reads the %s refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param from this refusal → FAILS)", async (key, buildForm) => {
+    expect(await setBrandingAction("acct_1", "en", buildForm())).toEqual({ ok: false, error: m[key] });
+    expect(await setBrandingAction("acct_1", "es", buildForm())).toEqual({ ok: false, error: m[`${key}.es`] });
+  });
+
+  it("reads the generic save-failed refusal in Spanish when the write itself fails (mutation: drop the locale param from this refusal → FAILS)", async () => {
+    dbMocks.setBranding.mockRejectedValue(new Error("boom"));
+    expect(await setBrandingAction("acct_1", "es", fd({ brandName: "x" })))
+      .toEqual({ ok: false, error: m["branding.saveFailed.es"] });
   });
 
   it("saves a normal, trimmed name", async () => {

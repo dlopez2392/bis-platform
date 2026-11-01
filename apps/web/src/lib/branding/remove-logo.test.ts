@@ -95,3 +95,30 @@ describe("runRemoveLogo — the pure sequencing behind the Branding card's Remov
     expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
   });
 });
+
+// Review fix round (S-10 T6, I-1): every m[...] read above was a bare
+// English read regardless of the caller's own locale; `locale` is now an
+// optional trailing parameter (default "en", every test above unaffected).
+describe("runRemoveLogo — Spanish (S-10 T6)", () => {
+  it("toasts success and its Undo label in Spanish (mutation: drop the locale param from the success toast → FAILS)", async () => {
+    const remove = vi.fn(async (): Promise<RemoveLogoResult> => ({ ok: true, path: "acct_1/logo.png" }));
+    const restore = vi.fn(async (): Promise<RestoreLogoResult> => ({ ok: true }));
+    const show = vi.fn();
+    const { toast } = fakeToast();
+
+    await runRemoveLogo(remove, restore, show, toast, "es");
+    expect(toast.success).toHaveBeenCalledWith(m["branding.logoRemoved.es"], expect.any(Object));
+    const opts = toast.success.mock.calls[0]![1] as { action: { label: string } };
+    expect(opts.action.label).toBe(m["common.undo.es"]);
+  });
+
+  it("toasts the crashed sentence in Spanish when remove throws (mutation: drop the locale param from the crashed toast → FAILS)", async () => {
+    const remove = vi.fn(async (): Promise<RemoveLogoResult> => { throw new Error("boom"); });
+    const restore = vi.fn(async (): Promise<RestoreLogoResult> => ({ ok: true }));
+    const show = vi.fn();
+    const { toast } = fakeToast();
+
+    await runRemoveLogo(remove, restore, show, toast, "es");
+    expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed.es"]);
+  });
+});

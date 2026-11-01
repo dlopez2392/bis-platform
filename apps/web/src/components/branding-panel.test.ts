@@ -141,6 +141,15 @@ describe("BrandingPanel — Remove logo (DESIGN rule 6, rule 8)", () => {
     expect(panelSource).toMatch(/runGuarded\(removeBusy, startRemoveTransition,/);
     expect(panelSource).toMatch(/<Button type="button" variant="ghost" size="sm" onClick=\{removeLogo\} disabled=\{removePending\}>/);
   });
+
+  // Review fix round (S-10 T6, I-1): runRemoveLogo's own toasts
+  // ("Logo removed", "Undo", the crashed sentence) read m[...] directly —
+  // English regardless of the reader's own locale, because the panel never
+  // passed one through. Same for SubmitButton's "Saving..." text.
+  it("passes the panel's own locale into runRemoveLogo and into SubmitButton (mutation: call either with no locale → FAILS)", () => {
+    expect(panelSource).toMatch(/runRemoveLogo\(removeLogoAction, restoreLogoAction, setHasLogo, toast, locale\)/);
+    expect(panelSource).toContain("<SubmitButton pending={pending} locale={locale}>");
+  });
 });
 
 // D-071 review round: the colour-only/unset preview's "Sidebar" specimen

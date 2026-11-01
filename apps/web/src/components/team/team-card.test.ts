@@ -346,6 +346,20 @@ describe("handlers: applied at once, with an Undo (rule 6)", () => {
     expect(toasts.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
   });
 
+  // Review fix round (minor): a Team handler's own toast AND its Undo
+  // label, in Spanish — every handler reads locale through to both
+  // t(m, "team.removed", locale) and t(m, "common.undo", locale), not just
+  // the catalogue string's own grammar (which "the Spanish role-change
+  // toast" block below already covers).
+  it("remove: the toast and its Undo label both read in Spanish when locale is es (mutation: drop the locale param from either read -> FAILS)", async () => {
+    const a = actions();
+    a.remove.mockResolvedValue({ ok: true, undo: { userId: STAFF.userId } } as never);
+    await removeMember(a, STAFF, "owner", undefined, "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe(m["team.removed.es"].replace("{name}", "tom@rio.test"));
+    const opts = toasts.success.mock.calls[0]![1] as { action: { label: string; onClick: () => void } };
+    expect(opts.action.label).toBe(m["common.undo.es"]);
+  });
+
   it("role: saved at once, Undo puts back the PREVIOUS role (mutation: undo with the new role -> FAILS)", async () => {
     const a = actions();
     a.setRole.mockResolvedValue({ ok: true, previous: "staff" } as never);
@@ -425,15 +439,15 @@ describe("Technician on the Team card", () => {
   const invite = CARD_SRC.slice(CARD_SRC.indexOf("function InviteDialog("));
   const memberRow = CARD_SRC.slice(CARD_SRC.indexOf("function MemberRow("), CARD_SRC.indexOf("function InviteRow("));
 
-  it("a Technician's role is a dot AND the word (rule 3) (mutation: drop ROLE_PILL.technician -> FAILS)", () => {
+  it("a Technician's role is a dot AND the word (rule 3) (mutation: drop rolePills.technician -> FAILS)", () => {
     expect(card({ members: [OWNER, TECH] })).toMatch(pill("technician", m["team.role.technician"]));
   });
 
   it("the invite's role select and each member's role select list technician by its word (mutation: leave either list at two roles -> FAILS)", () => {
     expect(memberRow.length).toBeGreaterThan(0);
     expect(invite.length).toBeLessThan(CARD_SRC.length);
-    expect(memberRow).toContain('(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
-    expect(invite).toContain('(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
+    expect(memberRow).toContain('(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)');
+    expect(invite).toContain('(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)');
     expect(m["team.role.technician"]).toBe("Technician");
   });
 
@@ -475,7 +489,17 @@ describe("TeamCard: Spanish (S-10 T6)", () => {
     expect(text).not.toContain(m["team.title"]);
   });
 
-  it("a member's role and status pills, and their language, read in Spanish (mutation: keep ROLE_PILL/LANGUAGE_NAME English → FAILS)", () => {
+  // Review fix round (I-3): team.body is read on the client Owner's OWN
+  // Team page, not only on the agency's Settings card describing someone
+  // else's company — "empresa" is the glossary's word for the agency's OWN
+  // account label, never for addressing the Owner about their own business
+  // (DESIGN.md §4.3: "empresa (the agency's word for an account)").
+  it("team.body.es never says 'empresa' (mutation: restore '...de esta empresa.' → FAILS)", () => {
+    expect(m["team.body.es"]).not.toMatch(/\bempresa\b/i);
+    expect(m["team.body.es"]).toBe("Las personas que pueden entrar a esta cuenta.");
+  });
+
+  it("a member's role and status pills, and their language, read in Spanish (mutation: keep rolePills/languageNames English → FAILS)", () => {
     const html = card({ locale: "es", members: [OWNER, STAFF], pending: [] });
     expect(html).toMatch(pill("owner", m["team.role.owner.es"]));
     expect(html).toMatch(pill("active", m["team.status.active.es"]));
