@@ -12,6 +12,11 @@ import { readLimitConfig, utcDayStart } from "@/lib/voice/call-limits";
 import { cn } from "@/lib/utils";
 import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { parseTimeCursor } from "@/lib/cursor";
 import { CallsTable } from "./calls-table";
 import { textbackWindow } from "./textback-window";
@@ -28,15 +33,20 @@ export default async function CallsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ before?: string }>;
+  searchParams: Promise<{ before?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { before } = await searchParams;
+  const { before, locale: localeParam } = await searchParams;
   // BOTH audiences. This is the client's own business data — who rang and
   // what the receptionist did about it — the same class of surface contacts
   // and the calendar are gated with, not agency work about the client.
   const { isAgency, role } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
+  // S-10 T5: same resolver as contacts/page.tsx — the person's own choice,
+  // then the account's, then the operator default; `requestPseudoMode` is
+  // the QA-only override (dead on every real deployment).
+  const prefs = await getPersonPrefs();
+  const pseudo = requestPseudoMode({ locale: localeParam });
   // F-085 part 1 (spec §7.2): today's calls against the daily limit is an
   // ACCOUNT total. Under a Technician's RLS it would count only their own
   // customers' calls and read as a false meter, so it is neither read nor
@@ -60,13 +70,17 @@ export default async function CallsPage({
     // (local midnight, ended calls only, …) would let this meter disagree
     // with the cap that actually declines calls.
     showLimit ? countCallsSince(db, accountId, utcDayStart(new Date())) : Promise.resolve(null),
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`calls: account lookup failed: ${error.message}`);
         if (!data) throw new Error("calls: account not found");
-        return data as { timezone: string };
+        return data as { timezone: string; language?: Locale | null };
       }),
   ]);
+
+  const accountLanguage = { language: account.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // …and the same config read, so the denominator on screen is the cap that
   // is actually enforced rather than a hard-coded 50.
@@ -137,9 +151,9 @@ export default async function CallsPage({
 
   return (
     <>
-      <PageHeader title={m["calls.title"]} />
+      <PageHeader title={tr.text("calls.title")} />
       <div className="space-y-6 p-6">
-        {todayCount !== null ? <UsageMeter used={todayCount} cap={cap} /> : null}
+        {todayCount !== null ? <UsageMeter used={todayCount} cap={cap} locale={locale} /> : null}
         {/* BELOW the meter and bound to the TABLE, deliberately.
             `UsageMeter` counts today from `utcDayStart` — it has to, because
             that is the floor the incoming-call webhook enforces the cap
@@ -151,7 +165,7 @@ export default async function CallsPage({
             Grouped with the table instead, so what it qualifies is
             unambiguous. */}
         <div className="space-y-3">
-          <ZoneNote zone={zone} isAgency={isAgency} />
+          <ZoneNote zone={zone} isAgency={isAgency} locale={locale} />
           {rows.length === 0 && !cursor ? (
             // The COLD-START reading of zero rows: no `?before=` cursor, so
             // this is page one and there is nothing behind it either — a
@@ -161,8 +175,8 @@ export default async function CallsPage({
             // and no pager rather than this.
             <EmptyState
               icon={PhoneIncoming}
-              title={m["calls.empty.title"]}
-              body={m["calls.empty.body"]}
+              title={tr.text("calls.empty.title")}
+              body={tr.text("calls.empty.body")}
             />
           ) : (
             <CallsTable
@@ -172,6 +186,8 @@ export default async function CallsPage({
               olderHref={olderHref}
               textbackFailed={textbackFailed}
               reasons={reasons}
+              locale={locale}
+              pseudo={pseudo}
             />
           )}
         </div>
@@ -186,7 +202,7 @@ export default async function CallsPage({
  * approaches the point where real callers start being declined — which is
  * the one thing about this number a client would actually want to be told.
  */
-function UsageMeter({ used, cap }: { used: number; cap: number }) {
+function UsageMeter({ used, cap, locale }: { used: number; cap: number; locale: Locale }) {
   const denominator = Math.max(1, Math.floor(cap));
   const ratio = Math.min(1, Math.max(0, used / denominator));
   // Clamped integer, never interpolated from anything user-supplied — the
@@ -206,7 +222,7 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
   // Split rather than a plain double `.replace()` so the two numbers can be
   // set apart typographically while the sentence — including the order of its
   // parts — stays entirely in the message catalogue.
-  const parts = m["calls.usage"].split(/(\{n\}|\{cap\})/);
+  const parts = t(m, "calls.usage", locale).split(/(\{n\}|\{cap\})/);
   // The progressbar's accessible VALUE below — as `aria-valuetext`, not as its
   // name. A name carrying this same sentence would duplicate the visible
   // paragraph beside it: a screen reader would announce it once for the
@@ -218,7 +234,7 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
   // is announced as an unlabelled progress bar — so it carries a short
   // `aria-label` that says what is being measured rather than restating the
   // count.
-  const plain = m["calls.usage"].replace("{n}", String(used)).replace("{cap}", String(cap));
+  const plain = t(m, "calls.usage", locale, { n: used, cap });
 
   return (
     <section className="flex flex-col gap-4 rounded-xl border border-border bg-card glass p-4 sm:flex-row sm:items-center sm:gap-6">
@@ -244,7 +260,7 @@ function UsageMeter({ used, cap }: { used: number; cap: number }) {
 
       <Meter
         percent={percent}
-        label={m["calls.usageLabel"]}
+        label={t(m, "calls.usageLabel", locale)}
         max={denominator}
         now={Math.min(used, denominator)}
         valueText={plain}

@@ -12,7 +12,7 @@ import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
 import { runGuarded } from "@/lib/ui/guarded-run";
-import { PHONE_CHECK_TREATMENT, pickPhoneCountry } from "@/lib/contacts/phone-country";
+import { phoneCheckTreatment, pickPhoneCountry } from "@/lib/contacts/phone-country";
 import { TEXTS_TREATMENT, textsLine, runTextsAction, textsStatusWord, type TextsLoad } from "@/lib/consent/texts-row";
 import type { TextsView } from "@/lib/consent/texts-view";
 import type { Locale } from "@/lib/i18n/locale";
@@ -128,12 +128,13 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
     if (pending || busy.current) return;
     run(() => pickPhoneCountry(
       country,
-      (c) => setPhoneCountryAction(accountId, contactId, c, phone),
-      (picked, previous) => undoPhoneCountryAction(accountId, contactId, picked, previous),
+      (c) => setPhoneCountryAction(accountId, contactId, c, phone, locale),
+      (picked, previous) => undoPhoneCountryAction(accountId, contactId, picked, previous, locale),
       setChecking,
       toast,
       run,
       onChanged,
+      locale,
     ));
   }
 
@@ -149,7 +150,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
   const pill = view.kind === "allowed" ? TEXTS_TREATMENT.allowed
     : view.kind === "stopped" ? TEXTS_TREATMENT.stopped
     : view.kind === "held" ? TEXTS_TREATMENT.held
-    : PHONE_CHECK_TREATMENT;
+    : phoneCheckTreatment(locale);
   const checkNumber = view.kind === "check_number" && !picked;
 
   return (

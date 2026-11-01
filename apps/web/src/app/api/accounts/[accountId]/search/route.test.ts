@@ -3,8 +3,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
 /** The request client: a sentinel, so a test can prove it (not serviceDb()) is what reaches each search. */
-const REQUEST = { tag: "request-db" };
+const REQUEST = {
+  tag: "request-db",
+  // S-10 fix round I7: the route reads the account's language for a client
+  // reader. Still the same sentinel object, so the identity checks below hold.
+  from: (table: string) => {
+    if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
+    return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: localeFixture.account }, error: null }) }) }) };
+  },
+};
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
+const localeFixture = vi.hoisted(() => ({ person: null as "en" | "es" | null, account: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: localeFixture.person, theme: null }),
+}));
 
 const dbMocks = {
   searchContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
@@ -28,6 +40,8 @@ function req(q: string, types?: string) {
 function ctx() { return { params: Promise.resolve({ accountId: "a1" }) }; }
 
 beforeEach(() => {
+  localeFixture.person = null;
+  localeFixture.account = null;
   access.mockReset();
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   dbMocks.searchContacts.mockResolvedValue([]);
@@ -294,5 +308,35 @@ describe("account search route", () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     dbMocks.searchCalls.mockRejectedValue(new Error("permission denied for table calls"));
     await expect(GET(req("rosa"), ctx())).rejects.toThrow(/permission denied/);
+  });
+});
+
+// S-10 fix round I7: ⌘K's call hits were English (callerLabel(c) and
+// OUTCOMES[...].label, no locale) on an otherwise Spanish dashboard.
+describe("account search route — the reader's language for call hits", () => {
+  const CALL_HIT = { id: "c1", outcome: "booked", started_at: "2026-08-25T19:15:00Z", caller_e164: null, contact: null };
+
+  it("a Spanish-reading operator gets the outcome and the unknown caller in Spanish (mutation: OUTCOMES[...].label / callerLabel(c) -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    localeFixture.person = "es";
+    dbMocks.searchCalls.mockResolvedValue([CALL_HIT]);
+    const body = await (await GET(req("rosa", "calls"), ctx())).json();
+    expect(body.calls[0]).toMatchObject({ label: "Desconocido", sublabel: "Agendó" });
+  });
+
+  it("a client with no choice of their own reads the account's Spanish", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    localeFixture.account = "es";
+    dbMocks.searchCalls.mockResolvedValue([CALL_HIT]);
+    const body = await (await GET(req("rosa", "calls"), ctx())).json();
+    expect(body.calls[0]).toMatchObject({ label: "Desconocido", sublabel: "Agendó" });
+  });
+
+  it("an operator never inherits the account's Spanish (mutation: read the account for an operator and resolve with isOperator: false -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    localeFixture.account = "es";
+    dbMocks.searchCalls.mockResolvedValue([CALL_HIT]);
+    const body = await (await GET(req("rosa", "calls"), ctx())).json();
+    expect(body.calls[0]).toMatchObject({ label: "Unknown caller", sublabel: "Booked" });
   });
 });

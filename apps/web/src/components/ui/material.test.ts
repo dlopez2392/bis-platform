@@ -689,8 +689,11 @@ describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", (
     expect(s).toContain('<Section title="SMS preview" file="components/sms-preview.tsx">');
     expect(s).toContain("<SmsPreview");
     // Both answers, read off the calendar's own map, dense as the calendar
-    // renders them.
-    expect(s).toContain('(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)');
+    // renders them. S-10 review M-5: the module no longer carries an
+    // English `label` (confirm-reply.ts) — the demo supplies one itself,
+    // through the new confirmReplyLabel(reply, locale) function, English
+    // here since the styleguide stays agency-only (Q4).
+    expect(s).toContain('<DotPill key={a} label={confirmReplyLabel(a, "en")} {...CONFIRM_REPLY_TREATMENTS[a]} dense />');
   });
   it("indexes the client Billing page's Manage billing button and its client-only 'Payment processing' pill (M7a PR-3 Task 10) (mutation: drop either specimen → FAILS)", () => {
     expect(s).toContain('import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";');

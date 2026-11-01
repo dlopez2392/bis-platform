@@ -380,7 +380,7 @@ export function ContactDrawer({
                                   locale={locale}
                                   value={(fieldsRow[field] as string | null) ?? null}
                                   save={async (v) => {
-                                    const saved = await updateContactFieldAction(accountId, row.id, field, v);
+                                    const saved = await updateContactFieldAction(accountId, row.id, field, v, locale);
                                     // A phone edit can make the number ambiguous, or settle it: re-read the summary so the Check number row follows (review R3-I2).
                                     if (field === "phone") setRetryNonce((n) => n + 1);
                                     // A name or email edit changes the header (name, dialog accessible name, Call's aria label, Email action), which the route also owns: re-read on those saves too (final review, item 2).
@@ -389,7 +389,7 @@ export function ContactDrawer({
                                   }}
                                   {...(field === "phone" ? {
                                     undoPhone: async (undo: PhoneInlineUndo) => {
-                                      const r = await undoInlinePhoneEditAction(accountId, row.id, undo);
+                                      const r = await undoInlinePhoneEditAction(accountId, row.id, undo, locale);
                                       // Same reason as the save above: the undo can move the flag too, so the row must re-read.
                                       if (r.ok) setRetryNonce((n) => n + 1);
                                       return r;

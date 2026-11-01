@@ -14,6 +14,14 @@ vi.mock("@/lib/auth", () => ({
 const dbForRequestMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ dbForRequest: dbForRequestMock }));
 
+// S-10 T3: the consent To-do's own words (todo.consent.decided/failed, with no errorKey mechanism
+// of their own — unlike work.actionFailed) resolve the reader's locale the same way contacts/
+// actions.ts's languageError does — real requestLocale/t, only the person's own preference mocked.
+const getPersonPrefsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: (...a: unknown[]) => getPersonPrefsMock(...a),
+}));
+
 const dbMocks = vi.hoisted(() => ({
   addTask: vi.fn(),
   completeTask: vi.fn(),
@@ -80,6 +88,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   db = fakeDb({ data: { timezone: "America/Chicago" }, error: null });
   dbForRequestMock.mockResolvedValue(db);
+  getPersonPrefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
+  authFixture.access = { userId: "user_1", isAgency: true, role: null };
 });
 
 afterEach(() => {
@@ -315,6 +325,52 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
     texts.textsContextFor.mockResolvedValue({ ok: false, reason: "failed", error: m["contact.texts.failed"] });
     expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, reason: "failed", error: m["contact.texts.failed"] });
     expect(vi.mocked(completeTasksForConsentEvents)).not.toHaveBeenCalled();
+  });
+
+  // S-10 T3: "already decided" and the generic consent failure carry no errorKey (unlike
+  // work.actionFailed above), so decideFromTask must resolve the reader's own locale itself.
+  describe("in the reader's language (S-10 T3)", () => {
+    it("'already decided' is said in Spanish for a client-role reader on a Spanish account (mutation: read m[...] directly -> FAILS)", async () => {
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      dbForRequestMock.mockResolvedValue(fakeDb({ data: { language: "es" } as never, error: null }));
+      vi.mocked(readConsentHistory).mockResolvedValue([
+        { id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: "u" },
+      ] as never);
+      expect(await notAStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
+    });
+
+    it("an agency operator reads English even on a Spanish account (requestLocale's role split)", async () => {
+      authFixture.access = { userId: "user_1", isAgency: true, role: null };
+      dbForRequestMock.mockResolvedValue(fakeDb({ data: { language: "es" } as never, error: null }));
+      vi.mocked(readConsentHistory).mockResolvedValue([
+        { id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: "u" },
+      ] as never);
+      expect(await notAStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided"] });
+    });
+
+    it("the generic consent failure (a thrown read) is said in the reader's own language too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      texts.textsContextFor.mockRejectedValue(new Error("db down"));
+      expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.failed.es"] });
+    });
+
+    // The other two "already decided" returns in decideFromTask (no contact linked; no textable
+    // number left), pinned the same way as the third one above.
+    it("'already decided' (no contact linked to the task) is said in Spanish too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      dbMocks.readTaskContact.mockResolvedValueOnce({ contactId: null, consentEventId: null });
+      expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
+    });
+
+    it("'already decided' (the contact has no textable number left) is said in Spanish too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      texts.textsContextFor.mockResolvedValue({ ok: false, reason: "no_number", error: m["contact.texts.noNumber"] });
+      expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
+      expect(vi.mocked(completeTasksForConsentEvents)).toHaveBeenCalled();
+    });
   });
 });
 

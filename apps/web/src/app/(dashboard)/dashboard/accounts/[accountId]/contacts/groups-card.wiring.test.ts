@@ -19,6 +19,11 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useEffect: () => {},
     useId: () => "id",
+    // S-10 T3: GroupsCard now reads the dashboard's LocaleProvider through
+    // useLocale() (useContext). Called as a plain function here (no real
+    // render, so no dispatcher) — this stands in for "no provider", the
+    // same default LocaleContext itself carries.
+    useContext: () => "en",
     useState: (init: unknown) => {
       const initial = typeof init === "function" ? (init as () => unknown)() : init;
       const set = vi.fn();

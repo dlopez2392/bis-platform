@@ -255,7 +255,8 @@ describe("deleteOne: delete for good, only when nothing blocks it (spec §5)", (
     bulkDeleteContactsAction.mockResolvedValue(deleted());
     const c = ctx();
     expect(await deleteOne("a1", "c1", { status: "ready", kept: [] }, c)).toBe("deleted");
-    expect(bulkDeleteContactsAction).toHaveBeenCalledWith("a1", ["c1"]);
+    // S-10 T3: the caller's own locale (ctx().locale) now reaches the server action too.
+    expect(bulkDeleteContactsAction).toHaveBeenCalledWith("a1", ["c1"], "en");
     expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne"]);
     expect(c.onGone).toHaveBeenCalledTimes(1);
   });

@@ -1007,6 +1007,20 @@ describe("setContactBusinessAction", () => {
     expect((await undoContactBusinessAction("a1", "c9", { added: ADDED, removed: null })).ok).toBe(false);
     expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
   });
+
+  // S-10 T3: these two sentences were raw literals, never in the catalogue (contacts.action.*
+  // now names them) — a caller that predates the new trailing param (every test above) is
+  // unchanged.
+  it("save failure reads Spanish when the caller passes es (mutation: read the raw English literal -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", company_name: null, holds_shared_number: true });
+    expect(await setContactBusinessAction("a1", "c1", "Acme", "es")).toEqual({ ok: false, error: m["contacts.action.saveFailed.es"] });
+  });
+  it("undo failure reads Spanish too", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    dbMocks.undoSetBusiness.mockResolvedValue("not_found");
+    const forged = { id: ADDED, account_id: "a1", client_group_id: "g-household", contact_id: "c1", role: null, is_primary: false, is_billing: false, is_primary_contact: false, created_at: "2026-01-01" };
+    expect(await undoContactBusinessAction("a1", "c1", { added: null, removed: forged }, "es")).toEqual({ ok: false, error: m["contacts.action.undoFailed.es"] });
+  });
 });
 
 describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () => {
@@ -1215,5 +1229,65 @@ describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () 
     });
     dbMocks.getContact.mockResolvedValueOnce(null);
     await expect(setContactLanguageAction("a1", "c9", "en")).resolves.toEqual({ ok: false, error: m["contact.language.saveFailed"] });
+  });
+});
+
+// S-10 T3: the remaining server-action sentences this file used to return as raw literals, or as
+// a direct m["..."] read (always English whatever the locale) — a trailing `locale` parameter on
+// each, defaulting to "en" so every call above (which predates it) is unchanged.
+describe("the record and bulk actions, in the reader's language (S-10 T3)", () => {
+  it("updateContactFieldAction's 'Unknown field' reads Spanish when the caller passes es (mutation: read the raw English literal -> FAILS)", async () => {
+    const r = await updateContactFieldAction("a1", "c1", "custom" as never, "x", "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.unknownField.es"] });
+  });
+  it("updateContactFieldAction's db-throw save failure reads Spanish too", async () => {
+    dbForRequest.mockRejectedValueOnce(new Error("no connection"));
+    const r = await updateContactFieldAction("a1", "c1", "phone", "5551234567", "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.saveFailed.es"] });
+  });
+
+  it("bulkAddTagAction's 'Nothing selected' reads Spanish (mutation: read the raw English literal -> FAILS)", async () => {
+    const r = await bulkAddTagAction("a1", [], "urgent", "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.nothingSelected.es"] });
+  });
+  it("bulkAddTagAction's db-throw failure reads Spanish too", async () => {
+    dbMocks.addTagToContacts.mockRejectedValue(new Error("boom"));
+    const r = await bulkAddTagAction("a1", ["c1"], "urgent", "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.tagFailed.es"] });
+  });
+  it("bulkRemoveTagAction's db-throw failure reads Spanish (mutation: read the raw English literal -> FAILS)", async () => {
+    dbMocks.removeTagFromContacts.mockRejectedValue(new Error("boom"));
+    const r = await bulkRemoveTagAction("a1", ["c1"], "t9", "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.undoTagFailed.es"] });
+  });
+
+  it("bulkDeleteContactsAction's 'Nothing selected' reads Spanish (mutation: read the raw English literal -> FAILS)", async () => {
+    const r = await bulkDeleteContactsAction("a1", [], "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.nothingSelected.es"] });
+  });
+  it("bulkDeleteContactsAction's delete failure reads Spanish too", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
+    const r = await bulkDeleteContactsAction("a1", ["x"], "es");
+    expect(r).toEqual({ ok: false, error: m["contacts.action.deleteFailed.es"] });
+    spy.mockRestore();
+  });
+
+  it("setPhoneCountryAction reads Spanish when the caller passes es (mutation: read m[...] directly -> FAILS)", async () => {
+    const r = await setPhoneCountryAction("a1", "c1", "CA" as never, "+15512345678", "es");
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
+  });
+  it("undoPhoneCountryAction reads Spanish too", async () => {
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false }, "es");
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
+  });
+  it("undoInlinePhoneEditAction reads Spanish too", async () => {
+    const r = await undoInlinePhoneEditAction("a1", "c1", { priorPhone: null, priorUnconfirmed: "x" as never, editedPhone: null }, "es");
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
+  });
+
+  it("every action above still answers in English when no locale is passed (the default)", async () => {
+    expect(await updateContactFieldAction("a1", "c1", "custom" as never, "x")).toEqual({ ok: false, error: m["contacts.action.unknownField"] });
+    expect(await bulkAddTagAction("a1", [], "urgent")).toEqual({ ok: false, error: m["contacts.action.nothingSelected"] });
   });
 });

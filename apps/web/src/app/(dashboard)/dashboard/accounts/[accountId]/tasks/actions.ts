@@ -30,6 +30,10 @@ import { isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import type { AssignError } from "../contacts/actions";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import type { Locale } from "@/lib/i18n/locale";
 import { tomorrowAt9 } from "@/lib/work/dismiss-date";
 import { loggableError } from "@/lib/loggable-error";
 import { textsContextFor } from "@/lib/consent/texts-context";
@@ -210,6 +214,32 @@ async function closeStaleHoldTodo(
 }
 
 /**
+ * S-10 T3: "already decided" and the generic consent failure carry no
+ * errorKey of their own (unlike `work.actionFailed`'s pair above, which the
+ * client already re-words from its key via `failureText` — F-085 follow-ups),
+ * so `decideFromTask` resolves the reader's own locale itself, the same way
+ * `contacts/actions.ts`'s `languageError` does: a failed account-language
+ * read still resolves a locale (no account fallback, same as an unthemed
+ * account), never a thrown action.
+ */
+async function resolveTaskLocale(accountId: string, isAgency: boolean): Promise<Locale> {
+  const prefs = await getPersonPrefs();
+  let accountLanguageValue: Locale | null = null;
+  try {
+    const db = await dbForRequest();
+    const { data } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+    accountLanguageValue = (data?.language as Locale | null | undefined) ?? null;
+  } catch {
+    // Reading the account's language for an ERROR's own locale must never itself raise a new
+    // error; a failed read here still resolves a locale.
+  }
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's
+  // braces, and a NESTED { language: ... } before the closing brace defeats its non-greedy regex.
+  const accountLanguage = { language: accountLanguageValue };
+  return requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
+}
+
+/**
  * The consent To-do's two buttons (spec §6): decide the contact's CURRENT
  * hold, whatever hold the To-do was made for, through the same guarded write
  * as the drawer (lib/consent/staff-actions.ts), which also completes the
@@ -223,16 +253,17 @@ async function closeStaleHoldTodo(
 async function decideFromTask(
   accountId: string, taskId: string, decide: typeof confirmStop,
 ): Promise<TextsActionResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  const locale = await resolveTaskLocale(accountId, isAgency);
   try {
     const db = await dbForRequest();
     const task = await readTaskContact(db, accountId, taskId);
-    if (!task?.contactId) return { ok: false, error: m["todo.consent.decided"] };
+    if (!task?.contactId) return { ok: false, error: t(m, "todo.consent.decided", locale) };
     const ctx = await textsContextFor(accountId, task.contactId, userId);
     if ("ok" in ctx) {
       if (ctx.reason === "no_number") {
         await closeStaleHoldTodo(db, accountId, taskId, task.consentEventId, userId);
-        return { ok: false, error: m["todo.consent.decided"] };
+        return { ok: false, error: t(m, "todo.consent.decided", locale) };
       }
       return ctx;
     }
@@ -241,14 +272,14 @@ async function decideFromTask(
     const newest = newestDecidingRow(await readConsentHistory(ctx.writer, accountId, "sms", ctx.address));
     if (!newest || newest.action !== "held") {
       await closeStaleHoldTodo(ctx.db, accountId, taskId, task.consentEventId, userId);
-      return { ok: false, error: m["todo.consent.decided"] };
+      return { ok: false, error: t(m, "todo.consent.decided", locale) };
     }
     const result = await decide(ctx, newest.id);
     if (result.ok) revalidatePath(tasksPath(accountId));
     return result;
   } catch (e) {
     console.error(`decideFromTask: task ${taskId} (account ${accountId}): ${loggableError(e)}`);
-    return { ok: false, error: m["todo.consent.failed"] };
+    return { ok: false, error: t(m, "todo.consent.failed", locale) };
   }
 }
 

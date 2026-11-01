@@ -182,16 +182,36 @@ test("1. Filters: Expiring soon by default, Expired, and the category Select by 
   // The same destination, reached through the Radix Select by KEYBOARD alone: focus the trigger, open
   // with Enter, arrow down to Photo, and only Enter commits — arrowing through the list must never
   // navigate (spec review addition).
+  //
+  // Radix's own ArrowDown handler reads `event.target` (the currently FOCUSED item) to compute where
+  // to move next, but defers the actual `.focus()` call to a `setTimeout` (see @radix-ui/react-select's
+  // SelectContentImpl onKeyDown). Firing the next ArrowDown before that deferred focus move has landed
+  // reads a stale `document.activeElement`, and two keydowns computed from the same stale item collapse
+  // into a single step of real movement once their deferred callbacks both run. A loop that only checks
+  // the URL hasn't changed (true on every step, moved or not) can't see that collapse — it let this test
+  // land on Invoice instead of Photo (CI 41251574421, 41265857019, #307) one step short, roughly once in
+  // dozens of runs. So: count from the known start (Any) through the real, named option order, and after
+  // EVERY ArrowDown assert the item that step should land on is actually focused — not just that the URL
+  // is unchanged — before sending the next key. That makes each step's landing deterministic instead of
+  // assumed, while still proving arrowing alone never navigates.
   await page.goto(`${base()}?show=all`);
   const trigger = main(page).getByRole("combobox", { name: m["documents.page.category.label"] });
   await trigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("option", { name: m["documents.category.photo"], exact: true })).toBeVisible();
+  const anyOption = page.getByRole("option", { name: m["documents.page.category.any"], exact: true });
+  await expect(anyOption).toBeVisible();
+  await expect(anyOption).toBeFocused();
   const openedUrl = page.url();
-  // any(0) -> id(1) -> contract(2) -> estimate(3) -> invoice(4) -> photo(5): five ArrowDowns.
-  for (let i = 0; i < 5; i++) {
+  // any(0) -> id(1) -> contract(2) -> estimate(3) -> invoice(4) -> photo(5): five ArrowDowns, each one
+  // confirmed landed before the next is sent.
+  const order = [
+    m["documents.category.id"], m["documents.category.contract"], m["documents.category.estimate"],
+    m["documents.category.invoice"], m["documents.category.photo"],
+  ];
+  for (const label of order) {
     await page.keyboard.press("ArrowDown");
     await expect(page).toHaveURL(openedUrl);
+    await expect(page.getByRole("option", { name: label, exact: true })).toBeFocused();
   }
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/category=photo/);

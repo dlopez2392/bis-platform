@@ -172,7 +172,7 @@ export async function deleteOne(
   const announce = { accountId, timezone: ctx.timezone, view: ctx.view };
   let r: Awaited<ReturnType<typeof bulkDeleteContactsAction>>;
   try {
-    r = await bulkDeleteContactsAction(accountId, [contactId]);
+    r = await bulkDeleteContactsAction(accountId, [contactId], locale);
   } catch {
     toast.error(t(m, "inline.crashed", locale));
     return "failed";

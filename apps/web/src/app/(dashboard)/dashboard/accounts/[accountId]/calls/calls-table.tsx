@@ -12,7 +12,8 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { ListPanel } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { callerLabel, formatCallTime, formatDuration } from "./format";
 import { OutcomePill } from "./outcome-pill";
 import { TextbackFailedBadge } from "./textback-failed-badge";
@@ -36,6 +37,8 @@ export function CallsTable({
   olderHref,
   textbackFailed,
   reasons,
+  locale = "en",
+  pseudo = false,
 }: {
   rows: CallListRow[];
   accountId: string;
@@ -57,8 +60,12 @@ export function CallsTable({
    *  caller rang about something different each time. Optional for the same
    *  reason `textbackFailed` is. */
   reasons?: ReadonlyMap<string, string>;
+  /** S-10 T5: optional, default English — only calls/page.tsx passes it today. */
+  locale?: Locale;
+  pseudo?: boolean;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
+  const tr = makeTr(locale, pseudo);
 
   return (
     <ListPanel>
@@ -68,12 +75,12 @@ export function CallsTable({
             own `[&_tr]:border-b` is the separation. */}
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className={HEAD}>{m["calls.col.when"]}</TableHead>
-            <TableHead className={HEAD}>{m["calls.col.caller"]}</TableHead>
-            <TableHead className={cn(HEAD, "text-right")}>{m["calls.col.duration"]}</TableHead>
-            <TableHead className={HEAD}>{m["calls.col.outcome"]}</TableHead>
+            <TableHead className={HEAD}>{tr.text("calls.col.when")}</TableHead>
+            <TableHead className={HEAD}>{tr.text("calls.col.caller")}</TableHead>
+            <TableHead className={cn(HEAD, "text-right")}>{tr.text("calls.col.duration")}</TableHead>
+            <TableHead className={HEAD}>{tr.text("calls.col.outcome")}</TableHead>
             <TableHead className={cn(HEAD, "hidden sm:table-cell")}>
-              {m["calls.col.language"]}
+              {tr.text("calls.col.language")}
             </TableHead>
             <TableHead className="w-10" />
           </TableRow>
@@ -81,7 +88,7 @@ export function CallsTable({
         <TableBody>
           {rows.map((row) => {
             const callHref = `${base}/calls/${row.id}`;
-            const label = callerLabel(row);
+            const label = callerLabel(row, locale);
             // Whether the label is a real identity or the withheld-number
             // fallback — read off the row rather than by comparing the label
             // back against its own message, so a copy change cannot silently
@@ -95,7 +102,7 @@ export function CallsTable({
               <CallRow key={row.id} href={callHref} label={label}>
                 <TableCell className={CELL}>
                   <span className="font-medium tabular-nums">
-                    {formatCallTime(row.started_at, timezone)}
+                    {formatCallTime(row.started_at, timezone, locale)}
                   </span>
                 </TableCell>
 
@@ -148,9 +155,9 @@ export function CallsTable({
                     sentence on a row that is untrue of that call. */}
                 <TableCell className={CELL}>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <OutcomePill outcome={row.outcome} />
+                    <OutcomePill outcome={row.outcome} locale={locale} pseudo={pseudo} />
                     {row.outcome === "abandoned" && textbackFailed?.has(row.id) ? (
-                      <TextbackFailedBadge />
+                      <TextbackFailedBadge locale={locale} pseudo={pseudo} />
                     ) : null}
                   </div>
                 </TableCell>
@@ -185,7 +192,7 @@ export function CallsTable({
       {olderHref ? (
         <div className="flex justify-end border-t border-[var(--row-line)] px-4 py-3">
           <Link href={olderHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            {m["calls.older"]}
+            {tr.text("calls.older")}
             <ArrowRight className="size-3.5" aria-hidden />
           </Link>
         </div>

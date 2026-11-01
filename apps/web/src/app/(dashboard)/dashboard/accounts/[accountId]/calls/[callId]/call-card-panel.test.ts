@@ -18,12 +18,16 @@ const CARD: CallCard = {
 /** The rendered text with each run of whitespace (where a tag stood) as one space. */
 const renderedText = (html: string) => rawText(html).replace(/\s+/g, " ");
 
-function render(over: Partial<CallCard> = {}, opts: { persona?: string; language?: "en" | "es" } = {}) {
+function render(
+  over: Partial<CallCard> = {},
+  opts: { persona?: string; language?: "en" | "es"; locale?: "en" | "es" } = {},
+) {
   return renderToStaticMarkup(createElement(CallCardPanel, {
     who: "Ana Reyes",
     card: { ...CARD, ...over },
     personaName: opts.persona ?? "Sofía",
     language: opts.language ?? "en",
+    locale: opts.locale ?? "en",
   }));
 }
 
@@ -58,6 +62,16 @@ describe("CallCardPanel", () => {
   it("no words → no words row; the caller's words carry the language they were spoken in", () => {
     expect(renderedText(render({ callerWords: null }))).not.toContain(m["calls.card.words"]);
     expect(render({}, { language: "es" })).toMatch(/<q[^>]*lang="es"/);
+  });
+
+  // S-10 T5: the card's own labels used to be bare m[] reads, English regardless of the reader.
+  it("renders its labels in Spanish under locale 'es' (mutation: hard-code English -> FAILS)", () => {
+    const text = renderedText(render({}, { locale: "es" }));
+    expect(text).toContain(m["calls.card.who.es"]);
+    expect(text).toContain(m["calls.card.reason.es"]);
+    expect(text).toContain(m["calls.card.callback.es"]);
+    expect(text).toContain(m["calls.card.words.es"]);
+    expect(text).not.toContain(m["calls.card.heading"]);
   });
 
   it("hasCard: a card of three nulls is no card (older calls, spam), anything set is one", () => {

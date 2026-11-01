@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import type { Locale } from "@/lib/i18n/locale";
 
 vi.mock("./groups-actions", () => ({
   searchGroupsAction: vi.fn(), createGroupAction: vi.fn(), addToGroupAction: vi.fn(), setRoleAction: vi.fn(),
@@ -18,8 +19,8 @@ const group = (over: Partial<Record<string, unknown>> = {}) => ({
   memberId: "m1", groupId: "g1", kind: "household", name: "Garcia", billingAddress: null, role: "Madre",
   isPrimary: true, isBilling: true, others: [{ contactId: "c2", firstName: "Luis", lastName: null }], moreOthers: 0, ...over,
 });
-const view = (load: unknown, canManageGroups = true) => renderToStaticMarkup(createElement(GroupsCardView, {
-  accountId: "a1", contactId: "c1", canManageGroups, load: load as never, onRetry: () => {}, onChanged: () => {},
+const view = (load: unknown, canManageGroups = true, locale: Locale = "en") => renderToStaticMarkup(createElement(GroupsCardView, {
+  accountId: "a1", contactId: "c1", canManageGroups, load: load as never, onRetry: () => {}, onChanged: () => {}, locale,
 }));
 
 describe("GroupsCardView", () => {
@@ -97,6 +98,22 @@ describe("GroupsCardView", () => {
     const id = html.match(/<h3 id="([^"]+)"/)![1];
     expect(html).toContain(`aria-labelledby="${id}"`);
     expect(view({ status: "loading" })).not.toContain('class="sr-only"');
+  });
+  it("S-10 T3: a Spanish reader sees the card in Spanish, not the catalogue's English key (mutation: read m[...] directly instead of t() -> FAILS)", () => {
+    const html = view({ status: "ready", groups: [group(), group({ memberId: "m2", groupId: "g2", kind: "business", name: "Acme Roofing", isPrimary: false, isBilling: false, others: [] })] }, true, "es");
+    expect(html).toContain(m["groups.title.es"]);
+    expect(html).toContain(m["groups.kind.household.es"]);
+    expect(html).toContain(m["groups.kind.business.es"]);
+    expect(html).toContain(m["groups.primary.es"]);
+    expect(html).toContain(m["groups.billing.es"]);
+    expect(html).toContain(m["groups.makePrimary.es"]);
+    expect(html).toContain(m["groups.open.es"]);
+    expect(html).toContain(m["groups.add.es"]);
+    expect(html).toContain(m["groups.openAria.es"].replace("{name}", "Garcia"));
+  });
+  it("S-10 T3: the error, empty and search states are in Spanish too (mutation: fall back to English -> FAILS)", () => {
+    expect(view({ status: "error" }, true, "es")).toContain(m["groups.loadFailed.es"]);
+    expect(view({ status: "ready", groups: [] }, true, "es")).toContain(m["groups.empty.es"]);
   });
   it("headingHidden: no empty row under RecordCard's title, and the Add control stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
     const hidden = (load: unknown) => renderToStaticMarkup(createElement(GroupsCardView, {

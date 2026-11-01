@@ -17,6 +17,7 @@ import { noticeBelongsToBooking } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { originFrom } from "@/lib/email/origin";
@@ -83,7 +84,7 @@ function isMeetingType(v: FormDataEntryValue | null): v is MeetingType {
  * the caller would see a refusal, not "calendar missing".
  */
 export async function updateCalendarSettingsAction(
-  accountId: string, formData: FormData,
+  accountId: string, formData: FormData, locale: Locale = "en",
 ): Promise<ActionResult> {
   const { userId } = await requireAccountOwner(accountId);
 
@@ -92,12 +93,12 @@ export async function updateCalendarSettingsAction(
   const minNoticeHours = Number(formData.get("minNoticeHours"));
   const maxAdvanceDays = Number(formData.get("maxAdvanceDays"));
   if (![slotDurationMinutes, bufferMinutes, minNoticeHours, maxAdvanceDays].every(Number.isFinite)) {
-    return { ok: false, error: m["calendar.settings.saveFailed"] };
+    return { ok: false, error: t(m, "calendar.settings.saveFailed", locale) };
   }
 
   const meetingTypeRaw = formData.get("meetingType");
   if (!isMeetingType(meetingTypeRaw)) {
-    return { ok: false, error: m["calendar.settings.saveFailed"] };
+    return { ok: false, error: t(m, "calendar.settings.saveFailed", locale) };
   }
   const meetingType = meetingTypeRaw;
 
@@ -115,7 +116,7 @@ export async function updateCalendarSettingsAction(
   const notifyEmails = parseNotifyEmails(String(formData.get("notifyEmails") ?? ""));
   for (const email of notifyEmails) {
     if (!isValidEmail(email)) {
-      return { ok: false, error: m["calendar.settings.notifyEmailsInvalid"].replace("{value}", email) };
+      return { ok: false, error: t(m, "calendar.settings.notifyEmailsInvalid", locale, { value: email }) };
     }
   }
 
@@ -137,11 +138,11 @@ export async function updateCalendarSettingsAction(
   // `automations/actions.ts`'s `body.length`) — trimming first would let
   // 1,001 spaces (trim-empty) sail past the bound and land in the column.
   if (followupBody.length > AUTOMATION_BODY_MAX_LENGTH) {
-    return { ok: false, error: m["automations.bodyTooLong"] };
+    return { ok: false, error: t(m, "automations.bodyTooLong", locale) };
   }
   const submittedEs = String(formData.get("body_es") ?? "");
   if (submittedEs.length > AUTOMATION_BODY_MAX_LENGTH) {
-    return { ok: false, error: m["automations.bodyTooLong"] };
+    return { ok: false, error: t(m, "automations.bodyTooLong", locale) };
   }
 
   const db = await dbForRequest();
@@ -174,7 +175,7 @@ export async function updateCalendarSettingsAction(
     }, userId);
   } catch (e) {
     console.error(`updateCalendarSettingsAction: save failed for account ${accountId}: ${String(e)}`);
-    return { ok: false, error: m["calendar.settings.saveFailed"] };
+    return { ok: false, error: t(m, "calendar.settings.saveFailed", locale) };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
@@ -433,8 +434,12 @@ export async function keepAppointmentAction(
 ): Promise<ActionResult> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access)) return { ok: false, error: t(m, "business.refuse.keep", locale) };
+  // S-10 review I-1: proveBooking's own refusal is the catalogue's ENGLISH sentence (shared with
+  // setBookingStatusAction's callers outside this file, so it carries no locale of its own) — never passed
+  // through raw. This action already asks for `locale`, so it answers its OWN Keep failure in it instead,
+  // same as every other refusal below.
   const refused = await proveBooking("keepAppointmentAction", accountId, bookingId);
-  if (refused) return refused;
+  if (refused) return { ok: false, error: t(m, "business.card.keepFailed", locale) };
 
   let changed: boolean;
   try {

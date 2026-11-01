@@ -1,5 +1,8 @@
 import type { CallListRow, CallOutcome } from "@bis/db";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Outcome treatment, shared by the list (`calls-table.tsx`) and the detail
@@ -64,6 +67,25 @@ export const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: s
   },
 };
 
+const OUTCOME_KEY: Record<CallOutcome, MessageKey> = {
+  booked: "calls.outcome.booked",
+  lead: "calls.outcome.lead",
+  message: "calls.outcome.message",
+  transferred: "calls.outcome.transferred",
+  abandoned: "calls.outcome.abandoned",
+  spam: "calls.outcome.spam",
+};
+
+/** S-10 T5: `OUTCOMES.label` is English, built once at load (every caller
+ *  reads it through `OutcomePill`, which used to read `.label` directly —
+ *  a lesson from the calendar lane's own confirm-reply.ts mistake, caught
+ *  before it shipped here). This is what asks for the reader's own locale;
+ *  `OUTCOMES` itself is left exactly as it was (dot/chip, and its English
+ *  label for the tests and callers that still want it). */
+export function outcomeLabel(outcome: CallOutcome, locale: Locale): string {
+  return t(m, OUTCOME_KEY[outcome], locale);
+}
+
 /** What a cell shows when there is no duration to show. Exported so the call
  *  detail page (Task 11) renders the same placeholder as the list rather than
  *  a second, drifting one. */
@@ -98,8 +120,8 @@ type CallerFields = Pick<CallListRow, "caller_e164" | "contact">;
  * year" and a year would be clutter. This list scrolls back across years —
  * without one, a call from 2024 and one from 2026 render identically.
  */
-export function formatCallTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+export function formatCallTime(iso: string, timeZone: string, locale: Locale = "en"): string {
+  return new Intl.DateTimeFormat(tag(locale), {
     timeZone, weekday: "short", month: "short", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit", timeZoneName: "short",
   }).format(new Date(iso));
@@ -113,7 +135,7 @@ export function formatCallTime(iso: string, timeZone: string): string {
  * perfectly good phone number: a call can create a contact from nothing but a
  * spoken email address, so a nameless linked contact is a real shape here.
  */
-export function callerLabel(row: CallerFields): string {
+export function callerLabel(row: CallerFields, locale: Locale = "en"): string {
   const name = [row.contact?.first_name, row.contact?.last_name]
     .map((part) => part?.trim() ?? "")
     .filter(Boolean)
@@ -121,5 +143,5 @@ export function callerLabel(row: CallerFields): string {
   if (name) return name;
   const number = row.caller_e164?.trim();
   if (number) return number;
-  return m["calls.unknownCaller"];
+  return t(m, "calls.unknownCaller", locale);
 }

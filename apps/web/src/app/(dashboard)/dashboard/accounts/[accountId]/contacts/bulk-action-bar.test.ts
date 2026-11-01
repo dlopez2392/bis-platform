@@ -63,8 +63,9 @@ describe("applyBulkTag's undo (D-007)", () => {
     expect(r.applied).toBe(3);
 
     await r.undo();
-    expect(bulkRemoveTagAction).toHaveBeenCalledWith("a1", ["c2", "c3"], "t9");
-    expect(bulkRemoveTagAction).not.toHaveBeenCalledWith("a1", ["c1", "c2", "c3"], "t9");
+    // S-10 T3: applyBulkTag's own "en" default rides through to both server actions.
+    expect(bulkRemoveTagAction).toHaveBeenCalledWith("a1", ["c2", "c3"], "t9", "en");
+    expect(bulkRemoveTagAction).not.toHaveBeenCalledWith("a1", ["c1", "c2", "c3"], "t9", "en");
   });
 
   it("propagates a failed add without calling remove at all", async () => {
@@ -72,6 +73,18 @@ describe("applyBulkTag's undo (D-007)", () => {
     const r = await applyBulkTag("a1", ["c1"], "vip");
     expect(r).toEqual({ ok: false, error: "nope" });
     expect(bulkRemoveTagAction).not.toHaveBeenCalled();
+  });
+
+  // S-10 T3: the caller's own locale (the bar's useLocale(), passed into applyBulkTag) reaches
+  // both server actions, not just the "crashed" toast applyBulkTag already translated.
+  it("passes the caller's own locale through to both server actions (mutation: drop locale from either call -> FAILS)", async () => {
+    bulkAddTagAction.mockResolvedValue({ ok: true, tagId: "t9", applied: 1, addedIds: ["c1"] });
+    bulkRemoveTagAction.mockResolvedValue({ ok: true });
+    const r = await applyBulkTag("a1", ["c1"], "vip", "es");
+    expect(bulkAddTagAction).toHaveBeenCalledWith("a1", ["c1"], "vip", "es");
+    if (!r.ok) throw new Error("unreachable");
+    await r.undo();
+    expect(bulkRemoveTagAction).toHaveBeenCalledWith("a1", ["c1"], "t9", "es");
   });
 });
 
@@ -721,6 +734,14 @@ describe("deleteInChunks: a selection past 500 deletes in calls of 500, and says
     expect(await deleteInChunks("a1", ids, "en")).toEqual({ done: res(500, []), failure: fail });
     bulkDeleteContactsAction.mockReset().mockRejectedValue(new Error("stale"));
     expect(await deleteInChunks("a1", ["c1"], "en")).toEqual({ done: null, failure: { ok: false, error: m["inline.crashed"] } });
+  });
+
+  // S-10 T3: the caller's own locale reaches the server action, not just the "crashed" toast
+  // deleteInChunks already translated.
+  it("passes the caller's own locale through to bulkDeleteContactsAction (mutation: drop locale from the call -> FAILS)", async () => {
+    bulkDeleteContactsAction.mockResolvedValueOnce(res(1, []));
+    await deleteInChunks("a1", ["c1"], "es");
+    expect(bulkDeleteContactsAction).toHaveBeenCalledWith("a1", ["c1"], "es");
   });
 });
 

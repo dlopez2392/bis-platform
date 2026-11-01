@@ -61,6 +61,14 @@ describe("planInlineUndo: the phone and plain fields keep their rules", () => {
     expect(planInlineUndo({ field: "phone", prior: "+19565550100", priorValid: true, phoneUndo: undefined, ownUndo: undefined, ...w, undoWith: undefined })).toBeNull();
   });
 
+  // S-10 T3: planInlineUndo passes the field's own locale through to commitInlineUndo, so the
+  // "no undoPhone wired" refusal (round 3's second fence) reads the reader's language.
+  it("the no-payload phone refusal reads the reader's language when the field passes one (mutation: drop locale from the call -> FAILS)", async () => {
+    const w = writers();
+    const undo = planInlineUndo({ field: "phone", prior: "+19565550100", priorValid: true, phoneUndo: PHONE_UNDO, ownUndo: undefined, ...w, undoWith: undefined, undoPhone: undefined, locale: "es" });
+    expect(await undo!()).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
+  });
+
   it("a plain field re-saves the prior text when it validates, and offers nothing when it does not", async () => {
     const w = writers();
     const undo = planInlineUndo({ field: "email", prior: "old@example.com", priorValid: true, phoneUndo: undefined, ownUndo: undefined, ...w, undoWith: undefined });
@@ -103,6 +111,12 @@ describe("inlineSavedView", () => {
 
   it("the saved message follows the locale (mutation: ignore locale -> FAILS)", () =>
     expect(inlineSavedView("x", "Dirección", {}, "es").message).toBe(m["inline.saved.es"].replace("{label}", "Dirección")));
+
+  // S-10 T3: the "already" branch (an unchanged save under another spelling) read m[...] directly,
+  // never the locale this function already took for the "saved" branch above.
+  it("the 'already' message follows the locale too (mutation: read m[...] directly -> FAILS)", () =>
+    expect(inlineSavedView("beta", "Business name", { shown: "Beta" }, "es").message)
+      .toBe(m["contact.business.alreadyAs.es"].replace("{name}", "Beta")));
 });
 
 /**

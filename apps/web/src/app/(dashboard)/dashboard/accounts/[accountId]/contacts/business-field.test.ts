@@ -15,11 +15,11 @@ const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),
  * planInlineUndo's behaviour is pinned in lib/contacts/inline-save.test.ts.
  */
 describe("BusinessInlineField wiring", () => {
-  it("passes undoContactBusinessAction as undoWith, with the save's payload (mutation: drop the undoWith prop -> FAILS)", () => {
-    expect(src).toMatch(/undoWith=\{\(payload\) => undoContactBusinessAction\(accountId, contactId, payload as BusinessUndo\)\}/);
+  it("passes undoContactBusinessAction as undoWith, with the save's payload, in the field's own language (S-10 T3; mutation: drop the undoWith prop -> FAILS)", () => {
+    expect(src).toMatch(/undoWith=\{\(payload\) => undoContactBusinessAction\(accountId, contactId, payload as BusinessUndo, locale\)\}/);
   });
   it("saves through setContactBusinessAction, never the generic field action", () => {
-    expect(src).toMatch(/save=\{\(v\) => setContactBusinessAction\(accountId, contactId, v\)\}/);
+    expect(src).toMatch(/save=\{\(v\) => setContactBusinessAction\(accountId, contactId, v, locale\)\}/);
     expect(src).not.toMatch(/updateContactFieldAction/);
   });
 });

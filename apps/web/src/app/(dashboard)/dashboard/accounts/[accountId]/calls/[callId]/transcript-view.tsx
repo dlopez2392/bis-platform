@@ -1,6 +1,8 @@
 import type { TranscriptEvent } from "@bis/db";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 
 /**
  * Clock time only — the date already leads the page header, and repeating it
@@ -18,13 +20,13 @@ import { m } from "@/lib/messages";
  * for that would be parsing the same jsonb-sourced string twice against the
  * one guard below that establishes it is even parseable.
  */
-function turnClock(at: string, timeZone: string): { label: string; ms: number } | null {
+function turnClock(at: string, timeZone: string, locale: Locale): { label: string; ms: number } | null {
   // `at` arrives out of a jsonb column. A row written by an older shape — or
   // by a test fixture — can hold anything, and `Intl` would render the string
   // "Invalid Date" rather than throw. No timestamp is better than that.
   const ms = Date.parse(at);
   if (Number.isNaN(ms)) return null;
-  const label = new Intl.DateTimeFormat("en-US", {
+  const label = new Intl.DateTimeFormat(tag(locale), {
     timeZone, hour: "numeric", minute: "2-digit", second: "2-digit",
   }).format(new Date(ms));
   return { label, ms };
@@ -62,16 +64,21 @@ function usableTurns(transcript: TranscriptEvent[]): { turn: TranscriptEvent; ra
 export function TranscriptView({
   transcript,
   timezone,
+  locale,
+  pseudo = false,
 }: {
   transcript: TranscriptEvent[];
   /** The ACCOUNT's IANA zone, already validated by the page — the company's
    *  wall clock, not the viewer's. */
   timezone: string;
+  locale: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const turns = usableTurns(transcript);
 
   if (turns.length === 0) {
-    return <p className="text-sm text-muted-foreground">{m["calls.detail.noTranscript"]}</p>;
+    return <p className="text-sm text-muted-foreground">{tr.text("calls.detail.noTranscript")}</p>;
   }
 
   return (
@@ -96,7 +103,7 @@ export function TranscriptView({
           // have, and without the label a listener hears a bare timestamp and
           // a sentence with nobody attached to it.
           const startsRun = i === 0 || turns[i - 1]?.turn.role !== turn.role;
-          const clock = turnClock(turn.at, timezone);
+          const clock = turnClock(turn.at, timezone, locale);
 
           return (
             <li
@@ -121,7 +128,7 @@ export function TranscriptView({
                     startsRun ? null : "sr-only",
                   )}
                 >
-                  {isCaller ? m["calls.detail.caller"] : m["calls.detail.assistant"]}
+                  {isCaller ? tr.text("calls.detail.caller") : tr.text("calls.detail.assistant")}
                 </span>
                 {clock ? (
                   // Full `--muted-foreground`, not a faded one. At 11px this is

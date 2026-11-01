@@ -21,10 +21,10 @@ import { useLocale } from "@/components/locale-provider";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { DealContactPicker, dealSubmitBlock } from "./deal-contact-picker";
 
-function Submit({ pending }: { pending: boolean }) {
+function Submit({ pending, locale }: { pending: boolean; locale: Locale }) {
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? m["common.saving"] : m["common.save"]}
+      {t(m, pending ? "common.saving" : "common.save", locale)}
     </Button>
   );
 }
@@ -70,12 +70,13 @@ export function AddOpportunityDialog({
       <DialogTrigger asChild>
         <Button>
           <Plus className="size-4" aria-hidden />
-          {m["pipeline.add"]}
+          {t(m, "pipeline.add", locale)}
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      {/* Portaled to the body, outside the board's own lang wrapper, so it carries lang itself. */}
+      <DialogContent lang={locale} closeLabel={t(m, "common.close", locale)}>
         <DialogHeader>
-          <DialogTitle>{m["pipeline.add"]}</DialogTitle>
+          <DialogTitle>{t(m, "pipeline.add", locale)}</DialogTitle>
         </DialogHeader>
         <form
           // onSubmit, NOT the `action` prop: on the catch path the dialog
@@ -89,19 +90,19 @@ export function AddOpportunityDialog({
         >
           <input type="hidden" name="pipelineId" value={pipelineId} />
           <div className="space-y-2">
-            <p id="deal-contact-label" className="text-sm font-medium">{m["pipeline.contact"]}</p>
+            <p id="deal-contact-label" className="text-sm font-medium">{t(m, "pipeline.contact", locale)}</p>
             <DealContactPicker accountId={accountId} labelId="deal-contact-label" locale={locale} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="name">{m["pipeline.name"]}</Label>
+            <Label htmlFor="name">{t(m, "pipeline.name", locale)}</Label>
             <Input id="name" name="name" required />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="value">{m["pipeline.value"]}</Label>
+            <Label htmlFor="value">{t(m, "pipeline.value", locale)}</Label>
             <Input id="value" name="value" type="number" step="0.01" />
           </div>
           <DialogFooter>
-            <Submit pending={pending} />
+            <Submit pending={pending} locale={locale} />
           </DialogFooter>
         </form>
       </DialogContent>

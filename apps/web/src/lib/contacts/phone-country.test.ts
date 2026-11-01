@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
 import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 import {
-  PHONE_CHECK_TREATMENT, pickPhoneCountry,
+  phoneCheckTreatment, pickPhoneCountry,
   type PhoneCountryPickResult, type PhoneCountryUndoResult, type PhoneCountryPrevious,
 } from "./phone-country";
 
@@ -114,11 +114,40 @@ describe("pickPhoneCountry", () => {
   });
 });
 
-describe("PHONE_CHECK_TREATMENT", () => {
+// S-10 T3: pickPhoneCountry's own toasts read the reader's language when the caller passes one;
+// a caller that predates it (every test above) is unchanged. phoneCheckTreatment is now its own
+// function of locale too (below), wired into texts-row.tsx's chip.
+describe("pickPhoneCountry in the reader's language (S-10 T3)", () => {
+  it("toasts the Mexican line in Spanish when the caller passes es (mutation: read m[...] directly -> FAILS)", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast, undefined, undefined, "es");
+    expect(h.toast.success).toHaveBeenCalledWith(
+      m["contact.phoneCountry.mxToast.es"],
+      expect.objectContaining({ action: expect.objectContaining({ label: m["common.undo.es"] }) }),
+    );
+  });
+  it("a busy Undo is refused in Spanish too", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast, () => false, undefined, "es");
+    h.click()!();
+    expect(h.toast.error).toHaveBeenCalledWith(m["contact.phoneCountry.undoBusy.es"]);
+  });
+  it("defaults to English when no locale is passed", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    expect(h.toast.success.mock.calls[0]?.[0]).toBe(m["contact.phoneCountry.mxToast"]);
+  });
+});
+
+describe("phoneCheckTreatment (S-10 T3: a function of locale, not a frozen English constant)", () => {
   it("is a dot AND the word, in token classes only (rule 3; mutation: a hex colour → FAILS)", () => {
-    expect(PHONE_CHECK_TREATMENT.label).toBe("Check number");
-    expect(PHONE_CHECK_TREATMENT.dot).toBe("bg-warning");
-    expect(`${PHONE_CHECK_TREATMENT.dot} ${PHONE_CHECK_TREATMENT.chip}`).not.toMatch(/#|rgb|hsl|oklch|\[/);
+    expect(phoneCheckTreatment("en").label).toBe("Check number");
+    expect(phoneCheckTreatment("en").dot).toBe("bg-warning");
+    expect(`${phoneCheckTreatment("en").dot} ${phoneCheckTreatment("en").chip}`).not.toMatch(/#|rgb|hsl|oklch|\[/);
+  });
+  it("the label reads Spanish when asked (mutation: return the English literal regardless -> FAILS)", () => {
+    expect(phoneCheckTreatment("es").label).toBe(m["contact.phoneCountry.word.es"]);
+    expect(phoneCheckTreatment("es").dot).toBe("bg-warning");
   });
 
   it("the spec's words, verbatim (§6)", () => {

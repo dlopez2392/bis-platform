@@ -3,6 +3,8 @@
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 
 // useFormStatus only reports the parent <form>'s pending state when the
 // component calling it is itself a child of that <form> — inline in the
@@ -11,8 +13,8 @@ import { m } from "@/lib/messages";
 // Conversations) so the send button disables and the Resend round-trip
 // can't be double-submitted from either surface.
 export function EmailSendButton({
-  label = m["compose.send"],
-  pendingLabel = m["compose.sending"],
+  label,
+  pendingLabel,
   variant = "default",
   pending: pendingProp,
 }: {
@@ -27,9 +29,17 @@ export function EmailSendButton({
 } = {}) {
   const status = useFormStatus();
   const pending = pendingProp ?? status.pending;
+  // A caller may omit label/pendingLabel entirely and take the default (the
+  // message composer's own caller always passes both explicitly today, but
+  // the doc comment above promises this component to Conversations too, and
+  // nothing stops a future caller from relying on the default) — so the
+  // default itself must ask for the reader's own locale, never pin English.
+  const locale = useLocale();
+  const resolvedLabel = label ?? t(m, "compose.send", locale);
+  const resolvedPendingLabel = pendingLabel ?? t(m, "compose.sending", locale);
   return (
     <Button type="submit" variant={variant} disabled={pending} className="min-h-11 md:min-h-8">
-      {pending ? pendingLabel : label}
+      {pending ? resolvedPendingLabel : resolvedLabel}
     </Button>
   );
 }
