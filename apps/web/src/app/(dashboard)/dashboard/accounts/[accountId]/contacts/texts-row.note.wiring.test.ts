@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { TextsView } from "@/lib/consent/texts-view";
 
 /**
  * Fix round 1 #1, #4: the Resume form's `note` field must never survive
@@ -87,14 +88,14 @@ function find(node: unknown, pred: (el: El) => boolean): El | null {
   return find(props.children, pred);
 }
 
-const STOPPED_STAFF = { kind: "stopped", eventId: "e1", since: "2026-10-04T02:30:00Z", how: { kind: "staff" as const }, canResume: true };
+const STOPPED_STAFF = { kind: "stopped" as const, eventId: "e1", since: "2026-10-04T02:30:00Z", how: { kind: "staff" as const }, canResume: true };
 const LOAD = { status: "ready" as const, view: STOPPED_STAFF, zone: "America/Chicago", phone: "+15512345678" };
 
 /** `TextsRow` itself calls only `useLocale()` (mocked to "en" above); the
  *  tree this returns for a "ready" load is exactly `<ReadyRow .../>`,
  *  called directly to reach ITS tree. `load` defaults to the resumable-stop
  *  fixture every pre-existing test here already expects. */
-function render(load: typeof LOAD = LOAD): El {
+function render(load: { status: "ready"; view: TextsView; zone: string; phone: string } = LOAD): El {
   callIndex = 0;
   states = [];
   const root = (TextsRow as unknown as (p: unknown) => unknown)({ accountId: "a1", contactId: "c1", load });
@@ -193,7 +194,7 @@ describe("ReadyRow's Resume form — the submit is disabled while the note is bl
 describe("Stop texts, Confirm stop and Not a stop thread the reader's locale to their server action (S-10 leftovers item 7)", () => {
   it("Stop texts passes the reader's locale (mutation: drop the locale arg -> FAILS)", async () => {
     stopTextsAction.mockResolvedValueOnce({ ok: true, view: { kind: "stopped", eventId: "e9", since: "2026-10-04T02:30:00Z", how: { kind: "staff" }, canResume: true } });
-    const tree = render({ status: "ready", view: { kind: "allowed", newestId: "e9" }, zone: "America/Chicago", phone: "+15512345678" });
+    const tree = render({ status: "ready", view: { kind: "allowed" as const, newestId: "e9" }, zone: "America/Chicago", phone: "+15512345678" });
     const btn = find(tree, (el) => el.type === Button && el.props.children === m["contact.texts.stopTexts"]);
     expect(btn).not.toBeNull();
     (btn!.props.onClick as () => void)();
