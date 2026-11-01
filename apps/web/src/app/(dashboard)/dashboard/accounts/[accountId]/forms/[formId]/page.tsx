@@ -66,7 +66,7 @@ export default async function FormEditorPage({
     noteOpened(access, accountId, { kind: "form_answers", recordId: form.id }),
   ]);
   if (account.error) {
-    console.error(`forms editor: account ${accountId} timezone read failed: ${account.error.message}`);
+    console.error(`forms editor: account ${accountId} timezone/language read failed: ${account.error.message}`);
   }
   const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
   const zone = await renderZone(accountRow?.timezone);

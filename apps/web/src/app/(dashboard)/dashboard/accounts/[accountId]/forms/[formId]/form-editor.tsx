@@ -22,6 +22,7 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo, kindLabel } from "@/lib/forms/editor-helpers";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
@@ -258,8 +259,9 @@ export function FormEditor({
                     — never routed through readerLocale: an English-speaking
                     operator must still be able to read that "Español" means
                     the form speaks Spanish to its own visitors. */}
-                <SelectItem value="en">English</SelectItem>
-                <SelectItem value="es">Español</SelectItem>
+                {LANGUAGE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

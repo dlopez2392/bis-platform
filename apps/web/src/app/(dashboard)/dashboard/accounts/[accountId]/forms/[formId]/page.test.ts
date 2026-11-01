@@ -94,10 +94,10 @@ const { default: FormEditorPage } = await import("./page");
 
 const FORM = { id: "f1", account_id: "acct1", name: "Contact us", public_id: "p1", status: "published", locale_default: "en" };
 
-async function render(): Promise<string> {
+async function render(searchParams: Record<string, string> = {}): Promise<string> {
   const el = await FormEditorPage({
     params: Promise.resolve({ accountId: "acct1", formId: "f1" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(searchParams),
   });
   return renderToStaticMarkup(el);
 }
@@ -173,13 +173,27 @@ describe("FormEditorPage resolves and forwards the reader's locale (S-10 T5 part
     expect(formEditorProps.value?.readerLocale).toBe("en");
   });
 
-  it("an agency operator's own choice wins over the account's language (owner decision 1; mutation: read account.language for an agency session → FAILS)", async () => {
+  it("an agency operator with no own choice never inherits the account's language (owner decision 1; mutation: isOperator false → FAILS)", async () => {
+    // No own preference: a person's own choice outranks the account's on
+    // BOTH branches, so only the operator branch can keep this English.
     accountRead.mockResolvedValue({ data: { timezone: "America/Chicago", language: "es" }, error: null });
     authFixture.isAgency = true;
     requireNotTechnicianMock.mockResolvedValue({ userId: "u1", isAgency: true, role: null, canManage: true });
-    prefsFixture.language = "en";
+    prefsFixture.language = null;
     await render();
     expect(formEditorProps.value?.readerLocale).toBe("en");
+  });
+
+  it("?locale=pseudo reaches all three cards under the QA flag (mutation: drop pseudo from any card → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1"); vi.stubEnv("VERCEL", "");
+    try {
+      await render({ locale: "pseudo" });
+      expect(formEditorProps.value?.pseudo).toBe(true);
+      expect(submissionsTableProps.value?.pseudo).toBe(true);
+      expect(embedSnippetProps.value?.pseudo).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("a client role with no own preference falls back to the account's language (mutation: ignore account.language for a client → FAILS)", async () => {

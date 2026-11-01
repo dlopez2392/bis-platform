@@ -75,6 +75,21 @@ describe("SubmissionsTable speaks Spanish to a Spanish-reading operator (S-10 T5
     expect(declined).toContain(m["forms.consentNotGiven.es"]);
   });
 
+  it("both dates — the submission's and the consent's — read in the reader's language and the account's zone (mutation: drop the locale from either call, or format in UTC → FAILS)", () => {
+    // 03:00Z on Oct 8 is 10 PM on Oct 7 in America/Chicago, so the day
+    // itself proves the account's zone, and the month word proves the language.
+    const at = "2026-10-08T03:00:00.000Z";
+    const row = submission({
+      created_at: at,
+      consent: [{ key: "marketing", given: true, text: "Acepto", at }],
+    });
+    const es = renderedText(html([row], { readerLocale: "es" }));
+    expect(es.match(/7 oct 2026/g)?.length).toBe(2);
+    expect(es).not.toMatch(/Oct 7/);
+    const en = renderedText(html([row], { readerLocale: "en" }));
+    expect(en.match(/Oct 7, 2026/g)?.length).toBe(2);
+  });
+
   it("defaults to English with no readerLocale prop, so every other caller keeps its current behaviour (mutation: default to Spanish → FAILS)", () => {
     const text = renderedText(html([submission()]));
     expect(text).toContain(m["forms.submissions"]);
