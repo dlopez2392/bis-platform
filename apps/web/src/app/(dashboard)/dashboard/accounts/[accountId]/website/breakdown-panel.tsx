@@ -8,6 +8,17 @@ const DEVICE_NAME_KEYS = {
   mobile: "website.devices.phone", desktop: "website.devices.desktop", tablet: "website.devices.tablet",
 } as const;
 
+// I-3 (review): channelOf's (lib/website/channel.ts) category names, shown
+// raw by the Sources panel. Distinct keyspace from DEVICE_NAME_KEYS above
+// (title-case channel names vs lowercase device ids), so both tables are
+// checked by one lookup with no collision risk. Brand names (Google, Bing,
+// DuckDuckGo, Yahoo) are proper nouns and are deliberately absent — they
+// pass through unchanged in every locale.
+const CHANNEL_NAME_KEYS = {
+  Direct: "website.channel.direct", Social: "website.channel.social",
+  "AI assistants": "website.channel.aiAssistants", "Other websites": "website.channel.otherWebsites",
+} as const;
+
 /** A ranked list: name, proportional bar, value. Bars are relative to the
  *  top row so the leader is always full width — the mockup's treatment. */
 export function BreakdownPanel({
@@ -32,7 +43,8 @@ export function BreakdownPanel({
       ) : (
         <ul>
           {rows.map((r) => {
-            const nameKey = (DEVICE_NAME_KEYS as Record<string, keyof typeof m>)[r.name];
+            const nameKey = (DEVICE_NAME_KEYS as Record<string, keyof typeof m>)[r.name]
+              ?? (CHANNEL_NAME_KEYS as Record<string, keyof typeof m>)[r.name];
             return (
               <li key={r.name} className="grid grid-cols-[1fr_auto] items-center gap-x-2.5 gap-y-1.5 border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0">
                 <span className="truncate text-card-foreground">{nameKey ? t(m, nameKey, locale) : r.name}</span>

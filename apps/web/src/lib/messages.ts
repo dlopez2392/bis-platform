@@ -4087,6 +4087,17 @@ export const m = {
   "website.devices.desktop.es": "Computadora",
   "website.devices.tablet": "Tablet",
   "website.devices.tablet.es": "Tableta",
+  // I-3 (review): channelOf's (lib/website/channel.ts) category names, shown
+  // raw in the Sources breakdown panel. Brand names (Google, Bing,
+  // DuckDuckGo, Yahoo) are proper nouns and stay as-is — not catalogued.
+  "website.channel.direct": "Direct",
+  "website.channel.direct.es": "Directo",
+  "website.channel.social": "Social",
+  "website.channel.social.es": "Redes sociales",
+  "website.channel.aiAssistants": "AI assistants",
+  "website.channel.aiAssistants.es": "Asistentes de IA",
+  "website.channel.otherWebsites": "Other websites",
+  "website.channel.otherWebsites.es": "Otros sitios web",
   "website.panel.pages": "Pages people read",
   "website.panel.pages.es": "Páginas que la gente leyó",
   "website.panel.sources": "Where visitors came from",

@@ -60,21 +60,21 @@ describe("websiteSentence in Spanish (usted register, Valley trades Spanish)", (
   it("the full sentence, with the same bold fragments as the English mockup", () => {
     const s = websiteSentence(base, "es");
     expect(text(s)).toBe(
-      "1,284 personas visitaron su sitio web, 18% más que las dos semanas anteriores. "
-      + "La mayoría llegó desde Google, la página que más leyeron fue Services, y siete de cada diez estaban en el celular.",
+      "1,284 personas visitaron su sitio web, 18% más que en las dos semanas anteriores. "
+      + "La mayoría llegó desde Google, la página que más leyeron fue Services y siete de cada diez usaron el celular.",
     );
     expect(strong(s)).toEqual(["1,284 personas", "18% más", "Google", "Services"]);
   });
 
-  it("under 5% change reads 'casi igual que'", () => {
+  it("under 5% change reads 'casi igual que en'", () => {
     expect(text(websiteSentence({ ...base, visitors: 1100, priorVisitors: 1088 }, "es")))
-      .toMatch(/^1,100 personas visitaron su sitio web, casi igual que las dos semanas anteriores\./);
+      .toMatch(/^1,100 personas visitaron su sitio web, casi igual que en las dos semanas anteriores\./);
   });
 
   it("fewer is 'menos', and the period phrase follows the period", () => {
     expect(text(websiteSentence({ ...base, period: 7, visitors: 500, priorVisitors: 1000 }, "es")))
-      .toContain("50% menos que la semana anterior");
-    expect(text(websiteSentence({ ...base, period: 30 }, "es"))).toContain("que el mes anterior");
+      .toContain("50% menos que en la semana anterior");
+    expect(text(websiteSentence({ ...base, period: 30 }, "es"))).toContain("que en el mes anterior");
   });
 
   it("names the top page only with a 10-point lead over the runner-up; the top source likewise", () => {
@@ -84,9 +84,24 @@ describe("websiteSentence in Spanish (usted register, Valley trades Spanish)", (
   });
 
   it("names a device only at 60% share, in tenths ('de cada diez'), and 'la computadora' for desktop", () => {
-    expect(text(websiteSentence({ ...base, topDevice: { name: "desktop", visitors: 1, share: 0.64 } }, "es"))).toContain("seis de cada diez estaban en la computadora");
+    expect(text(websiteSentence({ ...base, topDevice: { name: "desktop", visitors: 1, share: 0.64 } }, "es"))).toContain("seis de cada diez usaron la computadora");
     expect(text(websiteSentence({ ...base, topDevice: { name: "mobile", visitors: 1, share: 0.55 } }, "es"))).not.toContain("de cada diez");
-    expect(text(websiteSentence({ ...base, topDevice: { name: "mobile", visitors: 1, share: 0.97 } }, "es"))).toContain("casi todos estaban en el celular");
+    expect(text(websiteSentence({ ...base, topDevice: { name: "mobile", visitors: 1, share: 0.97 } }, "es"))).toContain("casi todas usaron el celular");
+  });
+
+  // I-3 (review): channelOf's category names take an article in the
+  // sentence ("desde las redes sociales", "desde otros sitios web"); brand
+  // names (Google, Bing, ...) take none ("desde Google").
+  it("channel category names take their article; brand names stay bare", () => {
+    expect(text(websiteSentence({ ...base, topSource: { name: "Social", visitors: 783, share: 0.61 }, runnerUpSourceShare: 0.22 })))
+      .toContain("Most of them found you on Social");
+    expect(text(websiteSentence({ ...base, topSource: { name: "Social", visitors: 783, share: 0.61 }, runnerUpSourceShare: 0.22 }, "es")))
+      .toContain("La mayoría llegó desde las redes sociales");
+    expect(text(websiteSentence({ ...base, topSource: { name: "AI assistants", visitors: 783, share: 0.61 }, runnerUpSourceShare: 0.22 }, "es")))
+      .toContain("La mayoría llegó desde los asistentes de IA");
+    expect(text(websiteSentence({ ...base, topSource: { name: "Other websites", visitors: 783, share: 0.61 }, runnerUpSourceShare: 0.22 }, "es")))
+      .toContain("La mayoría llegó desde otros sitios web");
+    expect(text(websiteSentence(base, "es"))).toContain("La mayoría llegó desde Google");
   });
 
   it("under 20 visitors: the plain count and nothing else, with singular/plural agreement", () => {

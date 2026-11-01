@@ -47,7 +47,25 @@ function lastPeriodEs(period: Period): string {
 }
 function deviceWordsEs(name: string): string {
   const n = name.toLowerCase();
-  return n === "mobile" ? "el celular" : n === "desktop" ? "la computadora" : n === "tablet" ? "la tableta" : n;
+  if (n === "mobile") return "el celular";
+  if (n === "desktop") return "la computadora";
+  if (n === "tablet") return "la tableta";
+  // M-3 (review): an unknown device name has no known gender to pick an
+  // article for — "su" (their) sidesteps the guess rather than mismatching
+  // one, and still reads naturally after "usaron" (used their X).
+  return `su ${n}`;
+}
+/** I-3 (review): channelOf's (lib/website/channel.ts) category names take
+ *  an article in a sentence ("desde las redes sociales", "desde otros
+ *  sitios web"); brand names (Google, Bing, DuckDuckGo, Yahoo) are proper
+ *  nouns and take none ("desde Google"). Mirrors the panel's own
+ *  website.channel.* keys in wording, but is NOT sourced from them —
+ *  sentence.ts reads no catalogue key at all (generated prose). */
+function sourceNameEs(name: string): string {
+  if (name === "Social") return "las redes sociales";
+  if (name === "AI assistants") return "los asistentes de IA";
+  if (name === "Other websites") return "otros sitios web";
+  return name;
 }
 
 /** The Spanish half of `websiteSentence` below — same four restraint rules,
@@ -75,28 +93,34 @@ function websiteSentenceEs(input: {
   const out: SentenceSegment[] = [{ text: `${fmt(input.visitors, "es")} personas`, strong: true }, { text: " visitaron su sitio web, " }];
   const change = (input.visitors - input.priorVisitors) / input.priorVisitors;
   if (Math.abs(change) < SAME_THRESHOLD) {
-    out.push({ text: `casi igual que ${periodBeforeEs(input.period)}.` });
+    // M-3 (review): "que en" (than IN the two weeks before), not a bare
+    // "que" — the natural Spanish preposition this comparison needs.
+    out.push({ text: `casi igual que en ${periodBeforeEs(input.period)}.` });
   } else {
     const pct = Math.round(Math.abs(change) * 100);
-    out.push({ text: `${pct}% ${change > 0 ? "más" : "menos"}`, strong: true }, { text: ` que ${periodBeforeEs(input.period)}.` });
+    out.push({ text: `${pct}% ${change > 0 ? "más" : "menos"}`, strong: true }, { text: ` que en ${periodBeforeEs(input.period)}.` });
   }
 
   const clauses: SentenceSegment[][] = [];
   if (input.topSource && input.topSource.share - input.runnerUpSourceShare >= LEAD_MARGIN && input.topSource.name !== "Direct") {
-    clauses.push([{ text: "la mayoría llegó desde " }, { text: input.topSource.name, strong: true }]);
+    clauses.push([{ text: "la mayoría llegó desde " }, { text: sourceNameEs(input.topSource.name), strong: true }]);
   }
   if (input.topPage && input.topPage.share - input.runnerUpPageShare >= LEAD_MARGIN) {
     clauses.push([{ text: "la página que más leyeron fue " }, { text: input.topPage.name, strong: true }]);
   }
   if (input.topDevice && input.topDevice.share >= DEVICE_SHARE) {
     const tenths = Math.round(input.topDevice.share * 10);
-    clauses.push([{ text: tenths >= 10 ? `casi todos estaban en ${deviceWordsEs(input.topDevice.name)}` : `${TENTHS_ES[tenths]} de cada diez estaban en ${deviceWordsEs(input.topDevice.name)}` }]);
+    // M-3 (review): "usaron" (used), not "estaban en" (were on/in) — and
+    // "casi todas" (feminine, agreeing with "personas") not "casi todos".
+    clauses.push([{ text: tenths >= 10 ? `casi todas usaron ${deviceWordsEs(input.topDevice.name)}` : `${TENTHS_ES[tenths]} de cada diez usaron ${deviceWordsEs(input.topDevice.name)}` }]);
   }
   if (clauses.length === 0) return out;
 
   out.push({ text: " " });
   clauses.forEach((clause, i) => {
-    if (i > 0) out.push({ text: i === clauses.length - 1 ? ", y " : ", " });
+    // M-2 (review): no serial comma before the last clause — Spanish joins
+    // with a bare " y ", unlike the English mockup's ", and".
+    if (i > 0) out.push({ text: i === clauses.length - 1 ? " y " : ", " });
     const first = clause[0]!;
     out.push(i === 0 ? { ...first, text: first.text.charAt(0).toUpperCase() + first.text.slice(1) } : first);
     out.push(...clause.slice(1));
