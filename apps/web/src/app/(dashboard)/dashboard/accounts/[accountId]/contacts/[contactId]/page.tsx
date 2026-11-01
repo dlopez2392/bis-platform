@@ -378,8 +378,8 @@ export default async function ContactDetailPage({
         ),
       }
       : failed(tr.text("record.activity.failed")),
-    // The Groups card's copy stays English (S-03 part 3 D10; spec §16 files its translation).
-    groups: { node: <div lang="en"><GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /></div> },
+    // The Groups card reads the reader's language itself (S-10 T3): no wrapper needed.
+    groups: { node: <GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /> },
     properties: { node: <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} headingHidden /> },
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
     documents: {

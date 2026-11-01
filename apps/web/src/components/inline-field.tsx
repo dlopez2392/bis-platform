@@ -134,7 +134,7 @@ export function InlineField(
     rule ? validateInlineRule(rule, raw, locale)
     : options ? validateEnumValue(options, raw)
     : required ? normalizeRequired(raw)
-    : normalizeFieldInput(field as EditableField, raw);
+    : normalizeFieldInput(field as EditableField, raw, locale);
   const [editing, setEditingState] = useState(false);
   // The ONE way editing changes, so onEditingChange hears every path: click, commit and Esc.
   const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };
@@ -180,7 +180,7 @@ export function InlineField(
     const undo = planInlineUndo({
       field, prior, priorValid: normalize(prior).ok,
       phoneUndo: result.undo, ownUndo: result.undoPayload,
-      save, undoPhone, undoWith,
+      save, undoPhone, undoWith, locale,
     });
     const notify = view.kind === "already" ? toast.info : toast.success;
     notify(view.message, {

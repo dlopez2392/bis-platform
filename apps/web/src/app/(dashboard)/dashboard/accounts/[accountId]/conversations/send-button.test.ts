@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { LocaleProvider } from "@/components/locale-provider";
 import { EmailSendButton } from "./send-button";
 
 /**
@@ -15,5 +16,24 @@ describe("EmailSendButton: phone tap target", () => {
     const button = html.match(/<button[^>]*>/)?.[0] ?? "";
     expect(button).toContain("min-h-11");
     expect(button).toContain("md:min-h-8");
+  });
+});
+
+// S-10 T4: the default label/pendingLabel were bare m[] reads, English on every
+// locale (no caller happens to rely on the default today, but a future one would).
+describe("EmailSendButton: Spanish default labels (S-10 T4)", () => {
+  function render(locale: "en" | "es") {
+    return renderToStaticMarkup(
+      createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(EmailSendButton, {})),
+    );
+  }
+
+  it("defaults to the Spanish label under a Spanish locale (mutation: default to English always -> FAILS)", () => {
+    expect(render("es")).toContain("Enviar");
+    expect(render("es")).not.toContain(">Send<");
+  });
+
+  it("still defaults to the English label under English", () => {
+    expect(render("en")).toContain(">Send<");
   });
 });

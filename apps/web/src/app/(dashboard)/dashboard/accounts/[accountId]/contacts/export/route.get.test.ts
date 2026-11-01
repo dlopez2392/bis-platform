@@ -12,7 +12,22 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // requireAccountOwner, not requireAccountAccess.
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ requireAccountOwner: (...a: unknown[]) => access(...a) }));
-vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+// S-10 T3: the filename now resolves the reader's own locale (requestLocale + getPersonPrefs +
+// accounts.language), the same convention the record, pipeline and To do pages use. `.from` sits
+// on the PROTOTYPE, not an own property, so every existing `toHaveBeenCalledWith({}, ...)` below
+// (listContacts is given this same object as its db argument) still deep-equals a plain `{}` —
+// only the route's own `db.from("accounts")` call, which walks the prototype chain, sees it.
+let personLanguage: "en" | "es" | null = null;
+let accountLanguage: "en" | "es" | null = null;
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: personLanguage, theme: null }) }));
+vi.mock("@/lib/db", () => ({
+  dbForRequest: async () => Object.create({
+    from: (table: string) => {
+      if (table !== "accounts") throw new Error(`unexpected table ${table}`);
+      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: accountLanguage }, error: null }) }) }) };
+    },
+  }),
+}));
 
 const listContacts = vi.fn();
 const listTagNamesForContacts = vi.fn();
@@ -78,6 +93,8 @@ beforeEach(() => {
   countContacts.mockResolvedValue(0);
   agencyVisitMissing.mockResolvedValue(false);
   noteOpenedApi.mockResolvedValue(true);
+  personLanguage = null;
+  accountLanguage = null;
 });
 
 describe("contacts CSV export route (GET)", () => {
@@ -136,6 +153,24 @@ describe("contacts CSV export route (GET)", () => {
     expect(res.headers.get("Content-Disposition")).toMatch(
       /^attachment; filename="contacts-\d{4}-\d{2}-\d{2}\.csv"$/);
     expect(await text(res)).toBe("first_name,last_name,email,phone,company_name,source,tags");
+  });
+
+  // S-10 T3: the downloaded filename itself follows the reader's language.
+  it("a client-role owner on a Spanish account downloads 'contactos-...' (mutation: read m[...] directly -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    accountLanguage = "es";
+    listContacts.mockResolvedValueOnce([]);
+    const res = await GET(req(), ctx());
+    expect(res.headers.get("Content-Disposition")).toMatch(
+      /^attachment; filename="contactos-\d{4}-\d{2}-\d{2}\.csv"$/);
+  });
+  it("an agency operator downloads 'contacts-...' even on a Spanish account", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    accountLanguage = "es";
+    listContacts.mockResolvedValueOnce([]);
+    const res = await GET(req(), ctx());
+    expect(res.headers.get("Content-Disposition")).toMatch(
+      /^attachment; filename="contacts-\d{4}-\d{2}-\d{2}\.csv"$/);
   });
 
   it("prefixes the body with a UTF-8 BOM — Excel mis-renders á/ñ/é without it on double-click open", async () => {

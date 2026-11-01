@@ -19,10 +19,21 @@ import { formatCurrency } from "@/lib/format";
  */
 
 // F-085 part 1: the page now calls requireNotTechnician first (spec §7.1).
-vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: true, role: null, canManage: true }) }));
+let isAgency = true;
+vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency, role: null, canManage: true }) }));
 
+// S-10 T3: the page now resolves its own render locale (requestLocale + getPersonPrefs +
+// accounts.language), the same convention tasks/page.tsx already uses.
+let personLanguage: "en" | "es" | null = null;
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: personLanguage, theme: null }) }));
+let accountLanguage: "en" | "es" | null = null;
 vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({}),
+  dbForRequest: async () => ({
+    from: (table: string) => {
+      if (table !== "accounts") throw new Error(`unexpected table ${table}`);
+      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: accountLanguage }, error: null }) }) }) };
+    },
+  }),
 }));
 
 const boardFixture = vi.hoisted(() => ({
@@ -111,6 +122,59 @@ describe("PipelinePage header total", () => {
     await PipelinePage(route("acct_specific"));
 
     expect(sumOpenOpportunitiesMock).toHaveBeenCalledWith(expect.anything(), "acct_specific");
+  });
+});
+
+// S-10 T3: the page resolves its own locale (it had none before — spec row 9 "no locale on the page")
+// and the header's title and count read it.
+describe("PipelinePage reads the reader's language (S-10 T3)", () => {
+  it("a client-role person on a Spanish account reads the header in Spanish (mutation: read m[...] directly -> FAILS)", async () => {
+    isAgency = false;
+    personLanguage = null;
+    accountLanguage = "es";
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+    const html = renderToStaticMarkup(await PipelinePage(route()));
+    expect(html).toContain(m["pipeline.title.es"]);
+    expect(html).toContain(m["pipeline.openTotal.es"].replace("{count}", "2").replace("{value}", formatCurrency(500)));
+    expect(html).not.toContain(m["pipeline.title"]);
+    isAgency = true;
+    accountLanguage = null;
+  });
+  it("an agency operator reads English even on a Spanish account (requestLocale's role split)", async () => {
+    isAgency = true;
+    accountLanguage = "es";
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+    const html = renderToStaticMarkup(await PipelinePage(route()));
+    expect(html).toContain(m["pipeline.title"]);
+    accountLanguage = null;
+  });
+  it("a single open deal reads the singular form, in Spanish too (mutation: drop pipeline.openTotalOne -> FAILS)", async () => {
+    isAgency = false;
+    accountLanguage = "es";
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 1, value: 500 });
+    const html = renderToStaticMarkup(await PipelinePage(route()));
+    expect(html).toContain(m["pipeline.openTotalOne.es"].replace("{value}", formatCurrency(500)));
+    isAgency = true;
+    accountLanguage = null;
+  });
+  // The QA override (`?locale=`, BIS_I18N_QA only) reaches this page's own locale resolution,
+  // the same mechanism the record and To do pages already prove end to end.
+  it("the QA override (?locale=es) turns the header Spanish even on an English account (mutation: drop { locale: localeParam } from requestLocale -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "es" }),
+      }));
+      expect(html).toContain(m["pipeline.title.es"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

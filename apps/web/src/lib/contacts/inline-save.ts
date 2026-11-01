@@ -43,15 +43,18 @@ export function planInlineUndo(a: {
   save: (value: string) => Promise<WriteResult>;
   undoPhone: InlinePhoneUndoWrite | undefined;
   undoWith: ((payload: unknown) => Promise<WriteResult>) | undefined;
+  /** The field's own language (S-10 T3), for `commitInlineUndo`'s refusal; default "en" so a
+   *  caller that predates it is unchanged. */
+  locale?: Locale;
 }): (() => Promise<WriteResult>) | null {
-  const { field, prior, priorValid, phoneUndo, ownUndo, save, undoPhone, undoWith } = a;
+  const { field, prior, priorValid, phoneUndo, ownUndo, save, undoPhone, undoWith, locale = "en" } = a;
   if (field === "phone") {
-    return phoneUndo === undefined ? null : () => commitInlineUndo(field, prior, phoneUndo, save, undoPhone);
+    return phoneUndo === undefined ? null : () => commitInlineUndo(field, prior, phoneUndo, save, undoPhone, locale);
   }
   if (undoWith) {
     return ownUndo === undefined ? null : () => undoWith(ownUndo);
   }
-  return priorValid ? () => commitInlineUndo(field, prior, undefined, save, undoPhone) : null;
+  return priorValid ? () => commitInlineUndo(field, prior, undefined, save, undoPhone, locale) : null;
 }
 
 /**
@@ -69,7 +72,7 @@ export function inlineSavedView(
 ): { shown: string; kind: "saved" | "already"; message: string } {
   const shown = result.shown ?? typed;
   if (result.shown !== undefined && result.undoPayload === undefined && shown !== "" && shown !== typed) {
-    return { shown, kind: "already", message: m["contact.business.alreadyAs"].replace("{name}", shown) };
+    return { shown, kind: "already", message: t(m, "contact.business.alreadyAs", locale, { name: shown }) };
   }
   return { shown, kind: "saved", message: t(m, "inline.saved", locale, { label }) };
 }

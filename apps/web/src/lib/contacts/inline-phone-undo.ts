@@ -1,5 +1,7 @@
 import type { EditableField } from "./field-input";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * What `updateContactFieldAction` hands back after a PHONE save, so the
@@ -59,9 +61,12 @@ export async function commitInlineUndo(
   phoneUndo: PhoneInlineUndo | undefined,
   save: (value: string) => Promise<{ ok: true } | { ok: false; error: string }>,
   undoPhone: InlinePhoneUndoWrite | undefined,
+  /** The reader's language for the refusal (S-10 T3); default "en" so a caller that predates it
+   *  is unchanged. */
+  locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (field === "phone") {
-    if (!phoneUndo || !undoPhone) return { ok: false, error: m["contact.phoneCountry.failed"] };
+    if (!phoneUndo || !undoPhone) return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
     return undoPhone(phoneUndo);
   }
   return save(priorValue);

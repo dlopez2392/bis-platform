@@ -6,6 +6,8 @@ import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mapRows, type ParsedRow } from "@/lib/contacts/csv";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 
 /**
@@ -21,13 +23,18 @@ export async function importContactsBatchAction(
   accountId: string,
   rows: ParsedRow[],
   opts: { mapping: Record<string, string | null>; createTags: boolean },
+  // S-10 T3: the wizard already knows the reader's own language (useLocale, in context from the
+  // dashboard shell) — passed straight through rather than re-resolved here from the account and
+  // the caller's prefs, which this action has no other reason to read. Defaults to "en" so a caller
+  // that predates it (this file's own tests) is unchanged.
+  locale: Locale = "en",
 ): Promise<
   | { ok: true; created: number; updated: number; flagged: number; businessLinkFailed?: boolean; businessTooLong?: number }
   | { ok: false; error: string }
 > {
   const { userId } = await requireNotTechnician(accountId);
-  if (!Array.isArray(rows)) return { ok: false, error: m["contacts.import.failed"] };
-  if (rows.length > MAX_ROWS_PER_CALL) return { ok: false, error: m["contacts.import.tooMany"] };
+  if (!Array.isArray(rows)) return { ok: false, error: t(m, "contacts.import.failed", locale) };
+  if (rows.length > MAX_ROWS_PER_CALL) return { ok: false, error: t(m, "contacts.import.tooMany", locale) };
 
   // Re-run the mapping HERE rather than accepting the browser's mapped output.
   // The wizard runs the same `mapRows` for its preview, but that result is a
@@ -77,6 +84,6 @@ export async function importContactsBatchAction(
       ...(businessTooLong ? { businessTooLong } : {}),
     };
   } catch {
-    return { ok: false, error: m["contacts.import.failed"] };
+    return { ok: false, error: t(m, "contacts.import.failed", locale) };
   }
 }

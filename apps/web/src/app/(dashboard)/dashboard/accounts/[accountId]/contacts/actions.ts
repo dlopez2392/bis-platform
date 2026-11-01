@@ -177,25 +177,27 @@ export type BusinessUndo = { added: string | null; removed: GroupMemberSnapshot 
  */
 export async function setContactBusinessAction(
   accountId: string, contactId: string, value: string,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<{ ok: true; shown: string; undoPayload?: BusinessUndo } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const name = value.trim();
-  if ([...name].length > GROUP_NAME_MAX) return { ok: false, error: m["contact.business.tooLong"] };
+  if ([...name].length > GROUP_NAME_MAX) return { ok: false, error: t(m, "contact.business.tooLong", locale) };
   let db: Awaited<ReturnType<typeof dbForRequest>>;
   let r: Awaited<ReturnType<typeof setContactsBusiness>>[number] | undefined;
   let before: Awaited<ReturnType<typeof getContact>>;
   try {
     db = await dbForRequest();
     before = await getContact(db, accountId, contactId);
-    if (!before) return { ok: false, error: "Save failed — please try again." };
+    if (!before) return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
     // S-47e (spec 5.12.3): a shared number's holding record is nobody's business (0098's CHECK refuses one too).
-    if (before.holds_shared_number) return { ok: false, error: "Save failed — please try again." };
+    if (before.holds_shared_number) return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
     [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
-    if (!r || r.status === "not_found") return { ok: false, error: "Save failed — please try again." };
-    if (r.status === "too_long") return { ok: false, error: m["contact.business.tooLong"] };
+    if (!r || r.status === "not_found") return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
+    if (r.status === "too_long") return { ok: false, error: t(m, "contact.business.tooLong", locale) };
   } catch (e) {
     console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: "Save failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
   }
   if (r.status === "unchanged") return { ok: true, shown: before.company_name ?? "" };
   // The write has committed by here: a failed read-back costs the canonical
@@ -215,24 +217,26 @@ export async function setContactBusinessAction(
 
 export async function undoContactBusinessAction(
   accountId: string, contactId: string, undo: BusinessUndo,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const removed = undo?.removed ?? null;
   if (!isUuidOrNull(undo?.added ?? null) || (removed !== null && removed.contact_id !== contactId)) {
-    return { ok: false, error: "Undo failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
   }
   try {
     const db = await dbForRequest();
-    if (!(await getContact(db, accountId, contactId))) return { ok: false, error: "Undo failed — please try again." };
+    if (!(await getContact(db, accountId, contactId))) return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
     // userId: the Undo deletes the membership the write added, and that removal is recorded as the caller's.
     const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed, userId);
-    if (r !== "ok") return { ok: false, error: "Undo failed — please try again." };
+    if (r !== "ok") return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
     revalidatePath(contactsPath(accountId));
     revalidatePath(`${contactsPath(accountId)}/${contactId}`);
     return { ok: true };
   } catch (e) {
     console.error(`undoContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: "Undo failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
   }
 }
 
@@ -395,14 +399,16 @@ export async function keepContactLanguageHintAction(
  */
 export async function updateContactFieldAction(
   accountId: string, contactId: string, field: EditableField, value: string,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
-  if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: "Unknown field." };
+  if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: t(m, "contacts.action.unknownField", locale) };
   if (field === "company_name") {
-    const r = await setContactBusinessAction(accountId, contactId, value);
+    const r = await setContactBusinessAction(accountId, contactId, value, locale);
     return r.ok ? { ok: true } : r;
   }
-  const norm = normalizeFieldInput(field, value);
+  const norm = normalizeFieldInput(field, value, locale);
   if (!norm.ok) return norm;
   // Round 4 (m4): `dbForRequest()` moves back INSIDE the try — a throw here
   // is a failed save (the operator typed something and nothing happened),
@@ -422,7 +428,7 @@ export async function updateContactFieldAction(
     }
     await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
   } catch {
-    return { ok: false, error: "Save failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
   }
   // The write has already committed by here: a failed read-back (m4) costs
   // the Undo button, never the truth that the edit went through — this
@@ -445,23 +451,27 @@ export async function updateContactFieldAction(
 
 export async function bulkAddTagAction(
   accountId: string, contactIds: string[], tagName: string,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<
   | { ok: true; tagId: string; applied: number; addedIds: string[] }
   | { ok: false; error: string }
 > {
   await requireAccountAccess(accountId);
-  if (contactIds.length === 0 || !tagName.trim()) return { ok: false, error: "Nothing selected." };
+  if (contactIds.length === 0 || !tagName.trim()) return { ok: false, error: t(m, "contacts.action.nothingSelected", locale) };
   try {
     const r = await addTagToContacts(await dbForRequest(), accountId, contactIds, tagName);
     revalidatePath(contactsPath(accountId));
     return { ok: true, ...r };
   } catch {
-    return { ok: false, error: "Tagging failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.tagFailed", locale) };
   }
 }
 
 export async function bulkRemoveTagAction(
   accountId: string, contactIds: string[], tagId: string,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireAccountAccess(accountId);
   try {
@@ -469,12 +479,14 @@ export async function bulkRemoveTagAction(
     revalidatePath(contactsPath(accountId));
     return { ok: true };
   } catch {
-    return { ok: false, error: "Undo failed — the tag is still applied." };
+    return { ok: false, error: t(m, "contacts.action.undoTagFailed", locale) };
   }
 }
 
 export async function bulkDeleteContactsAction(
   accountId: string, contactIds: string[],
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<
   // skippedIds: every contact kept, blocked or kept late (the bar's "Archive them" archives exactly these).
   // lateKept: of those, the ones the database kept AFTER the purge removed files (the bar's
@@ -490,7 +502,7 @@ export async function bulkDeleteContactsAction(
   // layer too, but this guard runs FIRST: it must never be possible for a
   // refused delete to read back as "deleted: 0" success.
   const { userId } = await requireAccountOwner(accountId);
-  if (contactIds.length === 0) return { ok: false, error: "Nothing selected." };
+  if (contactIds.length === 0) return { ok: false, error: t(m, "contacts.action.nothingSelected", locale) };
   // Owner ruling 2026-10-13: a customer's files go with them. deleteContacts proves the deletable ids
   // on the REQUEST client (RLS reads which of these ids are this account's contacts, and drops the
   // linked ones); only those reach beforeDelete, where the purge removes each document's objects and
@@ -522,9 +534,9 @@ export async function bulkDeleteContactsAction(
     // the same state): say exactly that, never a plain "try again" that hides the files went.
     if (purged > 0) {
       revalidatePath(contactsPath(accountId));
-      return { ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" };
+      return { ok: false, error: t(m, "contacts.action.deleteFailed", locale), errorKey: "contacts.delete.filesGoneKept" };
     }
-    return { ok: false, error: "Delete failed — please try again." };
+    return { ok: false, error: t(m, "contacts.action.deleteFailed", locale) };
   }
 }
 
@@ -576,34 +588,36 @@ function revalidateContact(accountId: string, contactId: string): void {
  */
 export async function setPhoneCountryAction(
   accountId: string, contactId: string, country: PhoneCountry, seenPhone: string,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<PhoneCountryPickResult> {
   const { userId } = await requireAccountAccess(accountId);
-  if (!COUNTRIES.includes(country)) return { ok: false, error: m["contact.phoneCountry.failed"] };
+  if (!COUNTRIES.includes(country)) return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   try {
     const db = await dbForRequest();
     const contact = await getContact(db, accountId, contactId);
-    if (!contact?.phone) return { ok: false, error: m["contact.phoneCountry.changed"] };
+    if (!contact?.phone) return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
     // Fails CLOSED (round 3, IMPORTANT): a `seenPhone` that is missing or
     // does not itself read as a ten-digit-based number answers "changed"
     // rather than falling through — an empty stub (a `?peek=` row) or an
     // unseen number must never be treated as "no opinion, proceed".
     const seenReads = repickPhoneCountry(seenPhone, "US");
     if (seenReads === null || repickPhoneCountry(contact.phone, "US") !== seenReads) {
-      return { ok: false, error: m["contact.phoneCountry.changed"] };
+      return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
     }
     if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) {
-      return { ok: false, error: m["contact.phoneCountry.changed"] };
+      return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
     }
     const phone = repickPhoneCountry(contact.phone, country);
-    if (!phone) return { ok: false, error: m["contact.phoneCountry.unreadable"] };
+    if (!phone) return { ok: false, error: t(m, "contact.phoneCountry.unreadable", locale) };
     const outcome = await setContactPhoneCountry(db, accountId, contactId,
       { expectedPhone: contact.phone, phone, unconfirmed: false }, userId);
-    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
+    if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
     revalidateContact(accountId, contactId);
     return { ok: true, phone, previous: { phone: contact.phone, unconfirmed: contact.phone_country_unconfirmed === true } };
   } catch (e) {
     console.error(`setPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.phoneCountry.failed"] };
+    return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   }
 }
 
@@ -620,23 +634,25 @@ export async function setPhoneCountryAction(
  */
 export async function undoPhoneCountryAction(
   accountId: string, contactId: string, picked: string, previous: PhoneCountryPrevious,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<PhoneCountryUndoResult> {
   const { userId } = await requireAccountAccess(accountId);
   const sameNumber = typeof picked === "string" && typeof previous?.phone === "string"
     && typeof previous.unconfirmed === "boolean"
     && repickPhoneCountry(picked, "US") !== null
     && repickPhoneCountry(picked, "US") === repickPhoneCountry(previous.phone, "US");
-  if (!sameNumber) return { ok: false, error: m["contact.phoneCountry.failed"] };
+  if (!sameNumber) return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   const restored = normalisePhone(previous.phone);
   const phone = restored?.e164 ?? previous.phone;
   const unconfirmed = previous.unconfirmed || restored?.unconfirmed === true;
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
       { expectedPhone: picked, phone, unconfirmed }, userId);
-    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
+    if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
   } catch (e) {
     console.error(`undoPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.phoneCountry.failed"] };
+    return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   }
   revalidateContact(accountId, contactId);
   return { ok: true };
@@ -661,6 +677,8 @@ export async function undoPhoneCountryAction(
  */
 export async function undoInlinePhoneEditAction(
   accountId: string, contactId: string, undo: PhoneInlineUndo,
+  // S-10 T3: default "en" so a caller that predates it is unchanged.
+  locale: Locale = "en",
 ): Promise<PhoneCountryUndoResult> {
   const { userId } = await requireAccountAccess(accountId);
   if (
@@ -668,7 +686,7 @@ export async function undoInlinePhoneEditAction(
     (undo?.priorPhone !== null && typeof undo?.priorPhone !== "string") ||
     typeof undo?.priorUnconfirmed !== "boolean"
   ) {
-    return { ok: false, error: m["contact.phoneCountry.failed"] };
+    return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   }
   // R3-M12 floor: restore the NORMALISER's own form of the prior text, and
   // never a flag cleared for a number the normaliser still calls ambiguous,
@@ -680,10 +698,10 @@ export async function undoInlinePhoneEditAction(
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
       { expectedPhone: undo.editedPhone, phone, unconfirmed }, userId);
-    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.inlineChanged"] };
+    if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.inlineChanged", locale) };
   } catch (e) {
     console.error(`undoInlinePhoneEditAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.phoneCountry.failed"] };
+    return { ok: false, error: t(m, "contact.phoneCountry.failed", locale) };
   }
   revalidateContact(accountId, contactId);
   return { ok: true };

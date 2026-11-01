@@ -6,7 +6,6 @@ vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), co
 vi.mock("./message-composer", () => ({ MessageComposer: () => createElement("div", { "data-composer-stub": "" }) }));
 const { ActivityTimeline } = await import("./activity-timeline");
 const { legacyTimeline } = await import("./activity-timeline.fixture");
-const { m } = await import("@/lib/messages");
 
 const html = renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
   accountId: "a1", contactId: "c1", contactHasEmail: true, contactHasPhone: false, smsGate: null,
@@ -27,6 +26,10 @@ describe("the timeline in its record card (S-03 part 1, spec §9.4)", () => {
   });
   it("carries no card chrome or title of its own: RecordCard's 'Activity' is the one seen (mutation: keep the Card -> FAILS)", () => {
     expect(html).not.toContain('data-slot="card"');
-    expect(html).not.toContain(`>${m["contact.activity"]}<`);
+    // S-10 T0 dead-key sweep missed this one: "contact.activity" (the OLD title this component used to
+    // render itself) named no live reference by the AST scan except this negative check, so it is
+    // deleted here (S-10 T3) rather than translated — checked against the literal English it used to
+    // read, which is exactly what "no title of its own" means regardless of locale.
+    expect(html).not.toContain(">Activity<");
   });
 });

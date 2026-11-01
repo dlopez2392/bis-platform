@@ -49,10 +49,10 @@ export async function applyBulkTag(
   | { ok: true; applied: number; undo: () => Promise<{ ok: true } | { ok: false; error: string }> }
   | { ok: false; error: string }
 > {
-  const r = await bulkAddTagAction(accountId, ids, name).catch(
+  const r = await bulkAddTagAction(accountId, ids, name, locale).catch(
     () => ({ ok: false as const, error: t(m, "inline.crashed", locale) }));
   if (!r.ok) return r;
-  return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId) };
+  return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId, locale) };
 }
 
 /** The "Assign to…" menu (F-085, spec §9): Unassigned first, then each person by name, the field's own order. */
@@ -319,7 +319,7 @@ export async function deleteInChunks(
 ): Promise<{ done: DeleteOk | null; failure: DeleteFail | null }> {
   let done: DeleteOk | null = null;
   for (const chunk of inChunks(ids)) {
-    const r: DeleteResult = await bulkDeleteContactsAction(accountId, chunk).catch(
+    const r: DeleteResult = await bulkDeleteContactsAction(accountId, chunk, locale).catch(
       () => ({ ok: false as const, error: t(m, "inline.crashed", locale) }));
     if (!r.ok) return { done, failure: r };
     done = done === null ? r : {

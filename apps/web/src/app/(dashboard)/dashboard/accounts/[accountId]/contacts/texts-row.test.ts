@@ -152,4 +152,14 @@ describe("TextsRow in Spanish (S-03 part 3 §10)", () => {
     expect(out).toContain("No se pudo cargar la configuración de mensajes. Intente de nuevo.");
     expect(out).toContain(">Intentar de nuevo<");
   });
+  // S-10 T3: the Check number chip's own word (phoneCheckTreatment) and the country buttons.
+  it("Check number reads Spanish: the chip word, the line, and Mexico/US (mutation: keep phoneCheckTreatment(\"en\") -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(TextsRow, { accountId: "a1", contactId: "c1", load: ready({ kind: "check_number" }) })));
+    const block = inside(html, "phone-country-row");
+    expect(renderedText(block)).toContain(m["contact.phoneCountry.word.es"]);
+    expect(renderedText(block)).toContain(m["contact.phoneCountry.line.es"]);
+    expect(button(block, m["contact.phoneCountry.mx.es"])).not.toBeNull();
+    expect(button(block, m["contact.phoneCountry.us.es"])).not.toBeNull();
+    expect(renderedText(block)).not.toContain(m["contact.phoneCountry.word"]);
+  });
 });

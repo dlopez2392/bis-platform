@@ -4,6 +4,10 @@ import { agencyVisitMissing } from "@/lib/access-log/gate";
 import { noteOpenedApi } from "@/lib/access-log/note";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { archivedFilterOf, parseView } from "@/lib/contacts/view";
 
 export const dynamic = "force-dynamic";
@@ -199,8 +203,15 @@ export async function GET(
   // not a business date tied to the account's own timezone — contrast the
   // Intl-in-the-server's-zone trap this codebase has hit before on values
   // that DO need to match the account's local calendar day.
+  // S-10 T3: the downloaded filename follows the reader's own language — the same convention
+  // the record, pipeline and To do pages resolve their locale by.
+  const prefs = await getPersonPrefs();
+  const { data: accountRow } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
   const date = new Date().toISOString().slice(0, 10);
-  const filename = m["contacts.export.filename"].replace("{date}", date);
+  const filename = t(m, "contacts.export.filename", locale, { date });
   return new Response(stream, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

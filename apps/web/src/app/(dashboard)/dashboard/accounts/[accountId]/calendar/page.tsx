@@ -16,6 +16,7 @@ import { makeTr } from "@/lib/record/copy";
 import { parseAgendaParams } from "@/lib/booking/agenda-window";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { seesWholeAccount } from "@/lib/auth-role";
@@ -245,7 +246,7 @@ export default async function CalendarPage({
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
-      <PageHeader title={m["calendar.title"]} />
+      <PageHeader title={t(m, "calendar.title", locale)} />
       <div className="space-y-6 p-6">
         {jobRead === "gone" || jobRead === "failed" ? (
           <p data-job-gone role="status" className="text-sm text-muted-foreground">
@@ -265,7 +266,9 @@ export default async function CalendarPage({
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
             {canManage ? (
-              <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
+              <CalendarSettings
+                isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} locale={locale} pseudo={pseudo}
+              />
             ) : null}
             <ClosedDaysCard
               accountId={accountId}
@@ -284,7 +287,9 @@ export default async function CalendarPage({
             />
           </div>
           <div className="space-y-6">
-            <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
+            <EmbedSnippet
+              origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} locale={locale} pseudo={pseudo}
+            />
             <FeedCard
               view={feedView}
               locale={locale}

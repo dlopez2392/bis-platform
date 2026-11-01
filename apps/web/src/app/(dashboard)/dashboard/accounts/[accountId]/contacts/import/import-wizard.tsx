@@ -10,6 +10,8 @@ import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
+import { t, plural } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 
 /**
  * Rows per server call. The action enforces its own, larger ceiling — this is
@@ -31,6 +33,9 @@ type Phase =
 export function ImportWizard(
   { accountId, existingTags }: { accountId: string; existingTags: string[] },
 ) {
+  // S-10 T3: the dashboard shell's LocaleProvider (requestLocale) — this screen spoke English
+  // only until now (spec row 12); the .es twins were already in the catalogue.
+  const locale = useLocale();
   const [phase, setPhase] = useState<Phase>({ name: "choose" });
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<ParsedRow[]>([]);
@@ -54,7 +59,7 @@ export function ImportWizard(
         // number the operator sees in their spreadsheet.
         const parsed = result.data.map((values, i) => ({ line: i + 2, values }));
         if (parsed.length === 0 || fields.length === 0) {
-          setFileError(m["contacts.import.empty"]);
+          setFileError(t(m, "contacts.import.empty", locale));
           return;
         }
         setHeaders(fields);
@@ -62,7 +67,7 @@ export function ImportWizard(
         setMapping(autoMap(fields));
         setPhase({ name: "map" });
       },
-      error: () => setFileError(m["contacts.import.empty"]),
+      error: () => setFileError(t(m, "contacts.import.empty", locale)),
     });
   }
 
@@ -105,7 +110,7 @@ export function ImportWizard(
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const slice = rows.slice(i, i + BATCH_SIZE);
       const result = await importContactsBatchAction(
-        accountId, slice, { mapping, createTags });
+        accountId, slice, { mapping, createTags }, locale);
       if (!result.ok) {
         // Stop at the first failure and say exactly how far we got. Rows
         // before this point ARE committed; claiming otherwise would send the
@@ -124,21 +129,18 @@ export function ImportWizard(
     return (
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
-          {m["contacts.import.done"]
-            .replace("{created}", String(phase.totals.created))
-            .replace("{updated}", String(phase.totals.updated))}
+          {t(m, "contacts.import.done", locale, { created: phase.totals.created, updated: phase.totals.updated })}
         </p>
         {phase.totals.flagged > 0 ? (
           <p className="mt-2 text-sm text-text-2">
-            {m["contacts.import.flagged"].replace("{flagged}", String(phase.totals.flagged))}
+            {t(m, "contacts.import.flagged", locale, { flagged: phase.totals.flagged })}
           </p>
         ) : null}
-        {/* This screen speaks English today (m, not the request locale); the .es twins are in. */}
-        {importBusinessNotes(phase.totals, "en").map((note) => (
+        {importBusinessNotes(phase.totals, locale).map((note) => (
           <p key={note} className="mt-2 text-sm text-text-2">{note}</p>
         ))}
         <Link href={contactsHref} className="mt-4 inline-block text-sm text-accent underline">
-          {m["contacts.import.back"]}
+          {t(m, "contacts.import.back", locale)}
         </Link>
       </div>
     );
@@ -149,10 +151,10 @@ export function ImportWizard(
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">{phase.error}</p>
         <p className="mt-2 text-sm text-text-2">
-          {m["contacts.import.partial"].replace("{done}", String(phase.done))}
+          {t(m, "contacts.import.partial", locale, { done: phase.done })}
         </p>
         <Link href={contactsHref} className="mt-4 inline-block text-sm text-accent underline">
-          {m["contacts.import.back"]}
+          {t(m, "contacts.import.back", locale)}
         </Link>
       </div>
     );
@@ -163,11 +165,10 @@ export function ImportWizard(
       <div className="glass rounded-[var(--radius-card)] border border-line p-8 text-center">
         <Upload className="mx-auto size-8 text-text-3" aria-hidden />
         <p className="mt-3 text-text-2">
-          Bring your contacts over from a spreadsheet. Export from anywhere,
-          match the columns, and we will add what is new and update what is not.
+          {t(m, "contacts.import.intro", locale)}
         </p>
         <label className="mt-5 inline-block cursor-pointer">
-          <span className="sr-only">{m["contacts.import.drop"]}</span>
+          <span className="sr-only">{t(m, "contacts.import.drop", locale)}</span>
           <input
             type="file"
             accept=".csv,text/csv"
@@ -192,7 +193,7 @@ export function ImportWizard(
   return (
     <form ref={formRef} onSubmit={onSubmit} className="space-y-6">
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
-        <h2 className="text-sm font-semibold text-text-1">{m["contacts.import.mapTitle"]}</h2>
+        <h2 className="text-sm font-semibold text-text-1">{t(m, "contacts.import.mapTitle", locale)}</h2>
 
         <ul className="mt-4 space-y-2">
           {headers.map((header) => (
@@ -211,7 +212,7 @@ export function ImportWizard(
                 className="rounded-[var(--radius-ctl)] border border-line-strong bg-surface-2
                            px-2 py-1 text-sm text-text-1"
               >
-                <option value={IGNORE}>{m["contacts.import.ignore"]}</option>
+                <option value={IGNORE}>{t(m, "contacts.import.ignore", locale)}</option>
                 {IMPORT_FIELDS.map((field) => (
                   <option key={field} value={field}>{field}</option>
                 ))}
@@ -222,33 +223,27 @@ export function ImportWizard(
 
         {ignoredCount > 0 ? (
           <p className="mt-4 text-sm text-text-3">
-            {ignoredCount === 1
-              ? m["contacts.import.ignoredOne"]
-              : m["contacts.import.ignored"].replace("{count}", String(ignoredCount))}
+            {plural(m, "contacts.import.ignored", ignoredCount, locale, { count: ignoredCount })}
           </p>
         ) : null}
       </div>
 
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
-          {mapped.length === 1
-            ? m["contacts.import.previewOne"]
-            : m["contacts.import.preview"].replace("{count}", String(mapped.length))}
+          {plural(m, "contacts.import.preview", mapped.length, locale, { count: mapped.length })}
         </p>
 
         {errors.length > 0 ? (
           <div className="mt-3">
             <p className="text-sm text-text-2">
-              {errors.length === 1
-                ? m["contacts.import.errorsOne"]
-                : m["contacts.import.errors"].replace("{count}", String(errors.length))}
+              {plural(m, "contacts.import.errors", errors.length, locale, { count: errors.length })}
             </p>
             <button
               type="button"
               onClick={downloadSkipped}
               className="mt-1 text-sm text-accent underline"
             >
-              {m["contacts.import.downloadErrors"]}
+              {t(m, "contacts.import.downloadErrors", locale)}
             </button>
           </div>
         ) : null}
@@ -261,25 +256,21 @@ export function ImportWizard(
               disabled={running}
               onChange={(e) => setCreateTags(e.target.checked)}
             />
-            {newTags.length === 1
-              ? m["contacts.import.createTagsOne"]
-              : m["contacts.import.createTags"].replace("{count}", String(newTags.length))}
+            {plural(m, "contacts.import.createTags", newTags.length, locale, { count: newTags.length })}
           </label>
         ) : null}
 
         <div className="mt-6 flex items-center gap-4">
           <Button type="submit" disabled={pending || running || mapped.length === 0}>
-            {m["contacts.import.confirm"]}
+            {t(m, "contacts.import.confirm", locale)}
           </Button>
           {running ? (
             <span aria-live="polite" className="text-sm text-text-2">
-              {m["contacts.import.importing"]
-                .replace("{done}", String(phase.done))
-                .replace("{total}", String(phase.total))}
+              {t(m, "contacts.import.importing", locale, { done: phase.done, total: phase.total })}
             </span>
           ) : (
             <Link href={contactsHref} className="text-sm text-text-3 underline">
-              {m["contacts.import.back"]}
+              {t(m, "contacts.import.back", locale)}
             </Link>
           )}
         </div>
