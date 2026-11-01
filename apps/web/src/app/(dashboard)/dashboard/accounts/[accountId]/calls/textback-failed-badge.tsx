@@ -13,8 +13,13 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
-export function TextbackFailedBadge({ className }: { className?: string }) {
+/** `locale` defaults to English: this badge's two callers (the list row,
+ *  the detail page) both now pass their own real locale (S-10 T5); the
+ *  default only protects a future caller that forgets to. */
+export function TextbackFailedBadge({ className, locale = "en" }: { className?: string; locale?: Locale }) {
   return (
     <Badge
       variant="outline"
@@ -24,7 +29,7 @@ export function TextbackFailedBadge({ className }: { className?: string }) {
       )}
     >
       <span className="size-1.5 rounded-full bg-destructive" aria-hidden />
-      {m["calls.textbackFailed"]}
+      {t(m, "calls.textbackFailed", locale)}
     </Badge>
   );
 }

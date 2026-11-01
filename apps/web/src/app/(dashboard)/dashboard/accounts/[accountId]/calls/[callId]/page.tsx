@@ -108,6 +108,15 @@ export default async function CallDetailPage({
   // is the same answer an id that never existed gets.
   if (!call) notFound();
 
+  // S-10 T5: moved up from just before the Suggestions section (its original
+  // home) so every OTHER read on this page — the resend-closed line
+  // included — can also answer in the reader's own language, not only the
+  // one part that used to. A named variable, not an inline literal:
+  // request-locale-callers.test.ts scans each call's own braces.
+  const accountLanguage = { language: account.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+
   // F-118 part 1 (spec 4.1): the call page is a record surface, so BIS's own open of it is written to
   // the account's access log here — after the call is proven to exist in this account, and before any
   // of it leaves the server. A client never reaches this call (noteOpened returns at once for them).
@@ -161,10 +170,10 @@ export default async function CallDetailPage({
       // the contact read above, on the request client, proved the contact.
       resendClosedLine = contact
         ? composerStateLine(await smsRecipientState(ledgerDb(), accountId, contact), timezone)
-        : m["compose.smsStateUnknown"];
+        : tr.text("compose.smsStateUnknown");
     } catch (e) {
       console.error(`call detail ${callId}: recipient read failed, closing the resend: ${String(e)}`);
-      resendClosedLine = m["compose.smsStateUnknown"];
+      resendClosedLine = tr.text("compose.smsStateUnknown");
     }
   }
 
@@ -197,17 +206,12 @@ export default async function CallDetailPage({
   }
 
   // The Suggestions section (item 8b-1, spec 4.5): this call's suggestions as cards with their actions.
-  // It is the ONE part of this page in the reader's language (requestLocale: the person, then the
-  // account, then the operator default); the rest stays English until its own bilingual pass. Every
-  // read it needs runs on the request client: the rows, the deals and stage lists behind a stage
-  // suggestion (account-scoped, bounded: readSuggestionStages) and the deciders' names. A failure in
-  // any of them is the section's error state with Retry (rule 5), never a silently absent section and
-  // never the call record. The persona name above is the one read whose failure costs nothing but the
-  // name ("Sofía"), so it never puts the section into its error state.
-  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
-  const accountLanguage = { language: account.language ?? null };
-  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // `locale`/`tr` (moved above, S-10 T5) already give it the reader's own language. Every read it
+  // needs runs on the request client: the rows, the deals and stage lists behind a stage suggestion
+  // (account-scoped, bounded: readSuggestionStages) and the deciders' names. A failure in any of them
+  // is the section's error state with Retry (rule 5), never a silently absent section and never the
+  // call record. The persona name above is the one read whose failure costs nothing but the name
+  // ("Sofía"), so it never puts the section into its error state.
   let suggestions: SuggestionSectionData;
   try {
     const rows = await listProposalsForCall(db, accountId, callId);
@@ -242,7 +246,7 @@ export default async function CallDetailPage({
       ? {
           key: "contact",
           href: `${base}/contacts/${call.contact_id}`,
-          label: m["calls.detail.viewContact"],
+          label: tr.text("calls.detail.viewContact"),
           Icon: UserRound,
         }
       : null,
@@ -257,13 +261,13 @@ export default async function CallDetailPage({
         ? {
             key: "conversation",
             href: `${base}/conversations`,
-            label: m["calls.detail.viewConversation"],
+            label: tr.text("calls.detail.viewConversation"),
             Icon: MessagesSquare,
           }
         : {
             key: "conversation",
             href: `${base}/conversations?c=${call.conversation_id}`,
-            label: m["call.holding.openTexts"],
+            label: tr.text("call.holding.openTexts"),
             Icon: MessagesSquare,
           }
       : null,
@@ -272,7 +276,7 @@ export default async function CallDetailPage({
       ? {
           key: "booking",
           href: `${base}/calendar`,
-          label: m["calls.detail.viewBooking"],
+          label: tr.text("calls.detail.viewBooking"),
           Icon: CalendarCheck,
         }
       : null,
@@ -281,8 +285,8 @@ export default async function CallDetailPage({
   return (
     <>
       <PageHeader
-        title={m["calls.detail.title"]}
-        tabs={<OutcomePill outcome={call.outcome} />}
+        title={tr.text("calls.detail.title")}
+        tabs={<OutcomePill outcome={call.outcome} locale={locale} />}
         selector={
           // A description list, not a row of spans: each value here answers a
           // question the list page answers with a column header, and the
@@ -292,24 +296,24 @@ export default async function CallDetailPage({
           // rather than absent.
           <dl className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
             <div className="flex min-w-0 items-center gap-1.5">
-              <dt className="sr-only">{m["calls.col.caller"]}</dt>
-              <dd className="truncate font-medium text-foreground">{callerLabel(call)}</dd>
+              <dt className="sr-only">{tr.text("calls.col.caller")}</dt>
+              <dd className="truncate font-medium text-foreground">{callerLabel(call, locale)}</dd>
             </div>
 
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{m["calls.col.when"]}</dt>
+              <dt className="sr-only">{tr.text("calls.col.when")}</dt>
               <Clock className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-              <dd className="tabular-nums">{formatCallTime(call.started_at, timezone)}</dd>
+              <dd className="tabular-nums">{formatCallTime(call.started_at, timezone, locale)}</dd>
             </div>
 
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{m["calls.col.duration"]}</dt>
+              <dt className="sr-only">{tr.text("calls.col.duration")}</dt>
               <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
               <dd className="tabular-nums">{formatDuration(call.duration_secs)}</dd>
             </div>
 
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{m["calls.col.language"]}</dt>
+              <dt className="sr-only">{tr.text("calls.col.language")}</dt>
               <dd className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium tracking-widest uppercase">
                 {call.language}
               </dd>
@@ -375,7 +379,7 @@ export default async function CallDetailPage({
             className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
           >
             <ArrowLeft className="size-3.5" aria-hidden />
-            {m["calls.title"]}
+            {tr.text("calls.title")}
           </Link>
         }
       />
@@ -397,10 +401,11 @@ export default async function CallDetailPage({
               summary, as before. */}
           {hasCard(card) ? (
             <CallCardPanel
-              who={callerLabel(call)}
+              who={callerLabel(call, locale)}
               card={card}
               personaName={personaName}
               language={call.language}
+              locale={locale}
             />
           ) : null}
           {/* Above the summary, because it is the only thing on this page that
@@ -420,9 +425,9 @@ export default async function CallDetailPage({
             <div className={cn(CARD, "border-destructive/30")}>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-destructive/5 p-5">
                 <div className="min-w-0 flex-1 space-y-1.5">
-                  <TextbackFailedBadge />
+                  <TextbackFailedBadge locale={locale} />
                   <p className="text-sm leading-6 text-muted-foreground">
-                    {m["calls.textbackFailedBody"]}
+                    {tr.text("calls.textbackFailedBody")}
                   </p>
                 </div>
                 {/* The control needs a contact to text — `sendSmsAction` reads
@@ -447,7 +452,7 @@ export default async function CallDetailPage({
                     button occupied carries the reason instead of going blank. */}
                 {textbackFailure.supersededAt ? (
                   <p className="text-sm leading-6 text-muted-foreground">
-                    {m["calls.textbackSuperseded"]}
+                    {tr.text("calls.textbackSuperseded")}
                   </p>
                 ) : resendClosedLine ? (
                   <p className="text-sm leading-6 text-muted-foreground">{resendClosedLine}</p>
@@ -456,6 +461,7 @@ export default async function CallDetailPage({
                     contactId={call.contact_id}
                     body={textbackFailure.body}
                     action={sendSmsAction.bind(null, accountId)}
+                    locale={locale}
                   />
                 ) : null}
               </div>
@@ -468,7 +474,7 @@ export default async function CallDetailPage({
           {blocks.length > 0 ? (
             <section aria-labelledby="call-summary" className={CARD}>
               <h2 id="call-summary" className={CARD_HEAD}>
-                {m["calls.detail.summary"]}
+                {tr.text("calls.detail.summary")}
               </h2>
               <div className="space-y-4 p-5">
                 {blocks.map((block, i) => (
@@ -515,10 +521,10 @@ export default async function CallDetailPage({
 
           <section aria-labelledby="call-transcript" className={CARD}>
             <h2 id="call-transcript" className={CARD_HEAD}>
-              {m["calls.detail.transcript"]}
+              {tr.text("calls.detail.transcript")}
             </h2>
             <div className="p-5">
-              <TranscriptView transcript={call.transcript} timezone={timezone} />
+              <TranscriptView transcript={call.transcript} timezone={timezone} locale={locale} />
             </div>
           </section>
         </div>

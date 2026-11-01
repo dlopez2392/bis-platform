@@ -21,6 +21,14 @@ vi.mock("next/navigation", () => ({
  *  the whole suite green while offering a client a link to a route
  *  `requireAgencyOnlyAccountAccess` would bounce them from. */
 const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
+// S-10 T5: this page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
+// same reason contacts/page.test.ts already uses — person-prefs pulls in @/lib/auth's
+// resolveClientAccessState through tenant-theme-reader.ts, which this file's own @/lib/auth mock
+// below does not define.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
+}));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role }),
 }));
@@ -71,10 +79,10 @@ vi.mock("@/lib/zone", () => ({
 
 const { default: CallsPage } = await import("./page");
 
-function route(before?: string) {
+function route(before?: string, locale?: string) {
   return {
     params: Promise.resolve({ accountId: "acct1" }),
-    searchParams: Promise.resolve({ before }),
+    searchParams: Promise.resolve({ before, locale }),
   };
 }
 
@@ -106,6 +114,7 @@ describe("CallsPage", () => {
   beforeEach(() => {
     listFailedOutboundSmsMock.mockReset();
     listFailedOutboundSmsMock.mockResolvedValue([]);
+    prefsFixture.language = null;
   });
 
   it("renders the cold-start EmptyState for a genuinely empty, uncursored account", async () => {
@@ -116,6 +125,25 @@ describe("CallsPage", () => {
     // `CallsTable`'s own header — its absence is what proves EmptyState, not
     // an empty table, is what rendered.
     expect(html).not.toContain("Outcome");
+  });
+
+  // S-10 T5: the whole page used to be bare m[] reads, English regardless of the reader's own
+  // choice (`prefs.language`).
+  it("renders the title, table headers and empty state in Spanish for a Spanish-reading operator (mutation: hard-code English -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    listCallsMock.mockResolvedValue([]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain(m["calls.title.es"]);
+    expect(html).toContain(m["calls.empty.title.es"]);
+    expect(html).not.toContain(m["calls.empty.title"]);
+  });
+
+  it("renders the table headers in Spanish once there are rows", async () => {
+    prefsFixture.language = "es";
+    listCallsMock.mockResolvedValue([{ ...ROW }]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain(m["calls.col.caller.es"]);
+    expect(html).toContain(m["calls.col.outcome.es"]);
   });
 
   /**

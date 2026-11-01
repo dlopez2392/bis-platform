@@ -12,6 +12,10 @@ import { renderZone } from "@/lib/zone";
 import { parseCursor, parseTimeCursor, encodeCursor } from "@/lib/cursor";
 import { monthWindow } from "@/lib/reports/month-window";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { readLimitConfig } from "@/lib/voice/call-limits";
 import { UsageCard, type UsageState } from "./usage-card";
 import { ActivityTable, PAGE_SIZE } from "./activity-table";
@@ -31,20 +35,24 @@ export default async function ActivityPage({
   params, searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ before?: string }>;
+  searchParams: Promise<{ before?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { before } = await searchParams;
+  const { before, locale: localeParam } = await searchParams;
   const { isAgency } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
+  const prefs = await getPersonPrefs();
+  const pseudo = requestPseudoMode({ locale: localeParam });
 
-  const account = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
+  const account = await db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle()
     .then(({ data, error }) => {
       if (error) throw new Error(`activity: account lookup failed: ${error.message}`);
       if (!data) throw new Error("activity: account not found");
-      return data as { timezone: string };
+      return data as { timezone: string; language?: Locale | null };
     });
   const zone = await renderZone(account.timezone);
+  const accountLanguage = { language: account.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
 
   // The cursor is TWO validated halves (the contacts list's rule): a
   // timestamp for occurred_at and a uuid for the tiebreaker. Anything else
@@ -71,9 +79,12 @@ export default async function ActivityPage({
 
   return (
     <>
-      <PageHeader title={m["activity.title"]} />
+      <PageHeader title={t(m, "activity.title", locale)} />
       <div className="space-y-6 p-6">
-        <UsageCard state={usage} monthLabel={month.label} callCap={readLimitConfig().perAccountPerDay} />
+        <UsageCard
+          state={usage} monthLabel={month.label} callCap={readLimitConfig().perAccountPerDay}
+          locale={locale} pseudo={pseudo}
+        />
         <div className="space-y-3">
           <ZoneNote zone={zone} isAgency={isAgency} />
           {!history.ok ? (
@@ -81,10 +92,10 @@ export default async function ActivityPage({
             // without this, a client two pages deep who hits a transient
             // read failure has no way back to page one but editing the URL.
             <div className="space-y-3">
-              <Notice tone="crit" role="alert">{m["activity.error"]}</Notice>
+              <Notice tone="crit" role="alert">{t(m, "activity.error", locale)}</Notice>
               {newerHref ? (
-                <nav className="flex justify-end" aria-label="Pages">
-                  <Link href={newerHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>{m["activity.newer"]}</Link>
+                <nav className="flex justify-end" aria-label={t(m, "activity.pagesLabel", locale)}>
+                  <Link href={newerHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>{t(m, "activity.newer", locale)}</Link>
                 </nav>
               ) : null}
             </div>
@@ -98,14 +109,17 @@ export default async function ActivityPage({
             // its own second-person version for the client's reading.
             <EmptyState
               icon={Activity}
-              title={m["activity.empty.title"]}
-              body={isAgency ? m["activity.empty.body"] : m["activity.empty.clientBody"]}
+              title={t(m, "activity.empty.title", locale)}
+              body={t(m, isAgency ? "activity.empty.body" : "activity.empty.clientBody", locale)}
               action={isAgency
-                ? <Link href={`/dashboard/accounts/${accountId}/automations`} className={buttonVariants({ size: "sm" })}>{m["activity.empty.action"]}</Link>
+                ? <Link href={`/dashboard/accounts/${accountId}/automations`} className={buttonVariants({ size: "sm" })}>{t(m, "activity.empty.action", locale)}</Link>
                 : undefined}
             />
           ) : (
-            <ActivityTable rows={history.rows} timezone={zone.zone} olderHref={olderHref} newerHref={newerHref} />
+            <ActivityTable
+              rows={history.rows} timezone={zone.zone} olderHref={olderHref} newerHref={newerHref}
+              locale={locale} pseudo={pseudo}
+            />
           )}
         </div>
       </div>

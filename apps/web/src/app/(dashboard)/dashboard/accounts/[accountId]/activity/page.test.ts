@@ -7,6 +7,12 @@ import { m } from "@/lib/messages";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 const authFixture = vi.hoisted(() => ({ isAgency: true }));
 vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }) }));
+// S-10 T5: this page now resolves its own locale (requestLocale + getPersonPrefs), same stub,
+// same reason contacts/page.test.ts and calls/page.test.ts already use.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
+}));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }) }) }) }) }),
 }));
@@ -28,6 +34,7 @@ beforeEach(() => {
   dbMocks.listAutomationLog.mockReset().mockResolvedValue([]);
   dbMocks.countAutomationUsage.mockReset().mockResolvedValue(USAGE);
   authFixture.isAgency = true;
+  prefsFixture.language = null;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -68,6 +75,17 @@ describe("the Activity page", () => {
   it("the cold-start empty state offers the agency an action: a link to Automations (mutation: drop the action → FAILS)", async () => {
     const html = await render();
     expect(html).toMatch(new RegExp(`href="/dashboard/accounts/a1/automations"[^>]*>[^<]*Set up automations`));
+  });
+
+  // S-10 T5: the whole page used to be bare m[] reads, English regardless of the reader's own
+  // choice (`prefs.language`).
+  it("renders the title, usage card and empty state in Spanish for a Spanish-reading operator (mutation: hard-code English -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const text = renderedText(await render());
+    expect(text).toContain(m["activity.title.es"]);
+    expect(text).toContain(m["activity.usage.title.es"]);
+    expect(text).toContain(m["activity.empty.title.es"]);
+    expect(text).not.toContain("What went out");
   });
 
   it("gives a client reader no agency-only action — Automations is agency-only", async () => {

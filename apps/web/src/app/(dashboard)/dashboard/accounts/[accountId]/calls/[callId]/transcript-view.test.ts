@@ -17,8 +17,8 @@ const transcript: TranscriptEvent[] = [
   { role: "caller", text: "Call me back Tuesday.", at: AT },
 ];
 
-function render(t: TranscriptEvent[]) {
-  return renderToStaticMarkup(createElement(TranscriptView, { transcript: t, timezone: "America/Chicago" }));
+function render(t: TranscriptEvent[], locale: "en" | "es" = "en") {
+  return renderToStaticMarkup(createElement(TranscriptView, { transcript: t, timezone: "America/Chicago", locale }));
 }
 
 describe("TranscriptView: turn anchors", () => {
@@ -42,5 +42,24 @@ describe("TranscriptView: turn anchors", () => {
     const html = render(transcript);
     const cls = (/<li[^>]*id="turn-2"[^>]*class="([^"]*)"|<li[^>]*class="([^"]*)"[^>]*id="turn-2"/.exec(html) ?? []).slice(1).join(" ").split(" ");
     expect(cls).toEqual(expect.arrayContaining(["target:ring-[3px]", "target:ring-[var(--ring-glow)]", "rounded-[var(--radius-ctl)]"]));
+  });
+});
+
+// S-10 T5: the "Caller"/"Assistant" labels and the clock's own "en-US" pin
+// used to ignore the reader's locale entirely.
+describe("TranscriptView: Spanish (S-10 T5)", () => {
+  it("renders the side labels in Spanish and the clock through tag(locale) (mutation: hard-code en-US -> FAILS)", () => {
+    const en = render(transcript, "en");
+    const es = render(transcript, "es");
+    expect(es).toContain("Quien llama");
+    expect(es).toContain("Asistente");
+    expect(es).not.toContain(">Caller<");
+    expect(es).not.toContain(">Assistant<");
+    // Spanish time formatting ("a. m."/"p. m.") differs from English's "AM"/"PM".
+    expect(es).not.toBe(en);
+  });
+
+  it("says the Spanish empty-transcript sentence under es", () => {
+    expect(render([], "es")).toContain("No se grabó transcripción de esta llamada.");
   });
 });

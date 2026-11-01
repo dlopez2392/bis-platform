@@ -693,14 +693,19 @@ describe("CallDetailPage — the Suggestions section (item 8b-1)", () => {
     spy.mockRestore();
   });
 
-  it("a Spanish reader gets the section in Spanish while the page title stays English (spec 4.5)", async () => {
+  // S-10 T5: the whole page now reads the same `locale`/`tr` the Suggestions section always has
+  // (moved up from just before this section, so every other read answers in it too) — the page
+  // title and the Transcript heading are no longer the one part left in English.
+  it("a Spanish reader gets the whole page in Spanish, the Suggestions section included (spec 4.5)", async () => {
     prefsFixture.language = "es";
     const html = await render(CALL, [], [TASK]);
     const text = renderedText(html);
     expect(text).toContain("Sugerencias");
     expect(html).toContain('lang="es"');
-    expect(text).toContain(m["calls.detail.title"]);
-    expect(text).toContain(m["calls.detail.transcript"]);
+    expect(text).toContain(m["calls.detail.title.es"]);
+    expect(text).toContain(m["calls.detail.transcript.es"]);
+    const h1 = /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
+    expect(h1).toBe(m["calls.detail.title.es"]);
   });
 
   it("the deals read: this account's deals only, for exactly the rows' deal ids (mutation: drop its account filter -> FAILS)", async () => {
