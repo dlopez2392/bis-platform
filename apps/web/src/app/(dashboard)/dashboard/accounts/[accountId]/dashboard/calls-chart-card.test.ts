@@ -354,7 +354,7 @@ describe("CallsChartCard in Spanish (usted register)", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], locale: "es" });
     expect(html).toContain("Llamadas atendidas");
     expect(html).toContain("Últimos 14 días");
-    expect(html).toContain("Cuando Sofía contesta, cada llamada aparece aquí con su resultado.");
+    expect(html).toContain("Cuando Sofía conteste, cada llamada aparecerá aquí con su resultado.");
     expect(html).not.toContain("Calls answered");
   });
 

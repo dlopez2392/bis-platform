@@ -173,7 +173,7 @@ describe("ActivityCard in Spanish (usted register)", () => {
       accountId: "acct1", events: [], now: NOW, personaName: null, locale: "es",
     }));
     expect(html).toContain("Actividad");
-    expect(html).toContain("Reciente");
+    expect(html).toContain("Recientes");
     expect(html).toContain("Las citas, los clientes potenciales de formularios y los resultados de llamadas aparecen aquí a medida que ocurren.");
   });
 

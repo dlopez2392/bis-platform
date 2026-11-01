@@ -506,7 +506,11 @@ export const m = {
   "dashboard.calls.unit.calls.es": "llamadas",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   "dashboard.calls.empty": "When {name} answers, every call lands here with its outcome.",
-  "dashboard.calls.empty.es": "Cuando {name} contesta, cada llamada aparece aquí con su resultado.",
+  // M-3 (review): "cuando" + subjunctive ("conteste") for a future-referring
+  // clause, not the present indicative ("contesta") — Spanish grammar's
+  // own rule for "when X happens" describing what will happen, paired with
+  // the future tense "aparecerá".
+  "dashboard.calls.empty.es": "Cuando {name} conteste, cada llamada aparecerá aquí con su resultado.",
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptySetupVoice.es": "Configure su recepcionista de voz",
   "dashboard.calls.emptyViewCalls": "View all calls",
@@ -556,7 +560,7 @@ export const m = {
   "dashboard.activity.title": "Activity",
   "dashboard.activity.title.es": "Actividad",
   "dashboard.activity.caption": "Recent",
-  "dashboard.activity.caption.es": "Reciente",
+  "dashboard.activity.caption.es": "Recientes",
   "dashboard.activity.bookingCreated": "A new appointment was booked.",
   "dashboard.activity.bookingCreated.es": "Se agendó una cita nueva.",
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
