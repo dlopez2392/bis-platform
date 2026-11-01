@@ -51,10 +51,15 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("./actions", () => ({ setPhoneCountryAction: vi.fn(), undoPhoneCountryAction: vi.fn() }));
 const resumeTextsAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+const stopTextsAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+const confirmStopAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+const notAStopAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
 vi.mock("./texts-actions", () => ({
-  stopTextsAction: vi.fn(), undoStopTextsAction: vi.fn(),
+  stopTextsAction: (...a: unknown[]) => stopTextsAction(...a), undoStopTextsAction: vi.fn(),
   resumeTextsAction: (...a: unknown[]) => resumeTextsAction(...a),
-  confirmStopAction: vi.fn(), notAStopAction: vi.fn(), undoHoldDecisionAction: vi.fn(),
+  confirmStopAction: (...a: unknown[]) => confirmStopAction(...a),
+  notAStopAction: (...a: unknown[]) => notAStopAction(...a),
+  undoHoldDecisionAction: vi.fn(),
 }));
 
 const { TextsRow } = await import("./texts-row");
@@ -87,11 +92,12 @@ const LOAD = { status: "ready" as const, view: STOPPED_STAFF, zone: "America/Chi
 
 /** `TextsRow` itself calls only `useLocale()` (mocked to "en" above); the
  *  tree this returns for a "ready" load is exactly `<ReadyRow .../>`,
- *  called directly to reach ITS tree. */
-function render(): El {
+ *  called directly to reach ITS tree. `load` defaults to the resumable-stop
+ *  fixture every pre-existing test here already expects. */
+function render(load: typeof LOAD = LOAD): El {
   callIndex = 0;
   states = [];
-  const root = (TextsRow as unknown as (p: unknown) => unknown)({ accountId: "a1", contactId: "c1", load: LOAD });
+  const root = (TextsRow as unknown as (p: unknown) => unknown)({ accountId: "a1", contactId: "c1", load });
   if (!isEl(root)) throw new Error("TextsRow returned no element for a ready, resumable stop");
   const inner = (root.type as (p: unknown) => unknown)(root.props);
   if (!isEl(inner)) throw new Error("ReadyRow returned no element");
@@ -144,7 +150,9 @@ describe("ReadyRow's Resume form — the note never survives across stops (fix r
     (form!.props.onSubmit as (e: { preventDefault: () => void }) => void)({ preventDefault: () => {} });
     await vi.waitFor(() => expect(noteState.set).toHaveBeenCalled());
 
-    expect(resumeTextsAction).toHaveBeenCalledWith("a1", "c1", "e1", "a stale reason from last time");
+    // S-10 leftovers (#317 follow-up, item 7): locale (here "en", useContext's own mock above)
+    // now threads through so staff-actions.ts's error lines read the reader's own language.
+    expect(resumeTextsAction).toHaveBeenCalledWith("a1", "c1", "e1", "a stale reason from last time", "en");
     expect(noteState.set).toHaveBeenCalledWith("");
   });
 });
@@ -173,5 +181,45 @@ describe("ReadyRow's Resume form — the submit is disabled while the note is bl
     const submit = find(tree, (el) => el.type === Button && el.props.type === "submit");
     expect(submit).not.toBeNull();
     expect(submit!.props.disabled).toBe(false);
+  });
+});
+
+/**
+ * S-10 leftovers (#317 follow-up, item 7): Stop texts (Allowed), Confirm stop and Not a stop
+ * (On hold) all call their server action with no locale argument at all — ctx.locale always
+ * defaulted to "en" on the server regardless of who clicked, so every error line
+ * staff-actions.ts can build for these three actions was always English.
+ */
+describe("Stop texts, Confirm stop and Not a stop thread the reader's locale to their server action (S-10 leftovers item 7)", () => {
+  it("Stop texts passes the reader's locale (mutation: drop the locale arg -> FAILS)", async () => {
+    stopTextsAction.mockResolvedValueOnce({ ok: true, view: { kind: "stopped", eventId: "e9", since: "2026-10-04T02:30:00Z", how: { kind: "staff" }, canResume: true } });
+    const tree = render({ status: "ready", view: { kind: "allowed", newestId: "e9" }, zone: "America/Chicago", phone: "+15512345678" });
+    const btn = find(tree, (el) => el.type === Button && el.props.children === m["contact.texts.stopTexts"]);
+    expect(btn).not.toBeNull();
+    (btn!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(stopTextsAction).toHaveBeenCalled());
+    expect(stopTextsAction).toHaveBeenCalledWith("a1", "c1", "e9", "en");
+  });
+
+  const HELD = { status: "ready" as const, view: { kind: "held" as const, eventId: "h1", since: "2026-10-04T02:30:00Z", excerpt: "stop" }, zone: "America/Chicago", phone: "+15512345678" };
+
+  it("Confirm stop passes the reader's locale (mutation: drop the locale arg -> FAILS)", async () => {
+    confirmStopAction.mockResolvedValueOnce({ ok: true, view: { kind: "stopped", eventId: "h1", since: "2026-10-04T02:30:00Z", how: { kind: "free_text", excerpt: "stop" }, canResume: true } });
+    const tree = render(HELD);
+    const btn = find(tree, (el) => el.type === Button && el.props.children === m["contact.texts.confirmStop"]);
+    expect(btn).not.toBeNull();
+    (btn!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(confirmStopAction).toHaveBeenCalled());
+    expect(confirmStopAction).toHaveBeenCalledWith("a1", "c1", "h1", "en");
+  });
+
+  it("Not a stop passes the reader's locale (mutation: drop the locale arg -> FAILS)", async () => {
+    notAStopAction.mockResolvedValueOnce({ ok: true, view: { kind: "allowed", newestId: null } });
+    const tree = render(HELD);
+    const btn = find(tree, (el) => el.type === Button && el.props.children === m["contact.texts.notAStop"]);
+    expect(btn).not.toBeNull();
+    (btn!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(notAStopAction).toHaveBeenCalled());
+    expect(notAStopAction).toHaveBeenCalledWith("a1", "c1", "h1", "en");
   });
 });

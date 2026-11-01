@@ -16,7 +16,7 @@ const NOW = new Date("2026-10-06T20:00:00Z");
 const FRESH = "2026-10-06T19:59:30Z";
 const ctx: TextsContext = {
   db: READER, writer: WRITER, accountId: "a1", contactId: "c1", userId: "user_1", actorName: "Ana",
-  address: "+19562921696", unconfirmed: false, now: NOW,
+  address: "+19562921696", unconfirmed: false, now: NOW, locale: "en",
 };
 let n = 0;
 const row = (action: string, method: string, evidence: Record<string, unknown> = {}, at = `2026-10-0${++n}T10:00:00Z`) =>
@@ -218,5 +218,44 @@ describe("the history these controls read comes from the service client (F-085)"
       expect(call[0]).toBe(WRITER);
       expect(call.slice(1)).toEqual(["a1", "sms", "+19562921696"]);
     }
+  });
+});
+
+/**
+ * S-10 leftovers (#317 follow-up, item 7): every error this module builds read
+ * `m["contact.texts.*"]` directly — English always — though the .es twins already
+ * ship. `ctx.locale` (threaded from the row component through the server action)
+ * is what every error below now reads through.
+ */
+describe("errors read in ctx's own locale (S-10 leftovers item 7)", () => {
+  const esCtx = { ...ctx, locale: "es" as const };
+
+  it("a stale click's 'changed' line is Spanish on a Spanish ctx (mutation: read m[...] directly, ignoring ctx.locale -> FAILS)", async () => {
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: null });
+    const kw = row("revoked", "keyword", { keyword: "STOP" });
+    db.readConsentHistory.mockResolvedValueOnce([]).mockResolvedValue([kw]);
+    const r = await stopTexts(esCtx, null);
+    expect(r).toMatchObject({ ok: false, error: m["contact.texts.changed.es"] });
+    expect(r).not.toMatchObject({ error: m["contact.texts.changed"] });
+  });
+
+  it("the undo-expired line is Spanish on a Spanish ctx (mutation: read m[...] directly -> FAILS)", async () => {
+    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
+    expect(await undoStopTexts(esCtx, "ev_staff")).toEqual({ ok: false, error: m["contact.texts.undoExpired.es"] });
+  });
+
+  it("the empty-note refusal is Spanish on a Spanish ctx, before any read (mutation: read m[...] directly -> FAILS)", async () => {
+    expect(await resumeTexts(esCtx, "ev_1", "   ")).toEqual({ ok: false, error: m["contact.texts.resumeNoteRequired.es"] });
+  });
+
+  it("a write that throws logs a plain failure line in Spanish on a Spanish ctx (mutation: read m[...] directly -> FAILS)", async () => {
+    db.appendConsentEventGuarded.mockRejectedValue(new Error("append_consent_event failed: timeout"));
+    expect(await stopTexts(esCtx, null)).toEqual({ ok: false, error: m["contact.texts.failed.es"] });
+  });
+
+  it("an English ctx is unaffected (control)", async () => {
+    db.appendConsentEventGuarded.mockRejectedValue(new Error("boom"));
+    expect(await stopTexts(ctx, null)).toEqual({ ok: false, error: m["contact.texts.failed"] });
   });
 });
