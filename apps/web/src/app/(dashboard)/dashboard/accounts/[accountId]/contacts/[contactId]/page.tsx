@@ -226,7 +226,7 @@ export default async function ContactDetailPage({
   // M7a PR-4 (design review I5): the account layout's own cached verdict read, so no second query;
   // a paused account's Text tab says texts are stopped instead of refusing only at Send.
   const accountPaused = (await billingVerdictFor(accountId)).paused;
-  const name = contactDisplayName(contact);
+  const name = contactDisplayName(contact, locale);
   // Task 8 fix round: the Documents card's "Ask the customer" dialog wants the RAW joined name, not
   // contactDisplayName's "(no name)" placeholder — a non-empty placeholder would stop requestTitle's
   // own fallback ("Ask the customer") from ever firing for a nameless contact.

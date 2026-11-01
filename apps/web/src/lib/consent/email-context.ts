@@ -2,6 +2,8 @@ import { getContact, serviceDb } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { actorName } from "./actor";
 import type { EmailContext } from "./email-staff-actions";
@@ -14,15 +16,18 @@ import type { EmailContext } from "./email-staff-actions";
  */
 export async function emailContextFor(
   accountId: string, contactId: string, userId: string,
+  // Review fix round: no default — every caller resolves its OWN reader's locale and
+  // chooses explicitly (the Texts row's own fix, mirrored for email).
+  locale: Locale,
 ): Promise<EmailContext | { ok: false; reason: "no_email" | "failed"; error: string }> {
   try {
     const db = await dbForRequest();
     const contact = await getContact(db, accountId, contactId);
     const address = emailLedgerAddress(contact?.email ?? null);
-    if (!contact || !address) return { ok: false, reason: "no_email", error: m["contact.email.noEmail"] };
-    return { db, writer: serviceDb(), accountId, contactId, userId, actorName: await actorName(userId), address, now: new Date() };
+    if (!contact || !address) return { ok: false, reason: "no_email", error: t(m, "contact.email.noEmail", locale) };
+    return { db, writer: serviceDb(), accountId, contactId, userId, actorName: await actorName(userId), address, now: new Date(), locale };
   } catch (e) {
     console.error(`emailContextFor: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, reason: "failed", error: m["contact.email.failed"] };
+    return { ok: false, reason: "failed", error: t(m, "contact.email.failed", locale) };
   }
 }

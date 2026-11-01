@@ -962,6 +962,17 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(props.name).toBe("");
   });
 
+  // S-10 leftovers (#317 follow-up): the header's own `name` (RecordHeader's h1) was built with
+  // contactDisplayName(contact) — no locale — so a nameless contact's own record page still read
+  // the English "(no name)" placeholder for a Spanish-reading person.
+  it("a nameless contact's header reads the Spanish placeholder for a Spanish-reading person (mutation: call contactDisplayName(contact) with no locale -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    getContactMock.mockResolvedValueOnce({ ...CONTACT, first_name: null, last_name: null });
+    const html = await render();
+    expect(html).toContain(`<h1 title="${m["contact.noName.es"]}"`);
+    expect(html).not.toContain(`title="${m["contact.noName"]}"`);
+  });
+
   it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {
     listContactTimelinePageMock.mockRejectedValue(new Error("timeline read down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

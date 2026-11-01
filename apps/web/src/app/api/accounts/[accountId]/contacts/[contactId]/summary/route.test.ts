@@ -240,6 +240,18 @@ describe("the drawer's summary route: each section loads and fails on its own (C
     expect([b.facts.text, b.nextUp.text, b.recent.text]).toEqual([m["record.summary.failed.es"], m["record.nextUp.failed.es"], m["record.activity.failed.es"]]);
   });
 
+  // S-10 leftovers (#317 follow-up): the header's own name was built with `contactDisplayName(contact)`
+  // — no locale — even though `locale` is resolved two lines above it, so a nameless contact's drawer
+  // header read "(no name)" even for a Spanish-account client reader.
+  it("a nameless contact's header reads the Spanish placeholder for a Spanish-account client reader (mutation: call contactDisplayName(contact) with no locale -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    dbMocks.getContact.mockReset().mockResolvedValue({ ...CONTACT, first_name: null, last_name: null });
+    const b = await body();
+    expect(b.header.name).toBe(m["contact.noName.es"]);
+    expect(b.header.name).not.toBe(m["contact.noName"]);
+  });
+
   it("a view builder throwing (not just a failed read) costs only the sections that build on it — the viewOf guard (mutation: call factsView outside the try/catch -> the route 500s, FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     // The reads succeed, but the zone every view is built in is unusable: factsView's own

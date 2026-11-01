@@ -41,7 +41,7 @@ export async function importContactsBatchAction(
   // convenience for the operator, never the thing that gets written: a caller
   // could otherwise hand us a patch for any column with none of Task 5's
   // validation applied.
-  const { mapped } = mapRows(rows, opts.mapping);
+  const { mapped } = mapRows(rows, opts.mapping, locale);
   if (mapped.length === 0) return { ok: true, created: 0, updated: 0, flagged: 0 };
 
   try {

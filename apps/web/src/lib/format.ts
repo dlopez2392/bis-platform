@@ -1,4 +1,5 @@
 import { m } from "./messages";
+import { t } from "./i18n/t";
 import type { Locale } from "./i18n/locale";
 
 /** `es` renders as `es-US` (not bare `es`) so currency/date conventions stay
@@ -116,11 +117,15 @@ export function formatRelativeTime(iso: string, locale: Locale = "en"): string {
   return rtf.format(Math.round(diffHr / 24), "day");
 }
 
+/** S-10 leftovers (#317 follow-up): the "(no name)" fallback used to read
+ *  `m["contact.noName"]` directly, English always, whatever the reader's own
+ *  language. `locale` defaults to "en" so every caller that predates this
+ *  param is unchanged. */
 export function contactDisplayName(c: {
   first_name: string | null;
   last_name: string | null;
-}): string {
-  return [c.first_name, c.last_name].filter(Boolean).join(" ") || m["contact.noName"];
+}, locale: Locale = "en"): string {
+  return [c.first_name, c.last_name].filter(Boolean).join(" ") || t(m, "contact.noName", locale);
 }
 
 export function initials(name: string): string {

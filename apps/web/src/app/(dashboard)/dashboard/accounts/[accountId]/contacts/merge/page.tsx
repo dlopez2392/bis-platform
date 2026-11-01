@@ -155,8 +155,8 @@ export default async function MergeComparePage({
   return (
     <MergeScreen
       accountId={accountId}
-      keep={{ id: kept.id, name: contactDisplayName(kept) }}
-      other={{ id: other.id, name: contactDisplayName(other) }}
+      keep={{ id: kept.id, name: contactDisplayName(kept, locale) }}
+      other={{ id: other.id, name: contactDisplayName(other, locale) }}
       conflicts={conflicts}
       alsoKeeps={also}
       otherReach={reach}
