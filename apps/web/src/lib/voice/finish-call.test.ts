@@ -956,14 +956,25 @@ describe("finishCall — the staff alert SMS", () => {
 
   // Owner decision B (2026-10-10): the call alert TEXT is in the account's
   // language — ctx.accountLanguage, read off the account row route.ts already
-  // loads — Spanish with accents dropped, GSM-7, one segment. The alert
-  // EMAIL stays English (owner decision A).
-  it("a Spanish account's call alert text is Spanish, GSM-7 and one segment, while the alert email stays English (owner decision B; mutation: call composeCallAlertSms without the account's language → FAILS)", async () => {
+  // loads — Spanish with accents dropped, GSM-7, one segment. S-10 T8
+  // (spec §3.3) extended the SAME field to the alert EMAIL's subject and
+  // body — superseding owner decision A's "the alert email stays English"
+  // for this one field; the call SUMMARY and the conversation body still do.
+  it("a Spanish account's call alert text is Spanish, GSM-7 and one segment, and the alert email is Spanish too (owner decision B, extended by S-10 T8; mutation: call composeCallAlertSms without the account's language → FAILS)", async () => {
     dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
     await finishCall(leadState(), { ...ctx, accountLanguage: "es" }, meta);
     const body = smsRefs.send.mock.calls[0]![0].body as string;
     expect(body).toBe("Nueva llamada: nuevo cliente potencial. Revise su correo para mas detalles.");
     expect(segmentsFor(body)).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
+    const email = emailRefs.send.mock.calls[0]![0] as { subject: string; html: string; body: string };
+    expect(email.subject).toMatch(/^Llamada — cliente potencial — /);
+    expect(email.body).toContain("Llamada — cliente potencial");
+    expect(email.html).toContain("Llamada — cliente potencial");
+  });
+
+  it("no language on the account (null or absent) keeps the call alert EMAIL English too (mutation: default the alert email locale to es → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: null }, meta);
     const email = emailRefs.send.mock.calls[0]![0] as { subject: string };
     expect(email.subject).toMatch(/^Call — lead — /);
   });

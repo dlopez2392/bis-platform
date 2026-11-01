@@ -42,6 +42,7 @@ function row(overrides: Partial<AccountDueWeeklyReport> = {}): AccountDueWeeklyR
     replyToEmail: "owner-reply@rioroofing.com",
     lastSentWeek: null,
     hasSite: false,
+    language: null,
     ...overrides,
   };
 }
@@ -165,6 +166,26 @@ describe("weeklyClientReportPass", () => {
     expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
       accountId: "acct_1", kind: "operator.weekly_report",
     }));
+  });
+
+  // S-10 T8 (spec §3.3): the account's own `language`, read off the SAME due
+  // row this pass already has — never a second accounts read, never the
+  // recipient address's (none of `report_emails` is a `users` row).
+  it("sends a Spanish account's report in Spanish — subject and body — (mutation: drop the `language` field from the row → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ language: "es" })]);
+    await weeklyClientReportPass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; html: string };
+    expect(sent.subject).toBe("La semana pasada: 5 llamadas, 2 nuevos clientes potenciales");
+    expect(sent.body).toContain("llamadas atendidas");
+    expect(sent.html).toContain("llamadas atendidas");
+  });
+
+  it("no language on the account (null) sends the report in English (mutation: default the pass's locale to es → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ language: null })]);
+    await weeklyClientReportPass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string };
+    expect(sent.subject).toBe("Last week: 5 calls, 2 new leads");
+    expect(sent.body).toContain("calls answered");
   });
 
   // D-063 (wiring, review follow-up): weeklyReportEmail.ts's own suite proves

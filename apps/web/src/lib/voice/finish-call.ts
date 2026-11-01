@@ -8,7 +8,7 @@ import {
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
-import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
+import { voiceCallAlertEmail, voiceCallAlertSubject } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { readCandidates, isShared } from "./identity/candidates";
@@ -82,13 +82,16 @@ export interface FinishContext {
    *  included, in English — C11, via `chooseBody` inside `prepareTextback`. */
   textbackBodyEs: string | null;
   /** `accounts.language` (0065), read off the account row route.ts already
-   *  loads (ACCOUNT_COLS, no extra query). Used for ONE thing: the staff
-   *  call-alert TEXT (`composeCallAlertSms`, owner decision B, 2026-10-10 —
-   *  Spanish with accents dropped for a Spanish account). The call SUMMARY,
-   *  the conversation body and the alert EMAIL stay English regardless
-   *  (owner decision A). Unrelated to `profileLanguage` above (what Sofía
-   *  may SPEAK) and to `calls.language` (what the caller spoke). NULL or
-   *  absent means English, via `resolveLocale`. */
+   *  loads (ACCOUNT_COLS, no extra query). Used for the staff call-alert TEXT
+   *  (`composeCallAlertSms`, owner decision B, 2026-10-10 — Spanish with
+   *  accents dropped for a Spanish account) and, since S-10 T8, the staff
+   *  call-alert EMAIL (`voiceCallAlertEmail`/`voiceCallAlertSubject`), which
+   *  superseded owner decision A's "the alert email stays English" for this
+   *  one field — spec §3.3 names the call alert explicitly. The call SUMMARY
+   *  and the conversation body still stay English regardless. Unrelated to
+   *  `profileLanguage` above (what Sofía may SPEAK) and to `calls.language`
+   *  (what the caller spoke). NULL or absent means English, via
+   *  `resolveLocale`. */
   accountLanguage?: Locale | null;
   /** S-47b: the trade module this call ran under, from the SAME profile read that stamped the row and
    *  built the prompt (route.ts's `tradeStamp`). `insurance_pc` masks SSN- and licence-shaped numbers
@@ -668,8 +671,11 @@ export async function finishCall(
       // follow-up) the alert is today's. A pure read of `state`: nothing here
       // waits on the card's post-call reading, and this leg's place and
       // isolation are unchanged.
+      // S-10 T8: the account's own language, matching the alert SMS's locale
+      // below (owner decision B) — same field, now the same email too.
+      const alertLocale = resolveLocale(undefined, ctx.accountLanguage ?? null);
       const { html, text } = voiceCallAlertEmail({
-        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine,
+        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine, locale: alertLocale,
       });
 
       const failures: string[] = [];
@@ -681,7 +687,8 @@ export async function finishCall(
           // corporate filters treat as spoofing. Platform From only.
           await sendEmailOrThrow({
             accountId: ctx.accountId, kind: "operator.call_alert",
-            to, fromName: brand.name, subject: `Call — ${outcome} — ${callerDisplay}`, body: text, html,
+            to, fromName: brand.name,
+            subject: voiceCallAlertSubject(outcome, callerDisplay, alertLocale), body: text, html,
           });
           notified = true;
         } catch (e) {

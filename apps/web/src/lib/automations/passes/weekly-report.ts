@@ -5,6 +5,7 @@ import { weeklyReportEmail, weeklyReportSubject } from "@/lib/email/templates/we
 import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
 import { inMondayBand, lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
+import { resolveLocale } from "@/lib/i18n/locale";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import {
   WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS, WEEKLY_REPORT_MAX_RECIPIENTS,
@@ -141,6 +142,9 @@ export const weeklyClientReportPass: Pass = {
         ]);
 
         const brand = emailBrandNamed(row.branding, row.brandName);
+        // S-10 T8: the account's own language, never a recipient's — none of
+        // `report_emails` is a `users` row. NULL is English, via resolveLocale.
+        const locale = resolveLocale(undefined, row.language ?? null);
         const { html, text } = weeklyReportEmail({
           brand, now, prior,
           dashboardUrl: `${ctx.origin}/dashboard/accounts/${row.accountId}/dashboard`,
@@ -154,8 +158,9 @@ export const weeklyClientReportPass: Pass = {
             // only when this is omitted or blank.
             receptionistName: profile?.persona_name,
           },
+          locale,
         });
-        const subject = weeklyReportSubject(now);
+        const subject = weeklyReportSubject(now, locale);
         const replyTo = normalizeReplyTo(row.replyToEmail);
 
         // ONE send PER RECIPIENT, failures collected rather than awaited in a

@@ -29,6 +29,12 @@ export type AccountDueWeeklyReport = {
    *  is omitted entirely: a zero we did not measure must not look like a zero
    *  we did. */
   hasSite: boolean;
+  /** `accounts.language` (0065) — S-10 T8, the client's weekly report in the
+   *  account's own language. NULL means English, at the send site, never
+   *  here. Not part of `AccountBrandRow`/`brandingOf` on purpose: the agency
+   *  roll-up (`listAccountsForWeeklyRollup` below) shares that row shape and
+   *  stays English regardless (spec §3.3, Q4). */
+  language: "en" | "es" | null;
 };
 
 /** D-067: PostgREST on this project caps a single response at `max_rows`
@@ -95,6 +101,9 @@ export async function listAccountsDueWeeklyReport(
   type Row = {
     id: string; created_at: string;
     report_emails: string[]; weekly_report_week: string | null;
+    // Already riding `ACCOUNT_BRAND_COLS` below (0076, selected there for the
+    // reminder's own reader) — no second column, no second select.
+    language: "en" | "es" | null;
   } & AccountBrandRow;
   const rows: Row[] = [];
   for (let from = 0; ; ) {
@@ -154,6 +163,7 @@ export async function listAccountsDueWeeklyReport(
     replyToEmail: r.reply_to_email ?? null,
     lastSentWeek: r.weekly_report_week,
     hasSite: withSite.has(r.id),
+    language: r.language ?? null,
   }));
 }
 
