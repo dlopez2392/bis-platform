@@ -295,6 +295,53 @@ describe("confirmMoveAction — who is told", () => {
   });
 });
 
+// S-10 (booking alerts): the business's alert follows the ACCOUNT's language
+// (readMoveContext's own accounts read), never the customer's page `locale`,
+// which their own "moved" email follows. Both times are in that language too.
+// The thread line is the business's stored record and stays English.
+describe("confirmMoveAction — the owner's moved alert in the account's language (S-10)", () => {
+  const was = (lang: "en" | "es") => formatWhen(new Date(OWN.starts_at), "UTC", lang);
+  const now = (lang: "en" | "es") => formatWhen(new Date(ELEVEN), "UTC", lang);
+  const withLanguage = (language: "en" | "es" | null) => {
+    const c = context();
+    return { ...c, account: { ...c.account, language } };
+  };
+
+  it("es account, English customer: the alert's subject, text and html are Spanish with Spanish dates; the customer's email stays English (mutation: pass the page's lang to the alert → FAILS)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage("es"));
+    await confirmMoveAction(TOKEN, "en", ELEVEN);
+    expect(was("es")).not.toBe(was("en"));
+    const staff = gated().find((g) => g.kind === "operator.move_notice")!;
+    expect(staff.subject).toBe(`Cita cambiada: ${was("es")} a ${now("es")} — Jane Doe`);
+    expect(staff.body).toBe(
+      `Cita cambiada.\nJane Doe cambió su cita.\n\nAntes: ${was("es")}\nAhora: ${now("es")}\nQuién: Jane Doe\n\n`
+      + "Abrir este contacto: https://app.example/dashboard/accounts/acct_1/contacts/contact_1",
+    );
+    expect(staff.html).toContain(now("es"));
+    expect(staff.html).not.toContain(now("en"));
+    expect(gated().find((g) => g.kind === "booking.moved")!.subject).toBe("Your booking has been moved");
+    expect(m.createMessage.mock.calls[0]![2]).toMatchObject({ body: `Moved their booking from ${was("en")} to ${now("en")}` });
+  });
+
+  it("es account, a contact with no name or email: the fallback name is Spanish (mutation: keep the English 'Someone' → FAILS)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage("es"));
+    m.getContact.mockResolvedValue({ id: "contact_1", first_name: null, last_name: null, email: null });
+    await confirmMoveAction(TOKEN, "en", ELEVEN);
+    expect(gated().find((g) => g.kind === "operator.move_notice")!.subject).toMatch(/ — Alguien$/);
+  });
+
+  it("no language on the account (null): English, byte for byte, even for a Spanish customer (mutation: default the alert to the page's lang → FAILS)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage(null));
+    await confirmMoveAction(TOKEN, "es", ELEVEN);
+    const staff = gated().find((g) => g.kind === "operator.move_notice")!;
+    expect(staff.subject).toBe(`Booking moved: ${was("en")} to ${now("en")} — Jane Doe`);
+    expect(staff.body).toBe(
+      `Booking moved.\nJane Doe moved their booking.\n\nWas: ${was("en")}\nNow: ${now("en")}\nWho: Jane Doe\n\n`
+      + "Open this contact: https://app.example/dashboard/accounts/acct_1/contacts/contact_1",
+    );
+  });
+});
+
 describe("getMoveSlotsAction — the picker", () => {
   it("offers the day without the booking being moved, minus its own range (mutation: drop the exclusion → [] , FAILS)", async () => {
     expect(await getMoveSlotsAction(TOKEN, "en", "2027-06-01"))

@@ -394,6 +394,29 @@ describe("runCallLifecycle — the account's language reaches finishCall (F-013)
   });
 });
 
+// S-10 (booking alerts): the SAME accounts.language reaches the TOOLS' context too, so the staff
+// phone-change alert (registry.ts) is written in the account's language. No second accounts read.
+describe("runCallLifecycle — the account's language reaches the tools (S-10)", () => {
+  for (const value of ["es", null] as const) {
+    it(`accounts.language: ${String(value)} reaches runTool's context as accountLanguage (mutation: drop accountLanguage from toolCtx → undefined, FAILS)`, async () => {
+      accountLanguageMock.value = value;
+      const { lifecycleDone, ws } = await startLifecycle();
+      ws.emit("open");
+      runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+      ws.emit("message", JSON.stringify({
+        type: "response.function_call_arguments.done",
+        name: "cancel_appointment", call_id: "fc-s10", arguments: "{}",
+      }));
+      await flushMicrotasks();
+      ws.emit("close", 1000, Buffer.from(""));
+      await lifecycleDone;
+      expect(runToolMock).toHaveBeenCalledTimes(1);
+      const [, ctxArg] = runToolMock.mock.calls[0]!;
+      expect(ctxArg).toHaveProperty("accountLanguage", value);
+    });
+  }
+});
+
 // S-47b, owner ruling B7: the profile's trade module reaches finishCall's context, from the SAME one
 // profile read that stamps the row and builds the prompt (Task 5's `tradeStamp`), so the post-call AI
 // masking follows the module this call actually ran under.

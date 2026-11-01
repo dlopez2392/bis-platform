@@ -1314,6 +1314,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       callerNumber, origin,
       callRowId, handoffTarget,
       tradeModule: tradeStamp?.module ?? null,
+      // S-10: the staff phone-change alert's language, off the same accounts row.
+      accountLanguage: accountRow.language,
     };
     const finishCtx: FinishContext = {
       db, accountId, branding,

@@ -207,6 +207,7 @@ import {
 } from "@/lib/forms/guards";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { segmentsFor } from "@/lib/sms/segments";
+import { formatWhen } from "@/lib/booking/time";
 
 const PUBLIC_ID = "cal_test1234";
 
@@ -952,6 +953,59 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
     expect(result.ok).toBe(true);
     const [, , , body] = sendAlertSmsMock.mock.calls[0]!;
     expect(body).toContain("New booking");
+  });
+});
+
+// S-10 (booking alerts): the alert EMAIL to the owner follows the account's
+// language, like the alert SMS above — never the booker's `?locale=`, which
+// the confirmation follows. The thread line stays English (it is stored data,
+// not mail). Dates are compared to formatWhen's own output in the account
+// zone, after asserting the two languages render differently.
+describe("submitBookingAction — the owner's alert email in the account's language (S-10)", () => {
+  it("es account, English booker: the alert subject, body, date and html are Spanish; the confirmation stays English; the thread stays English (mutation: pass the booker's locale, or drop locale from bookingAlertEmail → FAILS)", async () => {
+    accountRow.language = "es";
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result.ok).toBe(true);
+
+    const whenEs = formatWhen(slot.startsAt, accountRow.timezone, "es");
+    const whenEn = formatWhen(slot.startsAt, accountRow.timezone);
+    expect(whenEs).not.toBe(whenEn);
+    const [alert, confirmation] = gated();
+    expect(alert!.kind).toBe("operator.booking_alert");
+    expect(alert!.subject).toBe(`Nueva cita: ${whenEs} — Maria Lopez`);
+    expect(alert!.body).toBe(`Nueva cita de Maria Lopez.
+
+Cuándo: ${whenEs}
+Quién: Maria Lopez
+Nota: Please call ahead`);
+    expect(alert!.html).toContain("Maria Lopez agendó una cita con usted.");
+    expect(alert!.html).toContain(whenEs);
+    expect(alert!.html).not.toContain(whenEn);
+    // The booker chose no locale: their confirmation is English, untouched.
+    expect(confirmation!.subject).toBe("You're booked in");
+    // The thread line is the business's stored record: English, as before.
+    expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking", body: expect.stringContaining(`Booking: ${whenEn}`) });
+  });
+
+  it("es account, Spanish booker: still ONE language per message — Spanish alert, Spanish confirmation (mutation: build the alert without the account's language → FAILS)", async () => {
+    accountRow.language = "es";
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    const [alert, confirmation] = gated();
+    expect(alert!.subject).toMatch(/^Nueva cita: /);
+    expect(confirmation!.subject).toBe("Tu cita quedó agendada");
+  });
+
+  it("no language on the account (null): the alert is English, byte for byte, even for a Spanish booker (mutation: default the alert locale to the booker's or to es → FAILS)", async () => {
+    // accountRow.language is null via the top-level beforeEach.
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    const whenEn = formatWhen(slot.startsAt, accountRow.timezone);
+    const [alert] = gated();
+    expect(alert!.subject).toBe(`New booking: ${whenEn} — Maria Lopez`);
+    expect(alert!.body).toBe(`New booking from Maria Lopez.
+
+When: ${whenEn}
+Who: Maria Lopez
+Note: Please call ahead`);
   });
 });
 
