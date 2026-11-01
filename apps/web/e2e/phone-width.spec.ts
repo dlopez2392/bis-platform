@@ -9,6 +9,7 @@ import {
 import { dayKey } from "../src/lib/business-status/status";
 import { m } from "../src/lib/messages";
 import { t } from "../src/lib/i18n/t";
+import { assertNoRedirect, waitForHeaderSettled, assertHeaderChildrenInBounds } from "./shell-geometry";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -153,49 +154,6 @@ const NARROW_WIDTH = 320;
 const HEIGHT = 844;
 
 /**
- * F-107 r1 review, item 3: topbar.tsx's header is `justify-end` (right-
- * aligned), so overflow there pushes content LEFT, past the header's own
- * left edge — `document.documentElement.scrollWidth` cannot see that; it
- * only grows when something pushes the document's RIGHT edge out. Checked
- * on every route below (the topbar renders on all of them): every direct
- * child of `<header>` stays within the header's own left edge and the
- * viewport's right edge. Children with a zero-sized rect (e.g. a `hidden`
- * one) trivially pass and are not special-cased.
- */
-async function assertHeaderChildrenInBounds(page: Page, route: string, width: number) {
-  const result = await page.evaluate(() => {
-    const header = document.querySelector("header");
-    if (!header) return null;
-    const hLeft = header.getBoundingClientRect().left;
-    const vw = window.innerWidth;
-    const bad = Array.from(header.children)
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        return { el, r };
-      })
-      .filter(({ r }) => (r.width > 0 || r.height > 0) && (r.left < hLeft - 0.5 || r.right > vw + 0.5))
-      .map(({ el, r }) => ({
-        tag: el.tagName,
-        // F-107 r3 review, item 3: `getAttribute("class")`, not
-        // `.className` — on an SVG element `.className` is an
-        // SVGAnimatedString, not a string, so `|| ""` never fires and
-        // `.slice` would throw on the first SVG header child this ever
-        // walks.
-        cls: (el.getAttribute("class") || "").slice(0, 100),
-        left: Math.round(r.left),
-        right: Math.round(r.right),
-      }));
-    return { hLeft, vw, bad };
-  });
-  if (!result) return;
-  expect(
-    result.bad.length,
-    `${route} at ${width}px: header child(ren) outside [${Math.round(result.hLeft)}, ${result.vw}]: ` +
-      JSON.stringify(result.bad),
-  ).toBe(0);
-}
-
-/**
  * F-107 r2 review, item 1: CI found a real overflow this rider's own local
  * fixture never reproduced (bis-ci's /dashboard/accounts lists every
  * account every earlier spec in that run created, with real long names and
@@ -245,37 +203,10 @@ async function findWidestOffender(page: Page, clientWidth: number): Promise<stri
   }, clientWidth);
 }
 
-/**
- * F-107 r4 review, item 2: `goto` resolves on "load", not on every async
- * child mounting — Clerk's UserButton/OrganizationSwitcher and (in-account)
- * the presence pill all render after an SDK round trip, and measuring
- * right after `goto` let /dashboard and /contacts PASS at 320px with the
- * exact same header that failed on /settings moments later, for no reason
- * but timing: a route that measures before the header has its real
- * content proves nothing. `.cl-userButton-root`/`.cl-organizationSwitcher-
- * root` are Clerk's own structural class names (the org-switcher one is
- * confirmed from a real CI failure's own diagnostic text, not guessed —
- * Clerk's `cl-<component>-root` naming is consistent across its
- * components). The presence pill has no stable class of its own, so it is
- * found by the text either of its two states always contains.
- */
-async function waitForHeaderSettled(page: Page, isAgency: boolean, inAccount: boolean) {
-  // F-107 r5 review (item 4): an explicit timeout on each wait, so a
-  // failure NAMES the missing element (Playwright's default test timeout
-  // would otherwise fail the whole `test.step` with no indication which of
-  // these three waits — if any — never resolved).
-  await page.locator(".cl-userButton-root").first().waitFor({ state: "visible", timeout: 10_000 });
-  if (isAgency) {
-    await page.locator(".cl-organizationSwitcher-root").first().waitFor({ state: "visible", timeout: 10_000 });
-  }
-  if (inAccount) {
-    // A single `data-testid`, not a text match: both of TopbarPresence's
-    // CSS-toggled variants contain overlapping text ("this week" in both
-    // the short and full idle phrase), so a text locator's `.first()` did
-    // not reliably resolve to whichever one the viewport actually shows.
-    await page.getByTestId("topbar-presence").waitFor({ state: "visible", timeout: 10_000 });
-  }
-}
+// waitForHeaderSettled and assertHeaderChildrenInBounds moved to
+// ./shell-geometry.ts (review round I-1, S-10 T9) and imported above,
+// unchanged in behaviour, so spanish-dashboard.spec.ts's own shell G9 check
+// can call the SAME header-overflow logic rather than a weaker one.
 
 async function assertNoPageScroll(
   page: Page, route: string, width: number,
@@ -284,11 +215,7 @@ async function assertNoPageScroll(
   await test.step(`${route} at ${width}px`, async () => {
     await page.setViewportSize({ width, height: HEIGHT });
     await page.goto(route);
-    // F-107 r1 review, item 2: a redirect (e.g. access-off, not-found, or a
-    // client bounced back to their own account) must fail this check, not
-    // silently pass it by measuring whatever page it landed on instead.
-    const pathname = new URL(page.url()).pathname;
-    expect(pathname, `${route} redirected to ${pathname}`).toBe(route);
+    await assertNoRedirect(page, route);
     await waitForHeaderSettled(page, opts.isAgency, opts.inAccount);
     const measured = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,

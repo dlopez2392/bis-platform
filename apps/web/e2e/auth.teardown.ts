@@ -10,6 +10,11 @@ loadEnv({ path: ".env.local" });
 
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
+// S-10 T9: the Spanish-language fixture's own sidecar — a SEPARATE
+// account/org/Clerk user from CLIENT_FIXTURE_FILE above (see
+// auth.setup.ts's "authenticate as Spanish client user" test, and
+// fixtures/stale.ts's FIXTURE_CLIENT_ES_ACCOUNT_RE doc comment, for why).
+const SPANISH_CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture-es.json";
 
 type ClientFixture = {
   accountId: string;
@@ -138,6 +143,44 @@ teardown("delete the client-access e2e fixture", async () => {
     } catch (e) {
       console.error(`e2e teardown: failed to delete Clerk technician user ${fixture.technicianClerkUserId}: ${String(e)}`);
     }
+  }
+});
+
+// S-10 T9: the Spanish-language fixture's own account, Clerk org and Clerk
+// user — a SEPARATE fixture from "delete the client-access e2e fixture"
+// above (see SPANISH_CLIENT_FIXTURE_FILE's own comment for why). No logo,
+// no document objects, no Staff/Technician logins — this fixture never
+// grows any of those — so its teardown is the account cascade plus the org
+// and the user, nothing more.
+teardown("delete the Spanish client e2e fixture", async () => {
+  if (!existsSync(SPANISH_CLIENT_FIXTURE_FILE)) return;
+  const fixture = JSON.parse(readFileSync(SPANISH_CLIENT_FIXTURE_FILE, "utf-8")) as {
+    accountId: string | null; clerkOrgId: string | null; clerkUserId: string;
+  };
+
+  if (fixture.accountId) {
+    try {
+      const db = serviceDb();
+      const report = emptySweepReport();
+      await deleteAccountCascade(db, fixture.accountId, report);
+      for (const err of report.errors) console.error(`e2e teardown: ${err}`);
+    } catch (e) {
+      console.error(`e2e teardown: spanish client fixture postgres delete failed: ${String(e)}`);
+    }
+  }
+
+  const clerk = await clerkClient();
+  if (fixture.clerkOrgId) {
+    try {
+      await clerk.organizations.deleteOrganization(fixture.clerkOrgId);
+    } catch (e) {
+      console.error(`e2e teardown: failed to delete Clerk org ${fixture.clerkOrgId} (spanish client fixture): ${String(e)}`);
+    }
+  }
+  try {
+    await clerk.users.deleteUser(fixture.clerkUserId);
+  } catch (e) {
+    console.error(`e2e teardown: failed to delete Clerk user ${fixture.clerkUserId} (spanish client fixture): ${String(e)}`);
   }
 });
 

@@ -49,6 +49,26 @@ export const FIXTURE_CO_ACCOUNT_RE = /^E2E Co (\d{13})$/;
 export const FIXTURE_AGENCY_ORG_RE = /^E2E Agency Org (\d{13})$/;
 
 /**
+ * `E2E Client Co ES 1786412389258` — S-10 T9's own Spanish-language e2e
+ * fixture (auth.setup.ts's "authenticate as Spanish client user"), a
+ * SEPARATE account and Clerk org from the shared `E2E Client Co <stamp>`
+ * fixture above rather than a fourth membership added to it.
+ *
+ * Why separate: `staff-roles.spec.ts` hard-codes `[data-team-row]` to
+ * exactly 3 (Owner, Staff, Technician) on THAT account, and
+ * `listAccountTeam`/`TeamSection` (team-section.tsx) read the stored
+ * `memberships` table directly, with no filter for "real person" vs
+ * "e2e fixture" — a fourth real membership on that same account, Spanish or
+ * not, would read as a fourth team row and red that count by name, a spec
+ * this task does not own and was told not to change. A brand-new account,
+ * minted and swept exactly like the shared one (own Clerk user, own org, own
+ * `accounts` row, own cascade), keeps this fixture invisible to every spec
+ * that already depends on the shared one's exact membership shape. Anchored
+ * exactly as tightly as `FIXTURE_ACCOUNT_RE`.
+ */
+export const FIXTURE_CLIENT_ES_ACCOUNT_RE = /^E2E Client Co ES (\d{13})$/;
+
+/**
  * Every account or Clerk org name a spec mints. The accounts leg and the
  * Clerk orgs leg of the sweep both ask `isStaleFixtureAccount`, which reads
  * this list, so a shape added here is swept in both systems at once (the
@@ -57,7 +77,7 @@ export const FIXTURE_AGENCY_ORG_RE = /^E2E Agency Org (\d{13})$/;
  * name that no pattern here (or in the form/blueprint patterns) admits.
  */
 export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [
-  FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE,
+  FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE, FIXTURE_CLIENT_ES_ACCOUNT_RE,
 ];
 
 /**
@@ -70,15 +90,18 @@ export const FIXTURE_BLUEPRINT_RE = /^E2E Blueprint (\d{13})$/;
 
 /**
  * `e2e-client-1786412389258@example.com`, `e2e-agency-1786412389258@example.com`,
- * `e2e-staff-1786412389258@example.com` or
- * `e2e-technician-1786412389258@example.com` — the four Clerk users
+ * `e2e-staff-1786412389258@example.com`,
+ * `e2e-technician-1786412389258@example.com` or
+ * `e2e-spanish-1786412389258@example.com` — the five Clerk users
  * auth.setup.ts mints per run (staff and roles: the per-run client's own
  * Staff login, added alongside its Owner; F-085 part 1: its Technician
- * login, added the same way). The alternation is non-capturing so the stamp
- * stays capture group 1, the shape `fixtureStamp`/`isStaleFixture` read for
- * every fixture pattern.
+ * login, added the same way; S-10 T9: the Spanish-language fixture's own
+ * Owner, on its own SEPARATE account — see FIXTURE_CLIENT_ES_ACCOUNT_RE's
+ * doc comment for why it is not a fourth login on the shared fixture). The
+ * alternation is non-capturing so the stamp stays capture group 1, the shape
+ * `fixtureStamp`/`isStaleFixture` read for every fixture pattern.
  */
-export const FIXTURE_EMAIL_RE = /^e2e-(?:client|agency|staff|technician)-(\d{13})@example\.com$/;
+export const FIXTURE_EMAIL_RE = /^e2e-(?:client|agency|staff|technician|spanish)-(\d{13})@example\.com$/;
 
 /**
  * `E2E Form 1789613520660` or `E2E Spam 1789613520660` — the two names

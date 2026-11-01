@@ -118,12 +118,15 @@ describe("e2e entry points refuse production", () => {
 
     // Staff and roles added a third (the per-run client's own Staff login);
     // F-085 part 1 added a fourth (its Technician login); F-118 part 1 added
-    // a fifth (the agency's one reason for both accounts agency specs enter)
-    // — all registered after the agency and client ones (auth.setup.ts).
-    // Asserted BY NAME, in order, not merely by count: a count alone still
-    // catches one going missing or a sixth appearing, but would pass just as
-    // happily if a rename or a reorder silently swapped which test is which.
-    it("registers its five setup tests, by name, on the CI project", async () => {
+    // a fifth (the agency's one reason for both accounts agency specs enter);
+    // S-10 T9 added a sixth (the Spanish-language fixture's own Owner, on
+    // its own SEPARATE account — see fixtures/stale.ts's
+    // FIXTURE_CLIENT_ES_ACCOUNT_RE doc comment for why) — all registered
+    // after the agency and client ones (auth.setup.ts). Asserted BY NAME, in
+    // order, not merely by count: a count alone still catches one going
+    // missing or a seventh appearing, but would pass just as happily if a
+    // rename or a reorder silently swapped which test is which.
+    it("registers its six setup tests, by name, on the CI project", async () => {
       stubEnv(`https://${CI_REF}.supabase.invalid`);
       await import("../auth.setup");
       expect(spies.test.mock.calls.map((call) => call[0])).toEqual([
@@ -132,6 +135,7 @@ describe("e2e entry points refuse production", () => {
         "authenticate as staff user",
         "authenticate as technician user",
         "agency gives a reason for the fixture account and Test Client One",
+        "authenticate as Spanish client user",
       ]);
     });
   });
