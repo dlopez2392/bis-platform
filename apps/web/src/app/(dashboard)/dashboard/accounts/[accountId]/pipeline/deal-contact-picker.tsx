@@ -64,6 +64,10 @@ export function DealContactPicker({ accountId, labelId }: { accountId: string; l
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<Hits | null>(null);
   const [chosen, setChosen] = useState<{ id: string; name: string } | null>(null);
+  // Review M3: a choice unmounts the focused result (or the focused "Choose someone else"), so focus would fall
+  // to <body>. It goes to what replaces it instead, by autoFocus as that mounts; null until the first choice, so
+  // the dialog's own first focus stands.
+  const [focusAfter, setFocusAfter] = useState<"change" | "box" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seq = useRef(0);
   const box = useRef<HTMLInputElement>(null);
@@ -100,6 +104,7 @@ export function DealContactPicker({ accountId, labelId }: { accountId: string; l
 
   function choose(next: { id: string; name: string } | null) {
     setChosen(next);
+    setFocusAfter(next ? "change" : "box");
     setQuery("");
     setHits(null);
     seq.current++;
@@ -111,15 +116,15 @@ export function DealContactPicker({ accountId, labelId }: { accountId: string; l
       {chosen ? (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span data-deal-contact className="min-w-0 break-words text-sm text-card-foreground">{chosen.name}</span>
-          <Button type="button" variant="ghost" size="sm" className="min-w-0"
-            onClick={() => { choose(null); setTimeout(() => box.current?.focus(), 0); }}>
+          <Button type="button" variant="ghost" size="sm" className="min-w-0" autoFocus={focusAfter === "change"}
+            onClick={() => choose(null)}>
             <span className="min-w-0 truncate">{m["pipeline.contactChange"]}</span>
           </Button>
         </div>
       ) : (
         <>
           <Input ref={box} aria-labelledby={labelId} type="search" value={query} placeholder={m["pipeline.contactSearch"]}
-            autoComplete="off" onChange={(e) => onQuery(e.target.value)} onKeyDown={(e) => onKey(-1, e)} />
+            autoComplete="off" autoFocus={focusAfter === "box"} onChange={(e) => onQuery(e.target.value)} onKeyDown={(e) => onKey(-1, e)} />
           <div aria-live="polite" data-deal-search-results>
             {hits?.status === "error" ? <p className="text-sm text-muted-foreground">{m["palette.error"]}</p>
               : hits && hits.contacts.length === 0 ? <p className="break-words text-sm text-muted-foreground">{m["palette.empty"].replace("{query}", hits.query)}</p>
