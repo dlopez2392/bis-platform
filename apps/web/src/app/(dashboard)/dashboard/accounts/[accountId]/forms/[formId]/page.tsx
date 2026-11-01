@@ -89,8 +89,15 @@ export default async function FormEditorPage({
   return (
     <>
       <PageHeader title={form.name} />
-      <div className="grid gap-4 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-4">
+      {/* S-10 T9a: `grid-cols-1` + `min-w-0` on the first column — same fix
+          as calendar/page.tsx's identical `lg:grid-cols-[minmax(0,1fr)_…]`
+          pattern (its own comment there has the full measurement). The
+          second column here is `<EmbedSnippet>` itself, whose root is a
+          `Card` (ui/card.tsx), which already carries `min-w-0` for being a
+          direct grid/flex item elsewhere — so only the first wrapper needed
+          it explicitly. */}
+      <div className="grid grid-cols-1 gap-4 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-4">
           <FormEditor
             form={form}
             customFields={customFields}

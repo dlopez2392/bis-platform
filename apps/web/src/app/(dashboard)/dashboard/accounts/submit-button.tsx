@@ -7,7 +7,7 @@ import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 
 export function SubmitButton({
-  children, pending: pendingProp, disabled, locale = "en",
+  children, pending: pendingProp, disabled, locale = "en", className,
 }: {
   children: React.ReactNode;
   /** Supply this for a form driven by `useFormSubmit` (onSubmit) rather than
@@ -25,11 +25,17 @@ export function SubmitButton({
    *  (34 files, mostly agency-only) is unaffected; the client Branding
    *  panel passes its own resolved locale. */
   locale?: Locale;
+  /** S-10 T9a: merged onto the Button (which merges it via its own `cn()`)
+   *  — e.g. "h-auto whitespace-normal" for a form whose label may wrap
+   *  under long or pseudo-padded copy (closed-days-card.tsx's "Agregar
+   *  días cerrados" clipped the viewport by 6px without it). Optional;
+   *  every existing caller passes none and renders exactly as before. */
+  className?: string;
 }) {
   const status = useFormStatus();
   const pending = pendingProp ?? status.pending;
   return (
-    <Button type="submit" disabled={pending || Boolean(disabled)}>
+    <Button type="submit" disabled={pending || Boolean(disabled)} className={className}>
       {pending ? t(m, "common.saving", locale) : children}
     </Button>
   );
