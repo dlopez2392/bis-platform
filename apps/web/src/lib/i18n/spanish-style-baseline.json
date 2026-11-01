@@ -3,19 +3,7 @@
     "aiActs.notice.calendarFix.es",
     "automations.instantReply.defaultBody.es",
     "automations.instantReply.defaultBodyNoName.es",
-    "common.actionCrashed.es",
-    "concierge.aiIntro.es",
-    "prefs.error.failed.es",
-    "prefs.error.load.es",
-    "prefs.intro.es",
-    "prefs.language.agencyEmpty.es",
-    "prefs.saved.languageAccount.es",
-    "prefs.saved.theme.none.es",
-    "prefs.saved.theme.system.es",
-    "prefs.theme.empty.es",
-    "prefs.theme.emptyDevice.es",
-    "prefs.title.es",
-    "theme.saveFailed.es"
+    "concierge.aiIntro.es"
   ],
   "glossary": [
     "accessLog.gone.customer.es|delete",

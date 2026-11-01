@@ -314,7 +314,7 @@ export const m = {
   "common.actionCrashed":"That didn't go through — this page may be out of date. Reload it and try again.",
   // Twin added by mis preferencias (F-096, Task 6): the Preferences page
   // speaks the person's own locale, including this house sentence.
-  "common.actionCrashed.es": "Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.",
+  "common.actionCrashed.es": "Eso no se completó: puede que esta página esté desactualizada. Recárguela e inténtelo de nuevo.",
   "common.unavailable": "—",
   // The period caption on a StatTile (Task 4) when the metric covers the
   // whole account history rather than a rolling window — shared verbatim
@@ -1271,7 +1271,7 @@ export const m = {
   // fails, so the chosen mode keeps working this visit but may not survive a
   // reload.
   "theme.saveFailed": "Couldn't save your theme. It may switch back when the page reloads.",
-  "theme.saveFailed.es": "No se pudo guardar tu tema. Puede volver al anterior al recargar la página.",
+  "theme.saveFailed.es": "No se pudo guardar su tema. Es posible que vuelva al anterior al recargar la página.",
 
   // Mis preferencias (F-096, Task 6): the Preferences page, its user-menu
   // item and its ⌘K entry. A person's own page, so every key has a Spanish
@@ -1280,9 +1280,9 @@ export const m = {
   // (prefs.languageName.*); the radios themselves keep LANGUAGE_OPTIONS'
   // own-language labels ("English", "Español"), the word a reader looks for.
   "prefs.title": "Your preferences",
-  "prefs.title.es": "Tus preferencias",
+  "prefs.title.es": "Sus preferencias",
   "prefs.intro": "These are just for you. Nobody else on your team sees them change.",
-  "prefs.intro.es": "Solo son para ti. Nadie más de tu equipo ve el cambio.",
+  "prefs.intro.es": "Son solo para usted. Nadie más de su equipo ve el cambio.",
   "prefs.language.legend": "Language",
   "prefs.language.legend.es": "Idioma",
   "prefs.language.account": "Follow the account",
@@ -1290,7 +1290,7 @@ export const m = {
   "prefs.language.accountHint": "The account's language right now is {language}.",
   "prefs.language.accountHint.es": "Ahora mismo el idioma de la cuenta es {language}.",
   "prefs.language.agencyEmpty": "You'll see English until you pick one.",
-  "prefs.language.agencyEmpty.es": "Verás inglés hasta que elijas uno.",
+  "prefs.language.agencyEmpty.es": "Verá inglés hasta que elija uno.",
   "prefs.languageName.english": "English",
   "prefs.languageName.english.es": "inglés",
   "prefs.languageName.spanish": "Spanish",
@@ -1304,9 +1304,9 @@ export const m = {
   "prefs.theme.system": "Follow my device",
   "prefs.theme.system.es": "Seguir mi dispositivo",
   "prefs.theme.empty": "You haven't picked one yet, so you're seeing the {mode} look.",
-  "prefs.theme.empty.es": "Aún no has elegido, así que ves el tema {mode}.",
+  "prefs.theme.empty.es": "Aún no ha elegido, así que ve el tema {mode}.",
   "prefs.theme.emptyDevice": "You haven't picked one yet, so the look follows your device.",
-  "prefs.theme.emptyDevice.es": "Aún no has elegido, así que el tema sigue tu dispositivo.",
+  "prefs.theme.emptyDevice.es": "Aún no ha elegido, así que se usa el tema de su dispositivo.",
   "prefs.mode.light": "light",
   "prefs.mode.light.es": "claro",
   "prefs.mode.dark": "dark",
@@ -1314,23 +1314,23 @@ export const m = {
   "prefs.saved.language": "Language set to {language}.",
   "prefs.saved.language.es": "Idioma cambiado a {language}.",
   "prefs.saved.languageAccount": "You'll see the account's language, {language}.",
-  "prefs.saved.languageAccount.es": "Verás el idioma de la cuenta: {language}.",
+  "prefs.saved.languageAccount.es": "Verá el idioma de la cuenta: {language}.",
   "prefs.saved.theme.light": "Light theme on.",
   "prefs.saved.theme.light.es": "Tema claro activado.",
   "prefs.saved.theme.dark": "Dark theme on.",
   "prefs.saved.theme.dark.es": "Tema oscuro activado.",
   "prefs.saved.theme.system": "The theme now follows your device.",
-  "prefs.saved.theme.system.es": "El tema ahora sigue tu dispositivo.",
+  "prefs.saved.theme.system.es": "Ahora se usa el tema de su dispositivo.",
   "prefs.saved.theme.none": "Back to the default theme for your login.",
-  "prefs.saved.theme.none.es": "Volviste al tema predeterminado.",
+  "prefs.saved.theme.none.es": "Se volvió al tema predeterminado.",
   "prefs.undo": "Undo",
   "prefs.undo.es": "Deshacer",
   "prefs.undone": "Changed back.",
   "prefs.undone.es": "Se deshizo el cambio.",
   "prefs.error.failed": "That didn't save. Try again in a moment.",
-  "prefs.error.failed.es": "No se guardó. Inténtalo de nuevo en un momento.",
+  "prefs.error.failed.es": "No se guardó. Inténtelo de nuevo en un momento.",
   "prefs.error.load": "We couldn't load your preferences. Reload the page.",
-  "prefs.error.load.es": "No pudimos cargar tus preferencias. Recarga la página.",
+  "prefs.error.load.es": "No pudimos cargar sus preferencias. Recargue la página.",
   "prefs.reload": "Reload",
   "prefs.reload.es": "Recargar",
   "prefs.menuItem": "Preferences",
