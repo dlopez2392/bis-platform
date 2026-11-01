@@ -1,5 +1,7 @@
 import type { PhoneCountry } from "@bis/db/phone";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 
 /**
@@ -29,13 +31,13 @@ export type PhoneCountryUndo = (picked: string, previous: PhoneCountryPrevious) 
 
 /** One call, with a rejected promise (a stale tab's server-action id after
  *  a redeploy) turned into the same "crashed" toast every inline edit uses. */
-async function attempt<T extends { ok: boolean }>(call: () => Promise<T>, toast: OptOutToast): Promise<T | null> {
+async function attempt<T extends { ok: boolean }>(call: () => Promise<T>, toast: OptOutToast, locale: Locale): Promise<T | null> {
   try {
     const result = await call();
     if (!result.ok) toast.error((result as unknown as { error: string }).error);
     return result.ok ? result : null;
   } catch {
-    toast.error(m["inline.crashed"]);
+    toast.error(t(m, "inline.crashed", locale));
     return null;
   }
 }
@@ -59,22 +61,26 @@ export async function pickPhoneCountry(
   // never remounts (it shows no row until a reload). Never called for a
   // refusal: nothing changed, and the row is exactly as it was.
   onChanged: () => void = () => {},
+  /** The reader's language for every toast below (S-10 T3); default "en" so a caller that
+   *  predates it (texts-row.tsx, not yet wired) is unchanged. Never PHONE_CHECK_TREATMENT.label,
+   *  the module-level chip caption texts-row.tsx reads directly today — out of this fix's scope. */
+  locale: Locale = "en",
 ): Promise<void> {
-  const picked = await attempt(() => save(country), toast);
+  const picked = await attempt(() => save(country), toast, locale);
   if (!picked || !picked.ok) return;
   show(false);
   onChanged();
-  toast.success(m[country === "MX" ? "contact.phoneCountry.mxToast" : "contact.phoneCountry.usToast"], {
+  toast.success(t(m, country === "MX" ? "contact.phoneCountry.mxToast" : "contact.phoneCountry.usToast", locale), {
     action: {
-      label: m["common.undo"],
+      label: t(m, "common.undo", locale),
       onClick: () => {
         const ran = run(async () => {
-          if (await attempt(() => undo(picked.phone, picked.previous), toast)) {
+          if (await attempt(() => undo(picked.phone, picked.previous), toast, locale)) {
             show(true);
             onChanged();
           }
         });
-        if (ran === false) toast.error(m["contact.phoneCountry.undoBusy"]);
+        if (ran === false) toast.error(t(m, "contact.phoneCountry.undoBusy", locale));
         return ran;
       },
     },

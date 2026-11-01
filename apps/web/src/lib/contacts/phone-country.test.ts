@@ -114,6 +114,31 @@ describe("pickPhoneCountry", () => {
   });
 });
 
+// S-10 T3: pickPhoneCountry's own toasts (never PHONE_CHECK_TREATMENT.label, a module-level
+// constant texts-row.tsx reads directly today — out of this lane's scope) read the reader's
+// language when the caller passes one; a caller that predates it (every test above) is unchanged.
+describe("pickPhoneCountry in the reader's language (S-10 T3)", () => {
+  it("toasts the Mexican line in Spanish when the caller passes es (mutation: read m[...] directly -> FAILS)", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast, undefined, undefined, "es");
+    expect(h.toast.success).toHaveBeenCalledWith(
+      m["contact.phoneCountry.mxToast.es"],
+      expect.objectContaining({ action: expect.objectContaining({ label: m["common.undo.es"] }) }),
+    );
+  });
+  it("a busy Undo is refused in Spanish too", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast, () => false, undefined, "es");
+    h.click()!();
+    expect(h.toast.error).toHaveBeenCalledWith(m["contact.phoneCountry.undoBusy.es"]);
+  });
+  it("defaults to English when no locale is passed", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    expect(h.toast.success.mock.calls[0]?.[0]).toBe(m["contact.phoneCountry.mxToast"]);
+  });
+});
+
 describe("PHONE_CHECK_TREATMENT", () => {
   it("is a dot AND the word, in token classes only (rule 3; mutation: a hex colour → FAILS)", () => {
     expect(PHONE_CHECK_TREATMENT.label).toBe("Check number");

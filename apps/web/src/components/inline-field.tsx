@@ -180,7 +180,7 @@ export function InlineField(
     const undo = planInlineUndo({
       field, prior, priorValid: normalize(prior).ok,
       phoneUndo: result.undo, ownUndo: result.undoPayload,
-      save, undoPhone, undoWith,
+      save, undoPhone, undoWith, locale,
     });
     const notify = view.kind === "already" ? toast.info : toast.success;
     notify(view.message, {
