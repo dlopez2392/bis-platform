@@ -3,7 +3,7 @@ import type { MergeCountKey } from "@bis/db";
 import { m } from "@/lib/messages";
 import { plural, type PluralKey } from "@/lib/i18n/t";
 import { makeTr } from "@/lib/record/copy";
-import { mergeCountsList } from "./merge-copy";
+import { mergeCountsList, mergeCountsTotal } from "./merge-copy";
 
 /**
  * F-006 part 1 (plan Task 9, Step 1): the moves line's counted phrases, joined by Intl.ListFormat. The
@@ -46,5 +46,37 @@ describe("mergeCountsList (plan Task 9): the merge's moves, as one phrase", () =
     const counts: Partial<Record<MergeCountKey, number>> = { tasks: 1, messages: 2 };
     const expected = want("en", [phrase("contacts.merge.count.messages", 2, "en"), phrase("contacts.merge.count.tasks", 1, "en")]);
     expect(mergeCountsList(counts, tr, "en")).toBe(expected);
+  });
+});
+
+// S-10 T9a: the grammatical number for the SENTENCE wrapped around the
+// list (timeline-rows.ts's "merge" row), which depends on the TOTAL moved,
+// never on how many categories are nonzero.
+describe("mergeCountsTotal (S-10 T9a)", () => {
+  it("sums every counted category (mutation: count nonzero categories instead of summing -> FAILS)", () => {
+    expect(mergeCountsTotal({ messages: 12, calls: 3, bookings: 1 })).toBe(16);
+  });
+
+  it("one category with 1 item sums to 1 (mutation: return the category count unconditionally -> FAILS)", () => {
+    expect(mergeCountsTotal({ notes: 1 })).toBe(1);
+  });
+
+  it("two categories each with 1 item sum to 2, not 1 (mutation: count categories, not items -> FAILS)", () => {
+    expect(mergeCountsTotal({ notes: 1, calls: 1 })).toBe(2);
+  });
+
+  it("{} sums to 0 (mutation: default a missing key to 1 -> FAILS)", () => {
+    expect(mergeCountsTotal({})).toBe(0);
+  });
+
+  // m5 (review fix round): a malformed count (negative, here) is excluded
+  // from BOTH mergeCountsList's own phrase list and mergeCountsTotal's sum
+  // — the same shared filter, so the two can never disagree about which
+  // counts are real.
+  it("a negative count is excluded from the total, the same way it is excluded from the list (mutation: drop the shared filter, add it to the sum anyway -> FAILS)", () => {
+    const tr = makeTr("en");
+    const counts = { notes: 3, calls: -1 };
+    expect(mergeCountsTotal(counts)).toBe(3);
+    expect(mergeCountsList(counts, tr, "en")).not.toMatch(/-1|minus/i);
   });
 });

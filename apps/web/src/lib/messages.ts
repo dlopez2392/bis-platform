@@ -4228,7 +4228,9 @@ export const m = {
   "calls.detail.assistant": "Assistant",
   "calls.detail.assistant.es": "Asistente",
   "calls.detail.caller": "Caller",
-  "calls.detail.caller.es": "Quien llamó",
+  // S-10 T9a: matched to calls.col.caller.es's accent ("Quién", interrogative) —
+  // this twin had drifted to the unaccented relative pronoun "Quien".
+  "calls.detail.caller.es": "Quién llamó",
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
   "calls.detail.noTranscript.es": "No se grabó transcripción de esta llamada.",
   // The call card: who called, why, the number to call back and the caller's
@@ -5043,10 +5045,18 @@ export const m = {
   "billing.usage.chats.es": "{used} de {included} chats del sitio web",
   "billing.usage.minutes.none": "{used} minutes (none included)",
   "billing.usage.minutes.none.es": "{used} minutos (ninguno incluido)",
+  // S-10 T9a: the singular form — "1 minutes (none included)" read wrong in
+  // BOTH languages (the .none branch never had a One twin at all).
+  "billing.usage.minutes.noneOne": "{used} minute (none included)",
+  "billing.usage.minutes.noneOne.es": "{used} minuto (ninguno incluido)",
   "billing.usage.sms.none": "{used} texts (none included)",
   "billing.usage.sms.none.es": "{used} mensajes de texto (ninguno incluido)",
+  "billing.usage.sms.noneOne": "{used} text (none included)",
+  "billing.usage.sms.noneOne.es": "{used} mensaje de texto (ninguno incluido)",
   "billing.usage.chats.none": "{used} website chats (none included)",
   "billing.usage.chats.none.es": "{used} chats del sitio web (ninguno incluido)",
+  "billing.usage.chats.noneOne": "{used} website chat (none included)",
+  "billing.usage.chats.noneOne.es": "{used} chat del sitio web (ninguno incluido)",
   "billing.usage.since": "Since {date}",
   "billing.usage.since.es": "Desde el {date}",
   "billing.usage.chatsNote": "A website chat counts once Sofía first replies.",
@@ -6629,6 +6639,12 @@ export const m = {
   // and, while its Undo window is open, the merge row's own "Undo merge" link.
   "timeline.merged": "merged {name} into this record: {list} moved here",
   "timeline.merged.es": "unió a {name} con este registro: {list} pasaron aquí",
+  // S-10 T9a: the singular form of the line above — "1 note" takes "pasó"
+  // (singular), never "pasaron" (plural), which is what the bug always
+  // read regardless of how many things moved. English's "moved" needs no
+  // singular/plural split, so this twin matches the "other" form exactly.
+  "timeline.mergedOne": "merged {name} into this record: {list} moved here",
+  "timeline.mergedOne.es": "unió a {name} con este registro: {list} pasó aquí",
   "timeline.mergedEmpty": "merged {name} into this record",
   "timeline.mergedEmpty.es": "unió a {name} con este registro",
   "timeline.mergeUndone": "undid the merge with {name}",

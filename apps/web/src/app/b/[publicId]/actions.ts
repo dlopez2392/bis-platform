@@ -409,7 +409,6 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       whenCompanyZone = formatWhen(startsAt, timezone);
       whenBookerZone = formatWhen(startsAt, bookerZone, locale);
       whenCompanyZoneForBooker = formatWhen(startsAt, timezone, locale);
-      whenForAlert = formatWhen(startsAt, timezone, alertLocale);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
       // The details as the booker TYPED them (D-031), the way a form
       // submission's thread lists every answer: for a returning booker these
@@ -428,6 +427,29 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       await incrementUnreadCount(db, calendar.account_id, convo.id);
     } catch (e) {
       console.error(`booking ${bookingId} conversation/thread/formatting failed: ${String(e)}`);
+    }
+
+    // S-10 T9a: the owner alert's own date, in the account's language —
+    // guarded on its OWN, AFTER the thread write above, so a formatter
+    // failure here (an account language this file does not otherwise
+    // validate) can never skip the thread line, which does not depend on
+    // it at all.
+    //
+    // m1 (review fix round): a formatting failure here must not drop the
+    // EMAIL — a staff member still needs to hear about a real booking. It
+    // falls back to the whole message in English instead (one message,
+    // one language): `whenCompanyZone` is the identical instant, already
+    // proven safe by the thread-write try above, and `alertEmailLocale`
+    // carries the fallback to every string the alert builds from
+    // (subject, body, html) — never a half-Spanish message with an
+    // English date.
+    let alertEmailLocale: Locale = alertLocale;
+    try {
+      whenForAlert = formatWhen(startsAt, timezone, alertLocale);
+    } catch (e) {
+      console.error(`booking ${bookingId} alert-date formatting failed, falling back to English: ${String(e)}`);
+      whenForAlert = whenCompanyZone;
+      alertEmailLocale = "en";
     }
 
     // `originFrom` can legitimately return null (a request with no host
@@ -486,10 +508,16 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
       const origin = originFrom(h);
 
-      if (calendar.notify_emails.length > 0) {
+      // S-10 T9a: skip the alert entirely when its own date failed to
+      // format (`whenForAlert` stays "" — see the guarded block above),
+      // the same rule the move action's own "moved" alert already follows
+      // (move/[token]/actions.ts). A blank date in a staff-facing email is
+      // worse than no email at all, and the booker's own confirmation
+      // below is unaffected either way.
+      if (calendar.notify_emails.length > 0 && whenForAlert) {
         const contactUrl = origin ? `${origin}/dashboard/accounts/${calendar.account_id}/contacts/${contactId}` : null;
         const { html, text } = bookingAlertEmail({
-          brand, whenCompanyZone: whenForAlert, contactName, note: note || null, contactUrl, locale: alertLocale,
+          brand, whenCompanyZone: whenForAlert, contactName, note: note || null, contactUrl, locale: alertEmailLocale,
         });
         const failures: string[] = [];
         for (const to of calendar.notify_emails) {
@@ -502,7 +530,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
               accountId: calendar.account_id, kind: "operator.booking_alert",
               to, fromName: brand.name,
               // Time first (spec §6); the name made header-safe inside.
-              subject: bookingAlertSubject(whenForAlert, contactName, alertLocale),
+              subject: bookingAlertSubject(whenForAlert, contactName, alertEmailLocale),
               body: text, html,
             });
           } catch (e) {

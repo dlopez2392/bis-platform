@@ -1,6 +1,5 @@
 import { BIS_REPLY_DOMAIN, type InboundMode } from "@bis/db";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 
 /**
@@ -44,36 +43,41 @@ export type PanelCopy = {
  * so the agency's Settings card, which never passes a locale, is
  * byte-identical to before).
  */
-function agencyCopy(locale: Locale): PanelCopy {
+function agencyCopy(locale: Locale, pseudo: boolean): PanelCopy {
+  const tr = makeTr(locale, pseudo);
   return {
-    title: t(m, "branding.title", locale),
-    description: t(m, "branding.body", locale),
-    nameHint: t(m, "branding.nameHint", locale),
-    colorHint: t(m, "branding.colorHint", locale),
-    neutralHint: t(m, "branding.neutralHint", locale),
-    modeHint: t(m, "branding.modeHint", locale),
-    modeFollow: t(m, "branding.modeFollow", locale),
-    replyToHint: t(m, "branding.replyToHint", locale),
-    mailingAddressHint: t(m, "branding.mailingAddressHint", locale),
+    title: tr.text("branding.title"),
+    description: tr.text("branding.body"),
+    nameHint: tr.text("branding.nameHint"),
+    colorHint: tr.text("branding.colorHint"),
+    neutralHint: tr.text("branding.neutralHint"),
+    modeHint: tr.text("branding.modeHint"),
+    modeFollow: tr.text("branding.modeFollow"),
+    replyToHint: tr.text("branding.replyToHint"),
+    mailingAddressHint: tr.text("branding.mailingAddressHint"),
   };
 }
 
-function clientCopy(locale: Locale): PanelCopy {
+function clientCopy(locale: Locale, pseudo: boolean): PanelCopy {
+  const tr = makeTr(locale, pseudo);
   return {
-    title: t(m, "branding.clientTitle", locale),
-    description: t(m, "branding.clientBody", locale),
-    nameHint: t(m, "branding.clientNameHint", locale),
-    colorHint: t(m, "branding.clientColorHint", locale),
-    neutralHint: t(m, "branding.clientNeutralHint", locale),
-    modeHint: t(m, "branding.clientModeHint", locale),
-    modeFollow: t(m, "branding.clientModeFollow", locale),
-    replyToHint: t(m, "branding.clientReplyToHint", locale),
-    mailingAddressHint: t(m, "branding.clientMailingAddressHint", locale),
+    title: tr.text("branding.clientTitle"),
+    description: tr.text("branding.clientBody"),
+    nameHint: tr.text("branding.clientNameHint"),
+    colorHint: tr.text("branding.clientColorHint"),
+    neutralHint: tr.text("branding.clientNeutralHint"),
+    modeHint: tr.text("branding.clientModeHint"),
+    modeFollow: tr.text("branding.clientModeFollow"),
+    replyToHint: tr.text("branding.clientReplyToHint"),
+    mailingAddressHint: tr.text("branding.clientMailingAddressHint"),
   };
 }
 
-export function panelCopy(audience: BrandingAudience, locale: Locale = "en"): PanelCopy {
-  return audience === "client" ? clientCopy(locale) : agencyCopy(locale);
+/** `pseudo` (S-10 T9a): the QA pseudo-locale, off by default so every
+ *  existing caller (the agency's Settings card, the styleguide) renders
+ *  byte-identical to before. */
+export function panelCopy(audience: BrandingAudience, locale: Locale = "en", pseudo = false): PanelCopy {
+  return audience === "client" ? clientCopy(locale, pseudo) : agencyCopy(locale, pseudo);
 }
 
 /**
@@ -86,10 +90,10 @@ export function panelCopy(audience: BrandingAudience, locale: Locale = "en"): Pa
  * operator customers reply to a domain nothing is actually listening on.
  */
 export function repliesLine(
-  audience: BrandingAudience, s: { mode: InboundMode; domain: string | null }, locale: Locale = "en",
+  audience: BrandingAudience, s: { mode: InboundMode; domain: string | null }, locale: Locale = "en", pseudo = false,
 ): string | null {
   if (s.mode === "off") return null;
   const domain = s.mode === "bis" ? BIS_REPLY_DOMAIN : (s.domain ?? "");
   const key = audience === "client" ? "branding.replies.client" : "branding.replies.agency";
-  return t(m, key, locale, { domain });
+  return makeTr(locale, pseudo).text(key, { domain });
 }

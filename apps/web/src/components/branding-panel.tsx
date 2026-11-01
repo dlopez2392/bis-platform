@@ -10,8 +10,9 @@ import { badgeVariants } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
-import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
 import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -83,6 +84,7 @@ export function BrandingPanel({
   removeLogoAction,
   restoreLogoAction,
   locale = "en",
+  pseudo = false,
 }: {
   audience?: BrandingAudience;
   brandName: string | null;
@@ -117,8 +119,14 @@ export function BrandingPanel({
    *  agency's Settings card (which never passes one) renders byte-identical
    *  to before; the client's own Branding page passes its resolved locale. */
   locale?: Locale;
+  /** S-10 T9a: the QA pseudo-locale (`requestPseudoMode`), a prop like every
+   *  other card on a pseudo-wired page (calendar's EmbedSnippet, FeedCard) —
+   *  never the ambient LocaleProvider, which cannot see a page's own
+   *  `?locale=` QA override. */
+  pseudo?: boolean;
 }) {
-  const copy = panelCopy(audience, locale);
+  const tr = makeTr(locale, pseudo);
+  const copy = panelCopy(audience, locale, pseudo);
 
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
@@ -161,6 +169,13 @@ export function BrandingPanel({
     // message, not the guarantee.
     const picked = formData.get("logo");
     if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
+      // m6 (review fix round): toast copy is never pseudo-wired, on
+      // either side of this seam — plain t(m, key, locale), never
+      // tr.text(key), matching remove-logo.ts's own toasts below and
+      // team-handlers.ts's (team-copy.ts's own comment on
+      // `teamErrorCopy`). Pseudo stops at the page's own STATIC, page-load
+      // render; a toast is post-interaction feedback, never measured by
+      // the pseudo G9 overflow check.
       toast.error(t(m, "branding.tooLarge", locale));
       return;
     }
@@ -252,13 +267,13 @@ export function BrandingPanel({
           className="space-y-3"
         >
           <div className="space-y-1.5">
-            <Label htmlFor="brand-name">{t(m, "branding.name", locale)}</Label>
+            <Label htmlFor="brand-name">{tr.text("branding.name")}</Label>
             <Input id="brand-name" name="brandName" defaultValue={brandName ?? ""} required />
             <p className="text-xs text-muted-foreground">{copy.nameHint}</p>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="brand-logo">{t(m, "branding.logo", locale)}</Label>
+            <Label htmlFor="brand-logo">{tr.text("branding.logo")}</Label>
             <Input
               key={fileKey}
               id="brand-logo"
@@ -269,11 +284,11 @@ export function BrandingPanel({
               // the browser and anyone can send whatever they like regardless.
               accept="image/png,image/jpeg,image/webp"
             />
-            <p className="text-xs text-muted-foreground">{t(m, "branding.logoHint", locale)}</p>
+            <p className="text-xs text-muted-foreground">{tr.text("branding.logoHint")}</p>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="reply-to-email">{t(m, "branding.replyTo", locale)}</Label>
+            <Label htmlFor="reply-to-email">{tr.text("branding.replyTo")}</Label>
             {/* type="email" for the keyboard and the browser's own nudge only.
                 The address is validated server-side in setBrandingAction: this
                 is a client component and must not import @/lib/forms/guards,
@@ -286,13 +301,13 @@ export function BrandingPanel({
             />
             <p className="text-xs text-muted-foreground">{copy.replyToHint}</p>
             {replyRoute ? (() => {
-              const line = repliesLine(audience, replyRoute, locale);
+              const line = repliesLine(audience, replyRoute, locale, pseudo);
               return line ? <p data-replies-line className="text-xs text-muted-foreground">{line}</p> : null;
             })() : null}
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="mailing-address">{t(m, "branding.mailingAddress", locale)}</Label>
+            <Label htmlFor="mailing-address">{tr.text("branding.mailingAddress")}</Label>
             {/* Several lines on purpose: an address is several lines, and the
                 reactivation email prints it with its line breaks. Trimmed,
                 blank-means-cleared and the length cap are all enforced in
@@ -307,7 +322,7 @@ export function BrandingPanel({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="brand-color">{t(m, "branding.color", locale)}</Label>
+            <Label htmlFor="brand-color">{tr.text("branding.color")}</Label>
             <div className="flex items-center gap-2">
               {/* The TEXT field is what submits. A bare <input type="color">
                   always posts a value whether or not anyone touched it — that
@@ -323,7 +338,7 @@ export function BrandingPanel({
               />
               <input
                 type="color"
-                aria-label={t(m, "branding.color", locale)}
+                aria-label={tr.text("branding.color")}
                 value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : FORM_ACCENT_FALLBACK}
                 onChange={(e) => setColor(e.target.value)}
                 className="h-9 w-12 shrink-0 rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
@@ -333,59 +348,59 @@ export function BrandingPanel({
           </div>
 
           <RadioRow
-            legend={t(m, "branding.neutral", locale)}
+            legend={tr.text("branding.neutral")}
             name="brandNeutral"
             value={neutral}
             onChange={setNeutral}
             hint={copy.neutralHint}
             options={[
-              ["", t(m, "branding.themeDefault", locale)],
-              ["warm", t(m, "branding.neutralWarm", locale)],
-              ["cool", t(m, "branding.neutralCool", locale)],
-              ["slate", t(m, "branding.neutralSlate", locale)],
+              ["", tr.text("branding.themeDefault")],
+              ["warm", tr.text("branding.neutralWarm")],
+              ["cool", tr.text("branding.neutralCool")],
+              ["slate", tr.text("branding.neutralSlate")],
             ]}
           />
           <RadioRow
-            legend={t(m, "branding.corners", locale)}
+            legend={tr.text("branding.corners")}
             name="brandCorners"
             value={corners}
             onChange={setCorners}
             options={[
-              ["", t(m, "branding.themeDefault", locale)],
-              ["sharp", t(m, "branding.cornersSharp", locale)],
-              ["soft", t(m, "branding.cornersSoft", locale)],
-              ["round", t(m, "branding.cornersRound", locale)],
+              ["", tr.text("branding.themeDefault")],
+              ["sharp", tr.text("branding.cornersSharp")],
+              ["soft", tr.text("branding.cornersSoft")],
+              ["round", tr.text("branding.cornersRound")],
             ]}
           />
           <RadioRow
-            legend={t(m, "branding.type", locale)}
+            legend={tr.text("branding.type")}
             name="brandType"
             value={typeface}
             onChange={setTypeface}
             options={[
-              ["", t(m, "branding.themeDefault", locale)],
-              ["geist", t(m, "branding.typeGeist", locale)],
-              ["inter", t(m, "branding.typeInter", locale)],
-              ["serif", t(m, "branding.typeSerif", locale)],
+              ["", tr.text("branding.themeDefault")],
+              ["geist", tr.text("branding.typeGeist")],
+              ["inter", tr.text("branding.typeInter")],
+              ["serif", tr.text("branding.typeSerif")],
             ]}
           />
           <RadioRow
-            legend={t(m, "branding.mode", locale)}
+            legend={tr.text("branding.mode")}
             name="brandMode"
             value={mode}
             onChange={setMode}
             hint={copy.modeHint}
             options={[
-              ["", t(m, "branding.themeDefault", locale)],
-              ["light", t(m, "branding.modeLight", locale)],
-              ["dark", t(m, "branding.modeDark", locale)],
+              ["", tr.text("branding.themeDefault")],
+              ["light", tr.text("branding.modeLight")],
+              ["dark", tr.text("branding.modeDark")],
               ["follow", copy.modeFollow],
             ]}
           />
 
           <div className="space-y-1.5">
             <div className="flex items-center gap-3">
-              <p className="text-sm font-medium text-card-foreground">{t(m, "branding.colorPreview", locale)}</p>
+              <p className="text-sm font-medium text-card-foreground">{tr.text("branding.colorPreview")}</p>
               {/* Only shown when there is a derived theme to switch. With no
                   theme the preview below is the two-swatch fallback, which has
                   no light and dark form — a control that changes nothing is
@@ -408,7 +423,7 @@ export function BrandingPanel({
                           "border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]",
                       )}
                     >
-                      {pm === "light" ? t(m, "branding.previewLight", locale) : t(m, "branding.previewDark", locale)}
+                      {pm === "light" ? tr.text("branding.previewLight") : tr.text("branding.previewDark")}
                     </button>
                   ))}
                 </div>
@@ -438,7 +453,7 @@ export function BrandingPanel({
                 >
                   <span className="h-4 w-1 rounded-r" style={{ backgroundColor: previewTheme.sidebarAccent }} />
                   <span className="text-xs" style={{ color: previewTheme.sidebarForeground }}>
-                    {t(m, "branding.previewSidebar", locale)}
+                    {tr.text("branding.previewSidebar")}
                   </span>
                 </span>
                 {/* A card inside a Card BY DESIGN — it is the live brand
@@ -453,8 +468,8 @@ export function BrandingPanel({
                     past its track at phone width. */}
                 <span className="min-w-0 flex-1 rounded-xl border border-border bg-card p-3"
                       style={{ borderRadius: "var(--radius)", fontFamily: "var(--font-sans)" }}>
-                  <span className="block text-sm font-medium text-card-foreground">{t(m, "branding.previewHeading", locale)}</span>
-                  <span className="block text-xs text-muted-foreground">{t(m, "branding.previewBody", locale)}</span>
+                  <span className="block text-sm font-medium text-card-foreground">{tr.text("branding.previewHeading")}</span>
+                  <span className="block text-xs text-muted-foreground">{tr.text("branding.previewBody")}</span>
                   <span
                     className="mt-2 inline-block px-4 py-2 text-sm font-medium"
                     style={{
@@ -463,7 +478,7 @@ export function BrandingPanel({
                       borderRadius: "var(--radius)",
                     }}
                   >
-                    {t(m, "branding.previewSubmit", locale)}
+                    {tr.text("branding.previewSubmit")}
                   </span>
                 </span>
               </div>
@@ -479,7 +494,7 @@ export function BrandingPanel({
                     borderRadius: "var(--radius)",
                   }}
                 >
-                  {t(m, "branding.previewSubmit", locale)}
+                  {tr.text("branding.previewSubmit")}
                 </span>
                 <span
                   className="flex items-center gap-2 rounded-md px-3 py-2"
@@ -490,7 +505,7 @@ export function BrandingPanel({
                     style={{ backgroundColor: previewSidebar ?? "var(--sidebar-accent)" }}
                   />
                   <span className="text-xs" style={{ color: SIDEBAR_FOREGROUND }}>
-                    {t(m, "branding.previewSidebar", locale)}
+                    {tr.text("branding.previewSidebar")}
                   </span>
                 </span>
               </div>
@@ -498,7 +513,7 @@ export function BrandingPanel({
           </div>
 
           <div className="space-y-1.5">
-            <p className="text-sm font-medium text-card-foreground">{t(m, "branding.currentLogo", locale)}</p>
+            <p className="text-sm font-medium text-card-foreground">{tr.text("branding.currentLogo")}</p>
             {logoUrl && hasLogo ? (
               <div className="flex items-center gap-3">
                 {/* Plain <img>, not next/image: this is a small asset on a
@@ -509,7 +524,7 @@ export function BrandingPanel({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={logoUrl}
-                  alt={brandName ?? t(m, "branding.logo", locale)}
+                  alt={brandName ?? tr.text("branding.logo")}
                   className="max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
                 />
                 {/* Ghost, never the card's primary (DESIGN rule 8: Save
@@ -520,16 +535,16 @@ export function BrandingPanel({
                     is a logo to remove. */}
                 {removeLogoAction && restoreLogoAction ? (
                   <Button type="button" variant="ghost" size="sm" onClick={removeLogo} disabled={removePending}>
-                    {t(m, "branding.removeLogo", locale)}
+                    {tr.text("branding.removeLogo")}
                   </Button>
                 ) : null}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{t(m, "branding.noLogo", locale)}</p>
+              <p className="text-sm text-muted-foreground">{tr.text("branding.noLogo")}</p>
             )}
           </div>
 
-          <SubmitButton pending={pending} locale={locale}>{t(m, "common.save", locale)}</SubmitButton>
+          <SubmitButton pending={pending} locale={locale}>{tr.text("common.save")}</SubmitButton>
         </form>
       </CardContent>
     </Card>

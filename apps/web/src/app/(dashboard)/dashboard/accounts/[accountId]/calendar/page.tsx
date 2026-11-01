@@ -15,8 +15,6 @@ import { isUuid } from "@/lib/assign/action-guards";
 import { makeTr } from "@/lib/record/copy";
 import { parseAgendaParams } from "@/lib/booking/agenda-window";
 import { dbForRequest } from "@/lib/db";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { seesWholeAccount } from "@/lib/auth-role";
@@ -246,7 +244,12 @@ export default async function CalendarPage({
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
-      <PageHeader title={t(m, "calendar.title", locale)} />
+      {/* S-10 T9a: through `tr.text()`, not plain `t()` — this page's OWN
+          title had ignored `?locale=pseudo` even though every card below it
+          already took `pseudo` as a prop (found by the e2e's own pseudo-
+          proof loop, which had to substitute the settings Card's title for
+          this one). */}
+      <PageHeader title={tr.text("calendar.title")} />
       <div className="space-y-6 p-6">
         {jobRead === "gone" || jobRead === "failed" ? (
           <p data-job-gone role="status" className="text-sm text-muted-foreground">
@@ -263,8 +266,30 @@ export default async function CalendarPage({
             calendar={calendar} job={job ? job.id : null}
           />
         </Suspense>
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="space-y-6">
+        {/*
+          S-10 T9a (the e2e fixme): below `lg` there was no column template at
+          all, so the grid fell back to ONE implicit, auto-sized column
+          shared by both children (`grid-auto-flow`'s default row-only
+          implicit grid, with no explicit columns, places siblings into
+          SEPARATE ROWS of the SAME single column) — and an `auto` track's
+          base size is the LARGEST of its items' automatic minimum size,
+          which for a block-level grid item defaults to its min-content size
+          UNLESS the item itself carries `min-width:0` (the override every
+          other grid item on this page already has via Card's own
+          `min-w-0`, ui/card.tsx — but these two wrappers are plain `<div
+          className="space-y-6">`, not Cards, so the override never reached
+          them). Measured directly at 375px under `?locale=pseudo`:
+          `getComputedStyle(grid).gridTemplateColumns` resolved to
+          "318.062px" against the grid's own rendered width of 263px, 55px
+          short — `grid-cols-1` gives the column an explicit, real `1fr`-
+          shaped track instead of an ambiguous auto one, and `min-w-0` on
+          both children removes their own content-based floor from that
+          track's sizing, matching the fix the calls record page
+          ([callId]/page.tsx) and forms/[formId]/page.tsx's identical
+          `lg:grid-cols-[minmax(0,1fr)_…]` pattern already needed.
+        */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="min-w-0 space-y-6">
             {canManage ? (
               <CalendarSettings
                 isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} locale={locale} pseudo={pseudo}
@@ -286,7 +311,7 @@ export default async function CalendarPage({
               keepAction={boundKeepAppointment}
             />
           </div>
-          <div className="space-y-6">
+          <div className="min-w-0 space-y-6">
             <EmbedSnippet
               origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} locale={locale} pseudo={pseudo}
             />

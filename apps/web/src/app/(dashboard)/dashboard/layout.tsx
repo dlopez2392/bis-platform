@@ -192,6 +192,17 @@ export default async function DashboardLayout({
   // the account's language. No per-account read happens on agency routes. `clientState.language` is widened onto
   // resolveClientAccessState's existing read (lib/auth.ts →
   // getAccountByOrgId, packages/db/src/accounts.ts) — no second query.
+  // S-10 T9a (decided, with evidence): `requestLocale` here deliberately
+  // receives NO third argument. Next.js gives `searchParams` to PAGES only
+  // — a layout's own props are `{ params, children }`, nothing more (this
+  // is a framework constraint, not an oversight to wire shut) — so
+  // `?locale=`/`?locale=pseudo` can never reach the shell this layout
+  // builds (the sidebar, the topbar, ⌘K): only a real `users.language` row
+  // does, same as production. The design spec's §10 "the QA locale
+  // override never reaches the shell" finding and §5.2's G9 row record the
+  // consequence for the build checks: the shell's own G9 overflow proof
+  // needs a real Spanish e2e session (spanish-dashboard.spec.ts's "the
+  // shell:" test), never a `?locale=` query on any other account.
   const locale = requestLocale({
     account: clientState?.status === "ok"
       ? { language: clientState.language as Locale | null }

@@ -5,7 +5,7 @@ import { describeRow } from "@/lib/proposals/view";
 import type { DescribeCtx, Description, Part } from "@/lib/proposals/kinds/types";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { contactDisplayName, formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
-import { mergeCountsList } from "@/lib/contacts/merge-copy";
+import { mergeCountsList, mergeCountsTotal } from "@/lib/contacts/merge-copy";
 import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { describeAct } from "@/lib/ai-acts/kinds";
@@ -219,7 +219,14 @@ function phrase(
         ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName }, tr.locale)
         : tr.text("timeline.mergeOtherHidden");
       const list = mergeCountsList(entry.merge.counts, tr, tr.locale);
-      return { verb: list ? tr.text("timeline.merged", { name, list }) : tr.text("timeline.mergedEmpty", { name }), status: null, detail: null };
+      // S-10 T9a: "{list} moved here" agrees with how MANY things moved in
+      // total ("1 nota pasó aquí" vs "1 nota y 1 llamada pasaron aquí"),
+      // never the plain "other" form regardless of count — the bug this
+      // fixes always read the plural Spanish verb even for a single item.
+      const verb = list
+        ? tr.count("timeline.merged", mergeCountsTotal(entry.merge.counts), { name, list })
+        : tr.text("timeline.mergedEmpty", { name });
+      return { verb, status: null, detail: null };
     }
     case "mergeUndone": {
       const name = entry.merge.otherVisible

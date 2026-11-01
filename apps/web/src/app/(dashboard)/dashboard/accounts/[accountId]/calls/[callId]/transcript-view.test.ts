@@ -51,7 +51,7 @@ describe("TranscriptView: Spanish (S-10 T5)", () => {
   it("renders the side labels in Spanish and the clock through tag(locale) (mutation: hard-code en-US -> FAILS)", () => {
     const en = render(transcript, "en");
     const es = render(transcript, "es");
-    expect(es).toContain("Quien llamó");
+    expect(es).toContain("Quién llamó");
     expect(es).toContain("Asistente");
     expect(es).not.toContain(">Caller<");
     expect(es).not.toContain(">Assistant<");

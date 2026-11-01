@@ -39,19 +39,19 @@ loadEnv({ path: ".env.local" });
  * any other identity could substitute for it, in this suite or in
  * production.
  *
- * SCOPE (updated, review round 1): Billing, Branding and Team are now
- * covered — #324 (T6) merged into `main` after this file's first draft,
- * converting all three and shipping `.es` twins for `billing.page.title`,
+ * SCOPE (updated, S-10 T9a): Billing, Branding and Team are now covered —
+ * #324 (T6) merged into `main` after this file's first draft, converting
+ * all three and shipping `.es` twins for `billing.page.title`,
  * `branding.clientTitle` and `team.title` (confirmed read through `t()`,
  * not a direct `m[...]` literal, by reading each page.tsx and
- * team-card.tsx). They are added to the G9 "real Spanish, no horizontal
- * scroll" loop only, below — not the pseudo loop — because none of the
- * three calls `requestPseudoMode` yet (confirmed by reading billing/
- * page.tsx, branding/page.tsx and team/page.tsx: none imports it), so
- * `?locale=pseudo` would be silently inert there. That gap is a T9
- * follow-up (routing those three pages' copy through `requestPseudoMode`
- * the way Dashboard/Contacts/To do/Calls/Forms already are), not something
- * this lane's fixture needs to paper over.
+ * team-card.tsx). T9a (below, after review round 1's own gap note) routed
+ * all three pages' copy through `requestPseudoMode` the way Dashboard/
+ * Contacts/To do/Calls/Forms already were (billing/page.tsx,
+ * branding/page.tsx and team/page.tsx, plus the client components each
+ * renders, now take `pseudo` as a prop), so they carry their own content
+ * assertions (`billingBrandingTeamRoutes`, real Spanish) AND a pseudo G9 proof
+ * (the same array's own `pseudoProofKey`, read by a second loop over it,
+ * below), the same two checks every other screen in this file gets.
  */
 
 const SPANISH_AUTH_FILE = "e2e/.auth/client-es-state.json";
@@ -342,25 +342,38 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
     { name: "Dashboard", path: (base) => `${base}/dashboard`, pseudoProofKey: "dashboard.kpi.last7Days" },
     { name: "Contacts", path: (base) => `${base}/contacts`, pseudoProofKey: "contacts.title" },
     { name: "To do", path: (base) => `${base}/tasks`, pseudoProofKey: "work.title" },
-    // Calendar's OWN title is not pseudo-aware (calendar/page.tsx:249 reads
-    // it through plain `t()`, never `tr.text()`), so its proof uses the
-    // booking-settings Card's title instead — a string the SAME page DOES
-    // route through `tr.text()` (calendar-settings.tsx), confirmed by the
-    // real finding below.
-    { name: "Calendar", path: (base) => `${base}/calendar`, pseudoProofKey: "calendar.settings.clientTitle" },
+    // S-10 T9a: Calendar's own title now routes through `tr.text()`
+    // (calendar/page.tsx), so its proof is its own page title again, the
+    // same shape every other route in this array uses.
+    { name: "Calendar", path: (base) => `${base}/calendar`, pseudoProofKey: "calendar.title" },
     { name: "Calls", path: (base) => `${base}/calls`, pseudoProofKey: "calls.title" },
     { name: "Forms", path: (base) => `${base}/forms`, pseudoProofKey: "forms.title" },
   ];
 
   // ADD (review round 1, now that #324/T6 has merged): Billing, Branding
-  // and Team, REAL-SPANISH ONLY — see this file's own top SCOPE comment
-  // for why they are not in the pseudo loop. Each carries its own content
-  // assertions (not just "no scroll") so this loop proves BOTH at once.
-  const realSpanishOnlyRoutes: Array<{
-    name: string; path: (base: string) => string; assertContent: (page: Page) => Promise<void>;
+  // and Team. Each carries its own content assertions (not just "no
+  // scroll") so this loop proves BOTH at once, in real Spanish.
+  // `pseudoProofKey` (S-10 T9a) feeds the separate pseudo loop further
+  // down (the `for (... of billingBrandingTeamRoutes)` block below the
+  // main `routes` loop), now that all three pages route their copy
+  // through `requestPseudoMode`.
+  //
+  // I-2 (review fix round): each key is a string a COMPONENT renders, not
+  // the page's own PageHeader title — a page-header key is covered by the
+  // page's own `p()` wrapper regardless of whether a deeper component
+  // (BrandingPanel, AlertPhoneCard, NeverLogList, TeamSection) ever saw
+  // `pseudo` at all, so it cannot prove the wiring I-2 named as unchecked.
+  // Billing is the one exception, and the reason is on its own line below:
+  // this fixture carries no billing row, so `ManageBillingButton` and the
+  // usage list never render here at all — `billing.page.empty.title`
+  // (the EmptyState component's own title prop) is the only
+  // reliably-rendered string past the header in this account's actual
+  // state.
+  const billingBrandingTeamRoutes: Array<{
+    name: string; path: (base: string) => string; pseudoProofKey: MessageKey; assertContent: (page: Page) => Promise<void>;
   }> = [
     {
-      name: "Billing", path: (base) => `${base}/billing`,
+      name: "Billing", path: (base) => `${base}/billing`, pseudoProofKey: "billing.page.empty.title",
       assertContent: async (page) => {
         // `{ level: 1 }`: the PageHeader's own h1, never a card's own h3 —
         // found live, this review round, on Team (below), where
@@ -374,7 +387,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
       },
     },
     {
-      name: "Branding", path: (base) => `${base}/branding`,
+      name: "Branding", path: (base) => `${base}/branding`, pseudoProofKey: "branding.name",
       assertContent: async (page) => {
         await expect(page.getByRole("heading", { level: 1, name: t(m, "branding.clientTitle", "es"), exact: true })).toBeVisible();
         // alert-phone-card.tsx:239 — a second card on the SAME page, below
@@ -383,7 +396,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
       },
     },
     {
-      name: "Team", path: (base) => `${base}/team`,
+      name: "Team", path: (base) => `${base}/team`, pseudoProofKey: "team.body",
       assertContent: async (page) => {
         // `{ level: 1 }`: TeamSection's own card ALSO carries an "Equipo"
         // heading (an `<h3 data-slot="card-title">`) — an unleveled query
@@ -432,7 +445,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
     });
   }
 
-  for (const { name, path, assertContent } of realSpanishOnlyRoutes) {
+  for (const { name, path, assertContent } of billingBrandingTeamRoutes) {
     test(`${name}: content reads Spanish and there is no horizontal page scroll at ${WIDTH}px, real Spanish`, async ({ page }) => {
       const fixture = spanishFixture();
       if (!fixture) { test.skip(true, SKIP_REASON); return; }
@@ -450,52 +463,63 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
   }
 
   for (const { name, path, pseudoProofKey } of routes) {
-    // FOUND, not fixed (brief: do not fix product UI in this lane). Real
-    // finding on Calendar only, confirmed by a solo run of this exact test
-    // (`pnpm exec playwright test e2e/spanish-dashboard.spec.ts -g
-    // "Calendar: no horizontal page scroll at 375px, pseudo-Spanish"`) and
-    // then measured further in the browser (review round 1, I-4 — the
-    // first draft of this comment named the wrong element):
+    // FIXED (S-10 T9a; was `test.fixme` — real finding on Calendar only,
+    // confirmed by a solo run of this exact test before the fix and
+    // measured in the browser, review round 1 I-4):
     //
     // At 375px, under the pseudo-locale's +35% padding, the OUTER grid at
-    // calendar/page.tsx:266 (`grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]`)
-    // declares a column template ONLY at `lg:` — below it there is no
-    // mobile template at all, so the grid falls back to ONE implicit,
+    // calendar/page.tsx (`grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]`)
+    // declared a column template ONLY at `lg:` — below it there was no
+    // mobile template at all, so the grid fell back to ONE implicit,
     // `auto`-sized column holding both children (the CalendarSettings
     // Card's wrapper and the ClosedDaysCard's wrapper, each a sibling
-    // `<div className="space-y-6">`). Measured directly:
-    // `getComputedStyle(grid).gridTemplateColumns` resolves to
+    // `<div className="space-y-6">`). Measured directly, BEFORE the fix:
+    // `getComputedStyle(grid).gridTemplateColumns` resolved to
     // `"318.062px"`, while the grid's OWN rendered width
-    // (`grid.getBoundingClientRect().width`) is only 263px (its parent,
+    // (`grid.getBoundingClientRect().width`) was only 263px (its parent,
     // `div.space-y-6.p-6`, is 311px — the content area right of the 64px
-    // collapsed sidebar rail — minus 24px of padding on each side). A
-    // CSS Grid `auto` track takes the LARGEST min-content contribution of
-    // the items placed in it rather than shrinking to the container, and
-    // nothing in this chain (the grid item itself, the Card, CardHeader's
-    // own `@container/card-header` grid) carries a `min-width: 0`
-    // override to let it shrink below that — so the track floors at
-    // 318px, 55px past its own 263px container, and the document ends up
+    // collapsed sidebar rail — minus 24px of padding on each side). A CSS
+    // Grid `auto` track takes the LARGEST min-content contribution of the
+    // items placed in it rather than shrinking to the container, and
+    // nothing in that chain (the grid item itself, the Card, CardHeader's
+    // own `@container/card-header` grid) carried a `min-width: 0`
+    // override to let it shrink below that — so the track floored at
+    // 318px, 55px past its own 263px container, and the document ended up
     // 406px wide, 31px past the 375px viewport
     // (`scrollWidth 406 > clientWidth 375`).
     //
-    // The exact LEAF driving that 318.062px figure is NOT pinned — stated,
-    // not guessed. Measured individually, under the same pseudo padding:
-    // the card's own `<h3>` title (268px), its `<p>` description (268px),
-    // every day-of-week row (268px) and all five `<SelectTrigger>`
-    // elements' own min-content width (forced via a temporary
-    // `style.width = "min-content"` read, the standard trick for this —
-    // 74 to 164px, none close to 318) all measured BELOW the 318px figure,
-    // so no single unwrapped text run explains it on its own; it is some
-    // combination inside the Card's own padding boundary that this lane
-    // did not chase further. Every other screen in this loop (Dashboard,
-    // Contacts, To do, Calls, Forms) passes the identical check, and
-    // real-Spanish Calendar (the test above this one) passes too — only
-    // the pseudo-padded case clips. The body below is the real assertion,
-    // kept live rather than dropped, so flipping `test.fixme` back to
-    // `test` is the whole fix once the grid gets a mobile column template
-    // (or the relevant child a `min-w-0`).
-    const testOrFixme = name === "Calendar" ? test.fixme : test;
-    testOrFixme(`${name}: no horizontal page scroll at ${WIDTH}px, pseudo-Spanish (+35%)`, async ({ page }) => {
+    // The exact LEAF driving that 318.062px figure was NOT pinned — stated,
+    // not guessed, at the time: the card's own `<h3>` title (268px), its
+    // `<p>` description (268px), every day-of-week row (268px) and all five
+    // `<SelectTrigger>` elements' own min-content width (74 to 164px) all
+    // measured BELOW the 318px figure on their own, so no single unwrapped
+    // text run explained it alone.
+    //
+    // FIX: `grid-cols-1` on the outer grid (a real, explicit single-column
+    // track instead of an ambiguous implicit `auto` one) plus `min-w-0` on
+    // both `<div className="space-y-6">` wrappers (the actual grid items —
+    // Card's own `min-w-0`, which every OTHER item on this page already
+    // gets from `ui/card.tsx`, never reached these because they sit a level
+    // above the Card). forms/[formId]/page.tsx carried the identical
+    // `lg:grid-cols-[minmax(0,1fr)_…]` pattern and got the same fix.
+    test(`${name}: no horizontal page scroll at ${WIDTH}px, pseudo-Spanish (+35%)`, async ({ page }) => {
+      const fixture = spanishFixture();
+      if (!fixture) { test.skip(true, SKIP_REASON); return; }
+      const route = path(`/dashboard/accounts/${fixture.accountId}`);
+      await assertNoPageScroll(page, `${route}?locale=pseudo`, WIDTH, {
+        expectedPathname: route, proveActive: provePseudoActive(pseudoProofKey),
+      });
+    });
+  }
+
+  // S-10 T9a: Billing, Branding and Team now route their copy through
+  // `requestPseudoMode` too (`billingBrandingTeamRoutes`'s own `pseudoProofKey`,
+  // added alongside this), so they get the SAME pseudo G9 proof every route
+  // above does — a separate loop, not folded into `routes`, because these
+  // three keep their own `assertContent` for the real-Spanish case above
+  // and gain nothing by duplicating that content check here too.
+  for (const { name, path, pseudoProofKey } of billingBrandingTeamRoutes) {
+    test(`${name}: no horizontal page scroll at ${WIDTH}px, pseudo-Spanish (+35%)`, async ({ page }) => {
       const fixture = spanishFixture();
       if (!fixture) { test.skip(true, SKIP_REASON); return; }
       const route = path(`/dashboard/accounts/${fixture.accountId}`);
@@ -514,11 +538,15 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
   // Filtered OUT before the loop (review I-3), not an early `return`
   // inside it, which registered a test that asserted nothing: Dashboard's
   // <h1> is the dynamic greeting (not a catalogue string, so there is
-  // nothing to compare against), and Calendar's <h1> is read through plain
-  // `t()` (calendar/page.tsx:249), never `tr.text()`, so `?locale=pseudo`
-  // never reaches it (review I-2) — neither has a page title worth
-  // measuring here.
-  const pageTitleRoutes = routes.filter((r) => r.name !== "Dashboard" && r.name !== "Calendar");
+  // nothing to compare against) — the only screen left out now. Calendar's
+  // own <h1> was read through plain `t()` (review I-2) until S-10 T9a wired
+  // it through `tr.text()`, so it rejoins this loop like every other
+  // screen; Billing, Branding and Team (S-10 T9a) join it for the first
+  // time, now that their own `PageHeader` titles are pseudo-aware too.
+  const pageTitleRoutes = [
+    ...routes.filter((r) => r.name !== "Dashboard"),
+    ...billingBrandingTeamRoutes,
+  ];
   for (const { name, path } of pageTitleRoutes) {
     test(`${name}: the page title element itself does not clip at ${WIDTH}px, pseudo-Spanish`, async ({ page }) => {
       const fixture = spanishFixture();

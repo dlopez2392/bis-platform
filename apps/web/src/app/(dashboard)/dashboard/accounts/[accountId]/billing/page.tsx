@@ -11,7 +11,8 @@ import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { dbForRequest } from "@/lib/db";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { t as tFn } from "@/lib/i18n/t";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
@@ -38,8 +39,22 @@ export const dynamic = "force-dynamic";
  * other owner-only surface, never 403'd (requireAccountAccess's own
  * reasoning).
  */
-export default async function BillingPage({ params }: { params: Promise<{ accountId: string }> }) {
+export default async function BillingPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  /** S-10 T9a: the QA override only (`?locale=pseudo`) — off unless
+   *  BIS_I18N_QA, never on Vercel (requestPseudoMode's own gate). This page
+   *  had no `searchParams` param at all before, so `?locale=pseudo` was
+   *  silently inert here even though every string below already resolves
+   *  through `locale`. Optional, like team/page.tsx's own `searchParams?`:
+   *  every existing caller that renders this page with no query string
+   *  (every test in page.test.ts) keeps working unchanged. */
+  searchParams?: Promise<{ locale?: string }>;
+}) {
   const { accountId } = await params;
+  const { locale: localeParam } = (await searchParams) ?? {};
   const { isAgency } = await requireAccountOwner(accountId);
   const db = await dbForRequest();
   // The paused line (M7a PR-4 Task 10, plan G12) and its locale, read the
@@ -54,8 +69,14 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
     billingVerdictFor(accountId),
     getPersonPrefs(),
   ]);
-  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language });
-  const header = <PageHeader title={tFn(m, "billing.page.title", locale)} subtitle={tFn(m, "billing.page.subtitle", locale)} />;
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  // S-10 T9a: `p()` wraps an already-resolved string from the `tFn()` calls
+  // below, the same precedent dashboard/page.tsx's own `p()` sets — never a
+  // prop threaded through child components, since every string on this page
+  // is built right here in the server component.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const p = (resolved: string) => (pseudo ? pseudoLocale(resolved) : resolved);
+  const header = <PageHeader title={p(tFn(m, "billing.page.title", locale))} subtitle={p(tFn(m, "billing.page.subtitle", locale))} />;
   if (!billing) {
     // DECISION 4: the item is in the client's nav before billing starts, and
     // this says what will appear here and what makes it appear.
@@ -63,7 +84,7 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
       <>
         {header}
         <div className="p-6">
-          <EmptyState icon={CreditCard} title={tFn(m, "billing.page.empty.title", locale)} body={tFn(m, "billing.page.empty.body", locale)} />
+          <EmptyState icon={CreditCard} title={p(tFn(m, "billing.page.empty.title", locale))} body={p(tFn(m, "billing.page.empty.body", locale))} />
         </div>
       </>
     );
@@ -88,7 +109,9 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   // the server, else the line names who to ask.
   const ended = view.status === "canceled" || (verdict.paused && verdict.cause === "ended");
   const support = normalizeReplyTo(process.env.AGENCY_SUPPORT_EMAIL) ?? null;
-  const pausedLine = verdict.paused ? pausedSentence(verdict.cause === "ended" ? "ended" : "payment", support, locale) : null;
+  const pausedLine = verdict.paused
+    ? pausedSentence(verdict.cause === "ended" ? "ended" : "payment", support, locale, pseudo)
+    : null;
 
   return (
     <>
@@ -97,30 +120,31 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
         <Card>
           <CardHeader>
             <CardTitle>{plan.name}</CardTitle>
-            <CardAction><DotPill label={t.label} chip={t.chip} dot={t.dot} data-status={processing ? "payment_processing" : view.status} /></CardAction>
+            <CardAction><DotPill label={p(t.label)} chip={t.chip} dot={t.dot} data-status={processing ? "payment_processing" : view.status} /></CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <p className="text-sm text-foreground tabular-nums">
-              {billing.complimentary ? tFn(m, "billing.page.complimentary", locale) : view.plan?.price}
+              {billing.complimentary ? p(tFn(m, "billing.page.complimentary", locale)) : view.plan?.price}
             </p>
             <div className="flex flex-col gap-2">
-              <h2 className="text-sm font-medium text-foreground">{tFn(m, "billing.page.usage", locale)}</h2>
+              <h2 className="text-sm font-medium text-foreground">{p(tFn(m, "billing.page.usage", locale))}</h2>
               <ul className="space-y-1 text-sm tabular-nums text-foreground">
-                {view.usage.map((u) => <li key={u.meter} className={u.over ? "font-medium" : undefined}>{u.text}</li>)}
+                {view.usage.map((u) => <li key={u.meter} className={u.over ? "font-medium" : undefined}>{p(u.text)}</li>)}
               </ul>
               {view.since ? (
-                <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{view.since}</p>
+                <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{p(view.since)}</p>
               ) : null}
-              <p className="text-xs text-muted-foreground">{tFn(m, "billing.usage.chatsNote", locale)}</p>
+              <p className="text-xs text-muted-foreground">{p(tFn(m, "billing.usage.chatsNote", locale))}</p>
             </div>
-            {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{view.nextInvoice}</p> : null}
-            {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{tFn(m, "billing.page.canceled", locale)}</p> : null}
+            {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{p(view.nextInvoice)}</p> : null}
+            {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{p(tFn(m, "billing.page.canceled", locale))}</p> : null}
             {pausedLine ? <p className="text-sm text-foreground" lang={locale}>{pausedLine}</p> : null}
             {!billing.complimentary && billing.stripeCustomerId ? (
               <ManageBillingButton
                 open={openBillingPortalAction.bind(null, accountId, locale)}
-                help={ended ? tFn(m, "billing.page.manageHelp.canceled", locale) : tFn(m, "billing.page.manageHelp", locale)}
+                help={p(ended ? tFn(m, "billing.page.manageHelp.canceled", locale) : tFn(m, "billing.page.manageHelp", locale))}
                 locale={locale}
+                pseudo={pseudo}
               />
             ) : null}
           </CardContent>
@@ -131,11 +155,17 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
 }
 
 /** The paused line (plan G12; design review I4): an ended plan's "contact us" is a mailto link to the
- *  agency's support address when one is set, else names the team that set up the account. */
-function pausedSentence(cause: "payment" | "ended", support: string | null, locale: Locale): React.ReactNode {
-  if (cause === "payment") return tFn(m, "billing.page.paused.payment", locale);
-  if (!support) return tFn(m, "billing.page.paused.endedNoContact", locale);
-  const [before, after] = tFn(m, "billing.page.paused.ended", locale).split("{email}");
+ *  agency's support address when one is set, else names the team that set up the account.
+ *
+ *  S-10 T9a: `pseudo` wraps the WHOLE resolved string before any split —
+ *  `pseudoLocale` leaves a `{placeholder}` byte-for-byte untouched wherever
+ *  it falls, so `.split("{email}")` still finds it inside the padded,
+ *  bracketed text and the link lands in the middle of one bracket pair. */
+function pausedSentence(cause: "payment" | "ended", support: string | null, locale: Locale, pseudo = false): React.ReactNode {
+  const p = (resolved: string) => (pseudo ? pseudoLocale(resolved) : resolved);
+  if (cause === "payment") return p(tFn(m, "billing.page.paused.payment", locale));
+  if (!support) return p(tFn(m, "billing.page.paused.endedNoContact", locale));
+  const [before, after] = p(tFn(m, "billing.page.paused.ended", locale)).split("{email}");
   return (
     <>
       {before}

@@ -314,7 +314,7 @@ has, `I18N/ratchet-scan.ts:113-116`).
 | G6 Glossary (new) | none | each row of 4.3 with a "Never" becomes a banned-word check, applied when the English holds the row's word (whole word, case-insensitive). **As built, 19 rules:** settings→configuración, delete→eliminar, book→reserv-, try again→Reintentar / Vuelva a intentarlo, estimate→presupuesto/cotización, add→añadir, email→e-mail, text→SMS, lead→prospecto, staff (the role, not "agency staff")→personal, owner→propietario, upload→cargar, and from the PR 1 review dashboard→tablero, deal→trato, appointment/booking→reserva, reschedule→reprogramar, answered→contestada, trade→oficio, to do→tareas (the last six have no breach and are hard). **Excluded on purpose:** "servicio" for job (also "service", as in Services & prices), "registro" for record (also a log: the access log's word; 14 legitimate uses measured), "inicio" for dashboard (also "inicio de sesión"), and "contacto" for customer in prose (a contact row is one) | frozen list of today's hits shrinks to empty |
 | G7 Accents | `I18N/accents-guard.test.ts:7-19` checks only that `app-sidebar.tsx` and `stat-tile.tsx` do not import `consent/keywords` or `consent/phrases` | every file under `src/app` and `src/components` except the consent pipeline is checked for those imports and for `stripDiacritics` (`WEB/lib/sms/alerts.ts:52`, which is right for SMS and wrong on a screen) | same |
 | G8 `lang` | none | signed out (T7): `localeFromAcceptLanguage` unit tests (`es-MX,en;q=0.5` gives `es`, `en-US,es;q=0.9` gives `en`, a q=0 or malformed range never selects) and AuthShell's `<main lang>`; the root layout's `<html lang>` stays `"en"` with no session read (`layout.test.ts`). Signed in (`es` session gives `lang="es"`): T9 | same |
-| G9 Overflow | `e2e/i18n-overflow.spec.ts` on four screens at 390×844 (`:186`) | every converted screen, at **375×812**, in `es` (nothing may clip) and `pseudo` (a clip must carry a `title` fallback), deciding with the existing `e2e/overflow-check.ts` | same; a measurement run by bis-e2e-qa, never by the lane agent |
+| G9 Overflow | `e2e/i18n-overflow.spec.ts` on four screens at 390×844 (`:186`) | every converted screen, at **375×812**, in `es` (nothing may clip) and `pseudo` (a clip must carry a `title` fallback), deciding with the existing `e2e/overflow-check.ts`. **The shell itself is excluded on purpose (decided 2026-11-01, T9a):** Next layouts receive no `searchParams`, so `?locale=` can never reach the sidebar/topbar/⌘K — there is no QA override to wire, and the shell's own G9 proof instead needs a real Spanish e2e session (section 10's own finding; `spanish-dashboard.spec.ts`'s "the shell:" test) | same; a measurement run by bis-e2e-qa, never by the lane agent |
 
 A test that cannot fail is not evidence: each new gate's task names its mutation (G3: add `m["nav.tasks"]` to
 `app-sidebar.tsx`, must fail naming that file; G4: put "Inténtalo de nuevo." in any `.es` ("Revisa" cannot work: it is also the third person, so it is not on the list); G6: put "Eliminar" in a twin of
@@ -467,7 +467,11 @@ account with no language gets English, decision 3, `RT:467`.)
   `?locale=es` turns pages Spanish under a still-English sidebar, topbar and ⌘K. G9 for the shell therefore
   needs a Spanish e2e user (own `users.language`) or a QA header set by `src/proxy.ts`. Moved from T7 to T9
   by the 2026-11-01 split: T7's 375px check measures AuthShell, not the shell, and is named as a signed-out
-  overflow check.
+  overflow check. **Decided 2026-11-01 (T9a, with evidence):** leave it — a layout's props in this framework
+  are `{ params, children }` only, so there is no `searchParams` to read; this is a constraint, not a gap to
+  wire shut. The decision and its reasoning are now also a code comment at the exact read site
+  (`dashboard/layout.tsx`'s own `requestLocale` call), and `spanish-dashboard.spec.ts`'s G9 "the shell:" test
+  (the real Spanish e2e session this finding calls for) is the standing proof.
 - **T7 split, 2026-11-01:** the signed-in `<html lang>` was built in T7 and removed before merge. It read
   `auth()`, `resolveClientAccessState()` and `getPersonPrefs()` in the root layout, which wraps `/sign-in`,
   `/no-access` and paths outside the proxy matcher (a bare `auth()` throws there, and an unguarded

@@ -29,3 +29,24 @@ describe("SubmitButton — Spanish (S-10 T6)", () => {
     expect(html).toContain(m["common.saving"]);
   });
 });
+
+// S-10 T9a: calendar's ClosedDaysCard "Agregar días cerrados" button
+// clipped the viewport by 6px under the pseudo-locale's +35% padding
+// (e2e/spanish-dashboard.spec.ts's own G9 loop, found live) — the Button
+// underneath carries `whitespace-nowrap` with no width to wrap against, and
+// this is the one caller that needed to override it. `className` is
+// additive and optional: every pre-existing caller (34 files) passes none
+// and is unaffected.
+describe("SubmitButton — className is forwarded onto the Button (S-10 T9a)", () => {
+  it("merges an explicit className onto the rendered <button> (mutation: drop the className prop → FAILS)", () => {
+    const html = renderToStaticMarkup(
+      createElement(SubmitButton, { pending: false, className: "whitespace-normal" } as never, "Save"),
+    );
+    expect(html).toMatch(/<button[^>]*class="[^"]*\bwhitespace-normal\b/);
+  });
+
+  it("with no className, the button renders exactly as before (mutation: force a className unconditionally → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(SubmitButton, { pending: false } as never, "Save"));
+    expect(html).not.toContain("whitespace-normal");
+  });
+});

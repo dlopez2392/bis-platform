@@ -8,7 +8,8 @@ import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
 import { requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { t } from "@/lib/i18n/t";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
@@ -76,12 +77,16 @@ export default async function TeamPage({
     getPersonPrefs(),
   ]);
   const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  // S-10 T9a: wired the way billing/branding now are — `pseudo` is a prop
+  // every child below takes, never the ambient LocaleProvider.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const p = (resolved: string) => (pseudo ? pseudoLocale(resolved) : resolved);
   return (
     <>
-      <PageHeader title={t(m, "team.title", locale)} subtitle={t(m, "team.page.subtitle", locale)} />
+      <PageHeader title={p(t(m, "team.title", locale))} subtitle={p(t(m, "team.page.subtitle", locale))} />
       <div className="p-6">
-        <Suspense fallback={<TeamSkeleton locale={locale} />}>
-          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} />
+        <Suspense fallback={<TeamSkeleton locale={locale} pseudo={pseudo} />}>
+          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} pseudo={pseudo} />
         </Suspense>
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>

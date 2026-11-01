@@ -186,7 +186,7 @@ describe("the invite form keeps what was typed when an invite is refused", () =>
   it("the send button takes pending by hand, since useFormStatus reports only for action forms (mutation: read useFormStatus again -> FAILS)", () => {
     expect(CARD_SRC).not.toContain("useFormStatus(");
     expect(CARD_SRC).not.toMatch(/import {[^}]*useFormStatus/);
-    expect(form).toContain("<SendButton pending={pending} locale={locale} />");
+    expect(form).toContain("<SendButton pending={pending} locale={locale} pseudo={pseudo} />");
   });
 });
 
@@ -459,7 +459,7 @@ describe("Technician on the Team card", () => {
 
   it("choosing Technician in the invite shows the help line: the role is held in state and RoleHelp reads it (mutation: render RoleHelp for the default role only -> FAILS)", () => {
     expect(invite).toMatch(/<Select name="role" value=\{role\} onValueChange=\{\(v\) => \{ if \(isAccountRole\(v\)\) setRole\(v\); \}\}>/);
-    expect(invite).toContain("<RoleHelp role={role} locale={locale} />");
+    expect(invite).toContain("<RoleHelp role={role} locale={locale} pseudo={pseudo} />");
   });
 
   it("a member who is a Technician carries the help line on their row; a team without one does not (mutation: drop RoleHelp from the row -> FAILS)", () => {
@@ -516,13 +516,39 @@ describe("TeamCard: Spanish (S-10 T6)", () => {
   // Radix renders a CLOSED Dialog's content to nothing on the server (the
   // suite's own "invite" source slice above exists for exactly this reason),
   // so the dialog's own words are pinned from source, not from a render.
-  it("the invite dialog's title, body, field labels and send button read through t(), not a bare m[...] (mutation: leave InviteDialog's own m[] reads → FAILS)", () => {
+  it("the invite dialog's title, body, field labels and send button read through tr.text(), not a bare m[...] (mutation: leave InviteDialog's own m[] reads → FAILS)", () => {
     const FULL_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
     const src = FULL_SRC.slice(FULL_SRC.indexOf("function InviteDialog("), FULL_SRC.indexOf("function TeamSkeleton("));
     for (const key of ["team.invite", "team.invite.title", "team.invite.body", "team.invite.email", "team.invite.role", "team.invite.language"]) {
-      expect(src, key).toContain(`t(m, "${key}", locale)`);
+      expect(src, key).toContain(`tr.text("${key}")`);
       expect(src, key).not.toContain(`m["${key}"]`);
     }
+  });
+
+  // I1 (review fix round): the test above never proved `tr` inside
+  // InviteDialog came from `makeTr(locale, pseudo)` specifically — a
+  // sneaked-in `const tr = makeTr("en", pseudo);` (or any other literal
+  // locale) still reads as `tr.text("key")` everywhere and passed every
+  // assertion above undetected. Pinned directly: the InviteDialog slice
+  // contains EXACTLY one `makeTr(` call, and it is `makeTr(locale, pseudo)`.
+  it("InviteDialog's own tr is built from makeTr(locale, pseudo) and nothing else calls makeTr (mutation: const tr = makeTr(\"en\", pseudo); → FAILS)", () => {
+    const FULL_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+    const src = FULL_SRC.slice(FULL_SRC.indexOf("function InviteDialog("), FULL_SRC.indexOf("function TeamSkeleton("));
+    const calls = [...src.matchAll(/makeTr\(/g)];
+    expect(calls).toHaveLength(1);
+    expect(src).toContain("const tr = makeTr(locale, pseudo);");
+  });
+
+  // "Ideally" (review fix round): a render test, not just a source-text
+  // pin — proves the Invite trigger's own TEXT, not merely its call
+  // shape, actually reads Spanish. Radix renders the TRIGGER (a real
+  // Button) to real markup on the server; only its portalled CONTENT is
+  // inert (this file's own top comment on DialogContent explains why
+  // THAT needs source-text pins instead).
+  it("in Spanish, TeamCard shows the Invite trigger's Spanish text, not the English one (mutation: locale=\"en\" inside InviteDialog → FAILS)", () => {
+    const html = card({ locale: "es" });
+    expect(renderedText(html)).toContain(m["team.invite.es"]);
+    expect(html).not.toContain(`>${m["team.invite"]}<`);
   });
 
   it("the room line and the empty sentence read in Spanish (mutation: call roomCopy/emptyCopy with no locale → FAILS)", () => {

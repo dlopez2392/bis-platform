@@ -181,7 +181,19 @@ vi.mock("@/lib/sms/alerts", async () => {
 // throws; `whenBookerZone`/`whenCompanyZoneForBooker` always pass a locale
 // and keep working, matching what a real Intl failure on the company's own
 // zone would do.
-const { formatWhenThrowsRef } = vi.hoisted(() => ({ formatWhenThrowsRef: { current: false } }));
+//
+// `formatWhenThrowsOnAlertRef` (S-10 T9a) isolates the OWNER ALERT's own
+// date formatting (`whenForAlert = formatWhen(startsAt, timezone,
+// alertLocale)`) from every other `formatWhen` call on this page — it
+// throws only on a 3-arg call whose locale is "es", and every test that
+// uses it sets the booker's own page `locale` to "en" (validFormData's
+// default) while the ACCOUNT's language is "es", so `alertLocale` is "es"
+// and `locale` (the booker/thread calls) stays "en": only the alert call
+// matches.
+const { formatWhenThrowsRef, formatWhenThrowsOnAlertRef } = vi.hoisted(() => ({
+  formatWhenThrowsRef: { current: false },
+  formatWhenThrowsOnAlertRef: { current: false },
+}));
 vi.mock("@/lib/booking/time", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/booking/time")>();
   return {
@@ -189,6 +201,9 @@ vi.mock("@/lib/booking/time", async (importOriginal) => {
     formatWhen: (...args: Parameters<typeof actual.formatWhen>) => {
       if (formatWhenThrowsRef.current && args.length === 2) {
         throw new Error("Intl formatting failed");
+      }
+      if (formatWhenThrowsOnAlertRef.current && args.length === 3 && args[2] === "es") {
+        throw new Error("alert-date Intl formatting failed");
       }
       return actual.formatWhen(...args);
     },
@@ -305,6 +320,7 @@ beforeEach(() => {
   accountRow.language = null;
   sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
   formatWhenThrowsRef.current = false;
+  formatWhenThrowsOnAlertRef.current = false;
   recordLanguageSignalMock.mockReset().mockResolvedValue(true);
   restoreContactOnSignMock.mockReset().mockResolvedValue(false);
 });
@@ -1006,6 +1022,47 @@ Nota: Please call ahead`);
 When: ${whenEn}
 Who: Maria Lopez
 Note: Please call ahead`);
+  });
+
+  // S-10 T9a (review of #325): the alert's own date used to be formatted
+  // INSIDE the same try as the conversation-thread write, so a failure
+  // formatting JUST the alert's date (account language "es") could skip
+  // the thread line too — a formatter failure for a line nobody reads yet
+  // (the alert) should never cost the line that is the business's own
+  // stored record.
+  it("the thread write survives a failure formatting the owner alert's own date (mutation: share one try/catch for the thread write and the alert-date formatting → FAILS)", async () => {
+    accountRow.language = "es"; // alertLocale "es"; the booker's own locale stays "en" (validFormData's default)
+    formatWhenThrowsOnAlertRef.current = true;
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createMessageMock).toHaveBeenCalledTimes(1);
+    const whenEn = formatWhen(slot.startsAt, accountRow.timezone);
+    expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking", body: expect.stringContaining(`Booking: ${whenEn}`) });
+  });
+
+  // m1 (review fix round): a formatter failure must never drop the owner
+  // alert — it falls back to the WHOLE message in English (one message,
+  // one language: never a Spanish subject with an English date), using
+  // the same instant the thread write already proved safe
+  // (`whenCompanyZone`). The booker's own confirmation is unaffected
+  // either way.
+  it("falls back to a fully English alert when its date failed to format, rather than dropping it (mutation: keep sending it in Spanish with the English date → FAILS, half-translated; mutation: skip the alert → FAILS, none sent)", async () => {
+    accountRow.language = "es";
+    formatWhenThrowsOnAlertRef.current = true;
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    const whenEn = formatWhen(slot.startsAt, accountRow.timezone);
+    const alert = gated().find((r) => r.kind === "operator.booking_alert");
+    expect(alert).toBeDefined();
+    expect(alert!.subject).toBe(`New booking: ${whenEn} — Maria Lopez`);
+    expect(alert!.body).toContain(`When: ${whenEn}`);
+    expect(alert!.subject).not.toContain("Nueva cita");
+    expect(alert!.body).not.toContain("Nueva cita");
+    expect(gated().map((r) => r.kind)).toContain("booking.confirmation");
   });
 });
 

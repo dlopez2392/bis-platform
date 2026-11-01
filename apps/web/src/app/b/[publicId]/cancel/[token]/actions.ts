@@ -106,16 +106,6 @@ export async function confirmCancelAction(
       const timezone = account?.timezone ?? "UTC";
       // The thread line is the business's stored record: English, as before.
       const whenCompanyZone = formatWhen(new Date(row.starts_at), timezone);
-      // S-10: the notice to the OWNER is in the ACCOUNT's language (the row
-      // just read), never `locale`, the customer's page — its date too.
-      const noticeLocale = resolveLocale(undefined, account?.language ?? null);
-      const whenForNotice = formatWhen(new Date(row.starts_at), timezone, noticeLocale);
-
-      const contact = await getContact(db, row.account_id, row.contact_id);
-      const contactName = contact
-        ? ([contact.first_name, contact.last_name].filter(Boolean).join(" ").trim()
-          || contact.email || ownerAlertFallbackName(noticeLocale))
-        : ownerAlertFallbackName(noticeLocale);
 
       const convo = await ensureConversation(db, row.account_id, row.contact_id, ACTOR_ID, ACTOR_TYPE);
       await createMessage(db, row.account_id, {
@@ -124,6 +114,36 @@ export async function confirmCancelAction(
       }, ACTOR_ID, ACTOR_TYPE);
       await incrementUnreadCount(db, row.account_id, convo.id);
 
+      // S-10 T9a: the notice to the OWNER is in the ACCOUNT's language (the
+      // row just read), never `locale`, the customer's page — its date too.
+      // Guarded on its OWN, AFTER the thread write above, so a formatter
+      // failure here can never skip the thread line, which does not depend
+      // on it at all.
+      //
+      // m1 (review fix round): a formatting failure here must not drop the
+      // notice EMAIL — it falls back to the whole message in English
+      // instead (one message, one language), using `whenCompanyZone`, the
+      // identical instant the thread write already proved safe.
+      // `noticeEmailLocale` carries the fallback into the fallback contact
+      // name AND the email builder, never a half-Spanish notice with an
+      // English date.
+      const noticeLocale = resolveLocale(undefined, account?.language ?? null);
+      let whenForNotice = "";
+      let noticeEmailLocale: Locale = noticeLocale;
+      try {
+        whenForNotice = formatWhen(new Date(row.starts_at), timezone, noticeLocale);
+      } catch (e) {
+        console.error(`booking ${row.id} cancel notice-date formatting failed, falling back to English: ${String(e)}`);
+        whenForNotice = whenCompanyZone;
+        noticeEmailLocale = "en";
+      }
+
+      const contact = await getContact(db, row.account_id, row.contact_id);
+      const contactName = contact
+        ? ([contact.first_name, contact.last_name].filter(Boolean).join(" ").trim()
+          || contact.email || ownerAlertFallbackName(noticeEmailLocale))
+        : ownerAlertFallbackName(noticeEmailLocale);
+
       // `loadCalendarNotifyEmails` selects only `notify_emails` — no
       // `enabled` column at all, deliberately: a disabled calendar stops NEW
       // bookings (`submitBookingAction` gates on `enabled`); it must never
@@ -131,7 +151,7 @@ export async function confirmCancelAction(
       // something out, it doesn't open anything new, so there is nothing
       // left here to gate on.
       const notifyEmails = await loadCalendarNotifyEmails(db, row.calendar_id);
-      if (notifyEmails.length > 0) {
+      if (notifyEmails.length > 0 && whenForNotice) {
         const brand = emailBrand({
           brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
           brandColor: account?.brand_color ?? null, brandNeutral: account?.brand_neutral ?? null,
@@ -140,7 +160,7 @@ export async function confirmCancelAction(
         });
 
         const { subject, text: body } = bookingCancelNoticeEmail({
-          whenCompanyZone: whenForNotice, contactName, note: row.note, locale: noticeLocale,
+          whenCompanyZone: whenForNotice, contactName, note: row.note, locale: noticeEmailLocale,
         });
 
         const failures: string[] = [];

@@ -10,7 +10,8 @@ import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { loggableError } from "@/lib/loggable-error";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "./actions";
@@ -119,13 +120,17 @@ export default async function BrandingPage({
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  // S-10 T9a: wired the way calendar/page.tsx wires EmbedSnippet/FeedCard —
+  // `pseudo` is a prop every child below takes, never the ambient
+  // LocaleProvider, which cannot see this page's own `?locale=` override.
+  const pseudo = requestPseudoMode({ locale: localeParam });
   const neverLogCard: { entries: NeverLogView[] | null; locale: Locale } | undefined =
     access.canManage ? { entries: neverLogEntries, locale } : undefined;
 
   return (
     <div className="space-y-6">
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
-      <PageHeader title={t(m, "branding.clientTitle", locale)} />
+      <PageHeader title={pseudo ? pseudoLocale(t(m, "branding.clientTitle", locale)) : t(m, "branding.clientTitle", locale)} />
       <BrandingPanel
         // Remount when the ACCOUNT changes, so the panel's own state cannot
         // carry one account's unsaved selections into another's fields on a
@@ -153,13 +158,14 @@ export default async function BrandingPage({
         removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}
         restoreLogoAction={restoreBrandLogoAction.bind(null, accountId, locale)}
         locale={locale}
+        pseudo={pseudo}
       />
       {/* S-06 part 2: its own card, OUTSIDE the branding form (plan G6), and no primary of its own. */}
       {neverLogCard !== undefined ? (
         <Card id="never-record">
           <CardContent className="pt-6">
             <NeverLogList entries={neverLogCard.entries} add={addNeverLogAction.bind(null, accountId)}
-              remove={removeNeverLogAction.bind(null, accountId)} locale={neverLogCard.locale} idPrefix="branding" />
+              remove={removeNeverLogAction.bind(null, accountId)} locale={neverLogCard.locale} idPrefix="branding" pseudo={pseudo} />
           </CardContent>
         </Card>
       ) : null}
@@ -176,6 +182,7 @@ export default async function BrandingPage({
         // alone was the narrow, pre-widening comparison read back in here.
         smsNotReady={!smsGate.ok || (alertPhone !== null && smsGate.ownedNumbers.includes(alertPhone))}
         locale={locale}
+        pseudo={pseudo}
       />
     </div>
   );

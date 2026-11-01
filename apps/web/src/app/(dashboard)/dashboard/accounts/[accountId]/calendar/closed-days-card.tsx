@@ -347,7 +347,14 @@ export function ClosedDaysCard({
           </Select>
         </div>
       </div>
-      <SubmitButton pending={addPending}>{tr.text("closedDays.add")}</SubmitButton>
+      {/* S-10 T9a: found live — the pseudo-padded "[Ágrégár díás cérrádós
+          Ẋẋ Ṿṿ Ẋẋ Ṿṿ]" is 268px of unbreakable `whitespace-nowrap` text
+          (the Button's own default) with nothing to wrap against, and
+          clipped the 375px viewport by 6px. `h-auto` lets the button's own
+          height follow a second line instead of clipping it. */}
+      <SubmitButton pending={addPending} className="h-auto max-w-full whitespace-normal text-left">
+        {tr.text("closedDays.add")}
+      </SubmitButton>
     </form>
   ) : null;
 

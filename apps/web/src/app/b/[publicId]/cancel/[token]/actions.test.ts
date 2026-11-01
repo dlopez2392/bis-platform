@@ -143,6 +143,30 @@ vi.mock("@bis/db", () => ({
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
 }));
 
+// S-10 T9a: isolates the owner NOTICE's own date formatting (`whenForNotice
+// = formatWhen(new Date(row.starts_at), timezone, noticeLocale)`) from the
+// thread's own (`formatWhen(new Date(row.starts_at), timezone)`, 2 args,
+// always real) — the same idiom app/b/[publicId]/actions.test.ts's own
+// `formatWhenThrowsOnAlertRef` uses, for the identical reason: proving the
+// thread write survives a formatter failure that is scoped to the notice
+// alone. Every test that sets this also sets `accountRow.language = "es"`
+// (`noticeLocale` "es") while leaving the page's own `locale` argument at
+// its default "en" (unused by either formatWhen call here, but kept for
+// clarity) — only the 3-arg "es" call matches.
+const { formatWhenThrowsOnNoticeRef } = vi.hoisted(() => ({ formatWhenThrowsOnNoticeRef: { current: false } }));
+vi.mock("@/lib/booking/time", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/booking/time")>();
+  return {
+    ...actual,
+    formatWhen: (...args: Parameters<typeof actual.formatWhen>) => {
+      if (formatWhenThrowsOnNoticeRef.current && args.length === 3 && args[2] === "es") {
+        throw new Error("notice-date Intl formatting failed");
+      }
+      return actual.formatWhen(...args);
+    },
+  };
+});
+
 import { confirmCancelAction } from "./actions";
 import { lookupBookingByToken } from "./data";
 import { serviceDb } from "@bis/db";
@@ -192,6 +216,7 @@ beforeEach(() => {
   calendarNotifyRowsRef.current = { cal_1: { notify_emails: ["owner@acme.com"] } };
   calendarLookupErrorRef.current = null;
   accountRow.language = null;
+  formatWhenThrowsOnNoticeRef.current = false;
 });
 
 describe("lookupBookingByToken — the page-level, read-only lookup", () => {
@@ -338,6 +363,21 @@ Nota: Otro día`);
     expect(gated()[0]!.body).toMatch(/^Alguien canceló su cita./);
   });
 
+  // S-10 T9a (item 7b, #325's review): the "Alguien"/"Someone" fallback has
+  // TWO distinct code paths — `contact === null` (above) and a contact row
+  // that EXISTS but carries no first/last name and no email, which falls
+  // through the `|| ownerAlertFallbackName(...)` inside the ternary's TRUE
+  // branch instead of its `: ownerAlertFallbackName(...)` false branch.
+  // Only the null case had a test; a mutation dropping this second fallback
+  // would read " canceló su cita." (an empty name) and the null-contact
+  // test above could not catch it.
+  it("es account, a contact row that EXISTS with no first/last name and no email: the fallback name is Spanish too (mutation: drop the `|| ownerAlertFallbackName(...)` fallback inside the ternary's true branch → FAILS, an empty name)", async () => {
+    accountRow.language = "es";
+    getContactMock.mockResolvedValue({ id: "contact_1", first_name: null, last_name: null, email: null });
+    await confirmCancelAction(PUBLIC_ID, TOKEN);
+    expect(gated()[0]!.body).toMatch(/^Alguien canceló su cita./);
+  });
+
   it("no language on the account (null): English, byte for byte, even from a Spanish page (mutation: follow the page locale or default to es → FAILS)", async () => {
     await confirmCancelAction(PUBLIC_ID, TOKEN, "es");
     const whenEn = formatWhen(STARTS, "America/Chicago");
@@ -346,6 +386,43 @@ Nota: Otro día`);
     expect(notice!.body).toBe(`Maria Lopez cancelled their booking.
 
 When: ${whenEn}`);
+  });
+
+  // S-10 T9a: the notice's own date used to be formatted INSIDE the same
+  // try as the conversation-thread write, so a failure formatting JUST the
+  // notice's date (account language "es") could skip the thread line too.
+  it("the thread write survives a failure formatting the owner notice's own date (mutation: share one try/catch for the thread write and the notice-date formatting → FAILS)", async () => {
+    accountRow.language = "es";
+    formatWhenThrowsOnNoticeRef.current = true;
+
+    const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
+
+    expect(result).toEqual({ ok: true });
+    expect(createMessageMock).toHaveBeenCalledTimes(1);
+    const whenEn = formatWhen(STARTS, "America/Chicago");
+    expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking cancelled", body: `Cancelled their ${whenEn} booking` });
+  });
+
+  // m1 (review fix round): a formatter failure must never drop the notice
+  // — it falls back to the WHOLE message in English (one message, one
+  // language: never a Spanish subject with an English date), using the
+  // same instant the thread write already proved safe (`whenCompanyZone`).
+  it("falls back to a fully English cancel notice when its date failed to format, rather than dropping it (mutation: keep sending it in Spanish with the English date → FAILS, half-translated; mutation: skip the notice → FAILS, none sent)", async () => {
+    accountRow.language = "es";
+    formatWhenThrowsOnNoticeRef.current = true;
+
+    const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
+
+    expect(result).toEqual({ ok: true });
+    const whenEn = formatWhen(STARTS, "America/Chicago");
+    const [notice] = gated();
+    expect(notice).toBeDefined();
+    expect(notice!.subject).toBe(`Booking cancelled: ${whenEn} — Maria Lopez`);
+    expect(notice!.body).toBe(`Maria Lopez cancelled their booking.
+
+When: ${whenEn}`);
+    expect(notice!.subject).not.toContain("Cita cancelada");
+    expect(notice!.body).not.toContain("Cuándo");
   });
 });
 

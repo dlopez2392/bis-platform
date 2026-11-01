@@ -36,7 +36,7 @@ import type { TeamViewer } from "./team-copy";
  *   which must stay reachable (client-access-section.tsx's reasoning).
  */
 export async function TeamSection({
-  accountId, viewer, locale = "en",
+  accountId, viewer, locale = "en", pseudo = false,
 }: {
   accountId: string;
   viewer: TeamViewer;
@@ -44,6 +44,9 @@ export async function TeamSection({
    *  own route, or Settings' Client access card) and passed down. Optional,
    *  defaulting to "en" so every pre-existing caller is unaffected. */
   locale?: Locale;
+  /** S-10 T9a: the QA pseudo-locale (`requestPseudoMode`), a prop like every
+   *  other card on a pseudo-wired page. */
+  pseudo?: boolean;
 }) {
   const db = await dbForRequest();
 
@@ -59,9 +62,9 @@ export async function TeamSection({
     row = account.data as Record<string, unknown> | null;
   } catch (e) {
     console.error(`team: stored team unreadable for account ${accountId}: ${loggableError(e)}`);
-    return <TeamLoadError locale={locale} />;
+    return <TeamLoadError locale={locale} pseudo={pseudo} />;
   }
-  if (row?.client_access_enabled !== true) return <TeamAccessOff locale={locale} />;
+  if (row?.client_access_enabled !== true) return <TeamAccessOff locale={locale} pseudo={pseudo} />;
   const clerkOrgId = typeof row.clerk_org_id === "string" && row.clerk_org_id ? row.clerk_org_id : null;
 
   let pending: PendingInvite[] = [];
@@ -81,6 +84,7 @@ export async function TeamSection({
   return (
     <TeamCard
       locale={locale}
+      pseudo={pseudo}
       members={members}
       pending={pending}
       room={room}

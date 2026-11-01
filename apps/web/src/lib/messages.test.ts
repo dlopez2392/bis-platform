@@ -2743,6 +2743,8 @@ describe("duplicates and merge copy, English and Spanish (F-006 plan Task 2)", (
     "contacts.merge.undoFailed.es": "No se pudo deshacer la unión. No cambió nada. Intente de nuevo.",
     "timeline.merged": "merged {name} into this record: {list} moved here",
     "timeline.merged.es": "unió a {name} con este registro: {list} pasaron aquí",
+    "timeline.mergedOne": "merged {name} into this record: {list} moved here",
+    "timeline.mergedOne.es": "unió a {name} con este registro: {list} pasó aquí",
     "timeline.mergedEmpty": "merged {name} into this record",
     "timeline.mergedEmpty.es": "unió a {name} con este registro",
     "timeline.mergeUndone": "undid the merge with {name}",

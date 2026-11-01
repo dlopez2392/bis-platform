@@ -234,3 +234,21 @@ describe("BrandingPanel — Spanish (S-10 T6)", () => {
     expect(text).toContain(m["branding.nameHint"]);
   });
 });
+
+// m6 (review fix round): the toast-pseudo policy is "never" everywhere —
+// a toast is post-interaction feedback, not the page's own static render,
+// so it is never wired through `tr.text()` (which pseudo-pads), only plain
+// `t(m, key, locale)`. The SAME policy alert-phone-card.tsx and
+// team-copy.ts's `teamErrorCopy` both carry (each with its own comment
+// making the same call), so this file's own toasts can never drift from
+// theirs.
+describe("BrandingPanel — toasts never read through tr.text() (m6, review fix round)", () => {
+  it("no toast.error/toast.success call reads tr.text() (mutation: toast.error(tr.text(\"branding.tooLarge\")) → FAILS)", () => {
+    expect(panelSource).not.toMatch(/toast\.(error|success)\([^)]*tr\.text\(/);
+  });
+  it("the three toast strings this form uses are all plain t(m, key, locale) calls", () => {
+    for (const key of ["branding.tooLarge", "branding.saved", "common.actionCrashed"]) {
+      expect(panelSource).toContain(`t(m, "${key}", locale)`);
+    }
+  });
+});
