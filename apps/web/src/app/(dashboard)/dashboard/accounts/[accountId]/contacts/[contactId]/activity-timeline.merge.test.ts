@@ -76,7 +76,9 @@ describe("a merge/mergeUndone row renders as one: its verb, its mark and the Mer
 
   it("in Spanish", () => {
     const entries: TimelineEntry[] = [{ kind: "merge", id: "1", at: AT, contactId: "c1", merge: TM() } as TimelineEntry];
-    expect(row(render(entries, "es"), "merge")).toContain(">unió a Other Person con este registro: 1 nota pasaron aquí<");
+    // S-10 T9a: singular ("pasó", not "pasaron") — the default TM() counts
+    // exactly ONE note.
+    expect(row(render(entries, "es"), "merge")).toContain(">unió a Other Person con este registro: 1 nota pasó aquí<");
   });
 
   // S-10 leftovers (#317 follow-up): the row's VERB text ("unió a X con este registro") is built by
@@ -92,7 +94,7 @@ describe("a merge/mergeUndone row renders as one: its verb, its mark and the Mer
       merge: TM({ otherFirstName: null, otherLastName: null }),
     } as TimelineEntry];
     const r = row(render(entries, "es"), "merge");
-    expect(r).toContain(">unió a (sin nombre) con este registro: 1 nota pasaron aquí<");
+    expect(r).toContain(">unió a (sin nombre) con este registro: 1 nota pasó aquí<");
     expect(r).not.toContain("(no name)");
   });
 });

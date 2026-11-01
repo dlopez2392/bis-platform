@@ -31,3 +31,17 @@ export function mergeCountsList(counts: Partial<Record<MergeCountKey, number>>, 
   if (phrases.length === 0) return "";
   return new Intl.ListFormat(locale === "es" ? "es-US" : "en-US", { type: "conjunction" }).format(phrases);
 }
+
+/**
+ * S-10 T9a: the sum of every counted category, for the ONE agreement
+ * decision a sentence wrapped around `mergeCountsList`'s own output still
+ * has to make on its own — "1 nota pasó aquí" (singular) vs "1 nota y 1
+ * llamada pasaron aquí" (plural, even though each category's own count is
+ * 1). `mergeCountsList` already gives each PHRASE its own singular/plural
+ * form (`tr.count`); this is the grammatical number of the SENTENCE the
+ * list sits inside, which depends on how many items moved in total, not on
+ * how many categories are nonzero.
+ */
+export function mergeCountsTotal(counts: Partial<Record<MergeCountKey, number>>): number {
+  return MERGE_COUNT_KEYS.reduce((sum, key) => sum + (counts[key] ?? 0), 0);
+}

@@ -4,7 +4,7 @@ import {
 } from "@bis/db";
 import { localMidnightInstant } from "@/lib/reports/weekly-window";
 import { m, type MessageKey } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import { t, plural, type PluralKey } from "@/lib/i18n/t";
 import { tag } from "@/lib/format";
 import type { Locale } from "@/lib/i18n/locale";
 import { formatCents } from "./plan-form";
@@ -161,8 +161,11 @@ const USAGE_COPY: Record<MeterKey, { of: MessageKey; none: MessageKey }> = {
 export function usageLines(allowances: MeterAmounts, used: MeterAmounts, locale: Locale = "en"): UsageLine[] {
   return METER_KEYS.map((meter) => {
     const included = allowances[meter];
+    // S-10 T9a: the ".none" branch agrees with how many were USED ("1
+    // minute", not "1 minutes") — found live reading the plain "other"
+    // form unconditionally, in both languages.
     const text = included === 0
-      ? t(m, USAGE_COPY[meter].none, locale, { used: count(used[meter], locale) })
+      ? plural(m, USAGE_COPY[meter].none as PluralKey<typeof m>, used[meter], locale, { used: count(used[meter], locale) })
       : t(m, USAGE_COPY[meter].of, locale, { used: count(used[meter], locale), included: count(included, locale) });
     return { meter, used: used[meter], included, over: used[meter] > included, text };
   });

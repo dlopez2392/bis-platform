@@ -501,8 +501,24 @@ describe("a merge/mergeUndone row's phrase (F-006 part 1, plan Task 9)", () => {
   });
 
   it("in Spanish (mutation: build from m[...] in English -> FAILS)", () => {
-    expect(rows([mergeEntry({ counts: { notes: 1 } })], "es")[0]!.verb).toBe("unió a Other Person con este registro: 1 nota pasaron aquí");
+    expect(rows([mergeEntry({ counts: { notes: 1 } })], "es")[0]!.verb).toBe("unió a Other Person con este registro: 1 nota pasó aquí");
     expect(rows([undoneEntry()], "es")[0]!.verb).toBe("deshizo la unión con Other Person");
+  });
+
+  // S-10 T9a: "{list} moved here" agrees with the TOTAL count of things
+  // moved, never the plain "other" form regardless of count — found live
+  // as "1 nota pasaron aquí" (plural verb on a singular subject).
+  it("the Spanish verb agrees with how many things moved in total, not with the number of nonzero categories (mutation: always use the plural 'pasaron' -> FAILS)", () => {
+    // One category, one item: singular.
+    expect(rows([mergeEntry({ counts: { notes: 1 } })], "es")[0]!.verb)
+      .toBe("unió a Other Person con este registro: 1 nota pasó aquí");
+    // One category, several items: plural.
+    expect(rows([mergeEntry({ counts: { notes: 3 } })], "es")[0]!.verb)
+      .toBe("unió a Other Person con este registro: 3 notas pasaron aquí");
+    // Two categories, each with 1 (so 2 items total): plural, even though
+    // every INDIVIDUAL phrase in the list is itself singular.
+    expect(rows([mergeEntry({ counts: { notes: 1, calls: 1 } })], "es")[0]!.verb)
+      .toBe("unió a Other Person con este registro: 1 llamada y 1 nota pasaron aquí");
   });
 
   it("WHAT names the merge source for the 'couldn't load' line (mutation: no merge key -> FAILS)", () => {

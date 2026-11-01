@@ -98,6 +98,24 @@ describe("usage", () => {
     expect(includedLine({ voice_minutes: 0, sms: 0, ai_chats: 0 })).toBe(m["billing.includes.none"]);
   });
 
+  // S-10 T9a: found live as "1 minutes (none included)" / "1 chats (none
+  // included)" in BOTH languages — the ".none" branch always read the
+  // plain "other" form, regardless of how many were used.
+  it("a single used unit stays singular in English and Spanish, not just plural (mutation: drop the One form → FAILS)", () => {
+    const en = usageLines({ voice_minutes: 0, sms: 0, ai_chats: 0 }, { voice_minutes: 1, sms: 1, ai_chats: 1 });
+    expect(en.map((l) => l.text)).toEqual([
+      "1 minute (none included)",
+      "1 text (none included)",
+      "1 website chat (none included)",
+    ]);
+    const es = usageLines({ voice_minutes: 0, sms: 0, ai_chats: 0 }, { voice_minutes: 1, sms: 1, ai_chats: 1 }, "es");
+    expect(es.map((l) => l.text)).toEqual([
+      "1 minuto (ninguno incluido)",
+      "1 mensaje de texto (ninguno incluido)",
+      "1 chat del sitio web (ninguno incluido)",
+    ]);
+  });
+
   it("use exactly at the allowance is not over (mutation: over uses >= → FAILS) (R2)", () => {
     expect(usageLines({ voice_minutes: 500, sms: 1000, ai_chats: 0 }, { voice_minutes: 500, sms: 0, ai_chats: 0 })[0]!.over).toBe(false);
   });
