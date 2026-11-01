@@ -10,6 +10,8 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { formatWhen } from "@/lib/booking/time";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { bookingCancelNoticeEmail, ownerAlertFallbackName } from "@/lib/email/templates/booking";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 
 export type CancelResult = { ok: true } | { ok: false; error: string };
 
@@ -19,18 +21,13 @@ export type CancelResult = { ok: true } | { ok: false; error: string };
 const ACTOR_ID = "public";
 const ACTOR_TYPE = "system";
 
-/** Same subject-injection guard `b/[publicId]/actions.ts` keeps — duplicated
- *  rather than imported because it is two lines and private there; promoting
- *  it would be a bigger change than this task's scope for no real gain. */
-function stripSubjectControlChars(value: string): string {
-  return value.replace(/[\r\n\t]+/g, " ");
-}
-
 type AccountRow = {
   timezone: string | null;
   brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
   brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
+  /** S-10: the language the owner's cancel notice is written in. */
+  language: Locale | null;
 };
 
 /** Only the columns this action's notify email and when-strings need — a
@@ -41,7 +38,7 @@ async function loadAccount(
 ): Promise<AccountRow | null> {
   const { data, error } = await db.from("accounts")
     .select("timezone, brand_name, brand_logo_path, brand_color, brand_neutral, "
-      + "brand_corners, brand_type, brand_mode")
+      + "brand_corners, brand_type, brand_mode, language")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
   return data as AccountRow | null;
@@ -107,13 +104,18 @@ export async function confirmCancelAction(
     try {
       const account = await loadAccount(db, row.account_id);
       const timezone = account?.timezone ?? "UTC";
+      // The thread line is the business's stored record: English, as before.
       const whenCompanyZone = formatWhen(new Date(row.starts_at), timezone);
+      // S-10: the notice to the OWNER is in the ACCOUNT's language (the row
+      // just read), never `locale`, the customer's page — its date too.
+      const noticeLocale = resolveLocale(undefined, account?.language ?? null);
+      const whenForNotice = formatWhen(new Date(row.starts_at), timezone, noticeLocale);
 
       const contact = await getContact(db, row.account_id, row.contact_id);
       const contactName = contact
         ? ([contact.first_name, contact.last_name].filter(Boolean).join(" ").trim()
-          || contact.email || "Someone")
-        : "Someone";
+          || contact.email || ownerAlertFallbackName(noticeLocale))
+        : ownerAlertFallbackName(noticeLocale);
 
       const convo = await ensureConversation(db, row.account_id, row.contact_id, ACTOR_ID, ACTOR_TYPE);
       await createMessage(db, row.account_id, {
@@ -137,13 +139,9 @@ export async function confirmCancelAction(
           brandMode: account?.brand_mode ?? null, replyToEmail: null,
         });
 
-        const subject = `Booking cancelled: ${stripSubjectControlChars(whenCompanyZone)}`
-          + ` — ${stripSubjectControlChars(contactName)}`;
-        const body = [
-          `${contactName} cancelled their booking.`, "",
-          `When: ${whenCompanyZone}`,
-          ...(row.note ? [`Note: ${row.note}`] : []),
-        ].join("\n");
+        const { subject, text: body } = bookingCancelNoticeEmail({
+          whenCompanyZone: whenForNotice, contactName, note: row.note, locale: noticeLocale,
+        });
 
         const failures: string[] = [];
         for (const to of notifyEmails) {

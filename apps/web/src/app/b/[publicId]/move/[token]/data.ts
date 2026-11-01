@@ -3,6 +3,7 @@ import {
   serviceDb, getCalendarForAccount, rescheduleChain, type BookingRow, type Branding, type CalendarRow,
 } from "@bis/db";
 import { scrubToken } from "@/lib/booking/links";
+import type { Locale } from "@/lib/i18n/locale";
 import { lookupBookingByToken } from "../../cancel/[token]/data";
 
 /**
@@ -23,6 +24,9 @@ export type MoveAccount = {
   brand_name: string | null; brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
   brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
+  /** S-10: the language the owner's moved alert is written in. Optional so a
+   *  context built without it (a test's) reads as English, the default. */
+  language?: Locale | null;
 };
 
 export type MoveContext = {
@@ -39,12 +43,13 @@ export type MoveContext = {
 };
 
 const ACCOUNT_COLS = "timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
-  + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode";
+  + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode, language";
 
 const NO_ACCOUNT: MoveAccount = {
   timezone: null, from_email: null, reply_to_email: null,
   brand_name: null, brand_logo_path: null, brand_color: null,
   brand_neutral: null, brand_corners: null, brand_type: null, brand_mode: null,
+  language: null,
 };
 
 export async function readMoveContext(

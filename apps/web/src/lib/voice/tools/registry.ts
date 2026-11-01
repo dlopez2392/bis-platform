@@ -18,8 +18,9 @@ import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
   bookingConfirmationEmail, bookingConfirmationSubject, bookingRescheduledEmail, bookingRescheduledSubject,
-  bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
+  bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject, ownerAlertFallbackName,
 } from "@/lib/email/templates/booking";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
@@ -73,6 +74,11 @@ export interface ToolContext {
   /** S-47e (S15): the trade module this call runs under, the route's own `tradeStamp?.module ?? null` (the
    *  value that stamped the row and built the prompt). Decides the identity rung (identity/ladder.ts). */
   tradeModule: TradeModuleId | null;
+  /** S-10 (booking alerts): `accounts.language`, off route.ts's one accounts
+   *  read (the same value finishCall's context carries). The staff
+   *  phone-change alert is written in it; the caller's own email follows the
+   *  call instead. Absent or null is English. */
+  accountLanguage?: Locale | null;
   now?: () => Date;
 }
 
@@ -183,8 +189,8 @@ type PhoneChange =
   | { kind: "cancelled"; oldStartsAt: string }
   | { kind: "moved"; oldStartsAt: string; newStartsAt: Date };
 
-function contactDisplayName(contact: BookingContact | null): string {
-  return [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || "Someone";
+function contactDisplayName(contact: BookingContact | null, locale: Locale): string {
+  return [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || ownerAlertFallbackName(locale);
 }
 
 /** The caller's language for the customer email and the handoff stamp —
@@ -230,11 +236,14 @@ async function alertStaffOfPhoneChange(
   }
   try {
     const brand = emailBrand(ctx.branding);
+    // S-10: the ACCOUNT's language, never the caller's (`spokenLocale`); the
+    // two times are formatted in it too. English when unset.
+    const locale = resolveLocale(undefined, ctx.accountLanguage ?? null);
     const { subject, html, text } = bookingPhoneChangeAlertEmail({
-      brand, kind: change.kind,
-      whenCompanyZone: formatWhen(new Date(change.oldStartsAt), ctx.timezone),
-      newWhenCompanyZone: change.kind === "moved" ? formatWhen(change.newStartsAt, ctx.timezone) : undefined,
-      contactName: contactDisplayName(contact),
+      brand, kind: change.kind, locale,
+      whenCompanyZone: formatWhen(new Date(change.oldStartsAt), ctx.timezone, locale),
+      newWhenCompanyZone: change.kind === "moved" ? formatWhen(change.newStartsAt, ctx.timezone, locale) : undefined,
+      contactName: contactDisplayName(contact, locale),
       callerNumber: ctx.callerNumber,
       contactUrl: `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`,
     });

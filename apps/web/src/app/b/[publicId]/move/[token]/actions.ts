@@ -12,7 +12,7 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
-  bookingMovedAlertEmail, bookingRescheduledEmail, bookingRescheduledSubject,
+  bookingMovedAlertEmail, bookingRescheduledEmail, bookingRescheduledSubject, ownerAlertFallbackName,
 } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { moveSlots, movableSlot, dayKeyInZone } from "@/lib/booking/availability";
@@ -21,6 +21,7 @@ import { bookingCancelUrl, bookingMoveUrl, isBookingToken } from "@/lib/booking/
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { clientIp, hashIp, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from "@/lib/forms/guards";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { resolveLocale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { readMoveContext, moveState, movingOf, scrubToken, MOVE_CHAIN_MAX, type MoveContext } from "./data";
 
@@ -174,16 +175,24 @@ export async function confirmMoveAction(
   } catch (e) {
     console.error(`move ${row.id}: contact read failed: ${String(e)}`);
   }
+  // S-10: the business's ALERT is in the account's language (readMoveContext's
+  // own accounts read), never `lang`, the customer's page.
+  const alertLocale = resolveLocale(undefined, account.language ?? null);
   const contactEmail = contact?.email?.trim() || null;
   const contactName = [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim()
-    || contactEmail || "Someone";
+    || contactEmail || ownerAlertFallbackName(alertLocale);
 
-  // The business's record, in English and its own zone (the dashboard's).
+  // The business's record, in English and its own zone (the dashboard's);
+  // the alert's two times in the alert's language, inside the same guard.
   let wasCompanyZone = "";
   let nowCompanyZone = "";
+  let wasForAlert = "";
+  let nowForAlert = "";
   try {
     wasCompanyZone = formatWhen(new Date(row.starts_at), timezone);
     nowCompanyZone = formatWhen(startsAt, timezone);
+    wasForAlert = formatWhen(new Date(row.starts_at), timezone, alertLocale);
+    nowForAlert = formatWhen(startsAt, timezone, alertLocale);
     const convo = await ensureConversation(db, accountId, row.contact_id, ACTOR_ID, ACTOR_TYPE);
     await createMessage(db, accountId, {
       conversationId: convo.id, channel: "form", direction: "inbound",
@@ -203,11 +212,11 @@ export async function confirmMoveAction(
   });
 
   // The business: one alert per notify address, from the row's own calendar.
-  if (calendar.notify_emails.length > 0 && wasCompanyZone && nowCompanyZone) {
+  if (calendar.notify_emails.length > 0 && wasForAlert && nowForAlert) {
     const contactUrl = origin ? `${origin}/dashboard/accounts/${accountId}/contacts/${row.contact_id}` : null;
     const { subject, html, text } = bookingMovedAlertEmail({
-      brand, whenCompanyZone: wasCompanyZone, newWhenCompanyZone: nowCompanyZone,
-      contactName: stripSubjectControlChars(contactName), contactUrl,
+      brand, whenCompanyZone: wasForAlert, newWhenCompanyZone: nowForAlert,
+      contactName: stripSubjectControlChars(contactName), contactUrl, locale: alertLocale,
     });
     const failures: string[] = [];
     for (const to of calendar.notify_emails) {

@@ -41,6 +41,9 @@ const accountRow = {
   brand_name: "Rio Roofing", brand_logo_path: null,
   brand_color: null, brand_neutral: null, brand_corners: null,
   brand_type: null, brand_mode: null,
+  // S-10: the account's language, which the owner's cancel notice follows.
+  // Null like a real account with none set; reset in beforeEach.
+  language: null as "en" | "es" | null,
 };
 
 // Mutable, set per-test, read by the `serviceDb().from("bookings")` mock —
@@ -144,6 +147,7 @@ import { confirmCancelAction } from "./actions";
 import { lookupBookingByToken } from "./data";
 import { serviceDb } from "@bis/db";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { formatWhen } from "@/lib/booking/time";
 
 const PUBLIC_ID = "cal_test1234";
 const TOKEN = "tok_abc123";
@@ -187,6 +191,7 @@ beforeEach(() => {
   accountErrorRef.current = null;
   calendarNotifyRowsRef.current = { cal_1: { notify_emails: ["owner@acme.com"] } };
   calendarLookupErrorRef.current = null;
+  accountRow.language = null;
 });
 
 describe("lookupBookingByToken — the page-level, read-only lookup", () => {
@@ -298,6 +303,49 @@ describe("confirmCancelAction — happy path", () => {
     expect(gated().map((r) => [r.kind, r.accountId])).toEqual(
       expect.arrayContaining([["operator.cancel_notice", ACCOUNT_ID]]));
     expect(gated().every((r) => r.kind === "operator.cancel_notice")).toBe(true);
+  });
+});
+
+// S-10 (booking alerts): the notice to the OWNER follows the account's
+// language, never the customer's cancel page (`locale`, which only answers
+// the page's own error). Its date is in that language too. The thread line
+// is the business's stored record and stays English.
+describe("confirmCancelAction — the owner's cancel notice in the account's language (S-10)", () => {
+  const STARTS = new Date("2026-09-01T14:00:00.000Z");
+
+  it("es account, English page: subject and body in Spanish with the Spanish date; the thread stays English (mutation: use the page locale, or drop language from loadAccount's select → FAILS)", async () => {
+    accountRow.language = "es";
+    cancelBookingByTokenMock.mockResolvedValue(bookingRow({ note: "Otro día" }));
+    await confirmCancelAction(PUBLIC_ID, TOKEN, "en");
+
+    const whenEs = formatWhen(STARTS, "America/Chicago", "es");
+    const whenEn = formatWhen(STARTS, "America/Chicago");
+    expect(whenEs).not.toBe(whenEn);
+    const [notice] = gated();
+    expect(notice!.kind).toBe("operator.cancel_notice");
+    expect(notice!.subject).toBe(`Cita cancelada: ${whenEs} — Maria Lopez`);
+    expect(notice!.body).toBe(`Maria Lopez canceló su cita.
+
+Cuándo: ${whenEs}
+Nota: Otro día`);
+    expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking cancelled", body: `Cancelled their ${whenEn} booking` });
+  });
+
+  it("es account, a contact with no name: the fallback name is Spanish too (mutation: keep the English 'Someone' → FAILS)", async () => {
+    accountRow.language = "es";
+    getContactMock.mockResolvedValue(null);
+    await confirmCancelAction(PUBLIC_ID, TOKEN);
+    expect(gated()[0]!.body).toMatch(/^Alguien canceló su cita./);
+  });
+
+  it("no language on the account (null): English, byte for byte, even from a Spanish page (mutation: follow the page locale or default to es → FAILS)", async () => {
+    await confirmCancelAction(PUBLIC_ID, TOKEN, "es");
+    const whenEn = formatWhen(STARTS, "America/Chicago");
+    const [notice] = gated();
+    expect(notice!.subject).toBe(`Booking cancelled: ${whenEn} — Maria Lopez`);
+    expect(notice!.body).toBe(`Maria Lopez cancelled their booking.
+
+When: ${whenEn}`);
   });
 });
 
