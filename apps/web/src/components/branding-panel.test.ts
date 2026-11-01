@@ -20,6 +20,7 @@ const panelSource = readFileSync(path.join(here, "./branding-panel.tsx"), "utf8"
 function render(
   mailingAddress: string | null,
   audience: "agency" | "client" = "client",
+  locale: "en" | "es" = "en",
 ): string {
   return renderToStaticMarkup(createElement(BrandingPanel, {
     audience,
@@ -33,6 +34,7 @@ function render(
     brandMode: null,
     logoUrl: null,
     action: async () => ({ ok: true as const }),
+    locale,
   }));
 }
 
@@ -139,6 +141,15 @@ describe("BrandingPanel — Remove logo (DESIGN rule 6, rule 8)", () => {
     expect(panelSource).toMatch(/runGuarded\(removeBusy, startRemoveTransition,/);
     expect(panelSource).toMatch(/<Button type="button" variant="ghost" size="sm" onClick=\{removeLogo\} disabled=\{removePending\}>/);
   });
+
+  // Review fix round (S-10 T6, I-1): runRemoveLogo's own toasts
+  // ("Logo removed", "Undo", the crashed sentence) read m[...] directly —
+  // English regardless of the reader's own locale, because the panel never
+  // passed one through. Same for SubmitButton's "Saving..." text.
+  it("passes the panel's own locale into runRemoveLogo and into SubmitButton (mutation: call either with no locale → FAILS)", () => {
+    expect(panelSource).toMatch(/runRemoveLogo\(removeLogoAction, restoreLogoAction, setHasLogo, toast, locale\)/);
+    expect(panelSource).toContain("<SubmitButton pending={pending} locale={locale}>");
+  });
 });
 
 // D-071 review round: the colour-only/unset preview's "Sidebar" specimen
@@ -163,5 +174,63 @@ describe("BrandingPanel — the unset/colour-only preview's sidebar specimen (D-
     const html = render(null);
     expect(html).toContain('style="background-color:#100f17"');
     expect(html).toMatch(/style="color:#b9b3cf"[^<]*>Sidebar</);
+  });
+});
+
+// S-10 T6: every field label, hint, button and preview string read m[...]
+// directly — English regardless of the reader's own stored choice. The
+// panel now takes an optional `locale` prop (default "en", so Settings'
+// own render, which never passes one, is unaffected) and reads every
+// string through t()/panelCopy(audience, locale).
+describe("BrandingPanel — Spanish (S-10 T6)", () => {
+  it("every field label, the hints, the logo field and Save read in Spanish on the client's own page (mutation: hard-code m[key] → FAILS)", () => {
+    const text = renderedText(render(null, "client", "es"));
+    const all = m as Record<string, string>;
+    for (const key of [
+      "branding.name", "branding.logo", "branding.logoHint", "branding.replyTo", "branding.mailingAddress",
+      "branding.color", "branding.noLogo", "common.save",
+    ]) expect(text, key).toContain(all[`${key}.es`]);
+    expect(text).toContain(m["branding.clientNameHint.es"]);
+    expect(text).toContain(m["branding.clientColorHint.es"]);
+    expect(text).toContain(m["branding.clientReplyToHint.es"]);
+    expect(text).toContain(m["branding.clientMailingAddressHint.es"]);
+    expect(text).not.toContain(m["branding.name"]);
+  });
+
+  it("the radio groups (Surfaces, Corners, Typeface, Default appearance) and their options read in Spanish (mutation: leave RadioRow legends/options in English → FAILS)", () => {
+    const text = renderedText(render(null, "client", "es"));
+    const all = m as Record<string, string>;
+    for (const key of [
+      "branding.neutral", "branding.themeDefault", "branding.neutralWarm", "branding.neutralCool", "branding.neutralSlate",
+      "branding.corners", "branding.cornersSharp", "branding.cornersSoft", "branding.cornersRound",
+      "branding.type", "branding.typeGeist", "branding.typeInter", "branding.typeSerif",
+      "branding.mode", "branding.modeLight", "branding.modeDark", "branding.clientModeFollow",
+    ]) expect(text, key).toContain(all[`${key}.es`]);
+  });
+
+  it("the colour-only preview's Submit and Sidebar labels read in Spanish (mutation: skip the preview block → FAILS)", () => {
+    const text = renderedText(render(null, "client", "es"));
+    expect(text).toContain(m["branding.previewSubmit.es"]);
+    expect(text).toContain(m["branding.previewSidebar.es"]);
+  });
+
+  it("the Current logo state and Remove logo read in Spanish (mutation: hard-code m[key] in the logo block → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(BrandingPanel, {
+      audience: "client", brandName: "Rio Roofing", replyToEmail: null, mailingAddress: null,
+      brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
+      logoUrl: "https://cdn.example/logo.png", action: async () => ({ ok: true as const }),
+      removeLogoAction: async () => ({ ok: true as const, path: "a/logo-x.png" }),
+      restoreLogoAction: async () => ({ ok: true as const }),
+      locale: "es",
+    }));
+    const text = renderedText(html);
+    expect(text).toContain(m["branding.currentLogo.es"]);
+    expect(text).toContain(m["branding.removeLogo.es"]);
+  });
+
+  it("the agency's own Settings render is unaffected (no locale passed, defaults to English) (mutation: default the prop to es → FAILS)", () => {
+    const text = renderedText(render(null, "agency"));
+    expect(text).toContain(m["branding.title"]);
+    expect(text).toContain(m["branding.nameHint"]);
   });
 });

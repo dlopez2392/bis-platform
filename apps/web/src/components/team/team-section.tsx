@@ -4,6 +4,7 @@ import {
   undoRemoveTeamMemberAction, revokeTeamInvitationAction, undoRevokeTeamInvitationAction,
 } from "@/app/(dashboard)/dashboard/accounts/[accountId]/team/actions";
 import { dbForRequest } from "@/lib/db";
+import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { listPendingInvitations, teamCapacity } from "@/lib/team/clerk-team";
 import { inviteDefaultLanguage, roomLeft, type PendingInvite } from "@/lib/team/team-view";
@@ -34,7 +35,16 @@ import type { TeamViewer } from "./team-copy";
  *   throwing: under Settings it shares a page with the client-access switch,
  *   which must stay reachable (client-access-section.tsx's reasoning).
  */
-export async function TeamSection({ accountId, viewer }: { accountId: string; viewer: TeamViewer }) {
+export async function TeamSection({
+  accountId, viewer, locale = "en",
+}: {
+  accountId: string;
+  viewer: TeamViewer;
+  /** S-10 T6: the reader's own locale, resolved once by the page (Team's
+   *  own route, or Settings' Client access card) and passed down. Optional,
+   *  defaulting to "en" so every pre-existing caller is unaffected. */
+  locale?: Locale;
+}) {
   const db = await dbForRequest();
 
   let members: TeamMember[];
@@ -49,9 +59,9 @@ export async function TeamSection({ accountId, viewer }: { accountId: string; vi
     row = account.data as Record<string, unknown> | null;
   } catch (e) {
     console.error(`team: stored team unreadable for account ${accountId}: ${loggableError(e)}`);
-    return <TeamLoadError />;
+    return <TeamLoadError locale={locale} />;
   }
-  if (row?.client_access_enabled !== true) return <TeamAccessOff />;
+  if (row?.client_access_enabled !== true) return <TeamAccessOff locale={locale} />;
   const clerkOrgId = typeof row.clerk_org_id === "string" && row.clerk_org_id ? row.clerk_org_id : null;
 
   let pending: PendingInvite[] = [];
@@ -70,6 +80,7 @@ export async function TeamSection({ accountId, viewer }: { accountId: string; vi
 
   return (
     <TeamCard
+      locale={locale}
       members={members}
       pending={pending}
       room={room}

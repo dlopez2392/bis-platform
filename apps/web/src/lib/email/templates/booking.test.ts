@@ -6,7 +6,9 @@ import {
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
   bookingRescheduledSubject, bookingCancelledByBusinessEmail, bookingCancelledByBusinessSubject,
   bookingMovedAlertEmail, bookingReminderSubject,
+  bookingAlertSubject, bookingCancelNoticeEmail, ownerAlertFallbackName,
 } from "./booking";
+import { formatWhen } from "@/lib/booking/time";
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -659,7 +661,7 @@ describe("bookingMovedAlertEmail — the business hears the customer moved it (F
     expect(`${subject}${text}`).not.toMatch(/→|->/);
   });
 
-  it("is written out in Spanish too, waiting for an operator locale; English stays the default, byte-identical (mutation: drop the es copy → FAILS)", () => {
+  it("is written out in Spanish for a Spanish account (S-10); English stays the default, byte-identical (mutation: drop the es copy → FAILS)", () => {
     const es = bookingMovedAlertEmail({ ...input, locale: "es" });
     expect(es.subject).toBe(`Cita cambiada: ${input.whenCompanyZone} a ${input.newWhenCompanyZone} — Jane Doe`);
     for (const part of [es.html, es.text]) {
@@ -735,4 +737,158 @@ describe("the Where line on the confirmation and the moved email (F-046)", () =>
       });
     }
   }
+});
+
+/**
+ * S-10 (booking alerts): the OWNER's booking mail arrives in the account's
+ * language (spec 2026-10-31-spanish-dashboard-design.md §3.3, DESIGN.md "A
+ * customer's language"): one message, one language, end to end, in both
+ * parts. The templates still format nothing: each when-string is the
+ * caller's, formatted by `formatWhen` in the account's zone AND language, so
+ * these tests hand in a real Spanish rendering and assert it arrives intact
+ * beside Spanish labels. The English half pins today's exact text.
+ */
+describe("S-10: the owner's booking alerts in Spanish, and English unchanged", () => {
+  const AT = new Date("2026-09-01T14:00:00Z");
+  const AT2 = new Date("2026-09-03T16:30:00Z");
+  const W_EN = formatWhen(AT, "America/Chicago");
+  const W2_EN = formatWhen(AT2, "America/Chicago");
+  const W_ES = formatWhen(AT, "America/Chicago", "es");
+  const W2_ES = formatWhen(AT2, "America/Chicago", "es");
+  // English words that must never appear in a Spanish owner alert.
+  const ENGLISH = /\b(New booking|booked a time|When|Who|Note|Was|Now|Called from|Number not shown|Open this contact|by phone|moved their|cancelled their|Booking (moved|cancelled))\b/;
+
+  it("the Spanish date really differs from the English one (else every date assertion below could pass vacuously)", () => {
+    expect(W_ES).not.toBe(W_EN);
+    expect(W2_ES).not.toBe(W2_EN);
+  });
+
+  describe("bookingAlertEmail + bookingAlertSubject", () => {
+    const input = { brand, whenCompanyZone: W_ES, contactName: "Ana Ruiz", note: "Llamar antes", contactUrl: CONTACT_URL };
+
+    it("es: subject, heading, sentence, every row label, the date and the button are Spanish, in both parts (mutation: hard-code \"en\" at any one t() call → FAILS)", () => {
+      expect(bookingAlertSubject(W_ES, "Ana\r\nRuiz", "es")).toBe(`Nueva cita: ${W_ES} — Ana Ruiz`);
+      const { html, text } = bookingAlertEmail({ ...input, locale: "es" });
+      expect(text).toBe(
+        `Nueva cita de Ana Ruiz.\n\nCuándo: ${W_ES}\nQuién: Ana Ruiz\nNota: Llamar antes\n\nAbrir este contacto: ${CONTACT_URL}`,
+      );
+      expect(html).toContain(">Nueva cita</p>");
+      expect(html).toContain("Ana Ruiz agendó una cita con usted.");
+      for (const label of ["Cuándo", "Quién", "Nota"]) expect(html).toContain(`>${label}</td>`);
+      expect(html).toContain(W_ES);
+      expect(html).toContain(">Abrir este contacto<");
+      expect(html).not.toMatch(ENGLISH);
+      expect(text).not.toMatch(ENGLISH);
+    });
+
+    it("en: no locale is today's text and subject, byte for byte, and equals an explicit \"en\" (mutation: default the locale to \"es\" → FAILS)", () => {
+      expect(bookingAlertSubject(W_EN, "Ana\r\nRuiz")).toBe(`New booking: ${W_EN} — Ana Ruiz`);
+      const en = bookingAlertEmail({ ...input, whenCompanyZone: W_EN, note: "Call ahead" });
+      expect(en.text).toBe(
+        `New booking from Ana Ruiz.\n\nWhen: ${W_EN}\nWho: Ana Ruiz\nNote: Call ahead\n\nOpen this contact: ${CONTACT_URL}`,
+      );
+      expect(en.html).toContain(">New booking</p>");
+      expect(en.html).toContain("Ana Ruiz booked a time with you.");
+      expect(bookingAlertEmail({ ...input, whenCompanyZone: W_EN, note: "Call ahead", locale: "en" })).toEqual(en);
+    });
+  });
+
+  describe("bookingCancelNoticeEmail (the customer cancelled from their link)", () => {
+    it("es: subject and text in Spanish with the Spanish date; text-only, as on main (mutation: hard-code \"en\" → FAILS)", () => {
+      const es = bookingCancelNoticeEmail({ whenCompanyZone: W_ES, contactName: "Ana\nRuiz", note: "Otra vez", locale: "es" });
+      expect(es).toEqual({
+        subject: `Cita cancelada: ${W_ES} — Ana Ruiz`,
+        text: `Ana\nRuiz canceló su cita.\n\nCuándo: ${W_ES}\nNota: Otra vez`,
+      });
+    });
+
+    it("en: today's subject and text, byte for byte, with and without a note (mutation: drop the note line → FAILS)", () => {
+      expect(bookingCancelNoticeEmail({ whenCompanyZone: W_EN, contactName: "Maria Lopez", note: null })).toEqual({
+        subject: `Booking cancelled: ${W_EN} — Maria Lopez`,
+        text: `Maria Lopez cancelled their booking.\n\nWhen: ${W_EN}`,
+      });
+      expect(bookingCancelNoticeEmail({ whenCompanyZone: W_EN, contactName: "Maria Lopez", note: "Later", locale: "en" }).text)
+        .toBe(`Maria Lopez cancelled their booking.\n\nWhen: ${W_EN}\nNote: Later`);
+    });
+  });
+
+  describe("bookingPhoneChangeAlertEmail", () => {
+    const base = { brand, contactName: "Ana Ruiz", callerNumber: "+19562921696", contactUrl: CONTACT_URL };
+
+    it("es, cancelled: subject, heading, sentence, labels, date and button in Spanish, both parts (mutation: hard-code \"en\" → FAILS)", () => {
+      const { subject, html, text } = bookingPhoneChangeAlertEmail({ ...base, kind: "cancelled", whenCompanyZone: W_ES, locale: "es" });
+      expect(subject).toBe(`Cita cancelada por teléfono: ${W_ES} — Ana Ruiz`);
+      expect(text).toBe(
+        `Cita cancelada por teléfono.\nAna Ruiz canceló su cita por teléfono.\n\nCuándo: ${W_ES}\nQuién: Ana Ruiz\n`
+        + `Llamó desde: +19562921696\n\nAbrir este contacto: ${CONTACT_URL}`,
+      );
+      expect(html).toContain(">Cita cancelada por teléfono</p>");
+      expect(html).toContain("Ana Ruiz canceló su cita por teléfono.");
+      for (const label of ["Cuándo", "Quién", "Llamó desde"]) expect(html).toContain(`>${label}</td>`);
+      expect(html).toContain(W_ES);
+      expect(html).toContain(">Abrir este contacto<");
+      for (const part of [subject, html, text]) expect(part).not.toMatch(ENGLISH);
+    });
+
+    it("es, moved: both Spanish dates in words (\"a\", never an arrow), Antes/Ahora rows, and a hidden number in Spanish (mutation: drop the es twin of numberHidden → FAILS)", () => {
+      const { subject, html, text } = bookingPhoneChangeAlertEmail({
+        ...base, kind: "moved", whenCompanyZone: W_ES, newWhenCompanyZone: W2_ES, callerNumber: null, locale: "es",
+      });
+      expect(subject).toBe(`Cita cambiada por teléfono: ${W_ES} a ${W2_ES} — Ana Ruiz`);
+      expect(text).toBe(
+        `Cita cambiada por teléfono.\nAna Ruiz cambió su cita por teléfono.\n\nAntes: ${W_ES}\nAhora: ${W2_ES}\n`
+        + `Quién: Ana Ruiz\nLlamó desde: Número oculto\n\nAbrir este contacto: ${CONTACT_URL}`,
+      );
+      for (const label of ["Antes", "Ahora", "Quién", "Llamó desde"]) expect(html).toContain(`>${label}</td>`);
+      expect(html).toContain("Número oculto");
+      expect(html).toContain(W2_ES);
+      for (const part of [subject, html, text]) expect(part).not.toMatch(ENGLISH);
+      expect(`${subject}${text}`).not.toMatch(/→|->/);
+    });
+
+    it("en: no locale is today's subject and text for both kinds, byte for byte, and equals an explicit \"en\" (mutation: default to \"es\" → FAILS)", () => {
+      const cancelled = bookingPhoneChangeAlertEmail({ ...base, kind: "cancelled", whenCompanyZone: W_EN });
+      expect(cancelled.subject).toBe(`Booking cancelled by phone: ${W_EN} — Ana Ruiz`);
+      expect(cancelled.text).toBe(
+        `Booking cancelled by phone.\nAna Ruiz cancelled their booking by phone.\n\nWhen: ${W_EN}\nWho: Ana Ruiz\n`
+        + `Called from: +19562921696\n\nOpen this contact: ${CONTACT_URL}`,
+      );
+      const moved = bookingPhoneChangeAlertEmail({ ...base, kind: "moved", whenCompanyZone: W_EN, newWhenCompanyZone: W2_EN, callerNumber: null });
+      expect(moved.subject).toBe(`Booking moved by phone: ${W_EN} to ${W2_EN} — Ana Ruiz`);
+      expect(moved.text).toBe(
+        `Booking moved by phone.\nAna Ruiz moved their booking by phone.\n\nWas: ${W_EN}\nNow: ${W2_EN}\n`
+        + `Who: Ana Ruiz\nCalled from: Number not shown\n\nOpen this contact: ${CONTACT_URL}`,
+      );
+      expect(bookingPhoneChangeAlertEmail({ ...base, kind: "cancelled", whenCompanyZone: W_EN, locale: "en" })).toEqual(cancelled);
+    });
+  });
+
+  describe("bookingMovedAlertEmail (the customer moved it from their link)", () => {
+    const input = { brand, whenCompanyZone: W_ES, newWhenCompanyZone: W2_ES, contactName: "Ana Ruiz", contactUrl: CONTACT_URL };
+
+    it("es: the whole text, the subject and the html rows in Spanish with both Spanish dates (mutation: hard-code \"en\" at the subject → FAILS)", () => {
+      const { subject, html, text } = bookingMovedAlertEmail({ ...input, locale: "es" });
+      expect(subject).toBe(`Cita cambiada: ${W_ES} a ${W2_ES} — Ana Ruiz`);
+      expect(text).toBe(
+        `Cita cambiada.\nAna Ruiz cambió su cita.\n\nAntes: ${W_ES}\nAhora: ${W2_ES}\nQuién: Ana Ruiz\n\nAbrir este contacto: ${CONTACT_URL}`,
+      );
+      expect(html).toContain(">Cita cambiada</p>");
+      for (const label of ["Antes", "Ahora", "Quién"]) expect(html).toContain(`>${label}</td>`);
+      for (const part of [subject, html, text]) expect(part).not.toMatch(ENGLISH);
+    });
+
+    it("en: no locale is today's subject and text, byte for byte (mutation: default to \"es\" → FAILS)", () => {
+      const en = bookingMovedAlertEmail({ ...input, whenCompanyZone: W_EN, newWhenCompanyZone: W2_EN });
+      expect(en.subject).toBe(`Booking moved: ${W_EN} to ${W2_EN} — Ana Ruiz`);
+      expect(en.text).toBe(
+        `Booking moved.\nAna Ruiz moved their booking.\n\nWas: ${W_EN}\nNow: ${W2_EN}\nWho: Ana Ruiz\n\nOpen this contact: ${CONTACT_URL}`,
+      );
+    });
+  });
+
+  it("ownerAlertFallbackName: \"Someone\" in English, \"Alguien\" in Spanish (mutation: return the English word for both → FAILS)", () => {
+    expect(ownerAlertFallbackName("en")).toBe("Someone");
+    expect(ownerAlertFallbackName()).toBe("Someone");
+    expect(ownerAlertFallbackName("es")).toBe("Alguien");
+  });
 });

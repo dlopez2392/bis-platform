@@ -126,9 +126,9 @@ export default async function CrmSettingsPage({
   const boundCreateField = createFieldAction.bind(null, accountId);
   const boundUpsertValue = upsertValueAction.bind(null, accountId);
   // accountId is bound here, server-side. It must never travel as a form field.
-  const boundSetBranding = setBrandingAction.bind(null, accountId);
+  const boundSetBranding = setBrandingAction.bind(null, accountId, "en");
   const boundRemoveLogo = removeBrandLogoAction.bind(null, accountId);
-  const boundRestoreLogo = restoreBrandLogoAction.bind(null, accountId);
+  const boundRestoreLogo = restoreBrandLogoAction.bind(null, accountId, "en");
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);

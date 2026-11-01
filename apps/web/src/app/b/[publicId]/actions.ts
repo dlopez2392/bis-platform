@@ -11,7 +11,7 @@ import { getMeetingProvider } from "@/lib/meetings/provider";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
+import { bookingAlertEmail, bookingAlertSubject, bookingConfirmationEmail } from "@/lib/email/templates/booking";
 import { composeBookingAlertSms, formatAlertWhen, sendAlertSms } from "@/lib/sms/alerts";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { safeZone, formatWhen } from "@/lib/booking/time";
@@ -78,13 +78,6 @@ function str(formData: FormData, key: string): string {
   return max ? raw.slice(0, max) : raw;
 }
 
-/** Strips characters that could inject additional lines into a rendered
- *  email subject. A crafted contact name carrying `\r`/`\n`/`\t` is still a
- *  valid name for the booking itself — only the subject line needs this. */
-function stripSubjectControlChars(value: string): string {
-  return value.replace(/[\r\n\t]+/g, " ");
-}
-
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The account row every send below needs — timezone for both re-validating
@@ -120,7 +113,8 @@ async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) 
     // NULL is "off," not an error — see sendAlertSms (@/lib/sms/alerts).
     alert_phone: string | null;
     // F-013 (Task 8, Spanish-runtime lane): the account's own language, read
-    // for the staff booking-alert SMS below — never the booker's own
+    // for the staff booking-alert SMS below, and since S-10 for the staff
+    // booking-alert EMAIL too — never the booker's own
     // `?locale=` (the `locale` local variable in this file), which answers a
     // different question (what language the CUSTOMER'S confirmation is in).
     language: Locale | null;
@@ -399,16 +393,23 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // probe), but this keeps it true by structure rather than by trust — a
     // formatting failure here can no longer escape to the outer catch and turn
     // a successful insert into a reported failure. -------------------------
-    // `whenCompanyZone` is operator-facing (the alert, the thread) and stays
-    // English; the two `*ForBooker` strings are the same instants in the
-    // booker's own language, for the one email the booker reads.
+    // `whenCompanyZone` is the thread line's (the business's stored record)
+    // and stays English; the two `*ForBooker` strings are the same instants
+    // in the booker's own language, for the one email the booker reads.
+    // S-10: the owner's alert EMAIL follows the ACCOUNT's language (the row
+    // `loadAccount` already read), never `locale` above, the booker's. One
+    // message, one language, so its date is formatted in it too, here inside
+    // this same guarded try; for English it is exactly `whenCompanyZone`.
+    const alertLocale = resolveLocale(undefined, account?.language ?? null);
     let whenCompanyZone = "";
     let whenBookerZone = "";
     let whenCompanyZoneForBooker = "";
+    let whenForAlert = "";
     try {
       whenCompanyZone = formatWhen(startsAt, timezone);
       whenBookerZone = formatWhen(startsAt, bookerZone, locale);
       whenCompanyZoneForBooker = formatWhen(startsAt, timezone, locale);
+      whenForAlert = formatWhen(startsAt, timezone, alertLocale);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
       // The details as the booker TYPED them (D-031), the way a form
       // submission's thread lists every answer: for a returning booker these
@@ -488,7 +489,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       if (calendar.notify_emails.length > 0) {
         const contactUrl = origin ? `${origin}/dashboard/accounts/${calendar.account_id}/contacts/${contactId}` : null;
         const { html, text } = bookingAlertEmail({
-          brand, whenCompanyZone, contactName, note: note || null, contactUrl,
+          brand, whenCompanyZone: whenForAlert, contactName, note: note || null, contactUrl, locale: alertLocale,
         });
         const failures: string[] = [];
         for (const to of calendar.notify_emails) {
@@ -500,11 +501,8 @@ export async function submitBookingAction(publicId: string, formData: FormData):
             await sendEmailOrThrow({
               accountId: calendar.account_id, kind: "operator.booking_alert",
               to, fromName: brand.name,
-              // Time first (spec §6): the operator triages a list of these,
-              // and the time is what they scan for, not the name.
-              // `whenCompanyZone` is server-computed from a real timestamp
-              // (never attacker input) so only the name needs stripping.
-              subject: `New booking: ${whenCompanyZone} — ${stripSubjectControlChars(contactName)}`,
+              // Time first (spec §6); the name made header-safe inside.
+              subject: bookingAlertSubject(whenForAlert, contactName, alertLocale),
               body: text, html,
             });
           } catch (e) {

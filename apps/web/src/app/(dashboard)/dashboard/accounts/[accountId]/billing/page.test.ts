@@ -28,7 +28,10 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 // proves billingVerdictFor's fail-soft/switch contract).
 const verdict = vi.hoisted(() => ({ fn: vi.fn() }));
 vi.mock("@/lib/billing/standing-read", () => ({ billingVerdictFor: (...a: unknown[]) => verdict.fn(...a) }));
-vi.mock("./actions", () => ({ openBillingPortalAction: async () => ({ ok: false, error: "x" }) }));
+// Echoes the bound locale back as `error` (S-10 T6 test below), rather than
+// a fixed "x" — the real action's own shape, with nothing to assert on its
+// REAL English/Spanish text here; billing/actions.test.ts already covers that.
+vi.mock("./actions", () => ({ openBillingPortalAction: async (_accountId: string, locale?: string) => ({ ok: false, error: locale ?? "x" }) }));
 
 const { default: BillingPage } = await import("./page");
 const { EmptyState } = await import("@/components/empty-state");
@@ -205,5 +208,60 @@ describe("the client Billing page", () => {
     const tree = await page();
     expect(withLang(tree).map((n) => (n.props as { lang: string }).lang)).toEqual(["es"]);
     expect(text(tree)).toContain(m["billing.page.paused.payment.es"]);
+  });
+});
+
+// S-10 T6: the rest of the page's own words — title, subtitle, empty state,
+// usage, status pill, Manage billing — read m[...] directly, English
+// regardless of the reader's own stored choice (`prefs.language`).
+describe("the client Billing page — Spanish (S-10 T6)", () => {
+  it("renders the title, subtitle and empty state in Spanish for a Spanish-reading owner (mutation: hard-code m[key] → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(null);
+    prefs.language = "es";
+    const tree = await page();
+    const { PageHeader } = await import("@/components/page-header");
+    const [header] = find(tree, PageHeader);
+    expect(header?.props).toMatchObject({ title: m["billing.page.title.es"], subtitle: m["billing.page.subtitle.es"] });
+    const [empty] = find(tree, EmptyState);
+    expect(empty?.props).toMatchObject({ title: m["billing.page.empty.title.es"], body: m["billing.page.empty.body.es"] });
+  });
+
+  it("renders the plan, usage, status pill and Manage billing help in Spanish, with the price and dates formatted in Spanish (mutation: thread locale into the view but not into formatDay → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    prefs.language = "es";
+    const tree = await page();
+    const words = text(tree);
+    expect(words).toContain(m["billing.page.usage.es"]);
+    expect(words).toContain("$149.00/mes");
+    expect(words).toContain("312 de 500 minutos");
+    expect(words).toContain("Desde el 12 oct");
+    expect(words).toContain("Próxima factura el 12 nov");
+    const [pill] = find(tree, DotPill);
+    expect((pill!.props as { label: string }).label).toBe(m["billing.status.active.es"]);
+    const [button] = find(tree, ManageBillingButton);
+    expect((button!.props as { help: string }).help).toBe(m["billing.page.manageHelp.es"]);
+  });
+
+  it("the status pill and the complimentary/canceled lines read in Spanish (mutation: skip billingStatusTreatment on es → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, complimentary: true, stripeCustomerId: null, stripeSubscriptionId: null, subscriptionStatus: null });
+    prefs.language = "es";
+    expect(text(await page())).toContain(m["billing.page.complimentary.es"]);
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "canceled" });
+    expect(text(await page())).toContain(m["billing.page.canceled.es"]);
+  });
+
+  it("'Payment processing' reads in Spanish on a first payment still going through (mutation: use PAYMENT_PROCESSING as-is → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "incomplete" });
+    prefs.language = "es";
+    const [pill] = find(await page(), DotPill);
+    expect((pill!.props as { label: string }).label).toBe(m["billing.page.status.processing.es"]);
+  });
+
+  it("Manage billing's own action is bound with the reader's locale, not just the account id (mutation: bind the action with no locale → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    prefs.language = "es";
+    const [button] = find(await page(), ManageBillingButton);
+    const open = (button!.props as { open: () => Promise<{ ok: false; error: string }> }).open;
+    expect(await open()).toEqual({ ok: false, error: "es" });
   });
 });

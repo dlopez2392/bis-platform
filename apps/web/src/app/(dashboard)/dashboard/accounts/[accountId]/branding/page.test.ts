@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * What is under test here is ONE thing: whether the client's own Branding
@@ -27,9 +30,10 @@ const accessFixture = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   requireNotTechnician: async () => accessFixture.access,
 }));
-// getPersonPrefs reads Clerk; the person here has no language of their own.
+// getPersonPrefs reads Clerk; mutable so a Spanish-preference test can set it.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({
-  getPersonPrefs: async () => ({ language: null, theme: null }),
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
 }));
 
 const dbFixture = vi.hoisted(() => ({
@@ -89,17 +93,22 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 
 const captured = vi.hoisted(() => ({
-  props: null as { alertPhone: string | null; smsNotReady?: boolean } | null,
-  panel: null as { mailingAddress?: string | null } | null,
+  props: null as { alertPhone: string | null; smsNotReady?: boolean; locale?: string } | null,
+  panel: null as {
+    mailingAddress?: string | null; locale?: string;
+    action?: (fd: FormData) => Promise<unknown>;
+    removeLogoAction?: () => Promise<unknown>;
+    restoreLogoAction?: (p: string) => Promise<unknown>;
+  } | null,
 }));
 vi.mock("@/components/branding-panel", () => ({
-  BrandingPanel: (props: { mailingAddress?: string | null }) => {
+  BrandingPanel: (props: NonNullable<typeof captured.panel>) => {
     captured.panel = props;
     return null;
   },
 }));
 vi.mock("@/components/alert-phone-card", () => ({
-  AlertPhoneCard: (props: { alertPhone: string | null; smsNotReady?: boolean }) => {
+  AlertPhoneCard: (props: NonNullable<typeof captured.props>) => {
     captured.props = props;
     return null;
   },
@@ -110,10 +119,15 @@ vi.mock("../never-log-actions", () => ({
   addNeverLogAction: async () => ({ ok: false, error: "failed" }),
   removeNeverLogAction: async () => ({ ok: false, error: "failed" }),
 }));
+// Echoes the args it was called with, so a test can see what the PAGE bound
+// (S-10 T6: the locale the page resolved, alongside accountId), without
+// asserting these actions' own Spanish text — that is each action's own
+// test file's job.
+const actionCalls = vi.hoisted(() => ({ setBranding: [] as unknown[][], removeLogo: [] as unknown[][], restoreLogo: [] as unknown[][] }));
 vi.mock("./actions", () => ({
-  setBrandingAction: async () => ({ ok: true }),
-  removeBrandLogoAction: async () => ({ ok: true, path: "acct/logo.png" }),
-  restoreBrandLogoAction: async () => ({ ok: true }),
+  setBrandingAction: async (...a: unknown[]) => { actionCalls.setBranding.push(a); return { ok: true }; },
+  removeBrandLogoAction: async (...a: unknown[]) => { actionCalls.removeLogo.push(a); return { ok: true, path: "acct/logo.png" }; },
+  restoreBrandLogoAction: async (...a: unknown[]) => { actionCalls.restoreLogo.push(a); return { ok: true }; },
 }));
 
 const { default: BrandingPage } = await import("./page");
@@ -142,6 +156,10 @@ beforeEach(() => {
   dbFixture.languageReads = [];
   dbFixture.neverLogReads = [];
   dbFixture.neverLogFails = false;
+  prefsFixture.language = null;
+  actionCalls.setBranding = [];
+  actionCalls.removeLogo = [];
+  actionCalls.restoreLogo = [];
 });
 
 describe("branding page — the mailing address field", () => {
@@ -197,12 +215,17 @@ describe("branding page — the Never record card (S-06 part 2; plan G8)", () =>
     expect(dbFixture.languageReads).toEqual([["accounts", "language", "id", "a1"]]);
   });
 
-  it("staff sees no list and nothing is read for them (mutation: drop the canManage gate → FAILS twice)", async () => {
+  it("staff sees no list and the list itself is never read for them (mutation: drop the canManage gate → FAILS)", async () => {
     accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
     await render();
     expect(lastHtml).not.toContain("data-never-log");
     expect(dbFixture.neverLogReads).toEqual([]);
-    expect(dbFixture.languageReads).toEqual([]);
+    // S-10 T6: the account-language read moved OUT of the canManage gate —
+    // it now also drives the page's own title, BrandingPanel and
+    // AlertPhoneCard for Staff, not just the Owner-only Never record list —
+    // so staff DOES trigger exactly this one read now, same shape as every
+    // other role (mutation: gate it behind canManage again → FAILS).
+    expect(dbFixture.languageReads).toEqual([["accounts", "language", "id", "a1"]]);
   });
 
   it("an Owner whose account reads Spanish gets the list in Spanish, lang=es (mutation: pass locale=\"en\" → FAILS)", async () => {
@@ -269,5 +292,85 @@ describe("branding page — the Never record card's language (review fix round 1
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// S-10 T6: the page's own title, and what it hands AlertPhoneCard and
+// BrandingPanel, stayed English regardless of the reader's own stored
+// choice — only the Owner-only Never record list read a locale at all.
+describe("branding page — the whole page's own locale (S-10 T6)", () => {
+  it("resolves person, then account, then English, for BOTH an Owner and Staff (mutation: gate the resolution behind canManage → FAILS)", async () => {
+    for (const role of ["owner", "staff"] as const) {
+      accessFixture.access = { userId: "user_1", isAgency: false, role, canManage: role === "owner" };
+      dbFixture.accountLanguage = "es";
+      prefsFixture.language = null;
+      await render();
+      expect(captured.props?.locale, role).toBe("es");
+      expect(captured.panel?.locale, role).toBe("es");
+    }
+  });
+
+  it("the person's own choice wins over the account's (mutation: swap the precedence → FAILS)", async () => {
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    prefsFixture.language = "en";
+    await render();
+    expect(captured.props?.locale).toBe("en");
+  });
+
+  it("the page's own title reads in Spanish (mutation: hard-code m[key] in the page → FAILS)", async () => {
+    const { m } = await import("@/lib/messages");
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    await render();
+    expect(lastHtml).toContain(m["branding.clientTitle.es"]);
+    expect(lastHtml).not.toContain(m["branding.clientTitle"]);
+  });
+
+  it("binds setBrandingAction, removeBrandLogoAction and restoreBrandLogoAction with the resolved locale, alongside accountId (mutation: bind only accountId → FAILS)", async () => {
+    accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
+    dbFixture.accountLanguage = "es";
+    await render();
+    await captured.panel!.action!(new FormData());
+    await captured.panel!.removeLogoAction!();
+    await captured.panel!.restoreLogoAction!("a/logo-x.png");
+    expect(actionCalls.setBranding[0]!.slice(0, 2)).toEqual(["a1", "es"]);
+    expect(actionCalls.removeLogo[0]).toEqual(["a1", "es"]);
+    expect(actionCalls.restoreLogo[0]).toEqual(["a1", "es", "a/logo-x.png"]);
+  });
+});
+
+// A server component can hand a client component only a server action or its
+// .bind(); an arrow wrapper renders fine through renderToStaticMarkup (every
+// test above) and then fails at render in production. So the page's action
+// props are pinned to .bind() at the source.
+describe("branding/page.tsx passes BrandingPanel bound server actions, never arrow wrappers (mutation: wrap any one in an arrow → FAILS)", () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "page.tsx"), "utf8");
+  // Review fix round: the first guard only matched a PARENTHESIZED arrow
+  // param ("(x) =>"), never a bracketless single-param arrow ("x =>") or a
+  // `function` expression — both fail at render the same way an arrow
+  // wrapper does, and NeverLogList's own `remove` prop is exactly the shape
+  // ("id => removeNeverLogAction(accountId, id)") a careless edit could
+  // reach for here. Widened to catch all three forms.
+  const JSX_FUNCTION_PROP = /[A-Za-z]+=\{\s*(async\s*)?(\([^)]*\)\s*=>|\w+\s*=>|function\b)/;
+  it("the widened guard catches a bracketless arrow and a function expression the original (parens-only) regex missed (mutation: narrow it back to parens-only → FAILS)", () => {
+    const original = /[A-Za-z]+=\{\s*(async\s*)?\([^)]*\)\s*=>/;
+    const bracketless = 'remove={id => removeNeverLogAction(accountId, id)}';
+    const fn = 'remove={function (id) { return removeNeverLogAction(accountId, id); }}';
+    expect(original.test(bracketless)).toBe(false);
+    expect(original.test(fn)).toBe(false);
+    expect(JSX_FUNCTION_PROP.test(bracketless)).toBe(true);
+    expect(JSX_FUNCTION_PROP.test(fn)).toBe(true);
+    // Still passes a real .bind() call and a plain prop — no false positive.
+    expect(JSX_FUNCTION_PROP.test('action={setBrandingAction.bind(null, accountId, locale)}')).toBe(false);
+    expect(JSX_FUNCTION_PROP.test('locale={locale}')).toBe(false);
+  });
+  it("no JSX prop on this server page is an arrow function or a function expression", () => {
+    expect(src).not.toMatch(JSX_FUNCTION_PROP);
+  });
+  it("each of the three branding actions is bound with accountId and the reader's locale", () => {
+    expect(src).toContain("action={setBrandingAction.bind(null, accountId, locale)}");
+    expect(src).toContain("removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}");
+    expect(src).toContain("restoreLogoAction={restoreBrandLogoAction.bind(null, accountId, locale)}");
   });
 });

@@ -186,8 +186,8 @@ describe("AlertPhoneCard — agency pending phase (reached after a successful se
   it("offers Resend and Change-number as ghost actions beside the one primary Confirm button (mutation: make Resend or Change-number the default/primary variant → FAILS)", () => {
     expect(agencyRegion).toContain("settings.alertPhoneResendCode");
     expect(agencyRegion).toContain("settings.alertPhoneChangeNumber");
-    expect(agencyRegion).toMatch(/variant="ghost"[^>]*>\s*\{m\["settings\.alertPhoneResendCode"\]/);
-    expect(agencyRegion).toMatch(/variant="ghost"[^>]*>\s*\{m\["settings\.alertPhoneChangeNumber"\]/);
+    expect(agencyRegion).toMatch(/variant="ghost"[^>]*>\s*\{t\(m, "settings\.alertPhoneResendCode", locale\)\}/);
+    expect(agencyRegion).toMatch(/variant="ghost"[^>]*>\s*\{t\(m, "settings\.alertPhoneChangeNumber", locale\)\}/);
   });
 
   it("Resend and Change-number are both type=\"button\", never a second submit inside the confirm form (mutation: drop type=\"button\" from Change-number → FAILS)", () => {
@@ -233,5 +233,33 @@ describe("AlertPhoneCard — the country control's wiring (review: two silent mu
 
   it("the pending number is the SERVER's echoed E.164, never the raw typed text (mutation: setPendingPhone(raw) → resend sends the raw text under a hard-coded country, FAILS)", () => {
     expect(agencyRegion).toContain("setPendingPhone(result.phone)");
+  });
+});
+
+// S-10 T6: this file is shared between the agency's Settings page AND the
+// client's own Branding page, so every `m["…"]` read inside it — even on
+// the agency-only idle/pending phases — was English regardless of the
+// reader's own stored choice. Converted wholesale to t(m, key, locale):
+// a plain `codeOnly` scan for any remaining bracket read is the cleanest
+// mutation to write (the exact shape every prior read had), and it cannot
+// pass by accident, because the file read nothing BUT m["…"] before.
+describe("AlertPhoneCard — Spanish (S-10 T6)", () => {
+  it("reads no catalogue key directly any more — every read goes through t(), with the reader's own locale (mutation: leave any single m[\"…\"] read → FAILS)", () => {
+    expect(codeOnly).not.toMatch(/\bm\[["']/);
+  });
+
+  it("every read is t(m, key, locale) — the locale prop is actually threaded, not a literal \"en\" (mutation: t(m, key, \"en\") → FAILS)", () => {
+    const reads = [...codeOnly.matchAll(/t\(m,\s*"[^"]+",\s*([^)]+)\)/g)];
+    expect(reads.length).toBeGreaterThan(20);
+    for (const [whole, arg] of reads) expect(whole, whole).toBe(whole.replace(arg!, "locale"));
+  });
+
+  it("the component takes a locale prop, defaulting to \"en\" so the agency's Settings render (which never passes one) is unaffected (mutation: make it required, or default it to es → FAILS)", () => {
+    expect(codeOnly).toMatch(/isAgency, accountId, alertPhone, smsNotReady,\s*\n\s*clearAction, startVerificationAction, confirmVerificationAction, locale = "en",/);
+  });
+
+  it("imports t() and Locale, the same pattern every other S-10 file uses (mutation: hand-roll a lookup instead → FAILS)", () => {
+    expect(card).toContain('import { t } from "@/lib/i18n/t";');
+    expect(card).toContain('import type { Locale } from "@/lib/i18n/locale";');
   });
 });

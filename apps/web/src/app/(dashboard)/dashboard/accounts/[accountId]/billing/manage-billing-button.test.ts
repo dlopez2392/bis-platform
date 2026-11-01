@@ -67,4 +67,13 @@ describe("ManageBillingButton", () => {
     const src = stripComments(readFileSync(path.join(here, "manage-billing-button.tsx"), "utf8"));
     expect(src).toContain('{state ? <p role="alert" className="text-sm text-destructive">{state.error}</p> : null}');
   });
+
+  // S-10 T6: the button's own label read m["billing.page.manage"] directly —
+  // English regardless of the reader's own locale.
+  it("reads 'Administrar facturación' for a Spanish-reading owner (mutation: hard-code m[key] → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ManageBillingButton, { open, help: m["billing.page.manageHelp.es"], locale: "es" }));
+    const words = renderedText(html);
+    expect(words).toContain(m["billing.page.manage.es"]);
+    expect(words).not.toContain(m["billing.page.manage"]);
+  });
 });

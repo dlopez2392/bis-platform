@@ -1521,6 +1521,58 @@ describe("reschedule / cancel", () => {
       expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking moved by phone/);
     });
 
+    // S-10 (booking alerts): the staff alert follows the ACCOUNT's language
+    // (ctx.accountLanguage, off route.ts's one accounts read), never the
+    // caller's, which their own email follows. Its dates are in it too.
+    describe("the staff alert in the account's language (S-10)", () => {
+      const esAccount: ToolContext = { ...notifyCtx, accountLanguage: "es" };
+      const OLD = new Date(ROW.starts_at);
+      const NEW = new Date(NEW_ISO);
+      const w = (d: Date, lang: "en" | "es") => formatWhen(d, notifyCtx.timezone, lang);
+
+      it("es account, English caller, cancel: the alert is Spanish end to end, the caller's email stays English (mutation: use spokenLocale for the alert, or drop locale → FAILS)", async () => {
+        expect(w(OLD, "es")).not.toBe(w(OLD, "en"));
+        const { result } = await runTool(owns(), esAccount, "cancel_appointment", { bookingId: "b1" });
+        expect(result).toEqual({ ok: true });
+        const [alert] = sentTo(STAFF[0]!);
+        expect(alert!.subject).toBe(`Cita cancelada por teléfono: ${w(OLD, "es")} — Ana Ruiz`);
+        expect(alert!.body).toBe(
+          `Cita cancelada por teléfono.\nAna Ruiz canceló su cita por teléfono.\n\nCuándo: ${w(OLD, "es")}\n`
+          + `Quién: Ana Ruiz\nLlamó desde: +19562921696\n\nAbrir este contacto: ${CONTACT_URL}`,
+        );
+        expect(alert!.html).toContain(w(OLD, "es"));
+        expect(alert!.html).not.toContain(w(OLD, "en"));
+        expect(sentTo("ana@example.com")[0]!.subject).toBe("Your booking has been cancelled");
+        // The thread line is the business's stored record: English, as before.
+        expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+          subject: "Booking cancelled by phone", body: `Cancelled their ${w(OLD, "en")} booking`,
+        }), "voice", "ai");
+      });
+
+      it("es account, reschedule: both times Spanish, joined by \"a\" (mutation: format the new time in English → FAILS)", async () => {
+        await runTool(owns(), esAccount, "reschedule_appointment", { bookingId: "b1", startsAt: NEW_ISO });
+        const [alert] = sentTo(STAFF[0]!);
+        expect(alert!.subject).toBe(`Cita cambiada por teléfono: ${w(OLD, "es")} a ${w(NEW, "es")} — Ana Ruiz`);
+        expect(alert!.body).toContain(`Antes: ${w(OLD, "es")}\nAhora: ${w(NEW, "es")}`);
+      });
+
+      it("es account, a contact with no name: the fallback name is Spanish (mutation: keep the English 'Someone' → FAILS)", async () => {
+        dbMocks.getContact.mockResolvedValue({ ...OWNER, first_name: null, last_name: null, email: "ana@example.com" });
+        await runTool(owns(), esAccount, "cancel_appointment", { bookingId: "b1" });
+        expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/ — Alguien$/);
+      });
+
+      it("null account language: English, byte for byte (mutation: default the alert to es → FAILS)", async () => {
+        await runTool(owns(), { ...notifyCtx, accountLanguage: null }, "cancel_appointment", { bookingId: "b1" });
+        const [alert] = sentTo(STAFF[0]!);
+        expect(alert!.subject).toBe(`Booking cancelled by phone: ${w(OLD, "en")} — Ana Ruiz`);
+        expect(alert!.body).toBe(
+          `Booking cancelled by phone.\nAna Ruiz cancelled their booking by phone.\n\nWhen: ${w(OLD, "en")}\n`
+          + `Who: Ana Ruiz\nCalled from: +19562921696\n\nOpen this contact: ${CONTACT_URL}`,
+        );
+      });
+    });
+
     it("reschedule: the staff alert says moved, with the old AND new times, alongside the unchanged customer email", async () => {
       const { result } = await runTool(owns(), notifyCtx, "reschedule_appointment",
         { bookingId: "b1", startsAt: NEW_ISO });

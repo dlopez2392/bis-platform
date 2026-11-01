@@ -922,6 +922,70 @@ describe("S-10 T8: the owner's own mail (weekly report, lead alert, call alert) 
   });
 });
 
+describe("S-10: the owner's booking mail (new booking, cancel, move, phone change) in the account's language (spec §3.3)", () => {
+  const KEYS_BOOKING_ALERTS = [
+    "email.bookingAlert.subject", "email.bookingAlert.heading", "email.bookingAlert.sentence", "email.bookingAlert.text",
+    "email.bookingAlert.label.when", "email.bookingAlert.label.who", "email.bookingAlert.label.note",
+    "email.bookingAlert.label.was", "email.bookingAlert.label.now", "email.bookingAlert.label.calledFrom",
+    "email.bookingAlert.someone",
+    "email.cancelNotice.subject", "email.cancelNotice.sentence",
+    "email.phoneChangeAlert.subject.cancelled", "email.phoneChangeAlert.subject.moved",
+    "email.phoneChangeAlert.heading.cancelled", "email.phoneChangeAlert.heading.moved",
+    "email.phoneChangeAlert.sentence.cancelled", "email.phoneChangeAlert.sentence.moved",
+    "email.phoneChangeAlert.numberHidden",
+    "email.movedAlert.subject", "email.movedAlert.heading", "email.movedAlert.sentence",
+  ] as const;
+
+  it("every key has a Spanish twin that differs from the English (mutation: drop one .es line -> FAILS naming it)", () => {
+    const missing = KEYS_BOOKING_ALERTS.filter((k) => !(k in m) || !(`${k}.es` in m));
+    expect(missing).toEqual([]);
+    for (const k of KEYS_BOOKING_ALERTS) {
+      expect(m[`${k}.es` as keyof typeof m], k).not.toBe(m[k as keyof typeof m]);
+    }
+  });
+
+  it("every English key has its .es twin on the very next line (mutation: move a twin -> FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of KEYS_BOOKING_ALERTS) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, never tú, and says cita, never reserva (mutation: 'Nueva reserva' or 'agendó una cita contigo' -> FAILS)", () => {
+    const TU = /\b(tu|tus|ti|te|contigo|puedes|tienes|agendaste|cancelaste|cambiaste)\b/i;
+    for (const k of KEYS_BOOKING_ALERTS) {
+      const es = m[`${k}.es` as keyof typeof m] as string;
+      expect(TU.test(es), `${k}.es: ${es}`).toBe(false);
+      expect(/reserva/i.test(es), `${k}.es: ${es}`).toBe(false);
+    }
+    expect(m["email.bookingAlert.sentence.es"]).toBe("{name} agendó una cita con usted.");
+  });
+
+  it("the English is today's exact wording, so the English emails stay byte-identical (mutation: reword any English key -> FAILS)", () => {
+    expect(KEYS_BOOKING_ALERTS.map((k) => m[k as keyof typeof m])).toEqual([
+      "New booking: {when} — {name}", "New booking", "{name} booked a time with you.", "New booking from {name}.",
+      "When", "Who", "Note", "Was", "Now", "Called from", "Someone",
+      "Booking cancelled: {when} — {name}", "{name} cancelled their booking.",
+      "Booking cancelled by phone: {when} — {name}", "Booking moved by phone: {was} to {now} — {name}",
+      "Booking cancelled by phone", "Booking moved by phone",
+      "{name} cancelled their booking by phone.", "{name} moved their booking by phone.",
+      "Number not shown",
+      "Booking moved: {was} to {now} — {name}", "Booking moved", "{name} moved their booking.",
+    ]);
+  });
+
+  it("every placeholder set survives translation (mutation: drop {name} from cancelNotice.sentence.es -> FAILS)", () => {
+    const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+    for (const k of KEYS_BOOKING_ALERTS) {
+      const en = m[k as keyof typeof m] as string;
+      const es = m[`${k}.es` as keyof typeof m] as string;
+      expect(ph(es), `${k}.es`).toEqual(ph(en));
+    }
+  });
+});
+
 describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
   const KEYS_8A1 = [
     "aiSettings.title", "aiSettings.description", "aiSettings.account.label", "aiSettings.account.help", "aiSettings.budget.label",

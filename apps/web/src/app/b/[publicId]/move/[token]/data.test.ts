@@ -21,6 +21,7 @@ import { readMoveContext, moveState, MOVE_CHAIN_MAX, loadMoveContextSafe } from 
  */
 const TOKEN = "abcdefghijkmnpqrstuvwxyz";
 type Row = { id: string; rescheduled_from_id: string | null };
+const ACCOUNT = { timezone: "UTC", language: "es", name: "Rio Roofing — trial" };
 
 function stubDb(chain: Record<string, Row>, opts: { walkFails?: boolean } = {}) {
   const booking = {
@@ -31,11 +32,17 @@ function stubDb(chain: Record<string, Row>, opts: { walkFails?: boolean } = {}) 
   return {
     from: (table: string) => {
       const eqs: Record<string, unknown> = {};
+      let cols = "";
       const b = {
-        select: () => b,
+        select: (c?: string) => { cols = c ?? ""; return b; },
         eq: (k: string, v: unknown) => { eqs[k] = v; return b; },
         maybeSingle: async () => {
-          if (table === "accounts") return { data: { timezone: "UTC" }, error: null };
+          // Projected to the columns asked for, so a column the code forgets
+          // to select never reaches an assertion (S-10: `language`).
+          if (table === "accounts") {
+            const wanted = cols.split(",").map((c) => c.trim());
+            return { data: Object.fromEntries(Object.entries(ACCOUNT).filter(([k]) => wanted.includes(k))), error: null };
+          }
           if (table === "calendars") {
             return { data: { id: "cal1", account_id: "a1", public_id: "pub1", enabled: true }, error: null };
           }
@@ -85,6 +92,16 @@ describe("readMoveContext — the chain depth is read, and a bad walk fails safe
     const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
     expect(logged).toMatch(/chain/);
     expect(logged).not.toContain(TOKEN);
+  });
+});
+
+describe("readMoveContext — the account's language (S-10)", () => {
+  it("reads accounts.language on the SAME accounts read, for the owner's moved alert (mutation: drop language from ACCOUNT_COLS → FAILS)", async () => {
+    const ctx = await readMoveContext(stubDb({ b3: { id: "b3", rescheduled_from_id: null } }), TOKEN);
+    expect(ctx!.account.language).toBe("es");
+    expect(ctx!.account.timezone).toBe("UTC");
+    // Only the columns asked for: never the agency's internal label.
+    expect(ctx!.account).not.toHaveProperty("name");
   });
 });
 

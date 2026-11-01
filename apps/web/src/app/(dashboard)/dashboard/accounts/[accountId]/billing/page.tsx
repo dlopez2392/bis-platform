@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAccountOwner } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
-import { BILLING_STATUS_TREATMENTS, billingCardView, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
+import { billingCardView, billingStatusTreatment, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { dbForRequest } from "@/lib/db";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -16,7 +16,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { openBillingPortalAction } from "./actions";
-import { PAYMENT_PROCESSING } from "./client-status";
+import { paymentProcessingTreatment } from "./client-status";
 import { ManageBillingButton } from "./manage-billing-button";
 
 export const dynamic = "force-dynamic";
@@ -55,7 +55,7 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
     getPersonPrefs(),
   ]);
   const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language });
-  const header = <PageHeader title={m["billing.page.title"]} subtitle={m["billing.page.subtitle"]} />;
+  const header = <PageHeader title={tFn(m, "billing.page.title", locale)} subtitle={tFn(m, "billing.page.subtitle", locale)} />;
   if (!billing) {
     // DECISION 4: the item is in the client's nav before billing starts, and
     // this says what will appear here and what makes it appear.
@@ -63,7 +63,7 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
       <>
         {header}
         <div className="p-6">
-          <EmptyState icon={CreditCard} title={m["billing.page.empty.title"]} body={m["billing.page.empty.body"]} />
+          <EmptyState icon={CreditCard} title={tFn(m, "billing.page.empty.title", locale)} body={tFn(m, "billing.page.empty.body", locale)} />
         </div>
       </>
     );
@@ -76,13 +76,13 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   const used = await sumUsageSince(db, accountId, usagePeriodStart(billing, zone, now).start.toISOString());
   const view = billingCardView({ billing, link: null, plan, activePlans: [], used, zone, now, defaultEmail: "",
     // Inert here: no plans are passed, so no action is offered on this page.
-    stripeReady: true, webhookReady: true });
+    stripeReady: true, webhookReady: true, locale });
   // A first payment still going through: the client's word, shown to whoever
   // opens this page, the agency included (it sees the client's page as the
   // client does). The agency's own card on Settings keeps "Payment failed".
   // client-status.ts says why.
   const processing = billing.subscriptionStatus === "incomplete";
-  const t = processing ? PAYMENT_PROCESSING : BILLING_STATUS_TREATMENTS[view.status];
+  const t = processing ? paymentProcessingTreatment(locale) : billingStatusTreatment(view.status, locale);
   // An ended plan (design review I4): the help never asks for a card, whether the plan reads canceled
   // or its pause says so; and "contact us" has a target — the agency's support address, read here on
   // the server, else the line names who to ask.
@@ -101,25 +101,26 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <p className="text-sm text-foreground tabular-nums">
-              {billing.complimentary ? m["billing.page.complimentary"] : view.plan?.price}
+              {billing.complimentary ? tFn(m, "billing.page.complimentary", locale) : view.plan?.price}
             </p>
             <div className="flex flex-col gap-2">
-              <h2 className="text-sm font-medium text-foreground">{m["billing.page.usage"]}</h2>
+              <h2 className="text-sm font-medium text-foreground">{tFn(m, "billing.page.usage", locale)}</h2>
               <ul className="space-y-1 text-sm tabular-nums text-foreground">
                 {view.usage.map((u) => <li key={u.meter} className={u.over ? "font-medium" : undefined}>{u.text}</li>)}
               </ul>
               {view.since ? (
                 <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{view.since}</p>
               ) : null}
-              <p className="text-xs text-muted-foreground">{m["billing.usage.chatsNote"]}</p>
+              <p className="text-xs text-muted-foreground">{tFn(m, "billing.usage.chatsNote", locale)}</p>
             </div>
             {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{view.nextInvoice}</p> : null}
-            {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{m["billing.page.canceled"]}</p> : null}
+            {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{tFn(m, "billing.page.canceled", locale)}</p> : null}
             {pausedLine ? <p className="text-sm text-foreground" lang={locale}>{pausedLine}</p> : null}
             {!billing.complimentary && billing.stripeCustomerId ? (
               <ManageBillingButton
-                open={openBillingPortalAction.bind(null, accountId)}
-                help={ended ? m["billing.page.manageHelp.canceled"] : m["billing.page.manageHelp"]}
+                open={openBillingPortalAction.bind(null, accountId, locale)}
+                help={ended ? tFn(m, "billing.page.manageHelp.canceled", locale) : tFn(m, "billing.page.manageHelp", locale)}
+                locale={locale}
               />
             ) : null}
           </CardContent>

@@ -93,4 +93,32 @@ describe("repliesLine", () => {
   it("answers null for off — no line to show when Replies is off (mutation: answer a line for off → FAILS)", () => {
     expect(repliesLine("client", { mode: "off", domain: null })).toBeNull();
   });
+
+  // S-10 T6: an optional trailing locale (default "en", every call above unaffected).
+  it("reads in Spanish when the reader's locale is es (mutation: ignore the locale param → FAILS)", () => {
+    expect(repliesLine("client", { mode: "bis", domain: null }, "es")).toBe(m["branding.replies.client.es"].replace("{domain}", "reply.bis-rgv.com"));
+  });
+});
+
+// S-10 T6: panelCopy was a module-level English constant per audience, read
+// directly by branding-panel.tsx — English regardless of the reader's own
+// stored choice. Now a function of locale too (default "en", so Settings'
+// own `panelCopy("agency")` call is unaffected).
+describe("panelCopy: Spanish (S-10 T6)", () => {
+  it("the client copy reads in Spanish, every key (mutation: drop the locale param → FAILS)", () => {
+    const es = panelCopy("client", "es");
+    expect(es.title).toBe(m["branding.clientTitle.es"]);
+    expect(es.description).toBe(m["branding.clientBody.es"]);
+    expect(es.nameHint).toBe(m["branding.clientNameHint.es"]);
+    expect(es.colorHint).toBe(m["branding.clientColorHint.es"]);
+    expect(es.neutralHint).toBe(m["branding.clientNeutralHint.es"]);
+    expect(es.modeHint).toBe(m["branding.clientModeHint.es"]);
+    expect(es.modeFollow).toBe(m["branding.clientModeFollow.es"]);
+    expect(es.replyToHint).toBe(m["branding.clientReplyToHint.es"]);
+    expect(es.mailingAddressHint).toBe(m["branding.clientMailingAddressHint.es"]);
+  });
+
+  it("defaults to English when no locale is given, so the agency's Settings card is byte-identical to before (mutation: default to es → FAILS)", () => {
+    expect(panelCopy("agency")).toEqual(panelCopy("agency", "en"));
+  });
 });

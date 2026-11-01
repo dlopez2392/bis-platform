@@ -6,7 +6,13 @@ import { BisAccessFrame } from "@/components/access-log/bis-access-frame";
 import { BisAccessSection } from "@/components/access-log/bis-access-section";
 import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
 import { requireAccountOwner } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
+import { t } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +31,14 @@ export const dynamic = "force-dynamic";
  * reach this page, and the agency only reaches it on a live visit
  * (`requireAgencyVisit`, inside `requireAccountAccess`).
  *
- * The page reads nothing itself: TeamSection reads the account once (its
- * organisation, access and language) and streams in its own boundary,
- * because it waits on Clerk. The header paints without it.
+ * S-10 T6: the page itself reads ONE column (`language`) off the account
+ * row, for its own chrome locale — TeamSection separately reads the whole
+ * row (organisation, access, language) for the team data, and streams in
+ * its own boundary, because it waits on Clerk. A failed read of the
+ * page's own column is logged and falls back to no account language
+ * (English, absent the person's own choice) — never thrown — so a broken
+ * read never costs the header or the card below it (same shape as
+ * branding/page.tsx's own account-language read).
  *
  * F-118 part 1 (plan Task 10; spec 6.1): below TeamSection, the "BIS access"
  * section — every visit BIS has made to this account, its reason and what it
@@ -44,17 +55,37 @@ export default async function TeamPage({
 }) {
   const { accountId } = await params;
   const { isAgency } = await requireAccountOwner(accountId);
-  const { accessBefore, locale } = (await searchParams) ?? {};
+  const { accessBefore, locale: localeParam } = (await searchParams) ?? {};
+  // S-10 T6: the page itself read no locale at all; its title/subtitle and
+  // everything TeamSection renders (the card, or either of its non-card
+  // states) stayed English regardless of the reader's own stored choice.
+  // Same pattern as billing/page.tsx and branding/page.tsx: one more read
+  // off the account row this navigation already needs, beside the person's
+  // own preference.
+  const [account, prefs] = await Promise.all([
+    dbForRequest().then((db) => db.from("accounts").select("language").eq("id", accountId).maybeSingle())
+      .then(({ data, error }: { data: { language?: Locale | null } | null; error: unknown }) => {
+        // Fail SOFT, like branding/page.tsx's own account-language read: a
+        // broken read here must not cost the header or the Team card below
+        // it, so it logs and falls back rather than throwing into the
+        // Promise.all (which would replace the whole page with the error
+        // boundary for a column this page does not even need to function).
+        if (error) console.error(`team page: account ${accountId} language read failed: ${loggableError(error)}`);
+        return { language: (data?.language ?? null) as Locale | null };
+      }),
+    getPersonPrefs(),
+  ]);
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   return (
     <>
-      <PageHeader title={m["team.title"]} subtitle={m["team.page.subtitle"]} />
+      <PageHeader title={t(m, "team.title", locale)} subtitle={t(m, "team.page.subtitle", locale)} />
       <div className="p-6">
-        <Suspense fallback={<TeamSkeleton />}>
-          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} />
+        <Suspense fallback={<TeamSkeleton locale={locale} />}>
+          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} />
         </Suspense>
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
-            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={locale} />
+            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={localeParam} />
           </Suspense>
         </BisAccessFrame>
       </div>

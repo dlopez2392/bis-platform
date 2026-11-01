@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import type { ToastLike } from "@/lib/ui/guarded-run";
 
 export type RemoveLogoResult = { ok: true; path: string } | { ok: false; error: string };
@@ -19,12 +21,16 @@ export async function runRemoveLogo(
   restore: (path: string) => Promise<RestoreLogoResult>,
   show: (hasLogo: boolean) => void,
   toast: ToastLike,
+  // S-10 T6: optional, defaulting to "en" — every m[...] read below was
+  // bare English, regardless of the caller's own locale. This module's one
+  // real caller (branding-panel.tsx) passes its resolved locale.
+  locale: Locale = "en",
 ): Promise<boolean> {
   let r: RemoveLogoResult;
   try {
     r = await remove();
   } catch {
-    toast.error(m["common.actionCrashed"]);
+    toast.error(t(m, "common.actionCrashed", locale));
     return false;
   }
   if (!r.ok) {
@@ -33,16 +39,16 @@ export async function runRemoveLogo(
   }
   show(false);
   const path = r.path;
-  toast.success(m["branding.logoRemoved"], {
+  toast.success(t(m, "branding.logoRemoved", locale), {
     action: {
-      label: m["common.undo"],
+      label: t(m, "common.undo", locale),
       onClick: () => {
         void (async () => {
           let u: RestoreLogoResult;
           try {
             u = await restore(path);
           } catch {
-            toast.error(m["common.actionCrashed"]);
+            toast.error(t(m, "common.actionCrashed", locale));
             return;
           }
           if (u.ok) show(true);
