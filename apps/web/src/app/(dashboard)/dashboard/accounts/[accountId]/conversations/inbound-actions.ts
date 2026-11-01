@@ -37,10 +37,18 @@ function metaOf(msg: { channel: string; direction: string; meta: unknown }): Mes
   return msg.channel === "email" && msg.direction === "inbound" ? ((msg.meta as MessageMeta | null) ?? {}) : null;
 }
 
+/** Review fix round, Minor 1: the read's own `error` is checked separately from a genuine miss, the
+ *  same split `provedRow` already makes below — an outage here must THROW, not be read as "changed"
+ *  the way "no such row" is. Unlike `provedRow`'s own callers (which catch the throw themselves and
+ *  answer a typed `"failed"`), `undoReplyStopAction`/`stopEmailsFromReplyAction` have no try/catch of
+ *  their own by design: the thrown rejection crosses the server-action boundary and is caught by the
+ *  client's own `run()` wrapper (inbound-notice-handlers.ts), which already shows the crash toast in
+ *  the reader's language — the other option the review named, already built, for exactly this case. */
 async function provedThread(accountId: string, conversationId: string): Promise<{ db: SupabaseClient; contactId: string } | null> {
   const db = await dbForRequest();
   const { data, error } = await db.from("conversations").select("id, contact_id").eq("account_id", accountId).eq("id", conversationId).maybeSingle();
-  if (error || !data) return null;
+  if (error) throw new Error(`provedThread: conversation read failed: ${error.message}`);
+  if (!data) return null;
   return { db, contactId: (data as { contact_id: string }).contact_id };
 }
 

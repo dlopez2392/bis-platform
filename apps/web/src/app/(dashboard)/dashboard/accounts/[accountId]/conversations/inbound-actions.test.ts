@@ -175,6 +175,18 @@ describe("undoReplyStopAction", () => {
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, "luis", USER, "es");
   });
 
+  // Review fix round, Minor 1: provedThread used to answer null (read as "changed") on a READ ERROR
+  // the same way it does for a genuine miss — an outage reported as "Someone already handled this
+  // email" is a lie. provedRow already makes this split (its own test two describes down); this
+  // mirrors it: THROW, so the crash toast shows (inbound-notice-handlers.ts's run() wrapper), rather
+  // than claiming a stale-click "changed".
+  it("provedThread's own conversation read failing (an outage, not a miss) throws, never the stale-click 'changed' sentence (mutation: ignore the read's error → FAILS)", async () => {
+    CONV_READ_ERROR.value = "outage";
+
+    await expect(undoReplyStopAction(ACCOUNT, "en", CONV, "ev_1")).rejects.toThrow(/outage/);
+    expect(dbMock.listMessages).not.toHaveBeenCalled();
+  });
+
   it("an eventId not carried by any message on this thread is refused, never reaching emailContextFor (mutation: skip the binding check → FAILS)", async () => {
     dbMock.listMessages.mockResolvedValue([
       message({ meta: { consent: { kind: "stopped", eventId: "ev_OTHER" } } }),
@@ -271,6 +283,14 @@ describe("stopEmailsFromReplyAction", () => {
 
     const result = await stopEmailsFromReplyAction(ACCOUNT, "es", CONV, "ana");
     expect(result).toEqual({ ok: false, error: t(m, "conversations.held.changed", "es") });
+  });
+
+  // Review fix round, Minor 1: same split as undoReplyStopAction's own test above.
+  it("provedThread's own conversation read failing (an outage, not a miss) throws, never the stale-click 'changed' sentence (mutation: ignore the read's error → FAILS)", async () => {
+    CONV_READ_ERROR.value = "outage";
+
+    await expect(stopEmailsFromReplyAction(ACCOUNT, "en", CONV, "ana")).rejects.toThrow(/outage/);
+    expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
   });
 
   it("in Spanish: a bound member's context is built with the reader's own locale (mutation: pass \"en\" to emailContextFor regardless of locale → FAILS)", async () => {
