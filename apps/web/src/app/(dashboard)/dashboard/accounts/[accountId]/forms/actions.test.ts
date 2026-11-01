@@ -60,9 +60,16 @@ beforeEach(() => {
 // house pattern for a user-fixable validation failure is a RETURNED
 // { ok: false, error } the caller can show verbatim (see
 // settings/actions.ts's setReportEmailsAction beside this).
+//
+// S-10 T5 part 2: `saveFormAction` now takes the READER's own locale as its
+// second positional argument, bound by the page (never the form's own
+// `locale_default`, which this action also writes to the row below) — so
+// every call in this file now passes one explicitly, same as every other
+// server action in this codebase that returns a user-fixable message
+// (contacts/actions.ts's own `locale: Locale = "en"` parameters).
 describe("saveFormAction — field-level errors instead of a swallowed throw (D-024)", () => {
   it("returns the specific invalid-notify-email message instead of throwing it away (mutation: keep `throw new Error(...)` → rejects instead of resolving, FAILS)", async () => {
-    const result = await saveFormAction("acct_1", fd({
+    const result = await saveFormAction("acct_1", "en", fd({
       formId: "form_1", fields: "[]", status: "draft",
       notifyEmails: "not-an-email",
     }));
@@ -73,7 +80,7 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 
   it("returns the specific invalid-redirect-url message instead of throwing it away (mutation: keep `throw new Error(...)` → rejects instead of resolving, FAILS)", async () => {
-    const result = await saveFormAction("acct_1", fd({
+    const result = await saveFormAction("acct_1", "en", fd({
       formId: "form_1", fields: "[]", status: "draft",
       successMode: "redirect", redirectUrl: "javascript:alert(1)",
     }));
@@ -82,7 +89,7 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 
   it("returns the invalid-fields message for a tampered fields payload, instead of throwing (mutation: keep the throw → FAILS)", async () => {
-    const result = await saveFormAction("acct_1", fd({
+    const result = await saveFormAction("acct_1", "en", fd({
       formId: "form_1", fields: "[{}]", status: "draft",
     }));
     expect(result).toEqual({ ok: false, error: m["forms.invalidFields"] });
@@ -90,7 +97,7 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 
   it("returns the needs-a-field message when publishing with no fields, instead of throwing a raw string (mutation: keep the throw → FAILS)", async () => {
-    const result = await saveFormAction("acct_1", fd({
+    const result = await saveFormAction("acct_1", "en", fd({
       formId: "form_1", fields: "[]", status: "published",
     }));
     expect(result).toEqual({ ok: false, error: m["forms.noFields"] });
@@ -98,7 +105,7 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 
   it("still reports ok and writes the form on a valid submit", async () => {
-    const result = await saveFormAction("acct_1", fd({
+    const result = await saveFormAction("acct_1", "en", fd({
       formId: "form_1", fields: "[]", status: "draft",
       notifyEmails: "owner@example.com",
     }));
@@ -111,6 +118,50 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 });
 
+// S-10 T5 part 2: every one of the four refusal messages above now reads
+// through t(m, key, locale) rather than the bare English m[key] — proven
+// here by asking for "es" instead of relying on the default.
+describe("saveFormAction speaks Spanish to a Spanish-reading operator (S-10 T5 part 2)", () => {
+  it("returns the invalid-notify-email message in Spanish, with {value} interpolated, when locale is 'es' (mutation: hard-code English, or drop the locale argument → FAILS)", async () => {
+    const result = await saveFormAction("acct_1", "es", fd({
+      formId: "form_1", fields: "[]", status: "draft",
+      notifyEmails: "not-an-email",
+    }));
+    expect(result).toEqual({
+      ok: false, error: m["forms.invalidNotifyEmail.es"].replace("{value}", "not-an-email"),
+    });
+  });
+
+  it("returns the invalid-redirect-url message in Spanish (mutation: hard-code English → FAILS)", async () => {
+    const result = await saveFormAction("acct_1", "es", fd({
+      formId: "form_1", fields: "[]", status: "draft",
+      successMode: "redirect", redirectUrl: "javascript:alert(1)",
+    }));
+    expect(result).toEqual({ ok: false, error: m["forms.invalidRedirectUrl.es"] });
+  });
+
+  it("returns the invalid-fields message in Spanish (mutation: hard-code English → FAILS)", async () => {
+    const result = await saveFormAction("acct_1", "es", fd({
+      formId: "form_1", fields: "[{}]", status: "draft",
+    }));
+    expect(result).toEqual({ ok: false, error: m["forms.invalidFields.es"] });
+  });
+
+  it("returns the needs-a-field message in Spanish (mutation: hard-code English → FAILS)", async () => {
+    const result = await saveFormAction("acct_1", "es", fd({
+      formId: "form_1", fields: "[]", status: "published",
+    }));
+    expect(result).toEqual({ ok: false, error: m["forms.noFields.es"] });
+  });
+
+  it("defaults to English when the locale argument is explicitly undefined, so an uncalled-out caller keeps its current behaviour (mutation: default to Spanish → FAILS)", async () => {
+    const result = await saveFormAction("acct_1", undefined, fd({
+      formId: "form_1", fields: "[]", status: "published",
+    }));
+    expect(result).toEqual({ ok: false, error: m["forms.noFields"] });
+  });
+});
+
 // Owner context (forms tracker batch 4), revised in fix round 1 (review
 // item 2): the Undo half of the Forms page's unpublish warning. The first
 // version wrote status unconditionally through updateForm; it now delegates
@@ -118,9 +169,16 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
 // packages/db's own republishFormIfUnchanged, and this layer's only job is
 // threading the account-access guard and turning its three-way outcome into
 // the { ok, error } shape the toast renders.
+//
+// S-10 T5 part 2: `republishFormAction` now takes the READER's own locale as
+// its THIRD positional argument, before `expectedPriorStatus` — so the
+// client's own bound call (`republishFormAction.bind(null, accountId,
+// formId, locale)`, form-editor.tsx's `republishAction` prop) still leaves
+// exactly `expectedPriorStatus` free for the toast's own Undo click to
+// supply. Every call below is updated to the new four-argument shape.
 describe("republishFormAction", () => {
   it("passes accountId, formId, the caller's expected prior status and the actor through, and reports ok on a clean republish (mutation: hardcode a fixed prior status instead of the one passed in → FAILS)", async () => {
-    const result = await republishFormAction("acct_1", "form_1", "draft");
+    const result = await republishFormAction("acct_1", "form_1", "en", "draft");
     expect(result).toEqual({ ok: true });
     expect(dbMocks.republishFormIfUnchanged).toHaveBeenCalledWith(
       dbForRequestInstance, "acct_1", "form_1", "draft", "user_1",
@@ -128,25 +186,45 @@ describe("republishFormAction", () => {
   });
 
   it("checks account access before writing (mutation: drop the guard call → FAILS)", async () => {
-    await republishFormAction("acct_1", "form_1", "draft");
+    await republishFormAction("acct_1", "form_1", "en", "draft");
     expect(authMocks.requireNotTechnician).toHaveBeenCalledWith("acct_1");
   });
 
   it("reports the stale outcome with an honest message instead of silently succeeding (mutation: treat every outcome as ok → FAILS)", async () => {
     dbMocks.republishFormIfUnchanged.mockResolvedValue("stale");
-    const result = await republishFormAction("acct_1", "form_1", "draft");
+    const result = await republishFormAction("acct_1", "form_1", "en", "draft");
     expect(result).toEqual({ ok: false, error: m["forms.undoStale"] });
   });
 
   it("reports the needs-fields outcome with the same rule saveFormAction already enforces, instead of silently succeeding (mutation: treat every outcome as ok → FAILS)", async () => {
     dbMocks.republishFormIfUnchanged.mockResolvedValue("needs_fields");
-    const result = await republishFormAction("acct_1", "form_1", "draft");
+    const result = await republishFormAction("acct_1", "form_1", "en", "draft");
     expect(result).toEqual({ ok: false, error: m["forms.noFields"] });
   });
 
   it("reports a plain failure instead of throwing when the write itself throws (mutation: let it reject → FAILS)", async () => {
     dbMocks.republishFormIfUnchanged.mockRejectedValueOnce(new Error("db exploded"));
-    const result = await republishFormAction("acct_1", "form_1", "draft");
+    const result = await republishFormAction("acct_1", "form_1", "en", "draft");
     expect(result).toEqual({ ok: false, error: m["forms.republishFailed"] });
+  });
+});
+
+describe("republishFormAction speaks Spanish to a Spanish-reading operator (S-10 T5 part 2)", () => {
+  it("reports the stale-undo message in Spanish (mutation: hard-code English → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockResolvedValue("stale");
+    const result = await republishFormAction("acct_1", "form_1", "es", "draft");
+    expect(result).toEqual({ ok: false, error: m["forms.undoStale.es"] });
+  });
+
+  it("reports the needs-fields message in Spanish (mutation: hard-code English → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockResolvedValue("needs_fields");
+    const result = await republishFormAction("acct_1", "form_1", "es", "draft");
+    expect(result).toEqual({ ok: false, error: m["forms.noFields.es"] });
+  });
+
+  it("reports a thrown write's failure in Spanish (mutation: hard-code English → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockRejectedValueOnce(new Error("db exploded"));
+    const result = await republishFormAction("acct_1", "form_1", "es", "draft");
+    expect(result).toEqual({ ok: false, error: m["forms.republishFailed.es"] });
   });
 });
