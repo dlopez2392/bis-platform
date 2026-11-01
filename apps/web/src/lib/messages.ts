@@ -690,8 +690,12 @@ export const m = {
   "contacts.import.empty": "That file has no rows we can read.",
   "contacts.import.empty.es": "Ese archivo no tiene filas que podamos leer.",
   // S-10 leftovers (#317 follow-up, item 4): the per-row reasons mapRows attaches to a skipped
-  // row (the inline "won't be imported" list and the downloaded skipped-rows.csv) — lowercase,
-  // matching the plain style a spreadsheet cell reads.
+  // row. Review fix round (M-5): the wizard's own screen shows only a COUNT of skipped rows
+  // ("N rows have problems and will be skipped", contacts.import.errors below) — these two
+  // reason strings reach a person only inside the downloaded skipped-rows.csv, never an inline
+  // list. (The "won't be imported" wording belongs to contacts.import.ignored above, a
+  // different concept — a column left unmapped, not a row a validation check rejected.)
+  // Lowercase, matching the plain style a spreadsheet cell reads.
   "contacts.import.reason.noEmailOrPhone": "no email or phone",
   "contacts.import.reason.noEmailOrPhone.es": "sin correo ni teléfono",
   "contacts.import.reason.invalidEmail": "invalid email",

@@ -135,9 +135,15 @@ export function autoMap(headers: string[]): Record<string, string | null> {
  */
 export function mapRows(
   rows: ParsedRow[], mapping: Record<string, string | null>,
-  // S-10 leftovers (#317 follow-up, item 4): default "en" so a caller that predates this param
-  // (applyImportBatch's own server-side re-validation, which never shows these reasons to anyone)
-  // is unchanged.
+  // S-10 leftovers (#317 follow-up, item 4): default "en" so any caller written before this
+  // param existed is unchanged. Review fix round (M-5): the server's own caller,
+  // `importContactsBatchAction` (contacts/import/actions.ts), DOES pass its resolved locale
+  // through — it is not predating the param — but its own re-validation call discards this
+  // function's `errors` entirely (it reads only `mapped`), so the locale it passes here never
+  // reaches anyone either way; the ONE place a person actually reads a reason is the wizard's
+  // own call (import-wizard.tsx) — and even there, only inside the downloaded skipped-rows
+  // CSV's own text; the wizard's inline screen shows just a COUNT of skipped rows
+  // ("contacts.import.errors"), never the reasons themselves.
   locale: Locale = "en",
 ): { mapped: MappedRow[]; errors: RowError[] } {
   const mapped: MappedRow[] = [];

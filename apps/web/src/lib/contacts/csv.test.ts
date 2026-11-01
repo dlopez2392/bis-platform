@@ -91,9 +91,11 @@ describe("mapRows", () => {
     expect(mapped).toHaveLength(1);
   });
 
-  // S-10 leftovers (#317 follow-up, item 4): the skipped-row reasons a person sees after an
-  // import (the inline "won't be imported" list and the downloaded skipped-rows.csv) were
-  // English-only literals — never routed through the catalogue at all.
+  // S-10 leftovers (#317 follow-up, item 4): the per-row reasons a person sees after an import
+  // were English-only literals — never routed through the catalogue at all. Review fix round
+  // (M-5): a person reads one of these two reason strings only inside the downloaded
+  // skipped-rows.csv; the wizard's own inline screen shows only a COUNT of skipped rows,
+  // never a list of their own reasons.
   describe("skipped-row reasons in the reader's language", () => {
     it("reads the Spanish reason when asked, for both skip reasons (mutation: ignore the locale param -> FAILS)", () => {
       const { errors: noContact } = mapRows([{ line: 5, values: { First: "Ada" } }], m, "es");
