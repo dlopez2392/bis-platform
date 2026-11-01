@@ -93,3 +93,12 @@ describe("toggleTheme", () => {
     expect(calls).toEqual(["cookie", "setTheme", "refresh"]);
   });
 });
+
+// S-10 review I-3: the toggle sits in the topbar, outside any `lang` subtree.
+describe("ThemeToggle — lang (S-10 review I-3)", () => {
+  it("the button carries lang={locale} beside its translated label (mutation: drop it → FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./theme-toggle.tsx", import.meta.url), "utf8");
+    expect(src).toMatch(/aria-label=\{t\(m, "theme\.toggle", locale\)\}\s*title=\{t\(m, "theme\.toggle", locale\)\}\s*lang=\{locale\}/);
+  });
+});

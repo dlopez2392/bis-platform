@@ -41,9 +41,9 @@ function arm(state: State) {
   harness.setters = [];
   harness.overrides = new Map(Object.entries(state).map(([k, v]) => [STATE[k as keyof typeof STATE], v]));
 }
-const render = (state: State) => { arm(state); return renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "l" })); };
+const render = (state: State) => { arm(state); return renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "l", locale: "en" })); };
 /** The picker's own element tree (its children are not rendered), with the hooks answered from `state`. */
-const tree = (state: State) => { arm(state); return DealContactPicker({ accountId: ACCT, labelId: "l" }) as ReactElement; };
+const tree = (state: State) => { arm(state); return DealContactPicker({ accountId: ACCT, labelId: "l", locale: "en" }) as ReactElement; };
 
 function find(node: ReactNode, pred: (el: ReactElement<Record<string, unknown>>) => boolean): ReactElement<Record<string, unknown>> | null {
   if (Array.isArray(node)) {

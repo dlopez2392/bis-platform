@@ -633,19 +633,20 @@ function SetupMeterLink({
   done: number;
   total: number;
 }) {
+  const locale = useLocale();
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
-  const progressText = m["setup.progress"]
-    .replace("{done}", String(done))
-    .replace("{total}", String(total));
+  const progressText = t(m, "setup.progress", locale, { done, total });
+  const setupLabel = t(m, "nav.setup", locale);
   return (
     <Link
       href={`${base}/setup`}
+      lang={locale}
       // Unconditional for the same reason SidebarLink's own title is now
       // unconditional (F-107 r1 review): the label/count row below is
       // `hidden` below `sm` even when `collapsed` is false, so sighted
       // hover needs the tooltip there too, not only when desktop-collapsed.
-      title={m["nav.setup"]}
-      aria-label={`${m["nav.setup"]} (${progressText})`}
+      title={setupLabel}
+      aria-label={`${setupLabel} (${progressText})`}
       className={cn(
         // Mobile-first (F-107, rider part): no horizontal padding is the
         // BASE below `sm`, whatever `collapsed` says — same reasoning as
@@ -658,7 +659,7 @@ function SetupMeterLink({
     >
       {collapsed ? null : (
         <span className="hidden items-center justify-between gap-2 sm:flex">
-          <span className="truncate">{m["nav.setup"]}</span>
+          <span className="truncate">{setupLabel}</span>
           <span className="shrink-0 font-mono text-xs text-sidebar-foreground/60 tabular-nums">
             {done}/{total}
           </span>

@@ -36,6 +36,7 @@ function CommandDialog({
   className,
   showCloseButton = true,
   shouldFilter,
+  lang,
   ...props
 }: React.ComponentProps<typeof Dialog> & {
   title?: string
@@ -45,10 +46,14 @@ function CommandDialog({
   /** Forwarded to the inner Command. Destructured out of `...props` on
    *  purpose: spread onto Dialog it would land on a DOM node and warn. */
   shouldFilter?: boolean
+  /** The content's language (S-10): it portals into <body>, outside any
+   *  `lang` subtree, so it states its own. */
+  lang?: string
 }) {
   return (
     <Dialog {...props}>
       <DialogContent
+        lang={lang}
         className={cn("overflow-hidden p-0", className)}
         showCloseButton={showCloseButton}
       >

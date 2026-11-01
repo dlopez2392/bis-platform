@@ -107,9 +107,13 @@ export const m = {
   // label, not because this string itself differs.
   "shell.brand.es": "BIS",
   "shell.switchAccount": "Switch company",
+  "shell.switchAccount.es": "Cambiar de empresa",
   "shell.searchAccounts": "Search companies…",
+  "shell.searchAccounts.es": "Buscar empresas…",
   "shell.noAccounts": "No companies yet",
+  "shell.noAccounts.es": "Todavía no hay empresas",
   "shell.search": "Search",
+  "shell.search.es": "Buscar",
   "shell.collapse": "Collapse sidebar",
   "shell.collapse.es": "Contraer panel lateral",
   "shell.expand": "Expand sidebar",
@@ -127,6 +131,7 @@ export const m = {
   // clients rename theirs. The caller falls back to "Sofía" only when the
   // persona name is missing or blank.
   "shell.presence.onCall": "{name} · on a call",
+  "shell.presence.onCall.es": "{name} · en una llamada",
   // "the last 7 days", not "this week" (2026-10-26): the count is the
   // dashboard tile's own rolling window (lib/voice/presence.ts).
   "shell.presence.idle": "✓ {count} calls handled in the last 7 days",
@@ -252,7 +257,6 @@ export const m = {
   "branding.nameHint": "What this company's own customers see — on their lead forms, booking page, website chat, emails and texts, and in their sidebar. Your internal name for them stays private.",
   "branding.logo": "Logo",
   "branding.logoHint": "PNG, JPEG or WebP, up to 512 KB.",
-  "branding.upload": "Upload",
   "branding.saved": "Branding updated",
   "branding.saveFailed": "Could not update branding",
   "branding.badFormat": "That file isn't a PNG, JPEG or WebP.",
@@ -305,9 +309,6 @@ export const m = {
   "common.retry.es": "Intentar de nuevo",
   "common.add": "Add",
   "common.add.es": "Agregar",
-  "common.import": "Import",
-  "common.filters": "Filters",
-  "common.sort": "Sort",
   "common.none": "—",
   "common.none.es": "—",
   "common.saving": "Saving…",
@@ -318,7 +319,7 @@ export const m = {
   "common.actionCrashed":"That didn't go through — this page may be out of date. Reload it and try again.",
   // Twin added by mis preferencias (F-096, Task 6): the Preferences page
   // speaks the person's own locale, including this house sentence.
-  "common.actionCrashed.es": "Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.",
+  "common.actionCrashed.es": "Eso no se completó: puede que esta página esté desactualizada. Recárguela e inténtelo de nuevo.",
   "common.unavailable": "—",
   // The period caption on a StatTile (Task 4) when the metric covers the
   // whole account history rather than a rolling window — shared verbatim
@@ -790,7 +791,6 @@ export const m = {
   "contact.opportunities": "Opportunities",
   "contact.opportunities.es": "Oportunidades",
   "contact.activity": "Activity",
-  "contact.notes": "Notes",
   "contact.tasks": "Tasks",
   "contact.tasks.es": "Pendientes",
   "contact.addNote": "Add a note…",
@@ -889,8 +889,6 @@ export const m = {
   "language.name.en.es": "inglés",
   "language.name.es": "Spanish",
   "language.name.es.es": "español",
-  "contact.noActivity": "No activity yet",
-  "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
   "contact.noOpportunities.es": "Todavía no hay ninguna.",
   "contact.noName": "(no name)",
@@ -1272,20 +1270,27 @@ export const m = {
   "settings.requiredDocuments.failed.es": "No se pudo guardar la lista. Intente de nuevo.",
 
   "error.title": "Something went wrong",
+  "error.title.es": "Algo salió mal",
   "error.body": "We couldn't complete that action. Your changes may not have been saved.",
+  "error.body.es": "No pudimos completar esa acción. Es posible que sus cambios no se hayan guardado.",
   "error.retry": "Try again",
+  "error.retry.es": "Intentar de nuevo",
 
   "notFound.title": "Page not found",
+  "notFound.title.es": "No encontramos esta página",
   "notFound.body": "That page doesn't exist or may have moved.",
+  "notFound.body.es": "Esa página no existe o cambió de lugar.",
   "notFound.back": "Back to dashboard",
+  "notFound.back.es": "Volver al panel",
 
   "theme.toggle": "Toggle light and dark mode",
+  "theme.toggle.es": "Cambiar entre modo claro y oscuro",
   // Mis preferencias (F-096, D5): the toggle applies the new mode at once and
   // saves it in the background; this is shown only if that background save
   // fails, so the chosen mode keeps working this visit but may not survive a
   // reload.
   "theme.saveFailed": "Couldn't save your theme. It may switch back when the page reloads.",
-  "theme.saveFailed.es": "No se pudo guardar tu tema. Puede volver al anterior al recargar la página.",
+  "theme.saveFailed.es": "No se pudo guardar su tema. Es posible que vuelva al anterior al recargar la página.",
 
   // Mis preferencias (F-096, Task 6): the Preferences page, its user-menu
   // item and its ⌘K entry. A person's own page, so every key has a Spanish
@@ -1294,9 +1299,9 @@ export const m = {
   // (prefs.languageName.*); the radios themselves keep LANGUAGE_OPTIONS'
   // own-language labels ("English", "Español"), the word a reader looks for.
   "prefs.title": "Your preferences",
-  "prefs.title.es": "Tus preferencias",
+  "prefs.title.es": "Sus preferencias",
   "prefs.intro": "These are just for you. Nobody else on your team sees them change.",
-  "prefs.intro.es": "Solo son para ti. Nadie más de tu equipo ve el cambio.",
+  "prefs.intro.es": "Son solo para usted. Nadie más de su equipo ve el cambio.",
   "prefs.language.legend": "Language",
   "prefs.language.legend.es": "Idioma",
   "prefs.language.account": "Follow the account",
@@ -1304,7 +1309,7 @@ export const m = {
   "prefs.language.accountHint": "The account's language right now is {language}.",
   "prefs.language.accountHint.es": "Ahora mismo el idioma de la cuenta es {language}.",
   "prefs.language.agencyEmpty": "You'll see English until you pick one.",
-  "prefs.language.agencyEmpty.es": "Verás inglés hasta que elijas uno.",
+  "prefs.language.agencyEmpty.es": "Verá inglés hasta que elija uno.",
   "prefs.languageName.english": "English",
   "prefs.languageName.english.es": "inglés",
   "prefs.languageName.spanish": "Spanish",
@@ -1318,9 +1323,9 @@ export const m = {
   "prefs.theme.system": "Follow my device",
   "prefs.theme.system.es": "Seguir mi dispositivo",
   "prefs.theme.empty": "You haven't picked one yet, so you're seeing the {mode} look.",
-  "prefs.theme.empty.es": "Aún no has elegido, así que ves el tema {mode}.",
+  "prefs.theme.empty.es": "Aún no ha elegido, así que ve el tema {mode}.",
   "prefs.theme.emptyDevice": "You haven't picked one yet, so the look follows your device.",
-  "prefs.theme.emptyDevice.es": "Aún no has elegido, así que el tema sigue tu dispositivo.",
+  "prefs.theme.emptyDevice.es": "Aún no ha elegido, así que se usa el tema de su dispositivo.",
   "prefs.mode.light": "light",
   "prefs.mode.light.es": "claro",
   "prefs.mode.dark": "dark",
@@ -1328,23 +1333,23 @@ export const m = {
   "prefs.saved.language": "Language set to {language}.",
   "prefs.saved.language.es": "Idioma cambiado a {language}.",
   "prefs.saved.languageAccount": "You'll see the account's language, {language}.",
-  "prefs.saved.languageAccount.es": "Verás el idioma de la cuenta: {language}.",
+  "prefs.saved.languageAccount.es": "Verá el idioma de la cuenta: {language}.",
   "prefs.saved.theme.light": "Light theme on.",
   "prefs.saved.theme.light.es": "Tema claro activado.",
   "prefs.saved.theme.dark": "Dark theme on.",
   "prefs.saved.theme.dark.es": "Tema oscuro activado.",
   "prefs.saved.theme.system": "The theme now follows your device.",
-  "prefs.saved.theme.system.es": "El tema ahora sigue tu dispositivo.",
+  "prefs.saved.theme.system.es": "Ahora se usa el tema de su dispositivo.",
   "prefs.saved.theme.none": "Back to the default theme for your login.",
-  "prefs.saved.theme.none.es": "Volviste al tema predeterminado.",
+  "prefs.saved.theme.none.es": "Volvió al tema predeterminado.",
   "prefs.undo": "Undo",
   "prefs.undo.es": "Deshacer",
   "prefs.undone": "Changed back.",
   "prefs.undone.es": "Se deshizo el cambio.",
   "prefs.error.failed": "That didn't save. Try again in a moment.",
-  "prefs.error.failed.es": "No se guardó. Inténtalo de nuevo en un momento.",
+  "prefs.error.failed.es": "No se guardó. Inténtelo de nuevo en un momento.",
   "prefs.error.load": "We couldn't load your preferences. Reload the page.",
-  "prefs.error.load.es": "No pudimos cargar tus preferencias. Recarga la página.",
+  "prefs.error.load.es": "No pudimos cargar sus preferencias. Recargue la página.",
   "prefs.reload": "Reload",
   "prefs.reload.es": "Recargar",
   "prefs.menuItem": "Preferences",
@@ -1624,12 +1629,6 @@ export const m = {
   "conversations.channel.webchat": "Web chat",
   "conversations.channel.webchat.es": "Chat web",
   // "{channel}" is the house placeholder convention (see shell.presence.idle).
-  // Filled from MESSAGE_CHANNEL_LABEL (lib/labels.ts) so the timeline reads
-  // "Email sent"/"Text sent"/etc. from the real channel instead of a
-  // hardcoded "Email" for every message regardless of how it was sent.
-  "contact.activitySent": "{channel} sent",
-  "contact.activityReceived": "{channel} received",
-  "contact.formSubmission": "Form submission",
 
   // Every item but form_notify happens outside the platform. The help text
   // must say so plainly — implying the app performs these is a lie it would
@@ -1841,11 +1840,6 @@ export const m = {
   "calendar.settings.saveFailed": "Could not save booking settings.",
   "calendar.settings.saveCrashed": "Could not save — this page may be out of date. Reload it and try again.",
 
-  // Not "Upcoming": since D-030 the list (listCalendarBookings) also carries appointments that are
-  // over and still waiting for "Mark completed" or "No-show".
-  "calendar.bookings.title": "Bookings",
-  "calendar.bookings.empty": "Nothing here yet. Bookings from your booking page and phone calls show up here and stay until you mark them completed or no-show.",
-  "calendar.bookings.note": "Note",
   "calendar.bookings.join": "Join",
   "calendar.bookings.join.es": "Unirse",
   "calendar.bookings.cancel": "Cancel",
@@ -2316,15 +2310,21 @@ export const m = {
   "sms.alert.emailHint": " Check email for details.",
   "sms.alert.emailHint.es": " Revise su correo para mas detalles.",
 
-  "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
-  "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
+  // Renamed from the camel `…En`/`…Es` suffix to the catalogue's own `x` /
+  // `x.es` pair (S-10 T0), so the parity gate reads them as twins.
+  "voice.textback.defaultBody": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBody.es": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  "voice.textback.defaultBodyNoName": "Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBodyNoName.es": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
   // 2026-09-26): "just now" would be false the next morning. Spanish needs no
-  // variant; its default never said "just now".
-  "voice.textback.defaultBodyHeldEn": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
-  "voice.textback.defaultBodyHeldNoNameEn": "Sorry we missed your call, reply here and we'll help.",
-  "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
-  "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  // variant; its default never said "just now", so the held twins are the
+  // same sentences as the plain ones (defaultTextbackBody reads the plain
+  // Spanish for both; these twins exist so the parity gate can see that).
+  "voice.textback.defaultBodyHeld": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeld.es": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  "voice.textback.defaultBodyHeldNoName": "Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeldNoName.es": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // Same class of note as `automations.optOutCounted` (the count above
   // includes a sentence not shown in the textarea/placeholder) but worded
   // WITHOUT quoting the English disclosure verbatim: this card's preview
@@ -3221,10 +3221,10 @@ export const m = {
   // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
   // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
   // dash anywhere: it is outside GSM-7.
-  "automations.instantReply.defaultBodyEn": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyNoNameEn": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyEs": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
-  "automations.instantReply.defaultBodyNoNameEs": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBody": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoName": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBodyNoName.es": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
@@ -3754,6 +3754,7 @@ export const m = {
   "setup.railLabel": "Setup steps",
   "setup.backToSetup": "Back to setup",
   "setup.progress": "{done} of {total} steps done",
+  "setup.progress.es": "{done} de {total} pasos listos",
   "setup.progressLabel": "Setup progress",
   "setup.nextUp": "Next up",
   "setup.state.done": "Done",
@@ -3909,39 +3910,61 @@ export const m = {
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",
+  "palette.placeholder.es": "Buscar contactos, llamadas, páginas…",
   "palette.searchHint": "Search",
+  "palette.searchHint.es": "Buscar",
   // Two, because the hint has to name the key this machine actually has.
   "palette.shortcut.mac": "⌘K",
+  "palette.shortcut.mac.es": "⌘K",
   "palette.shortcut.other": "Ctrl K",
+  "palette.shortcut.other.es": "Ctrl K",
   "palette.group.navigation": "Go to",
+  "palette.group.navigation.es": "Ir a",
   "palette.group.settings": "Settings",
+  "palette.group.settings.es": "Ajustes",
   "palette.group.actions": "Actions",
+  "palette.group.actions.es": "Acciones",
   "palette.group.contacts": "Contacts",
+  "palette.group.contacts.es": "Contactos",
   "palette.group.calls": "Calls",
+  "palette.group.calls.es": "Llamadas",
   "palette.group.conversations": "Conversations",
+  "palette.group.conversations.es": "Conversaciones",
   "palette.hint": "Keep typing to search your contacts, calls and conversations.",
+  "palette.hint.es": "Siga escribiendo para buscar en sus contactos, llamadas y conversaciones.",
   "palette.empty": "Nothing matches “{query}”.",
-  "palette.empty.es": "Nada coincide con “{query}”.",
+  "palette.empty.es": "No hay resultados para “{query}”.",
   // Names the failure instead of showing an empty list. An empty list would
   // say "you have no such contact", which is a lie about a broken request.
   "palette.error": "Couldn't search your records just now.",
-  "palette.error.es": "No pudimos buscar en sus registros en este momento.",
+  "palette.error.es": "No pudimos buscar en este momento.",
   "palette.retry": "Try again",
+  "palette.retry.es": "Intentar de nuevo",
   "palette.action.toggleTheme": "Switch between light and dark",
+  "palette.action.toggleTheme.es": "Cambiar entre modo claro y oscuro",
   // Staff and roles (Task 8): the agency's own ⌘K entry point into this
   // client's team management (registry.ts's own comment on why this is a
   // plain navigation entry, not a SETTINGS_SECTIONS anchor).
   "palette.settings.team": "Team",
   "palette.settings.team.es": "Equipo",
   "palette.settings.clientAccess": "Client access",
+  "palette.settings.clientAccess.es": "Acceso del negocio",
   "palette.settings.sendingAddress": "Sending address",
+  "palette.settings.sendingAddress.es": "Correo de envío",
   "palette.settings.customFields": "Custom fields",
+  "palette.settings.customFields.es": "Campos personalizados",
   "palette.settings.customValues": "Custom values",
+  "palette.settings.customValues.es": "Valores personalizados",
   "palette.settings.alertPhone": "Alert texts",
+  "palette.settings.alertPhone.es": "Avisos por texto",
   "palette.settings.billing": "Billing",
+  "palette.settings.billing.es": "Facturación",
   "palette.settings.branding": "Branding",
+  "palette.settings.branding.es": "Marca",
   "palette.settings.weeklyReport": "Weekly report",
+  "palette.settings.weeklyReport.es": "Reporte semanal",
   "palette.settings.website": "Website",
+  "palette.settings.website.es": "Sitio web",
   "palette.settings.requiredDocuments": "Required documents",
   "palette.settings.requiredDocuments.es": "Documentos requeridos",
 

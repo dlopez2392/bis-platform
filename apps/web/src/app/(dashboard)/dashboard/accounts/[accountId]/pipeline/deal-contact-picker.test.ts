@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   DealContactHit, DealContactPicker, dealContactSearchUrl, nextHitIndex, dealSubmitBlock,
 } from "./deal-contact-picker";
+import { m } from "@/lib/messages";
 
 /**
  * The new-deal picker (F-092 out-of-scope finding, pipeline/page.tsx:26): it offered only the newest 200
@@ -40,7 +41,7 @@ describe("DealContactHit", () => {
 });
 
 describe("DealContactPicker — before anyone is chosen", () => {
-  const html = renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "deal-contact" }));
+  const html = renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "deal-contact", locale: "en" }));
 
   it("is a search box, not a dropdown of the newest few (mutation: keep the Select -> FAILS)", () => {
     expect(html).toMatch(/<input[^>]*type="search"/);
@@ -84,5 +85,18 @@ describe("dealSubmitBlock — a deal needs its customer", () => {
     const fd = new FormData();
     fd.set("contactId", "c1");
     expect(dealSubmitBlock(fd)).toBeNull();
+  });
+});
+
+// S-10: the picker reads every word through t() in the locale its dialog
+// passes down (the dialog takes it from the dashboard's LocaleProvider).
+describe("DealContactPicker — in Spanish (S-10)", () => {
+  it("the search box speaks Spanish (mutation: read m[\"pipeline.contactSearch\"] directly → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "deal-contact", locale: "es" }));
+    expect(html).toContain(`placeholder="${m["pipeline.contactSearch.es"]}"`);
+  });
+  it("and English stays English (mutation: hard-code \"es\" → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(DealContactPicker, { accountId: ACCT, labelId: "deal-contact", locale: "en" }));
+    expect(html).toContain(`placeholder="${m["pipeline.contactSearch"]}"`);
   });
 });

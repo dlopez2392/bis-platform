@@ -74,6 +74,6 @@ describe("getForwardingAddress (owner ruling 2026-10-17: the address is made on 
     expect(toast.error).toHaveBeenCalledWith("That didn't go through — this page may be out of date. Reload it and try again.");
     const es = toasts();
     await getForwardingAddress(async () => { throw new Error("x"); }, es, "es");
-    expect(es.error).toHaveBeenCalledWith("Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.");
+    expect(es.error).toHaveBeenCalledWith("Eso no se completó: puede que esta página esté desactualizada. Recárguela e inténtelo de nuevo.");
   });
 });

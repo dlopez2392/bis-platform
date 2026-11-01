@@ -15,8 +15,8 @@ describe("the spec's own words (§6)", () => {
   });
 
   it("a text-back held overnight does not say \"just now\" (danlo, 2026-09-26)", () => {
-    expect(m["voice.textback.defaultBodyHeldEn"]).toBe("Hi, this is {name}. Sorry we missed your call, reply here and we'll help.");
-    expect(m["voice.textback.defaultBodyHeldNoNameEn"]).toBe("Sorry we missed your call, reply here and we'll help.");
+    expect(m["voice.textback.defaultBodyHeld"]).toBe("Hi, this is {name}. Sorry we missed your call, reply here and we'll help.");
+    expect(m["voice.textback.defaultBodyHeldNoName"]).toBe("Sorry we missed your call, reply here and we'll help.");
   });
 
   it("the Texts row's Check number state", () => {

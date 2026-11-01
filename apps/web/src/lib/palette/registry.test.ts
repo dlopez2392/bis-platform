@@ -441,3 +441,33 @@ describe("Preferences", () => {
       expect(filterEntries([e!], "idioma")).toHaveLength(1);
     });
 });
+
+describe("buildPaletteEntries in Spanish (S-10 T1)", () => {
+  it("labels every entry in the reader's language (mutation: ignore the locale → English labels, FAILS)", () => {
+    const es = buildPaletteEntries(BASE, false, true, false, "es");
+    expect(es.find((e) => e.id === `nav:${BASE}/contacts`)?.label).toBe("Contactos");
+    expect(es.find((e) => e.id === "action:toggle-theme")?.label).toBe(m["palette.action.toggleTheme.es"]);
+  });
+
+  it("keeps the English label findable in Spanish: typing 'contacts' still finds Contactos (mutation: drop the English keyword → FAILS)", () => {
+    const hits = filterEntries(buildPaletteEntries(BASE, false, true, false, "es"), "contacts");
+    expect(hits.map((e) => e.label)).toContain("Contactos");
+  });
+
+  it("an agency settings section is labelled in Spanish too (mutation: keep section.label English → FAILS)", () => {
+    const es = buildPaletteEntries(BASE, true, false, false, "es");
+    expect(es.find((e) => e.id === "settings:billing")?.label).toBe("Facturación");
+  });
+
+  it("English stays the default, label for label (mutation: default the locale to es → FAILS)", () => {
+    expect(buildPaletteEntries(BASE, false, true).map((e) => e.label))
+      .toEqual(buildPaletteEntries(BASE, false, true, false, "en").map((e) => e.label));
+    expect(buildPaletteEntries(BASE, false, true).find((e) => e.id === `nav:${BASE}/contacts`)?.label).toBe("Contacts");
+  });
+});
+
+describe("one wording for the theme switch (S-10 review M-10)", () => {
+  it("the palette action and the topbar toggle say the same thing in Spanish (mutation: reword one → FAILS)", () => {
+    expect(m["palette.action.toggleTheme.es"]).toBe(m["theme.toggle.es"]);
+  });
+});

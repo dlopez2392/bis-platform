@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { HighlightedText } from "@/components/highlighted-text";
 import { nameRanges, phoneRanges } from "@/lib/contacts/search-highlight";
 import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import type { SearchHit, SearchResults } from "@/app/api/accounts/[accountId]/search/route";
 
 /**
@@ -60,7 +62,9 @@ export function DealContactHit({ hit, query, onChoose, index, onKey }: {
 
 type Hits = { query: string; status: "ready" | "error"; contacts: SearchHit[] };
 
-export function DealContactPicker({ accountId, labelId }: { accountId: string; labelId: string }) {
+/** `locale` comes from the dialog, which reads the dashboard's LocaleProvider (S-10). A prop, not a hook here:
+ *  the picker's focus test answers its hooks by position and calls it as a plain function. */
+export function DealContactPicker({ accountId, labelId, locale }: { accountId: string; labelId: string; locale: Locale }) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<Hits | null>(null);
   const [chosen, setChosen] = useState<{ id: string; name: string } | null>(null);
@@ -118,16 +122,16 @@ export function DealContactPicker({ accountId, labelId }: { accountId: string; l
           <span data-deal-contact className="min-w-0 break-words text-sm text-card-foreground">{chosen.name}</span>
           <Button type="button" variant="ghost" size="sm" className="min-w-0" autoFocus={focusAfter === "change"}
             onClick={() => choose(null)}>
-            <span className="min-w-0 truncate">{m["pipeline.contactChange"]}</span>
+            <span className="min-w-0 truncate">{t(m, "pipeline.contactChange", locale)}</span>
           </Button>
         </div>
       ) : (
         <>
-          <Input ref={box} aria-labelledby={labelId} type="search" value={query} placeholder={m["pipeline.contactSearch"]}
+          <Input ref={box} aria-labelledby={labelId} type="search" value={query} placeholder={t(m, "pipeline.contactSearch", locale)}
             autoComplete="off" autoFocus={focusAfter === "box"} onChange={(e) => onQuery(e.target.value)} onKeyDown={(e) => onKey(-1, e)} />
           <div aria-live="polite" data-deal-search-results>
-            {hits?.status === "error" ? <p className="text-sm text-muted-foreground">{m["palette.error"]}</p>
-              : hits && hits.contacts.length === 0 ? <p className="break-words text-sm text-muted-foreground">{m["palette.empty"].replace("{query}", hits.query)}</p>
+            {hits?.status === "error" ? <p className="text-sm text-muted-foreground">{t(m, "palette.error", locale)}</p>
+              : hits && hits.contacts.length === 0 ? <p className="break-words text-sm text-muted-foreground">{t(m, "palette.empty", locale, { query: hits.query })}</p>
               : hits ? (
                 <ul ref={list} className="flex max-h-60 flex-col overflow-y-auto">
                   {hits.contacts.map((h, i) => (

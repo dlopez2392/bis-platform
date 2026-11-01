@@ -284,7 +284,7 @@ describe("the two new answers read in both languages (fix round 1)", () => {
     expect(m["documents.request.notOpen"]).toBe("This request is no longer open.");
     expect(m["documents.request.notOpen.es"]).toBe("Este pedido ya no está abierto.");
     expect(m["common.actionCrashed"]).toBe("That didn't go through — this page may be out of date. Reload it and try again.");
-    expect(m["common.actionCrashed.es"]).toBe("Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.");
+    expect(m["common.actionCrashed.es"]).toBe("Eso no se completó: puede que esta página esté desactualizada. Recárguela e inténtelo de nuevo.");
   });
 });
 

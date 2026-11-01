@@ -73,7 +73,7 @@ describe("CommandPalette — 'Toggle theme' shares theme-toggle.tsx's toggleThem
 // accessible name.
 describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-only, below `sm`)", () => {
   it("the mobile trigger is visible below `sm` and hidden at sm+ (mutation: drop `sm:hidden` → both triggers show everywhere)", () => {
-    expect(src).toMatch(/size="icon-sm"[\s\S]{0,120}aria-label=\{m\["shell\.search"\]\}[\s\S]{0,120}className="sm:hidden"/);
+    expect(src).toMatch(/size="icon-sm"[\s\S]{0,120}aria-label=\{t\(m, "shell\.search", locale\)\}[\s\S]{0,120}className="sm:hidden"/);
   });
 
   it("the desktop trigger is hidden below `sm` and visible at sm+ (mutation: drop `hidden`/`sm:inline-flex` → it shows below `sm` too, 300px wide)", () => {
@@ -82,7 +82,7 @@ describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-
 
   it("both triggers open the SAME dialog state, carry the SAME accessible name, and name the SAME keyboard shortcut (F-107 r2 review, item 5)", () => {
     expect(src.match(/onClick=\{\(\) => setOpen\(true\)\}/g)?.length).toBe(2);
-    expect(src.match(/aria-label=\{m\["shell\.search"\]\}/g)?.length).toBe(2);
+    expect(src.match(/aria-label=\{t\(m, "shell\.search", locale\)\}/g)?.length).toBe(2);
     expect(src.match(/aria-keyshortcuts=\{isMac \? "Meta\+K" : "Control\+K"\}/g)?.length).toBe(2);
   });
 });
@@ -155,13 +155,19 @@ describe("CommandPalette — wires the CONTACTS group through PaletteHitContent 
 describe("CommandPalette — threads isOwner to buildPaletteEntries (staff and roles)", () => {
   it("takes an isOwner prop and passes it as buildPaletteEntries' third argument (mutation: call buildPaletteEntries(base, isAgency) with only two args → FAILS)", () => {
     expect(src).toMatch(/export function CommandPalette\(\{\s*isAgency,\s*isOwner,\s*isTechnician,\s*\}/);
-    expect(src).toContain("filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query)");
+    expect(src).toContain("filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician, locale), query)");
   });
   // F-085 part 1 (spec §9): the ⌘K index leaves out the routes a Technician
   // cannot enter, which buildPaletteEntries does from its fourth argument.
   it("takes an isTechnician prop and passes it as buildPaletteEntries' fourth argument (mutation: drop it → FAILS)", () => {
     expect(src).toMatch(/isTechnician: boolean;/);
-    expect(src).toContain("buildPaletteEntries(base, isAgency, isOwner, isTechnician)");
+    expect(src).toContain("buildPaletteEntries(base, isAgency, isOwner, isTechnician, locale)");
+  });
+  // S-10 T1: the entries are labelled in the reader's language, from the
+  // LocaleProvider the dashboard layout seeds.
+  it("passes the reader's locale as buildPaletteEntries' fifth argument (mutation: drop it → FAILS)", () => {
+    expect(src).toContain("const locale = useLocale();");
+    expect(src).toContain("buildPaletteEntries(base, isAgency, isOwner, isTechnician, locale)");
   });
 });
 
@@ -185,5 +191,19 @@ describe("CommandPalette — sends the trimmed raw query, never a sanitized one 
     expect(src).toMatch(/fetch\(paletteSearchUrl\(accountId, q\)/);
     expect(src).toMatch(/const q = query\.trim\(\);/);
     expect(src).toMatch(/searchTermLength\(query\) >= MIN_QUERY/);
+  });
+});
+
+// S-10 review I-3: the palette's dialog portals into <body>, under
+// <html lang="en">, so it carries the reader's language itself; so do both
+// triggers. CommandDialog passes `lang` to its DialogContent.
+describe("CommandPalette — lang (S-10 review I-3)", () => {
+  it("the dialog and both search triggers carry lang={locale} (mutation: drop it from any one → FAILS)", () => {
+    expect(src).toMatch(/<CommandDialog[\s\S]{0,80}lang=\{locale\}/);
+    expect(src.match(/aria-label=\{t\(m, "shell\.search", locale\)\}\s*lang=\{locale\}/g)?.length).toBe(2);
+  });
+  it("CommandDialog puts lang on the portalled DialogContent (mutation: spread it onto Dialog instead → FAILS)", () => {
+    const ui = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "ui/command.tsx"), "utf8");
+    expect(ui).toMatch(/<DialogContent\s+lang=\{lang\}/);
   });
 });

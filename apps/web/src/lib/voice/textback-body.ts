@@ -72,12 +72,12 @@ export function defaultTextbackBody(brandName: string, language: "en" | "es", he
   // `held`: sent at 08:00 for a call missed overnight, so no "just now".
   if (!brandName.trim()) {
     return language === "es"
-      ? m["voice.textback.defaultBodyNoNameEs"]
-      : m[held ? "voice.textback.defaultBodyHeldNoNameEn" : "voice.textback.defaultBodyNoNameEn"];
+      ? m["voice.textback.defaultBodyNoName.es"]
+      : m[held ? "voice.textback.defaultBodyHeldNoName" : "voice.textback.defaultBodyNoName"];
   }
   const template = language === "es"
-    ? m["voice.textback.defaultBodyEs"]
-    : m[held ? "voice.textback.defaultBodyHeldEn" : "voice.textback.defaultBodyEn"];
+    ? m["voice.textback.defaultBody.es"]
+    : m[held ? "voice.textback.defaultBodyHeld" : "voice.textback.defaultBody"];
   // Function replacement, not a plain string: a company name containing `$&`
   // or `$'` would otherwise be re-interpreted by String.replace as a
   // substitution pattern and mangle the message.

@@ -129,7 +129,7 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // never from the radio's own optimistic local state. A generous timeout
     // covers the save's 600ms debounce (preference-handlers.ts's
     // PREFS_SAVE_DEBOUNCE_MS) plus the round trip.
-    await expect(prefs(page).getByRole("heading", { level: 1, name: "Tus preferencias" })).toBeVisible({ timeout: 15_000 });
+    await expect(prefs(page).getByRole("heading", { level: 1, name: "Sus preferencias" })).toBeVisible({ timeout: 15_000 });
 
     // The agency's OWN language, not the account's: viewing a DIFFERENT
     // account's dashboard must still show the agency's chrome in Spanish.

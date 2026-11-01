@@ -132,7 +132,7 @@ describe("hasOptOutInstruction", () => {
   });
 
   it("reads the formal Spanish imperatives, which the text-back's own default uses", () => {
-    // "responda este mensaje" (voice.textback.defaultBodyEs) is usted-form, so
+    // "responda este mensaje" (voice.textback.defaultBody.es) is usted-form, so
     // an operator writing in that register writes "Envíe STOP" / "Escriba STOP".
     // Missing them costs a doubled disclosure, never a missing one.
     for (const body of ["Envíe STOP para cancelar.", "Envie STOP para cancelar.", "Escriba STOP para cancelar."]) {

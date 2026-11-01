@@ -94,6 +94,7 @@ export function PaletteHitContent({
   hit: SearchHit;
   query: string;
 }) {
+  const locale = useLocale();
   const isContacts = groupKey === "contacts";
   const sublabelText = hit.sublabel
     ? (isContacts ? <HighlightedText text={hit.sublabel} ranges={phoneRanges(hit.sublabel, query)} /> : hit.sublabel)
@@ -108,7 +109,7 @@ export function PaletteHitContent({
         <span className="truncate text-xs text-muted-foreground">
           {sublabelText}
           {hit.sublabel && hit.at ? " · " : ""}
-          {hit.at ? formatDate(hit.at) : ""}
+          {hit.at ? formatDate(hit.at, locale) : ""}
         </span>
       ) : null}
     </span>
@@ -153,7 +154,7 @@ export function CommandPalette({
 
   const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1] ?? null;
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
-  const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query);
+  const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician, locale), query);
 
   // The floor is measured on the SANITIZED length (searchTermLength), the
   // SAME floor the route applies to the SAME transform. Gating on the raw
@@ -254,15 +255,15 @@ export function CommandPalette({
   }
 
   const groups: { key: string; heading: string; items: PaletteEntry[] }[] = [
-    { key: "navigation", heading: m["palette.group.navigation"], items: entries.filter((e) => e.group === "navigation") },
-    { key: "settings", heading: m["palette.group.settings"], items: entries.filter((e) => e.group === "settings") },
-    { key: "actions", heading: m["palette.group.actions"], items: entries.filter((e) => e.group === "actions") },
+    { key: "navigation", heading: t(m, "palette.group.navigation", locale), items: entries.filter((e) => e.group === "navigation") },
+    { key: "settings", heading: t(m, "palette.group.settings", locale), items: entries.filter((e) => e.group === "settings") },
+    { key: "actions", heading: t(m, "palette.group.actions", locale), items: entries.filter((e) => e.group === "actions") },
   ];
 
   const liveGroups: { key: string; heading: string; hits: SearchHit[] }[] = [
-    { key: "contacts", heading: m["palette.group.contacts"], hits: results.contacts },
-    { key: "calls", heading: m["palette.group.calls"], hits: results.calls },
-    { key: "conversations", heading: m["palette.group.conversations"], hits: results.conversations },
+    { key: "contacts", heading: t(m, "palette.group.contacts", locale), hits: results.contacts },
+    { key: "calls", heading: t(m, "palette.group.calls", locale), hits: results.calls },
+    { key: "conversations", heading: t(m, "palette.group.conversations", locale), hits: results.conversations },
   ];
 
   const liveHitCount = liveGroups.reduce((total, group) => total + group.hits.length, 0);
@@ -282,7 +283,8 @@ export function CommandPalette({
         variant="ghost"
         size="icon-sm"
         onClick={() => setOpen(true)}
-        aria-label={m["shell.search"]}
+        aria-label={t(m, "shell.search", locale)}
+        lang={locale}
         aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
         className="sm:hidden"
       >
@@ -292,13 +294,14 @@ export function CommandPalette({
         variant="ghost"
         size="sm"
         onClick={() => setOpen(true)}
-        aria-label={m["shell.search"]}
+        aria-label={t(m, "shell.search", locale)}
+        lang={locale}
         // Names the shortcut this machine actually honours, for the same
         // reason the visible chip below does.
         aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
         className="hidden gap-2 text-muted-foreground sm:inline-flex"
       >
-        <span>{m["palette.searchHint"]}</span>
+        <span>{t(m, "palette.searchHint", locale)}</span>
         {/* `[var(--radius-ctl)]`, not the bare `[--radius-ctl]` shorthand:
             that form was Tailwind v3 and this repo is on v4, where it emits an
             invalid declaration and silently drops the radius. --radius-ctl is
@@ -306,22 +309,23 @@ export function CommandPalette({
         {/* The shortcut this machine actually has. "⌘K" on a Windows box is
             just wrong — Ctrl is the only modifier that opens this there. */}
         <kbd className="rounded-[var(--radius-ctl)] border border-border px-1.5 py-0.5 font-mono text-[10px]">
-          {isMac ? m["palette.shortcut.mac"] : m["palette.shortcut.other"]}
+          {isMac ? t(m, "palette.shortcut.mac", locale) : t(m, "palette.shortcut.other", locale)}
         </kbd>
       </Button>
 
       <CommandDialog
+        lang={locale}
         open={open}
         onOpenChange={(next) => (next ? setOpen(true) : close())}
-        title={m["shell.search"]}
-        description={m["palette.placeholder"]}
+        title={t(m, "shell.search", locale)}
+        description={t(m, "palette.placeholder", locale)}
         // Matching lives in filterEntries (a pure, unit-tested function) and,
         // for the live half, in Postgres. cmdk must not re-filter server rows
         // whose matched columns it never saw.
         shouldFilter={false}
       >
         <CommandInput
-          placeholder={m["palette.placeholder"]}
+          placeholder={t(m, "palette.placeholder", locale)}
           value={query}
           onValueChange={setQuery}
         />
@@ -364,9 +368,9 @@ export function CommandPalette({
               data-testid="palette-error"
               className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
             >
-              <span className="text-muted-foreground">{m["palette.error"]}</span>
+              <span className="text-muted-foreground">{t(m, "palette.error", locale)}</span>
               <Button variant="outline" size="sm" onClick={() => setRetryNonce((n) => n + 1)}>
-                {m["palette.retry"]}
+                {t(m, "palette.retry", locale)}
               </Button>
             </div>
           ) : null}
@@ -391,12 +395,12 @@ export function CommandPalette({
 
           {/* Below the search floor, inside an account: say what would help. */}
           {accountId && q.length > 0 && q.length < MIN_QUERY ? (
-            <p className="px-4 py-3 text-sm text-muted-foreground">{m["palette.hint"]}</p>
+            <p className="px-4 py-3 text-sm text-muted-foreground">{t(m, "palette.hint", locale)}</p>
           ) : null}
 
           {nothingAtAll ? (
             <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              {m["palette.empty"].replace("{query}", query)}
+              {t(m, "palette.empty", locale, { query })}
             </p>
           ) : null}
         </CommandList>
