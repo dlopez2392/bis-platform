@@ -2,6 +2,8 @@
 
 import { EmbedSnippet as SharedEmbedSnippet } from "@/components/embed-snippet";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 
 /** A thin wrapper over the shared `components/embed-snippet.tsx` card —
  *  kept as its own file/export so `calendar/page.tsx` doesn't change, and
@@ -12,18 +14,19 @@ import { m } from "@/lib/messages";
 export function EmbedSnippet({
   origin, publicId, enabled,
 }: { origin: string; publicId: string; enabled: boolean }) {
+  const locale = useLocale();
   return (
     <SharedEmbedSnippet
       attribute="data-booking"
       publicId={publicId}
       origin={origin}
-      title={m["calendar.embed.title"]}
-      hint={m["calendar.embed.hint"]}
-      disabledHint={m["calendar.embed.disabledHint"]}
+      title={t(m, "calendar.embed.title", locale)}
+      hint={t(m, "calendar.embed.hint", locale)}
+      disabledHint={t(m, "calendar.embed.disabledHint", locale)}
       enabled={enabled}
-      copyLabel={m["calendar.embed.copy"]}
-      copiedLabel={m["calendar.embed.copied"]}
-      publicLinkLabel={m["calendar.embed.publicLink"]}
+      copyLabel={t(m, "calendar.embed.copy", locale)}
+      copiedLabel={t(m, "calendar.embed.copied", locale)}
+      publicLinkLabel={t(m, "calendar.embed.publicLink", locale)}
       extraAttrs={`data-min-height="560"`}
     />
   );

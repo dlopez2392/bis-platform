@@ -1,8 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CalendarRow } from "@bis/db";
+import { LocaleProvider } from "@/components/locale-provider";
 import { CalendarSettings } from "./calendar-settings";
+
+const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "calendar-settings.tsx"), "utf8");
 
 /**
  * Task 17 review round 1 (Important 2): no render test existed for this
@@ -20,12 +26,14 @@ const BASE_CALENDAR: CalendarRow = {
   followup_body_es: null, followup_body_es_basis: null,
 };
 
-function render(over: Partial<CalendarRow> = {}): string {
-  return renderToStaticMarkup(createElement(CalendarSettings, {
-    isAgency: true,
-    calendar: { ...BASE_CALENDAR, ...over },
-    action: async () => ({ ok: true as const }),
-  }));
+function render(over: Partial<CalendarRow> = {}, locale: "en" | "es" = "en"): string {
+  return renderToStaticMarkup(
+    createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(CalendarSettings, {
+      isAgency: true,
+      calendar: { ...BASE_CALENDAR, ...over },
+      action: async () => ({ ok: true as const }),
+    })),
+  );
 }
 
 describe("CalendarSettings — the follow-up card's Spanish box (Task 17)", () => {
@@ -53,6 +61,32 @@ describe("CalendarSettings — the follow-up card's Spanish box (Task 17)", () =
     const html = render();
     const matches = html.match(/data-variant="default"/g) ?? [];
     expect(matches.length).toBe(1);
+  });
+});
+
+describe("CalendarSettings — Spanish (S-10 T4)", () => {
+  it("renders the card's title, hours label and day names in Spanish (mutation: render English under es -> FAILS)", () => {
+    const html = render({}, "es");
+    expect(html).toContain("Ajustes de citas");
+    expect(html).toContain("Horario");
+    expect(html).toContain("Lunes");
+    expect(html).not.toContain("Booking settings");
+    expect(html).not.toContain(">Monday<");
+  });
+
+  // Radix Select's option content (SelectContent) renders through a portal that
+  // `renderToStaticMarkup` never mounts (the hidden native <select> fallback ships
+  // with no <option> children either), so the unit suffix cannot be asserted from
+  // rendered HTML. This reads the component's own source, the same thing the G2
+  // ratchet scans (a JSX text node with a letter): no raw "min"/"hr"/"days" text
+  // node may remain next to {v}.
+  it("the duration/buffer/notice/advance Selects read their unit suffix from the catalogue, not a raw JSX string (mutation: put \" min\"/\" hr\"/\" days\" back as JSX text -> FAILS)", () => {
+    expect(src).not.toMatch(/\{v\}\s*min\b/);
+    expect(src).not.toMatch(/\{v\}\s*hr\b/);
+    expect(src).not.toMatch(/\{v\}\s*days\b/);
+    expect(src).toMatch(/calendar\.settings\.unitMinutes/);
+    expect(src).toMatch(/calendar\.settings\.unitHours/);
+    expect(src).toMatch(/calendar\.settings\.unitDays/);
   });
 });
 

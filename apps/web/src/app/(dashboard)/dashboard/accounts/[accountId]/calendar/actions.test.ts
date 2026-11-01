@@ -355,6 +355,19 @@ describe("updateCalendarSettingsAction — notify addresses (D-034)", () => {
     expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
   });
 
+  // S-10 T4: this action has no caller outside calendar/**, so it is safe to carry its own `locale` and
+  // answer in it directly — unlike setBookingStatusAction (tasks/actions.ts, voice/actions.ts also call
+  // it), whose refusal stays English and is re-localized on the client (server-words.ts).
+  it("answers a bad address in the caller's own locale (mutation: drop the locale param -> FAILS)", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", withNotify("ana@example.com\nbob@example"), "es");
+    expect(r).toEqual({ ok: false, error: t(m, "calendar.settings.notifyEmailsInvalid", "es", { value: "bob@example" }) });
+  });
+
+  it("defaults to English when no locale is passed (mutation: default to 'es' -> FAILS)", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", withNotify("ana@example.com\nbob@example"));
+    expect(r).toEqual({ ok: false, error: m["calendar.settings.notifyEmailsInvalid"].replace("{value}", "bob@example") });
+  });
+
   it("an empty field still saves, as no addresses", async () => {
     const r = await updateCalendarSettingsAction("acct_1", withNotify("  \n , "));
     expect(r).toEqual({ ok: true });

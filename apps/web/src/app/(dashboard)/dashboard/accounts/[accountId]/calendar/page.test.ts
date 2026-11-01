@@ -530,6 +530,16 @@ describe("CalendarPage — the agenda and the job drawer (F-046 part 1)", () => 
     expect(dbMocks.listCalendarBookings).not.toHaveBeenCalled();
   });
 
+  // S-10 T4: the page's own title was a bare m[] read, English on every locale.
+  it("the page header's title follows the account's language (mutation: render m[\"calendar.title\"] directly -> FAILS)", async () => {
+    Object.assign(authState, { isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const html = await render();
+    const h1 = /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
+    expect(h1).toBe(m["calendar.title.es"]);
+    expect(h1).not.toBe(m["calendar.title"]);
+  });
+
   it("PageHeader carries no button; Add job lives in the agenda card, whose props carry canAdd (mutation: an action in PageHeader -> FAILS)", async () => {
     const html = await render();
     const head = html.slice(0, html.indexOf('data-stub="agenda"'));
