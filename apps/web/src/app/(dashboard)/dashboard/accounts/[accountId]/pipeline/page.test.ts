@@ -160,6 +160,31 @@ describe("PipelinePage reads the reader's language (S-10 T3)", () => {
     isAgency = true;
     accountLanguage = null;
   });
+
+  // S-10 leftovers (#317 follow-up): the header's own money figure was built with
+  // formatCurrency(total) — no locale — so a Spanish reader's header still carried an
+  // en-US-tagged amount even once the surrounding words were Spanish.
+  it("the header's own total passes es-US to Intl.NumberFormat, not the en-US default (mutation: call formatCurrency(total) with no locale -> FAILS)", async () => {
+    isAgency = false;
+    accountLanguage = "es";
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+    const Original = Intl.NumberFormat;
+    const spy = vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
+      this: unknown, ...args: unknown[]
+    ) {
+      return new (Original as new (...a: unknown[]) => unknown)(...args);
+    } as never);
+    try {
+      renderToStaticMarkup(await PipelinePage(route()));
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      for (const call of spy.mock.calls) expect(call[0]).toBe("es-US");
+    } finally {
+      spy.mockRestore();
+    }
+    isAgency = true;
+    accountLanguage = null;
+  });
   // The QA override (`?locale=`, BIS_I18N_QA only) reaches this page's own locale resolution,
   // the same mechanism the record and To do pages already prove end to end.
   it("the QA override (?locale=es) turns the header Spanish even on an English account (mutation: drop { locale: localeParam } from requestLocale -> FAILS)", async () => {
