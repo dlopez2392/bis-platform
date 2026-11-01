@@ -34,7 +34,7 @@ import { SuggestionDemo } from "./suggestion-demo";
 import { WorkTrayDemo } from "./work-tray-demo";
 import { BusinessStatusDemo } from "./business-status-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
-import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { CONFIRM_REPLY_TREATMENTS, confirmReplyLabel } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
 import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
 import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
@@ -274,7 +274,9 @@ export default async function StyleguidePage({
             components/dot-pill.tsx · …/calendar/confirm-reply.ts
           </p>
           <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
-            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
+            {(["yes", "no"] as const).map((a) => (
+              <DotPill key={a} label={confirmReplyLabel(a, "en")} {...CONFIRM_REPLY_TREATMENTS[a]} dense />
+            ))}
           </div>
           {/* The contact Messages block's Texts row (consent chain PR-1 and
               PR-2): its four states, each a dot + word. Allowed, Stopped and

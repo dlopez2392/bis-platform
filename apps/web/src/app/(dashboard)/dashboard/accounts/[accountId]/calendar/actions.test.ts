@@ -1078,12 +1078,24 @@ describe("keepAppointmentAction — S-47d Task 8", () => {
     expect(r).toEqual({ ok: true });
   });
 
-  it("a proveBooking refusal passes through, and nothing is written (mutation: skip proveBooking → FAILS)", async () => {
+  // S-10 review I-1: proveBooking's own refusal is the catalogue's ENGLISH sentence (`calendar.bookings.
+  // statusUpdateFailed`, read directly by prove-booking.ts's own m[] — shared with setBookingStatusAction's
+  // callers outside this file, so it cannot carry a locale). Passed through raw it reached closed-days-card.tsx's
+  // runKeepAppointment and dashboard/keep-with-undo.ts in English on a Spanish screen; this action translates
+  // it into its OWN Keep failure instead, which already asks for `locale` (unlike proveBooking's other callers).
+  it("a proveBooking refusal is answered as the Keep failure, in the caller's own language, and nothing is written (mutation: return refused as-is → FAILS)", async () => {
     visible.callerCanSee.mockResolvedValue(false);
     const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
-    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+    expect(r).toEqual({ ok: false, error: t(m, "business.card.keepFailed", "en") });
     expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
     expect(dbMocks.setBookingClosureKept).not.toHaveBeenCalled();
+  });
+
+  it("...in Spanish (mutation: pass proveBooking's raw English through under es → FAILS)", async () => {
+    visible.callerCanSee.mockResolvedValue(false);
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "es");
+    expect(r).toEqual({ ok: false, error: t(m, "business.card.keepFailed", "es") });
+    expect(r).not.toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
   });
 
   it.each([[true], [false]])("writes setBookingClosureKept(accountId, bookingId, %s)", async (kept) => {

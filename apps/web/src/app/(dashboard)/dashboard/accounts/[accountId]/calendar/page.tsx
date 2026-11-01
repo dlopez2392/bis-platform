@@ -266,7 +266,9 @@ export default async function CalendarPage({
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
             {canManage ? (
-              <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
+              <CalendarSettings
+                isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} locale={locale} pseudo={pseudo}
+              />
             ) : null}
             <ClosedDaysCard
               accountId={accountId}
@@ -285,7 +287,9 @@ export default async function CalendarPage({
             />
           </div>
           <div className="space-y-6">
-            <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />
+            <EmbedSnippet
+              origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} locale={locale} pseudo={pseudo}
+            />
             <FeedCard
               view={feedView}
               locale={locale}

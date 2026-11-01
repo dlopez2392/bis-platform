@@ -14,10 +14,11 @@ import { Notice } from "@/components/ui/notice";
 import { SpanishBodyField } from "@/components/spanish-body-field";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
-import { useLocale } from "@/components/locale-provider";
+import { makeTr, type Tr } from "@/lib/record/copy";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import {
   DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seedTimeOnPickerOpen,
   type WeekdayKey,
@@ -26,14 +27,14 @@ import type { ActionResult } from "./actions";
 import { parseNotifyEmails } from "./notify-emails";
 import type { Locale } from "@/lib/i18n/locale";
 
-const dayLabel = (locale: Locale): Record<WeekdayKey, string> => ({
-  mon: t(m, "calendar.settings.day.mon", locale),
-  tue: t(m, "calendar.settings.day.tue", locale),
-  wed: t(m, "calendar.settings.day.wed", locale),
-  thu: t(m, "calendar.settings.day.thu", locale),
-  fri: t(m, "calendar.settings.day.fri", locale),
-  sat: t(m, "calendar.settings.day.sat", locale),
-  sun: t(m, "calendar.settings.day.sun", locale),
+const dayLabelsFor = (tr: Tr): Record<WeekdayKey, string> => ({
+  mon: tr.text("calendar.settings.day.mon"),
+  tue: tr.text("calendar.settings.day.tue"),
+  wed: tr.text("calendar.settings.day.wed"),
+  thu: tr.text("calendar.settings.day.thu"),
+  fri: tr.text("calendar.settings.day.fri"),
+  sat: tr.text("calendar.settings.day.sat"),
+  sun: tr.text("calendar.settings.day.sun"),
 });
 
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 90];
@@ -41,24 +42,43 @@ const BUFFER_OPTIONS = [0, 5, 10, 15, 30];
 const NOTICE_OPTIONS = [1, 2, 4, 8, 12, 24, 48, 72];
 const ADVANCE_OPTIONS = [7, 14, 30, 45, 60, 90];
 
-const meetingTypeOptions = (locale: Locale): { value: CalendarRow["meeting_type"]; label: string }[] => [
-  { value: "in_person", label: t(m, "calendar.settings.meetingType.inPerson", locale) },
-  { value: "phone", label: t(m, "calendar.settings.meetingType.phone", locale) },
-  { value: "video", label: t(m, "calendar.settings.meetingType.video", locale) },
+const meetingTypeOptionsFor = (tr: Tr): { value: CalendarRow["meeting_type"]; label: string }[] => [
+  { value: "in_person", label: tr.text("calendar.settings.meetingType.inPerson") },
+  { value: "phone", label: tr.text("calendar.settings.meetingType.phone") },
+  { value: "video", label: tr.text("calendar.settings.meetingType.video") },
 ];
 
+/**
+ * S-10 review M-4: the duration/buffer/notice/advance Selects' own unit suffix, pulled out of the JSX
+ * so it is directly testable — Radix's `SelectContent` renders through a portal `renderToStaticMarkup`
+ * never mounts (confirmed empirically: the hidden native `<select>` fallback ships with no `<option>`
+ * children either), so no render test could ever see "30 min" in the markup.
+ */
+export function unitLabel(v: number, unit: "min" | "hr" | "days", locale: Locale): string {
+  const key = unit === "min" ? "calendar.settings.unitMinutes"
+    : unit === "hr" ? "calendar.settings.unitHours"
+    : "calendar.settings.unitDays";
+  return `${v} ${t(m, key, locale)}`;
+}
+
 export function CalendarSettings({
-  isAgency, calendar, action,
+  isAgency, calendar, action, locale, pseudo = false,
 }: {
   /** Selects the ownership voice (panel-copy.ts's mechanism, inlined here —
    *  only two strings differ, not the five branding carries). */
   isAgency: boolean;
   calendar: CalendarRow;
   action: (formData: FormData, locale: Locale) => Promise<ActionResult>;
+  /** S-10 review I-2: a prop, like every other card on `calendar/page.tsx` (ClosedDaysCard, FeedCard,
+   *  JobDrawer) — never the ambient LocaleProvider, which the layout seeds once and which cannot see
+   *  this page's own `?locale=` QA override (`requestLocale`/`requestPseudoMode`, page.tsx:112). */
+  locale: Locale;
+  /** The QA pseudo-locale (`requestPseudoMode`), same prop every sibling card takes. */
+  pseudo?: boolean;
 }) {
-  const locale = useLocale();
-  const DAY_LABEL = dayLabel(locale);
-  const MEETING_TYPE_OPTIONS = meetingTypeOptions(locale);
+  const tr = makeTr(locale, pseudo);
+  const dayLabels = dayLabelsFor(tr);
+  const meetingTypeOptions = meetingTypeOptionsFor(tr);
   const [enabled, setEnabled] = useState(calendar.enabled);
   const [notifyEmailsText, setNotifyEmailsText] = useState(calendar.notify_emails.join("\n"));
   const [followupEnabled, setFollowupEnabled] = useState(calendar.followup_enabled);
@@ -86,8 +106,8 @@ export function CalendarSettings({
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData, locale), toast, {
-      success: t(m, "calendar.settings.saved", locale),
-      crashed: t(m, "calendar.settings.saveCrashed", locale),
+      success: tr.text("calendar.settings.saved"),
+      crashed: tr.text("calendar.settings.saveCrashed"),
     });
   });
 
@@ -97,8 +117,8 @@ export function CalendarSettings({
   return (
     <Card id="booking-settings">
       <CardHeader>
-        <CardTitle>{t(m, isAgency ? "calendar.settings.title" : "calendar.settings.clientTitle", locale)}</CardTitle>
-        <CardDescription>{t(m, isAgency ? "calendar.settings.body" : "calendar.settings.clientBody", locale)}</CardDescription>
+        <CardTitle>{tr.text(isAgency ? "calendar.settings.title" : "calendar.settings.clientTitle")}</CardTitle>
+        <CardDescription>{tr.text(isAgency ? "calendar.settings.body" : "calendar.settings.clientBody")}</CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -122,22 +142,22 @@ export function CalendarSettings({
               id="calendar-enabled" name="enabled"
               checked={enabled} onCheckedChange={(v) => setEnabled(v === true)}
             />
-            <Label htmlFor="calendar-enabled">{t(m, "calendar.settings.enabled", locale)}</Label>
+            <Label htmlFor="calendar-enabled">{tr.text("calendar.settings.enabled")}</Label>
           </div>
 
           {enabled && notifyEmailsEmpty ? (
-            <Notice tone="crit">{t(m, "calendar.settings.notifyEmailsWarning", locale)}</Notice>
+            <Notice tone="crit">{tr.text("calendar.settings.notifyEmailsWarning")}</Notice>
           ) : null}
 
           <div className="space-y-2">
-            <p className="text-sm font-medium text-card-foreground">{t(m, "calendar.settings.hours", locale)}</p>
-            <p className="text-xs text-muted-foreground">{t(m, "calendar.settings.hoursHint", locale)}</p>
+            <p className="text-sm font-medium text-card-foreground">{tr.text("calendar.settings.hours")}</p>
+            <p className="text-xs text-muted-foreground">{tr.text("calendar.settings.hoursHint")}</p>
             <div className="space-y-2">
               {rows.map((row) => (
                 <div key={row.day} className="flex flex-wrap items-center gap-2">
-                  <span className="w-24 shrink-0 text-sm text-card-foreground">{DAY_LABEL[row.day]}</span>
+                  <span className="w-24 shrink-0 text-sm text-card-foreground">{dayLabels[row.day]}</span>
                   <Label htmlFor={`hours-${row.day}-from`} className="sr-only">
-                    {t(m, "calendar.settings.from", locale)}
+                    {tr.text("calendar.settings.from")}
                   </Label>
                   <Input
                     id={`hours-${row.day}-from`} name={`hours_${row.day}_from`}
@@ -153,9 +173,9 @@ export function CalendarSettings({
                     // the operator never meant to touch.
                     onPointerDown={(e) => { if (e.button !== 0) return; seedTimeOnPickerOpen(e.currentTarget, DEFAULT_OPEN_TIME); }}
                   />
-                  <span className="text-xs text-muted-foreground">{t(m, "calendar.settings.to", locale)}</span>
+                  <span className="text-xs text-muted-foreground">{tr.text("calendar.settings.to")}</span>
                   <Label htmlFor={`hours-${row.day}-to`} className="sr-only">
-                    {t(m, "calendar.settings.to", locale)}
+                    {tr.text("calendar.settings.to")}
                   </Label>
                   <Input
                     id={`hours-${row.day}-to`} name={`hours_${row.day}_to`}
@@ -169,55 +189,55 @@ export function CalendarSettings({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="slotDurationMinutes">{t(m, "calendar.settings.duration", locale)}</Label>
+              <Label htmlFor="slotDurationMinutes">{tr.text("calendar.settings.duration")}</Label>
               <Select name="slotDurationMinutes" defaultValue={String(calendar.slot_duration_minutes)}>
                 <SelectTrigger id="slotDurationMinutes" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {DURATION_OPTIONS.map((v) => (
-                    <SelectItem key={v} value={String(v)}>{v} {t(m, "calendar.settings.unitMinutes", locale)}</SelectItem>
+                    <SelectItem key={v} value={String(v)}>{unitLabel(v, "min", locale)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="bufferMinutes">{t(m, "calendar.settings.buffer", locale)}</Label>
+              <Label htmlFor="bufferMinutes">{tr.text("calendar.settings.buffer")}</Label>
               <Select name="bufferMinutes" defaultValue={String(calendar.buffer_minutes)}>
                 <SelectTrigger id="bufferMinutes" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {BUFFER_OPTIONS.map((v) => (
-                    <SelectItem key={v} value={String(v)}>{v} {t(m, "calendar.settings.unitMinutes", locale)}</SelectItem>
+                    <SelectItem key={v} value={String(v)}>{unitLabel(v, "min", locale)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="minNoticeHours">{t(m, "calendar.settings.minNotice", locale)}</Label>
+              <Label htmlFor="minNoticeHours">{tr.text("calendar.settings.minNotice")}</Label>
               <Select name="minNoticeHours" defaultValue={String(calendar.min_notice_hours)}>
                 <SelectTrigger id="minNoticeHours" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {NOTICE_OPTIONS.map((v) => (
-                    <SelectItem key={v} value={String(v)}>{v} {t(m, "calendar.settings.unitHours", locale)}</SelectItem>
+                    <SelectItem key={v} value={String(v)}>{unitLabel(v, "hr", locale)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="maxAdvanceDays">{t(m, "calendar.settings.maxAdvance", locale)}</Label>
+              <Label htmlFor="maxAdvanceDays">{tr.text("calendar.settings.maxAdvance")}</Label>
               <Select name="maxAdvanceDays" defaultValue={String(calendar.max_advance_days)}>
                 <SelectTrigger id="maxAdvanceDays" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ADVANCE_OPTIONS.map((v) => (
-                    <SelectItem key={v} value={String(v)}>{v} {t(m, "calendar.settings.unitDays", locale)}</SelectItem>
+                    <SelectItem key={v} value={String(v)}>{unitLabel(v, "days", locale)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="meetingType">{t(m, "calendar.settings.meetingType", locale)}</Label>
+              <Label htmlFor="meetingType">{tr.text("calendar.settings.meetingType")}</Label>
               <Select name="meetingType" defaultValue={calendar.meeting_type}>
                 <SelectTrigger id="meetingType" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {MEETING_TYPE_OPTIONS.map((opt) => (
+                  {meetingTypeOptions.map((opt) => (
                     <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                   ))}
                 </SelectContent>
@@ -226,34 +246,35 @@ export function CalendarSettings({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="notifyEmails">{t(m, "calendar.settings.notifyEmails", locale)}</Label>
+            <Label htmlFor="notifyEmails">{tr.text("calendar.settings.notifyEmails")}</Label>
             <textarea
               id="notifyEmails" name="notifyEmails" rows={3}
               value={notifyEmailsText}
               onChange={(e) => setNotifyEmailsText(e.target.value)}
               className={nativeFieldClass}
             />
-            <p className="text-xs text-muted-foreground">{t(m, "calendar.settings.notifyEmailsHint", locale)}</p>
+            <p className="text-xs text-muted-foreground">{tr.text("calendar.settings.notifyEmailsHint")}</p>
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium text-card-foreground">{t(m, "calendar.settings.followup", locale)}</p>
-            <p className="text-xs text-muted-foreground">{t(m, "calendar.settings.followupHint", locale)}</p>
+            <p className="text-sm font-medium text-card-foreground">{tr.text("calendar.settings.followup")}</p>
+            <p className="text-xs text-muted-foreground">{tr.text("calendar.settings.followupHint")}</p>
             <div className="flex items-center gap-2">
               <Checkbox
                 id="followup-enabled" name="followupEnabled"
                 checked={followupEnabled} onCheckedChange={(v) => setFollowupEnabled(v === true)}
               />
-              <Label htmlFor="followup-enabled">{t(m, "calendar.settings.followupEnabled", locale)}</Label>
+              <Label htmlFor="followup-enabled">{tr.text("calendar.settings.followupEnabled")}</Label>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="min-w-0 space-y-1.5">
-                <Label htmlFor="followupBody" className="sr-only">{t(m, "calendar.settings.followupBody", locale)}</Label>
+                <Label htmlFor="followupBody" className="sr-only">{tr.text("calendar.settings.followupBody")}</Label>
                 <textarea
                   id="followupBody" name="followupBody" rows={3}
                   value={followupBodyText}
                   onChange={(e) => setFollowupBodyText(e.target.value)}
                   placeholder={DEFAULT_FOLLOWUP_BODY}
+                  maxLength={AUTOMATION_BODY_MAX_LENGTH}
                   className={nativeFieldClass}
                 />
               </div>
@@ -270,7 +291,7 @@ export function CalendarSettings({
             </div>
           </div>
 
-          <SubmitButton pending={pending}>{t(m, "common.save", locale)}</SubmitButton>
+          <SubmitButton pending={pending}>{tr.text("common.save")}</SubmitButton>
         </form>
       </CardContent>
     </Card>

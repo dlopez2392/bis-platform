@@ -434,8 +434,12 @@ export async function keepAppointmentAction(
 ): Promise<ActionResult> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access)) return { ok: false, error: t(m, "business.refuse.keep", locale) };
+  // S-10 review I-1: proveBooking's own refusal is the catalogue's ENGLISH sentence (shared with
+  // setBookingStatusAction's callers outside this file, so it carries no locale of its own) — never passed
+  // through raw. This action already asks for `locale`, so it answers its OWN Keep failure in it instead,
+  // same as every other refusal below.
   const refused = await proveBooking("keepAppointmentAction", accountId, bookingId);
-  if (refused) return refused;
+  if (refused) return { ok: false, error: t(m, "business.card.keepFailed", locale) };
 
   let changed: boolean;
   try {
