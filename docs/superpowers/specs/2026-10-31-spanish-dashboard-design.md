@@ -313,7 +313,7 @@ has, `I18N/ratchet-scan.ts:113-116`).
 | G5 Placeholder parity (new) | per namespace | over every twin | 0 today; hard from day one |
 | G6 Glossary (new) | none | each row of 4.3 with a "Never" becomes a banned-word check, applied when the English holds the row's word (whole word, case-insensitive). **As built, 19 rules:** settings→configuración, delete→eliminar, book→reserv-, try again→Reintentar / Vuelva a intentarlo, estimate→presupuesto/cotización, add→añadir, email→e-mail, text→SMS, lead→prospecto, staff (the role, not "agency staff")→personal, owner→propietario, upload→cargar, and from the PR 1 review dashboard→tablero, deal→trato, appointment/booking→reserva, reschedule→reprogramar, answered→contestada, trade→oficio, to do→tareas (the last six have no breach and are hard). **Excluded on purpose:** "servicio" for job (also "service", as in Services & prices), "registro" for record (also a log: the access log's word; 14 legitimate uses measured), "inicio" for dashboard (also "inicio de sesión"), and "contacto" for customer in prose (a contact row is one) | frozen list of today's hits shrinks to empty |
 | G7 Accents | `I18N/accents-guard.test.ts:7-19` checks only that `app-sidebar.tsx` and `stat-tile.tsx` do not import `consent/keywords` or `consent/phrases` | every file under `src/app` and `src/components` except the consent pipeline is checked for those imports and for `stripDiacritics` (`WEB/lib/sms/alerts.ts:52`, which is right for SMS and wrong on a screen) | same |
-| G8 `lang` | none | a unit test on the root layout's locale helper: `es` session gives `lang="es"`, signed-out `Accept-Language: es-MX,en;q=0.5` gives `es`, `en-US,es;q=0.9` gives `en` | same |
+| G8 `lang` | none | signed out (T7): `localeFromAcceptLanguage` unit tests (`es-MX,en;q=0.5` gives `es`, `en-US,es;q=0.9` gives `en`, a q=0 or malformed range never selects) and AuthShell's `<main lang>`; the root layout's `<html lang>` stays `"en"` with no session read (`layout.test.ts`). Signed in (`es` session gives `lang="es"`): T9 | same |
 | G9 Overflow | `e2e/i18n-overflow.spec.ts` on four screens at 390×844 (`:186`) | every converted screen, at **375×812**, in `es` (nothing may clip) and `pseudo` (a clip must carry a `title` fallback), deciding with the existing `e2e/overflow-check.ts` | same; a measurement run by bis-e2e-qa, never by the lane agent |
 
 A test that cannot fail is not evidence: each new gate's task names its mutation (G3: add `m["nav.tasks"]` to
@@ -356,9 +356,9 @@ bis-frontend are **ASSUMPTION** from the agents' usual territories; the orchestr
 | **T4** | Conversations and Calendar: `conversations`, `conversation`, `compose`, `calendar`, `closedDays`, `business`; the unit suffixes | LOW | C, bis-comms and bis-booking | 0.5–0.75 |
 | **T5** | Calls, Activity, Forms: `calls`, `call`, `activity`, `forms`, the client-read `automations.*` log titles and `voice.*` number status; `formatWhen` and the transcript through `tag()`; the three pages resolve their locale | LOW | C, bis-voice and bis-comms | 1 |
 | **T6** | Owner-only: Billing, Branding (incl. the alert-phone card's `settings.*`), Team (46 reads), `prefs.*` to *usted*; `billing-view` dates | LOW | A, bis-frontend (Team and Billing with bis-platform) | 0.75 |
-| **T7** | Signed out: `localeFromAcceptLanguage`, `/sign-in`, `/`, `/no-access`, `/billing-done` (`signIn`, `landing`, `clientAccess`), `<html lang>` from the root layout, `lang="en"` on Clerk's widget and on agency-only pages; G8; the signed-out e2e asserts both languages and that the Clerk probes still pass; **G9 for the shell** (moved here from T1 by the PR 1 review: `?locale=` cannot reach the shell, so it needs T7's Spanish e2e user or QA header first) | **MEDIUM** | A, bis-frontend with bis-platform (`auth-shell.tsx` is shared) | 0.5–0.75 |
+| **T7** | Signed out: `localeFromAcceptLanguage`, `/sign-in`, `/`, `/no-access`, `/billing-done` (`signIn`, `landing`, `clientAccess`), each marked on AuthShell's `<main lang>` from Accept-Language, `lang="en"` on Clerk's sign-in widget; G8's signed-out half; the signed-out e2e asserts both languages and that the Clerk probes still pass. **Split 2026-11-01 (orchestrator, adopting the T7 review's correction 1):** the root layout makes NO session, account or preference read for `lang` and `<html lang>` stays `"en"` for every request, because the root layout wraps `/sign-in`, `/no-access` and paths outside the proxy matcher, where a bare `auth()` throws and an unguarded account read would 500 the pages that explain a failure (pinned by `layout.test.ts`, whose readers all throw). The signed-in `<html lang>`, `lang="en"` on agency-only pages and on Clerk's topbar menus (`OrganizationSwitcher`, `UserButton`), and G9 for the shell move to T9 | **MEDIUM** | A, bis-frontend with bis-platform (`auth-shell.tsx` is shared) | 0.5–0.75 |
 | **T8** | Owner emails in the account's language: weekly report (incl. `deltaPhrase` and the quiet week), lead alert, call alert; copy into the catalogue under `email.*`; tests render templates only, nothing is sent | **MEDIUM** | C, bis-comms | 0.5–0.75 |
-| **T9** | Close-out: regenerate and then delete the frozen lists; G1–G3 at zero, G4 and G6 frozen lists empty; G9 measurement run over every screen; Q1's review lands as copy-only commits; DESIGN.md amendments (section 8) | LOW | orchestrator, bis-e2e-qa | 0.5 |
+| **T9** | Close-out: regenerate and then delete the frozen lists; G1–G3 at zero, G4 and G6 frozen lists empty; G9 measurement run over every screen; **from T7 (split 2026-11-01):** the signed-in `<html lang>` (resolved without a new failure mode on `/sign-in`, `/no-access` or unmatched paths, and without a second accounts read), `lang="en"` on agency-only pages and on Clerk's topbar menus (`OrganizationSwitcher`, `UserButton`), and G9 for the shell, which needs a Spanish e2e user with its own `users.language`; Q1's review lands as copy-only commits; DESIGN.md amendments (section 8) | LOW | orchestrator, bis-e2e-qa | 0.5 |
 | | **Total** | | | **7.25–8.5** (Q4 (a) decided). That is at and above the top of the plan's 5–8 (`PLAN:1412`): the plan priced writing the Spanish, and did not know about the 864 direct reads (G3), which are about a third of the work |
 
 Order: T0+T1 (PR 1) → then three lanes at once: A runs T2 and T7 (PR 2), then T6 (PR 5); B runs T3 (PR 3);
@@ -432,7 +432,8 @@ account with no language gets English, decision 3, `RT:467`.)
 3. In Installation status, after the sentence about the `.dark` class, add: "`<html lang>` is the resolved
    locale (since S-10; it replaces decision D of 2026-10-10, which put `lang` on converted subtrees only,
    `WEB/app/(dashboard)/dashboard/layout.tsx:212-218`); English-only islands (Clerk's widgets, agency-only
-   pages) carry `lang="en"`." Lands with T7.
+   pages) carry `lang="en"`." Lands with T9: T7 shipped only the signed-out half, on AuthShell's `<main lang>`
+   (split 2026-11-01), so until T9 `<html lang>` is still `"en"` for every request.
 
 ---
 
@@ -464,7 +465,14 @@ account with no language gets English, decision 3, `RT:467`.)
 - **The QA locale override never reaches the shell** (found building T1): Next layouts receive no
   `searchParams`, and the shell's locale is resolved in `WEB/app/(dashboard)/dashboard/layout.tsx:195`, so
   `?locale=es` turns pages Spanish under a still-English sidebar, topbar and ⌘K. G9 for the shell therefore
-  needs a Spanish e2e user (own `users.language`) or a QA header set by `src/proxy.ts`; T7 picks one.
+  needs a Spanish e2e user (own `users.language`) or a QA header set by `src/proxy.ts`. Moved from T7 to T9
+  by the 2026-11-01 split: T7's 375px check measures AuthShell, not the shell, and is named as a signed-out
+  overflow check.
+- **T7 split, 2026-11-01:** the signed-in `<html lang>` was built in T7 and removed before merge. It read
+  `auth()`, `resolveClientAccessState()` and `getPersonPrefs()` in the root layout, which wraps `/sign-in`,
+  `/no-access` and paths outside the proxy matcher (a bare `auth()` throws there, and an unguarded
+  `getAccountByOrgId` failure would 500 the pages that explain a failure), and it doubled the accounts read on
+  every dashboard request. T9 owns it, with `lang="en"` on agency-only pages and Clerk's topbar menus.
 - **About 11 catalogue keys look dead** (no reference, literal or by prefix; section 0). T0 deletes them after
   a second grep each; a dead key in a 6,921-line catalogue costs a translator's time for nothing.
 

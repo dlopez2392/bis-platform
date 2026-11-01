@@ -1,7 +1,10 @@
 import type { ComponentProps } from "react";
+import { headers } from "next/headers";
 import { SignIn } from "@clerk/nextjs";
 import { AuthShell } from "@/components/auth-shell";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { localeFromAcceptLanguage } from "@/lib/i18n/accept-language";
 
 /**
  * Clerk restyled through OUR values, but as STYLE OBJECTS, not class names.
@@ -222,18 +225,29 @@ const appearance = {
   // the computed-style probes in signed-out.spec.ts are what catches one.
 } satisfies NonNullable<ComponentProps<typeof SignIn>["appearance"]> & { cssLayerName?: string };
 
-export default function Page() {
+export default async function Page() {
+  // S-10 T7 (spec §7 Q5): the browser's own language, since nobody is
+  // authenticated at /sign-in — `getRequestTheme()`'s own doc comment makes
+  // the identical point about theme, and the same "no tenant to ask" reasoning
+  // applies to locale.
+  const locale = localeFromAcceptLanguage((await headers()).get("accept-language"));
   return (
     // This route is a catch-all: it also renders Clerk's TASK screens, such as
     // /sign-in/tasks/choose-organization, which is a different component of
     // theirs inside the same shell. Nothing here may fix a height or assume
     // the sign-in card's contents — and Clerk can inject a Smart CAPTCHA
     // mid-flow, so the card has to be free to grow.
-    <AuthShell>
+    <AuthShell locale={locale}>
       <h1 className="font-display text-2xl font-[650] tracking-[-0.02em] text-foreground">
-        {m["signIn.title"]}
+        {t(m, "signIn.title", locale)}
       </h1>
-      <SignIn appearance={appearance} />
+      {/* Q6 (decided 2026-10-31): Clerk's own widget stays English until
+          F-117's part — its component localization is experimental and does
+          not reach its hosted pages. Marked explicitly, since AuthShell's
+          <main lang> and the heading above it may now both be Spanish. */}
+      <div lang="en">
+        <SignIn appearance={appearance} />
+      </div>
     </AuthShell>
   );
 }
