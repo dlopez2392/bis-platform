@@ -13,6 +13,7 @@ import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
   bookingMovedAlertEmail, bookingRescheduledEmail, bookingRescheduledSubject, ownerAlertFallbackName,
+  stripSubjectControlChars,
 } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { moveSlots, movableSlot, dayKeyInZone } from "@/lib/booking/availability";
@@ -52,10 +53,6 @@ const ACTOR_ID = "public";
 const ACTOR_TYPE = "system";
 
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function stripSubjectControlChars(value: string): string {
-  return value.replace(/[\r\n\t]+/g, " ");
-}
 
 /** The move page's picker: free times on one account-zone day, for the day as
  *  it will be once the move commits (`moveSlots`). */
@@ -191,8 +188,6 @@ export async function confirmMoveAction(
   try {
     wasCompanyZone = formatWhen(new Date(row.starts_at), timezone);
     nowCompanyZone = formatWhen(startsAt, timezone);
-    wasForAlert = formatWhen(new Date(row.starts_at), timezone, alertLocale);
-    nowForAlert = formatWhen(startsAt, timezone, alertLocale);
     const convo = await ensureConversation(db, accountId, row.contact_id, ACTOR_ID, ACTOR_TYPE);
     await createMessage(db, accountId, {
       conversationId: convo.id, channel: "form", direction: "inbound",
@@ -202,6 +197,18 @@ export async function confirmMoveAction(
     await incrementUnreadCount(db, accountId, convo.id);
   } catch (e) {
     console.error(`move ${row.id} -> ${moved.id}: thread line failed: ${String(e)}`);
+  }
+
+  // S-10 T9a: the alert's own dates, in the account's language — guarded
+  // on their OWN, AFTER the thread write above, so a formatter failure
+  // here can never skip the thread line, which does not depend on it at
+  // all. Left "" on failure; the alert block below already skips sending
+  // when either is empty.
+  try {
+    wasForAlert = formatWhen(new Date(row.starts_at), timezone, alertLocale);
+    nowForAlert = formatWhen(startsAt, timezone, alertLocale);
+  } catch (e) {
+    console.error(`move ${row.id} -> ${moved.id}: alert-date formatting failed: ${String(e)}`);
   }
 
   const brand = emailBrand({

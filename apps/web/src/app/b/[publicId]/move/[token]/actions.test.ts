@@ -67,6 +67,28 @@ vi.mock("./data", async (importOriginal) => {
   return { ...real, readMoveContext: m.readMoveContext };
 });
 
+// S-10 T9a: isolates the owner ALERT's own dates (`wasForAlert`/
+// `nowForAlert = formatWhen(..., alertLocale)`, both 3-arg calls with
+// locale "es" in every test that sets `withLanguage("es")`) from the
+// thread's own (2-arg, no locale, always real) and the customer's own
+// email (3-arg, but the customer's `locale` argument to `confirmMoveAction`
+// stays "en" in these tests) — the same idiom the sibling booking/cancel
+// actions.test.ts files use, for the same reason: proving the thread write
+// survives a formatter failure scoped to the alert alone.
+const { formatWhenThrowsOnAlertRef } = vi.hoisted(() => ({ formatWhenThrowsOnAlertRef: { current: false } }));
+vi.mock("@/lib/booking/time", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/booking/time")>();
+  return {
+    ...actual,
+    formatWhen: (...args: Parameters<typeof actual.formatWhen>) => {
+      if (formatWhenThrowsOnAlertRef.current && args.length === 3 && args[2] === "es") {
+        throw new Error("alert-date Intl formatting failed");
+      }
+      return actual.formatWhen(...args);
+    },
+  };
+});
+
 import { headers } from "next/headers";
 import { SlotTakenError, BookingNotMovableError, newCancelToken } from "@bis/db";
 import { bookingStrings } from "@/lib/booking/public-strings";
@@ -114,6 +136,7 @@ beforeEach(() => {
   vi.mocked(sendEmailOrThrow).mockClear();
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   providerThrows.current = false;
+  formatWhenThrowsOnAlertRef.current = false;
   getMeetingProviderMock.mockReset().mockReturnValue(null);
   // Postgres's answer: every live booking on the calendar, minus the one the
   // caller asked to leave out.
@@ -339,6 +362,34 @@ describe("confirmMoveAction — the owner's moved alert in the account's languag
       `Booking moved.\nJane Doe moved their booking.\n\nWas: ${was("en")}\nNow: ${now("en")}\nWho: Jane Doe\n\n`
       + "Open this contact: https://app.example/dashboard/accounts/acct_1/contacts/contact_1",
     );
+  });
+
+  // S-10 T9a: the alert's own dates used to be formatted INSIDE the same
+  // try as the conversation-thread write, so a failure formatting JUST the
+  // alert's dates (account language "es") could skip the thread line too.
+  it("the thread write survives a failure formatting the owner alert's own dates (mutation: share one try/catch for the thread write and the alert-date formatting → FAILS)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage("es"));
+    formatWhenThrowsOnAlertRef.current = true;
+
+    const result = await confirmMoveAction(TOKEN, "en", ELEVEN);
+
+    expect(result.ok).toBe(true);
+    expect(m.createMessage).toHaveBeenCalledTimes(1);
+    expect(m.createMessage.mock.calls[0]![2]).toMatchObject({ body: `Moved their booking from ${was("en")} to ${now("en")}` });
+  });
+
+  // This action already guards its OWN alert against an empty date
+  // (`wasForAlert && nowForAlert` in the send condition) — this proves that
+  // guard still holds now that the formatting moved into its own block.
+  it("skips the owner's moved alert entirely when its dates failed to format, but the customer's own email still goes (mutation: drop the wasForAlert/nowForAlert guard → FAILS, an alert sends with a blank date)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage("es"));
+    formatWhenThrowsOnAlertRef.current = true;
+
+    const result = await confirmMoveAction(TOKEN, "en", ELEVEN);
+
+    expect(result.ok).toBe(true);
+    expect(gated().map((g) => g.kind)).not.toContain("operator.move_notice");
+    expect(gated().map((g) => g.kind)).toContain("booking.moved");
   });
 });
 

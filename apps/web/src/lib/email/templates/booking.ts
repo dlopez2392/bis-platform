@@ -460,8 +460,11 @@ export function bookingReminderEmail(input: BookingReminderInput):
 }
 
 /** Same subject-injection guard the public booking and cancel actions keep:
- *  a customer-supplied name must never be able to start a new header line. */
-function stripSubjectControlChars(value: string): string {
+ *  a customer-supplied name must never be able to start a new header line.
+ *  Exported (S-10 T9a) so move/[token]/actions.ts can drop its own
+ *  byte-identical copy rather than keep two definitions of the same guard
+ *  in sync by hand. */
+export function stripSubjectControlChars(value: string): string {
   return value.replace(/[\r\n\t]+/g, " ");
 }
 

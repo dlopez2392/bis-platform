@@ -32,11 +32,17 @@ export function safeZone(tz: string | undefined, fallback: string): string {
 // Exported for the same reason `safeZone` above is: the cancel flow renders
 // and mails the identical "when" shape this route already established.
 //
-// `locale` is the BOOKER's language (the page's `?locale=`), for the strings
-// the booker reads — their confirmation, their cancel page. Operator-facing
-// strings (the alert, the conversation thread) keep the default: the
-// dashboard is English. Anything but "es" is English, never a RangeError
-// after a booking has already committed.
+// `locale` is whichever language the CALLER needs this particular string
+// in: the booker's own page/confirmation passes their own `?locale=`
+// choice; since S-10 the owner's ALERT (new booking, cancel notice, moved
+// notice) passes the ACCOUNT's language instead
+// (`resolveLocale(undefined, account.language)`, read by each caller and
+// passed here, never the booker's). The one line that stays English BY
+// CONSTRUCTION, with no `locale` argument at all, is the conversation
+// THREAD ("Booking: …", "Cancelled their … booking", "Moved their booking
+// from … to …") — the business's own stored record, the same in every
+// account. Anything but "es" is English, never a RangeError after a
+// booking has already committed.
 export function formatWhen(instant: Date, timeZone: string, locale: "en" | "es" = "en"): string {
   return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
     timeZone, weekday: "short", month: "short", day: "numeric",
