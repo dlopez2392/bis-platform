@@ -216,14 +216,14 @@ function phrase(
     // Technician fence included) could not read it — the row still says what moved either way.
     case "merge": {
       const name = entry.merge.otherVisible
-        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName })
+        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName }, tr.locale)
         : tr.text("timeline.mergeOtherHidden");
       const list = mergeCountsList(entry.merge.counts, tr, tr.locale);
       return { verb: list ? tr.text("timeline.merged", { name, list }) : tr.text("timeline.mergedEmpty", { name }), status: null, detail: null };
     }
     case "mergeUndone": {
       const name = entry.merge.otherVisible
-        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName })
+        ? contactDisplayName({ first_name: entry.merge.otherFirstName, last_name: entry.merge.otherLastName }, tr.locale)
         : tr.text("timeline.mergeOtherHidden");
       return { verb: tr.text("timeline.mergeUndone", { name }), status: null, detail: null };
     }

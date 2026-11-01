@@ -316,7 +316,7 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
       const canUndo = canMerge && nowMs !== undefined && !e.merge.undoneAt && Date.parse(e.merge.undoUntil) > nowMs
         && e.contactId === contactId;
       const otherName = e.merge.otherVisible
-        ? contactDisplayName({ first_name: e.merge.otherFirstName, last_name: e.merge.otherLastName })
+        ? contactDisplayName({ first_name: e.merge.otherFirstName, last_name: e.merge.otherLastName }, tr.locale)
         : tr.text("timeline.mergeOtherHidden");
       return (
         <TimelineItem {...head} icon={Merge} action={canUndo

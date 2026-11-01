@@ -1043,4 +1043,20 @@ describe("the Possible duplicates view (?view=duplicates)", () => {
     expect(typeof duplicatesListProps.at(-1)!.dismissAction).toBe("function");
     expect(typeof duplicatesListProps.at(-1)!.undismissAction).toBe("function");
   });
+
+  // S-10 leftovers (#317 follow-up): aName/bName are built with contactDisplayName with no locale,
+  // even though this page resolves one for every other row of the view — a nameless side of a pair
+  // read English regardless of the account's own language.
+  it("a nameless side of a pair reads the Spanish placeholder for a Spanish account (mutation: call contactDisplayName with no locale -> FAILS)", async () => {
+    resetMocks();
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    listDuplicatePairsMock.mockResolvedValue([{
+      ...PAIR(1), a: { id: "a1", firstName: null, lastName: null }, b: { id: "b1", firstName: null, lastName: null },
+    }]);
+    await render({ view: "duplicates" });
+    const row = (duplicatesListProps.at(-1)!.rows as { aName: string; bName: string }[])[0]!;
+    expect(row.aName).toBe(m["contact.noName.es"]);
+    expect(row.bName).toBe(m["contact.noName.es"]);
+  });
 });

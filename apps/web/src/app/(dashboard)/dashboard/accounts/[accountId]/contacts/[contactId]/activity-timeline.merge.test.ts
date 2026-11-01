@@ -62,6 +62,18 @@ describe("a merge/mergeUndone row renders as one: its verb, its mark and the Mer
     const entries: TimelineEntry[] = [{ kind: "merge", id: "1", at: AT, contactId: "c1", merge: TM() } as TimelineEntry];
     expect(row(render(entries, "es"), "merge")).toContain(">unió a Other Person con este registro: 1 nota pasaron aquí<");
   });
+
+  // S-10 leftovers (#317 follow-up): the OTHER record's own name (otherName, when visible) is built
+  // with contactDisplayName with no locale — a nameless other record read English even in Spanish.
+  it("a nameless OTHER record's stand-in reads the Spanish placeholder (mutation: call contactDisplayName with no locale -> FAILS)", () => {
+    const entries: TimelineEntry[] = [{
+      kind: "merge", id: "1", at: AT, contactId: "c1",
+      merge: TM({ otherFirstName: null, otherLastName: null }),
+    } as TimelineEntry];
+    const r = row(render(entries, "es"), "merge");
+    expect(r).toContain(">unió a (sin nombre) con este registro: 1 nota pasaron aquí<");
+    expect(r).not.toContain("(no name)");
+  });
 });
 
 /**
