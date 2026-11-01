@@ -174,4 +174,12 @@ describe("DailyChart in Spanish (usted register)", () => {
     expect(dayTooltipText({ day: "2026-09-01", visitors: 1234, pageviews: 300, isWeekend: false }, "es"))
       .toBe("1,234 visitantes · 300 páginas vistas");
   });
+
+  // M-5 (review): "1 visitors" was invariant in BOTH languages (mutation:
+  // revert dayTooltipText to tr.text → "1 visitor"/"1 visitante" FAILS,
+  // reads the plural form for count 1).
+  it("dayTooltipText reads the singular form for exactly one visitor, in both languages", () => {
+    expect(dayTooltipText({ day: "2026-09-01", visitors: 1, pageviews: 2, isWeekend: false }, "en")).toBe("1 visitor · 2 pageviews");
+    expect(dayTooltipText({ day: "2026-09-01", visitors: 1, pageviews: 2, isWeekend: false }, "es")).toBe("1 visitante · 2 páginas vistas");
+  });
 });

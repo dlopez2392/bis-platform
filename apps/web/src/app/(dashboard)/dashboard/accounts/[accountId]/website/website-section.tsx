@@ -86,7 +86,7 @@ export function WebsiteSection({
           label={tr.text("website.tile.topPage")}
           value={view.topPage?.name ?? "—"}
           period={view.topPage
-            ? tr.text("website.tile.topPageDetail", { visitors: fmt(view.topPage.visitors), share: pct(view.topPage.share) })
+            ? tr.count("website.tile.topPageDetail", view.topPage.visitors, { visitors: fmt(view.topPage.visitors), share: pct(view.topPage.share) })
             : tr.text("website.tile.noTopPage")}
           locale={locale}
         />

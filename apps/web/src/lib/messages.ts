@@ -4068,16 +4068,24 @@ export const m = {
   "website.tile.fromGoogle.es": "Desde Google",
   "website.tile.topPage": "Top page",
   "website.tile.topPage.es": "Página más vista",
+  // M-5 (review): "1 visitors" was a real English grammar bug too (never
+  // "1 visitor"), not just a Spanish one. `${key}One` is the plural pair's
+  // singular twin (t.ts's `plural()`), chosen by the VISITORS count.
   "website.tile.topPageDetail": "{visitors} visitors · {share} of all",
   "website.tile.topPageDetail.es": "{visitors} visitantes · {share} del total",
+  "website.tile.topPageDetailOne": "{visitors} visitor · {share} of all",
+  "website.tile.topPageDetailOne.es": "{visitors} visitante · {share} del total",
   "website.tile.noTopPage": "No page stood out yet",
   "website.tile.noTopPage.es": "Ninguna página destacó todavía",
   "website.summary.detail": "{visitors} people, {pageviews} pages. Your busiest day was {day}.",
   "website.summary.detail.es": "{visitors} personas, {pageviews} páginas. Su día más activo fue el {day}.",
   "website.chart.title": "Visitors by day",
   "website.chart.title.es": "Visitantes por día",
+  // M-5 (review): same "1 visitors" fix, keyed by the visitors count.
   "website.chart.tooltip": "{visitors} visitors · {pageviews} pageviews",
   "website.chart.tooltip.es": "{visitors} visitantes · {pageviews} páginas vistas",
+  "website.chart.tooltipOne": "{visitors} visitor · {pageviews} pageviews",
+  "website.chart.tooltipOne.es": "{visitors} visitante · {pageviews} páginas vistas",
   // S-10 T2: the per-bar aria-label template (daily-chart.tsx) was a raw
   // template literal, which the ratchet's JSX scan cannot see (only a plain
   // string-literal attribute counts) — real English copy all the same.

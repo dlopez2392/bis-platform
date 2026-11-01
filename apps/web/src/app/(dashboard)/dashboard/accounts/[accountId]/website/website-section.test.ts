@@ -98,4 +98,14 @@ describe("Website screen in Spanish (usted register)", () => {
     expect(esHtml).toContain("Dispositivos");
     expect(esHtml).toContain("Celular"); // devices: [{ name: "mobile", ... }]
   });
+
+  // M-5 (review): the top-page tile's "N visitors" was invariant even for
+  // exactly one visitor.
+  it("the top-page tile reads the singular form for exactly one visitor", () => {
+    const oneVisitorView = { ...VIEW, topPage: { name: "/", visitors: 1, share: 0.01 } };
+    const en = renderToStaticMarkup(createElement(WebsiteSection, { view: oneVisitorView }));
+    expect(en).toContain("1 visitor · 1% of all");
+    const es = renderToStaticMarkup(createElement(WebsiteSection, { view: oneVisitorView, locale: "es" }));
+    expect(es).toContain("1 visitante · 1% del total");
+  });
 });

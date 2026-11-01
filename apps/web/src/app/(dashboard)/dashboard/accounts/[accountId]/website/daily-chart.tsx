@@ -14,7 +14,9 @@ export type SecondSeries = { label: string; values: number[] };
  *  hover/focus state `active` gates on (this repo's test convention is
  *  `renderToStaticMarkup`, which never fires a mouse or focus event). */
 export function dayTooltipText(day: Day, locale: Locale, pseudo = false): string {
-  return makeTr(locale, pseudo).text("website.chart.tooltip", {
+  // M-5 (review): plural-keyed on the visitors count — "1 visitor"/"1
+  // visitante", not the invariant "1 visitors".
+  return makeTr(locale, pseudo).count("website.chart.tooltip", day.visitors, {
     visitors: day.visitors.toLocaleString(tag(locale)), pageviews: day.pageviews.toLocaleString(tag(locale)),
   });
 }
