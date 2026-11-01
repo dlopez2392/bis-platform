@@ -201,6 +201,27 @@ describe("PipelinePage reads the reader's language (S-10 T3)", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  // S-10 leftovers (#317 follow-up, item 6, "forged-locale" assertion): a value nothing in the
+  // product ever sends ("fr", typed into the URL bar by hand) must fall back to the page's
+  // normal resolution, never crash and never leak through as `lang` — requestLocale's own
+  // isLocale() guard (request-locale.ts), proved end to end on this page.
+  it("a forged ?locale= value (never 'en' or 'es') falls back to the normal resolution, never crashing or leaking through as lang (mutation: drop the isLocale() guard in requestLocale -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "fr" }),
+      }));
+      expect(html).toContain('lang="en"');
+      expect(html).not.toContain('lang="fr"');
+      expect(html).toContain(m["pipeline.title"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 // The new-deal picker (F-092 out-of-scope finding): the page used to read the newest 200 contacts for a plain
