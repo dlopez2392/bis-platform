@@ -45,3 +45,12 @@ describe("submitNewDeal", () => {
     expect(d.close).not.toHaveBeenCalled();
   });
 });
+
+// S-10: the "choose a customer first" toast is said in the reader's language.
+describe("submitNewDeal — in Spanish (S-10)", () => {
+  it("says why in Spanish when the dialog's locale is es (mutation: notify m[block] → FAILS)", async () => {
+    const d = { ...deps(), locale: "es" as const };
+    await submitNewDeal(form(""), d);
+    expect(d.notify).toHaveBeenCalledWith(m["pipeline.contactRequired.es"]);
+  });
+});

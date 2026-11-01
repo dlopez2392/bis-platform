@@ -15,6 +15,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { useLocale } from "@/components/locale-provider";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { DealContactPicker, dealSubmitBlock } from "./deal-contact-picker";
 
@@ -32,17 +35,20 @@ function Submit({ pending }: { pending: boolean }) {
  */
 export async function submitNewDeal(formData: FormData, deps: {
   action: (formData: FormData) => Promise<void>; notify: (message: string) => void; close: () => void;
+  /** The reader's language for the two toasts (S-10); English when not given. */
+  locale?: Locale;
 }): Promise<void> {
+  const locale = deps.locale ?? "en";
   const block = dealSubmitBlock(formData);
   if (block) {
-    deps.notify(m[block]);
+    deps.notify(t(m, block, locale));
     return;
   }
   try {
     await deps.action(formData);
     deps.close();
   } catch {
-    deps.notify(m["pipeline.createFailed"]);
+    deps.notify(t(m, "pipeline.createFailed", locale));
   }
 }
 
@@ -56,8 +62,9 @@ export function AddOpportunityDialog({
   action: (formData: FormData) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const locale = useLocale();
   const { pending, onSubmit } = useFormSubmit((formData) =>
-    submitNewDeal(formData, { action, notify: (message) => toast.error(message), close: () => setOpen(false) }));
+    submitNewDeal(formData, { action, notify: (message) => toast.error(message), close: () => setOpen(false), locale }));
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -83,7 +90,7 @@ export function AddOpportunityDialog({
           <input type="hidden" name="pipelineId" value={pipelineId} />
           <div className="space-y-2">
             <p id="deal-contact-label" className="text-sm font-medium">{m["pipeline.contact"]}</p>
-            <DealContactPicker accountId={accountId} labelId="deal-contact-label" />
+            <DealContactPicker accountId={accountId} labelId="deal-contact-label" locale={locale} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="name">{m["pipeline.name"]}</Label>
