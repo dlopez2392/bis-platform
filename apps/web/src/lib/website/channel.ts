@@ -27,11 +27,36 @@ const AI_ASSISTANTS: [RegExp, string][] = [
   [/(^|\.)claude\.ai$/, "Claude"],
 ];
 
-/** The words a business owner reads for a referrer hostname. Shared by the
- *  Website section and, later, the leads report, so "Google" means one thing. */
+// Production bug fix: `site_traffic_breakdown` (dimension="source") stores
+// BARE values from Vercel Web Analytics' own `source` dimension — "google",
+// "direct", "facebook", "nextdoor" — never hostnames (lib/vercel/web-
+// analytics.ts's `aggregate("source", ...)` call; confirmed read-only, the
+// sync itself is untouched). Every real row fell through the hostname-regex
+// path straight to "Other websites": "From Google" read ~0% and the
+// sentence said "found you on Other websites" against 1,664 real Google
+// rows (Sep 1 – Oct 30). A bare value is checked FIRST, by exact match, so
+// it can never be shadowed by (or shadow) the hostname patterns below.
+// Note the one deliberate asymmetry: the bare source "nextdoor" is Vercel's
+// own label for Nextdoor-app social traffic and reads Social, while the
+// HOSTNAME "nextdoor.com" (someone linked from the review site itself)
+// keeps reading "Other websites" — two different real-world referrals that
+// happen to share a word, not an inconsistency.
+const BARE_SEARCH: Record<string, Channel> = { google: "Google", bing: "Bing", duckduckgo: "DuckDuckGo", yahoo: "Yahoo" };
+const BARE_SOCIAL = new Set([
+  "facebook", "instagram", "nextdoor", "tiktok", "x", "twitter", "linkedin", "youtube", "whatsapp",
+]);
+const BARE_AI = new Set(["chatgpt", "perplexity", "claude", "gemini", "copilot"]);
+
+/** The words a business owner reads for a referrer value — a hostname
+ *  ("google.com") or, in production, Vercel's own bare source label
+ *  ("google"). Shared by the Website section and, later, the leads report,
+ *  so "Google" means one thing. */
 export function channelOf(referrerHostname: string): Channel {
-  const host = referrerHostname.trim().toLowerCase();
-  if (host === "") return "Direct";
+  const host = (referrerHostname ?? "").trim().toLowerCase();
+  if (host === "" || host === "direct") return "Direct";
+  if (host in BARE_SEARCH) return BARE_SEARCH[host]!;
+  if (BARE_SOCIAL.has(host)) return "Social";
+  if (BARE_AI.has(host)) return "AI assistants";
   if (AI_ASSISTANTS.some(([re]) => re.test(host))) return "AI assistants";
   for (const [re, channel] of SEARCH) if (re.test(host)) return channel;
   if (SOCIAL.test(host)) return "Social";
