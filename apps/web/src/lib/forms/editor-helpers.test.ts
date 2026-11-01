@@ -146,20 +146,23 @@ describe("shouldWarnOnUnpublish", () => {
 // repo — see contact-drawer.wiring.test.ts's own precedent for pulling
 // non-trivial wiring out of a component for exactly this reason).
 /**
- * Review round 1, m5: `kindLabel` doubles as the editor's own category tag
- * (operator-facing, always English — the dashboard carries no live i18n)
- * AND the SEEDED default value of a new field's customer-facing `label`
- * when `addField` first adds it. Those are two different readers: the
- * operator building the form always reads the editor in English, but the
- * seeded label becomes something the VISITOR reads, in whichever language
- * the FORM itself was built in (`form.locale_default`) — never an
- * "operator locale", which does not exist here (fixing the stale comment
- * at messages.ts, same review round).
+ * Review round 1, m5 (corrected for S-10 T5 part 2, which gave the
+ * dashboard a real reader locale): `kindLabel` doubles as the editor's own
+ * category tag AND the SEEDED default value of a new field's
+ * customer-facing `label` when `addField` first adds it. Those are two
+ * different readers of the SAME string, and `kindLabel` itself has no
+ * opinion on which locale belongs to which — it just renders whichever
+ * locale its caller passes. `addField` (form-editor.tsx) passes
+ * `form.locale_default` because that call seeds something the VISITOR
+ * reads; the editor's own category tag and "Add field" buttons now pass
+ * `readerLocale`, the OPERATOR's own, because those are editor chrome
+ * (form-editor.test.ts pins which call site passes which). Below, this
+ * unit only exercises the locale ARGUMENT itself, not who passes what.
  */
 describe("kindLabel", () => {
   const NO_CUSTOM: CustomFieldDef[] = [];
 
-  it("defaults to English with no locale argument — the editor's own chrome (mutation: default to Spanish → FAILS)", () => {
+  it("defaults to English with no locale argument (mutation: default to Spanish → FAILS)", () => {
     expect(kindLabel("core.referral_source", NO_CUSTOM)).toBe("Who recommended you?");
   });
 

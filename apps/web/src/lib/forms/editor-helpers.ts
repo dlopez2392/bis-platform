@@ -1,5 +1,7 @@
-import type { FormField, FormRow, FormStatus, FormTheme, CustomFieldDef } from "@bis/db";
+import type { FormField, FormStatus, FormTheme, CustomFieldDef } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t, type CatalogueKey } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * The key a newly added field gets, derived from the `kind` the editor is
@@ -30,28 +32,23 @@ export function defaultFieldKey(kind: string): string {
  * renderer, same reasoning `shouldWarnOnUnpublish`/`statusAfterUndo` were
  * pulled out for) so the locale behaviour is directly testable.
  *
- * `locale`, when given, is the FORM's own `locale_default` — never an
- * "operator locale" (review round 1 correction of a stale comment at
- * messages.ts: there is no such thing here; the dashboard's own chrome
- * carries no live i18n and always reads English, which is exactly why the
- * two call sites that render the editor's sidebar tag omit this argument
- * and get English regardless of the form's locale — only the ONE call
- * site that SEEDS a new field's customer-facing label passes it). A kind
- * with no `.es` twin (every core kind but `core.referral_source` today)
- * falls back to English even for a Spanish-locale form, same as before
- * this rider.
+ * `locale` is whichever language the CALLER means by it — this function has
+ * no opinion. `addField` (form-editor.tsx) passes `form.locale_default`,
+ * the FORM's own customer-facing language, because that call seeds a
+ * VISITOR-facing label. The editor's own sidebar tag and its "Add field"
+ * picker buttons (S-10 T5 part 2) pass `readerLocale`, the OPERATOR's own
+ * language reading this dashboard screen, because those are editor chrome.
+ * Collapsing the two into one meaning was the mistake a prior review round
+ * corrected in the comment this replaces: there is no single "the" locale
+ * here, only whichever one each caller is reading in. A kind with no `.es`
+ * twin falls back to English for either caller, same as `t()` falls back
+ * for every other reader on a missing twin.
  */
 export function kindLabel(
-  kind: string, customFields: CustomFieldDef[], locale?: FormRow["locale_default"],
+  kind: string, customFields: CustomFieldDef[], locale: Locale = "en",
 ): string {
-  const key = `forms.kind.${kind}` as keyof typeof m;
-  if (m[key]) {
-    if (locale === "es") {
-      const esKey = `forms.kind.${kind}.es` as keyof typeof m;
-      if (m[esKey]) return m[esKey] as string;
-    }
-    return m[key] as string;
-  }
+  const key = `forms.kind.${kind}` as CatalogueKey<typeof m>;
+  if (key in m) return t(m, key, locale);
   const fieldKey = kind.slice("custom.".length);
   return customFields.find((f) => f.field_key === fieldKey)?.name ?? fieldKey;
 }
