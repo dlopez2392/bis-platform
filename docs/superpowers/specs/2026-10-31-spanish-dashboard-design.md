@@ -185,9 +185,12 @@ files under `src/app` and `src/components` (`:151`, `:162`). The catalogue gate 
 - **`<html lang>`** and per-element `lang`;
 - **a second Spanish convention**: 16 keys use a camel `…En`/`…Es` suffix instead of `.en`/`.es`
   (`automations.instantReply.defaultBodyEs`, `voice.textback.defaultBodyEs`, `voice.profile.greetingEs`, ...).
-  The scanner reads each as a base key missing its twin, so they inflate the frozen list, and two of them,
-  `voice.textback.defaultBodyHeldEn` and `voice.textback.defaultBodyHeldNoNameEn`, have no Spanish partner at
-  all (section 10).
+  The scanner reads each as a base key missing its twin, so they inflate the frozen list. **Corrected in T0
+  (2026-10-31):** only 10 of the 16 are translation pairs (the text-back and instant-reply bodies); T0 renamed
+  those to `x`/`x.es`. The other 6 (`voice.profile.greetingEn`/`Es`, `automations.instantReply.messageEn`/`Es`,
+  `previewEn`/`Es`) are two different English labels ("Greeting (English)", "Greeting (Spanish)") and keep
+  their names. The held text-back has Spanish by design (`MSG:2314-2316`: "Spanish needs no variant; its default
+  never said 'just now'"), so T0 gave the held keys twins equal to the plain Spanish it already sent.
 
 What it does see but should not count: the hex placeholder, the language names and the honeypot label (row 15,
 row 11, public pages). Each becomes a catalogue key (the language names via `LANGUAGE_OPTIONS`), so the gate
@@ -453,8 +456,14 @@ account with no language gets English, decision 3, `RT:467`.)
   correo"), booking emails (`WEB/lib/email/templates/booking.ts:33`, `:241`), the lead receipt
   (`WEB/lib/email/templates/lead-receipt.ts:26-28`), and `aiActs.notice.calendarFix.es`. Owner: bis-booking
   and bis-comms.
-- **The held text-back has no Spanish**: `voice.textback.defaultBodyHeldEn` and
-  `voice.textback.defaultBodyHeldNoNameEn` have no `…Es` partner. If a held text-back can reach a Spanish
-  caller, it reaches them in English. Owner: bis-voice.
+- ~~The held text-back has no Spanish~~ **Withdrawn 2026-10-31 (T0):** the Spanish default never said "just
+  now", so the held text-back already sends it (`MSG:2314-2316`); see section 3.2.
+- **The web chat's AI introduction is in *tú*** ("para que el equipo te dé seguimiento",
+  `concierge.aiIntro.es`), found by G4 during T0; customer copy, so Q5 of the customer-language spec applies.
+  Owner: whoever owns the web concierge.
+- **The QA locale override never reaches the shell** (found building T1): Next layouts receive no
+  `searchParams`, and the shell's locale is resolved in `WEB/app/(dashboard)/dashboard/layout.tsx:195`, so
+  `?locale=es` turns pages Spanish under a still-English sidebar, topbar and ⌘K. G9 for the shell therefore
+  needs a Spanish e2e user (own `users.language`) or a QA header set by `src/proxy.ts`; T7 picks one.
 - **About 11 catalogue keys look dead** (no reference, literal or by prefix; section 0). T0 deletes them after
   a second grep each; a dead key in a 6,921-line catalogue costs a translator's time for nothing.
