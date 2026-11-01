@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { NumberChip } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup/steps/step-shared";
 import { makeTr } from "@/lib/record/copy";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
@@ -122,6 +124,14 @@ export function AlertPhoneCard({
   pseudo?: boolean;
 }) {
   const tr = makeTr(locale, pseudo);
+  // m6 (review fix round): every TOAST below reads through plain
+  // `t(m, key, locale)`, never `tr.text(key)` — the one deliberate
+  // exception to this file's own "everything through tr" rule. Pseudo
+  // wiring covers the page's own STATIC, page-load render; a toast is
+  // post-interaction feedback nobody measures with the pseudo G9 overflow
+  // check, and the policy has to be the same on every card (team-copy.ts's
+  // own comment on `teamErrorCopy` makes the identical call for Team's
+  // toasts; branding-panel.tsx's three toast reads match it too).
   // Controlled, unlike the pre-0036 card's `defaultValue`: the button's own
   // label needs to react to what is typed, not to the value the page was
   // rendered with. Initialized from the server prop so an untouched field
@@ -143,14 +153,14 @@ export function AlertPhoneCard({
       try {
         result = await clearAction(formData);
       } catch {
-        toast.error(tr.text("common.actionCrashed"));
+        toast.error(t(m, "common.actionCrashed", locale));
         return;
       }
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      toast.success(tr.text("settings.alertPhoneSaved"));
+      toast.success(t(m, "settings.alertPhoneSaved", locale));
       return;
     }
 
@@ -159,14 +169,14 @@ export function AlertPhoneCard({
     try {
       result = await startVerificationAction(formData);
     } catch {
-      toast.error(tr.text("common.actionCrashed"));
+      toast.error(t(m, "common.actionCrashed", locale));
       return;
     }
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    toast.success(tr.text("settings.alertPhoneCodeSent"));
+    toast.success(t(m, "settings.alertPhoneCodeSent", locale));
     // Displayed via NumberChip in the pending phase below: the E.164 the
     // SERVER normalised and texted, never a client-side guess at it.
     setPendingPhone(result.phone);
@@ -180,7 +190,7 @@ export function AlertPhoneCard({
     try {
       result = await confirmVerificationAction(formData);
     } catch {
-      toast.error(tr.text("common.actionCrashed"));
+      toast.error(t(m, "common.actionCrashed", locale));
       return;
     }
     if (!result.ok) {
@@ -190,7 +200,7 @@ export function AlertPhoneCard({
       toast.error(result.error);
       return;
     }
-    toast.success(tr.text("settings.alertPhoneSaved"));
+    toast.success(t(m, "settings.alertPhoneSaved", locale));
     setPhase("idle");
     setCode("");
   });
@@ -209,9 +219,9 @@ export function AlertPhoneCard({
         toast.error(result.error);
         return;
       }
-      toast.success(tr.text("settings.alertPhoneCodeSent"));
+      toast.success(t(m, "settings.alertPhoneCodeSent", locale));
     } catch {
-      toast.error(tr.text("common.actionCrashed"));
+      toast.error(t(m, "common.actionCrashed", locale));
     } finally {
       setResending(false);
     }

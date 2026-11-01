@@ -93,9 +93,9 @@ vi.mock("@/lib/sms/sender", () => ({
 }));
 
 const captured = vi.hoisted(() => ({
-  props: null as { alertPhone: string | null; smsNotReady?: boolean; locale?: string } | null,
+  props: null as { alertPhone: string | null; smsNotReady?: boolean; locale?: string; pseudo?: boolean } | null,
   panel: null as {
-    mailingAddress?: string | null; locale?: string;
+    mailingAddress?: string | null; locale?: string; pseudo?: boolean;
     action?: (fd: FormData) => Promise<unknown>;
     removeLogoAction?: () => Promise<unknown>;
     restoreLogoAction?: (p: string) => Promise<unknown>;
@@ -372,5 +372,40 @@ describe("branding/page.tsx passes BrandingPanel bound server actions, never arr
     expect(src).toContain("action={setBrandingAction.bind(null, accountId, locale)}");
     expect(src).toContain("removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}");
     expect(src).toContain("restoreLogoAction={restoreBrandLogoAction.bind(null, accountId, locale)}");
+  });
+});
+
+// I2 (review fix round): the page passed `pseudo={pseudo}` to BrandingPanel,
+// AlertPhoneCard and NeverLogList, but nothing proved any of the three
+// survived a mutation back to `pseudo={false}` (or, for NeverLogList, to
+// dropping the prop outright) — every PRE-EXISTING test above renders with
+// no `?locale=pseudo` at all.
+describe("branding page — pseudo wiring (I2, review fix round)", () => {
+  const OWNER = { userId: "user_1", isAgency: false, role: "owner", canManage: true };
+
+  it("passes pseudo=true to AlertPhoneCard and BrandingPanel, and renders NeverLogList's own title pseudo-wrapped, under BIS_I18N_QA + ?locale=pseudo (mutation: pseudo={false} on either card → FAILS; mutation: drop pseudo from NeverLogList → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      accessFixture.access = OWNER;
+      const props = await render({ locale: "pseudo" });
+      expect(props.pseudo).toBe(true);
+      expect(captured.panel?.pseudo).toBe(true);
+      const { pseudoLocale } = await import("@/lib/i18n/pseudo-locale");
+      const { m } = await import("@/lib/messages");
+      expect(lastHtml).toContain(pseudoLocale(m["neverLog.title"]));
+      expect(lastHtml).not.toContain(`>${m["neverLog.title"]}<`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("with no ?locale=pseudo, pseudo=false reaches both cards and NeverLogList's title is plain (unaffected baseline)", async () => {
+    accessFixture.access = OWNER;
+    const props = await render();
+    expect(props.pseudo).toBe(false);
+    expect(captured.panel?.pseudo).toBe(false);
+    const { m } = await import("@/lib/messages");
+    expect(lastHtml).toContain(`>${m["neverLog.title"]}<`);
   });
 });

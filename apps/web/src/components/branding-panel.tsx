@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { makeTr } from "@/lib/record/copy";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -167,7 +169,14 @@ export function BrandingPanel({
     // message, not the guarantee.
     const picked = formData.get("logo");
     if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
-      toast.error(tr.text("branding.tooLarge"));
+      // m6 (review fix round): toast copy is never pseudo-wired, on
+      // either side of this seam — plain t(m, key, locale), never
+      // tr.text(key), matching remove-logo.ts's own toasts below and
+      // team-handlers.ts's (team-copy.ts's own comment on
+      // `teamErrorCopy`). Pseudo stops at the page's own STATIC, page-load
+      // render; a toast is post-interaction feedback, never measured by
+      // the pseudo G9 overflow check.
+      toast.error(t(m, "branding.tooLarge", locale));
       return;
     }
     // notifyActionResult so a stale-deployment tab REJECTING its save toasts
@@ -177,7 +186,7 @@ export function BrandingPanel({
     await notifyActionResult(() => action(formData), {
       success: (msg) => { toast.success(msg); setFileKey((k) => k + 1); },
       error: toast.error,
-    }, { success: tr.text("branding.saved"), crashed: tr.text("common.actionCrashed") });
+    }, { success: t(m, "branding.saved", locale), crashed: t(m, "common.actionCrashed", locale) });
   });
   const [color, setColor] = useState(brandColor ?? "");
   const [neutral, setNeutral] = useState<string>(brandNeutral ?? "");

@@ -49,7 +49,7 @@ loadEnv({ path: ".env.local" });
  * Contacts/To do/Calls/Forms already were (billing/page.tsx,
  * branding/page.tsx and team/page.tsx, plus the client components each
  * renders, now take `pseudo` as a prop), so they carry their own content
- * assertions (`realSpanishOnlyRoutes`, real Spanish) AND a pseudo G9 proof
+ * assertions (`billingBrandingTeamRoutes`, real Spanish) AND a pseudo G9 proof
  * (the same array's own `pseudoProofKey`, read by a second loop over it,
  * below), the same two checks every other screen in this file gets.
  */
@@ -352,14 +352,28 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
 
   // ADD (review round 1, now that #324/T6 has merged): Billing, Branding
   // and Team. Each carries its own content assertions (not just "no
-  // scroll") so this loop proves BOTH at once, in real Spanish. `pseudoProofKey`
-  // (S-10 T9a) feeds the separate pseudo loop below (`pseudoWiredRoutes`),
-  // now that all three pages route their copy through `requestPseudoMode`.
-  const realSpanishOnlyRoutes: Array<{
+  // scroll") so this loop proves BOTH at once, in real Spanish.
+  // `pseudoProofKey` (S-10 T9a) feeds the separate pseudo loop further
+  // down (the `for (... of billingBrandingTeamRoutes)` block below the
+  // main `routes` loop), now that all three pages route their copy
+  // through `requestPseudoMode`.
+  //
+  // I-2 (review fix round): each key is a string a COMPONENT renders, not
+  // the page's own PageHeader title — a page-header key is covered by the
+  // page's own `p()` wrapper regardless of whether a deeper component
+  // (BrandingPanel, AlertPhoneCard, NeverLogList, TeamSection) ever saw
+  // `pseudo` at all, so it cannot prove the wiring I-2 named as unchecked.
+  // Billing is the one exception, and the reason is on its own line below:
+  // this fixture carries no billing row, so `ManageBillingButton` and the
+  // usage list never render here at all — `billing.page.empty.title`
+  // (the EmptyState component's own title prop) is the only
+  // reliably-rendered string past the header in this account's actual
+  // state.
+  const billingBrandingTeamRoutes: Array<{
     name: string; path: (base: string) => string; pseudoProofKey: MessageKey; assertContent: (page: Page) => Promise<void>;
   }> = [
     {
-      name: "Billing", path: (base) => `${base}/billing`, pseudoProofKey: "billing.page.title",
+      name: "Billing", path: (base) => `${base}/billing`, pseudoProofKey: "billing.page.empty.title",
       assertContent: async (page) => {
         // `{ level: 1 }`: the PageHeader's own h1, never a card's own h3 —
         // found live, this review round, on Team (below), where
@@ -373,7 +387,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
       },
     },
     {
-      name: "Branding", path: (base) => `${base}/branding`, pseudoProofKey: "branding.clientTitle",
+      name: "Branding", path: (base) => `${base}/branding`, pseudoProofKey: "branding.name",
       assertContent: async (page) => {
         await expect(page.getByRole("heading", { level: 1, name: t(m, "branding.clientTitle", "es"), exact: true })).toBeVisible();
         // alert-phone-card.tsx:239 — a second card on the SAME page, below
@@ -382,7 +396,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
       },
     },
     {
-      name: "Team", path: (base) => `${base}/team`, pseudoProofKey: "team.title",
+      name: "Team", path: (base) => `${base}/team`, pseudoProofKey: "team.body",
       assertContent: async (page) => {
         // `{ level: 1 }`: TeamSection's own card ALSO carries an "Equipo"
         // heading (an `<h3 data-slot="card-title">`) — an unleveled query
@@ -431,7 +445,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
     });
   }
 
-  for (const { name, path, assertContent } of realSpanishOnlyRoutes) {
+  for (const { name, path, assertContent } of billingBrandingTeamRoutes) {
     test(`${name}: content reads Spanish and there is no horizontal page scroll at ${WIDTH}px, real Spanish`, async ({ page }) => {
       const fixture = spanishFixture();
       if (!fixture) { test.skip(true, SKIP_REASON); return; }
@@ -499,12 +513,12 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
   }
 
   // S-10 T9a: Billing, Branding and Team now route their copy through
-  // `requestPseudoMode` too (`realSpanishOnlyRoutes`'s own `pseudoProofKey`,
+  // `requestPseudoMode` too (`billingBrandingTeamRoutes`'s own `pseudoProofKey`,
   // added alongside this), so they get the SAME pseudo G9 proof every route
   // above does — a separate loop, not folded into `routes`, because these
   // three keep their own `assertContent` for the real-Spanish case above
   // and gain nothing by duplicating that content check here too.
-  for (const { name, path, pseudoProofKey } of realSpanishOnlyRoutes) {
+  for (const { name, path, pseudoProofKey } of billingBrandingTeamRoutes) {
     test(`${name}: no horizontal page scroll at ${WIDTH}px, pseudo-Spanish (+35%)`, async ({ page }) => {
       const fixture = spanishFixture();
       if (!fixture) { test.skip(true, SKIP_REASON); return; }
@@ -531,7 +545,7 @@ test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)"
   // time, now that their own `PageHeader` titles are pseudo-aware too.
   const pageTitleRoutes = [
     ...routes.filter((r) => r.name !== "Dashboard"),
-    ...realSpanishOnlyRoutes,
+    ...billingBrandingTeamRoutes,
   ];
   for (const { name, path } of pageTitleRoutes) {
     test(`${name}: the page title element itself does not clip at ${WIDTH}px, pseudo-Spanish`, async ({ page }) => {

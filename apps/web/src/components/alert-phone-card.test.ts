@@ -260,6 +260,20 @@ describe("AlertPhoneCard — Spanish (S-10 T6)", () => {
     expect(codeOnly).not.toMatch(/tr\.text\([^)]*,\s*locale\)/);
   });
 
+  // I1 (review fix round): the test above only proved a `tr` BOUND
+  // correctly exists somewhere; it never proved that was the ONLY `makeTr`
+  // call. A second, sneaked-in `makeTr("en").text("key")` inline (never
+  // assigned to `tr`, so it never matches `tr\.text\(`) would quietly
+  // replace one real `tr.text(...)` read with a hard-coded English one
+  // and still leave the read count comfortably above 20 — undetected by
+  // every assertion above. `makeTr(` must appear EXACTLY once in this
+  // whole file.
+  it("makeTr( is called exactly once in this file (mutation: add a second inline makeTr(\"en\").text(...) call anywhere → FAILS)", () => {
+    const calls = [...codeOnly.matchAll(/makeTr\(/g)];
+    expect(calls).toHaveLength(1);
+    expect(codeOnly).toMatch(/const tr = makeTr\(locale, pseudo\);/);
+  });
+
   it("the component takes a locale prop, defaulting to \"en\" so the agency's Settings render (which never passes one) is unaffected (mutation: make it required, or default it to es → FAILS)", () => {
     expect(codeOnly).toMatch(/isAgency, accountId, alertPhone, smsNotReady,\s*\n\s*clearAction, startVerificationAction, confirmVerificationAction, locale = "en", pseudo = false,/);
   });
@@ -267,5 +281,20 @@ describe("AlertPhoneCard — Spanish (S-10 T6)", () => {
   it("imports makeTr and Locale, the same pattern every other pseudo-wired S-10 card uses (mutation: hand-roll a lookup instead → FAILS)", () => {
     expect(card).toContain('import { makeTr } from "@/lib/record/copy";');
     expect(card).toContain('import type { Locale } from "@/lib/i18n/locale";');
+  });
+});
+
+// m6 (review fix round): every toast on this card is the one deliberate
+// exception to "everything through tr" — plain t(m, key, locale), never
+// tr.text(key), the same policy branding-panel.tsx's own toasts and
+// team-copy.ts's teamErrorCopy both carry.
+describe("AlertPhoneCard — toasts never read through tr.text() (m6, review fix round)", () => {
+  it("no toast.error/toast.success call reads tr.text() (mutation: toast.error(tr.text(\"common.actionCrashed\")) → FAILS)", () => {
+    expect(codeOnly).not.toMatch(/toast\.(error|success)\([^)]*tr\.text\(/);
+  });
+  it("every toast string on this card is a plain t(m, key, locale) call", () => {
+    for (const key of ["common.actionCrashed", "settings.alertPhoneSaved", "settings.alertPhoneCodeSent"]) {
+      expect(codeOnly).toContain(`t(m, "${key}", locale)`);
+    }
   });
 });

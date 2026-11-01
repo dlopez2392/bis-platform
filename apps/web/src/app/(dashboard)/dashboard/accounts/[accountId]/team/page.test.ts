@@ -222,3 +222,25 @@ describe("the Team page: BIS access (F-118 part 1)", () => {
     expect(child.props.qaLocale).toBe("pseudo");
   });
 });
+
+// I2 (review fix round): the page passed `pseudo={pseudo}` to TeamSection
+// AND to the fallback TeamSkeleton, but nothing proved either survived a
+// mutation back to `pseudo={false}` — every PRE-EXISTING test above
+// renders with no `BIS_I18N_QA`/`?locale=pseudo` at all, so `pseudo: false`
+// (the correct DEFAULT answer) was indistinguishable from a hard-coded one.
+describe("the Team page — pseudo wiring (I2, review fix round)", () => {
+  it("under BIS_I18N_QA + ?locale=pseudo, pseudo=true reaches TeamSection and the fallback TeamSkeleton (mutation: pseudo={false} on either → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const els = all(await page({ locale: "pseudo" }));
+      const boundary = els.find((e) => e.type === Suspense)!;
+      const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+      expect(child.props.pseudo).toBe(true);
+      const fallback = boundary.props.fallback as ReactElement<Record<string, unknown>>;
+      expect(fallback.props.pseudo).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

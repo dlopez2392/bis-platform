@@ -68,7 +68,8 @@ const PLAN = { id: "p1", agencyId: "ag", name: "Growth", monthlyPriceCents: 1490
 const PAID = { accountId: "a", planId: "p1", complimentary: false, stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
   subscriptionStatus: "active", currentPeriodStart: "2026-10-12T17:00:00+00:00", currentPeriodEnd: "2026-11-12T17:00:00+00:00",
   pastDueSince: null, billingPausedAt: null, pauseLiftedAt: null, stripeCheckedAt: null, billingStartedAt: "", createdAt: "", updatedAt: "" } as AccountBilling;
-const page = () => BillingPage({ params: Promise.resolve({ accountId: "a" }) });
+const page = (searchParams: Record<string, string> = {}) =>
+  BillingPage({ params: Promise.resolve({ accountId: "a" }), searchParams: Promise.resolve(searchParams) });
 
 beforeEach(() => {
   guard.allowed = true;
@@ -263,5 +264,39 @@ describe("the client Billing page — Spanish (S-10 T6)", () => {
     const [button] = find(await page(), ManageBillingButton);
     const open = (button!.props as { open: () => Promise<{ ok: false; error: string }> }).open;
     expect(await open()).toEqual({ ok: false, error: "es" });
+  });
+});
+
+// I2 (review fix round): the page passed `pseudo={pseudo}` and wrapped its
+// own strings in `p()`, but nothing proved either survived a mutation —
+// `pseudo={false}` on ManageBillingButton, or `p()` dropped from the
+// chatsNote/usage lines, both read as correct to every PRE-EXISTING test
+// above (none of them sets `?locale=pseudo` at all).
+describe("the client Billing page — pseudo wiring (I2, review fix round)", () => {
+  it("passes pseudo=true to ManageBillingButton, and wraps the usage lines and chatsNote, under BIS_I18N_QA + ?locale=pseudo (mutation: pseudo={false} on ManageBillingButton → FAILS; mutation: drop p() from chatsNote/usage → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      dbm.getAccountBilling.mockResolvedValue(PAID);
+      dbm.sumUsageSince.mockResolvedValue({ voice_minutes: 312, sms: 0, ai_chats: 0 });
+      const tree = await page({ locale: "pseudo" });
+      const [button] = find(tree, ManageBillingButton);
+      expect((button!.props as { pseudo?: boolean }).pseudo).toBe(true);
+      const { pseudoLocale } = await import("@/lib/i18n/pseudo-locale");
+      const words = text(tree);
+      expect(words).toContain(pseudoLocale(m["billing.usage.chatsNote"]));
+      expect(words).toContain(pseudoLocale("312 of 500 minutes"));
+      expect(words).not.toContain(m["billing.usage.chatsNote"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("with no ?locale=pseudo, pseudo=false reaches ManageBillingButton and nothing is wrapped (unaffected baseline)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(PAID);
+    const tree = await page();
+    const [button] = find(tree, ManageBillingButton);
+    expect((button!.props as { pseudo?: boolean }).pseudo).toBe(false);
+    expect(text(tree)).toContain(m["billing.usage.chatsNote"]);
   });
 });

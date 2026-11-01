@@ -525,6 +525,32 @@ describe("TeamCard: Spanish (S-10 T6)", () => {
     }
   });
 
+  // I1 (review fix round): the test above never proved `tr` inside
+  // InviteDialog came from `makeTr(locale, pseudo)` specifically — a
+  // sneaked-in `const tr = makeTr("en", pseudo);` (or any other literal
+  // locale) still reads as `tr.text("key")` everywhere and passed every
+  // assertion above undetected. Pinned directly: the InviteDialog slice
+  // contains EXACTLY one `makeTr(` call, and it is `makeTr(locale, pseudo)`.
+  it("InviteDialog's own tr is built from makeTr(locale, pseudo) and nothing else calls makeTr (mutation: const tr = makeTr(\"en\", pseudo); → FAILS)", () => {
+    const FULL_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+    const src = FULL_SRC.slice(FULL_SRC.indexOf("function InviteDialog("), FULL_SRC.indexOf("function TeamSkeleton("));
+    const calls = [...src.matchAll(/makeTr\(/g)];
+    expect(calls).toHaveLength(1);
+    expect(src).toContain("const tr = makeTr(locale, pseudo);");
+  });
+
+  // "Ideally" (review fix round): a render test, not just a source-text
+  // pin — proves the Invite trigger's own TEXT, not merely its call
+  // shape, actually reads Spanish. Radix renders the TRIGGER (a real
+  // Button) to real markup on the server; only its portalled CONTENT is
+  // inert (this file's own top comment on DialogContent explains why
+  // THAT needs source-text pins instead).
+  it("in Spanish, TeamCard shows the Invite trigger's Spanish text, not the English one (mutation: locale=\"en\" inside InviteDialog → FAILS)", () => {
+    const html = card({ locale: "es" });
+    expect(renderedText(html)).toContain(m["team.invite.es"]);
+    expect(html).not.toContain(`>${m["team.invite"]}<`);
+  });
+
   it("the room line and the empty sentence read in Spanish (mutation: call roomCopy/emptyCopy with no locale → FAILS)", () => {
     expect(renderedText(card({ locale: "es", room: 3 }))).toContain("3 personas más");
     expect(renderedText(card({ locale: "es", room: 1 }))).toContain(m["team.room.one.es"]);
