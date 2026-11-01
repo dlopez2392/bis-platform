@@ -27,11 +27,11 @@ import { m } from "@/lib/messages";
 export function defaultInstantReplyBody(brandName: string, language: "en" | "es"): string {
   if (!brandName.trim()) {
     return language === "es"
-      ? m["automations.instantReply.defaultBodyNoNameEs"]
-      : m["automations.instantReply.defaultBodyNoNameEn"];
+      ? m["automations.instantReply.defaultBodyNoName.es"]
+      : m["automations.instantReply.defaultBodyNoName"];
   }
   const template = language === "es"
-    ? m["automations.instantReply.defaultBodyEs"]
-    : m["automations.instantReply.defaultBodyEn"];
+    ? m["automations.instantReply.defaultBody.es"]
+    : m["automations.instantReply.defaultBody"];
   return template.replace("{name}", () => brandName);
 }

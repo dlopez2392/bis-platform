@@ -2309,15 +2309,21 @@ export const m = {
   "sms.alert.emailHint": " Check email for details.",
   "sms.alert.emailHint.es": " Revise su correo para mas detalles.",
 
-  "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
-  "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
+  // Renamed from the camel `…En`/`…Es` suffix to the catalogue's own `x` /
+  // `x.es` pair (S-10 T0), so the parity gate reads them as twins.
+  "voice.textback.defaultBody": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBody.es": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  "voice.textback.defaultBodyNoName": "Sorry we missed you just now, reply here and we'll help.",
+  "voice.textback.defaultBodyNoName.es": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
   // 2026-09-26): "just now" would be false the next morning. Spanish needs no
-  // variant; its default never said "just now".
-  "voice.textback.defaultBodyHeldEn": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
-  "voice.textback.defaultBodyHeldNoNameEn": "Sorry we missed your call, reply here and we'll help.",
-  "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
-  "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  // variant; its default never said "just now", so the held twins are the
+  // same sentences as the plain ones (defaultTextbackBody reads the plain
+  // Spanish for both; these twins exist so the parity gate can see that).
+  "voice.textback.defaultBodyHeld": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeld.es": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+  "voice.textback.defaultBodyHeldNoName": "Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeldNoName.es": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // Same class of note as `automations.optOutCounted` (the count above
   // includes a sentence not shown in the textarea/placeholder) but worded
   // WITHOUT quoting the English disclosure verbatim: this card's preview
@@ -3214,10 +3220,10 @@ export const m = {
   // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
   // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
   // dash anywhere: it is outside GSM-7.
-  "automations.instantReply.defaultBodyEn": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyNoNameEn": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyEs": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
-  "automations.instantReply.defaultBodyNoNameEs": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBody": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoName": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
+  "automations.instantReply.defaultBodyNoName.es": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
