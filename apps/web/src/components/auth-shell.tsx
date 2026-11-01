@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { Ground } from "@/components/ground";
 import { BisMark } from "@/components/bis-mark";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * The frame every signed-out screen renders through: /sign-in, / and
@@ -27,9 +29,19 @@ import { m } from "@/lib/messages";
  * card so the form keeps full width on a phone; the rail's micro-copy drops
  * there rather than wrapping under the wordmark.
  */
-export function AuthShell({ children }: { children: ReactNode }) {
+export function AuthShell({ children, locale = "en" }: {
+  children: ReactNode;
+  /** S-10 T7 (spec §7 Q5): the BROWSER's language, since nobody is
+   *  authenticated on any page this shell wraps — the caller (each
+   *  signed-out page) resolves it via `localeFromAcceptLanguage` and passes
+   *  it down as a prop, same discipline as every other converted component
+   *  on this screen (never `useLocale()`, which has nothing to read here —
+   *  there is no `LocaleProvider` above a signed-out page). Optional,
+   *  default "en", so every existing call site is unaffected. */
+  locale?: Locale;
+}) {
   return (
-    <main className="relative flex min-h-screen items-center justify-center px-6 py-10">
+    <main lang={locale} className="relative flex min-h-screen items-center justify-center px-6 py-10">
       <Ground />
       {/* Deliberately NOT overflow-hidden. Clerk renders things that overflow
           the card on purpose — a "Last used" badge on the Google button, any
@@ -44,11 +56,15 @@ export function AuthShell({ children }: { children: ReactNode }) {
           className="sidebar-chrome flex shrink-0 items-center gap-3 rounded-t-xl border-b border-[var(--sidebar-line)] px-6 py-5 sm:w-[200px] sm:flex-col sm:items-start sm:gap-2 sm:border-b-0 sm:border-r sm:py-8 sm:rounded-tr-none sm:rounded-bl-xl"
         >
           <BisMark size={28} className="text-[var(--sidebar-text-strong)]" />
+          {/* "shell.brand" is "shell"'s own namespace, not this task's — read
+              through t() regardless (falls back to the identical English
+              "BIS" with no twin, which is also the correct Spanish: a brand
+              abbreviation, not a word to translate). */}
           <span className="text-sm font-semibold text-[var(--sidebar-text-strong)]">
-            {m["shell.brand"]}
+            {t(m, "shell.brand", locale)}
           </span>
           <span className="hidden text-xs text-[var(--sidebar-muted)] sm:block">
-            {m["signIn.railCopy"]}
+            {t(m, "signIn.railCopy", locale)}
           </span>
         </div>
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-4 px-6 py-8 sm:px-8">

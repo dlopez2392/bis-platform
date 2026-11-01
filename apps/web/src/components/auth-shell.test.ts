@@ -43,3 +43,24 @@ describe("AuthShell — the signed-out frame (spec §4)", () => {
     expect(html).toContain("child content");
   });
 });
+
+// S-10 T7 (spec §6 T7, §7 Q5): the rail's own copy ("by Bespoke Intelligent
+// Solutions") follows the resolved locale, same as every signed-out page's
+// own text — the browser's language, since nobody is authenticated here.
+describe("AuthShell in Spanish", () => {
+  it("defaults to English when no locale is passed (every existing call site above is unaffected)", () => {
+    const en = renderToStaticMarkup(
+      createElement(AuthShell, null, createElement("p", null, "child content")),
+    );
+    expect(en).toContain("by Bespoke Intelligent Solutions");
+  });
+
+  it("renders the rail copy in Spanish and wraps the shell in lang={locale} (mutation: leave railCopy as m[...] → FAILS)", () => {
+    const es = renderToStaticMarkup(
+      createElement(AuthShell, { locale: "es" } as never, createElement("p", null, "child content")),
+    );
+    expect(es).toContain("por Bespoke Intelligent Solutions");
+    expect(es).toContain('lang="es"');
+  });
+});
+
