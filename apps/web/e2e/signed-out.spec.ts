@@ -233,19 +233,35 @@ for (const mode of ["light", "dark"] as const) {
 }
 
 // S-10 T7 (spec §6 T7, §7 Q5): the browser's own language picks ONLY these
-// signed-out pages. Playwright's own default Accept-Language (whatever the
-// test runner's OS/locale sends, "en"-ish on every CI/local box this suite
-// has run on) is what every probe ABOVE already relies on staying English —
-// these cases set the header explicitly instead of trusting that default.
+// signed-out pages. Every probe ABOVE relies on the runner's own default
+// ("en-US" on every run measured); these cases set the header explicitly
+// instead of trusting that default.
+//
+// The header comes from the browser's own LOCALE (`test.use({ locale })`),
+// the way a real Spanish-speaking visitor's browser sends it. An extra
+// header does not work here: inside this test runner both
+// `page.setExtraHTTPHeaders` and `test.use({ extraHTTPHeaders })` lost to the
+// runner's default locale, and every navigation still went out as "en-US"
+// (measured 2026-11-01 with a request log). Chromium writes the q-values
+// itself, so locale "es-MX,en" goes out as "es-MX,en;q=0.9" and "en-US,es" as
+// "en-US,es;q=0.9". Each case asserts the header the navigation really
+// carried, so a header that silently fails to apply fails here instead of
+// passing on English.
 //
 // The language is marked on AuthShell's <main lang>, NOT on <html>: the root
 // layout makes no session or header read for `lang` and stays "en" for every
 // request (orchestrator split, 2026-11-01; the signed-in <html lang> is T9's).
-test.describe("signed-out pages follow Accept-Language (both languages)", () => {
-  test("a Spanish-ranked Accept-Language renders /sign-in, / and /no-access in Spanish, marked on <main lang>", async ({ page }) => {
-    await page.setExtraHTTPHeaders({ "accept-language": "es-MX,en;q=0.5" });
+async function sentAcceptLanguage(page: import("@playwright/test").Page, path: string) {
+  const nav = page.waitForRequest((r) => r.isNavigationRequest());
+  await page.goto(path);
+  return (await nav).headers()["accept-language"];
+}
 
-    await page.goto("/sign-in");
+test.describe("signed-out pages follow a Spanish-ranked Accept-Language", () => {
+  test.use({ locale: "es-MX,en" });
+
+  test("/sign-in, / and /no-access render in Spanish, marked on <main lang>", async ({ page }) => {
+    expect(await sentAcceptLanguage(page, "/sign-in")).toBe("es-MX,en;q=0.9");
     await expect(page.locator("main").first()).toHaveAttribute("lang", "es");
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(page.getByRole("heading", { name: "Iniciar sesión" })).toBeVisible();
@@ -263,13 +279,6 @@ test.describe("signed-out pages follow Accept-Language (both languages)", () => 
     await expect(page.getByRole("button", { name: "Cerrar sesión" })).toBeVisible();
   });
 
-  test("an en-ranked Accept-Language stays English even when es is also offered (the spec's own 'en-US,es;q=0.9' example)", async ({ page, baseURL }) => {
-    await page.setExtraHTTPHeaders({ "accept-language": "en-US,es;q=0.9" });
-    await visit(page, baseURL, "/sign-in", "light");
-    await expect(page.locator("main").first()).toHaveAttribute("lang", "en");
-    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  });
-
   // A signed-out overflow check, NOT the spec's G9 (G9 is the dashboard
   // shell at the pseudo-locale's +35%, which needs a signed-in Spanish e2e
   // user with its own users.language — moved to T9). This measures AuthShell
@@ -278,9 +287,10 @@ test.describe("signed-out pages follow Accept-Language (both languages)", () => 
   // called only by signed-in /dashboard pages and routes; the signed-out
   // pages never call it and resolve their locale from Accept-Language alone.
   test("the signed-out shell survives Spanish text at 375px with nothing clipped", async ({ page }) => {
-    await page.setExtraHTTPHeaders({ "accept-language": "es-MX" });
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.goto("/no-access?reason=off");
+    expect(await sentAcceptLanguage(page, "/no-access?reason=off")).toBe("es-MX,en;q=0.9");
+    // The text measured below is the Spanish, not an English fallback.
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "es");
 
     const rail = page.locator('[data-slot="auth-rail"]');
     await expect(rail).toBeVisible();
@@ -295,6 +305,18 @@ test.describe("signed-out pages follow Accept-Language (both languages)", () => 
       document.documentElement.scrollWidth, document.documentElement.clientWidth,
     ]);
     expect(clipFailure(scrollWidth, clientWidth, "the signed-out page at 375px in Spanish")).toBeNull();
+  });
+});
+
+test.describe("signed-out pages stay English for an en-ranked Accept-Language", () => {
+  test.use({ locale: "en-US,es" });
+
+  test("stays English even when es is also offered (the spec's own 'en-US,es;q=0.9' example)", async ({ page, baseURL }) => {
+    const nav = page.waitForRequest((r) => r.isNavigationRequest() && new URL(r.url()).pathname === "/sign-in");
+    await visit(page, baseURL, "/sign-in", "light");
+    expect((await nav).headers()["accept-language"]).toBe("en-US,es;q=0.9");
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "en");
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   });
 });
 
