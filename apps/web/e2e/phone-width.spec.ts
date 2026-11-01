@@ -7,6 +7,8 @@ import {
   insertClosedDay, deleteClosedDay, readAccountTimezone, listClosedDaysFrom,
 } from "@bis/db";
 import { dayKey } from "../src/lib/business-status/status";
+import { m } from "../src/lib/messages";
+import { t } from "../src/lib/i18n/t";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -695,7 +697,9 @@ test.describe("the agency's search button and the status indicator never overlap
         await page.setViewportSize({ width, height: HEIGHT });
         await page.goto(`${base}/dashboard`);
         await waitForHeaderSettled(page, true, true);
-        const search = page.locator("header").getByRole("button", { name: "Search" });
+        // The shell is in Spanish here (S-10 T1): the search button is named from the catalogue, never a
+        // hard-coded string, so a rewording cannot leave this locator matching nothing.
+        const search = page.locator("header").getByRole("button", { name: t(m, "shell.search", "es"), exact: true });
         const indicator = page.locator("header").getByRole("button", { name: /^Cerrado hoy\s*, Cambiar el estado de hoy$/ });
         await expect(search, `the search button at ${width}px`).toBeVisible();
         await expect(indicator, `the status indicator at ${width}px`).toBeVisible();
