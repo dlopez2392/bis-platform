@@ -120,8 +120,13 @@ export async function GET(
     // READER (the dashboard's own resolver). getPersonPrefs never rejects.
     // The account's language matters only to a client reader, and its read
     // is cosmetic: a failure costs the Spanish, never the search.
+    // Review fix round, Minor 2: this used to skip the read whenever `calls` wasn't among the
+    // requested `types`, which made sense while only the call hits read `locale` — but the
+    // conversations hits' holding label (holdingLabel) now reads it too, so a conversations-only
+    // request (types=conversations) on a client-role request must still resolve the account's
+    // language, not just a calls-including one.
     getPersonPrefs(),
-    access.isAgency || !sources.has("calls")
+    access.isAgency
       ? Promise.resolve({ language: null as Locale | null })
       : Promise.resolve(db.from("accounts").select("language").eq("id", accountId).maybeSingle())
         .then(({ data, error }) => {
@@ -158,7 +163,7 @@ export async function GET(
     })),
     conversations: conversations.slice(0, PER_SOURCE).map((v): SearchHit => ({
       id: v.id,
-      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, "en") : (joinName(v.contactFirstName, v.contactLastName) || UNNAMED),
+      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, locale) : (joinName(v.contactFirstName, v.contactLastName) || UNNAMED),
       sublabel: v.lastMessagePreview,
       // Deliberately null. `sublabel` here is the MATCHED message, but
       // `lastMessageAt` is the thread's NEWEST message — pairing them would

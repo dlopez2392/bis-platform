@@ -103,7 +103,7 @@ function HeldEmailRow({
       toast, locale,
       t(m, "conversations.held.filed", locale, { name }),
       onShow,
-      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, undo), toast, locale, () => { onUndone(); router.refresh(); }),
+      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, locale, undo), toast, locale, () => { onUndone(); router.refresh(); }),
     ));
   }
 
@@ -114,7 +114,7 @@ function HeldEmailRow({
       toast, locale,
       t(m, "conversations.held.dismissed", locale),
       onShow,
-      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, undo), toast, locale, () => { onUndone(); router.refresh(); }),
+      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, locale, undo), toast, locale, () => { onUndone(); router.refresh(); }),
     ));
   }
 

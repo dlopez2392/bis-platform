@@ -1187,6 +1187,19 @@ describe("TasksPage in Spanish (requestLocale; F-085 follow-up, Task B)", () => 
     const html = await renderEs([row]);
     expect(html).toContain("Responder a Ana López");
   });
+
+  // S-10 T9a: the contacts batch's own name read (`contactDisplayName(c)`, no locale) always
+  // fell back to the English "(no name)", even here, where every other word on the row is Spanish.
+  it("a nameless contact's row names them in Spanish, not always English (mutation: call contactDisplayName with no locale -> FAILS)", async () => {
+    const row: WorkRow = {
+      id: "conversation:1", source: "conversation", accountId: "acct1", contactId: "ct-noname",
+      title: "", dueAt: null, occurredAt: "2026-10-05T10:00:00Z",
+    };
+    fake.tables = { contacts: [{ id: "ct-noname", account_id: "acct1", first_name: null, last_name: null }] };
+    const html = await renderEs([row]);
+    expect(html).toContain(`Responder a ${m["contact.noName.es"]}`);
+    expect(html).not.toContain(m["contact.noName"]);
+  });
 });
 
 describe("TasksPage — a To-do on a shared number's holding record (S-47e P19; T17 review M9)", () => {

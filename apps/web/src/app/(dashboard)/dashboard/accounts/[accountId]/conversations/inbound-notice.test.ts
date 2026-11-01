@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderedText } from "@/lib/rendered-text";
 import type { InboundMeta } from "./inbound-meta";
+
+const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "inbound-notice.tsx"), "utf8");
 
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 vi.mock("./inbound-actions", () => ({ undoReplyStopAction: vi.fn(), stopEmailsFromReplyAction: vi.fn() }));
@@ -146,5 +151,23 @@ describe("InboundNotice reflects the stop's current state (fix round 1)", () => 
     expect(stillAllowed).toContain("May want to stop");
     expect(alreadyStopped).not.toContain("Stop emails");
     expect(alreadyStopped).toContain("May want to stop");
+  });
+});
+
+/**
+ * Review fix round, I-1: once inbound-notice-handlers.ts stopped re-localizing the server's answer
+ * (it trusts result.error is already in the reader's language), a Spanish toast depends ENTIRELY on
+ * this component actually sending its own `locale` prop to the server action — nothing in a static
+ * render (the mocked actions are vi.fn()s; neither call site is ever invoked here) can catch a
+ * regression to a hard-coded "en". Pinned on the source, as holding-move.test.ts already pins its
+ * own overlays.
+ */
+describe("InboundNotice's server calls carry the reader's own locale (source pin, review I-1)", () => {
+  it("undoReplyStopAction's second argument is `locale`, not a literal (mutation: pass \"en\" instead -> FAILS)", () => {
+    expect(src).toMatch(/undoReplyStopAction\(accountId,\s*locale,\s*conversationId,\s*eventId\)/);
+  });
+
+  it("stopEmailsFromReplyAction's second argument is `locale`, not a literal (mutation: pass \"en\" instead -> FAILS)", () => {
+    expect(src).toMatch(/stopEmailsFromReplyAction\(accountId,\s*locale,\s*conversationId,\s*contactId\)/);
   });
 });

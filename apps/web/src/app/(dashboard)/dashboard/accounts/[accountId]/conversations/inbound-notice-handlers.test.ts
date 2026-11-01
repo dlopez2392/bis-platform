@@ -36,18 +36,14 @@ describe("runUndoReplyStop", () => {
     expect(tt.success).not.toHaveBeenCalled();
   });
 
-  it("a non-expired ok:false toasts the mapped error and does not call onDone (mutation: call onDone on failure → FAILS)", async () => {
+  it("a non-expired ok:false shows the server's own string VERBATIM and does not call onDone (S-10 T9a: inbound-actions.ts now resolves the reader's own locale itself and hands back an already-localized string — re-mapping it here to the generic held.failed line would discard it; mutation: toast the generic held.failed line instead of result.error → FAILS)", async () => {
     const tt = toast();
     const onDone = vi.fn();
-    await runUndoReplyStop(async () => ({ ok: false, error: m["conversations.held.changed"] }), tt, "en", onDone);
-    expect(tt.error).toHaveBeenCalledWith(t(m, "conversations.held.failed", "en"));
+    const alreadyLocalized = t(m, "contact.email.noEmail", "es");
+    await runUndoReplyStop(async () => ({ ok: false, error: alreadyLocalized }), tt, "es", onDone);
+    expect(tt.error).toHaveBeenCalledWith(alreadyLocalized);
+    expect(tt.error).not.toHaveBeenCalledWith(t(m, "conversations.held.failed", "es"));
     expect(onDone).not.toHaveBeenCalled();
-  });
-
-  it("the one named exception: contact.email.changed's own English text maps to its OWN localized key, not the generic held.failed (mutation: drop this special case → FAILS)", async () => {
-    const tt = toast();
-    await runUndoReplyStop(async () => ({ ok: false, error: m["contact.email.changed"] }), tt, "es", vi.fn());
-    expect(tt.error).toHaveBeenCalledWith(t(m, "contact.email.changed", "es"));
   });
 
   it("a THROWN action shows the crash toast, in the reader's language (mutation: remove the catch → FAILS)", async () => {
@@ -68,10 +64,11 @@ describe("runStopEmailsFromReply", () => {
     expect(onDone).toHaveBeenCalledOnce();
   });
 
-  it("ok:false toasts the mapped error (mutation: toast the raw English error untranslated → FAILS)", async () => {
+  it("ok:false shows the server's own already-localized string verbatim (S-10 T9a; mutation: toast the generic held.failed line instead of result.error → FAILS)", async () => {
     const tt = toast();
-    await runStopEmailsFromReply(async () => ({ ok: false, error: m["contact.email.noEmail"] }), tt, "es", vi.fn());
-    expect(tt.error).toHaveBeenCalledWith(t(m, "conversations.held.failed", "es"));
+    const alreadyLocalized = t(m, "conversations.held.changed", "es");
+    await runStopEmailsFromReply(async () => ({ ok: false, error: alreadyLocalized }), tt, "es", vi.fn());
+    expect(tt.error).toHaveBeenCalledWith(alreadyLocalized);
   });
 
   it("a THROWN action shows the crash toast (mutation: remove the catch → FAILS)", async () => {

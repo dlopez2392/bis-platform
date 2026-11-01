@@ -77,7 +77,7 @@ async function HeldEmailPane({
       reason: r.holdReason ?? "not_on_record",
       suggestion: {
         contactId: r.contactId,
-        name: contactDisplayName({ first_name: r.contactFirstName, last_name: r.contactLastName }),
+        name: contactDisplayName({ first_name: r.contactFirstName, last_name: r.contactLastName }, locale),
       },
     }));
   } catch (e) {
@@ -438,7 +438,7 @@ export default async function ConversationsPage({
                 : contactDisplayName({
                   first_name: active.contactFirstName,
                   last_name: active.contactLastName,
-                })}
+                }, locale)}
               composer={composerFacts ? (
                 // key: a different thread is a different composer; its tab is that thread's server
                 // answer, never the last thread's (useState keeps its first value across re-renders).

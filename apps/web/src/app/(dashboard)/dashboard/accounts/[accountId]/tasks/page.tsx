@@ -190,7 +190,7 @@ export default async function TasksPage({
     if (error) throw new Error(`tasks: contacts lookup failed: ${error.message}`);
     for (const c of contacts ?? []) {
       // S-47e (P19): a To-do on a shared number's holding record names the number, never "Caller".
-      const name = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c);
+      const name = c.holds_shared_number ? holdingLabel(c.phone, locale) : contactDisplayName(c, locale);
       // contacts-archive Task 12: archiving never hides the work — it only marks whose it is.
       contactNames[c.id] = c.archived_at ? `${name} · ${tr.text("contacts.archived.mark")}` : name;
     }
