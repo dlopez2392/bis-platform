@@ -138,7 +138,7 @@ describe("callbackAlertLine: the call-alert email's own line, in the account's l
     expect(callbackAlertLine("956 555 0142", "Roof leak", "en")).toBe("Call back at 956 555 0142: Roof leak");
   });
 
-  it("Spanish, names the number and the reason (mutation: read todo.callback.en regardless of locale → FAILS)", () => {
+  it("Spanish, names the number and the reason (mutation: read todo.callback (English) regardless of locale → FAILS)", () => {
     expect(callbackAlertLine("956 555 0142", "Roof leak", "es")).toBe("Devuelva la llamada al 956 555 0142: Roof leak");
   });
 
