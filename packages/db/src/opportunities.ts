@@ -20,11 +20,16 @@ export async function createOpportunity(
   // S-47e (spec 5.12.3; Task 4 review M3): a shared number's holding record (0098) never carries a deal, so
   // the quote follow-up can never text a shared number from one. It reads as no such contact.
   const { data: contact, error: contactErr } = await db.from("contacts")
-    .select("id").eq("account_id", accountId).eq("holds_shared_number", false)
+    .select("id, archived_at, merged_into").eq("account_id", accountId).eq("holds_shared_number", false)
     .eq("id", input.contactId).maybeSingle();
   // A failed read is its own error, never "contact not in account" (T17 review M10); either way no deal is made.
   if (contactErr) throw new Error(`createOpportunity: contact read failed: ${contactErr.message}`);
   if (!contact) throw new Error("contact not in account");
+  // A deal is only ever for someone live: the new-deal picker's search rule (archived_at and merged_into both
+  // null), held here where the deal is written, since the action takes whatever id the form carries.
+  const row = contact as { archived_at?: string | null; merged_into?: string | null };
+  if (row.archived_at) throw new Error("createOpportunity: the contact is archived");
+  if (row.merged_into) throw new Error("createOpportunity: the contact was merged into another");
   const { data, error } = await db.from("opportunities")
     .insert({ account_id: accountId, contact_id: input.contactId, pipeline_id: input.pipelineId,
               stage_id: stages[0]!.id, name: input.name, monetary_value: input.value ?? 0 })

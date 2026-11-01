@@ -125,3 +125,32 @@ describe("listContactsOnNumber after a merge (0106, owner ruling D8)", () => {
     expect(rows.map((r) => r.id)).toEqual(["LiveFirst", "K1", "K2"]);
   });
 });
+
+describe("listContactsOnNumber { live: true } (F-046 follow-up: the Add job sheet's \"Use Ana?\" offer)", () => {
+  it("leaves out an archived owner, so the sheet never offers someone it cannot book (mutation: ignore `live` -> FAILS)", async () => {
+    const { db } = recordingDb({
+      contacts: [{ data: [{ ...raw({ id: "ARCH" }), archived_at: "2026-10-01T00:00:00Z" }, { ...raw({ id: "LIVE", first_name: "Beto" }), archived_at: null }], error: null }],
+    });
+    const { rows } = await listContactsOnNumber(db, "A", "+19565550501", { live: true });
+    expect(rows.map((r) => r.id)).toEqual(["LIVE"]);
+  });
+
+  it("leaves out a tombstone whose kept person is archived (the merged-away number resolves to nobody live)", async () => {
+    const { db } = recordingDb({
+      contacts: [
+        { data: [{ ...raw({ id: "T", merged_into: "K" }), archived_at: null }], error: null },
+        { data: [{ ...raw({ id: "K", first_name: "Ana", last_name: "Kept" }), archived_at: "2026-10-01T00:00:00Z" }], error: null },
+      ],
+    });
+    const { rows } = await listContactsOnNumber(db, "A", "+19565550501", { live: true });
+    expect(rows).toEqual([]);
+  });
+
+  it("without `live` an archived owner still comes back (callers on a call or a text still recognise them), in the six-column shape", async () => {
+    const { db } = recordingDb({
+      contacts: [{ data: [{ ...raw({ id: "ARCH" }), archived_at: "2026-10-01T00:00:00Z" }], error: null }],
+    });
+    const { rows } = await listContactsOnNumber(db, "A", "+19565550501");
+    expect(rows).toEqual([{ id: "ARCH", first_name: "Ana", last_name: "Prueba", phone: "+19565550501", email_key: null, holds_shared_number: false }]);
+  });
+});

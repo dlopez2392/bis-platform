@@ -42,6 +42,7 @@ import {
   settleJobHold, settleAfterWindow, jobNoticeAvailability, JOB_NOTICE_MAX_AGE_MS,
 } from "./job-hold";
 import { UNDO_WINDOW_MS, NOTICE_GRACE_MS } from "./undo-window";
+import { formatWhen } from "@/lib/booking/time";
 
 const NOW = new Date("2026-11-02T15:00:00.000Z");
 const now = () => NOW;
@@ -95,7 +96,7 @@ const CLAIM: JobHoldClaim = {
   starts_at: "2026-11-03T15:00:00.000Z", ends_at: "2026-11-03T16:00:00.000Z",
   contact_id: "contact_1", calendar_id: "cal_1", place_id: "00000000-0000-4000-8000-0000000000aa",
   meeting_url: null, cancel_token: "tok_new", rescheduled_from_id: null, author_id: "user_1",
-  hold_until: "2026-11-02T14:59:45.000Z", created_at: "2026-11-02T14:59:30.000Z",
+  hold_until: "2026-11-02T14:59:45.000Z", created_at: "2026-11-02T14:59:30.000Z", booker_timezone: null,
 };
 
 const BRAND_INFO = {
@@ -304,6 +305,38 @@ describe("settleJobHold — the confirmation and the moved email (spec 6.5 step 
     expect(req.subject).toBe("Your booking has been moved");
     expect(req.body).toContain("Your booking has been moved.");
     expect(req.body).toContain("Where: Home · 1 Main St");
+  });
+
+  // F-046 follow-up: a staff move of a booking the customer made keeps the zone they booked in (moveBooking
+  // carries booker_timezone over), and the moved email reads it as the customer's own move does
+  // (b/[publicId]/move/[token]/actions.ts): their zone first, the company's line under it.
+  it("moved: the time reads in the BOOKING's zone, the company's zone under it (mutation: account zone for both → FAILS)", async () => {
+    store.claim = [{ ...CLAIM, rescheduled_from_id: "bk_old", notice_wanted: "moved", booker_timezone: "America/New_York" } as JobHoldClaim];
+    expect(await settle()).toBe("sent");
+    const req = sent()[0]!;
+    const starts = new Date(CLAIM.starts_at);
+    const booker = formatWhen(starts, "America/New_York", "en");
+    const company = formatWhen(starts, "America/Chicago", "en");
+    expect(booker).not.toBe(company);
+    expect(req.body).toContain(`Your booking has been moved.
+
+${booker}
+`);
+    expect(req.body).toContain(company);
+    expect(req.html).toContain(booker);
+  });
+
+  it("a staff-made job (no booking zone) reads in the account's zone, once", async () => {
+    store.claim = [{ ...CLAIM, booker_timezone: null } as JobHoldClaim];
+    await settle();
+    const when = formatWhen(new Date(CLAIM.starts_at), "America/Chicago", "en");
+    expect(sent()[0]!.body.split(when).length - 1).toBe(1);
+  });
+
+  it("a booking zone that is not a real zone falls back to the account's (safeZone), never a failed send", async () => {
+    store.claim = [{ ...CLAIM, notice_wanted: "moved", booker_timezone: "Mars/Olympus" } as JobHoldClaim];
+    expect(await settle()).toBe("sent");
+    expect(sent()[0]!.body).toContain(formatWhen(new Date(CLAIM.starts_at), "America/Chicago", "en"));
   });
 
   it("a video job's room link goes in the email", async () => {

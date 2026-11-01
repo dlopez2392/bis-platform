@@ -38,6 +38,14 @@ const REASON_LABEL_KEY = {
  * it is re-validated through `safeReturnPath` both on an already-live visit (the VisitBounce, below)
  * and inside `startVisitAction` after a tile is chosen — never trusted from the query string on its own.
  */
+/** The agency's own session, never the account's `language` (request-locale.ts owner decision 1):
+ *  isOperator true, account null. `?locale=` is the QA override (off in production), documents/page.tsx's
+ *  shape. One place for both branches, the bounce and the chooser (#308 follow-up M3). */
+function chooserCopy(language: Parameters<typeof requestLocale>[0]["userLanguage"], qaLocale: string | undefined) {
+  const locale = requestLocale({ account: null, isOperator: true, userLanguage: language }, { locale: qaLocale });
+  return { locale, tr: makeTr(locale, requestPseudoMode({ locale: qaLocale })) };
+}
+
 export default async function EnterPage({ params, searchParams }: {
   params: Promise<{ accountId: string }>;
   searchParams?: Promise<{ to?: string; locale?: string }>;
@@ -52,9 +60,13 @@ export default async function EnterPage({ params, searchParams }: {
     // Never redirect() here (the router-cache loop, 2026-10-30): a render-time redirect cannot purge this
     // tab's client router cache, which may still hold prefetched "go to the chooser" answers for the
     // account's routes from before the visit (started in another tab) existed. The bounce hard-navigates.
-    const { language } = await getPersonPrefs();
-    const tr = makeTr(requestLocale({ account: null, isOperator: true, userLanguage: language }, { locale: qaLocale }), requestPseudoMode({ locale: qaLocale }));
-    return <VisitBounce target={back ?? accountHome(accountId, null)} label={tr.text("accessLog.enter.opening")} />;
+    const { locale, tr } = chooserCopy((await getPersonPrefs()).language, qaLocale);
+    return (
+      <div lang={locale}>
+        <VisitBounce target={back ?? accountHome(accountId, null)} label={tr.text("accessLog.enter.opening")}
+          continueLabel={tr.text("accessLog.enter.continue")} />
+      </div>
+    );
   }
 
   const db = await dbForRequest();
@@ -68,10 +80,7 @@ export default async function EnterPage({ params, searchParams }: {
   const account = accountRead.data as { name: string } | null;
   if (!account) notFound();
 
-  // The agency's own session, never the account's `language` (request-locale.ts owner decision 1):
-  // isOperator true, account null. `?locale=` is the QA override (off in production), documents/page.tsx's shape.
-  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: qaLocale });
-  const tr = makeTr(locale, requestPseudoMode({ locale: qaLocale }));
+  const { locale, tr } = chooserCopy(prefs.language, qaLocale);
 
   return (
     <div lang={locale}>

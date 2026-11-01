@@ -35,11 +35,13 @@ const boardFixture = vi.hoisted(() => ({
 }));
 
 const sumOpenOpportunitiesMock = vi.hoisted(() => vi.fn());
+const listContactsMock = vi.hoisted(() => vi.fn(async () => []));
+const dialogProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
 
 vi.mock("@bis/db", () => ({
   ensureDefaultPipeline: async () => ({ pipelineId: "pipe1" }),
   listBoard: async () => boardFixture.board,
-  listContacts: async () => [],
+  listContacts: (...a: unknown[]) => listContactsMock(...(a as [])),
   sumOpenOpportunities: (...a: unknown[]) => sumOpenOpportunitiesMock(...a),
   // Unused by this test (never called — these only back the bound server
   // actions passed down as props), but actions.ts imports them from here.
@@ -49,7 +51,9 @@ vi.mock("@bis/db", () => ({
 }));
 
 vi.mock("./pipeline-board", () => ({ PipelineBoard: () => null }));
-vi.mock("./add-opportunity-dialog", () => ({ AddOpportunityDialog: () => null }));
+vi.mock("./add-opportunity-dialog", () => ({
+  AddOpportunityDialog: (props: Record<string, unknown>) => { dialogProps.last = props; return null; },
+}));
 
 const { default: PipelinePage } = await import("./page");
 
@@ -107,5 +111,20 @@ describe("PipelinePage header total", () => {
     await PipelinePage(route("acct_specific"));
 
     expect(sumOpenOpportunitiesMock).toHaveBeenCalledWith(expect.anything(), "acct_specific");
+  });
+});
+
+// The new-deal picker (F-092 out-of-scope finding): the page used to read the newest 200 contacts for a plain
+// dropdown, so a deal for anyone older could not be added. The dialog now searches as you type, on its own.
+describe("PipelinePage — the new-deal customer picker", () => {
+  it("reads no contact list for the dialog, and hands it the account to search instead (mutation: keep listContacts({ limit: 200 }) -> FAILS)", async () => {
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 0, value: 0 });
+    listContactsMock.mockClear();
+    dialogProps.last = null;
+    renderToStaticMarkup(await PipelinePage(route("acct_specific")));
+    expect(listContactsMock).not.toHaveBeenCalled();
+    expect(dialogProps.last).toMatchObject({ accountId: "acct_specific", pipelineId: "pipe1" });
+    expect(dialogProps.last).not.toHaveProperty("contacts");
   });
 });

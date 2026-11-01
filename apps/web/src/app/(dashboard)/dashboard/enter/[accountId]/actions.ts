@@ -47,7 +47,11 @@ export async function startVisitAction(
  * every click on those routes replayed it: chooser -> live visit -> back -> cached chooser, ~2/s for five
  * minutes. `revalidatePath` called from a Server Function purges the client cache (Next 16.3 docs,
  * revalidatePath.md: "Server Functions: Updates the UI immediately ... it also causes all previously
- * visited pages to refresh when navigated to again"), and "layout" covers every page under the account.
+ * visited pages to refresh when navigated to again"). On the CLIENT the scope is wider than the arguments
+ * say: Next 16.3.6 answers any revalidation from an action with `invalidateEntirePrefetchCache`
+ * (segment-cache/cache.js), so the browser drops its WHOLE router cache, every route in the app, not just
+ * this account's (its own TODO: "Evict only segments with matching tags and/or paths"). The path and
+ * "layout" scope only the SERVER's cache, and that is the part they are chosen for (#308 review M2).
  */
 function enterAccount(accountId: string, back: string | null): never {
   revalidatePath(`/dashboard/accounts/${accountId}`, "layout");

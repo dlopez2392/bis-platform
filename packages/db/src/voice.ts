@@ -751,7 +751,7 @@ export function phoneKeysOf(e164: string): string[] {
   return ten === null ? [key] : [...new Set([key, ten, `52${ten}`, `521${ten}`])];
 }
 
-type RawNumberContactRow = NumberContactRow & { merged_into: string | null };
+type RawNumberContactRow = NumberContactRow & { merged_into: string | null; archived_at?: string | null };
 
 /** The six columns `NumberContactRow` promises; strips `merged_into` and anything else off a raw row so a
  *  kept-person substitution and a live row come back through exactly one shape (`voice.test.ts:1138` pins it). */
@@ -773,12 +773,17 @@ function toNumberContactRow(r: { id: string; first_name: string | null; last_nam
  * substitution: a merge never changes how many rows share a number. The live rows come first (in their own
  * oldest-first order), then the resolved tombstone rows, oldest tombstone first; a kept id already seen —
  * whether from its own live row or from an earlier tombstone pointing at it — is never repeated.
+ *
+ * `live: true` (F-046 follow-up, the Add job sheet's "Use Ana?" offer) also leaves out an archived person —
+ * their own row, or the kept person a tombstone resolves to — because that offer can only book someone live.
+ * Every other caller still hears an archived person on their number (a call or a text from them is theirs).
  */
 export async function listContactsOnNumber(
-  db: SupabaseClient, accountId: string, e164: string,
+  db: SupabaseClient, accountId: string, e164: string, opts: { live?: boolean } = {},
 ): Promise<{ rows: NumberContactRow[]; truncated: boolean }> {
+  const archivedOut = (r: { archived_at?: string | null }) => opts.live === true && r.archived_at != null;
   const { data, error } = await db.from("contacts")
-    .select("id, first_name, last_name, phone, email_key, holds_shared_number, merged_into")
+    .select("id, first_name, last_name, phone, email_key, holds_shared_number, merged_into, archived_at")
     .eq("account_id", accountId).in("phone_key", phoneKeysOf(e164))
     .order("created_at", { ascending: true }).order("id", { ascending: true })
     .limit(CONTACTS_ON_NUMBER_LIMIT + 1);
@@ -791,17 +796,19 @@ export async function listContactsOnNumber(
   const keptById = new Map<string, NumberContactRow>();
   if (keptIds.length > 0) {
     const { data: keptData, error: keptError } = await db.from("contacts")
-      .select("id, first_name, last_name, phone, email_key, holds_shared_number")
+      .select("id, first_name, last_name, phone, email_key, holds_shared_number, archived_at")
       .eq("account_id", accountId).in("id", keptIds).is("merged_into", null);
     if (keptError) throw new Error(`listContactsOnNumber failed: ${keptError.message}`);
-    for (const row of (keptData ?? []) as NumberContactRow[]) keptById.set(row.id, toNumberContactRow(row));
+    for (const row of (keptData ?? []) as (NumberContactRow & { archived_at?: string | null })[]) {
+      if (!archivedOut(row)) keptById.set(row.id, toNumberContactRow(row));
+    }
   }
 
   const seen = new Set<string>();
   const rows: NumberContactRow[] = [];
   for (const r of limited) {
     if (r.merged_into === null) {
-      if (seen.has(r.id)) continue;
+      if (seen.has(r.id) || archivedOut(r)) continue;
       seen.add(r.id);
       rows.push(toNumberContactRow(r));
     }
