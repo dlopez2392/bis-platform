@@ -29,7 +29,10 @@ vi.mock("@/lib/access-log/note", () => ({
 // renderToStaticMarkup, so a spy stub the same way.
 const closedDaysCardMock = vi.fn((_props: unknown) => null);
 vi.mock("./closed-days-card", () => ({ ClosedDaysCard: (props: unknown) => closedDaysCardMock(props) }));
-vi.mock("./embed-snippet", () => ({ EmbedSnippet: () => null }));
+// S-10 review I-2: a spy, not a bare `() => null` — this file's claim now includes WHICH props the page
+// hands EmbedSnippet (locale/pseudo, the same two every sibling card on this page gets).
+const embedSnippetMock = vi.fn((_props: unknown) => null);
+vi.mock("./embed-snippet", () => ({ EmbedSnippet: (props: unknown) => embedSnippetMock(props) }));
 // F-048 part 2: the "Bookings on your phone" card ("use client", hooks) and its server read and actions.
 const feedCardMock = vi.fn((_props: unknown) => null);
 vi.mock("./feed-card", () => ({ FeedCard: (props: unknown) => feedCardMock(props) }));
@@ -528,6 +531,27 @@ describe("CalendarPage — the agenda and the job drawer (F-046 part 1)", () => 
   it("the page no longer reads the old list (listCalendarBookings leaves the page)", async () => {
     await render();
     expect(dbMocks.listCalendarBookings).not.toHaveBeenCalled();
+  });
+
+  // S-10 T4: the page's own title was a bare m[] read, English on every locale.
+  it("the page header's title follows the account's language (mutation: render m[\"calendar.title\"] directly -> FAILS)", async () => {
+    Object.assign(authState, { isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const html = await render();
+    const h1 = /<h1[^>]*>([^<]*)<\/h1>/.exec(html)?.[1];
+    expect(h1).toBe(m["calendar.title.es"]);
+    expect(h1).not.toBe(m["calendar.title"]);
+  });
+
+  // S-10 review I-2: CalendarSettings and EmbedSnippet used to read the ambient LocaleProvider (blind to
+  // `?locale=`) instead of taking locale/pseudo as props, the same two every sibling card on this page
+  // gets (ClosedDaysCard, FeedCard, JobDrawer).
+  it("passes locale and pseudo to CalendarSettings and EmbedSnippet, the same props every sibling card gets (mutation: drop locale/pseudo from either -> FAILS)", async () => {
+    Object.assign(authState, { isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    await render();
+    expect(calendarSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ locale: "es", pseudo: false }));
+    expect(embedSnippetMock).toHaveBeenCalledWith(expect.objectContaining({ locale: "es", pseudo: false }));
   });
 
   it("PageHeader carries no button; Add job lives in the agenda card, whose props carry canAdd (mutation: an action in PageHeader -> FAILS)", async () => {

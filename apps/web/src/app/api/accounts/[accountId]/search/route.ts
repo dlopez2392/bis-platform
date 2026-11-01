@@ -3,7 +3,10 @@ import { searchContacts, searchCalls, searchConversations, searchTermLength } fr
 import { contactSearchPlan, phoneMatches } from "@bis/db/contact-search";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { callerLabel, OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
+import { callerLabel, OUTCOMES, outcomeLabel } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
 import { holdingLabel } from "@/lib/contacts/holding-label";
 
 export const dynamic = "force-dynamic";
@@ -109,11 +112,25 @@ export async function GET(
   // honest error row. Swallowing it here would render as "no matches", which
   // tells the user their contact does not exist when the read actually failed.
   // A source `types` left out answers [] without being asked.
-  const [contacts, calls, conversations] = await Promise.all([
+  const [contacts, calls, conversations, prefs, accountLanguage] = await Promise.all([
     sources.has("contacts") ? searchContacts(db, accountId, { term: raw, limit: PER_SOURCE }) : [],
     sources.has("calls") ? searchCalls(db, accountId, { search: raw, limit: PER_SOURCE }) : [],
     sources.has("conversations") ? searchConversations(db, accountId, { search: raw, limit: PER_SOURCE }) : [],
+    // S-10 fix round I7: the call hits' caller and outcome words follow the
+    // READER (the dashboard's own resolver). getPersonPrefs never rejects.
+    // The account's language matters only to a client reader, and its read
+    // is cosmetic: a failure costs the Spanish, never the search.
+    getPersonPrefs(),
+    access.isAgency || !sources.has("calls")
+      ? Promise.resolve({ language: null as Locale | null })
+      : Promise.resolve(db.from("accounts").select("language").eq("id", accountId).maybeSingle())
+        .then(({ data, error }) => {
+          if (error) console.error(`search ${accountId}: account language read failed, reading English: ${error.message}`);
+          return { language: (data as { language?: Locale | null } | null)?.language ?? null };
+        }),
   ]);
+  // Operators never inherit the account's language (requestLocale's own rule).
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
   // F-092: a phone search shows the number it matched, not the email beside it.
   const plan = contactSearchPlan(raw);
 
@@ -131,12 +148,11 @@ export async function GET(
     }),
     calls: calls.slice(0, PER_SOURCE).map((c): SearchHit => ({
       id: c.id,
-      label: callerLabel(c),
+      label: callerLabel(c, locale),
       // The localized label, never the raw `calls.outcome` enum. Unknown
       // values fall back to the raw string instead of throwing and taking the
       // whole search down — same defensive lookup the P4 summary route uses.
-      sublabel: (OUTCOMES as Record<string, { label: string }>)[c.outcome]?.label
-        ?? String(c.outcome),
+      sublabel: Object.hasOwn(OUTCOMES, c.outcome) ? outcomeLabel(c.outcome, locale) : String(c.outcome),
       at: c.started_at,
       href: `${base}/calls/${c.id}`,
     })),

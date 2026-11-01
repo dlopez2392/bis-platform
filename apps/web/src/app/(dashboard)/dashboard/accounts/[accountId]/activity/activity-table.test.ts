@@ -54,3 +54,28 @@ describe("ActivityTable", () => {
 
   it("PAGE_SIZE is the spec's 25", () => { expect(PAGE_SIZE).toBe(25); });
 });
+
+// S-10 fix round I6: the stored reason is REASONS' English sentence; a Spanish
+// reader must read it in Spanish, and text the catalogue does not know as stored.
+describe("ActivityTable — a row's reason in the reader's language", () => {
+  it("says a known stored reason in Spanish, and the quiet-hours shape with its time (mutation: render row.reason raw -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ActivityTable, {
+      rows: [
+        row({ id: "00000000-0000-4000-8000-000000000002", status: "skipped", reason: "No phone number we can text" }),
+        row({ id: "00000000-0000-4000-8000-000000000003", status: "held", reason: "Held until 8:00 AM — quiet hours" }),
+      ],
+      timezone: "America/Chicago", locale: "es",
+    }));
+    const text = renderedText(html);
+    expect(text).toContain("No hay un número al que se le pueda mandar un texto");
+    expect(text).toContain("En espera hasta las 8:00 a.m. — horario de silencio");
+    expect(text).not.toContain("No phone number we can text");
+  });
+
+  it("shows a reason it does not know as stored", () => {
+    const html = renderToStaticMarkup(createElement(ActivityTable, {
+      rows: [row({ status: "failed", reason: "Provider said: 30007" })], timezone: "America/Chicago", locale: "es",
+    }));
+    expect(renderedText(html)).toContain("Provider said: 30007");
+  });
+});

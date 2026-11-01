@@ -92,9 +92,9 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
                 inputType={type}
                 value={(contact[field] as string | null) ?? null}
                 locale={locale}
-                save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                save={(v) => updateContactFieldAction(accountId, contactId, field, v, locale)}
                 {...(field === "phone" ? {
-                  undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
+                  undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo, locale),
                 } : {})}
               />
             </dd>

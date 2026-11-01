@@ -10,42 +10,53 @@ import { formatDateTimeInZone } from "@/lib/format";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
-import { m } from "@/lib/messages";
-import { FORM_STATUS_LABEL } from "@/lib/labels";
+import { makeTr } from "@/lib/record/copy";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { FORM_STATUS_KEY, labelIn } from "@/lib/labels";
 import { NewFormDialog } from "./new-form-dialog";
 import { createFormAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function FormsPage({
-  params,
-}: { params: Promise<{ accountId: string }> }) {
+  params, searchParams,
+}: { params: Promise<{ accountId: string }>; searchParams: Promise<{ locale?: string }> }) {
   const { accountId } = await params;
+  const { locale: localeParam } = await searchParams;
   // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
   // to To do; everyone the [accountId] layout admitted passes straight on.
-  await requireNotTechnician(accountId);
+  const { isAgency } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
+  const prefs = await getPersonPrefs();
+  const pseudo = requestPseudoMode({ locale: localeParam });
   const [forms, account] = await Promise.all([
     listForms(db, accountId),
     // The zone each row's own `created_at` renders in below — not a throw:
     // one cosmetic date column must not take the whole list down, same
     // reasoning as the contacts list's own read (D-010).
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
   ]);
   if (account.error) {
     console.error(`forms: account ${accountId} timezone read failed: ${account.error.message}`);
   }
-  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+  const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
+  const zone = await renderZone(accountRow?.timezone);
+  const accountLanguage = { language: accountRow?.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   return (
     <>
       <PageHeader
-        title={m["forms.title"]}
-        actions={<NewFormDialog action={createFormAction.bind(null, accountId)} />}
+        title={tr.text("forms.title")}
+        actions={<NewFormDialog action={createFormAction.bind(null, accountId)} locale={locale} pseudo={pseudo} />}
       />
       <div className="p-6">
         {forms.length === 0 ? (
-          <EmptyState icon={FileText} title={m["forms.empty.title"]} body={m["forms.empty.body"]} />
+          <EmptyState icon={FileText} title={tr.text("forms.empty.title")} body={tr.text("forms.empty.body")} />
         ) : (
           <ListPanel as="ul">
             {forms.map((form) => (
@@ -64,12 +75,12 @@ export default async function FormsPage({
                       {form.name}
                     </span>
                     <span className="block text-xs text-muted-foreground">
-                      {formatDateTimeInZone(form.created_at, zone.zone)}
+                      {formatDateTimeInZone(form.created_at, zone.zone, locale)}
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-3">
                     <span className="text-xs text-muted-foreground">
-                      {form.submissionCount} {m["forms.submissions"].toLowerCase()}
+                      {tr.count("forms.submissionCount", form.submissionCount)}
                     </span>
                     {/* `default` is the solid primary fill — a second
                         primary-weight element in every row of the list, and
@@ -86,7 +97,7 @@ export default async function FormsPage({
                         )}
                         aria-hidden
                       />
-                      {FORM_STATUS_LABEL[form.status] ?? form.status}
+                      {(pseudo ? pseudoLocale : String)(labelIn(FORM_STATUS_KEY, form.status, locale))}
                     </Badge>
                   </span>
                 </Link>

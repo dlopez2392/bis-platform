@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CalendarRow } from "@bis/db";
-import { CalendarSettings } from "./calendar-settings";
+import { LocaleProvider } from "@/components/locale-provider";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
+import { CalendarSettings, unitLabel } from "./calendar-settings";
 
 /**
  * Task 17 review round 1 (Important 2): no render test existed for this
@@ -20,12 +25,20 @@ const BASE_CALENDAR: CalendarRow = {
   followup_body_es: null, followup_body_es_basis: null,
 };
 
-function render(over: Partial<CalendarRow> = {}): string {
-  return renderToStaticMarkup(createElement(CalendarSettings, {
-    isAgency: true,
-    calendar: { ...BASE_CALENDAR, ...over },
-    action: async () => ({ ok: true as const }),
-  }));
+// S-10 review I-2: the page (page.tsx:112-113) resolves `locale`/`pseudo` once and hands them to every
+// card as PROPS (ClosedDaysCard, FeedCard, JobDrawer) — never through the ambient LocaleProvider, which
+// is blind to `?locale=es`/`?locale=pseudo` (the QA override reaches the page's own resolver, not the
+// layout's). This card takes the same two props now.
+function render(over: Partial<CalendarRow> = {}, locale: Locale = "en", pseudo = false): string {
+  return renderToStaticMarkup(
+    createElement(CalendarSettings, {
+      isAgency: true,
+      calendar: { ...BASE_CALENDAR, ...over },
+      action: async () => ({ ok: true as const }),
+      locale,
+      pseudo,
+    }),
+  );
 }
 
 describe("CalendarSettings — the follow-up card's Spanish box (Task 17)", () => {
@@ -53,6 +66,52 @@ describe("CalendarSettings — the follow-up card's Spanish box (Task 17)", () =
     const html = render();
     const matches = html.match(/data-variant="default"/g) ?? [];
     expect(matches.length).toBe(1);
+  });
+});
+
+describe("CalendarSettings — Spanish (S-10 T4)", () => {
+  it("renders the card's title, hours label and day names in Spanish (mutation: render English under es -> FAILS)", () => {
+    const html = render({}, "es");
+    expect(html).toContain("Ajustes de citas");
+    expect(html).toContain("Horario");
+    expect(html).toContain("Lunes");
+    expect(html).not.toContain("Booking settings");
+    expect(html).not.toContain(">Monday<");
+  });
+
+  // S-10 review I-2: takes `locale` as its OWN prop, never the ambient LocaleProvider (which the
+  // layout seeds once and which is blind to `?locale=`). Wrapping in a LocaleProvider with a
+  // DIFFERENT locale than the prop proves which one wins: reading useLocale() instead would render
+  // the context's "en" ("Booking settings"), not the prop's "es".
+  it("takes its locale from its own prop, never the ambient LocaleProvider (mutation: read useLocale() instead of the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>, createElement(CalendarSettings, {
+        isAgency: true, calendar: BASE_CALENDAR, action: async () => ({ ok: true as const }), locale: "es", pseudo: false,
+      })),
+    );
+    expect(html).toContain("Ajustes de citas");
+    expect(html).not.toContain("Booking settings");
+  });
+
+  it("pads with the pseudo-locale when its pseudo prop is on, the same way every other card on this page does (mutation: ignore the pseudo prop -> FAILS; S-10 review I-2)", () => {
+    const html = render({}, "en", true);
+    expect(html).toContain(pseudoLocale(t(m, "calendar.settings.title", "en")));
+    expect(html).not.toContain(">Booking settings<");
+  });
+});
+
+// S-10 review M-4: the duration/buffer/notice/advance Selects' unit suffix, pulled into a pure
+// function so it is directly testable — Radix's SelectContent renders through a portal that
+// `renderToStaticMarkup` never mounts (confirmed empirically: the hidden native <select> fallback
+// ships with no <option> children either), so a render test could never see "30 min" in the markup.
+describe("unitLabel (S-10 review M-4)", () => {
+  it("formats minutes, hours and days in English and Spanish (mutation: hard-code the English suffix -> FAILS)", () => {
+    expect(unitLabel(30, "min", "en")).toBe("30 min");
+    expect(unitLabel(30, "min", "es")).toBe("30 min");
+    expect(unitLabel(24, "hr", "en")).toBe("24 hr");
+    expect(unitLabel(24, "hr", "es")).toBe("24 h");
+    expect(unitLabel(7, "days", "en")).toBe("7 days");
+    expect(unitLabel(7, "days", "es")).toBe("7 días");
   });
 });
 

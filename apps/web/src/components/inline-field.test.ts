@@ -61,7 +61,9 @@ describe("InlineField delegates Undo and the saved view to lib/contacts/inline-s
     expect(call).toMatch(/ownUndo: result\.undoPayload,/);
     // `undoWith` exactly as the prop arrived: the shorthand, never `undoWith: <anything>`
     // (mutations: `undoWith: undefined`; `undoWith: field === "phone" ? undoWith : undefined` -> FAIL).
-    expect(call).toMatch(/[\s,{]undoWith,?\s*\}\);$/);
+    // S-10 T3 added `locale` after it (the field's own language, for commitInlineUndo's refusal),
+    // so this no longer requires undoWith to be the LAST property, only a bare shorthand.
+    expect(call).toMatch(/[\s,{]undoWith,/);
     expect(call).not.toMatch(/undoWith\s*:/);
   });
   it("offers Undo exactly when one is planned, and runs only that write (mutation: a second write beside it -> FAILS)", () => {

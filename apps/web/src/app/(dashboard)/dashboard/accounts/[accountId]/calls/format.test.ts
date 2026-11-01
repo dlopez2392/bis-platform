@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, callerLabel, DURATION_UNKNOWN, OUTCOMES } from "./format";
+import { formatDuration, callerLabel, DURATION_UNKNOWN, OUTCOMES, outcomeLabel, formatCallTime } from "./format";
 import { m } from "@/lib/messages";
 
 describe("formatDuration", () => {
@@ -71,6 +71,24 @@ describe("callerLabel", () => {
     expect(callerLabel({ caller_e164: null, contact: null })).toBe("Unknown caller");
     expect(callerLabel({ caller_e164: "  ", contact: null })).toBe("Unknown caller");
   });
+
+  // S-10 T5: defaults to English (no locale arg), same shape as the sibling
+  // test above — a Spanish caller gets the Spanish fallback.
+  it("says the Spanish fallback under locale 'es' (mutation: ignore the locale param -> FAILS)", () => {
+    expect(callerLabel({ caller_e164: null, contact: null }, "es")).toBe(m["calls.unknownCaller.es"]);
+    expect(callerLabel({ caller_e164: null, contact: null }, "es")).not.toBe("Unknown caller");
+  });
+});
+
+describe("formatCallTime (S-10 T5)", () => {
+  it("defaults to English and reads Spanish month/weekday names under locale 'es' (mutation: hard-code en-US -> FAILS)", () => {
+    const iso = "2026-03-14T18:30:00.000Z";
+    const en = formatCallTime(iso, "America/Chicago");
+    const es = formatCallTime(iso, "America/Chicago", "es");
+    expect(en).toBe(formatCallTime(iso, "America/Chicago", "en"));
+    expect(es).not.toBe(en);
+    expect(es).toMatch(/mar\.?|sáb|lun|dom/i); // a Spanish month or weekday abbreviation appears
+  });
 });
 
 /**
@@ -133,5 +151,19 @@ describe("OUTCOMES", () => {
     // Plain words a business owner reads at 7 AM: no template syntax, no
     // internal codes, no carrier jargon.
     expect(OUTCOMES.transferred.label).not.toMatch(/[{}]|\bM\d[a-z]?\b/);
+  });
+});
+
+// S-10 T5: `OutcomePill` used to read `OUTCOMES[outcome].label` directly —
+// English on every locale, the calendar lane's confirm-reply.ts mistake,
+// caught here before `outcome-pill.tsx` shipped it.
+describe("outcomeLabel (S-10 T5)", () => {
+  it("covers every outcome in both locales (mutation: hard-code English -> FAILS)", () => {
+    for (const outcome of Object.keys(OUTCOMES) as (keyof typeof OUTCOMES)[]) {
+      expect(outcomeLabel(outcome, "en")).toBe(OUTCOMES[outcome].label);
+      expect(outcomeLabel(outcome, "es")).toBe(m[`calls.outcome.${outcome}.es` as keyof typeof m]);
+      // "spam" is a legitimate identical twin (section 0 of the design spec); every other outcome differs.
+      if (outcome !== "spam") expect(outcomeLabel(outcome, "es")).not.toBe(outcomeLabel(outcome, "en"));
+    }
   });
 });

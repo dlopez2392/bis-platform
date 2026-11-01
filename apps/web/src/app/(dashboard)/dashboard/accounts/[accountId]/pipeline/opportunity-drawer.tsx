@@ -20,12 +20,15 @@ import {
 } from "@/components/ui/select";
 import type { BoardOpportunity } from "./pipeline-board";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { useLocale } from "@/components/locale-provider";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
-function Submit({ pending }: { pending: boolean }) {
+function Submit({ pending, locale }: { pending: boolean; locale: Locale }) {
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? m["common.saving"] : m["common.save"]}
+      {t(m, pending ? "common.saving" : "common.save", locale)}
     </Button>
   );
 }
@@ -39,17 +42,20 @@ export function OpportunityDrawer({
   onClose: () => void;
   action: (formData: FormData) => Promise<void>;
 }) {
+  // S-10 T3: the board's own LocaleProvider (requestLocale), the same context the board and its
+  // add-opportunity dialog already read.
+  const locale = useLocale();
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     try {
       await action(formData);
       onClose();
     } catch {
-      toast.error(m["pipeline.updateFailed"]);
+      toast.error(t(m, "pipeline.updateFailed", locale));
     }
   });
   return (
     <Sheet open={opportunity !== null} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="flex flex-col gap-6">
+      <SheetContent className="flex flex-col gap-6" lang={locale}>
         <SheetHeader>
           <SheetTitle>{opportunity?.name ?? ""}</SheetTitle>
         </SheetHeader>
@@ -66,11 +72,11 @@ export function OpportunityDrawer({
           >
             <input type="hidden" name="oppId" value={opportunity.id} />
             <div className="space-y-2">
-              <Label htmlFor="name">{m["pipeline.name"]}</Label>
+              <Label htmlFor="name">{t(m, "pipeline.name", locale)}</Label>
               <Input id="name" name="name" defaultValue={opportunity.name} required />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="value">{m["pipeline.value"]}</Label>
+              <Label htmlFor="value">{t(m, "pipeline.value", locale)}</Label>
               <Input
                 id="value"
                 name="value"
@@ -80,20 +86,20 @@ export function OpportunityDrawer({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="status">{m["pipeline.status"]}</Label>
+              <Label htmlFor="status">{t(m, "pipeline.status", locale)}</Label>
               <Select name="status" defaultValue={opportunity.status}>
                 <SelectTrigger id="status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="open">{m["pipeline.status.open"]}</SelectItem>
-                  <SelectItem value="won">{m["pipeline.status.won"]}</SelectItem>
-                  <SelectItem value="lost">{m["pipeline.status.lost"]}</SelectItem>
+                  <SelectItem value="open">{t(m, "pipeline.status.open", locale)}</SelectItem>
+                  <SelectItem value="won">{t(m, "pipeline.status.won", locale)}</SelectItem>
+                  <SelectItem value="lost">{t(m, "pipeline.status.lost", locale)}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <SheetFooter className="mt-auto">
-              <Submit pending={pending} />
+              <Submit pending={pending} locale={locale} />
             </SheetFooter>
           </form>
         ) : null}

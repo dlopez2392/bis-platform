@@ -352,7 +352,8 @@ describe("the Texts row follows the contact (consent chain PR-2)", () => {
 
   it("a row action or a pick makes the drawer re-read, and the row hands onChanged to the pick (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
     expect(drawer).toMatch(/<TextsRow[\s\S]{0,400}?onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
-    expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
+    // S-10 T3 added the row's own locale as a trailing argument, after onChanged.
+    expect(row).toMatch(/run,\s*onChanged,\s*locale,\s*\)\);/);
   });
 
   it("the full page hands the row the page's own Texts load and refreshes on change (mutation: pass a constant load → FAILS)", () => {
@@ -402,11 +403,13 @@ describe("the inline phone Undo is server-authoritative", () => {
   });
 
   it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {
-    expect(drawer).toMatch(/undoPhone: async \(undo: PhoneInlineUndo\) => \{\s*const r = await undoInlinePhoneEditAction\(accountId, row\.id, undo\);\s*[\s\S]*?if \(r\.ok\) setRetryNonce\(\(n\) => n \+ 1\);\s*return r;\s*\}/);
+    // S-10 T3 added the row's own locale as a trailing argument.
+    expect(drawer).toMatch(/undoPhone: async \(undo: PhoneInlineUndo\) => \{\s*const r = await undoInlinePhoneEditAction\(accountId, row\.id, undo, locale\);\s*[\s\S]*?if \(r\.ok\) setRetryNonce\(\(n\) => n \+ 1\);\s*return r;\s*\}/);
   });
 
   it("the panel's phone Undo calls the dedicated action too", () => {
-    expect(panel).toMatch(/undoPhone: \(undo: PhoneInlineUndo\) => undoInlinePhoneEditAction\(accountId, contactId, undo\)/);
+    // S-10 T3 added the panel's own locale as a trailing argument.
+    expect(panel).toMatch(/undoPhone: \(undo: PhoneInlineUndo\) => undoInlinePhoneEditAction\(accountId, contactId, undo, locale\)/);
   });
 
   /**
@@ -440,7 +443,8 @@ describe("the pick is judged against the phone the operator SAW (review I3, roun
   const page = strip(readFileSync(path.join(here, "[contactId]", "page.tsx"), "utf8"));
 
   it("the row passes ITS OWN phone to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
-    expect(row).toContain("setPhoneCountryAction(accountId, contactId, c, phone)");
+    // S-10 T3 added the row's own locale as a trailing argument.
+    expect(row).toContain("setPhoneCountryAction(accountId, contactId, c, phone, locale)");
   });
 
   it("that phone is the one the server read with the view (the Texts load), never the peek stub row.phone (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {

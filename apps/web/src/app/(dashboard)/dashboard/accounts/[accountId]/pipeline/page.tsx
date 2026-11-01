@@ -6,20 +6,35 @@ import { PageHeader } from "@/components/page-header";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency } from "@/lib/format";
-import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { LocaleProvider } from "@/components/locale-provider";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage({
-  params,
+  params, searchParams,
 }: {
   params: Promise<{ accountId: string }>;
+  // The QA locale override (`?locale=es|pseudo`, BIS_I18N_QA only), as the record page's.
+  searchParams?: Promise<{ locale?: string }>;
 }) {
   const { accountId } = await params;
+  const { locale: localeParam } = (await searchParams) ?? {};
   // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
   // to To do; everyone the [accountId] layout admitted passes straight on.
-  await requireNotTechnician(accountId);
+  const access = await requireNotTechnician(accountId);
   const db = await dbForRequest();
+  // S-10 T3: this screen had no locale at all (spec row 9). Resolved the same way the
+  // record and To do pages do — requestLocale + getPersonPrefs + the account's own language.
+  const prefs = await getPersonPrefs();
+  const { data: accountRow } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
   const { pipelineId } = await ensureDefaultPipeline(db, accountId);
   // The new-deal dialog searches for its customer as you type (deal-contact-picker.tsx): no contact list is
   // read here, where the newest 200 used to be, which left everyone older unpickable.
@@ -45,25 +60,27 @@ export default async function PipelinePage({
   const boundUpdate = updateOpportunityAction.bind(null, accountId);
 
   return (
-    <>
-      <PageHeader
-        title={m["pipeline.title"]}
-        count={m["pipeline.openTotal"].replace("{count}", String(count)).replace("{value}", formatCurrency(total))}
-        actions={
-          <AddOpportunityDialog
-            accountId={accountId}
-            pipelineId={pipelineId}
-            action={boundCreate}
-          />
-        }
-      />
-      <div className="p-6">
-        <PipelineBoard
-          board={board}
-          moveAction={boundMove}
-          updateAction={boundUpdate}
+    <LocaleProvider locale={locale}>
+      <div lang={locale}>
+        <PageHeader
+          title={tr.text("pipeline.title")}
+          count={tr.count("pipeline.openTotal", count, { value: formatCurrency(total) })}
+          actions={
+            <AddOpportunityDialog
+              accountId={accountId}
+              pipelineId={pipelineId}
+              action={boundCreate}
+            />
+          }
         />
+        <div className="p-6">
+          <PipelineBoard
+            board={board}
+            moveAction={boundMove}
+            updateAction={boundUpdate}
+          />
+        </div>
       </div>
-    </>
+    </LocaleProvider>
   );
 }

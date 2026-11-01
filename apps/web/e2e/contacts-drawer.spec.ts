@@ -767,6 +767,24 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await expect(rows.nth(1)).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(rows.nth(0)).toBeFocused();
+
+    // CI run 41268906491 landed here on /sign-in?redirect_url=.../calls/<id> instead of the call
+    // (the agency session "dropped"). CallRow's Enter handler fires a client-side router.push — a
+    // same-origin RSC fetch, not a top-level document GET — and @clerk/nextjs's middleware only grants
+    // the transparent handshake refresh (session-state.ts's own documented mechanism) to a request that
+    // looks like a real document navigation; an RSC fetch is treated the same as the POST that
+    // session-state.ts already names as "not eligible for a handshake or a refresh". The saved storage
+    // state deliberately carries no __session cookie, so THIS test's first page.goto (line above) mints
+    // a token with a fresh 60-second runway, but the four Playwright round trips since then (the count
+    // assertion, two focuses, two keypresses and their two toBeFocused polls) have no fixed length on a
+    // loaded CI runner, and a slow enough gap ages that token out before Enter is pressed. A real page
+    // load would refresh it transparently; this keyboard interaction has none. window.Clerk.session's own
+    // getToken, the same call clerk-js's background timer makes, forces exactly that refresh — in place,
+    // with no reload, so the focus just proven above survives it.
+    await page.evaluate(() => (
+      window as unknown as { Clerk?: { session?: { getToken(opts: { skipCache: true }): Promise<string | null> } } }
+    ).Clerk?.session?.getToken({ skipCache: true }));
+
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/calls\/[0-9a-f-]{36}$/);
   });

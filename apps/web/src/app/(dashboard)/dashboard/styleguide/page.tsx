@@ -34,9 +34,9 @@ import { SuggestionDemo } from "./suggestion-demo";
 import { WorkTrayDemo } from "./work-tray-demo";
 import { BusinessStatusDemo } from "./business-status-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
-import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { CONFIRM_REPLY_TREATMENTS, confirmReplyLabel } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
-import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
+import { phoneCheckTreatment } from "@/lib/contacts/phone-country";
 import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
 import { EMAIL_TREATMENT } from "@/lib/consent/email-row";
 import { BillingBanner } from "@/components/billing-banner";
@@ -274,7 +274,9 @@ export default async function StyleguidePage({
             components/dot-pill.tsx · …/calendar/confirm-reply.ts
           </p>
           <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
-            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
+            {(["yes", "no"] as const).map((a) => (
+              <DotPill key={a} label={confirmReplyLabel(a, "en")} {...CONFIRM_REPLY_TREATMENTS[a]} dense />
+            ))}
           </div>
           {/* The contact Messages block's Texts row (consent chain PR-1 and
               PR-2): its four states, each a dot + word. Allowed, Stopped and
@@ -288,7 +290,7 @@ export default async function StyleguidePage({
             <DotPill {...TEXTS_TREATMENT.allowed} dense data-status="allowed" />
             <DotPill {...TEXTS_TREATMENT.stopped} dense data-status="stopped" />
             <DotPill {...TEXTS_TREATMENT.held} dense data-status="held" />
-            <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
+            <DotPill {...phoneCheckTreatment("en")} dense data-status="unconfirmed_number" />
           </div>
           <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
             …/contacts/email-row.tsx · lib/consent/email-row.ts

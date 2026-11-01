@@ -392,4 +392,8 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
     reason: "maps a server action's ENGLISH refusal back to its key (BY_ENGLISH), so it must read the English to say it in the drawer's language",
   },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
+    reason: "maps an automation_log reason, stored as REASONS' ENGLISH sentence, back to its key (BY_ENGLISH), so it must read the English to say it in the Activity reader's language",
+  },
 ];

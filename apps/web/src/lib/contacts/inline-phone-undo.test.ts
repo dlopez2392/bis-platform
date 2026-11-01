@@ -56,4 +56,14 @@ describe("commitInlineUndo", () => {
     expect(save).not.toHaveBeenCalled();
     expect(r).toEqual({ ok: true });
   });
+
+  // S-10 T3: the refusal is said in the reader's language when the field hands one in.
+  it("the no-payload refusal is said in Spanish when the field passes es (mutation: read m[...] directly -> FAILS)", async () => {
+    const r = await commitInlineUndo("phone", "+19565550100", undefined, vi.fn(), vi.fn(), "es");
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
+  });
+  it("defaults to English when no locale is passed", async () => {
+    const r = await commitInlineUndo("phone", "+19565550100", undefined, vi.fn(), vi.fn());
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+  });
 });

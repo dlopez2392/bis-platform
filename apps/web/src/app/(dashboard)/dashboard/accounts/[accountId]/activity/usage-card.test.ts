@@ -59,4 +59,36 @@ describe("UsageCard", () => {
     expect(text).toContain("Couldn't load this month's numbers");
     expect(text).toContain("September 2026");
   });
+
+  // S-10 T5: the card's own text was a bare m[] read, English on every locale, and two of its
+  // counted strings agree in number in Spanish ("no se envió" at 1, "no se enviaron" otherwise) —
+  // a bare {n} interpolation would show the plural form at 1.
+  describe("Spanish (S-10 T5)", () => {
+    it("renders the title and tile labels in Spanish (mutation: hard-code English -> FAILS)", () => {
+      const text = render({ state: { ok: true, usage }, monthLabel: "septiembre de 2026", callCap: 50, locale: "es" });
+      expect(text).toContain("Este mes");
+      expect(text).toContain("Textos enviados");
+      expect(text).toContain("Llamadas atendidas");
+      expect(text).not.toContain("Texts sent");
+    });
+
+    it("agrees in number: singular at 1, plural otherwise (mutation: bare {n} interpolation -> FAILS)", () => {
+      const one = render({ state: { ok: true, usage: { ...usage, emailsFailed: 1, skipped: 1 } }, monthLabel: "x", callCap: 50, locale: "es" });
+      expect(one).toContain("1 no se envió");
+      expect(one).toContain("1 omitido");
+      expect(one).not.toContain("1 no se enviaron");
+      expect(one).not.toContain("1 omitidos");
+
+      const many = render({ state: { ok: true, usage: { ...usage, emailsFailed: 3, skipped: 5 } }, monthLabel: "x", callCap: 50, locale: "es" });
+      expect(many).toContain("3 no se enviaron");
+      expect(many).toContain("5 omitidos");
+    });
+  });
+  // S-10 fix round I6: the month's top reasons are stored English sentences.
+  it("names the top held and skipped reasons in the reader's Spanish (mutation: interpolate the stored text raw -> FAILS)", () => {
+    const text = render({ state: { ok: true, usage }, monthLabel: "x", callCap: 50, locale: "es" });
+    expect(text).toContain("En espera hasta las 8:00 a.m. — horario de silencio");
+    expect(text).toContain("Identificada como llamada automática");
+    expect(text).not.toContain("Screened as a robocall");
+  });
 });

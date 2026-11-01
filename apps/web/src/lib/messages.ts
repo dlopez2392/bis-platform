@@ -617,29 +617,48 @@ export const m = {
   // a live "1 people" bug from exactly this omission, and every count below can
   // legitimately be 1.
   "contacts.import.title": "Import contacts",
+  "contacts.import.title.es": "Importar contactos",
+  "contacts.import.intro": "Bring your contacts over from a spreadsheet. Export from anywhere, match the columns, and we will add what is new and update what is not.",
+  "contacts.import.intro.es": "Traiga sus contactos desde una hoja de cálculo. Expórtelos de donde sea, haga coincidir las columnas, y agregaremos lo nuevo y actualizaremos lo que ya existe.",
   "contacts.import.drop": "Choose a CSV file",
+  "contacts.import.drop.es": "Elija un archivo CSV",
   "contacts.import.mapTitle": "Match your columns",
+  "contacts.import.mapTitle.es": "Haga coincidir sus columnas",
   "contacts.import.ignore": "Don't import this column",
+  "contacts.import.ignore.es": "No importar esta columna",
   "contacts.import.ignored": "{count} columns won't be imported",
+  "contacts.import.ignored.es": "{count} columnas no se importarán",
   "contacts.import.ignoredOne": "1 column won't be imported",
+  "contacts.import.ignoredOne.es": "1 columna no se importará",
   // NOT "will add X and update Y": which rows are new is only knowable against
   // the account's existing contacts, which this screen has not read. The real
   // split is reported in `done`, after the work.
   "contacts.import.preview": "{count} rows ready to import.",
+  "contacts.import.preview.es": "{count} filas listas para importar.",
   "contacts.import.previewOne": "1 row ready to import.",
+  "contacts.import.previewOne.es": "1 fila lista para importar.",
   "contacts.import.errors": "{count} rows have problems and will be skipped.",
+  "contacts.import.errors.es": "{count} filas tienen problemas y se omitirán.",
   "contacts.import.errorsOne": "1 row has a problem and will be skipped.",
+  "contacts.import.errorsOne.es": "1 fila tiene un problema y se omitirá.",
   "contacts.import.downloadErrors": "Download the skipped rows",
+  "contacts.import.downloadErrors.es": "Descargar las filas omitidas",
   "contacts.import.createTags": "Also create {count} new tags",
+  "contacts.import.createTags.es": "También crear {count} etiquetas nuevas",
   "contacts.import.createTagsOne": "Also create 1 new tag",
+  "contacts.import.createTagsOne.es": "También crear 1 etiqueta nueva",
   "contacts.import.confirm": "Import",
+  "contacts.import.confirm.es": "Importar",
   "contacts.import.importing": "Importing {done} of {total}...",
+  "contacts.import.importing.es": "Importando {done} de {total}…",
   "contacts.import.done": "Added {created}, updated {updated}.",
+  "contacts.import.done.es": "Se agregaron {created}, se actualizaron {updated}.",
   // Shown only when the count is non-zero. "Possible" is doing real work: these
   // are pairs where an email and a phone pointed at different contacts, which
   // is usually one person entered twice — but not always, and the product has
   // no merge screen yet, so it must not promise a resolution it cannot offer.
   "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
+  "contacts.import.flagged.es": "{flagged} posibles duplicados marcados para revisión.",
   // Shown on the done screen only when they happened (final review I-C), summed
   // across every batch. The contacts themselves were saved either way.
   "contacts.import.businessTooLong": "{count} business names were too long to save (120 characters max).",
@@ -649,16 +668,22 @@ export const m = {
   "contacts.import.businessLinkFailed": "Business names didn't save for some rows — import again to retry.",
   "contacts.import.businessLinkFailed.es": "Los nombres de negocio no se guardaron en algunas filas. Vuelva a importar para intentarlo de nuevo.",
   "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
+  "contacts.import.partial.es": "Se detuvo después de {done} filas. Nada después de eso se importó.",
   "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
+  "contacts.import.failed.es": "Esa importación no se completó. No se cambió nada. Inténtelo de nuevo.",
   "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",
+  "contacts.import.tooMany.es": "Son demasiadas filas a la vez. Intente con un archivo más pequeño.",
   "contacts.import.empty": "That file has no rows we can read.",
+  "contacts.import.empty.es": "Ese archivo no tiene filas que podamos leer.",
   "contacts.import.back": "Back to contacts",
+  "contacts.import.back.es": "Volver a contactos",
   // The downloaded file's own name (Task 4) — "{date}" is the house
   // {placeholder} convention (see setup.progress below). yyyy-mm-dd, filled
   // in by the export route itself; see that file's own comment for why it's
   // UTC rather than the account's timezone (a cosmetic export timestamp, not
   // a business date).
   "contacts.export.filename": "contacts-{date}.csv",
+  "contacts.export.filename.es": "contactos-{date}.csv",
   "contacts.search": "Search name, email, phone…",
   // Short in Spanish: the longer line truncated in the box at phone width.
   "contacts.search.es": "Buscar contactos",
@@ -724,6 +749,25 @@ export const m = {
   "contacts.add.existing.es": "Esta persona ya está en sus contactos.",
   "contacts.add.viewContact": "View contact",
   "contacts.add.viewContact.es": "Ver contacto",
+  // S-10 T3: the 16 server-action sentences contacts/actions.ts used to return as raw literals
+  // (never in the catalogue, so never said in the reader's language) — named here so t() can read
+  // them. "Save failed"/"Undo failed" each cover several call sites that all said the exact same
+  // English sentence; field-input.ts's own two shape refusals are contacts.add.badEmail/badPhone
+  // above (2026-10-28) and contact.business.tooLong (already catalogued) for the business name.
+  "contacts.action.saveFailed": "Save failed — please try again.",
+  "contacts.action.saveFailed.es": "No se pudo guardar. Inténtelo de nuevo.",
+  "contacts.action.undoFailed": "Undo failed — please try again.",
+  "contacts.action.undoFailed.es": "No se pudo deshacer. Inténtelo de nuevo.",
+  "contacts.action.unknownField": "Unknown field.",
+  "contacts.action.unknownField.es": "Campo desconocido.",
+  "contacts.action.nothingSelected": "Nothing selected.",
+  "contacts.action.nothingSelected.es": "No hay nada seleccionado.",
+  "contacts.action.tagFailed": "Tagging failed — please try again.",
+  "contacts.action.tagFailed.es": "No se pudo aplicar la etiqueta. Inténtelo de nuevo.",
+  "contacts.action.undoTagFailed": "Undo failed — the tag is still applied.",
+  "contacts.action.undoTagFailed.es": "No se pudo deshacer. La etiqueta sigue aplicada.",
+  "contacts.action.deleteFailed": "Delete failed — please try again.",
+  "contacts.action.deleteFailed.es": "No se pudo borrar. Inténtelo de nuevo.",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are
@@ -798,6 +842,7 @@ export const m = {
   "bulk.archiveKept.es": "Archivarlos",
 
   "pipeline.title": "Opportunities",
+  "pipeline.title.es": "Oportunidades",
   // The header badge used to read "N · $X" — the same shape the per-column
   // subtotals use, which count every status (open+won+lost). Saying "open"
   // plainly tells the two apart instead of relying on the reader to notice
@@ -805,15 +850,27 @@ export const m = {
   // "{count}"/"{value}" are the house {placeholder} convention (see
   // setup.progress above); the page .replace()s them.
   "pipeline.openTotal": "{count} open · {value}",
+  "pipeline.openTotal.es": "{count} abiertas · {value}",
+  "pipeline.openTotalOne": "1 open · {value}",
+  "pipeline.openTotalOne.es": "1 abierta · {value}",
   "pipeline.add": "Add opportunity",
+  "pipeline.add.es": "Agregar oportunidad",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
+  "pipeline.moveFailed.es": "No se pudo mover esa oportunidad. Actualice la página e intente de nuevo.",
   "pipeline.updateFailed": "Could not save that opportunity. Try again.",
+  "pipeline.updateFailed.es": "No se pudo guardar esa oportunidad. Inténtelo de nuevo.",
   "pipeline.createFailed": "Could not add that opportunity. Check the details and try again.",
+  "pipeline.createFailed.es": "No se pudo agregar esa oportunidad. Revise los datos e intente de nuevo.",
   "pipeline.empty.title": "No opportunities yet",
+  "pipeline.empty.title.es": "Todavía no hay oportunidades",
   "pipeline.empty.body": "Add your first deal to start tracking the pipeline.",
+  "pipeline.empty.body.es": "Agregue su primera oportunidad para empezar a seguir el embudo.",
   "pipeline.name": "Opportunity name",
+  "pipeline.name.es": "Nombre de la oportunidad",
   "pipeline.value": "Value",
+  "pipeline.value.es": "Valor",
   "pipeline.contact": "Contact",
+  "pipeline.contact.es": "Contacto",
   // The new-deal picker searches as you type (deal-contact-picker.tsx), where it listed the newest 200.
   "pipeline.contactSearch": "Search by name, phone or email",
   "pipeline.contactSearch.es": "Busque por nombre, teléfono o correo",
@@ -822,6 +879,7 @@ export const m = {
   "pipeline.contactRequired": "Choose who this opportunity is for first.",
   "pipeline.contactRequired.es": "Primero elija para quién es esta oportunidad.",
   "pipeline.status": "Status",
+  "pipeline.status.es": "Estado",
   "pipeline.status.open": "Open",
   "pipeline.status.open.es": "Abierta",
   "pipeline.status.won": "Won",
@@ -841,7 +899,8 @@ export const m = {
   "contact.removeTag.es": "Quitar {name}",
   "contact.opportunities": "Opportunities",
   "contact.opportunities.es": "Oportunidades",
-  "contact.activity": "Activity",
+  // "contact.activity" (S-10 T3): deleted — a dead key RecordCard's own title replaced (its only
+  // reference was a negative check in activity-timeline.order.test.ts, now against the literal).
   "contact.tasks": "Tasks",
   "contact.tasks.es": "Pendientes",
   "contact.addNote": "Add a note…",
@@ -1001,6 +1060,7 @@ export const m = {
   "contact.email.resumeCancel": "Cancel",
   "contact.email.resumeCancel.es": "Cancelar",
   "contact.email.resumeNoteRequired": "Write what they asked for before you turn emails back on.",
+  "contact.email.resumeNoteRequired.es": "Escriba lo que pidió antes de volver a activar los correos.",
   "contact.email.resumedToast": "Emails are back on. To stop them again, use Stop emails.",
   "contact.email.resumedToast.es": "Los correos se reanudaron. Para detenerlos otra vez, use Detener correos.",
   "contact.email.customerOnly": "They can resubscribe from the unsubscribe link in any email from you.",
@@ -1008,12 +1068,17 @@ export const m = {
   "contact.email.loadFailed": "Couldn't load their email settings. Try again.",
   "contact.email.loadFailed.es": "No se pudo cargar la configuración de correo. Intente de nuevo.",
   "contact.email.changed": "Their emails changed while you were looking. This is where they stand now.",
+  "contact.email.changed.es": "Sus correos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.email.failed": "Couldn't save that — please try again.",
+  "contact.email.failed.es": "No se pudo guardar. Inténtelo de nuevo.",
   "contact.email.noEmail": "They have no email address.",
+  "contact.email.noEmail.es": "No tiene un correo electrónico.",
   "contact.email.undoBusy": "Your last change is still saving. Try again in a moment.",
   "contact.email.undoBusy.es": "Su último cambio todavía se está guardando. Intente de nuevo en un momento.",
   "contact.email.undoExpired": "That can no longer be undone here. Use Stop emails or Resume emails instead.",
+  "contact.email.undoExpired.es": "Eso ya no se puede deshacer aquí. Use Detener correos o Reanudar correos.",
   "contact.phoneCountry.word": "Check number",
+  "contact.phoneCountry.word.es": "Revisar número",
   "contact.phoneCountry.line": "This number could be Mexican or US.",
   "contact.phoneCountry.line.es": "Este número puede ser de México o de EE. UU.",
   "contact.phoneCountry.mx": "Mexico (+52)",
@@ -1021,12 +1086,19 @@ export const m = {
   "contact.phoneCountry.us": "US (+1)",
   "contact.phoneCountry.us.es": "EE. UU. (+1)",
   "contact.phoneCountry.mxToast": "Saved as a Mexican number",
+  "contact.phoneCountry.mxToast.es": "Se guardó como número mexicano",
   "contact.phoneCountry.usToast": "Saved as a US number",
+  "contact.phoneCountry.usToast.es": "Se guardó como número de EE. UU.",
   "contact.phoneCountry.failed": "Couldn't save that — please try again.",
+  "contact.phoneCountry.failed.es": "No se pudo guardar. Inténtelo de nuevo.",
   "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
+  "contact.phoneCountry.changed.es": "Su número cambió mientras usted elegía. Vuelva a cargar para verlo.",
   "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
+  "contact.phoneCountry.unreadable.es": "Ese número no se puede leer como un número de EE. UU. o de México. Edítelo usted mismo.",
   "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
+  "contact.phoneCountry.undoBusy.es": "Su último cambio todavía se está guardando. Edite el número para cambiarlo de nuevo.",
   "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
+  "contact.phoneCountry.inlineChanged.es": "Su número cambió desde su edición. Vuelva a cargar para verlo.",
   // The rest of the Texts row (consent chain PR-2, spec §6). Status words are
   // a dot + word (rule 3). "{date}" is a calendar day in the account's zone;
   // "{word}" is the keyword as staff read it (keywordDisplay); "{excerpt}" is
@@ -1065,6 +1137,7 @@ export const m = {
   "contact.texts.resumeCancel": "Cancel",
   "contact.texts.resumeCancel.es": "Cancelar",
   "contact.texts.resumeNoteRequired": "Write what they asked for before you turn texts back on.",
+  "contact.texts.resumeNoteRequired.es": "Escriba lo que pidió antes de volver a activar los textos.",
   "contact.texts.resumedToast": "Texts are back on. To stop them again, use Stop texts.",
   "contact.texts.resumedToast.es": "Los textos se reanudaron. Para detenerlos otra vez, use Detener textos.",
   "contact.texts.customerOnly": "They can text START to get texts again.",
@@ -1082,11 +1155,15 @@ export const m = {
   "contact.texts.loadFailed": "Couldn't load their message settings. Try again.",
   "contact.texts.loadFailed.es": "No se pudo cargar la configuración de mensajes. Intente de nuevo.",
   "contact.texts.changed": "Their texts changed while you were looking. This is where they stand now.",
+  "contact.texts.changed.es": "Sus textos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.texts.failed": "Couldn't save that — please try again.",
+  "contact.texts.failed.es": "No se pudo guardar. Inténtelo de nuevo.",
   "contact.texts.noNumber": "They have no number to text.",
+  "contact.texts.noNumber.es": "No tiene un número al que mandarle un texto.",
   "contact.texts.undoBusy": "Your last change is still saving. Try again in a moment.",
   "contact.texts.undoBusy.es": "Su último cambio todavía se está guardando. Intente de nuevo en un momento.",
   "contact.texts.undoExpired": "That can no longer be undone here. Use Stop texts or Resume texts instead.",
+  "contact.texts.undoExpired.es": "Eso ya no se puede deshacer aquí. Use Detener textos o Reanudar textos.",
   // The consent To-do rows (spec §6). The English line is written into
   // tasks.title when the To-do is made (plan G8); the Spanish lines wait for an
   // operator locale. "{date}" is the appointment's calendar day in the account's zone.
@@ -1097,6 +1174,7 @@ export const m = {
   "todo.consent.cancel.en": "{name} texted {word}, so their texts are stopped. Check whether they also meant their appointment on {date}.",
   "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
   "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
+  "todo.consent.decided.es": "Esto ya se decidió. Abra el contacto para ver cómo están sus textos.",
   "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
   // Names the two buttons by their own Spanish words (contact.texts.confirmStop.es / notAStop.es).
   "todo.consent.decideFirst.es": "Decídalo con “Confirmar que pidió parar” o “No pidió parar”.",
@@ -1408,6 +1486,7 @@ export const m = {
   "prefs.palette": "Preferences: language and theme",
   "prefs.palette.es": "Preferencias: idioma y tema",
   "pipeline.dropHere": "Drop an opportunity here",
+  "pipeline.dropHere.es": "Suelte una oportunidad aquí",
 
   "compose.note": "Note",
   "compose.note.es": "Nota",
@@ -1553,39 +1632,74 @@ export const m = {
   "conversations.failureReason.noticeTooLateDayOld.es": "No se envió: había pasado un día desde la cancelación y era tarde para avisarle al cliente. Avísele usted.",
 
   "forms.title": "Forms",
+  "forms.title.es": "Formularios",
   "forms.add": "New form",
+  "forms.add.es": "Nuevo formulario",
   "forms.name": "Form name",
+  "forms.name.es": "Nombre del formulario",
   "forms.empty.title": "No forms yet",
+  "forms.empty.title.es": "Todavía no hay formularios",
   // "your website", not "the client's": Forms is one of the six items in a
   // CLIENT's own sidebar, so the agency's word for them was being read by
   // them. Second person is already this shell's in-account voice — see
   // "pipeline.empty.body" ("your first deal"), which the agency also reads
   // from inside a company's workspace.
   "forms.empty.body": "Build a form, embed it on your website, and leads land here automatically.",
+  "forms.empty.body.es": "Cree un formulario, póngalo en su sitio web y los clientes potenciales llegarán aquí solos.",
   "forms.submissions": "Submissions",
+  "forms.submissions.es": "Envíos",
+  // The Forms list's per-row count (S-10 fix round I3). A real singular,
+  // not the column title above lower-cased after a number ("1 submissions").
+  "forms.submissionCount": "{count} submissions",
+  "forms.submissionCount.es": "{count} envíos",
+  "forms.submissionCountOne": "1 submission",
+  "forms.submissionCountOne.es": "1 envío",
   "forms.status.draft": "Draft",
+  "forms.status.draft.es": "Borrador",
   "forms.status.published": "Published",
+  "forms.status.published.es": "Publicado",
   "forms.status.archived": "Archived",
+  "forms.status.archived.es": "Archivado",
   "forms.fields": "Fields",
+  "forms.fields.es": "Campos",
   "forms.addField": "Add field",
+  "forms.addField.es": "Agregar campo",
   "forms.fieldLabel": "Label",
+  "forms.fieldLabel.es": "Etiqueta",
   "forms.fieldRequired": "Required",
+  "forms.fieldRequired.es": "Obligatorio",
   "forms.moveUp": "Move up",
+  "forms.moveUp.es": "Subir",
   "forms.moveDown": "Move down",
+  "forms.moveDown.es": "Bajar",
   "forms.removeField": "Remove field",
+  "forms.removeField.es": "Quitar campo",
   "forms.noFields": "Add at least one field before publishing.",
+  "forms.noFields.es": "Agregue al menos un campo antes de publicar.",
   "forms.settings": "Settings",
+  "forms.settings.es": "Ajustes",
   "forms.locale": "Language",
+  "forms.locale.es": "Idioma",
   "forms.notifyEmails": "Notify these addresses",
+  "forms.notifyEmails.es": "Avisar a estos correos",
   "forms.notifyHint": "Comma-separated. Leave blank for no email notification.",
+  "forms.notifyHint.es": "Separados por comas. Déjelo en blanco para no recibir aviso por correo.",
   "forms.successMode": "After submitting",
+  "forms.successMode.es": "Después de enviar",
   "forms.successModeMessage": "Show a message",
+  "forms.successModeMessage.es": "Mostrar un mensaje",
   "forms.successModeRedirect": "Redirect to a URL",
+  "forms.successModeRedirect.es": "Redirigir a una URL",
   "forms.successMessage": "Success message",
+  "forms.successMessage.es": "Mensaje de confirmación",
   "forms.redirectUrl": "Redirect URL",
+  "forms.redirectUrl.es": "URL de redirección",
   "forms.transparent": "Transparent background",
+  "forms.transparent.es": "Fondo transparente",
   "forms.status": "Status",
+  "forms.status.es": "Estado",
   "forms.duplicateFieldKey": "A field with this key already exists on the form.",
+  "forms.duplicateFieldKey.es": "Ya existe un campo con esta clave en el formulario.",
   // Fix round 1 review (minor): the old wording ("each needs a key, kind,
   // label, and required flag") exposed this form's own internal field
   // shape — jargon with no translation for an operator, who never typed
@@ -1593,39 +1707,61 @@ export const m = {
   // Plain words, and the same "reload and try again" shape inline.crashed
   // already uses for the same class of problem.
   "forms.invalidFields": "Something went wrong with this form's fields. Reload the page and try again.",
+  "forms.invalidFields.es": "Algo salió mal con los campos de este formulario. Vuelva a cargar la página e intente de nuevo.",
   "forms.embed": "Embed",
+  "forms.embed.es": "Código para su sitio web",
   "forms.embedHint": "Paste this where the form should appear. Published forms only.",
+  "forms.embedHint.es": "Pegue esto donde quiera que aparezca el formulario. Solo formularios publicados.",
   "forms.embedNotPublished": "Publish the form to get its embed snippet.",
+  "forms.embedNotPublished.es": "Publique el formulario para obtener el código para su sitio web.",
   "forms.copy": "Copy",
+  "forms.copy.es": "Copiar",
   "forms.copied": "Copied",
+  "forms.copied.es": "Copiado",
   "forms.publicLink": "Direct link",
+  "forms.publicLink.es": "Enlace directo",
   "forms.saved": "Saved",
+  "forms.saved.es": "Guardado",
   "forms.saveFailed": "Could not save the form.",
+  "forms.saveFailed.es": "No se pudo guardar el formulario.",
   "forms.noSubmissions": "No submissions yet.",
+  "forms.noSubmissions.es": "Todavía no hay envíos.",
   // Deliberately NOT "Blocked": rate-limit hoisting means one recorded marker
   // suppresses further markers for the rest of the window, so a count of these
   // rows is a count of events recorded, not attempts made — a burst of 10,000
   // requests from one IP can surface as ~6 rows. Never present this as a total
   // of blocked attempts; that would understate spam volume to the operator.
   "forms.blocked": "Blocked event",
+  "forms.blocked.es": "Evento bloqueado",
   "forms.spamReason.honeypot": "Hidden field was filled in — a sign of an automated submission.",
+  "forms.spamReason.honeypot.es": "Se llenó un campo oculto — señal de un envío automatizado.",
   // The stored enum value is "too_fast", but the same reason is also recorded
   // for a missing, malformed, or forged render token (see submitFormAction in
   // apps/web/src/app/f/[publicId]/actions.ts) — a real person just filling
   // the form quickly is only one of the three causes, so the copy has to
   // cover all of them honestly rather than naming only the first.
   "forms.spamReason.too_fast": "Submitted too quickly, or with a missing or invalid form token, to have been filled out by a person.",
+  "forms.spamReason.too_fast.es": "Se envió demasiado rápido, o con un token de formulario faltante o inválido, para que lo haya llenado una persona.",
   "forms.spamReason.rate_limited": "Too many submissions from this source in a short time.",
+  "forms.spamReason.rate_limited.es": "Demasiados envíos de esta fuente en poco tiempo.",
   "forms.needsAttention": "Needs attention",
+  "forms.needsAttention.es": "Necesita atención",
   // Every submission stores the exact consent copy so it can be proved later.
   // That is only true if somebody can read it back — see submissions-table.tsx.
   "forms.consentGiven": "Agreed",
+  "forms.consentGiven.es": "Aceptó",
   "forms.consentNotGiven": "Not agreed",
+  "forms.consentNotGiven.es": "No aceptó",
   "forms.contact": "Contact",
+  "forms.contact.es": "Contacto",
   "forms.kind.core.first_name": "First name",
+  "forms.kind.core.first_name.es": "Nombre",
   "forms.kind.core.last_name": "Last name",
+  "forms.kind.core.last_name.es": "Apellido",
   "forms.kind.core.email": "Email",
+  "forms.kind.core.email.es": "Correo",
   "forms.kind.core.phone": "Phone",
+  "forms.kind.core.phone.es": "Teléfono",
   "forms.kind.core.company_name": "Business name",
   "forms.kind.core.company_name.es": "Nombre del negocio",
   // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): the source
@@ -1640,13 +1776,17 @@ export const m = {
   "forms.kind.core.referral_source": "Who recommended you?",
   "forms.kind.core.referral_source.es": "¿Quién le recomendó?",
   "forms.kind.message": "Message (starts a conversation)",
+  "forms.kind.message.es": "Mensaje (inicia una conversación)",
   "forms.kind.consent": "Consent checkbox",
+  "forms.kind.consent.es": "Casilla de consentimiento",
   "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",
+  "forms.invalidRedirectUrl.es": "La URL de redirección debe empezar con http:// o https://.",
   // The parked minor this change closes: notifyEmails has gone unvalidated
   // since the booking milestone. Same {value} convention and same wording as
   // settings.weeklyReportBadEmail — one bad-address message, not two that can
   // drift apart.
   "forms.invalidNotifyEmail": "That doesn't look like an email address: {value}",
+  "forms.invalidNotifyEmail.es": "Eso no parece una dirección de correo: {value}",
   // Owner context (forms tracker batch 4): shown inline, BEFORE Save, while
   // the operator is still choosing a non-published status for a form a
   // website assistant files its leads into — see shouldWarnOnUnpublish's
@@ -1655,6 +1795,8 @@ export const m = {
   // rather than the vaguer "republish" (fix round 1 review, minor).
   "forms.unpublishWarning":
     "{assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  "forms.unpublishWarning.es":
+    "{assistant} guarda sus clientes potenciales en este formulario — dejará de guardarlos aquí hasta que vuelva a poner el Estado en Publicado.",
   // The success toast AFTER that save has gone through. Distinct from
   // forms.unpublishWarning (fix round 1 review, minor: the toast must say
   // the save itself succeeded, not only name the consequence) — this one
@@ -1662,10 +1804,14 @@ export const m = {
   // allowed to say "Saved."
   "forms.unpublishedToast":
     "Saved. {assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  "forms.unpublishedToast.es":
+    "Guardado. {assistant} guarda sus clientes potenciales en este formulario — dejará de guardarlos aquí hasta que vuelva a poner el Estado en Publicado.",
   "forms.republishFailed": "Could not republish the form.",
+  "forms.republishFailed.es": "No se pudo volver a publicar el formulario.",
   // Fix round 1 review item 2: a stale Undo click — the form's status
   // changed again, through some other save, since this toast was shown.
   "forms.undoStale": "This form's status already changed since then — there's nothing to undo.",
+  "forms.undoStale.es": "El estado de este formulario ya cambió desde entonces — no hay nada que deshacer.",
 
   "conversations.unread": "unread",
   "conversations.unread.es": "sin leer",
@@ -1848,48 +1994,90 @@ export const m = {
   // the right voice, same mechanism panel-copy.ts pins for branding: the
   // agency reads "this company's", the client reads "your".
   "calendar.title": "Calendar",
+  "calendar.title.es": "Calendario",
   "calendar.settings.title": "Booking settings",
+  "calendar.settings.title.es": "Ajustes de citas",
   "calendar.settings.clientTitle": "Your booking settings",
+  "calendar.settings.clientTitle.es": "Sus ajustes de citas",
   "calendar.settings.body": "Controls how this company's public booking page behaves.",
+  "calendar.settings.body.es": "Controla cómo se comporta la página pública de citas de este negocio.",
   "calendar.settings.clientBody": "Controls how your public booking page behaves.",
+  "calendar.settings.clientBody.es": "Controla cómo se comporta su página pública de citas.",
   "calendar.settings.enabled": "Accept bookings",
+  "calendar.settings.enabled.es": "Aceptar citas",
   "calendar.settings.hours": "Hours",
+  "calendar.settings.hours.es": "Horario",
   "calendar.settings.hoursHint": "Set an open and close time for each day. Leave both blank to close that day.",
+  "calendar.settings.hoursHint.es": "Indique la hora de apertura y de cierre de cada día. Deje los dos vacíos para cerrar ese día.",
   "calendar.settings.day.mon": "Monday",
+  "calendar.settings.day.mon.es": "Lunes",
   "calendar.settings.day.tue": "Tuesday",
+  "calendar.settings.day.tue.es": "Martes",
   "calendar.settings.day.wed": "Wednesday",
+  "calendar.settings.day.wed.es": "Miércoles",
   "calendar.settings.day.thu": "Thursday",
+  "calendar.settings.day.thu.es": "Jueves",
   "calendar.settings.day.fri": "Friday",
+  "calendar.settings.day.fri.es": "Viernes",
   "calendar.settings.day.sat": "Saturday",
+  "calendar.settings.day.sat.es": "Sábado",
   "calendar.settings.day.sun": "Sunday",
+  "calendar.settings.day.sun.es": "Domingo",
   "calendar.settings.from": "From",
+  "calendar.settings.from.es": "Desde",
   "calendar.settings.to": "To",
+  "calendar.settings.to.es": "Hasta",
   "calendar.settings.duration": "Appointment length",
+  "calendar.settings.duration.es": "Duración de la cita",
   "calendar.settings.buffer": "Buffer between appointments",
+  "calendar.settings.buffer.es": "Tiempo entre citas",
   "calendar.settings.minNotice": "Minimum notice",
+  "calendar.settings.minNotice.es": "Tiempo mínimo antes de la cita",
   "calendar.settings.maxAdvance": "How far ahead people can book",
+  "calendar.settings.maxAdvance.es": "Con cuánta anticipación se puede agendar",
   "calendar.settings.notifyEmails": "Notify these addresses",
+  "calendar.settings.notifyEmails.es": "Avisar a estos correos",
   // D-034: only what is actually sent. The reminder pass mails the customer,
   // never these addresses, so "an appointment is coming up" was an alert that
   // did not exist. The senders that DO read them are listed in the action's
   // test (calendar/actions.test.ts). No persona name: clients rename Sofía.
   "calendar.settings.notifyEmailsHint": "Separate addresses with commas or put each on its own line. We email them when a customer books, cancels or moves an appointment, and when a caller leaves a message or their details.",
+  "calendar.settings.notifyEmailsHint.es": "Separe los correos con comas o ponga cada uno en su propia línea. Les escribimos cuando un cliente agenda, cancela o cambia una cita, y cuando quien llama deja un mensaje o sus datos.",
   "calendar.settings.notifyEmailsInvalid": "That doesn't look like an email address: {value}",
+  "calendar.settings.notifyEmailsInvalid.es": "Eso no parece una dirección de correo: {value}",
   // The inline warning the checklist's form_notify concern mirrors: an
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.
   "calendar.settings.notifyEmailsWarning": "Booking is on, but no address is listed above — nobody will be notified when someone books.",
+  "calendar.settings.notifyEmailsWarning.es": "Se están aceptando citas, pero no hay ningún correo en la lista de arriba — nadie se va a enterar cuando alguien agende.",
   "calendar.settings.meetingType": "Meeting type",
+  "calendar.settings.meetingType.es": "Tipo de cita",
   "calendar.settings.meetingType.inPerson": "In person",
+  "calendar.settings.meetingType.inPerson.es": "En persona",
   "calendar.settings.meetingType.phone": "Phone",
+  "calendar.settings.meetingType.phone.es": "Teléfono",
   "calendar.settings.meetingType.video": "Video",
+  "calendar.settings.meetingType.video.es": "Video",
   "calendar.settings.followup": "Follow-up email",
+  "calendar.settings.followup.es": "Correo de seguimiento",
   "calendar.settings.followupHint": "Sent the morning after an appointment ends. Leave blank to send our default message.",
+  "calendar.settings.followupHint.es": "Se envía la mañana siguiente a la cita. Déjelo en blanco para enviar nuestro mensaje predeterminado.",
   "calendar.settings.followupEnabled": "Send a follow-up email after appointments",
+  "calendar.settings.followupEnabled.es": "Enviar un correo de seguimiento después de las citas",
   "calendar.settings.followupBody": "Follow-up message",
+  "calendar.settings.followupBody.es": "Mensaje de seguimiento",
   "calendar.settings.saved": "Booking settings saved",
+  "calendar.settings.saved.es": "Se guardaron los ajustes de citas",
   "calendar.settings.saveFailed": "Could not save booking settings.",
+  "calendar.settings.saveFailed.es": "No se pudieron guardar los ajustes de citas.",
   "calendar.settings.saveCrashed": "Could not save — this page may be out of date. Reload it and try again.",
+  "calendar.settings.saveCrashed.es": "No se pudo guardar: puede que esta página esté desactualizada. Recárguela e inténtelo de nuevo.",
+  "calendar.settings.unitMinutes": "min",
+  "calendar.settings.unitMinutes.es": "min",
+  "calendar.settings.unitHours": "hr",
+  "calendar.settings.unitHours.es": "h",
+  "calendar.settings.unitDays": "days",
+  "calendar.settings.unitDays.es": "días",
 
   "calendar.bookings.join": "Join",
   "calendar.bookings.join.es": "Unirse",
@@ -2164,11 +2352,17 @@ export const m = {
   "calendar.job.readFailed.es": "No se pudo abrir este trabajo. Intente de nuevo en un momento.",
 
   "calendar.embed.title": "Embed",
+  "calendar.embed.title.es": "Código para su sitio web",
   "calendar.embed.hint": "Paste this where the booking widget should appear.",
+  "calendar.embed.hint.es": "Pegue esto donde quiera que aparezca el widget de citas.",
   "calendar.embed.disabledHint": "Turn on \"Accept bookings\" above to get the embed snippet.",
+  "calendar.embed.disabledHint.es": "Active \"Aceptar citas\" arriba para obtener el código de inserción.",
   "calendar.embed.copy": "Copy",
+  "calendar.embed.copy.es": "Copiar",
   "calendar.embed.copied": "Copied",
+  "calendar.embed.copied.es": "Copiado",
   "calendar.embed.publicLink": "Direct link",
+  "calendar.embed.publicLink.es": "Enlace directo",
 
   // F-048 part 2: the Calendar page's "Bookings on your phone" card (owner decisions D1–D3).
   "calendar.feed.title": "Bookings on your phone",
@@ -3281,6 +3475,9 @@ export const m = {
   "automations.title": "Automations",
   "automations.agencyOnly": "Only the agency may manage automations.",
   "automations.bodyTooLong": "Keep the message to 1,000 characters at most.",
+  // S-10 review M-3: calendar/actions.ts's updateCalendarSettingsAction is the first caller to pass a
+  // locale here; granted outside this lane's own prefixes (orchestrator).
+  "automations.bodyTooLong.es": "Use 1,000 caracteres como máximo.",
   "automations.review.title": "Review requests",
   "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
   "automations.review.enabled": "Send review requests",
@@ -3611,53 +3808,179 @@ export const m = {
   // this stays a literal translation of "What went out" instead.
   "nav.activity.es": "Lo que se envió",
   "activity.title": "What went out",
+  "activity.title.es": "Lo que se envió",
   "activity.usage.title": "This month",
+  "activity.usage.title.es": "Este mes",
   "activity.usage.texts": "Texts sent",
+  "activity.usage.texts.es": "Textos enviados",
   "activity.usage.emails": "Emails sent",
+  "activity.usage.emails.es": "Correos enviados",
   "activity.usage.conversations": "Website chats",
+  "activity.usage.conversations.es": "Chats del sitio web",
   "activity.usage.calls": "Calls handled",
+  "activity.usage.calls.es": "Llamadas atendidas",
   "activity.usage.capRecipe": "Most automations: up to {cap} a day",
+  "activity.usage.capRecipe.es": "La mayoría de las automatizaciones: hasta {cap} al día",
   "activity.usage.capDay": "Up to {cap} a day",
+  "activity.usage.capDay.es": "Hasta {cap} al día",
   // D-066: "Emails sent" used to mix in the agency's own weekly report (not
   // a customer send, and not capped by the recipe limit above) and never
   // said when a send failed outright. Zero is a number here too — this
   // always renders, the same convention "0 waiting"/"0 skipped" already
   // follow below.
+  // S-10 T5: the English doesn't conjugate for the count, but "se enviaron"
+  // does ("se envió" at 1) — a genuine One/Other split (plural()), not a
+  // bare {n} interpolation.
   "activity.usage.emailsFailed": "{n} failed to send",
+  "activity.usage.emailsFailed.es": "{n} no se enviaron",
+  "activity.usage.emailsFailedOne": "1 failed to send",
+  "activity.usage.emailsFailedOne.es": "1 no se envió",
   "activity.usage.held": "{n} waiting",
+  "activity.usage.held.es": "{n} en espera",
   "activity.usage.skipped": "{n} skipped",
+  // "omitido/omitidos" agrees in number; a bare {n} interpolation would show
+  // the plural adjective at n=1 ("1 omitidos").
+  "activity.usage.skipped.es": "{n} omitidos",
+  "activity.usage.skippedOne": "1 skipped",
+  "activity.usage.skippedOne.es": "1 omitido",
   "activity.usage.topReason": "most often: {reason}",
+  "activity.usage.topReason.es": "lo más frecuente: {reason}",
   "activity.usage.error": "Couldn't load this month's numbers. Reload the page to try again.",
+  "activity.usage.error.es": "No se pudieron cargar los números de este mes. Vuelva a cargar la página para intentarlo de nuevo.",
   "activity.empty.title": "Nothing has gone out yet",
+  "activity.empty.title.es": "Todavía no se ha enviado nada",
   "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
+  "activity.empty.body.es": "Cada texto, correo y conversación que el sistema maneja para esta empresa aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
   // The same sentence, second person: this page is BOTH audiences (its own
   // top comment), and a client reading about THEIR OWN business should
   // never read "this company" the way an agency describing a client does.
   "activity.empty.clientBody": "Every text, email and conversation the system handles for your business shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
+  "activity.empty.clientBody.es": "Cada texto, correo y conversación que el sistema maneja para su negocio aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
   "activity.empty.action": "Set up automations",
+  "activity.empty.action.es": "Configurar automatizaciones",
   "activity.error": "Couldn't load the history. Reload the page to try again.",
+  "activity.error.es": "No se pudo cargar el historial. Vuelva a cargar la página para intentarlo de nuevo.",
   "activity.col.when": "When",
+  "activity.col.when.es": "Cuándo",
   "activity.col.what": "What",
+  "activity.col.what.es": "Qué",
   "activity.col.who": "Who",
+  "activity.col.who.es": "Quién",
   "activity.col.channel": "How",
+  "activity.col.channel.es": "Cómo",
   "activity.col.status": "Status",
+  "activity.col.status.es": "Estado",
   "activity.status.sent": "Sent",
+  "activity.status.sent.es": "Enviado",
   "activity.status.held": "Waiting",
+  "activity.status.held.es": "En espera",
   "activity.status.skipped": "Skipped",
+  "activity.status.skipped.es": "Omitido",
   "activity.status.failed": "Failed",
+  "activity.status.failed.es": "No se envió",
   "activity.channel.sms": "Text",
+  "activity.channel.sms.es": "Texto",
   "activity.channel.email": "Email",
+  "activity.channel.email.es": "Correo",
   "activity.channel.ai": "Assistant",
+  "activity.channel.ai.es": "Asistente",
   "activity.older": "Older",
+  "activity.older.es": "Anteriores",
   "activity.newer": "Newer",
+  "activity.newer.es": "Más recientes",
+  // S-10 T5 (G2): the pager's own accessible name, same convention as
+  // conversations.pagesLabel.
+  "activity.pagesLabel": "Pages",
+  "activity.pagesLabel.es": "Páginas",
   "activity.source.reminders": "Booking reminders",
+  "activity.source.reminders.es": "Recordatorios de citas",
   "activity.source.followups": "Follow-up emails",
+  "activity.source.followups.es": "Correos de seguimiento",
   "activity.source.weekly_report": "Weekly report",
+  "activity.source.weekly_report.es": "Informe semanal",
   "activity.source.concierge": "Website assistant",
+  "activity.source.concierge.es": "Asistente del sitio web",
   "activity.source.voice": "Phone assistant",
+  "activity.source.voice.es": "Asistente telefónico",
   "activity.source.textback": "Missed-call text-back",
+  "activity.source.textback.es": "Texto por llamada perdida",
   "activity.source.documentRequest": "Document request",
   "activity.source.documentRequest.es": "Pedido de documentos",
+  // S-10 fix round I6: automation_log.reason is stored as the ENGLISH sentence
+  // lib/automations/hold-or-send.ts REASONS wrote. activity/reason-words.ts reads
+  // it back to one of these keys at render time; reason-words.test.ts pins each
+  // English line here to REASONS word for word. Reasons that already have a
+  // Spanish twin under automations.reason.* are read from there, not repeated.
+  "activity.reason.quietHours": "Held until {time} — quiet hours",
+  "activity.reason.quietHours.es": "En espera hasta las {time} — horario de silencio",
+  "activity.reason.windowAfterDeadline": "Not sent: quiet hours ran past the appointment",
+  "activity.reason.windowAfterDeadline.es": "No se envió: el horario de silencio terminó después de la cita",
+  "activity.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  "activity.reason.ledgerRetry.es": "Esperando unos minutos: no se pudo confirmar si puede recibir textos",
+  "activity.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
+  "activity.reason.emailLedgerRetry.es": "Esperando unos minutos: no se pudo confirmar si puede recibir correos",
+  "activity.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
+  "activity.reason.emailSetupRetry.es": "Esperando unos minutos: no se pudo agregar el enlace para darse de baja",
+  "activity.reason.tooLongAfterCall": "Not sent: too long after the call",
+  "activity.reason.tooLongAfterCall.es": "No se envió: pasó demasiado tiempo después de la llamada",
+  "activity.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  "activity.reason.tooLongAfterWriteIn.es": "No se envió: pasó demasiado tiempo después de que escribió",
+  "activity.reason.textsStopped": "They stopped texts from this business",
+  "activity.reason.textsStopped.es": "Dejó de recibir textos de este negocio",
+  "activity.reason.textsHeld": "Texts to them are on hold",
+  "activity.reason.textsHeld.es": "Los textos para esta persona están en espera",
+  "activity.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
+  "activity.reason.numberUnconfirmed.es": "Su número podría ser de México o de EE. UU. Elija el país en su contacto",
+  "activity.reason.noEmail": "No email address on file",
+  "activity.reason.noEmail.es": "No hay un correo registrado",
+  "activity.reason.noPhone": "No phone number we can text",
+  "activity.reason.noPhone.es": "No hay un número al que se le pueda mandar un texto",
+  "activity.reason.smsGate": "Texting isn't set up for this company yet",
+  "activity.reason.smsGate.es": "Los textos todavía no están configurados para este negocio",
+  "activity.reason.dailyCap": "Daily limit reached",
+  "activity.reason.dailyCap.es": "Se alcanzó el límite diario",
+  "activity.reason.failed": "Couldn't be delivered",
+  "activity.reason.failed.es": "No se pudo entregar",
+  "activity.reason.appointmentStarted": "Appointment already started",
+  "activity.reason.appointmentStarted.es": "La cita ya empezó",
+  "activity.reason.noLongerDue": "No longer due",
+  "activity.reason.noLongerDue.es": "Ya no corresponde",
+  "activity.reason.recipeOff": "This automation was turned off",
+  "activity.reason.recipeOff.es": "Esta automatización se desactivó",
+  "activity.reason.timezone": "The company's time zone isn't set",
+  "activity.reason.timezone.es": "La zona horaria del negocio no está configurada",
+  "activity.reason.calendarOff": "The booking page is switched off",
+  "activity.reason.calendarOff.es": "La página de citas está desactivada",
+  "activity.reason.recentText": "A text already went to this person today",
+  "activity.reason.recentText.es": "Ya se le mandó un texto a esta persona hoy",
+  "activity.reason.smsCooldown": "Waiting before trying this text again",
+  "activity.reason.smsCooldown.es": "Esperando antes de volver a intentar este texto",
+  "activity.reason.tooCloseToAppointment": "Too close to the appointment to ask",
+  "activity.reason.tooCloseToAppointment.es": "Demasiado cerca de la cita para preguntar",
+  "activity.reason.reviewFirst": "Waiting for the review request to go first",
+  "activity.reason.reviewFirst.es": "Esperando a que primero salga la solicitud de reseña",
+  "activity.reason.heardBack": "They've been in touch since",
+  "activity.reason.heardBack.es": "Se ha comunicado desde entonces",
+  "activity.reason.stageGone": "The stage this automation watches is gone",
+  "activity.reason.stageGone.es": "La etapa que vigila esta automatización ya no existe",
+  "activity.reason.noMailingAddress": "The company's mailing address isn't set",
+  "activity.reason.noMailingAddress.es": "La dirección postal del negocio no está configurada",
+  "activity.reason.noReplyTo": "The company has no reply-to address",
+  "activity.reason.noReplyTo.es": "El negocio no tiene una dirección de respuesta",
+  "activity.reason.optedOutEmail": "They asked not to get these emails",
+  "activity.reason.optedOutEmail.es": "Pidió no recibir estos correos",
+  "activity.reason.suppressedEmail": "This address bounced or was marked as spam",
+  "activity.reason.suppressedEmail.es": "Este correo rebotó o se marcó como spam",
+  "activity.reason.outsideRegion": "Number is outside the US, Canada or Mexico",
+  "activity.reason.outsideRegion.es": "El número está fuera de EE. UU., Canadá o México",
+  "activity.reason.consentWithheld": "They didn't agree to texts",
+  "activity.reason.consentWithheld.es": "No aceptó recibir textos",
+  "activity.reason.robocall": "Screened as a robocall",
+  "activity.reason.robocall.es": "Identificada como llamada automática",
+  "activity.reason.callerHungUp": "The caller hung up before anyone could help",
+  "activity.reason.callerHungUp.es": "La persona colgó antes de que alguien pudiera ayudar",
+  "activity.reason.transferNoAnswer": "Nobody answered the transfer",
+  "activity.reason.transferNoAnswer.es": "Nadie atendió la transferencia",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
@@ -3668,21 +3991,34 @@ export const m = {
   // `calls.usage` interpolates like `setup.progress` above: the component
   // .replace()s the placeholders, so a future translation may reorder them.
   "calls.title": "Calls",
+  "calls.title.es": "Llamadas",
   "calls.usage": "{n} of {cap} calls today",
+  "calls.usage.es": "{n} de {cap} llamadas hoy",
   // The meter's accessible NAME. Deliberately not the sentence above: that is
   // already the bar's `aria-valuetext`, and reusing it would have a screen
   // reader read the same count twice in a row.
   "calls.usageLabel": "Daily call usage",
+  "calls.usageLabel.es": "Uso diario de llamadas",
   "calls.empty.title": "No calls yet",
+  "calls.empty.title.es": "Todavía no hay llamadas",
   "calls.empty.body":
     "When Sofía answers a call, it will appear here with its transcript and outcome.",
+  "calls.empty.body.es":
+    "Cuando Sofía atienda una llamada, aparecerá aquí con su transcripción y resultado.",
   "calls.col.when": "When",
+  "calls.col.when.es": "Cuándo",
   "calls.col.caller": "Caller",
+  "calls.col.caller.es": "Quién llamó",
   "calls.col.duration": "Duration",
+  "calls.col.duration.es": "Duración",
   "calls.col.outcome": "Outcome",
+  "calls.col.outcome.es": "Resultado",
   "calls.col.language": "Language",
+  "calls.col.language.es": "Idioma",
   "calls.older": "Older calls",
+  "calls.older.es": "Llamadas anteriores",
   "calls.unknownCaller": "Unknown caller",
+  "calls.unknownCaller.es": "Desconocido",
   "calls.outcome.booked": "Booked",
   "calls.outcome.booked.es": "Agendó",
   "calls.outcome.lead": "Lead",
@@ -3708,10 +4044,12 @@ export const m = {
   // still sitting there un-texted, and no part of that sentence should make
   // them wonder whether it might yet go out on its own. It won't.
   "calls.textbackFailed": "Text-back didn't send",
+  "calls.textbackFailed.es": "El texto por llamada perdida no se envió",
   // The detail page only — the list row is a whole-row click target and gets
   // the badge alone (a nested button there would double-fire the row's own
   // navigation and confuse the tab order).
   "calls.textbackResend": "Send it now",
+  "calls.textbackResend.es": "Enviarlo ahora",
   // The one line under the badge on the detail page, and it says the thing
   // the operator cannot see anywhere else: `failed` means the provider refused
   // and NOTHING was delivered, and there is no queue and no cron that will
@@ -3724,6 +4062,8 @@ export const m = {
   // will.
   "calls.textbackFailedBody":
     "The text we tried to send never reached them, and nothing will try again on its own.",
+  "calls.textbackFailedBody.es":
+    "El texto que intentamos enviarle nunca le llegó, y nada lo va a volver a intentar por su cuenta.",
   // Where "Send it now" WOULD have been, once a later text to this person went
   // out fine. The button is withdrawn on purpose — pressing it would text them
   // the same words a second time — but withdrawing it silently left the
@@ -3737,6 +4077,8 @@ export const m = {
   // failed, and a later message does not make it un-fail.
   "calls.textbackSuperseded":
     "A later text did go out to them, so there's nothing left to send here.",
+  "calls.textbackSuperseded.es":
+    "Después se le envió otro texto, así que ya no queda nada por enviar aquí.",
 
   // A single call — /dashboard/accounts/<id>/calls/<callId>. The transcript
   // surface: the one place a client can read what their receptionist actually
@@ -3747,14 +4089,23 @@ export const m = {
   // own persona: the client's staff need to read the log knowing which turns
   // were the machine's, and a friendly name blurs exactly that line.
   "calls.detail.title": "Call",
+  "calls.detail.title.es": "Llamada",
   "calls.detail.summary": "Summary",
+  "calls.detail.summary.es": "Resumen",
   "calls.detail.transcript": "Transcript",
+  "calls.detail.transcript.es": "Transcripción",
   "calls.detail.viewContact": "View contact",
+  "calls.detail.viewContact.es": "Ver contacto",
   "calls.detail.viewConversation": "View conversation",
+  "calls.detail.viewConversation.es": "Ver conversación",
   "calls.detail.viewBooking": "View booking",
+  "calls.detail.viewBooking.es": "Ver cita",
   "calls.detail.assistant": "Assistant",
+  "calls.detail.assistant.es": "Asistente",
   "calls.detail.caller": "Caller",
+  "calls.detail.caller.es": "Quien llamó",
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
+  "calls.detail.noTranscript.es": "No se grabó transcripción de esta llamada.",
   // The call card: who called, why, the number to call back and the caller's
   // own words, readable in three seconds. Each line the screen renders has a
   // written-out `.es` twin that waits for an operator locale (the
@@ -4249,8 +4600,13 @@ export const m = {
   // populates `tasks` on an account with none). `work.row.overdue` needs no
   // singular twin of its own: "1 overdue" already reads correctly.
   "work.row.count": "{count} things to do",
+  "work.row.count.es": "{count} cosas por hacer",
   "work.row.countOne": "1 thing to do",
+  "work.row.countOne.es": "1 cosa por hacer",
   "work.row.overdue": "{count} overdue",
+  "work.row.overdue.es": "{count} atrasadas",
+  "work.row.overdueOne": "1 overdue",
+  "work.row.overdueOne.es": "1 atrasada",
   // F-006 plan Task 2: the dashboard's own row into the duplicates list (contacts.duplicates.*,
   // below), same compact-link convention as work.row.* above.
   "work.duplicates": "{count} possible duplicate customers to check",

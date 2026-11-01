@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { m } from "@/lib/messages";
 import type { FormTheme, CustomFieldDef } from "@bis/db";
 import {
   defaultFieldKey, mergeFormTheme, isValidFormFieldList, defaultFormFields,
@@ -171,7 +172,17 @@ describe("kindLabel", () => {
   });
 
   it("a kind with no .es twin falls back to English even for a Spanish form (mutation: throw/crash on a missing twin → FAILS)", () => {
-    expect(kindLabel("core.first_name", NO_CUSTOM, "es")).toBe("First name");
+    // S-10 T5 gave every forms.kind.* a Spanish twin (core.first_name's is
+    // "Nombre"), so no real kind reaches this branch any more. The twin is
+    // taken out for this one case, and put back, so the fallback stays tested.
+    const catalogue = m as Record<string, string | undefined>;
+    const twin = catalogue["forms.kind.core.first_name.es"];
+    delete catalogue["forms.kind.core.first_name.es"];
+    try {
+      expect(kindLabel("core.first_name", NO_CUSTOM, "es")).toBe("First name");
+    } finally {
+      catalogue["forms.kind.core.first_name.es"] = twin;
+    }
   });
 
   it("an unrecognised (custom) kind is unaffected by locale — it already reads the account's OWN custom field name", () => {

@@ -1,3 +1,7 @@
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+
 // "source" (F-157): the drawer's Source line, inline-editable like every
 // other field here — free text, no shape rule, same as first_name/last_name/
 // company_name (the fallthrough at the bottom of normalizeFieldInput below).
@@ -21,15 +25,19 @@ const PHONE_CHARS = /^[+()\-. \d]+$/;
 
 export function normalizeFieldInput(
   field: EditableField, raw: string,
+  // S-10 T3: the reader's language, default "en" so a caller that predates it (createContactAction
+  // discards this error text for its own fixed errorKey anyway) is unchanged. The two sentences
+  // are contacts.add.badEmail/badPhone (2026-10-28) — one answer everywhere this shape is checked.
+  locale: Locale = "en",
 ): { ok: true; value: string } | { ok: false; error: string } {
   const value = raw.trim();
   if (value === "") return { ok: true, value: "" }; // clearing is allowed — columns are nullable
   if (field === "email" && !EMAIL_SHAPE.test(value))
-    return { ok: false, error: "That doesn't look like an email address." };
+    return { ok: false, error: t(m, "contacts.add.badEmail", locale) };
   if (field === "phone") {
     const digits = value.replace(/\D/g, "");
     if (!PHONE_CHARS.test(value) || digits.length < 7)
-      return { ok: false, error: "That doesn't look like a phone number." };
+      return { ok: false, error: t(m, "contacts.add.badPhone", locale) };
   }
   return { ok: true, value };
 }

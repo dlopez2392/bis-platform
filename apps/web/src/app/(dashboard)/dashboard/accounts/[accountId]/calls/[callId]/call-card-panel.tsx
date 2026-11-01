@@ -6,7 +6,8 @@
 // call; this is a function of its props, a server component with no state.
 import type { CallCard } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
-import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 import { aiAuthorMark } from "@/lib/voice/provenance";
 import { CARD, CARD_HEAD } from "./card";
 
@@ -35,7 +36,7 @@ const VALUE = "min-w-0 text-sm leading-6 break-words text-foreground";
 const MISSING = "min-w-0 text-sm leading-6 text-muted-foreground";
 
 export function CallCardPanel({
-  who, card, personaName, language,
+  who, card, personaName, language, locale, pseudo = false,
 }: {
   /** `callerLabel(call)`: the contact's name, else the caller ID. */
   who: string;
@@ -44,29 +45,34 @@ export function CallCardPanel({
   personaName: string;
   /** The language the call was in — the caller's words carry it (`lang`). */
   language: "en" | "es";
+  /** The READER's own locale (S-10 T5) — this page's own, not the call's. */
+  locale: Locale;
+  /** The QA pseudo-locale (S-10 fix round M1). */
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const href = card.callbackNumber ? telHref(card.callbackNumber) : null;
   return (
     <section aria-labelledby="call-card" className={CARD}>
       <div className={`${CARD_HEAD} flex items-center justify-between gap-3`}>
-        <h2 id="call-card">{m["calls.card.heading"]}</h2>
+        <h2 id="call-card">{tr.text("calls.card.heading")}</h2>
         {/* DESIGN.md, Provenance: who wrote this is never left to be
             inferred. Every line on this card is the receptionist's — what
             she wrote down on the call, or her reading of it. */}
         <span>{aiAuthorMark(personaName)}</span>
       </div>
       <dl className="grid gap-x-6 gap-y-3 p-5 sm:grid-cols-[max-content_minmax(0,1fr)]">
-        <dt className={LABEL}>{m["calls.card.who"]}</dt>
+        <dt className={LABEL}>{tr.text("calls.card.who")}</dt>
         <dd className={`${VALUE} font-medium`}>{who}</dd>
 
-        <dt className={LABEL}>{m["calls.card.reason"]}</dt>
+        <dt className={LABEL}>{tr.text("calls.card.reason")}</dt>
         {card.reason ? (
           <dd className={VALUE}>{card.reason}</dd>
         ) : (
-          <dd className={MISSING}>{m["calls.card.reasonUnknown"]}</dd>
+          <dd className={MISSING}>{tr.text("calls.card.reasonUnknown")}</dd>
         )}
 
-        <dt className={LABEL}>{m["calls.card.callback"]}</dt>
+        <dt className={LABEL}>{tr.text("calls.card.callback")}</dt>
         {card.callbackNumber ? (
           <dd className={`${VALUE} font-medium tabular-nums`}>
             {href ? (
@@ -76,12 +82,12 @@ export function CallCardPanel({
             )}
           </dd>
         ) : (
-          <dd className={MISSING}>{m["calls.card.callbackUnknown"]}</dd>
+          <dd className={MISSING}>{tr.text("calls.card.callbackUnknown")}</dd>
         )}
 
         {card.callerWords ? (
           <>
-            <dt className={LABEL}>{m["calls.card.words"]}</dt>
+            <dt className={LABEL}>{tr.text("calls.card.words")}</dt>
             <dd className={VALUE}>
               <q lang={language}>{card.callerWords}</q>
             </dd>
