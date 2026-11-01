@@ -1086,7 +1086,14 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(cardHtml(html, "details")).toContain(`>${m["contact.source.label.es"]}<`);
     expect(cardHtml(html, "details")).toContain(`>${m["assign.field.label.es"]}<`);
     expect(cardHtml(html, "tags")).toContain(`placeholder="${m["contact.addTag.es"]}"`);
-    expect(cardHtml(html, "groups")).toContain(m["groups.title.es"]);
+    // Not m["groups.title.es"] alone: RecordCard's OWN chrome title (an <h2>, the one seen —
+    // record-cards.ts's titleKey is the SAME key, "groups.title") would say "Grupos" even if
+    // GroupsCard's own internal sr-only <h3> (headingHidden) were still hard-coded English — that
+    // would pass this assertion for the wrong reason. The <h3 class="sr-only"> is GroupsCard's own
+    // output; asserting against IT, and that no literal "Groups" leaks in at all, actually proves
+    // GroupsCard's own locale wiring (mutation: hard-code "en" in groups-card.tsx's heading -> FAILS).
+    expect(cardHtml(html, "groups")).toMatch(/<h3[^>]*class="sr-only"[^>]*>Grupos<\/h3>/);
+    expect(cardHtml(html, "groups")).not.toContain(">Groups<");
   });
 
   it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {

@@ -13,12 +13,16 @@ import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
  */
 
 /** Status dot + word (rule 3), in token classes only: a warning, because
- *  it is the one texts state an operator must act on before anything sends. */
-export const PHONE_CHECK_TREATMENT = {
-  label: m["contact.phoneCountry.word"],
-  dot: "bg-warning",
-  chip: "border-warning/30 bg-warning/10 text-foreground",
-} as const;
+ *  it is the one texts state an operator must act on before anything sends.
+ *  S-10 T3: a function of the reader's language — `dot`/`chip` are CSS
+ *  classes (locale-independent), but `label` is the Check number word. */
+export function phoneCheckTreatment(locale: Locale): { label: string; dot: string; chip: string } {
+  return {
+    label: t(m, "contact.phoneCountry.word", locale),
+    dot: "bg-warning",
+    chip: "border-warning/30 bg-warning/10 text-foreground",
+  };
+}
 
 export type PhoneCountryPrevious = { phone: string; unconfirmed: boolean };
 export type PhoneCountryPickResult =
@@ -62,8 +66,7 @@ export async function pickPhoneCountry(
   // refusal: nothing changed, and the row is exactly as it was.
   onChanged: () => void = () => {},
   /** The reader's language for every toast below (S-10 T3); default "en" so a caller that
-   *  predates it (texts-row.tsx, not yet wired) is unchanged. Never PHONE_CHECK_TREATMENT.label,
-   *  the module-level chip caption texts-row.tsx reads directly today — out of this fix's scope. */
+   *  predates it is unchanged. */
   locale: Locale = "en",
 ): Promise<void> {
   const picked = await attempt(() => save(country), toast, locale);

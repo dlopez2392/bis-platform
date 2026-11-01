@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { LocaleProvider } from "@/components/locale-provider";
@@ -38,7 +38,7 @@ const { ImportWizard } = await import("./import-wizard");
 function render(locale: "en" | "es", existingTags: string[] = []) {
   callCounter.n = 0;
   return renderToStaticMarkup(
-    createElement(LocaleProvider, { locale }, createElement(ImportWizard, { accountId: "a1", existingTags })),
+    createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(ImportWizard, { accountId: "a1", existingTags })),
   );
 }
 

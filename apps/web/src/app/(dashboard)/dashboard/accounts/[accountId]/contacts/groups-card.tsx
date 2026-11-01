@@ -408,7 +408,7 @@ function AddToGroup({ accountId, contactId, onChanged, locale }: { accountId: st
         </Button>
       </PopoverTrigger>
       {/* Esc closes it (Radix): the popover is the top layer, so the drawer stays open. */}
-      <PopoverContent className="w-80 p-0" align="end">
+      <PopoverContent className="w-80 p-0" align="end" lang={locale}>
         <Command shouldFilter={false}>
           <CommandInput placeholder={t(m, "groups.searchPlaceholder", locale)} value={term} onValueChange={setTerm} />
           <CommandList>

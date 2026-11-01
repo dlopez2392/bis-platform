@@ -3,10 +3,9 @@ import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { ImportWizard } from "./import-wizard";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { LocaleProvider } from "@/components/locale-provider";
 
@@ -25,9 +24,14 @@ export const dynamic = "force-dynamic";
  * we made up.
  */
 export default async function ImportContactsPage(
-  { params }: { params: Promise<{ accountId: string }> },
+  { params, searchParams }: {
+    params: Promise<{ accountId: string }>;
+    // The QA locale override (`?locale=es|pseudo`, BIS_I18N_QA only), as the record page's.
+    searchParams?: Promise<{ locale?: string }>;
+  },
 ) {
   const { accountId } = await params;
+  const { locale: localeParam } = (await searchParams) ?? {};
   const access = await requireNotTechnician(accountId);
   const db = await dbForRequest();
   // S-10 T3: this screen had no locale at all — resolved the same way the record, pipeline
@@ -36,13 +40,14 @@ export default async function ImportContactsPage(
   const { data: accountRow } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
-  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
   const tags = await listTags(db, accountId);
 
   return (
     <LocaleProvider locale={locale}>
       <div lang={locale}>
-        <PageHeader title={t(m, "contacts.import.title", locale)} />
+        <PageHeader title={tr.text("contacts.import.title")} />
         <div className="mx-auto max-w-2xl">
           <ImportWizard accountId={accountId} existingTags={tags.map((tag) => tag.name)} />
         </div>

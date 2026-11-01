@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { LocaleProvider } from "@/components/locale-provider";
@@ -11,7 +11,7 @@ const EMPTY: BoardColumn[] = [{ stage: { id: "s1", name: "New", position: 0 }, t
 
 function render(board: BoardColumn[], locale: "en" | "es") {
   return renderToStaticMarkup(
-    createElement(LocaleProvider, { locale }, createElement(PipelineBoard, {
+    createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(PipelineBoard, {
       board, moveAction: vi.fn(async () => {}), updateAction: vi.fn(async () => {}),
     })),
   );

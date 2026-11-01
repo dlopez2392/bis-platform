@@ -150,6 +150,32 @@ describe("PipelinePage reads the reader's language (S-10 T3)", () => {
     expect(html).toContain(m["pipeline.title"]);
     accountLanguage = null;
   });
+  it("a single open deal reads the singular form, in Spanish too (mutation: drop pipeline.openTotalOne -> FAILS)", async () => {
+    isAgency = false;
+    accountLanguage = "es";
+    sumOpenOpportunitiesMock.mockReset();
+    sumOpenOpportunitiesMock.mockResolvedValue({ count: 1, value: 500 });
+    const html = renderToStaticMarkup(await PipelinePage(route()));
+    expect(html).toContain(m["pipeline.openTotalOne.es"].replace("{value}", formatCurrency(500)));
+    isAgency = true;
+    accountLanguage = null;
+  });
+  // The QA override (`?locale=`, BIS_I18N_QA only) reaches this page's own locale resolution,
+  // the same mechanism the record and To do pages already prove end to end.
+  it("the QA override (?locale=es) turns the header Spanish even on an English account (mutation: drop { locale: localeParam } from requestLocale -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      sumOpenOpportunitiesMock.mockReset();
+      sumOpenOpportunitiesMock.mockResolvedValue({ count: 2, value: 500 });
+      const html = renderToStaticMarkup(await PipelinePage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "es" }),
+      }));
+      expect(html).toContain(m["pipeline.title.es"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 // The new-deal picker (F-092 out-of-scope finding): the page used to read the newest 200 contacts for a plain

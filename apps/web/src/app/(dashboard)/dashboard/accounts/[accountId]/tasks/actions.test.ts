@@ -354,6 +354,23 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
       texts.textsContextFor.mockRejectedValue(new Error("db down"));
       expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.failed.es"] });
     });
+
+    // The other two "already decided" returns in decideFromTask (no contact linked; no textable
+    // number left), pinned the same way as the third one above.
+    it("'already decided' (no contact linked to the task) is said in Spanish too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      dbMocks.readTaskContact.mockResolvedValueOnce({ contactId: null, consentEventId: null });
+      expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
+    });
+
+    it("'already decided' (the contact has no textable number left) is said in Spanish too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      texts.textsContextFor.mockResolvedValue({ ok: false, reason: "no_number", error: m["contact.texts.noNumber"] });
+      expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
+      expect(vi.mocked(completeTasksForConsentEvents)).toHaveBeenCalled();
+    });
   });
 });
 
