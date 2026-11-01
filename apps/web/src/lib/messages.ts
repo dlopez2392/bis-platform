@@ -651,14 +651,28 @@ export const m = {
   "contacts.import.confirm.es": "Importar",
   "contacts.import.importing": "Importing {done} of {total}...",
   "contacts.import.importing.es": "Importando {done} de {total}…",
-  "contacts.import.done": "Added {created}, updated {updated}.",
-  "contacts.import.done.es": "Se agregaron {created}, se actualizaron {updated}.",
+  // S-10 leftovers (#317 follow-up, item 5, the review's own "Se agregaron 1" finding):
+  // "contacts.import.done" (a single two-placeholder template) could never agree with BOTH
+  // counts at once in Spanish — "se agregó 1" needs the singular verb exactly when "se
+  // actualizaron 3" needs the plural one. Split into two independently-pluralized clauses
+  // (doneLine, import-summary.ts), joined by the wizard with the same ", " the old template
+  // used. The old combined key is gone — dead once nothing reads it (section 0's own rule).
+  "contacts.import.doneCreated": "Added {count}",
+  "contacts.import.doneCreated.es": "Se agregaron {count}",
+  "contacts.import.doneCreatedOne": "Added 1",
+  "contacts.import.doneCreatedOne.es": "Se agregó 1",
+  "contacts.import.doneUpdated": "updated {count}.",
+  "contacts.import.doneUpdated.es": "se actualizaron {count}.",
+  "contacts.import.doneUpdatedOne": "updated 1.",
+  "contacts.import.doneUpdatedOne.es": "se actualizó 1.",
   // Shown only when the count is non-zero. "Possible" is doing real work: these
   // are pairs where an email and a phone pointed at different contacts, which
   // is usually one person entered twice — but not always, and the product has
   // no merge screen yet, so it must not promise a resolution it cannot offer.
   "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
   "contacts.import.flagged.es": "{flagged} posibles duplicados marcados para revisión.",
+  "contacts.import.flaggedOne": "1 possible duplicate flagged for review.",
+  "contacts.import.flaggedOne.es": "1 posible duplicado marcado para revisión.",
   // Shown on the done screen only when they happened (final review I-C), summed
   // across every batch. The contacts themselves were saved either way.
   "contacts.import.businessTooLong": "{count} business names were too long to save (120 characters max).",

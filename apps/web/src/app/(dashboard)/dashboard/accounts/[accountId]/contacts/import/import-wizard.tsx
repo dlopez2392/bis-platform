@@ -5,7 +5,7 @@ import Papa from "papaparse";
 import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel, type ParsedRow } from "@/lib/contacts/csv";
-import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, type ImportTotals } from "@/lib/contacts/import-summary";
+import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, doneLine, flaggedLine, type ImportTotals } from "@/lib/contacts/import-summary";
 import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { Button } from "@/components/ui/button";
@@ -129,11 +129,11 @@ export function ImportWizard(
     return (
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
-          {t(m, "contacts.import.done", locale, { created: phase.totals.created, updated: phase.totals.updated })}
+          {doneLine(phase.totals, locale)}
         </p>
-        {phase.totals.flagged > 0 ? (
+        {flaggedLine(phase.totals, locale) ? (
           <p className="mt-2 text-sm text-text-2">
-            {t(m, "contacts.import.flagged", locale, { flagged: phase.totals.flagged })}
+            {flaggedLine(phase.totals, locale)}
           </p>
         ) : null}
         {importBusinessNotes(phase.totals, locale).map((note) => (

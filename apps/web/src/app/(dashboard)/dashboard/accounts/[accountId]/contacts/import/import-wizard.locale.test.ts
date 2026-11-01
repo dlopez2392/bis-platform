@@ -84,12 +84,21 @@ describe("ImportWizard in the reader's language (S-10 T3)", () => {
     expect(es).toContain(`>${m["contact.tags.es"]}<`);
     expect(es).not.toContain(">first_name<");
   });
-  it("the done screen reads Spanish, including the business notes (mutation: hard-code en in importBusinessNotes -> FAILS)", () => {
+  it("the done screen reads Spanish, including the business notes and the per-count verb agreement (S-10 leftovers item 5; mutation: hard-code en in importBusinessNotes -> FAILS)", () => {
+    // created=2 (plural "se agregaron"), updated=1 (singular "se actualizó") — the mixed case
+    // a single two-placeholder template could never say correctly in Spanish.
     phaseOverride = { name: "done", totals: { created: 2, updated: 1, flagged: 0, businessTooLong: 1, businessLinkFailed: false } };
     const html = render("es");
-    expect(html).toContain(m["contacts.import.done.es"].replace("{created}", "2").replace("{updated}", "1"));
+    expect(html).toContain("Se agregaron 2, se actualizó 1");
     expect(html).toContain(m["contacts.import.businessTooLongOne.es"]);
     expect(html).toContain(m["contacts.import.back.es"]);
+  });
+
+  it("the done screen's flagged count agrees at 1 in Spanish (S-10 leftovers item 5; mutation: always use the plural Spanish form -> FAILS)", () => {
+    phaseOverride = { name: "done", totals: { created: 1, updated: 0, flagged: 1, businessTooLong: 0, businessLinkFailed: false } };
+    const html = render("es");
+    expect(html).toContain(m["contacts.import.flaggedOne.es"]);
+    expect(html).not.toContain(m["contacts.import.flagged.es"].replace("{flagged}", "1"));
   });
   it("the stopped screen reads Spanish (mutation: read m[...] directly -> FAILS)", () => {
     phaseOverride = { name: "stopped", done: 3, error: "boom" };
