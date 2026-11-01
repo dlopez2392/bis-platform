@@ -56,7 +56,7 @@ beforeEach(() => {
 
 describe("setBrandingAction — the Clerk organisation follows the brand name (D-005)", () => {
   it("after a successful save, renames this account's Clerk organisation to the trimmed brand name, so invitation emails name the company as it is now (mutation: drop the sync → FAILS)", async () => {
-    expect(await setBrandingAction("acct_1", fd({ brandName: "  Rio Roofing  " }))).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "  Rio Roofing  " }))).toEqual({ ok: true });
     expect(orgNameMocks.syncClerkOrgName).toHaveBeenCalledOnce();
     const [db, , accountId, name] = orgNameMocks.syncClerkOrgName.mock.calls[0]! as unknown as [unknown, unknown, string, string];
     expect(db).toBe(dbForRequestInstance);
@@ -66,32 +66,32 @@ describe("setBrandingAction — the Clerk organisation follows the brand name (D
 
   it("skips Clerk when the brand name did not change, e.g. a colour-only save (mutation: always sync → FAILS)", async () => {
     dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
-    expect(await setBrandingAction("acct_1", fd({ brandName: " Rio Roofing ", brandColor: "#0f766e" }))).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: " Rio Roofing ", brandColor: "#0f766e" }))).toEqual({ ok: true });
     expect(orgNameMocks.syncClerkOrgName).not.toHaveBeenCalled();
   });
 
   it("still syncs when the earlier name could not be read: unsure means try", async () => {
     dbMocks.getBranding.mockRejectedValue(new Error("read failed"));
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
     expect(orgNameMocks.syncClerkOrgName).toHaveBeenCalledOnce();
   });
 
   it("a failed save never renames the organisation (mutation: sync before the write → FAILS)", async () => {
     dbMocks.setBranding.mockRejectedValue(new Error("rls"));
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Rio Roofing" })))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
     expect(orgNameMocks.syncClerkOrgName).not.toHaveBeenCalled();
   });
 
   it("a sync that could not reach Clerk still reports the save, which did happen (fail soft)", async () => {
     orgNameMocks.syncClerkOrgName.mockResolvedValue(false);
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
   });
 });
 
 describe("setBrandingAction — brand name is required", () => {
   it("refuses a blank brandName without writing", async () => {
-    expect(await setBrandingAction("acct_1", fd({ brandName: "" })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "" })))
       .toEqual({ ok: false, error: m["branding.nameRequired"] });
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
@@ -101,7 +101,7 @@ describe("setBrandingAction — brand name is required", () => {
     // a whitespace name then saves as "" instead of being refused. (Restoring
     // the old `|| null` alone is NOT a mutation that bites: null is falsy, so
     // the guard still refuses it.)
-    expect(await setBrandingAction("acct_1", fd({ brandName: "   " })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "   " })))
       .toEqual({ ok: false, error: m["branding.nameRequired"] });
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
@@ -111,14 +111,14 @@ describe("setBrandingAction — brand name is required", () => {
   // (default "en", every call above unaffected), bound by the page alongside
   // accountId.
   it("reads the refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param from any refusal → FAILS)", async () => {
-    expect(await setBrandingAction("acct_1", fd({ brandName: "" }), "es"))
+    expect(await setBrandingAction("acct_1", "es", fd({ brandName: "" })))
       .toEqual({ ok: false, error: m["branding.nameRequired.es"] });
-    expect(await setBrandingAction("acct_1", fd({ brandName: "x", brandColor: "notacolor" }), "es"))
+    expect(await setBrandingAction("acct_1", "es", fd({ brandName: "x", brandColor: "notacolor" })))
       .toEqual({ ok: false, error: m["branding.badColor.es"] });
   });
 
   it("saves a normal, trimmed name", async () => {
-    expect(await setBrandingAction("acct_1", fd({ brandName: "  Acme Dental  " })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "  Acme Dental  " })))
       .toEqual({ ok: true });
     expect(dbMocks.setBranding).toHaveBeenCalledWith(
       dbForRequestInstance, "acct_1",
@@ -146,7 +146,7 @@ describe("setBrandingAction — mailing address", () => {
   it("saves the address trimmed, keeping the line breaks inside it", async () => {
     // Mutation: drop the `.trim()` on the raw address → FAILS (the padding and
     // the trailing newline reach setBranding).
-    expect(await setBrandingAction("acct_1", fd({
+    expect(await setBrandingAction("acct_1", "en", fd({
       brandName: "Acme Dental", mailingAddress: "  \n123 Main St\nMcAllen, TX 78501 \n ",
     }))).toEqual({ ok: true });
     expect(sent().mailingAddress).toBe("123 Main St\nMcAllen, TX 78501");
@@ -155,7 +155,7 @@ describe("setBrandingAction — mailing address", () => {
   it("clears it (null, never \"\") when the box is emptied", async () => {
     // Mutation: pass the trimmed string through instead of `=== "" ? null` →
     // FAILS with "" (a second spelling of "not set", which the column refuses).
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Acme Dental", mailingAddress: "" })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Acme Dental", mailingAddress: "" })))
       .toEqual({ ok: true });
     expect(sent().mailingAddress).toBeNull();
   });
@@ -165,7 +165,7 @@ describe("setBrandingAction — mailing address", () => {
     // ideographic space — written as `\u` escapes so the line is reviewable:
     // blank to the send path's `.trim()` and to the column's CHECK, so this
     // must arrive as null and never be sent to the database as text.
-    expect(await setBrandingAction("acct_1", fd({
+    expect(await setBrandingAction("acct_1", "en", fd({
       brandName: "Acme Dental", mailingAddress: " \t\r\n\u00A0\uFEFF\u3000 ",
     }))).toEqual({ ok: true });
     expect(sent().mailingAddress).toBeNull();
@@ -173,7 +173,7 @@ describe("setBrandingAction — mailing address", () => {
 
   it("refuses 301 characters with its own message, without writing", async () => {
     // Mutation: delete the length check → FAILS (the action writes it).
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Acme Dental", mailingAddress: "a".repeat(301) })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Acme Dental", mailingAddress: "a".repeat(301) })))
       .toEqual({ ok: false, error: m["branding.mailingAddressTooLong"] });
     expect(dbMocks.setBranding).not.toHaveBeenCalled();
   });
@@ -181,9 +181,9 @@ describe("setBrandingAction — mailing address", () => {
   it("accepts exactly 300, and counts the length AFTER trimming", async () => {
     // Mutation: `>= 300` → FAILS on the first call; checking the raw length
     // before trimming → FAILS on the second (302 raw, 300 once trimmed).
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Acme Dental", mailingAddress: "a".repeat(300) })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Acme Dental", mailingAddress: "a".repeat(300) })))
       .toEqual({ ok: true });
-    expect(await setBrandingAction("acct_1", fd({ brandName: "Acme Dental", mailingAddress: ` ${"a".repeat(300)}\n` })))
+    expect(await setBrandingAction("acct_1", "en", fd({ brandName: "Acme Dental", mailingAddress: ` ${"a".repeat(300)}\n` })))
       .toEqual({ ok: true });
     expect(dbMocks.setBranding).toHaveBeenCalledTimes(2);
     expect(dbMocks.setBranding.mock.calls[1]![2]).toMatchObject({ mailingAddress: "a".repeat(300) });
@@ -196,13 +196,13 @@ describe("setBrandingAction — mailing address", () => {
     // "PO Box 12\r\nEdinburg, TX 78539" and the column held the \r\n verbatim.
     // Mutation: delete the normalization → FAILS (the \r survives to
     // setBranding untouched).
-    expect(await setBrandingAction("acct_1", fd({
+    expect(await setBrandingAction("acct_1", "en", fd({
       brandName: "Acme Dental", mailingAddress: "PO Box 12\r\nEdinburg, TX 78539",
     }))).toEqual({ ok: true });
     expect(sent().mailingAddress).toBe("PO Box 12\nEdinburg, TX 78539");
 
     // A lone \r (old Mac-style) is normalized too, not just \r\n pairs.
-    expect(await setBrandingAction("acct_1", fd({
+    expect(await setBrandingAction("acct_1", "en", fd({
       brandName: "Acme Dental", mailingAddress: "PO Box 12\rEdinburg, TX 78539",
     }))).toEqual({ ok: true });
     expect(dbMocks.setBranding.mock.calls[1]![2]).toMatchObject({
@@ -219,7 +219,7 @@ describe("setBrandingAction — mailing address", () => {
     const f = fd({ brandName: "Acme Dental", mailingAddress: "PO Box 12, Edinburg, TX 78539" });
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
     f.set("logo", new File([png], "logo.png", { type: "image/png" }));
-    expect(await setBrandingAction("acct_1", f)).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", f)).toEqual({ ok: true });
     expect(sent()).toMatchObject({
       brandLogoPath: "acct_1/logo.png", mailingAddress: "PO Box 12, Edinburg, TX 78539",
     });
@@ -238,7 +238,7 @@ describe("setBrandingAction — sweeping stale logo objects after a successful u
     const f = fd({ brandName: "Acme Dental" });
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
     f.set("logo", new File([png], "logo.png", { type: "image/png" }));
-    expect(await setBrandingAction("acct_1", f)).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", f)).toEqual({ ok: true });
     expect(dbMocks.sweepOrphanedLogos).toHaveBeenCalledWith({}, "acct_1", "acct_1/logo-new.png");
     expect(dbMocks.removeBrandLogo).not.toHaveBeenCalled();
   });
@@ -253,7 +253,7 @@ describe("setBrandingAction — sweeping stale logo objects after a successful u
     const f = fd({ brandName: "Acme Dental" });
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
     f.set("logo", new File([png], "logo.png", { type: "image/png" }));
-    expect(await setBrandingAction("acct_1", f)).toEqual({ ok: true });
+    expect(await setBrandingAction("acct_1", "en", f)).toEqual({ ok: true });
     expect(dbMocks.sweepOrphanedLogos).toHaveBeenCalledWith({}, "acct_1", "acct_1/logo-same.png");
     expect(dbMocks.removeBrandLogo).not.toHaveBeenCalled();
   });
@@ -339,12 +339,12 @@ describe("removeBrandLogoAction", () => {
 
 describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
   it("checks account access before doing anything (mutation: delete the requireNotTechnician call → FAILS)", async () => {
-    await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png");
+    await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png");
     expect(authMocks.requireNotTechnician).toHaveBeenCalledWith("acct_1");
   });
 
   it("checks Storage existence and the database compare-and-set, never setBranding directly, and never re-uploads", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png")).toEqual({ ok: true });
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png")).toEqual({ ok: true });
     expect(dbMocks.logoExists).toHaveBeenCalledWith({}, "acct_1/logo-0123456789abcdef.png");
     expect(dbMocks.restoreBrandLogoIfCleared).toHaveBeenCalledWith(
       dbForRequestInstance, "acct_1", "acct_1/logo-0123456789abcdef.png", "user_1",
@@ -360,14 +360,14 @@ describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
   // plain-language refusal, not a silent `ok: true`.
   it("refuses, in plain language, when the compare-and-set reports the column was no longer null (Remove → upload → stale Undo)", async () => {
     dbMocks.restoreBrandLogoIfCleared.mockResolvedValue(false);
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.logoGone"] });
   });
 
   // S-10 T6.
   it("reads that refusal in Spanish when the caller passes locale 'es' (mutation: drop the locale param → FAILS)", async () => {
     dbMocks.restoreBrandLogoIfCleared.mockResolvedValue(false);
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png", "es"))
+    expect(await restoreBrandLogoAction("acct_1", "es", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.logoGone.es"] });
   });
 
@@ -377,7 +377,7 @@ describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
   // FAILS (the CAS alone would succeed here, since the column IS null).
   it("refuses, in plain language, when the object no longer exists in Storage (Remove → upload → Remove → stale Undo for the first path)", async () => {
     dbMocks.logoExists.mockResolvedValue(false);
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.logoGone"] });
     expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
   });
@@ -386,40 +386,40 @@ describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
   // `acct_1/../acct_2/logo-abc.png`, which a URL normalizes to the OTHER
   // account's object. The exact-shape regex refuses it outright.
   it("refuses a path that escapes the account's own folder via '..' , without writing (mutation: drop the exact-shape check for a bare startsWith → FAILS)", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/../acct_2/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/../acct_2/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
     expect(dbMocks.logoExists).not.toHaveBeenCalled();
     expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
   });
 
   it("refuses a path with anything before the account's folder (mutation: drop the regex's leading ^ → FAILS)", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "x/acct_1/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "x/acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
     expect(dbMocks.logoExists).not.toHaveBeenCalled();
     expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
   });
 
   it("refuses a path in the right folder but the wrong shape — not one of uploadBrandLogo's own names (mutation: drop the filename regex → FAILS)", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/not-a-logo.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/not-a-logo.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
     expect(dbMocks.logoExists).not.toHaveBeenCalled();
   });
 
   it("refuses a path outside the account's own folder, without writing (mutation: drop the prefix check → FAILS)", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_2/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_2/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
     expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
   });
 
   it("answers the generic save-failed message when the compare-and-set throws", async () => {
     dbMocks.restoreBrandLogoIfCleared.mockRejectedValue(new Error("boom"));
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
   });
 
   it("answers the generic save-failed message when the Storage existence check throws", async () => {
     dbMocks.logoExists.mockRejectedValue(new Error("boom"));
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+    expect(await restoreBrandLogoAction("acct_1", "en", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
   });
 });

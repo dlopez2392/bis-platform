@@ -146,14 +146,12 @@ export default async function BrandingPage({
         brandMode={branding.brandMode}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
         replyRoute={replies}
-        // Not .bind() for these two: setBrandingAction's shape is (accountId,
-        // formData, locale) and restoreBrandLogoAction's is (accountId, path,
-        // locale) — in both, the single remaining arg this prop supplies
-        // sits BETWEEN the two bound ones, which .bind() cannot skip over.
-        // removeBrandLogoAction has no such middle argument, so .bind() still works for it.
-        action={(formData: FormData) => setBrandingAction(accountId, formData, locale)}
+        // All three are .bind() results, never arrow wrappers: a server
+        // component may pass a client component only a server action (or its
+        // .bind()), and an arrow function fails at render in production.
+        action={setBrandingAction.bind(null, accountId, locale)}
         removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}
-        restoreLogoAction={(path: string) => restoreBrandLogoAction(accountId, path, locale)}
+        restoreLogoAction={restoreBrandLogoAction.bind(null, accountId, locale)}
         locale={locale}
       />
       {/* S-06 part 2: its own card, OUTSIDE the branding form (plan G6), and no primary of its own. */}

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * What is under test here is ONE thing: whether the client's own Branding
@@ -331,11 +334,24 @@ describe("branding page — the whole page's own locale (S-10 T6)", () => {
     await captured.panel!.action!(new FormData());
     await captured.panel!.removeLogoAction!();
     await captured.panel!.restoreLogoAction!("a/logo-x.png");
-    // setBrandingAction's own shape is (accountId, formData, locale) — the
-    // caller's one remaining arg (formData) sits BETWEEN the two the page
-    // supplies, so only the first and last positions are asserted here.
-    expect([actionCalls.setBranding[0]![0], actionCalls.setBranding[0]![2]]).toEqual(["a1", "es"]);
+    expect(actionCalls.setBranding[0]!.slice(0, 2)).toEqual(["a1", "es"]);
     expect(actionCalls.removeLogo[0]).toEqual(["a1", "es"]);
-    expect(actionCalls.restoreLogo[0]).toEqual(["a1", "a/logo-x.png", "es"]);
+    expect(actionCalls.restoreLogo[0]).toEqual(["a1", "es", "a/logo-x.png"]);
+  });
+});
+
+// A server component can hand a client component only a server action or its
+// .bind(); an arrow wrapper renders fine through renderToStaticMarkup (every
+// test above) and then fails at render in production. So the page's action
+// props are pinned to .bind() at the source.
+describe("branding/page.tsx passes BrandingPanel bound server actions, never arrow wrappers (mutation: wrap any one in an arrow → FAILS)", () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "page.tsx"), "utf8");
+  it("no JSX prop on this server page is an arrow function", () => {
+    expect(src).not.toMatch(/[A-Za-z]+=\{\s*(async\s*)?\([^)]*\)\s*=>/);
+  });
+  it("each of the three branding actions is bound with accountId and the reader's locale", () => {
+    expect(src).toContain("action={setBrandingAction.bind(null, accountId, locale)}");
+    expect(src).toContain("removeLogoAction={removeBrandLogoAction.bind(null, accountId, locale)}");
+    expect(src).toContain("restoreLogoAction={restoreBrandLogoAction.bind(null, accountId, locale)}");
   });
 });

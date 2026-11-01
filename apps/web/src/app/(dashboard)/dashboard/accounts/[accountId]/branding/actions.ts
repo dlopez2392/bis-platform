@@ -40,11 +40,14 @@ const MAX_MAILING_ADDRESS = 300;
 
 export async function setBrandingAction(
   accountId: string,
+  // S-10 T6: the reader's language for every error below, bound by the page
+  // ahead of the caller's own argument (`.bind(null, accountId, locale)`).
+  // It sits BEFORE formData on purpose: a server component can hand a client
+  // component only a server action or its .bind(), never an arrow wrapper,
+  // and .bind() can only fill leading arguments. The agency's Settings card
+  // binds "en".
+  locale: Locale,
   formData: FormData,
-  // S-10 T6: optional, defaulting to "en" — every error below was a bare
-  // English m["…"] read; the page binds the reader's own resolved locale
-  // alongside accountId (`.bind(null, accountId, locale)`).
-  locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // Widened from agency-only: this action is now the ONE branding write,
   // reached from the agency's Settings card and from the client's own
@@ -299,7 +302,8 @@ export async function removeBrandLogoAction(
  * different account's stored object.
  */
 export async function restoreBrandLogoAction(
-  accountId: string, path: string, locale: Locale = "en",
+  // locale before path for the same .bind() reason as setBrandingAction.
+  accountId: string, locale: Locale, path: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireNotTechnician(accountId);
 
