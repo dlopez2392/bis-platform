@@ -189,7 +189,7 @@ export const m = {
   "landing.noAccess.title": "No access yet",
   "landing.noAccess.title.es": "Todavía no tiene acceso",
   "landing.noAccess.body": "This sign-in isn't connected to a company yet. If you were invited, open the invitation link from your email — it has to be accepted before you can sign in. Otherwise sign out and try the address the invitation was sent to.",
-  "landing.noAccess.body.es": "Este inicio de sesión todavía no está conectado a ninguna empresa. Si lo invitaron, abra el enlace de la invitación en su correo; debe aceptarla antes de poder iniciar sesión. Si no, cierre sesión e intente con la dirección a la que se envió la invitación.",
+  "landing.noAccess.body.es": "Este inicio de sesión todavía no está conectado a ningún negocio. Si lo invitaron, abra el enlace de la invitación en su correo; debe aceptarla antes de poder iniciar sesión. Si no, cierre sesión e intente con la dirección a la que se envió la invitación.",
 
   // The signed-out shell's rail. This is the line that does real work on
   // /sign-in: it answers "whose software is this", which is the question
@@ -212,9 +212,9 @@ export const m = {
   // and gave them nothing to do; "contact your account manager" is a title
   // nobody at a small business has. Say what happened and who can fix it.
   "clientAccess.none.title": "Your company isn't set up yet",
-  "clientAccess.none.title.es": "Su empresa todavía no está configurada",
+  "clientAccess.none.title.es": "Su negocio todavía no está configurado",
   "clientAccess.none.body": "Your invitation worked, but this company hasn't finished being set up on our side. Let the person who invited you know — they can finish it, and your invitation stays valid.",
-  "clientAccess.none.body.es": "Su invitación funcionó, pero esta empresa todavía no ha terminado de configurarse por nuestra parte. Avísele a la persona que lo invitó: puede terminar la configuración, y su invitación sigue siendo válida.",
+  "clientAccess.none.body.es": "Su invitación funcionó, pero su negocio todavía no ha terminado de configurarse por nuestra parte. Avísele a la persona que lo invitó: puede terminar la configuración, y su invitación sigue siendo válida.",
 
   // The agency-side half of the same fault. See lib/accounts/orphans.ts.
   "accounts.orphan.title": "Set up in Clerk but not here",

@@ -64,5 +64,17 @@ describe("localeFromAcceptLanguage", () => {
   it("an en range at q=0 does not stop a lower-ranked but acceptable es range", () => {
     expect(localeFromAcceptLanguage("en;q=0, es;q=0.1")).toBe("es");
   });
+
+  it("at equal q the range listed FIRST wins — the order a browser states its preference in (mutation: reverse the tie-break → FAILS)", () => {
+    expect(localeFromAcceptLanguage("en,es")).toBe("en");
+    expect(localeFromAcceptLanguage("es,en")).toBe("es");
+    expect(localeFromAcceptLanguage("en;q=0.5,es;q=0.5")).toBe("en");
+    expect(localeFromAcceptLanguage("es;q=0.5,en;q=0.5")).toBe("es");
+  });
+
+  it("the q parameter name is case-insensitive (RFC 9110 §5.6.6), so Q=0 still refuses", () => {
+    expect(localeFromAcceptLanguage("es;Q=0")).toBe("en");
+    expect(localeFromAcceptLanguage("en;Q=0.1, es;Q=0.9")).toBe("es");
+  });
 });
 

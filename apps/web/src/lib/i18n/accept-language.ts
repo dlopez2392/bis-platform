@@ -21,7 +21,8 @@ function parseRanges(header: string): Range[] {
     let q = 1;
     for (const param of params) {
       const [key, value] = param.split("=").map((s) => s.trim());
-      if (key === "q") {
+      // Parameter names are case-insensitive (RFC 9110 §5.6.6): "Q=0" is q=0.
+      if (key?.toLowerCase() === "q") {
         const parsed = Number(value);
         q = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
       }

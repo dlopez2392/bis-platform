@@ -6,7 +6,10 @@
 // Accept-Language (auth-shell.test.ts); the signed-in <html lang> is T9's.
 //
 // Every session/DB reader below is mocked to THROW: if the layout ever calls
-// one again, rendering it throws and these cases fail by name.
+// one again, rendering it throws and these cases fail by name. The ONE
+// exception is getRequestTheme, stubbed to return: it is the theme path the
+// layout already had (it reads the session itself, unchanged by T7), so this
+// file proves "no NEW read for lang", not "no session read at all".
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 

@@ -28,14 +28,16 @@ describe("/sign-in resolves its locale from Accept-Language", () => {
   it("no header (Playwright's own default, and every existing probe's case): renders English", async () => {
     const html = renderToStaticMarkup(await Page());
     expect(html).toContain("Sign in");
-    expect(html).toContain('lang="en"');
+    // <main lang>, not just any lang="en": Clerk's own wrapper always carries
+    // lang="en" (Q6), so a bare toContain could never fail.
+    expect(html).toMatch(/<main lang="en"/);
   });
 
   it("a Spanish-ranked header: the heading is Spanish (mutation: read m[...] directly → FAILS)", async () => {
     h.acceptLanguage = "es-MX,en;q=0.5";
     const html = renderToStaticMarkup(await Page());
     expect(html).toContain("Iniciar sesión");
-    expect(html).toContain('lang="es"');
+    expect(html).toMatch(/<main lang="es"/);
   });
 
   it("Clerk's own widget is wrapped in lang=\"en\" even on a Spanish page (mutation: drop the wrapper → FAILS)", async () => {

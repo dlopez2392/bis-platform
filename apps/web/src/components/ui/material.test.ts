@@ -331,7 +331,9 @@ describe("the routes above dashboard/layout.tsx get a ground of their own", () =
       "../../app/(dashboard)/billing-done/page.tsx",
     ]) {
       const s = src(rel);
-      expect(s, rel).toMatch(/<AuthShell[\s>]/);
+      // With the resolved locale, not just present: a bare <AuthShell> renders
+      // English for a Spanish browser and every other pin still passes.
+      expect(s, rel).toMatch(/<AuthShell locale=\{locale\}>/);
       expect(s, rel).toContain('from "@/components/auth-shell"');
       // And no longer its own: a second Ground behind the shell's would paint
       // every glow twice.
