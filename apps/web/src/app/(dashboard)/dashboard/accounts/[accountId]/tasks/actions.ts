@@ -233,7 +233,10 @@ async function resolveTaskLocale(accountId: string, isAgency: boolean): Promise<
     // Reading the account's language for an ERROR's own locale must never itself raise a new
     // error; a failed read here still resolves a locale.
   }
-  return requestLocale({ account: { language: accountLanguageValue }, isOperator: isAgency, userLanguage: prefs.language });
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's
+  // braces, and a NESTED { language: ... } before the closing brace defeats its non-greedy regex.
+  const accountLanguage = { language: accountLanguageValue };
+  return requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
 }
 
 /**
