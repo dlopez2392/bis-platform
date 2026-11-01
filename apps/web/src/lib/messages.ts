@@ -6900,6 +6900,8 @@ export const m = {
   "accessLog.enter.heading.es": "¿Por qué abre {name}?",
   "accessLog.enter.opening": "Opening the account",
   "accessLog.enter.opening.es": "Abriendo la cuenta",
+  "accessLog.enter.continue": "Continue",
+  "accessLog.enter.continue.es": "Continuar",
   "accessLog.enter.legend": "Choose a reason",
   "accessLog.enter.legend.es": "Elija un motivo",
   "accessLog.enter.notice": "The business's Owners can see each visit, its reason and everything you open.",
