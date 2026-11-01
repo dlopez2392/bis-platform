@@ -201,9 +201,9 @@ vi.mock("./checklist-row", () => ({
 // the page-level wiring (which counts it's handed, and that it renders at
 // zero for both audiences) is what's under test here, not work-row.tsx's own
 // markup (that's work-row.test.ts's job).
-const workRowProps = vi.hoisted(() => ({ current: null as { accountId: string; total: number; overdue: number } | null }));
+const workRowProps = vi.hoisted(() => ({ current: null as { accountId: string; total: number; overdue: number; locale?: string } | null }));
 vi.mock("./work-row", () => ({
-  WorkRowCard: (props: { accountId: string; total: number; overdue: number }) => {
+  WorkRowCard: (props: { accountId: string; total: number; overdue: number; locale?: string }) => {
     workRowProps.current = props;
     return null;
   },
@@ -373,13 +373,13 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
-    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 5, overdue: 1 });
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 5, overdue: 1, locale: "en" });
   });
 
   it("still renders the row at an empty queue, for an agency session", async () => {
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
-    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0, locale: "en" });
   });
 
   it("counts overdue work in the RESOLVED zone, not the account's raw one (mutation: bucketWork(..., account.timezone) -> overdue drops to 0 -> FAILS)", async () => {
@@ -393,7 +393,7 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
-    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 1, overdue: 1 });
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 1, overdue: 1, locale: "en" });
   });
 
   it("still renders the row at an empty queue, for a client session", async () => {
@@ -401,7 +401,7 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
-    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+    expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0, locale: "en" });
   });
 });
 

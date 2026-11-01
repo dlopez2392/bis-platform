@@ -2,6 +2,7 @@ import type { TrafficDay, TrafficBreakdownRow } from "@bis/db";
 import type { StatTileDelta } from "@/components/stat-tile";
 import { deltaVsPrior } from "@/lib/dashboard/metrics";
 import { dayKeyInZone } from "@/lib/booking/availability";
+import type { Locale } from "@/lib/i18n/locale";
 import { channelOf } from "./channel";
 import { websiteSentence, type SentenceSegment } from "./sentence";
 
@@ -103,6 +104,10 @@ function rank(rows: TrafficBreakdownRow[], name: (value: string) => string, tota
 export function buildWebsiteView(input: {
   now: Date; timezone: string; period: Period;
   daily: TrafficDay[]; breakdown: TrafficBreakdownRow[]; lastSyncedDay: string | null;
+  /** S-10 T2: the reader's own locale, for the sentence panel only — every
+   *  other field here is a number or a name, not copy. Optional, default
+   *  "en", so every pre-existing call site renders exactly as before. */
+  locale?: Locale;
 }): WebsiteView {
   const { current, prior } = windowDayKeys(input.now, input.timezone, input.period);
   const byDay = new Map(input.daily.map((d) => [d.day, d]));
@@ -134,7 +139,7 @@ export function buildWebsiteView(input: {
     topSource: sources[0] ?? null, runnerUpSourceShare: sources[1]?.share ?? 0,
     topPage, runnerUpPageShare: pages[1]?.share ?? 0,
     topDevice: devices[0] ?? null,
-  });
+  }, input.locale ?? "en");
 
   const today = dayKeyInZone(input.now, input.timezone);
   const stale = input.lastSyncedDay === null || daysBetween(input.lastSyncedDay, today) > STALE_AFTER_DAYS;

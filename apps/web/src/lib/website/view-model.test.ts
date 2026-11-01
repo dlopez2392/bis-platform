@@ -76,6 +76,14 @@ describe("buildWebsiteView", () => {
     expect(view.sentence.map((s) => s.text).join("")).toMatch(/^120 people visited your website, 71% more than the week before\./);
   });
 
+  // S-10 T2: `locale` is a new, optional field (default "en", so every call
+  // above is unaffected) that reaches the sentence builder — the one place
+  // on this screen whose copy is generated rather than a catalogue key.
+  it("an 'es' locale hands the SAME numbers to the Spanish sentence (mutation: drop locale from the websiteSentence call → this stays English and FAILS)", () => {
+    const esView = buildWebsiteView({ now: NOW, timezone: TZ, period: 7, daily, breakdown, lastSyncedDay: "2026-09-06", locale: "es" });
+    expect(esView.sentence.map((s) => s.text).join("")).toMatch(/^120 personas visitaron su sitio web, 71% más que en la semana anterior\./);
+  });
+
   /**
    * D-053, reopened with production evidence: on a real account, a day's
    * breakdown rows have been observed summing to MORE than that same

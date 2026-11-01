@@ -91,11 +91,15 @@ describe("period pills (Website header)", () => {
     // at `p-0.5` (2px). The mockup's `.pills` (northern-lights.html:70) is a
     // 3px inset on the mode-keyed chrome neutrals; this is page chrome, not a
     // card, so it chooses the mode-keyed side of the tenant seam on purpose.
+    // RETARGETED AGAIN (S-10 i18n): the nav's aria-label went from the literal
+    // "Period" to `tr.text("website.periodNav")` (still "Period" in English,
+    // per messages.ts) when the Website page gained a locale. The anchor
+    // follows the source shape; the classes it guards are unchanged.
     expect(page).toMatch(
-      /aria-label="Period" className="[^"]*\brounded-full\b[^"]*border-\[var\(--line\)\][^"]*bg-\[var\(--surface-1\)\][^"]*\bp-\[3px\]/,
+      /aria-label=\{tr\.text\("website\.periodNav"\)\} className="[^"]*\brounded-full\b[^"]*border-\[var\(--line\)\][^"]*bg-\[var\(--surface-1\)\][^"]*\bp-\[3px\]/,
     );
     // The old pair must be gone, not merely outranked further along the string.
-    expect(page).not.toMatch(/aria-label="Period" className="[^"]*\bbg-card\b/);
+    expect(page).not.toMatch(/aria-label=\{tr\.text\("website\.periodNav"\)\} className="[^"]*\bbg-card\b/);
     expect(page).toMatch(/\? "pill-on rounded-full px-3 py-1/);
     expect(page).not.toContain("bg-primary/15");
     // Same white-surface-2-in-light reasoning as the button/badge cases

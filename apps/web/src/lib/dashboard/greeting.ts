@@ -5,6 +5,8 @@
 // `partsInZone` primitive (booking/slots.ts) — never an un-pinned
 // `Intl.DateTimeFormat` reading the SYSTEM zone.
 import { partsInZone } from "@/lib/booking/slots";
+import { tag } from "@/lib/format";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type GreetingPeriod = "morning" | "afternoon" | "evening";
 
@@ -24,12 +26,15 @@ export function greetingPeriod(now: Date, timezone: string): GreetingPeriod {
 }
 
 /**
- * The greeting sub-line's local long date ("Monday, August 31, 2026") —
- * zone-pinned per `formatWhen`'s own pattern (booking/time.ts): an explicit
- * `timeZone` on the `Intl.DateTimeFormat` call, never the system zone.
+ * The greeting sub-line's local long date ("Monday, August 31, 2026",
+ * "sábado, 3 de julio de 2027" in Spanish) — zone-pinned per `formatWhen`'s
+ * own pattern (booking/time.ts): an explicit `timeZone` on the
+ * `Intl.DateTimeFormat` call, never the system zone. `locale` was pinned to
+ * "en-US" (S-10 T2, spec §3.1 row 2); optional, defaulting to "en" so every
+ * existing call site is unaffected.
  */
-export function formatLocalLongDate(now: Date, timezone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+export function formatLocalLongDate(now: Date, timezone: string, locale: Locale = "en"): string {
+  return new Intl.DateTimeFormat(tag(locale), {
     timeZone: timezone,
     weekday: "long",
     month: "long",

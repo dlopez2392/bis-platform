@@ -41,4 +41,19 @@ describe("relativeTime", () => {
   it("an unparseable timestamp reads as unknown, never 'NaNd'", () => {
     expect(relativeTime("garbage", NOW)).toBe("");
   });
+
+  // I-2 (review): the contact drawer is another caller of this helper, so
+  // `locale` is optional and defaults to "en" — every case above is
+  // unaffected (mutation: drop the default → every call above fails to
+  // compile).
+  describe("in Spanish", () => {
+    it("under a minute reads 'ahora', not the English 'now'", () => {
+      expect(relativeTime("2027-01-04T12:00:00.000Z", NOW, "es")).toBe("ahora");
+    });
+    it("m/h/d suffixes are unchanged — minuto, hora and día all start with the same letter in Spanish", () => {
+      expect(relativeTime("2027-01-04T11:50:00.000Z", NOW, "es")).toBe("10m");
+      expect(relativeTime("2027-01-04T09:00:00.000Z", NOW, "es")).toBe("3h");
+      expect(relativeTime("2026-12-30T12:00:00.000Z", NOW, "es")).toBe("5d");
+    });
+  });
 });

@@ -255,17 +255,17 @@ export default async function AccountDashboardPage({
   // return value is never re-interpreted. No name at all (D-072's
   // unreachable-in-practice edge) gets its own written copy, never a
   // dangling ", {name}".
+  // S-10 T2: routed through t(), which already carries the same
+  // function-replacer discipline these two comments describe (`t.ts`'s own
+  // `interpolate`), so a tenant-authored or persona name containing "$&" is
+  // still inserted verbatim.
   const greetingText = greetingName
-    ? m[`dashboard.greeting.${periodKey}` as const].replace("{name}", () => greetingName)
-    : m[`dashboard.greeting.${periodKey}NoName` as const];
-  const dateText = formatLocalLongDate(now, timezone);
+    ? t(m, `dashboard.greeting.${periodKey}` as const, locale, { name: greetingName })
+    : t(m, `dashboard.greeting.${periodKey}NoName` as const, locale);
+  const dateText = formatLocalLongDate(now, timezone, locale);
   const showVoiceSub = voiceProfile?.enabled === true;
-  // D-063 follow-up: the account's own configured persona, not a hard-coded
-  // "Sofía" — a function replacer for the same reason the greeting's own
-  // {name} substitution just above uses one (a persona containing `$&` must
-  // not be re-interpreted as a replacement pattern).
   const voiceSubText = showVoiceSub
-    ? m["dashboard.sub.voice"].replace("{name}", () => voiceProfile?.persona_name?.trim() || "Sofía")
+    ? t(m, "dashboard.sub.voice", locale, { name: voiceProfile?.persona_name?.trim() || "Sofía" })
     : "";
 
   // Calls answered — split the one 14-day fetch on window7's boundary
@@ -353,11 +353,16 @@ export default async function AccountDashboardPage({
     <>
       {/* The shared head, not a second copy of it: this slab was the
           hand-rolled twin of `PageHeader` and carried the same opaque
-          `--surface-1` fill over the aurora's brightest glow. */}
-      <PageHeader
-        title={greetingText}
-        subtitle={`${dateText}${showVoiceSub ? ` · ${voiceSubText}` : ""}`}
-      />
+          `--surface-1` fill over the aurora's brightest glow. `lang`
+          wraps it rather than sitting on `PageHeader` itself (whose own
+          prop types take a plain string) — S-10 T2: the greeting and
+          date/voice sub-line are both now locale-resolved. */}
+      <div lang={locale}>
+        <PageHeader
+          title={greetingText}
+          subtitle={`${dateText}${showVoiceSub ? ` · ${voiceSubText}` : ""}`}
+        />
+      </div>
       <div className="space-y-6 p-6">
         {/* Above the KPI tiles (Task 5) — both audiences, unlike the
             checklist row further down: the /tasks nav entry itself is
@@ -380,7 +385,7 @@ export default async function AccountDashboardPage({
             work row that follows, which `bucketWork` measures against those
             same midnights. */}
         <ZoneNote zone={zone} isAgency={isAgency} />
-        <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
+        <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} locale={locale} />
         {/* D-077, design review follow-up: a suffix on each of the four
             tile's own labels ("Appointments booked · Last 7 days",
             251.6px of Geist Mono at the Label role) wrapped in the ~234px
@@ -450,6 +455,8 @@ export default async function AccountDashboardPage({
             spamCount={spamCallsIso.length}
             abandonedCount={abandonedCallsIso.length}
             personaName={voiceProfile?.persona_name ?? null}
+            locale={locale}
+            pseudo={pseudo}
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
               grants comment) — no isAgency gate, unlike the checklist row
@@ -457,6 +464,7 @@ export default async function AccountDashboardPage({
           <ActivityCard
             accountId={accountId} events={recentEvents} now={now}
             personaName={voiceProfile?.persona_name ?? null}
+            locale={locale} pseudo={pseudo}
           />
         </div>
 

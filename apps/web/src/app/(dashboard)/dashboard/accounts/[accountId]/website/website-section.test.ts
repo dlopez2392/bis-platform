@@ -64,3 +64,48 @@ describe("Website screen (spec §5)", () => {
     expect(seriesSvg.match(/<polyline[^>]*points="([^"]+)"/)?.[1]).toBe("16.666666666666664,0 50,50 83.33333333333334,80");
   });
 });
+
+// S-10 T2 (spec §3.1 row 13): every website.* string here was read through
+// `m[...]` directly, and every number through a bare `.toLocaleString("en-US")`
+// — English regardless of the reader's locale. `locale`/`pseudo` are new,
+// optional props (default "en"/false) so every test above is unaffected.
+describe("Website screen in Spanish (usted register)", () => {
+  const esHtml = renderToStaticMarkup(createElement(WebsiteSection, { view: VIEW, locale: "es" }));
+
+  it("the summary card, tiles and chart/panel headings render in Spanish (mutation: leave any m[...] read unconverted → FAILS)", () => {
+    expect(esHtml).toContain("Visitantes");
+    expect(esHtml).toContain("Páginas vistas");
+    expect(esHtml).toContain("Desde Google");
+    expect(esHtml).toContain("Visitantes por día");
+    expect(esHtml).toContain("Páginas que la gente leyó");
+    expect(esHtml).toContain("Resumen"); // aria-label="Summary"
+    expect(esHtml).not.toContain("Visitors");
+  });
+
+  it("the supporting line and the chart legend use es-US number formatting (mutation: leave toLocaleString pinned to en-US → still passes for THESE digits, so this also checks the Spanish words around them)", () => {
+    const card = esHtml.match(/aria-label="Resumen"[\s\S]*?<\/section>/)![0]!;
+    expect(card).toContain("Últimos 14 días");
+    expect(card).toContain("Última actualización");
+    // "sept" (not "sep"), measured on this machine (Node 24.13.0/ICU 77.1) —
+    // see day-label.test.ts's own note on month-abbreviation irregularities.
+    expect(card).toMatch(/175 personas, 511 páginas\. Su día más activo fue el 1 sept 2026\./);
+  });
+
+  it("the breakdown panels are localized too — title and device name (mutation: leave BreakdownPanel unconverted → FAILS)", () => {
+    // PLACE_DIMENSION is "country" today, so showPlaces is false and the
+    // third panel is Devices, not Places — see website-section.tsx's own
+    // comment on `showPlaces`.
+    expect(esHtml).toContain("Dispositivos");
+    expect(esHtml).toContain("Celular"); // devices: [{ name: "mobile", ... }]
+  });
+
+  // M-5 (review): the top-page tile's "N visitors" was invariant even for
+  // exactly one visitor.
+  it("the top-page tile reads the singular form for exactly one visitor", () => {
+    const oneVisitorView = { ...VIEW, topPage: { name: "/", visitors: 1, share: 0.01 } };
+    const en = renderToStaticMarkup(createElement(WebsiteSection, { view: oneVisitorView }));
+    expect(en).toContain("1 visitor · 1% of all");
+    const es = renderToStaticMarkup(createElement(WebsiteSection, { view: oneVisitorView, locale: "es" }));
+    expect(es).toContain("1 visitante · 1% del total");
+  });
+});

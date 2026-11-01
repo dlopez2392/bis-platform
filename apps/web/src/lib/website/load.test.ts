@@ -52,4 +52,16 @@ describe("loadWebsiteState", () => {
     expect(dbMocks.listTrafficBreakdown).toHaveBeenCalledWith(expect.anything(), "acct_1", "2026-08-24", "2026-09-06");
     if (r.state === "ready") expect(r.view.totals.visitors).toBe(25);
   });
+
+  // S-10 T2: an optional 5th `locale` param, reaching the sentence panel —
+  // the page resolves its own locale (spec §3.1 row 13: "no locale on the
+  // page" today). Default "en" (omitted above) leaves every prior case
+  // unaffected.
+  it("ready, locale 'es': the view's sentence renders in Spanish (mutation: drop the locale arg from buildWebsiteView → stays English and FAILS)", async () => {
+    dbMocks.getSiteForAccount.mockResolvedValue(SITE);
+    dbMocks.listTrafficDays.mockResolvedValue([{ day: "2026-09-06", visitors: 25, pageviews: 40 }]);
+    const r = await loadWebsiteState(db(), "acct_1", 7, NOW, "es");
+    expect(r.state).toBe("ready");
+    if (r.state === "ready") expect(r.view.sentence.map((s) => s.text).join("")).toContain("personas visitaron su sitio web");
+  });
 });

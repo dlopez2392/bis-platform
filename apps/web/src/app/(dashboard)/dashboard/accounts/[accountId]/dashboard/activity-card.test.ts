@@ -149,6 +149,59 @@ describe("ActivityCard — who answers the phone (operational-floor PR-2)", () =
 });
 
 
+// S-10 T2 (spec §3.1 row 2): every dashboard.activity.* line was read
+// through `m[...]` directly — English regardless of the reader's locale.
+// `locale`/`pseudo` are new, optional props (default "en"/false) so every
+// test above is byte-for-byte unaffected.
+describe("ActivityCard in Spanish (usted register)", () => {
+  it("renders curated lines in Spanish, including the no-show status quoted the same way the rest of the catalogue quotes it (mutation: drop locale from the t() call → stays English and FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ActivityCard, {
+      accountId: "acct1",
+      events: [
+        row({ id: "e1", type: "booking.created" }),
+        row({ id: "e2", type: "booking.status_changed", payload: { status: "no_show" } }),
+      ],
+      now: NOW, personaName: null, locale: "es",
+    }));
+    expect(html).toContain("Se agendó una cita nueva.");
+    expect(html).toContain("La cita se marcó como “No llegó”.");
+    expect(html).not.toContain("A new appointment was booked.");
+  });
+
+  it("the header, caption and empty state are Spanish, and the footer link reads the catalogue (mutation: leave any m[...] read unconverted → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ActivityCard, {
+      accountId: "acct1", events: [], now: NOW, personaName: null, locale: "es",
+    }));
+    expect(html).toContain("Actividad");
+    expect(html).toContain("Recientes");
+    expect(html).toContain("Las citas, los clientes potenciales de formularios y los resultados de llamadas aparecen aquí a medida que ocurren.");
+  });
+
+  // I-2 (review): OUTCOMES[...].label is `m["calls.outcome.x"]` read ONCE
+  // at module load, always English — tr.text(`calls.outcome.${outcome}`)
+  // reads the SAME already-twinned key in the reader's own locale instead
+  // (mutation: revert to treatment.label → "Resultado de la llamada:
+  // Booked." FAILS, English leaking through).
+  it("call.recorded's outcome renders in Spanish, through the same calls.outcome.* key the Calls list itself twins", () => {
+    const html = renderToStaticMarkup(createElement(ActivityCard, {
+      accountId: "acct1",
+      events: [row({ id: "e1", type: "call.recorded", payload: { callId: "c1", outcome: "booked" } })],
+      now: NOW, personaName: null, locale: "es",
+    }));
+    expect(html).toContain("Resultado de la llamada: Agendó.");
+    expect(html).not.toContain("Booked");
+  });
+
+  it("names the account's own receptionist in the forward lines, in Spanish", () => {
+    const html = renderToStaticMarkup(createElement(ActivityCard, {
+      accountId: "acct1",
+      events: [row({ id: "f1", type: "voice.forward_changed", payload: { forwardCalls: true } })],
+      now: NOW, personaName: "Max", locale: "es",
+    }));
+    expect(html).toContain("Las llamadas empezaron a ir directo a su número de transferencia en vez de a Max.");
+  });
+});
+
 // D-045: who answers the phone is named by the account's own persona, not a
 // hard-coded "Sofía".
 describe("ActivityCard — names the account's own receptionist (D-045)", () => {
