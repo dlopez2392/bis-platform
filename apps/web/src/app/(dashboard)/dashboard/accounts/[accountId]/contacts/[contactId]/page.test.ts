@@ -1076,17 +1076,17 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(cardHtml(html, "next-up")).not.toContain(addTodo);
   });
 
-  it("on a Spanish page Details and Tags read Spanish with no lang=\"en\" wrapper, and only the Groups card keeps one (S-03 part 3 §10.2, D10; mutation: leave the Details wrapper -> FAILS; drop the Groups wrapper -> FAILS)", async () => {
+  it("on a Spanish page Details, Tags and (since S-10 T3) Groups read Spanish with no lang=\"en\" wrapper (S-03 part 3 §10.2, D10; S-10 T3; mutation: leave the Groups wrapper -> FAILS)", async () => {
     prefsMock.mockResolvedValue({ language: "es", theme: null });
     const html = await render();
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     const wrapped = (id: string) => /<div lang="en">/.test(cardHtml(html, id));
-    expect(["details", "tags", "summary", "next-up", "deals", "timeline"].filter(wrapped)).toEqual([]);
-    expect(wrapped("groups")).toBe(true);
+    expect(["details", "tags", "summary", "next-up", "deals", "timeline", "groups"].filter(wrapped)).toEqual([]);
     expect(cardHtml(html, "details")).toContain(`>${m["contacts.firstName.es"]}<`);
     expect(cardHtml(html, "details")).toContain(`>${m["contact.source.label.es"]}<`);
     expect(cardHtml(html, "details")).toContain(`>${m["assign.field.label.es"]}<`);
     expect(cardHtml(html, "tags")).toContain(`placeholder="${m["contact.addTag.es"]}"`);
+    expect(cardHtml(html, "groups")).toContain(m["groups.title.es"]);
   });
 
   it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {

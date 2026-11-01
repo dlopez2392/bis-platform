@@ -14,6 +14,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
+import type { Locale } from "@/lib/i18n/locale";
 import {
   searchGroupsAction, createGroupAction, addToGroupAction, setRoleAction, setBillingAction, makePrimaryAction,
   removeMembershipAction, restoreMembershipAction, renameGroupAction, setBillingAddressAction,
@@ -34,14 +37,15 @@ import {
 export type GroupsLoad = { status: "loading" } | { status: "error" } | { status: "ready"; groups: ContactGroup[] };
 type ViewProps = { accountId: string; contactId: string; canManageGroups: boolean; headingHidden?: boolean };
 
-const kindLabel = (k: GroupKind) => m[k === "household" ? "groups.kind.household" : "groups.kind.business"];
+const kindLabel = (k: GroupKind, locale: Locale) => t(m, k === "household" ? "groups.kind.household" : "groups.kind.business", locale);
 /** `{name}` filled by a replacer FUNCTION, so a name holding "$&" is inserted literally (t.ts, final review N1). */
 const withName = (template: string, name: string) => template.replace("{name}", () => name);
 
 const ERROR_KEYS: readonly GroupActionError[] = ["groups.refused", "groups.failed", "groups.nameTaken", "groups.tooLong"];
-/** An action's error key as the catalogue's sentence; anything else (a newer server's key) is "didn't save". */
-export function errorText(e: unknown): string {
-  return ERROR_KEYS.includes(e as GroupActionError) ? m[e as GroupActionError] : m["groups.failed"];
+/** An action's error key as the catalogue's sentence, in the reader's language; anything else (a newer
+ *  server's key) is "didn't save". */
+export function errorText(e: unknown, locale: Locale): string {
+  return t(m, ERROR_KEYS.includes(e as GroupActionError) ? (e as GroupActionError) : "groups.failed", locale);
 }
 
 // ── The route's body, parsed rather than cast (the drawer's summary lesson):
@@ -75,64 +79,66 @@ export async function groupsLoadFrom(res: Response): Promise<Exclude<GroupsLoad,
 // ── The writes. Exported for the test (no DOM renderer in apps/web).
 type Undo = () => Promise<GroupResult>;
 
-async function runUndo(undo: Undo, onChanged: () => void): Promise<void> {
+async function runUndo(undo: Undo, onChanged: () => void, locale: Locale): Promise<void> {
   try {
     const r = await undo();
-    if (!r.ok) { toast.error(errorText(r.error)); return; }
+    if (!r.ok) { toast.error(errorText(r.error, locale)); return; }
     onChanged();
   } catch {
-    toast.error(m["groups.failed"]);
+    toast.error(t(m, "groups.failed", locale));
   }
 }
 
-/** One write and its toast. A server action that REJECTS (a stale tab posting
- *  an action id from before a deploy) is a toast, not an unhandled throw. */
+/** One write and its toast, in the reader's language (S-10 T3; `locale` defaults to "en" so a caller
+ *  that predates it is unchanged). A server action that REJECTS (a stale tab posting an action id
+ *  from before a deploy) is a toast, not an unhandled throw. */
 async function runGroupWrite<T extends object>(
   write: () => Promise<GroupResult<T>>,
   opts: { success: (r: T) => string; undo?: (r: T) => Undo | null; onChanged: () => void },
+  locale: Locale = "en",
 ): Promise<boolean> {
   let r: GroupResult<T>;
-  try { r = await write(); } catch { toast.error(m["groups.failed"]); return false; }
-  if (!r.ok) { toast.error(errorText(r.error)); return false; }
+  try { r = await write(); } catch { toast.error(t(m, "groups.failed", locale)); return false; }
+  if (!r.ok) { toast.error(errorText(r.error, locale)); return false; }
   opts.onChanged();
   const undo = opts.undo?.(r) ?? null;
   if (undo) {
-    toast.success(opts.success(r), { action: { label: m["common.undo"], onClick: () => { void runUndo(undo, opts.onChanged); } } });
+    toast.success(opts.success(r), { action: { label: t(m, "common.undo", locale), onClick: () => { void runUndo(undo, opts.onChanged, locale); } } });
   } else {
     toast.success(opts.success(r));
   }
   return true;
 }
 
-export const addExisting = (accountId: string, contactId: string, hit: GroupSearchHit, onChanged: () => void) =>
+export const addExisting = (accountId: string, contactId: string, hit: GroupSearchHit, onChanged: () => void, locale: Locale = "en") =>
   runGroupWrite(() => addToGroupAction(accountId, contactId, hit.id),
-    { success: () => withName(m["groups.added"], hit.name), onChanged });
+    { success: () => withName(t(m, "groups.added", locale), hit.name), onChanged }, locale);
 
-export const createAndAdd = (accountId: string, contactId: string, kind: GroupKind, name: string, onChanged: () => void) =>
+export const createAndAdd = (accountId: string, contactId: string, kind: GroupKind, name: string, onChanged: () => void, locale: Locale = "en") =>
   runGroupWrite(() => createGroupAction(accountId, contactId, kind, name),
-    { success: (r) => withName(m[r.existed ? "groups.addedExisting" : "groups.added"], r.name), onChanged });
+    { success: (r) => withName(t(m, r.existed ? "groups.addedExisting" : "groups.added", locale), r.name), onChanged }, locale);
 
-export const toggleBilling = (accountId: string, group: ContactGroup, onChanged: () => void) =>
+export const toggleBilling = (accountId: string, group: ContactGroup, onChanged: () => void, locale: Locale = "en") =>
   runGroupWrite(() => setBillingAction(accountId, group.memberId, !group.isBilling), {
-    success: () => m["groups.saved"],
+    success: () => t(m, "groups.saved", locale),
     undo: (r) => () => setBillingAction(accountId, group.memberId, r.previous),
     onChanged,
-  });
+  }, locale);
 
 /** Undo goes back to the previous main; with none before, there is nothing to go back to. */
-export const makeMain = (accountId: string, group: ContactGroup, onChanged: () => void) =>
+export const makeMain = (accountId: string, group: ContactGroup, onChanged: () => void, locale: Locale = "en") =>
   runGroupWrite(() => makePrimaryAction(accountId, group.memberId), {
-    success: () => m["groups.saved"],
+    success: () => t(m, "groups.saved", locale),
     undo: (r) => { const prev = r.previous; return prev ? () => makePrimaryAction(accountId, prev) : null; },
     onChanged,
-  });
+  }, locale);
 
-export const removeFrom = (accountId: string, group: ContactGroup, onChanged: () => void) =>
+export const removeFrom = (accountId: string, group: ContactGroup, onChanged: () => void, locale: Locale = "en") =>
   runGroupWrite(() => removeMembershipAction(accountId, group.memberId), {
-    success: () => withName(m["groups.removed"], group.name),
+    success: () => withName(t(m, "groups.removed", locale), group.name),
     undo: (r) => () => restoreMembershipAction(accountId, r.removed),
     onChanged,
-  });
+  }, locale);
 
 /** The server's failed search (`{ ok: false }`, fix round 1, I2) and a search
  *  that throws (a stale tab after a deploy) are both the search's error
@@ -151,30 +157,30 @@ export async function searchOutcome(p: Promise<GroupSearchResult>): Promise<{ st
 // save and Undo that lands reports a change (fix round 1, I1): a rename can
 // change the Business name the page shows.
 type InlineResult = { ok: true; undoPayload?: unknown } | { ok: false; error: string };
-async function toInline<P>(write: () => Promise<GroupResult<{ previous: P }>>, onChanged: () => void): Promise<InlineResult> {
+async function toInline<P>(write: () => Promise<GroupResult<{ previous: P }>>, onChanged: () => void, locale: Locale): Promise<InlineResult> {
   const r = await write();
-  if (!r.ok) return { ok: false, error: errorText(r.error) };
+  if (!r.ok) return { ok: false, error: errorText(r.error, locale) };
   onChanged();
   return { ok: true, undoPayload: r.previous };
 }
 export async function inlineUndo(
-  write: () => Promise<GroupResult<object>>, onChanged: () => void,
+  write: () => Promise<GroupResult<object>>, onChanged: () => void, locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   let r: GroupResult<object>;
-  try { r = await write(); } catch { return { ok: false, error: m["groups.failed"] }; }
-  if (!r.ok) return { ok: false, error: errorText(r.error) };
+  try { r = await write(); } catch { return { ok: false, error: t(m, "groups.failed", locale) }; }
+  if (!r.ok) return { ok: false, error: errorText(r.error, locale) };
   onChanged();
   return { ok: true };
 }
 /** The name edits under `source`'s rule (trim, free text) and refuses a blank
  *  HERE: InlineField's `required` rule speaks of a "company" (G4). */
-export const nameSave = (accountId: string, groupId: string, onChanged: () => void) => async (v: string): Promise<InlineResult> =>
-  v === "" ? { ok: false, error: m["groups.nameEmpty"] } : toInline(() => renameGroupAction(accountId, groupId, v), onChanged);
+export const nameSave = (accountId: string, groupId: string, onChanged: () => void, locale: Locale = "en") => async (v: string): Promise<InlineResult> =>
+  v === "" ? { ok: false, error: t(m, "groups.nameEmpty", locale) } : toInline(() => renameGroupAction(accountId, groupId, v), onChanged, locale);
 /** "" clears: the action and the database store null for it. */
-export const roleSave = (accountId: string, memberId: string, onChanged: () => void) => (v: string): Promise<InlineResult> =>
-  toInline(() => setRoleAction(accountId, memberId, v === "" ? null : v), onChanged);
-const addressSave = (accountId: string, groupId: string, onChanged: () => void) => (v: string): Promise<InlineResult> =>
-  toInline(() => setBillingAddressAction(accountId, groupId, v === "" ? null : v), onChanged);
+export const roleSave = (accountId: string, memberId: string, onChanged: () => void, locale: Locale = "en") => (v: string): Promise<InlineResult> =>
+  toInline(() => setRoleAction(accountId, memberId, v === "" ? null : v), onChanged, locale);
+const addressSave = (accountId: string, groupId: string, onChanged: () => void, locale: Locale) => (v: string): Promise<InlineResult> =>
+  toInline(() => setBillingAddressAction(accountId, groupId, v === "" ? null : v), onChanged, locale);
 
 // ── The card.
 /**
@@ -187,6 +193,7 @@ const addressSave = (accountId: string, groupId: string, onChanged: () => void) 
 export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: () => void }) {
   const { accountId, contactId } = props;
   const router = useRouter();
+  const locale = useLocale();
   const [nonce, setNonce] = useState(0);
   // Paired with the contact it was read for (the drawer's shape): "loading"
   // falls out of a mismatch, so only the fetch's own callbacks set state. A
@@ -209,6 +216,7 @@ export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: ()
     <GroupsCardView
       {...props}
       load={load}
+      locale={locale}
       // Retry re-reads the card only: nothing changed.
       onRetry={() => { setRead(null); setNonce((n) => n + 1); }}
       onChanged={() => { setNonce((n) => n + 1); router.refresh(); onChanged?.(); }}
@@ -216,14 +224,14 @@ export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: ()
   );
 }
 
-export function GroupsCardView({ accountId, contactId, canManageGroups, headingHidden, load, onRetry, onChanged }:
-  ViewProps & { load: GroupsLoad; onRetry: () => void; onChanged: () => void }) {
+export function GroupsCardView({ accountId, contactId, canManageGroups, headingHidden, load, onRetry, onChanged, locale = "en" }:
+  ViewProps & { load: GroupsLoad; onRetry: () => void; onChanged: () => void; locale?: Locale }) {
   const titleId = useId();
-  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{m["groups.title"]}</h3>;
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{t(m, "groups.title", locale)}</h3>;
   const add = load.status === "ready" && load.groups.length > 0
-    ? <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} /> : null;
+    ? <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} locale={locale} /> : null;
   return (
-    <section aria-labelledby={titleId} className="space-y-2" data-groups-card>
+    <section aria-labelledby={titleId} className="space-y-2" data-groups-card lang={locale}>
       {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
          there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
       {headingHidden && !add ? heading : (
@@ -240,19 +248,19 @@ export function GroupsCardView({ accountId, contactId, canManageGroups, headingH
       ) : load.status === "error" ? (
         // Plain words and a ghost Try again, announced: a tinted Notice was a box in the glass card (design check 1a).
         <div role="alert" className="space-y-2 text-sm">
-          <p className="text-muted-foreground">{m["groups.loadFailed"]}</p>
-          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{m["groups.retry"]}</Button>
+          <p className="text-muted-foreground">{t(m, "groups.loadFailed", locale)}</p>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{t(m, "groups.retry", locale)}</Button>
         </div>
       ) : load.groups.length === 0 ? (
         <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">{m["groups.empty"]}</p>
-          <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} />
+          <p className="text-sm text-muted-foreground">{t(m, "groups.empty", locale)}</p>
+          <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} locale={locale} />
         </div>
       ) : (
         /* A rule between rows, never a box per row (the page's own list idiom). */
         <ul className="flex flex-col text-sm">
           {load.groups.map((g) => (
-            <GroupRow key={g.memberId} accountId={accountId} group={g} canManageGroups={canManageGroups} onChanged={onChanged} />
+            <GroupRow key={g.memberId} accountId={accountId} group={g} canManageGroups={canManageGroups} onChanged={onChanged} locale={locale} />
           ))}
         </ul>
       )}
@@ -269,8 +277,8 @@ function Mark({ kind, label }: { kind: "primary" | "billing"; label: string }) {
   );
 }
 
-function GroupRow({ accountId, group, canManageGroups, onChanged }:
-  { accountId: string; group: ContactGroup; canManageGroups: boolean; onChanged: () => void }) {
+function GroupRow({ accountId, group, canManageGroups, onChanged, locale }:
+  { accountId: string; group: ContactGroup; canManageGroups: boolean; onChanged: () => void; locale: Locale }) {
   // One write at a time per row: a double click must not send the toggle twice.
   const [busy, setBusy] = useState(false);
   const act = (run: () => Promise<unknown>) => async () => {
@@ -284,66 +292,66 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
       <div className="flex items-center gap-2">
         {canManageGroups ? (
           <div className="-ml-2 min-w-0 flex-1">
-            <InlineField label={m["groups.name"]} field="source" value={group.name}
-              save={nameSave(accountId, group.groupId, onChanged)}
-              undoWith={(prev) => inlineUndo(() => renameGroupAction(accountId, group.groupId, prev as string), onChanged)} />
+            <InlineField label={t(m, "groups.name", locale)} field="source" value={group.name} locale={locale}
+              save={nameSave(accountId, group.groupId, onChanged, locale)}
+              undoWith={(prev) => inlineUndo(() => renameGroupAction(accountId, group.groupId, prev as string), onChanged, locale)} />
           </div>
         ) : <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>}
-        <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(group.kind)}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(group.kind, locale)}</span>
         {/* S-03 part 2b: the way to the household's or business's own record page. */}
-        <Link href={`/dashboard/accounts/${accountId}/groups/${group.groupId}`} aria-label={withName(m["groups.openAria"], group.name)}
+        <Link href={`/dashboard/accounts/${accountId}/groups/${group.groupId}`} aria-label={withName(t(m, "groups.openAria", locale), group.name)}
           className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 shrink-0 md:min-h-8")} data-group-open={group.groupId}>
-          {m["groups.open"]}
+          {t(m, "groups.open", locale)}
         </Link>
       </div>
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
         {group.isPrimary ? (
-          <span className="px-3"><Mark kind="primary" label={m["groups.primary"]} /></span>
+          <span className="px-3"><Mark kind="primary" label={t(m, "groups.primary", locale)} /></span>
         ) : (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={act(() => makeMain(accountId, group, onChanged))}>
-            {m["groups.makePrimary"]}
+          <Button size="sm" variant="ghost" disabled={busy} onClick={act(() => makeMain(accountId, group, onChanged, locale))}>
+            {t(m, "groups.makePrimary", locale)}
           </Button>
         )}
         <Button size="sm" variant="ghost" aria-pressed={group.isBilling} disabled={busy}
-          onClick={act(() => toggleBilling(accountId, group, onChanged))}>
-          {group.isBilling ? <Mark kind="billing" label={m["groups.billing"]} /> : (
+          onClick={act(() => toggleBilling(accountId, group, onChanged, locale))}>
+          {group.isBilling ? <Mark kind="billing" label={t(m, "groups.billing", locale)} /> : (
             // Off: a hollow dot beside the word, so on and off differ in SHAPE, not colour.
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span aria-hidden className="size-1.5 shrink-0 rounded-full border border-[var(--line-strong)]" />{m["groups.billing"]}
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full border border-[var(--line-strong)]" />{t(m, "groups.billing", locale)}
             </span>
           )}
         </Button>
         <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground" disabled={busy}
-          aria-label={`${m["groups.remove"]}: ${group.name}`}
-          onClick={act(() => removeFrom(accountId, group, onChanged))}>
-          {m["groups.remove"]}
+          aria-label={`${t(m, "groups.remove", locale)}: ${group.name}`}
+          onClick={act(() => removeFrom(accountId, group, onChanged, locale))}>
+          {t(m, "groups.remove", locale)}
         </Button>
       </div>
       <dl className="space-y-1">
         <div className={fieldRow}>
-          <dt className="text-xs text-muted-foreground">{m["groups.role"]}</dt>
+          <dt className="text-xs text-muted-foreground">{t(m, "groups.role", locale)}</dt>
           {/* `source`'s rule is the role's rule: trim, free text (plan deviation 5). */}
           <dd className="min-w-0">
-            <InlineField label={m["groups.role"]} field="source" value={group.role}
-              placeholder={m["groups.rolePlaceholder"]}
-              save={roleSave(accountId, group.memberId, onChanged)}
-              undoWith={(prev) => inlineUndo(() => setRoleAction(accountId, group.memberId, prev as string | null), onChanged)} />
+            <InlineField label={t(m, "groups.role", locale)} field="source" value={group.role} locale={locale}
+              placeholder={t(m, "groups.rolePlaceholder", locale)}
+              save={roleSave(accountId, group.memberId, onChanged, locale)}
+              undoWith={(prev) => inlineUndo(() => setRoleAction(accountId, group.memberId, prev as string | null), onChanged, locale)} />
           </dd>
         </div>
         {canManageGroups ? (
           <div className={fieldRow}>
-            <dt className="text-xs text-muted-foreground">{m["groups.billingAddress"]}</dt>
+            <dt className="text-xs text-muted-foreground">{t(m, "groups.billingAddress", locale)}</dt>
             <dd className="min-w-0">
-              <InlineField label={m["groups.billingAddress"]} field="source" value={group.billingAddress}
-                save={addressSave(accountId, group.groupId, onChanged)}
-                undoWith={(prev) => inlineUndo(() => setBillingAddressAction(accountId, group.groupId, prev as string | null), onChanged)} />
+              <InlineField label={t(m, "groups.billingAddress", locale)} field="source" value={group.billingAddress} locale={locale}
+                save={addressSave(accountId, group.groupId, onChanged, locale)}
+                undoWith={(prev) => inlineUndo(() => setBillingAddressAction(accountId, group.groupId, prev as string | null), onChanged, locale)} />
             </dd>
           </div>
         ) : null}
       </dl>
       {group.others.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {m["groups.others"]}:{" "}
+          {t(m, "groups.others", locale)}:{" "}
           {group.others.map((o, i) => (
             <span key={o.contactId}>
               {i > 0 ? ", " : null}
@@ -358,7 +366,7 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
           ))}
           {/* Final review minor 10: the read names at most GROUP_OTHERS_SHOWN; the rest are a count of
               rows the caller's RLS returned, so a Technician never sees one. */}
-          {group.moreOthers > 0 ? ` ${m["groups.othersMore"].replace("{count}", String(group.moreOthers))}` : null}
+          {group.moreOthers > 0 ? ` ${t(m, "groups.othersMore", locale, { count: group.moreOthers })}` : null}
         </p>
       ) : null}
     </li>
@@ -367,7 +375,7 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
 
 type SearchResult = Awaited<ReturnType<typeof searchOutcome>>;
 
-function AddToGroup({ accountId, contactId, onChanged }: { accountId: string; contactId: string; onChanged: () => void }) {
+function AddToGroup({ accountId, contactId, onChanged, locale }: { accountId: string; contactId: string; onChanged: () => void; locale: Locale }) {
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -396,36 +404,36 @@ function AddToGroup({ accountId, contactId, onChanged }: { accountId: string; co
     <Popover open={open} onOpenChange={(o) => { if (o) setOpen(true); else close(); }}>
       <PopoverTrigger asChild>
         <Button size="sm" variant="ghost" className="-mr-2">
-          <Plus aria-hidden />{m["groups.add"]}
+          <Plus aria-hidden />{t(m, "groups.add", locale)}
         </Button>
       </PopoverTrigger>
       {/* Esc closes it (Radix): the popover is the top layer, so the drawer stays open. */}
       <PopoverContent className="w-80 p-0" align="end">
         <Command shouldFilter={false}>
-          <CommandInput placeholder={m["groups.searchPlaceholder"]} value={term} onValueChange={setTerm} />
+          <CommandInput placeholder={t(m, "groups.searchPlaceholder", locale)} value={term} onValueChange={setTerm} />
           <CommandList>
             {search === "searching" ? (
               <div className="space-y-1.5 px-3 py-2" data-testid="groups-search-skeleton">
                 <Skeleton className="h-4 w-3/4" /><Skeleton className="h-4 w-1/2" />
               </div>
             ) : search?.status === "error" ? (
-              <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{m["groups.searchFailed"]}</p>
+              <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t(m, "groups.searchFailed", locale)}</p>
             ) : null}
             {name ? (
               <CommandGroup>
                 {search !== null && search !== "searching" && search.status === "ready" ? search.hits.map((h) => (
                   <CommandItem key={h.id} value={`group-${h.id}`} disabled={busy}
-                    onSelect={() => void pick(() => addExisting(accountId, contactId, h, onChanged))}>
+                    onSelect={() => void pick(() => addExisting(accountId, contactId, h, onChanged, locale))}>
                     <span className="min-w-0 flex-1 truncate">{h.name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(h.kind)}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(h.kind, locale)}</span>
                   </CommandItem>
                 )) : null}
                 {(["household", "business"] as const).map((kind) => (
                   <CommandItem key={kind} value={`create-${kind}`} disabled={busy}
-                    onSelect={() => void pick(() => createAndAdd(accountId, contactId, kind, name, onChanged))}>
+                    onSelect={() => void pick(() => createAndAdd(accountId, contactId, kind, name, onChanged, locale))}>
                     <Plus aria-hidden className="text-muted-foreground" />
                     <span className="min-w-0 flex-1 break-words">
-                      {withName(m[kind === "household" ? "groups.createHousehold" : "groups.createBusiness"], name)}
+                      {withName(t(m, kind === "household" ? "groups.createHousehold" : "groups.createBusiness", locale), name)}
                     </span>
                   </CommandItem>
                 ))}

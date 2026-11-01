@@ -566,29 +566,46 @@ export const m = {
   // a live "1 people" bug from exactly this omission, and every count below can
   // legitimately be 1.
   "contacts.import.title": "Import contacts",
+  "contacts.import.title.es": "Importar contactos",
   "contacts.import.drop": "Choose a CSV file",
+  "contacts.import.drop.es": "Elija un archivo CSV",
   "contacts.import.mapTitle": "Match your columns",
+  "contacts.import.mapTitle.es": "Haga coincidir sus columnas",
   "contacts.import.ignore": "Don't import this column",
+  "contacts.import.ignore.es": "No importar esta columna",
   "contacts.import.ignored": "{count} columns won't be imported",
+  "contacts.import.ignored.es": "{count} columnas no se importarán",
   "contacts.import.ignoredOne": "1 column won't be imported",
+  "contacts.import.ignoredOne.es": "1 columna no se importará",
   // NOT "will add X and update Y": which rows are new is only knowable against
   // the account's existing contacts, which this screen has not read. The real
   // split is reported in `done`, after the work.
   "contacts.import.preview": "{count} rows ready to import.",
+  "contacts.import.preview.es": "{count} filas listas para importar.",
   "contacts.import.previewOne": "1 row ready to import.",
+  "contacts.import.previewOne.es": "1 fila lista para importar.",
   "contacts.import.errors": "{count} rows have problems and will be skipped.",
+  "contacts.import.errors.es": "{count} filas tienen problemas y se omitirán.",
   "contacts.import.errorsOne": "1 row has a problem and will be skipped.",
+  "contacts.import.errorsOne.es": "1 fila tiene un problema y se omitirá.",
   "contacts.import.downloadErrors": "Download the skipped rows",
+  "contacts.import.downloadErrors.es": "Descargar las filas omitidas",
   "contacts.import.createTags": "Also create {count} new tags",
+  "contacts.import.createTags.es": "También crear {count} etiquetas nuevas",
   "contacts.import.createTagsOne": "Also create 1 new tag",
+  "contacts.import.createTagsOne.es": "También crear 1 etiqueta nueva",
   "contacts.import.confirm": "Import",
+  "contacts.import.confirm.es": "Importar",
   "contacts.import.importing": "Importing {done} of {total}...",
+  "contacts.import.importing.es": "Importando {done} de {total}…",
   "contacts.import.done": "Added {created}, updated {updated}.",
+  "contacts.import.done.es": "Se agregaron {created}, se actualizaron {updated}.",
   // Shown only when the count is non-zero. "Possible" is doing real work: these
   // are pairs where an email and a phone pointed at different contacts, which
   // is usually one person entered twice — but not always, and the product has
   // no merge screen yet, so it must not promise a resolution it cannot offer.
   "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
+  "contacts.import.flagged.es": "{flagged} posibles duplicados marcados para revisión.",
   // Shown on the done screen only when they happened (final review I-C), summed
   // across every batch. The contacts themselves were saved either way.
   "contacts.import.businessTooLong": "{count} business names were too long to save (120 characters max).",
@@ -598,16 +615,22 @@ export const m = {
   "contacts.import.businessLinkFailed": "Business names didn't save for some rows — import again to retry.",
   "contacts.import.businessLinkFailed.es": "Los nombres de negocio no se guardaron en algunas filas. Vuelva a importar para intentarlo de nuevo.",
   "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
+  "contacts.import.partial.es": "Se detuvo después de {done} filas. Nada después de eso se importó.",
   "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
+  "contacts.import.failed.es": "Esa importación no se completó. No se cambió nada. Inténtelo de nuevo.",
   "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",
+  "contacts.import.tooMany.es": "Son demasiadas filas a la vez. Intente con un archivo más pequeño.",
   "contacts.import.empty": "That file has no rows we can read.",
+  "contacts.import.empty.es": "Ese archivo no tiene filas que podamos leer.",
   "contacts.import.back": "Back to contacts",
+  "contacts.import.back.es": "Volver a contactos",
   // The downloaded file's own name (Task 4) — "{date}" is the house
   // {placeholder} convention (see setup.progress below). yyyy-mm-dd, filled
   // in by the export route itself; see that file's own comment for why it's
   // UTC rather than the account's timezone (a cosmetic export timestamp, not
   // a business date).
   "contacts.export.filename": "contacts-{date}.csv",
+  "contacts.export.filename.es": "contactos-{date}.csv",
   "contacts.search": "Search name, email, phone…",
   // Short in Spanish: the longer line truncated in the box at phone width.
   "contacts.search.es": "Buscar contactos",
@@ -747,6 +770,7 @@ export const m = {
   "bulk.archiveKept.es": "Archivarlos",
 
   "pipeline.title": "Opportunities",
+  "pipeline.title.es": "Oportunidades",
   // The header badge used to read "N · $X" — the same shape the per-column
   // subtotals use, which count every status (open+won+lost). Saying "open"
   // plainly tells the two apart instead of relying on the reader to notice
@@ -754,15 +778,25 @@ export const m = {
   // "{count}"/"{value}" are the house {placeholder} convention (see
   // setup.progress above); the page .replace()s them.
   "pipeline.openTotal": "{count} open · {value}",
+  "pipeline.openTotal.es": "{count} abiertas · {value}",
   "pipeline.add": "Add opportunity",
+  "pipeline.add.es": "Agregar oportunidad",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
+  "pipeline.moveFailed.es": "No se pudo mover esa oportunidad. Actualice la página e intente de nuevo.",
   "pipeline.updateFailed": "Could not save that opportunity. Try again.",
+  "pipeline.updateFailed.es": "No se pudo guardar esa oportunidad. Intente de nuevo.",
   "pipeline.createFailed": "Could not add that opportunity. Check the details and try again.",
+  "pipeline.createFailed.es": "No se pudo agregar esa oportunidad. Revise los datos e intente de nuevo.",
   "pipeline.empty.title": "No opportunities yet",
+  "pipeline.empty.title.es": "Todavía no hay oportunidades",
   "pipeline.empty.body": "Add your first deal to start tracking the pipeline.",
+  "pipeline.empty.body.es": "Agregue su primera oportunidad para empezar a seguir el embudo.",
   "pipeline.name": "Opportunity name",
+  "pipeline.name.es": "Nombre de la oportunidad",
   "pipeline.value": "Value",
+  "pipeline.value.es": "Valor",
   "pipeline.contact": "Contact",
+  "pipeline.contact.es": "Contacto",
   // The new-deal picker searches as you type (deal-contact-picker.tsx), where it listed the newest 200.
   "pipeline.contactSearch": "Search by name, phone or email",
   "pipeline.contactSearch.es": "Busque por nombre, teléfono o correo",
@@ -771,6 +805,7 @@ export const m = {
   "pipeline.contactRequired": "Choose who this opportunity is for first.",
   "pipeline.contactRequired.es": "Primero elija para quién es esta oportunidad.",
   "pipeline.status": "Status",
+  "pipeline.status.es": "Estado",
   "pipeline.status.open": "Open",
   "pipeline.status.open.es": "Abierta",
   "pipeline.status.won": "Won",
@@ -790,7 +825,8 @@ export const m = {
   "contact.removeTag.es": "Quitar {name}",
   "contact.opportunities": "Opportunities",
   "contact.opportunities.es": "Oportunidades",
-  "contact.activity": "Activity",
+  // "contact.activity" (S-10 T3): deleted — a dead key RecordCard's own title replaced (its only
+  // reference was a negative check in activity-timeline.order.test.ts, now against the literal).
   "contact.tasks": "Tasks",
   "contact.tasks.es": "Pendientes",
   "contact.addNote": "Add a note…",
@@ -950,6 +986,7 @@ export const m = {
   "contact.email.resumeCancel": "Cancel",
   "contact.email.resumeCancel.es": "Cancelar",
   "contact.email.resumeNoteRequired": "Write what they asked for before you turn emails back on.",
+  "contact.email.resumeNoteRequired.es": "Escriba lo que pidió antes de volver a activar los correos.",
   "contact.email.resumedToast": "Emails are back on. To stop them again, use Stop emails.",
   "contact.email.resumedToast.es": "Los correos se reanudaron. Para detenerlos otra vez, use Detener correos.",
   "contact.email.customerOnly": "They can resubscribe from the unsubscribe link in any email from you.",
@@ -957,12 +994,17 @@ export const m = {
   "contact.email.loadFailed": "Couldn't load their email settings. Try again.",
   "contact.email.loadFailed.es": "No se pudo cargar la configuración de correo. Intente de nuevo.",
   "contact.email.changed": "Their emails changed while you were looking. This is where they stand now.",
+  "contact.email.changed.es": "Sus correos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.email.failed": "Couldn't save that — please try again.",
+  "contact.email.failed.es": "No se pudo guardar. Intente de nuevo.",
   "contact.email.noEmail": "They have no email address.",
+  "contact.email.noEmail.es": "No tiene un correo electrónico.",
   "contact.email.undoBusy": "Your last change is still saving. Try again in a moment.",
   "contact.email.undoBusy.es": "Su último cambio todavía se está guardando. Intente de nuevo en un momento.",
   "contact.email.undoExpired": "That can no longer be undone here. Use Stop emails or Resume emails instead.",
+  "contact.email.undoExpired.es": "Eso ya no se puede deshacer aquí. Use Detener correos o Reanudar correos.",
   "contact.phoneCountry.word": "Check number",
+  "contact.phoneCountry.word.es": "Revisar número",
   "contact.phoneCountry.line": "This number could be Mexican or US.",
   "contact.phoneCountry.line.es": "Este número puede ser de México o de EE. UU.",
   "contact.phoneCountry.mx": "Mexico (+52)",
@@ -970,12 +1012,19 @@ export const m = {
   "contact.phoneCountry.us": "US (+1)",
   "contact.phoneCountry.us.es": "EE. UU. (+1)",
   "contact.phoneCountry.mxToast": "Saved as a Mexican number",
+  "contact.phoneCountry.mxToast.es": "Se guardó como número mexicano",
   "contact.phoneCountry.usToast": "Saved as a US number",
+  "contact.phoneCountry.usToast.es": "Se guardó como número de EE. UU.",
   "contact.phoneCountry.failed": "Couldn't save that — please try again.",
+  "contact.phoneCountry.failed.es": "No se pudo guardar. Intente de nuevo.",
   "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
+  "contact.phoneCountry.changed.es": "Su número cambió mientras usted elegía. Vuelva a cargar para verlo.",
   "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
+  "contact.phoneCountry.unreadable.es": "Ese número no se puede leer como un número de EE. UU. o de México. Edítelo usted mismo.",
   "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
+  "contact.phoneCountry.undoBusy.es": "Su último cambio todavía se está guardando. Edite el número para cambiarlo de nuevo.",
   "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
+  "contact.phoneCountry.inlineChanged.es": "Su número cambió desde su edición. Vuelva a cargar para verlo.",
   // The rest of the Texts row (consent chain PR-2, spec §6). Status words are
   // a dot + word (rule 3). "{date}" is a calendar day in the account's zone;
   // "{word}" is the keyword as staff read it (keywordDisplay); "{excerpt}" is
@@ -1014,6 +1063,7 @@ export const m = {
   "contact.texts.resumeCancel": "Cancel",
   "contact.texts.resumeCancel.es": "Cancelar",
   "contact.texts.resumeNoteRequired": "Write what they asked for before you turn texts back on.",
+  "contact.texts.resumeNoteRequired.es": "Escriba lo que pidió antes de volver a activar los textos.",
   "contact.texts.resumedToast": "Texts are back on. To stop them again, use Stop texts.",
   "contact.texts.resumedToast.es": "Los textos se reanudaron. Para detenerlos otra vez, use Detener textos.",
   "contact.texts.customerOnly": "They can text START to get texts again.",
@@ -1031,11 +1081,15 @@ export const m = {
   "contact.texts.loadFailed": "Couldn't load their message settings. Try again.",
   "contact.texts.loadFailed.es": "No se pudo cargar la configuración de mensajes. Intente de nuevo.",
   "contact.texts.changed": "Their texts changed while you were looking. This is where they stand now.",
+  "contact.texts.changed.es": "Sus textos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.texts.failed": "Couldn't save that — please try again.",
+  "contact.texts.failed.es": "No se pudo guardar. Intente de nuevo.",
   "contact.texts.noNumber": "They have no number to text.",
+  "contact.texts.noNumber.es": "No tiene un número al que mandarle un texto.",
   "contact.texts.undoBusy": "Your last change is still saving. Try again in a moment.",
   "contact.texts.undoBusy.es": "Su último cambio todavía se está guardando. Intente de nuevo en un momento.",
   "contact.texts.undoExpired": "That can no longer be undone here. Use Stop texts or Resume texts instead.",
+  "contact.texts.undoExpired.es": "Eso ya no se puede deshacer aquí. Use Detener textos o Reanudar textos.",
   // The consent To-do rows (spec §6). The English line is written into
   // tasks.title when the To-do is made (plan G8); the Spanish lines wait for an
   // operator locale. "{date}" is the appointment's calendar day in the account's zone.
@@ -1046,6 +1100,7 @@ export const m = {
   "todo.consent.cancel.en": "{name} texted {word}, so their texts are stopped. Check whether they also meant their appointment on {date}.",
   "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
   "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
+  "todo.consent.decided.es": "Esto ya se decidió. Abra el contacto para ver cómo están sus textos.",
   "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
   // Names the two buttons by their own Spanish words (contact.texts.confirmStop.es / notAStop.es).
   "todo.consent.decideFirst.es": "Decídalo con “Confirmar que pidió parar” o “No pidió parar”.",
@@ -1357,6 +1412,7 @@ export const m = {
   "prefs.palette": "Preferences: language and theme",
   "prefs.palette.es": "Preferencias: idioma y tema",
   "pipeline.dropHere": "Drop an opportunity here",
+  "pipeline.dropHere.es": "Suelte una oportunidad aquí",
 
   "compose.note": "Note",
   "compose.note.es": "Nota",
@@ -4128,8 +4184,11 @@ export const m = {
   // populates `tasks` on an account with none). `work.row.overdue` needs no
   // singular twin of its own: "1 overdue" already reads correctly.
   "work.row.count": "{count} things to do",
+  "work.row.count.es": "{count} cosas por hacer",
   "work.row.countOne": "1 thing to do",
+  "work.row.countOne.es": "1 cosa por hacer",
   "work.row.overdue": "{count} overdue",
+  "work.row.overdue.es": "{count} atrasadas",
   // F-006 plan Task 2: the dashboard's own row into the duplicates list (contacts.duplicates.*,
   // below), same compact-link convention as work.row.* above.
   "work.duplicates": "{count} possible duplicate customers to check",
