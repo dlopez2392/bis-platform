@@ -1,11 +1,12 @@
 import type { NewMessage } from "@bis/db";
 import type { Locale } from "./i18n/locale";
-import { t } from "./i18n/t";
+import { t, type CatalogueKey } from "./i18n/t";
 import { m, type MessageKey } from "./messages";
 
 // S-10 T1: each table maps a DB value to its catalogue KEY, so a label can be
 // read in either language (`labelIn`); the English `*_LABEL` constants are
-// kept, built from the same keys, for the callers that have not moved yet.
+// kept, word for word, for the callers that have not moved yet (a test pins
+// each constant to its key table, so the two cannot drift).
 
 /** Opportunity `status` column -> its key. Shared so the pipeline drawer,
  *  contact detail page, and activity timeline never drift on wording (the raw
@@ -43,17 +44,42 @@ export const FORM_STATUS_KEY = {
 /** A DB value's label in the reader's language, through the table's key;
  *  a value the table does not know comes back as itself, the same fallback
  *  `messageChannelLabel` has always had. */
-export function labelIn(table: Readonly<Record<string, MessageKey>>, value: string, locale: Locale = "en"): string {
-  return Object.hasOwn(table, value) ? t(m, table[value]!, locale) : value;
+export function labelIn<C extends Readonly<Record<string, string>> = typeof m>(
+  table: Readonly<Record<string, CatalogueKey<C>>>, value: string, locale: Locale = "en",
+  catalogue: C = m as unknown as C,
+): string {
+  return Object.hasOwn(table, value) ? t(catalogue, table[value]!, locale) : value;
 }
 
-const english = (table: Readonly<Record<string, MessageKey>>): Record<string, string> =>
-  Object.fromEntries(Object.entries(table).map(([value, key]) => [value, t(m, key, "en")]));
+// The English constants below stay as direct reads ON PURPOSE (S-10 review
+// I-1): each is English whatever the reader's language, so the G3 ratchet
+// keeps counting them until every caller has moved to `labelIn`.
+export const STATUS_LABEL: Record<string, string> = {
+  open: m["pipeline.status.open"],
+  won: m["pipeline.status.won"],
+  lost: m["pipeline.status.lost"],
+};
 
-export const STATUS_LABEL: Record<string, string> = english(OPPORTUNITY_STATUS_KEY);
-export const ACCOUNT_STATUS_LABEL: Record<string, string> = english(ACCOUNT_STATUS_KEY);
-export const MESSAGE_STATUS_LABEL: Record<string, string> = english(MESSAGE_STATUS_KEY);
-export const FORM_STATUS_LABEL: Record<string, string> = english(FORM_STATUS_KEY);
+export const ACCOUNT_STATUS_LABEL: Record<string, string> = {
+  active: m["accounts.status.active"],
+  paused: m["accounts.status.paused"],
+  archived: m["accounts.status.archived"],
+};
+
+export const MESSAGE_STATUS_LABEL: Record<string, string> = {
+  queued: m["conversations.status.queued"],
+  sent: m["conversations.status.sent"],
+  delivered: m["conversations.status.delivered"],
+  opened: m["conversations.status.opened"],
+  bounced: m["conversations.status.bounced"],
+  failed: m["conversations.status.failed"],
+};
+
+export const FORM_STATUS_LABEL: Record<string, string> = {
+  draft: m["forms.status.draft"],
+  published: m["forms.status.published"],
+  archived: m["forms.status.archived"],
+};
 
 /** Message `channel` column -> its catalogue key (S-06 part 3, spec G8), so a label can be read in
  *  either language; exhaustive over the union for the same reason as the map below. */
@@ -77,11 +103,11 @@ const CHANNEL_KEY: Record<NewMessage["channel"], MessageKey> = {
  *  gap. S-06 part 3: these are the English labels; a reader in another
  *  language goes through `messageChannelLabel(channel, locale)`. */
 export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
-  email: t(m, CHANNEL_KEY.email, "en"),
-  form: t(m, CHANNEL_KEY.form, "en"),
-  voice: t(m, CHANNEL_KEY.voice, "en"),
-  sms: t(m, CHANNEL_KEY.sms, "en"),
-  webchat: t(m, CHANNEL_KEY.webchat, "en"),
+  email: m["conversations.channel.email"],
+  form: m["conversations.channel.form"],
+  voice: m["conversations.channel.voice"],
+  sms: m["conversations.channel.sms"],
+  webchat: m["conversations.channel.webchat"],
 };
 
 /** The one place that widens an untyped DB `channel` string against

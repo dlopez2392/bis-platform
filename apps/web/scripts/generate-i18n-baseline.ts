@@ -21,7 +21,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import {
-  countsByFile, keysMissingSpanish, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts,
+  countsByFile, keysMissingSpanish, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts, agencyFilesForExemption,
   AGENCY_ONLY_KEY_PREFIXES,
 } from "../src/lib/i18n/ratchet-scan";
 import { registerViolations, glossaryViolations } from "../src/lib/i18n/spanish-style";
@@ -41,7 +41,7 @@ writeFileSync(path.join(dir, "ratchet-baseline.json"), JSON.stringify(counts, nu
 
 const scan = scanSources(baseDir, new Set(Object.keys(m)));
 const agencyFiles = agencyOnlyFiles(scan.imports);
-const missing = keysMissingSpanish(m, AGENCY_ONLY_KEY_PREFIXES, agencyOnlyKeys(scan.refs, agencyFiles));
+const missing = keysMissingSpanish(m, AGENCY_ONLY_KEY_PREFIXES, agencyOnlyKeys(scan.refs, agencyFilesForExemption(agencyFiles)));
 writeFileSync(path.join(dir, "catalogue-baseline.json"), JSON.stringify(missing, null, 2) + "\n");
 
 const direct = nonzeroSorted(directReadCounts(scan, agencyFiles));

@@ -142,16 +142,19 @@ export function relativeKey(baseDir: string, absPath: string): string {
 // against `relativeKey`'s output, which is already "/"-separated, so a
 // plain "/" in each pattern is correct on every OS — no [\\/] needed.
 export const AGENCY_ONLY_ALLOWLIST: RegExp[] = [
-  /dashboard\/accounts\/page\.tsx$/, // the agency's accounts LIST page only
-  /dashboard\/blueprints\//,
-  /dashboard\/work\//,
-  /dashboard\/numbers\//,
-  /dashboard\/screened\//,
-  /dashboard\/plans\//,
+  // Anchored at the agency's own top level (S-10 review M-3): unanchored,
+  // /dashboard\/work\// also matched any client route that merely contained
+  // "dashboard/work/" (accounts/[accountId]/dashboard/work/...).
+  /^src\/app\/\(dashboard\)\/dashboard\/accounts\/page\.tsx$/, // the agency's accounts LIST page only
+  /^src\/app\/\(dashboard\)\/dashboard\/blueprints\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/work\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/numbers\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/screened\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/plans\//,
   // S-10 T0: the design reference, requireAgency at its first line
   // (styleguide/page.tsx:2). Its prose is notes to ourselves; its component
   // demos render EN and ES through the components' own t() reads.
-  /dashboard\/styleguide\//,
+  /^src\/app\/\(dashboard\)\/dashboard\/styleguide\//,
 ];
 
 // The ONE place the scan's roots are named (plan-review I2) — relative to
@@ -234,21 +237,36 @@ export function scanSourceText(
   const sf = ts.createSourceFile(key, source, ts.ScriptTarget.Latest, true, key.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const specs: string[] = [];
   const refs: string[] = [];
-  let importsM = false;
+  // The local names the catalogue `m` is bound to in this file: "m", or an
+  // alias (`import { m as messages }`, S-10 review M-1).
+  const catalogueNames = new Set<string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !isCatalogueModule(st.moduleSpecifier.text)) continue;
+    const named = st.importClause?.namedBindings;
+    if (st.importClause?.isTypeOnly || !named || !ts.isNamedImports(named)) continue;
+    for (const e of named.elements) {
+      if (!e.isTypeOnly && (e.propertyName ?? e.name).text === "m") catalogueNames.add(e.name.text);
+    }
+  }
+  const isCatalogue = (n: ts.Node) => ts.isIdentifier(n) && catalogueNames.has(n.text);
   let directReads = 0;
   function visit(node: ts.Node) {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      const spec = node.moduleSpecifier.text;
-      specs.push(spec);
-      const named = ts.isImportDeclaration(node) ? node.importClause?.namedBindings : undefined;
-      if (isCatalogueModule(spec) && named && ts.isNamedImports(named) && named.elements.some((e) => e.name.text === "m" && !e.isTypeOnly)) importsM = true;
+      specs.push(node.moduleSpecifier.text);
     }
     if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && catalogueKeys.has(node.text)) refs.push(node.text);
-    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "m") directReads += 1;
+    if (ts.isElementAccessExpression(node) && isCatalogue(node.expression)) directReads += 1;
+    // S-10 review I-1: t(m, key, "en") and plural(m, key, n, "en") hard-code
+    // the language exactly as m["key"] does, so they count the same.
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.arguments[0] && isCatalogue(node.arguments[0])) {
+      const fn = node.expression.text;
+      const localeArg = fn === "t" ? node.arguments[2] : fn === "plural" ? node.arguments[3] : undefined;
+      if (localeArg && (ts.isStringLiteral(localeArg) || ts.isNoSubstitutionTemplateLiteral(localeArg))) directReads += 1;
+    }
     ts.forEachChild(node, visit);
   }
   visit(sf);
-  return { specs, refs, directReads: importsM ? directReads : 0 };
+  return { specs, refs, directReads };
 }
 
 export function scanSources(baseDir: string, catalogueKeys: ReadonlySet<string>): SourceScan {
@@ -275,7 +293,35 @@ export function scanSources(baseDir: string, catalogueKeys: ReadonlySet<string>)
     }
     if (r.directReads > 0) scan.directReads.set(key, r.directReads);
   }
+  scan.refs = withPluralForms(scan.refs, catalogueKeys);
   return scan;
+}
+
+/** S-10 review I-2: `plural(m, "x", n, locale)` and `tr.count("x", n)` read
+ *  "xOne" (and an "xOther", where one exists) at runtime, though only "x" is
+ *  written, so each form is referenced wherever its base key is. */
+export function withPluralForms(
+  refs: ReadonlyMap<string, ReadonlySet<string>>, catalogueKeys: ReadonlySet<string>,
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>([...refs].map(([k, files]) => [k, new Set(files)]));
+  for (const [k, files] of refs) {
+    for (const form of [`${k}One`, `${k}Other`]) {
+      if (!catalogueKeys.has(form)) continue;
+      if (!out.has(form)) out.set(form, new Set());
+      for (const f of files) out.get(form)!.add(f);
+    }
+  }
+  return out;
+}
+
+/** Files that demo client components (S-10 review I-2): agency-only to open,
+ *  but a key named there is a client key shown in a demo, so a reference
+ *  there never makes a key exempt. */
+export const DEMO_FILES: RegExp[] = [/^src\/app\/\(dashboard\)\/dashboard\/styleguide\//];
+
+/** The agency-only files whose references CAN exempt a key: all but the demos. */
+export function agencyFilesForExemption(agencyFiles: ReadonlySet<string>, demos: readonly RegExp[] = DEMO_FILES): Set<string> {
+  return new Set([...agencyFiles].filter((f) => !demos.some((re) => re.test(f))));
 }
 
 /** The files `entries` reach through imports, the entries included. */
@@ -331,7 +377,19 @@ export function agencyOnlyKeys(
  *  whatever the locale, even when "x.es" exists; only t(), plural() and
  *  makeTr ask for the reader's language. */
 export function directReadCounts(scan: SourceScan, agencyFiles: ReadonlySet<string>): Record<string, number> {
+  const englishOnly = new Set(ENGLISH_ONLY_READERS.map((r) => r.file));
   const out: Record<string, number> = {};
-  for (const [file, n] of scan.directReads) if (!agencyFiles.has(file)) out[file] = n;
+  for (const [file, n] of scan.directReads) if (!agencyFiles.has(file) && !englishOnly.has(file)) out[file] = n;
   return out;
 }
+
+/** G3's named exceptions (S-10 review I-1): files whose English read is the
+ *  point, not a screen left untranslated. Each needs a reason and a test row
+ *  (ratchet.test.ts). The styleguide is not listed: it is agency-only, and
+ *  agency-only files are already outside G3. */
+export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] = [
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
+    reason: "maps a server action's ENGLISH refusal back to its key (BY_ENGLISH), so it must read the English to say it in the drawer's language",
+  },
+];
