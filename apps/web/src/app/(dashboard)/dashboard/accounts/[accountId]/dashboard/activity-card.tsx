@@ -67,6 +67,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { relativeTime } from "@/lib/dashboard/relative-time";
+import { makeTr, type Tr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { OUTCOMES } from "../calls/format";
 
 /** How many curated rows the card shows. `events` arrives already fetched at
@@ -99,44 +101,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The one place raw `events.type`/payload values get turned into copy —
  *  everything not covered by the curation map above returns `null`. */
-function curate(event: EventRow, personaName: string): CuratedRow | null {
+function curate(event: EventRow, personaName: string, tr: Tr): CuratedRow | null {
   const payload = isRecord(event.payload) ? event.payload : {};
 
   switch (event.type) {
     case "booking.created":
       return {
         key: event.id, icon: CalendarCheck, tone: "success",
-        summary: m["dashboard.activity.bookingCreated"], createdAtIso: event.createdAt,
+        summary: tr.text("dashboard.activity.bookingCreated"), createdAtIso: event.createdAt,
       };
     case "booking.cancelled":
       return {
         key: event.id, icon: CalendarX, tone: "warning",
-        summary: m["dashboard.activity.bookingCancelled"], createdAtIso: event.createdAt,
+        summary: tr.text("dashboard.activity.bookingCancelled"), createdAtIso: event.createdAt,
       };
     case "booking.status_changed": {
       const status = typeof payload.status === "string" ? payload.status : null;
       if (status === "cancelled") {
         return {
           key: event.id, icon: CalendarX, tone: "warning",
-          summary: m["dashboard.activity.bookingCancelled"], createdAtIso: event.createdAt,
+          summary: tr.text("dashboard.activity.bookingCancelled"), createdAtIso: event.createdAt,
         };
       }
       if (status === "completed") {
         return {
           key: event.id, icon: CheckCircle2, tone: "success",
-          summary: m["dashboard.activity.bookingCompleted"], createdAtIso: event.createdAt,
+          summary: tr.text("dashboard.activity.bookingCompleted"), createdAtIso: event.createdAt,
         };
       }
       if (status === "booked") {
         return {
           key: event.id, icon: CalendarCheck, tone: "success",
-          summary: m["dashboard.activity.bookingRestored"], createdAtIso: event.createdAt,
+          summary: tr.text("dashboard.activity.bookingRestored"), createdAtIso: event.createdAt,
         };
       }
       if (status === "no_show") {
         return {
           key: event.id, icon: CalendarX, tone: "warning",
-          summary: m["dashboard.activity.bookingNoShow"], createdAtIso: event.createdAt,
+          summary: tr.text("dashboard.activity.bookingNoShow"), createdAtIso: event.createdAt,
         };
       }
       // An unrecognized status (none exist today; every BookingStatus is
@@ -146,7 +148,7 @@ function curate(event: EventRow, personaName: string): CuratedRow | null {
     case "form.submitted":
       return {
         key: event.id, icon: Mail, tone: "accent",
-        summary: m["dashboard.activity.formSubmitted"], createdAtIso: event.createdAt,
+        summary: tr.text("dashboard.activity.formSubmitted"), createdAtIso: event.createdAt,
       };
     case "call.recorded": {
       const outcome = typeof payload.outcome === "string" ? (payload.outcome as CallOutcome) : null;
@@ -154,7 +156,7 @@ function curate(event: EventRow, personaName: string): CuratedRow | null {
       if (!treatment) return null; // unrecognized outcome — never render it raw
       return {
         key: event.id, icon: Phone, tone: "accent",
-        summary: m["dashboard.activity.callRecorded"].replace("{outcome}", treatment.label),
+        summary: tr.text("dashboard.activity.callRecorded", { outcome: treatment.label }),
         createdAtIso: event.createdAt,
       };
     }
@@ -163,10 +165,10 @@ function curate(event: EventRow, personaName: string): CuratedRow | null {
       return {
         // On is a warning (Sofía is no longer answering); off is Sofía back.
         key: event.id, icon: payload.forwardCalls ? PhoneForwarded : Phone, tone: payload.forwardCalls ? "warning" : "accent",
-        // D-045: the account's own receptionist, by a function replacer (a
-        // name containing `$&` is inserted verbatim).
-        summary: (payload.forwardCalls ? m["dashboard.activity.forwardOn"] : m["dashboard.activity.forwardOff"])
-          .replace("{name}", () => personaName),
+        // D-045: the account's own receptionist. `t()`'s own `interpolate`
+        // already inserts {name} via a function replacer, so a persona
+        // containing `$&` is still inserted verbatim.
+        summary: tr.text(payload.forwardCalls ? "dashboard.activity.forwardOn" : "dashboard.activity.forwardOff", { name: personaName }),
         createdAtIso: event.createdAt,
       };
     }
@@ -180,6 +182,8 @@ export function ActivityCard({
   events,
   now,
   personaName,
+  locale = "en",
+  pseudo = false,
 }: {
   accountId: string;
   /** Raw ledger rows, newest first — `listRecentEvents(db, accountId, N)`,
@@ -194,10 +198,15 @@ export function ActivityCard({
   /** The account's own receptionist name (`voice_profiles.persona_name`,
    *  D-045), null with no profile; "Sofía" only when missing or blank. */
   personaName: string | null;
+  /** S-10 T2: the reader's own locale — every existing call site omits this
+   *  and keeps rendering English, same as `StatTile`'s own default. */
+  locale?: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const name = personaName?.trim() || "Sofía";
   const rows = events
-    .map((event) => curate(event, name))
+    .map((event) => curate(event, name, tr))
     .filter((row): row is CuratedRow => row !== null)
     .slice(0, DISPLAY_LIMIT);
   const isEmpty = rows.length === 0;
@@ -211,10 +220,10 @@ export function ActivityCard({
     // min-content width, which this feed's row text pushed past the track
     // at phone width.
     <div className="min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
-      <div className="flex items-baseline gap-2">
-        <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.activity.title"]}</h5>
+      <div lang={locale} className="flex items-baseline gap-2">
+        <h5 className="text-[13.5px] font-semibold text-card-foreground">{tr.text("dashboard.activity.title")}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">
-          {m["dashboard.activity.caption"]}
+          {tr.text("dashboard.activity.caption")}
         </span>
       </div>
 
@@ -224,13 +233,16 @@ export function ActivityCard({
           (whose ctaHref IS the EmptyState's action), it stays outside the
           conditional and renders in EVERY state, matching the mockup's own
           markup: the `.feed` div and the button row are two separate
-          siblings, never one swapped for the other. */}
+          siblings, never one swapped for the other. `lang` sits on each
+          translated part, never on the card's own root — the footer link
+          below reads the (untranslated) `pipeline.*` namespace, not this
+          task's own. */}
       {isEmpty ? (
-        <EmptyState icon={Activity} title={m["dashboard.activity.empty"]} />
+        <div lang={locale}><EmptyState icon={Activity} title={tr.text("dashboard.activity.empty")} /></div>
       ) : (
         // The rule is --row-line (.06), the mockup's `.row`; `divide-border`
         // was --line (.08), a third stronger than every other row rule here.
-        <div className="mt-2 flex flex-col">
+        <div lang={locale} className="mt-2 flex flex-col">
           {rows.map((row) => (
             <div
               key={row.key}

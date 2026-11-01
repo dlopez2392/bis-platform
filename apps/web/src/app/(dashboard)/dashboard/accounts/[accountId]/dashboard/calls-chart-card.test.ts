@@ -51,6 +51,7 @@ function render(opts: {
   spamCount?: number;
   abandonedCount?: number;
   personaName?: string | null;
+  locale?: "en" | "es";
 } = {}) {
   // `spamCount`/`abandonedCount` default to 0, never derived from
   // `dayBuckets`: every pre-existing (non-screened) test below relies on
@@ -70,6 +71,7 @@ function render(opts: {
       spamCount: opts.spamCount ?? 0,
       abandonedCount: opts.abandonedCount ?? 0,
       personaName: opts.personaName ?? null,
+      locale: opts.locale ?? "en",
     }),
   );
 }
@@ -339,5 +341,39 @@ describe("CallsChartCard — names the account's own receptionist (D-045)", () =
   it("a name carrying a replacement pattern is inserted verbatim", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, personaName: "A$&B" });
     expect(html).toContain("A$&amp;B flagged 1 call as likely spam.");
+  });
+});
+
+// S-10 T2 (spec §3.1 row 2): every dashboard.calls.* string here was read
+// through `m[...]` directly, and the bar tooltip/axis and the mini table's
+// clock were pinned to "en-US" — all English regardless of the reader's
+// locale. `locale` is a new, optional prop (default "en") so every test
+// above is byte-for-byte unaffected.
+describe("CallsChartCard in Spanish (usted register)", () => {
+  it("header, caption, legend and the empty state render in Spanish (mutation: leave any m[...] read unconverted → FAILS)", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], locale: "es" });
+    expect(html).toContain("Llamadas atendidas");
+    expect(html).toContain("Últimos 14 días");
+    expect(html).toContain("Cuando Sofía contesta, cada llamada aparece aquí con su resultado.");
+    expect(html).not.toContain("Calls answered");
+  });
+
+  it("the bar tooltip and axis labels render Spanish month abbreviations with no trailing period (mutation: drop locale from shortDayLabel/longDayLabel → FAILS)", () => {
+    const html = render({ locale: "es" });
+    expect(html).toContain("18 ago · 5 llamadas");
+    expect(html).toContain('aria-label="18 de agosto, 5 llamadas"');
+    expect(html).toContain("Fines de semana atenuados");
+  });
+
+  it("the mini table's clock renders in es-US wording (mutation: leave the Intl.DateTimeFormat pinned to en-US → FAILS)", () => {
+    const html = render({ timezone: "America/Chicago", locale: "es" });
+    expect(html).toContain("2:15 p.m.");
+  });
+
+  it("the screened states render Spanish singular/plural units, naming the configured persona", () => {
+    const both = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, abandonedCount: 2, personaName: "Max", locale: "es" });
+    expect(both).toContain(
+      "Ninguna llamada atendida en los últimos 14 días. Max marcó 1 llamada como probable spam, y 2 personas colgaron antes de que Max pudiera ayudar.",
+    );
   });
 });

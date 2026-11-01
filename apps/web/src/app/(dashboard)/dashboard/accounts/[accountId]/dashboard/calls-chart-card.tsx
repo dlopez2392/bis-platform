@@ -30,9 +30,11 @@ import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
+import { tag } from "@/lib/format";
 import { longDayLabel, shortDayLabel } from "@/lib/dashboard/day-label";
 import { resolveCallsChartState } from "@/lib/dashboard/metrics";
+import { makeTr, type Tr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { callerLabel, formatDuration } from "../calls/format";
 import { OutcomePill } from "../calls/outcome-pill";
 
@@ -54,6 +56,8 @@ export function CallsChartCard({
   spamCount,
   abandonedCount,
   personaName,
+  locale = "en",
+  pseudo = false,
 }: {
   accountId: string;
   /** The ACCOUNT's IANA zone — the mini table's local time column reads it,
@@ -85,7 +89,12 @@ export function CallsChartCard({
    *  D-045) — null when there is no profile. Every line of this card names
    *  it; "Sofía" only when it is missing or blank, like the sub-line. */
   personaName: string | null;
+  /** S-10 T2: the reader's own locale — every existing call site omits this
+   *  and keeps rendering English, same as `StatTile`'s own default. */
+  locale?: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const base = `/dashboard/accounts/${accountId}`;
   const name = personaName?.trim() || "Sofía";
   const answeredCount = dayBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
@@ -103,7 +112,7 @@ export function CallsChartCard({
   // if it were honest.
   const offerVoiceSetup = isAgency && !voiceEnabled;
   const ctaHref = offerVoiceSetup ? `${base}/voice` : `${base}/calls`;
-  const ctaLabel = offerVoiceSetup ? m["dashboard.calls.emptySetupVoice"] : m["dashboard.calls.emptyViewCalls"];
+  const ctaLabel = tr.text(offerVoiceSetup ? "dashboard.calls.emptySetupVoice" : "dashboard.calls.emptyViewCalls");
 
   return (
     // F-107 (rider part): `min-w-0` — this card sits in the dashboard's
@@ -112,25 +121,27 @@ export function CallsChartCard({
     // which the chart's own bars/labels pushed past the track at phone
     // width even though nothing inside needed to scroll on its own.
     <div className="min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
-      <div className="flex items-baseline gap-2">
-        <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.calls.title"]}</h5>
+      <div lang={locale} className="flex items-baseline gap-2">
+        <h5 className="text-[13.5px] font-semibold text-card-foreground">{tr.text("dashboard.calls.title")}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">
-          {m["dashboard.calls.caption"]}
+          {tr.text("dashboard.calls.caption")}
         </span>
       </div>
 
       {chartState.kind !== "answered" ? (
-        <EmptyState
-          icon={PhoneIncoming}
-          title={withName(chartState.kind === "none" ? m["dashboard.calls.empty"] : screenedCopy(chartState), name)}
-          action={
-            <Link href={ctaHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
-              {ctaLabel}
-            </Link>
-          }
-        />
+        <div lang={locale}>
+          <EmptyState
+            icon={PhoneIncoming}
+            title={chartState.kind === "none" ? tr.text("dashboard.calls.empty", { name }) : screenedCopy(chartState, name, tr)}
+            action={
+              <Link href={ctaHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+                {ctaLabel}
+              </Link>
+            }
+          />
+        </div>
       ) : (
-        <Bars dayBuckets={dayBuckets} />
+        <Bars dayBuckets={dayBuckets} locale={locale} tr={tr} />
       )}
 
       {/* Keyed on `recentCalls` itself, independent of the 14-day `isEmpty`
@@ -140,7 +151,7 @@ export function CallsChartCard({
           chart area still shows its empty state, but the table renders
           below it whenever there is anything in it to show. */}
       {recentCalls.length > 0 ? (
-        <RecentCallsTable calls={recentCalls} accountId={accountId} timezone={timezone} />
+        <RecentCallsTable calls={recentCalls} accountId={accountId} timezone={timezone} locale={locale} />
       ) : null}
     </div>
   );
@@ -149,14 +160,14 @@ export function CallsChartCard({
 /** "Aug 18 · 5 calls" / "August 18, 5 calls" — shared count→copy resolution
  *  so the visible tooltip and the column's accessible name can never disagree
  *  about which noun ("call" vs "calls") a given count takes. */
-function callsUnit(count: number): string {
-  return count === 1 ? m["dashboard.calls.unit.call"] : m["dashboard.calls.unit.calls"];
+function callsUnit(count: number, tr: Tr): string {
+  return tr.text(count === 1 ? "dashboard.calls.unit.call" : "dashboard.calls.unit.calls");
 }
 
 /** "1 caller" / "2 callers" — same singular/plural shape as `callsUnit`
  *  above, for the abandoned-callers line. */
-function callerUnit(count: number): string {
-  return count === 1 ? m["dashboard.calls.unit.caller"] : m["dashboard.calls.unit.callers"];
+function callerUnit(count: number, tr: Tr): string {
+  return tr.text(count === 1 ? "dashboard.calls.unit.caller" : "dashboard.calls.unit.callers");
 }
 
 /** The one-sentence explanation for the "screened" state — three variants,
@@ -165,30 +176,21 @@ function callerUnit(count: number): string {
  *  caller who hung up is never hidden behind the spam line (review fix —
  *  the first version of this copy led with spam alone whenever it was
  *  present, silently dropping a real abandoned caller from the same
- *  window). */
-/** Every "{name}" in a line, by a FUNCTION replacer — a persona containing
- *  `$&` must be inserted verbatim, never re-read as a replacement pattern
- *  (page.tsx's own sub-line does the same). `screenedBoth` names it twice. */
-function withName(line: string, name: string): string {
-  return line.replaceAll("{name}", () => name);
-}
-
-function screenedCopy(state: { spamCount: number; abandonedCount: number }): string {
+ *  window). "{name}" is inserted by `tr.text`'s own function replacer (a
+ *  persona containing `$&` is inserted verbatim), the same discipline the
+ *  old by-hand `withName` helper existed to guarantee. */
+function screenedCopy(state: { spamCount: number; abandonedCount: number }, name: string, tr: Tr): string {
   if (state.spamCount > 0 && state.abandonedCount > 0) {
-    return m["dashboard.calls.screenedBoth"]
-      .replace("{spamCount}", String(state.spamCount))
-      .replace("{spamUnit}", callsUnit(state.spamCount))
-      .replace("{otherCount}", String(state.abandonedCount))
-      .replace("{otherUnit}", callerUnit(state.abandonedCount));
+    return tr.text("dashboard.calls.screenedBoth", {
+      name,
+      spamCount: state.spamCount, spamUnit: callsUnit(state.spamCount, tr),
+      otherCount: state.abandonedCount, otherUnit: callerUnit(state.abandonedCount, tr),
+    });
   }
   if (state.spamCount > 0) {
-    return m["dashboard.calls.screenedSpam"]
-      .replace("{count}", String(state.spamCount))
-      .replace("{unit}", callsUnit(state.spamCount));
+    return tr.text("dashboard.calls.screenedSpam", { name, count: state.spamCount, unit: callsUnit(state.spamCount, tr) });
   }
-  return m["dashboard.calls.screenedAbandoned"]
-    .replace("{count}", String(state.abandonedCount))
-    .replace("{unit}", callerUnit(state.abandonedCount));
+  return tr.text("dashboard.calls.screenedAbandoned", { name, count: state.abandonedCount, unit: callerUnit(state.abandonedCount, tr) });
 }
 
 /**
@@ -204,7 +206,7 @@ function screenedCopy(state: { spamCount: number; abandonedCount: number }): str
  * there is nothing here to hydrate. The reference chart is a client component
  * only because its bars are `<button>`s that drive React state.
  */
-function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isWeekend: boolean }[] }) {
+function Bars({ dayBuckets, locale, tr }: { dayBuckets: { dayKey: string; count: number; isWeekend: boolean }[]; locale: Locale; tr: Tr }) {
   const max = Math.max(1, ...dayBuckets.map((b) => b.count));
   // The BUSIEST day, resolved once. Ties keep the earliest, which is the same
   // rule `dayBuckets`' own ascending order already implies.
@@ -212,7 +214,7 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
 
   return (
     <>
-    <div className="relative mt-3 flex h-[168px] items-end gap-[7px] border-b border-[var(--axis)] px-[2px]">
+    <div lang={locale} className="relative mt-3 flex h-[168px] items-end gap-[7px] border-b border-[var(--axis)] px-[2px]">
       {[33, 66].map((pct) => (
         <div
           key={pct}
@@ -224,15 +226,9 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
       ))}
       {dayBuckets.map((bucket, i) => {
         const heightPercent = Math.max(MIN_BAR_PERCENT, (bucket.count / max) * 100);
-        const unit = callsUnit(bucket.count);
-        const tooltip = m["dashboard.calls.tooltip"]
-          .replace("{date}", shortDayLabel(bucket.dayKey))
-          .replace("{count}", String(bucket.count))
-          .replace("{unit}", unit);
-        const srText = m["dashboard.calls.tooltipSr"]
-          .replace("{date}", longDayLabel(bucket.dayKey))
-          .replace("{count}", String(bucket.count))
-          .replace("{unit}", unit);
+        const unit = callsUnit(bucket.count, tr);
+        const tooltip = tr.text("dashboard.calls.tooltip", { date: shortDayLabel(bucket.dayKey, locale), count: bucket.count, unit });
+        const srText = tr.text("dashboard.calls.tooltipSr", { date: longDayLabel(bucket.dayKey, locale), count: bucket.count, unit });
 
         return (
           // The COLUMN is the hover target and the group, so a 2%-tall zero
@@ -285,24 +281,25 @@ function Bars({ dayBuckets }: { dayBuckets: { dayKey: string; count: number; isW
         up under their bars; narrow viewports thin by PARITY — the odd labels'
         text hides while their column stays — so the axis never collapses to
         three stray words, which is what stood here before. */}
-    <div className="flex pt-1.5" aria-hidden data-slot="chart-axis">
+    <div lang={locale} className="flex pt-1.5" aria-hidden data-slot="chart-axis">
       {dayBuckets.map((bucket, i) => (
         <span
           key={bucket.dayKey}
           className="min-w-0 flex-1 text-center font-mono text-[10px] text-muted-foreground"
         >
-          <span className={i % 2 === 1 ? "hidden xl:inline" : ""}>{shortDayLabel(bucket.dayKey)}</span>
+          <span className={i % 2 === 1 ? "hidden xl:inline" : ""}>{shortDayLabel(bucket.dayKey, locale)}</span>
         </span>
       ))}
     </div>
     {/* "Weekends muted" is a LEGEND, not a tick — it never belonged in the
         axis row. Same shape as the reference chart's own legend. */}
     <div
+      lang={locale}
       data-slot="chart-legend"
       className="mt-2 flex items-center gap-1.5 font-mono text-[10px] tracking-[0.06em] text-muted-foreground uppercase"
     >
       <span aria-hidden className="size-2.5 rounded-[3px] bg-[var(--bar-wk)]" />
-      {m["dashboard.calls.axis.weekendsMuted"]}
+      {tr.text("dashboard.calls.axis.weekendsMuted")}
     </div>
     </>
   );
@@ -312,10 +309,12 @@ function RecentCallsTable({
   calls,
   accountId,
   timezone,
+  locale,
 }: {
   calls: CallListRow[];
   accountId: string;
   timezone: string;
+  locale: Locale;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -330,7 +329,9 @@ function RecentCallsTable({
           // the full Calls list's multi-year "when" column (formatCallTime).
           // Explicit `timeZone`, the ACCOUNT's own, never the viewer's —
           // same discipline `calls-table.tsx`'s own `formatCallTime` follows.
-          const time = new Intl.DateTimeFormat("en-US", {
+          // `tag(locale)` (S-10 T2): this was pinned to "en-US" regardless of
+          // the reader's own locale.
+          const time = new Intl.DateTimeFormat(tag(locale), {
             timeZone: timezone,
             hour: "numeric",
             minute: "2-digit",
