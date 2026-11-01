@@ -385,7 +385,7 @@ export default async function AccountDashboardPage({
             work row that follows, which `bucketWork` measures against those
             same midnights. */}
         <ZoneNote zone={zone} isAgency={isAgency} />
-        <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
+        <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} locale={locale} />
         {/* D-077, design review follow-up: a suffix on each of the four
             tile's own labels ("Appointments booked · Last 7 days",
             251.6px of Geist Mono at the Label role) wrapped in the ~234px
