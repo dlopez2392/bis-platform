@@ -5,10 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTimeInZone } from "@/lib/format";
 import { normalizeConsent } from "@/lib/forms/consent";
-import { m } from "@/lib/messages";
+import type { MessageKey } from "@/lib/messages";
+import { makeTr, type Tr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 
 export function SubmissionsTable({
-  accountId, submissions, timezone,
+  accountId, submissions, timezone, readerLocale = "en", pseudo = false,
 }: {
   accountId: string;
   submissions: SubmissionRow[];
@@ -18,34 +20,40 @@ export function SubmissionsTable({
    *  RUNTIME's zone (server or browser), never the account's, the same bug
    *  D-010 fixed for the contacts list and the activity timeline. */
   timezone: string;
+  /** S-10 T5 part 2: the OPERATOR reading this card — never a submission's
+   *  OWN `locale` (the language the visitor filled the form out in, a fact
+   *  about the row, never read here). */
+  readerLocale?: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(readerLocale, pseudo);
   return (
     <Card>
-      <CardHeader><CardTitle className="text-sm">{m["forms.submissions"]}</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-sm">{tr.text("forms.submissions")}</CardTitle></CardHeader>
       <CardContent>
         {submissions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{m["forms.noSubmissions"]}</p>
+          <p className="text-sm text-muted-foreground">{tr.text("forms.noSubmissions")}</p>
         ) : (
           <ul className="divide-y divide-border">
             {submissions.map((submission) => (
               <li key={submission.id} className="py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {formatDateTimeInZone(submission.created_at, timezone)}
+                    {formatDateTimeInZone(submission.created_at, timezone, readerLocale)}
                   </span>
                   {submission.spam_reason ? (
                     <Badge
                       variant="secondary"
-                      title={m[`forms.spamReason.${submission.spam_reason}` as keyof typeof m] as string}
+                      title={tr.text(`forms.spamReason.${submission.spam_reason}` as MessageKey)}
                     >
-                      {m["forms.blocked"]}
+                      {tr.text("forms.blocked")}
                     </Badge>
                   ) : null}
                   {/* Surfaced, not swallowed: the lead was saved but part of the
                       enrichment failed, and somebody has to know. */}
                   {submission.processing_error ? (
                     <Badge variant="destructive" title={submission.processing_error}>
-                      {m["forms.needsAttention"]}
+                      {tr.text("forms.needsAttention")}
                     </Badge>
                   ) : null}
                   {submission.contact_id ? (
@@ -53,7 +61,7 @@ export function SubmissionsTable({
                       href={`/dashboard/accounts/${accountId}/contacts/${submission.contact_id}`}
                       className="text-xs text-primary underline"
                     >
-                      {m["forms.contact"]}
+                      {tr.text("forms.contact")}
                     </Link>
                   ) : null}
                 </div>
@@ -69,7 +77,7 @@ export function SubmissionsTable({
                     consent field, precisely so it can be produced later. Until
                     this rendered it, that evidence lived only in the database
                     and no operator could answer "prove they agreed". */}
-                <ConsentList consent={submission.consent} timezone={timezone} />
+                <ConsentList consent={submission.consent} timezone={timezone} tr={tr} />
               </li>
             ))}
           </ul>
@@ -80,8 +88,8 @@ export function SubmissionsTable({
 }
 
 function ConsentList({
-  consent, timezone,
-}: { consent: SubmissionRow["consent"]; timezone: string }) {
+  consent, timezone, tr,
+}: { consent: SubmissionRow["consent"]; timezone: string; tr: Tr }) {
   const entries = normalizeConsent(consent);
   if (entries.length === 0) return null;
 
@@ -97,11 +105,11 @@ function ConsentList({
           <span className="min-w-0">
             {/* The icon carries the meaning, so a screen reader needs the word. */}
             <span className="sr-only">
-              {entry.given ? m["forms.consentGiven"] : m["forms.consentNotGiven"]}:{" "}
+              {entry.given ? tr.text("forms.consentGiven") : tr.text("forms.consentNotGiven")}:{" "}
             </span>
             <span className="break-words text-card-foreground">{entry.text}</span>
             {entry.at ? (
-              <span className="text-muted-foreground"> · {formatDateTimeInZone(entry.at, timezone)}</span>
+              <span className="text-muted-foreground"> · {formatDateTimeInZone(entry.at, timezone, tr.locale)}</span>
             ) : null}
           </span>
         </li>

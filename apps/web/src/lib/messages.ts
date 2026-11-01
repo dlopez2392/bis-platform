@@ -1783,11 +1783,12 @@ export const m = {
   // question — one optional field a form can add. This exact string doubles
   // as the field's default customer-facing label (form-editor.tsx's
   // `addField`, same as every kind above it), so it is written for the
-  // VISITOR. Review round 1 correction: the `.es` twin is NOT waiting for an
-  // operator locale (there is none here) — it is seeded as the default label
-  // the moment `form.locale_default === "es"`, because the FORM already
-  // carries its own locale and the visitor reads whichever one the form was
-  // built in. Usted register, matching the plan's own wording.
+  // VISITOR. The `.es` twin is seeded as the default label the moment
+  // `form.locale_default === "es"`, because the FORM carries its own locale
+  // and the visitor reads whichever one the form was built in. Since S-10 T5
+  // part 2 the same twin also serves the editor's own field tag, read in the
+  // OPERATOR's language (`kindLabel(..., readerLocale)`). Usted register,
+  // matching the plan's own wording.
   "forms.kind.core.referral_source": "Who recommended you?",
   "forms.kind.core.referral_source.es": "¿Quién le recomendó?",
   "forms.kind.message": "Message (starts a conversation)",

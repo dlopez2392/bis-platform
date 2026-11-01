@@ -19,8 +19,10 @@ import {
 } from "@/components/ui/select";
 import { SubmitButton } from "../../../submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo, kindLabel } from "@/lib/forms/editor-helpers";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
@@ -31,6 +33,7 @@ const CORE_KINDS = [
 
 export function FormEditor({
   form, customFields, action, conciergeAssistantName, republishAction,
+  readerLocale = "en", pseudo = false,
 }: {
   form: FormRow;
   customFields: CustomFieldDef[];
@@ -45,7 +48,21 @@ export function FormEditor({
   republishAction: (
     expectedPriorStatus: FormRow["status"],
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** S-10 T5 part 2: the OPERATOR's own language, reading THIS DASHBOARD
+   *  screen — every card title, label, hint, button and toast below.
+   *  Deliberately a SEPARATE prop from `form.locale_default` (passed to
+   *  `kindLabel` only inside `addField`, below): that one is the FORM's own
+   *  customer-facing language, forwarded to the public page and the embed
+   *  snippet's `data-locale`, and it is read by a VISITOR filling out the
+   *  form, never by the operator editing it here. Collapsing the two into
+   *  one prop would make an English-reading operator editing a Spanish
+   *  form, or the reverse, unrepresentable — see
+   *  form-editor.test.ts's own "seeded label follows the FORM's own locale;
+   *  the editor's chrome follows the READER's" block, which pins the split. */
+  readerLocale?: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(readerLocale, pseudo);
   const [fields, setFields] = useState<FormField[]>(form.fields);
   const [successMode, setSuccessMode] = useState(form.success_mode);
   // Controlled (fix round 1 review item 1): this used to be
@@ -81,7 +98,7 @@ export function FormEditor({
     try {
       result = await action(formData);
     } catch {
-      toast.error(m["forms.saveFailed"]);
+      toast.error(tr.text("forms.saveFailed"));
       return;
     }
     if (!result.ok) { toast.error(result.error); return; }
@@ -90,21 +107,21 @@ export function FormEditor({
       // only thing Undo can honestly promise to restore it FROM.
       const unpublishedTo = status;
       toast.success(
-        m["forms.unpublishedToast"].replace("{assistant}", conciergeAssistantName),
+        tr.text("forms.unpublishedToast", { assistant: conciergeAssistantName }),
         {
           action: {
-            label: m["common.undo"],
+            label: tr.text("common.undo"),
             onClick: () => void republishAction(unpublishedTo)
               .then((u) => {
                 setStatus((current) => statusAfterUndo(u, current));
                 if (!u.ok) toast.error(u.error);
               })
-              .catch(() => toast.error(m["forms.republishFailed"])),
+              .catch(() => toast.error(tr.text("forms.republishFailed"))),
           },
         },
       );
     } else {
-      toast.success(m["forms.saved"]);
+      toast.success(tr.text("forms.saved"));
     }
   });
 
@@ -122,14 +139,15 @@ export function FormEditor({
     // than silently producing a second field FormData would drop the answer
     // for, in case some future kind ever generates a duplicate key.
     if (fields.some((f) => f.key === key)) {
-      toast.error(m["forms.duplicateFieldKey"]);
+      toast.error(tr.text("forms.duplicateFieldKey"));
       return;
     }
     setFields((current) => [...current, {
       key, kind: kind as FormField["kind"],
       // Review round 1, m5: the ONLY call site that passes `form.locale_default`
       // — this seeds a new field's CUSTOMER-facing label, in the form's own
-      // locale, never the editor's own (always-English) chrome.
+      // locale, never the editor's own chrome (which follows `readerLocale`,
+      // below).
       label: kindLabel(kind, customFields, form.locale_default), required: false,
     }]);
   }
@@ -164,10 +182,10 @@ export function FormEditor({
       <input type="hidden" name="fields" value={JSON.stringify(fields)} />
 
       <Card>
-        <CardHeader><CardTitle className="text-sm">{m["forms.fields"]}</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-sm">{tr.text("forms.fields")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {fields.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{m["forms.noFields"]}</p>
+            <p className="text-sm text-muted-foreground">{tr.text("forms.noFields")}</p>
           ) : (
             /* Rules, never a box per row: these sit inside a glass `<Card>`
                and a bordered box each was the nested-card shape. */
@@ -175,12 +193,12 @@ export function FormEditor({
               {fields.map((field, index) => (
                 <li key={field.key} className="flex flex-wrap items-center gap-2 border-t border-[var(--row-line)] py-[7px] first:border-t-0">
                   <span className="w-40 shrink-0 truncate text-xs text-muted-foreground">
-                    {kindLabel(field.kind, customFields)}
+                    {kindLabel(field.kind, customFields, readerLocale)}
                   </span>
                   <Input
                     value={field.label}
                     onChange={(e) => patch(index, { label: e.target.value })}
-                    aria-label={`${m["forms.fieldLabel"]} — ${field.key}`}
+                    aria-label={`${tr.text("forms.fieldLabel")} — ${field.key}`}
                     className="h-8 min-w-[160px] flex-1 text-sm"
                   />
                   <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -188,19 +206,19 @@ export function FormEditor({
                       checked={field.required}
                       onCheckedChange={(value) => patch(index, { required: value === true })}
                     />
-                    {m["forms.fieldRequired"]}
+                    {tr.text("forms.fieldRequired")}
                   </label>
                   {/* Buttons, not drag: only @dnd-kit/core is installed, and
                       these are keyboard-accessible with no extra work. */}
-                  <Button type="button" variant="ghost" size="xs" aria-label={m["forms.moveUp"]}
+                  <Button type="button" variant="ghost" size="xs" aria-label={tr.text("forms.moveUp")}
                           onClick={() => move(index, -1)} disabled={index === 0}>
                     <ArrowUp className="size-3.5" aria-hidden />
                   </Button>
-                  <Button type="button" variant="ghost" size="xs" aria-label={m["forms.moveDown"]}
+                  <Button type="button" variant="ghost" size="xs" aria-label={tr.text("forms.moveDown")}
                           onClick={() => move(index, 1)} disabled={index === fields.length - 1}>
                     <ArrowDown className="size-3.5" aria-hidden />
                   </Button>
-                  <Button type="button" variant="ghost" size="xs" aria-label={m["forms.removeField"]}
+                  <Button type="button" variant="ghost" size="xs" aria-label={tr.text("forms.removeField")}
                           onClick={() => setFields((c) => c.filter((_, i) => i !== index))}>
                     <X className="size-3.5" aria-hidden />
                   </Button>
@@ -211,11 +229,11 @@ export function FormEditor({
 
           {available.length > 0 ? (
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-xs text-muted-foreground">{m["forms.addField"]}:</span>
+              <span className="text-xs text-muted-foreground">{tr.text("forms.addField")}:</span>
               {available.map((kind) => (
                 <Button key={kind} type="button" variant="outline" size="xs"
                         onClick={() => addField(kind)}>
-                  {kindLabel(kind, customFields)}
+                  {kindLabel(kind, customFields, readerLocale)}
                 </Button>
               ))}
             </div>
@@ -224,58 +242,63 @@ export function FormEditor({
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-sm">{m["forms.settings"]}</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-sm">{tr.text("forms.settings")}</CardTitle></CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="form-name-edit">{m["forms.name"]}</Label>
+            <Label htmlFor="form-name-edit">{tr.text("forms.name")}</Label>
             <Input id="form-name-edit" name="name" defaultValue={form.name} required />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="form-locale">{m["forms.locale"]}</Label>
+            <Label htmlFor="form-locale">{tr.text("forms.locale")}</Label>
             <Select name="locale" defaultValue={form.locale_default}>
               <SelectTrigger id="form-locale" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="en">English</SelectItem>
-                <SelectItem value="es">Español</SelectItem>
+                {/* The FORM's own language names, always shown as themselves
+                    — never routed through readerLocale: an English-speaking
+                    operator must still be able to read that "Español" means
+                    the form speaks Spanish to its own visitors. */}
+                {LANGUAGE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="form-notify">{m["forms.notifyEmails"]}</Label>
+            <Label htmlFor="form-notify">{tr.text("forms.notifyEmails")}</Label>
             <Input id="form-notify" name="notifyEmails" defaultValue={form.notify_emails.join(", ")} />
-            <p className="text-xs text-muted-foreground">{m["forms.notifyHint"]}</p>
+            <p className="text-xs text-muted-foreground">{tr.text("forms.notifyHint")}</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="form-success-mode">{m["forms.successMode"]}</Label>
+            <Label htmlFor="form-success-mode">{tr.text("forms.successMode")}</Label>
             <Select name="successMode" defaultValue={form.success_mode}
                     onValueChange={(value) => setSuccessMode(value as "message" | "redirect")}>
               <SelectTrigger id="form-success-mode" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="message">{m["forms.successModeMessage"]}</SelectItem>
-                <SelectItem value="redirect">{m["forms.successModeRedirect"]}</SelectItem>
+                <SelectItem value="message">{tr.text("forms.successModeMessage")}</SelectItem>
+                <SelectItem value="redirect">{tr.text("forms.successModeRedirect")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           {successMode === "redirect" ? (
             <div className="space-y-1.5">
-              <Label htmlFor="form-redirect">{m["forms.redirectUrl"]}</Label>
+              <Label htmlFor="form-redirect">{tr.text("forms.redirectUrl")}</Label>
               <Input id="form-redirect" name="redirectUrl" type="url"
                      defaultValue={form.redirect_url ?? ""} />
             </div>
           ) : (
             <div className="space-y-1.5">
-              <Label htmlFor="form-success-message">{m["forms.successMessage"]}</Label>
+              <Label htmlFor="form-success-message">{tr.text("forms.successMessage")}</Label>
               <Input id="form-success-message" name="successMessage"
                      defaultValue={form.success_message ?? ""} />
             </div>
           )}
           <label className="flex items-end gap-2 pb-1.5 text-sm">
             <Checkbox name="transparent" defaultChecked={form.theme.transparentBackground} />
-            {m["forms.transparent"]}
+            {tr.text("forms.transparent")}
           </label>
         </CardContent>
       </Card>
@@ -285,13 +308,13 @@ export function FormEditor({
           confirm dialog is the wrong pattern here. */}
       {warnOnUnpublish && conciergeAssistantName ? (
         <Notice tone="warn">
-          {m["forms.unpublishWarning"].replace("{assistant}", conciergeAssistantName)}
+          {tr.text("forms.unpublishWarning", { assistant: conciergeAssistantName })}
         </Notice>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
-        <Label htmlFor="form-status" className="sr-only">{m["forms.status"]}</Label>
+        <SubmitButton pending={pending}>{tr.text("common.save")}</SubmitButton>
+        <Label htmlFor="form-status" className="sr-only">{tr.text("forms.status")}</Label>
         <Select
           name="status"
           value={status}
@@ -301,9 +324,9 @@ export function FormEditor({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="draft">{m["forms.status.draft"]}</SelectItem>
-            <SelectItem value="published">{m["forms.status.published"]}</SelectItem>
-            <SelectItem value="archived">{m["forms.status.archived"]}</SelectItem>
+            <SelectItem value="draft">{tr.text("forms.status.draft")}</SelectItem>
+            <SelectItem value="published">{tr.text("forms.status.published")}</SelectItem>
+            <SelectItem value="archived">{tr.text("forms.status.archived")}</SelectItem>
           </SelectContent>
         </Select>
       </div>

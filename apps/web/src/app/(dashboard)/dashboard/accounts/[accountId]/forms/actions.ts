@@ -9,6 +9,8 @@ import {
   type FormField, type FormStatus,
 } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { isValidFormFieldList, mergeFormTheme, defaultFormFields } from "@/lib/forms/editor-helpers";
 // The public form's own validator, reused deliberately rather than a second
 // regex — same reasoning settings/actions.ts records for setFromEmailAction.
@@ -46,9 +48,16 @@ export async function createFormAction(accountId: string, formData: FormData): P
  * neither is something a mistyped address or URL could cause, and both read
  * as the genuine "this page may be stale, reload" case the crashed path
  * exists for.
+ *
+ * S-10 T5 part 2: `locale` is the OPERATOR reading the toast this return
+ * value becomes — never `formData`'s own `locale` field (the FORM's
+ * customer-facing language, written to the row below unchanged). The page
+ * binds it ahead of `formData` (`saveFormAction.bind(null, accountId,
+ * locale)`), so the bound action the editor calls still takes exactly
+ * `(formData)`.
  */
 export async function saveFormAction(
-  accountId: string, formData: FormData,
+  accountId: string, locale: Locale = "en", formData: FormData,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireNotTechnician(accountId);
   const formId = String(formData.get("formId") ?? "");
@@ -66,12 +75,12 @@ export async function saveFormAction(
     if (!isValidFormFieldList(parsed)) throw new Error("invalid field shape");
     fields = parsed;
   } catch {
-    return { ok: false, error: m["forms.invalidFields"] };
+    return { ok: false, error: t(m, "forms.invalidFields", locale) };
   }
 
   const status = String(formData.get("status") ?? "draft") as FormStatus;
   if (status === "published" && fields.length === 0) {
-    return { ok: false, error: m["forms.noFields"] };
+    return { ok: false, error: t(m, "forms.noFields", locale) };
   }
 
   const notifyEmails = String(formData.get("notifyEmails") ?? "")
@@ -87,7 +96,7 @@ export async function saveFormAction(
   // losing a recipient.
   for (const email of notifyEmails) {
     if (!isValidEmail(email)) {
-      return { ok: false, error: m["forms.invalidNotifyEmail"].replace("{value}", email) };
+      return { ok: false, error: t(m, "forms.invalidNotifyEmail", locale, { value: email }) };
     }
   }
 
@@ -107,7 +116,7 @@ export async function saveFormAction(
       scheme = null;
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      return { ok: false, error: m["forms.invalidRedirectUrl"] };
+      return { ok: false, error: t(m, "forms.invalidRedirectUrl", locale) };
     }
   }
 
@@ -164,9 +173,16 @@ export async function saveFormAction(
  * into the `{ ok, error }` shape the toast renders. A failure is reported,
  * never thrown — this runs from a toast's own action handler, with no form
  * around it to catch anything.
+ *
+ * S-10 T5 part 2: `locale` sits BEFORE `expectedPriorStatus` on purpose —
+ * the page binds the first three arguments (`accountId`, `formId`,
+ * `locale`), which leaves exactly `expectedPriorStatus` free for the
+ * toast's Undo click to supply, matching the editor's existing
+ * `republishAction: (expectedPriorStatus) => Promise<...>` prop type
+ * unchanged.
  */
 export async function republishFormAction(
-  accountId: string, formId: string, expectedPriorStatus: FormStatus,
+  accountId: string, formId: string, locale: Locale = "en", expectedPriorStatus: FormStatus,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
@@ -174,10 +190,10 @@ export async function republishFormAction(
   try {
     outcome = await republishFormIfUnchanged(db, accountId, formId, expectedPriorStatus, userId);
   } catch {
-    return { ok: false, error: m["forms.republishFailed"] };
+    return { ok: false, error: t(m, "forms.republishFailed", locale) };
   }
-  if (outcome === "needs_fields") return { ok: false, error: m["forms.noFields"] };
-  if (outcome === "stale") return { ok: false, error: m["forms.undoStale"] };
+  if (outcome === "needs_fields") return { ok: false, error: t(m, "forms.noFields", locale) };
+  if (outcome === "stale") return { ok: false, error: t(m, "forms.undoStale", locale) };
   revalidatePath(`/dashboard/accounts/${accountId}/forms`);
   revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
   return { ok: true };
