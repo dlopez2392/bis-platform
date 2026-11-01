@@ -113,7 +113,7 @@ export async function GET(
   };
 
   const recordHref = `/dashboard/accounts/${accountId}/contacts/${contactId}`;
-  const name = contactDisplayName(contact);
+  const name = contactDisplayName(contact, locale);
   const mainGroup = places?.groups.find((g) => g.isPrimary) ?? places?.groups[0] ?? null;
   const smsBlockedLine = composerStateLine(smsRecipient, zone.zone, locale);
   const header: DrawerSummary["header"] = {

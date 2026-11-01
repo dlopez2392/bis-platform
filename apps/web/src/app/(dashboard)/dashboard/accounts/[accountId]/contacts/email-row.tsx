@@ -96,7 +96,7 @@ function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
     setNote("");
     queueMicrotask(() => status.current?.focus());
   };
-  const undo = (u: EmailUndo): Promise<EmailActionResult> => undoStopEmailsAction(accountId, contactId, u.eventId);
+  const undo = (u: EmailUndo): Promise<EmailActionResult> => undoStopEmailsAction(accountId, contactId, u.eventId, locale);
   const act = (call: () => Promise<EmailActionResult>, success: string, withUndo = true) => {
     if (pending || busy.current) return;
     run(async () => {
@@ -119,7 +119,7 @@ function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
 
       {view.kind === "allowed" ? (
         <Button size="sm" variant="ghost" disabled={pending}
-          onClick={() => act(() => stopEmailsAction(accountId, contactId, view.newestId), t(m, "contact.email.stoppedToast", locale))}>
+          onClick={() => act(() => stopEmailsAction(accountId, contactId, view.newestId, locale), t(m, "contact.email.stoppedToast", locale))}>
           {t(m, "contact.email.stopEmails", locale)}
         </Button>
       ) : null}
@@ -135,7 +135,7 @@ function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
       {view.kind === "stopped" && view.canResume && resuming ? (
         <form className="space-y-2" data-testid="email-resume-form" onSubmit={(e) => {
           e.preventDefault();
-          act(() => resumeEmailsAction(accountId, contactId, view.eventId, note), t(m, "contact.email.resumedToast", locale), false);
+          act(() => resumeEmailsAction(accountId, contactId, view.eventId, note, locale), t(m, "contact.email.resumedToast", locale), false);
         }}>
           <Label htmlFor={`email-resume-${contactId}`}>{t(m, "contact.email.resumeNoteLabel", locale)}</Label>
           <Input id={`email-resume-${contactId}`} name="note" value={note} required aria-required="true" autoFocus

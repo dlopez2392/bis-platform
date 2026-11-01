@@ -33,6 +33,29 @@ export function addImportBatch(totals: ImportTotals, batch: ImportBatchCounts): 
   };
 }
 
+/**
+ * S-10 leftovers (#317 follow-up, item 5): the done screen's headline — "Added {created},
+ * updated {updated}." — as two independently-pluralized clauses, never one template with both
+ * placeholders. Created and updated are independent counts: a single Spanish sentence cannot
+ * say "se agregó 1" (singular) and "se actualizaron 3" (plural) at once, which the review's
+ * own "Se agregaron 1" finding named. English needs no second form (its verb does not
+ * conjugate by number), so this changes nothing visible there.
+ */
+export function doneLine(totals: ImportTotals, locale: Locale): string {
+  const created = plural(m, "contacts.import.doneCreated", totals.created, locale, { count: totals.created });
+  const updated = plural(m, "contacts.import.doneUpdated", totals.updated, locale, { count: totals.updated });
+  return `${created}, ${updated}`;
+}
+
+/** The done screen's flagged-duplicates line, with the singular/plural pair "1 flagged" vs
+ *  "N flagged" needs at count 1 (S-10 leftovers item 5) — null when there is nothing to flag,
+ *  exactly as the wizard already shows it only when non-zero. */
+export function flaggedLine(totals: ImportTotals, locale: Locale): string | null {
+  return totals.flagged > 0
+    ? plural(m, "contacts.import.flagged", totals.flagged, locale, { flagged: totals.flagged })
+    : null;
+}
+
 /** The done screen's lines about business names that did not save; none when every one did. */
 export function importBusinessNotes(totals: ImportTotals, locale: Locale): string[] {
   const notes: string[] = [];

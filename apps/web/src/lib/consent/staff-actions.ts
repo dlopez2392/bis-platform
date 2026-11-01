@@ -4,6 +4,8 @@ import {
   type ConsentAction, type ConsentHistoryRow, type ConsentMethod, type SupabaseClient,
 } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { textsViewOf, RESUMABLE_METHODS, type TextsView } from "./texts-view";
 
@@ -40,6 +42,9 @@ export type TextsContext = {
   unconfirmed: boolean;
   /** The request's clock, for the Undo window. */
   now: Date;
+  /** The reader's own language (S-10 leftovers item 7) — every error line below reads through
+   *  it, rather than `m[...]` directly (always English regardless of who is reading it). */
+  locale: Locale;
 };
 
 /**
@@ -55,7 +60,7 @@ function undoable(ctx: TextsContext, row: { actor_id: string | null; occurred_at
   const age = ctx.now.getTime() - Date.parse(row.occurred_at);
   return row.actor_id === ctx.userId && Number.isFinite(age) && age < UNDO_WINDOW_MS;
 }
-const undoExpired = (): TextsActionResult => ({ ok: false, error: m["contact.texts.undoExpired"] });
+const undoExpired = (locale: Locale): TextsActionResult => ({ ok: false, error: t(m, "contact.texts.undoExpired", locale) });
 
 // By address, on the service client (F-085, spec §7.3): the contact was proven on ctx.db first.
 const history = (ctx: TextsContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.writer, ctx.accountId, "sms", ctx.address);
@@ -64,10 +69,10 @@ const heldIds = (rows: readonly ConsentHistoryRow[]) => rows.filter((r) => r.act
 
 async function changed(ctx: TextsContext): Promise<TextsActionResult> {
   try {
-    return { ok: false, error: m["contact.texts.changed"], view: await view(ctx) };
+    return { ok: false, error: t(m, "contact.texts.changed", ctx.locale), view: await view(ctx) };
   } catch (e) {
     console.error(`changed: account ${ctx.accountId} contact ${ctx.contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.texts.changed"] };
+    return { ok: false, error: t(m, "contact.texts.changed", ctx.locale) };
   }
 }
 
@@ -76,7 +81,7 @@ async function guarded(label: string, ctx: TextsContext, work: () => Promise<Tex
     return await work();
   } catch (e) {
     console.error(`${label}: account ${ctx.accountId} contact ${ctx.contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.texts.failed"] };
+    return { ok: false, error: t(m, "contact.texts.failed", ctx.locale) };
   }
 }
 
@@ -130,7 +135,7 @@ export function undoStopTexts(ctx: TextsContext, eventId: string): Promise<Texts
     // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
-    if (!undoable(ctx, row)) return undoExpired();
+    if (!undoable(ctx, row)) return undoExpired(ctx.locale);
     const id = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
     return id ? { ok: true, view: await view(ctx) } : changed(ctx);
   });
@@ -139,7 +144,7 @@ export function undoStopTexts(ctx: TextsContext, eventId: string): Promise<Texts
 /** "Resume texts" with the required note: only a stop staff may lift (choice 19). */
 export async function resumeTexts(ctx: TextsContext, expectEventId: string, note: string): Promise<TextsActionResult> {
   const text = note.trim();
-  if (!text) return { ok: false, error: m["contact.texts.resumeNoteRequired"] };
+  if (!text) return { ok: false, error: t(m, "contact.texts.resumeNoteRequired", ctx.locale) };
   return guarded("resumeTexts", ctx, async () => {
     const newest = newestDecidingRow(await history(ctx));
     if (!newest || newest.id !== expectEventId || newest.action !== "revoked" || !RESUMABLE_METHODS.includes(newest.method)) {
@@ -191,7 +196,7 @@ export function undoHoldDecision(ctx: TextsContext, eventId: string, reopenTaskI
     const isDecision = !!row && row.address === ctx.address
       && ((row.action === "revoked" && row.method === "free_text") || (row.action === "hold_released" && row.method === "staff"));
     if (!row || !isDecision) return changed(ctx);
-    if (!undoable(ctx, row)) return undoExpired();
+    if (!undoable(ctx, row)) return undoExpired(ctx.locale);
     const id = await write(ctx, { action: "held", method: "staff_undo", evidence: { undoes: eventId, ...what(row) } }, eventId);
     if (!id) return changed(ctx);
     try {

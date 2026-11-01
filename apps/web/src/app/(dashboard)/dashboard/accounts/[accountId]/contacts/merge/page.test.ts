@@ -185,6 +185,17 @@ describe("the compare page: the account's own language, read like sibling pages 
     const html = renderToStaticMarkup(await MergePage(ctx(A, B)));
     expect(html).toContain("Intentar de nuevo"); // record.card.retry's Spanish twin
   });
+
+  // S-10 leftovers (#317 follow-up): keep/other's names are built with contactDisplayName with no
+  // locale, even though the page resolves one right above — a nameless side read English regardless.
+  it("a nameless side's stand-in name is handed to MergeScreen in Spanish (mutation: call contactDisplayName with no locale -> FAILS)", async () => {
+    accountFixture.language = "es";
+    getContactMock.mockImplementation(async (_db: unknown, _accountId: string, id: string) =>
+      contact(id, { first_name: null, last_name: null }));
+    renderToStaticMarkup(await MergePage(ctx(A, B)));
+    expect(screenProps.at(-1)!.keep).toMatchObject({ name: "(sin nombre)" });
+    expect(screenProps.at(-1)!.other).toMatchObject({ name: "(sin nombre)" });
+  });
 });
 
 describe("the compare page: assignee ids resolve to names before they reach MergeScreen (fix round, finding #4)", () => {

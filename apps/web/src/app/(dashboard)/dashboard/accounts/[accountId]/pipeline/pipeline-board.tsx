@@ -145,7 +145,7 @@ export function PipelineBoard({
           ))}
         </div>
         <DragOverlay>
-          {dragging ? <CardBody opp={dragging} dragging /> : null}
+          {dragging ? <CardBody opp={dragging} dragging locale={locale} /> : null}
         </DragOverlay>
       </DndContext>
       <OpportunityDrawer
@@ -178,7 +178,7 @@ function Column({
         <div className="px-4 py-3">
           <p className="text-[13.5px] font-semibold text-card-foreground">{column.stage.name}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {column.opportunities.length} · {formatCurrency(column.totalValue)}
+            {column.opportunities.length} · {formatCurrency(column.totalValue, locale)}
           </p>
         </div>
       </ListPanel>
@@ -203,7 +203,7 @@ function Column({
           </p>
         ) : (
           column.opportunities.map((opp) => (
-            <DraggableCard key={opp.id} opp={opp} onOpen={onOpen} />
+            <DraggableCard key={opp.id} opp={opp} onOpen={onOpen} locale={locale} />
           ))
         )}
       </div>
@@ -214,9 +214,11 @@ function Column({
 function DraggableCard({
   opp,
   onOpen,
+  locale,
 }: {
   opp: BoardOpportunity;
   onOpen?: (opp: BoardOpportunity) => void;
+  locale: Locale;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: opp.id });
   return (
@@ -228,12 +230,12 @@ function DraggableCard({
       className={cn("cursor-grab text-left", isDragging && "opacity-40")}
       data-testid={`opp-${opp.id}`}
     >
-      <CardBody opp={opp} />
+      <CardBody opp={opp} locale={locale} />
     </div>
   );
 }
 
-function CardBody({ opp, dragging }: { opp: BoardOpportunity; dragging?: boolean }) {
+function CardBody({ opp, dragging, locale }: { opp: BoardOpportunity; dragging?: boolean; locale: Locale }) {
   return (
     <div
       // Glass, like every other card. This was the one surface held back, and
@@ -253,10 +255,10 @@ function CardBody({ opp, dragging }: { opp: BoardOpportunity; dragging?: boolean
     >
       <p className="truncate font-medium text-card-foreground">{opp.name}</p>
       <p className="mt-1 truncate text-xs text-muted-foreground">
-        {contactDisplayName(opp.contact)}
+        {contactDisplayName(opp.contact, locale)}
       </p>
       <p className="mt-2 text-sm font-medium text-foreground">
-        {formatCurrency(opp.monetary_value)}
+        {formatCurrency(opp.monetary_value, locale)}
       </p>
     </div>
   );

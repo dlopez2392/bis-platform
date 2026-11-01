@@ -64,7 +64,7 @@ export default async function PipelinePage({
       <div lang={locale}>
         <PageHeader
           title={tr.text("pipeline.title")}
-          count={tr.count("pipeline.openTotal", count, { value: formatCurrency(total) })}
+          count={tr.count("pipeline.openTotal", count, { value: formatCurrency(total, locale) })}
           actions={
             <AddOpportunityDialog
               accountId={accountId}

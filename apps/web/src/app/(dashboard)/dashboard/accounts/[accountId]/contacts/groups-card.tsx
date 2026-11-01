@@ -360,7 +360,7 @@ function GroupRow({ accountId, group, canManageGroups, onChanged, locale }:
                 className="rounded-[var(--radius-ctl)] text-foreground underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 href={`/dashboard/accounts/${accountId}/contacts?peek=${o.contactId}`}
               >
-                {contactDisplayName({ first_name: o.firstName, last_name: o.lastName })}
+                {contactDisplayName({ first_name: o.firstName, last_name: o.lastName }, locale)}
               </Link>
             </span>
           ))}

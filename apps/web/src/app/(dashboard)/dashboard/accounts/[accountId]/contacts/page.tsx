@@ -234,8 +234,8 @@ async function renderDuplicatesView(
   const rows: DuplicateRow[] = page.map((pair) => ({
     id: pair.id,
     href: compareHref(accountId, pair),
-    aName: contactDisplayName({ first_name: pair.a.firstName, last_name: pair.a.lastName }),
-    bName: contactDisplayName({ first_name: pair.b.firstName, last_name: pair.b.lastName }),
+    aName: contactDisplayName({ first_name: pair.a.firstName, last_name: pair.a.lastName }, locale),
+    bName: contactDisplayName({ first_name: pair.b.firstName, last_name: pair.b.lastName }, locale),
     reasonText: tr.text(reasonMessageKey(pair.reason)),
     foundOnText: tr.text("contacts.duplicates.foundOn", { date: formatDateInZone(pair.createdAt, zone.zone, locale) }),
   }));
