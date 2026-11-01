@@ -272,8 +272,15 @@ describe("addJobAction: a new customer (R8, carry-in 4: never silently folded in
     })));
     const r = await addJobAction(ACCT, quick(), []);
     expect(r).toEqual({ ok: false, needs: { phoneOwner: { id: C1, name: "Ana García", first: "Ana" } } });
-    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+19565550123");
+    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+19565550123", { live: true });
     expect(writes()).toEqual([]);
+  });
+
+  // F-046 follow-up: "Use Ana?" offered an ARCHIVED owner, and picking her dead-ended (an existing customer who is
+  // archived is refused below). The offer reads live owners only, so an archived owner's number makes a new person.
+  it("the phone-owner offer asks for LIVE owners only, so an archived owner is never offered (mutation: drop { live: true } → FAILS)", async () => {
+    await addJobAction(ACCT, quick(), []);
+    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+19565550123", { live: true });
   });
 
   // listContactsOnNumber reads by phone_key, a SUPERSET on purpose (phoneKeysOf: a Mexican number keys its ten
@@ -284,7 +291,7 @@ describe("addJobAction: a new customer (R8, carry-in 4: never silently folded in
       rows: [{ id: C1, first_name: "Ana", last_name: "García", phone: "(956) 292-1696", email_key: null, holds_shared_number: false }], truncated: false,
     })));
     const r = await addJobAction(ACCT, quick({ phone: "+52 956 292 1696" }), []);
-    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+529562921696");
+    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+529562921696", { live: true });
     expect(r.ok).toBe(true);
     expect(db.createContact).toHaveBeenCalled();
   });
