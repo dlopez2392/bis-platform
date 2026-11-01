@@ -16,7 +16,7 @@ import DashboardNotFound from "./not-found";
 import DashboardError from "./error";
 
 const inLocale = (locale: "en" | "es", el: React.ReactElement) =>
-  renderToStaticMarkup(createElement(LocaleProvider, { locale }, el));
+  renderToStaticMarkup(createElement(LocaleProvider, { locale, children: el }));
 
 describe("dashboard not-found", () => {
   it("in Spanish: Spanish words under lang=\"es\" (mutation: drop lang={locale} → FAILS)", () => {
