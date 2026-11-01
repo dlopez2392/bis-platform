@@ -68,4 +68,15 @@ describe("mergeCountsTotal (S-10 T9a)", () => {
   it("{} sums to 0 (mutation: default a missing key to 1 -> FAILS)", () => {
     expect(mergeCountsTotal({})).toBe(0);
   });
+
+  // m5 (review fix round): a malformed count (negative, here) is excluded
+  // from BOTH mergeCountsList's own phrase list and mergeCountsTotal's sum
+  // — the same shared filter, so the two can never disagree about which
+  // counts are real.
+  it("a negative count is excluded from the total, the same way it is excluded from the list (mutation: drop the shared filter, add it to the sum anyway -> FAILS)", () => {
+    const tr = makeTr("en");
+    const counts = { notes: 3, calls: -1 };
+    expect(mergeCountsTotal(counts)).toBe(3);
+    expect(mergeCountsList(counts, tr, "en")).not.toMatch(/-1|minus/i);
+  });
 });

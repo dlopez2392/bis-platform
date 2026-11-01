@@ -151,7 +151,11 @@ export function includedLine(a: MeterAmounts, locale: Locale = "en"): string {
 
 export type UsageLine = { meter: MeterKey; used: number; included: number; over: boolean; text: string };
 
-const USAGE_COPY: Record<MeterKey, { of: MessageKey; none: MessageKey }> = {
+// `none` is typed as a PluralKey, not a bare MessageKey (m4, review fix
+// round): deleting any of the three `.noneOne` twins now fails tsc here,
+// at the declaration, instead of surviving silently behind the `as
+// PluralKey<typeof m>` cast `usageLines` used to carry at its call site.
+const USAGE_COPY: Record<MeterKey, { of: MessageKey; none: PluralKey<typeof m> }> = {
   voice_minutes: { of: "billing.usage.minutes", none: "billing.usage.minutes.none" },
   sms: { of: "billing.usage.sms", none: "billing.usage.sms.none" },
   ai_chats: { of: "billing.usage.chats", none: "billing.usage.chats.none" },
@@ -165,7 +169,7 @@ export function usageLines(allowances: MeterAmounts, used: MeterAmounts, locale:
     // minute", not "1 minutes") — found live reading the plain "other"
     // form unconditionally, in both languages.
     const text = included === 0
-      ? plural(m, USAGE_COPY[meter].none as PluralKey<typeof m>, used[meter], locale, { used: count(used[meter], locale) })
+      ? plural(m, USAGE_COPY[meter].none, used[meter], locale, { used: count(used[meter], locale) })
       : t(m, USAGE_COPY[meter].of, locale, { used: count(used[meter], locale), included: count(included, locale) });
     return { meter, used: used[meter], included, over: used[meter] > included, text };
   });

@@ -6,8 +6,7 @@ import type { DescribeCtx, Description, Part } from "@/lib/proposals/kinds/types
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { contactDisplayName, formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import { mergeCountsList, mergeCountsTotal } from "@/lib/contacts/merge-copy";
-import { m, type MessageKey } from "@/lib/messages";
-import type { PluralKey } from "@/lib/i18n/t";
+import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
 import { describeAct } from "@/lib/ai-acts/kinds";
 import type { ActFacts } from "@/lib/ai-acts/kinds/types";
@@ -225,7 +224,7 @@ function phrase(
       // never the plain "other" form regardless of count — the bug this
       // fixes always read the plural Spanish verb even for a single item.
       const verb = list
-        ? tr.count("timeline.merged" as PluralKey<typeof m>, mergeCountsTotal(entry.merge.counts), { name, list })
+        ? tr.count("timeline.merged", mergeCountsTotal(entry.merge.counts), { name, list })
         : tr.text("timeline.mergedEmpty", { name });
       return { verb, status: null, detail: null };
     }

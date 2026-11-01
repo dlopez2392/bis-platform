@@ -23,10 +23,21 @@ const COUNT_KEY: Record<MergeCountKey, PluralKey<typeof m>> = {
   form_submissions: "contacts.merge.count.form_submissions",
 };
 
+/** A count that is not a positive number (missing, zero, negative, NaN)
+ *  never moved anything — shared by `mergeCountsList` (which phrase to
+ *  include) and `mergeCountsTotal` (m5, review fix round: the two used to
+ *  apply this filter separately, and could silently disagree about a
+ *  malformed count — e.g. a negative value was EXCLUDED from the list but
+ *  still added to the total, same as a `notes: -1` bug subtracting from
+ *  the sentence's own grammatical number). */
+function positiveCount(n: number | undefined): number {
+  return typeof n === "number" && n > 0 ? n : 0;
+}
+
 export function mergeCountsList(counts: Partial<Record<MergeCountKey, number>>, tr: Tr, locale: Locale): string {
   const phrases = MERGE_COUNT_KEYS.flatMap((key) => {
-    const n = counts[key];
-    return typeof n === "number" && n > 0 ? [tr.count(COUNT_KEY[key], n)] : [];
+    const n = positiveCount(counts[key]);
+    return n > 0 ? [tr.count(COUNT_KEY[key], n)] : [];
   });
   if (phrases.length === 0) return "";
   return new Intl.ListFormat(locale === "es" ? "es-US" : "en-US", { type: "conjunction" }).format(phrases);
@@ -40,8 +51,10 @@ export function mergeCountsList(counts: Partial<Record<MergeCountKey, number>>, 
  * 1). `mergeCountsList` already gives each PHRASE its own singular/plural
  * form (`tr.count`); this is the grammatical number of the SENTENCE the
  * list sits inside, which depends on how many items moved in total, not on
- * how many categories are nonzero.
+ * how many categories are nonzero. Shares `positiveCount` with
+ * `mergeCountsList` (m5) so the two can never disagree about which counts
+ * are real.
  */
 export function mergeCountsTotal(counts: Partial<Record<MergeCountKey, number>>): number {
-  return MERGE_COUNT_KEYS.reduce((sum, key) => sum + (counts[key] ?? 0), 0);
+  return MERGE_COUNT_KEYS.reduce((sum, key) => sum + positiveCount(counts[key]), 0);
 }
