@@ -319,14 +319,19 @@ describe("the routes above dashboard/layout.tsx get a ground of their own", () =
   // /sign-in is NEW to this list. It had no ground at all — it was a bare
   // <SignIn /> on a flat page — which is the defect the shell exists to fix, so
   // the guard covers three routes now instead of two.
-  it("all three signed-out routes render through AuthShell", () => {
+  //
+  // S-10 T7: the shell now takes a `locale` prop, so the opening tag carries
+  // attributes; the pin matches the element, not the bare tag. /billing-done
+  // joined the signed-out set in T7 and is covered too.
+  it("all four signed-out routes render through AuthShell", () => {
     for (const rel of [
       "../../app/(dashboard)/no-access/page.tsx",
       "../../app/(dashboard)/page.tsx",
       "../../app/(dashboard)/sign-in/[[...sign-in]]/page.tsx",
+      "../../app/(dashboard)/billing-done/page.tsx",
     ]) {
       const s = src(rel);
-      expect(s, rel).toContain("<AuthShell>");
+      expect(s, rel).toMatch(/<AuthShell[\s>]/);
       expect(s, rel).toContain('from "@/components/auth-shell"');
       // And no longer its own: a second Ground behind the shell's would paint
       // every glow twice.
@@ -339,7 +344,7 @@ describe("the routes above dashboard/layout.tsx get a ground of their own", () =
     expect(s).toContain("<Ground />");
     expect(s).toContain('from "@/components/ground"');
     // A fixed -z-10 child needs a positioned ancestor to sit behind.
-    expect(s).toMatch(/<main className="relative /);
+    expect(s).toMatch(/<main [^>]*className="relative /);
     expect(s).toMatch(/\bbg-card\b[^"]*\bglass\b/);
   });
 });

@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures/test";
+import { clipFailure } from "./overflow-check";
 
 // Explicitly no storage state. playwright.config.ts gives the "chromium"
 // project the agency's saved session, and every assertion in this file is
@@ -236,42 +237,47 @@ for (const mode of ["light", "dark"] as const) {
 // test runner's OS/locale sends, "en"-ish on every CI/local box this suite
 // has run on) is what every probe ABOVE already relies on staying English —
 // these cases set the header explicitly instead of trusting that default.
-test.describe("signed-out pages follow Accept-Language (G9, both languages)", () => {
-  test("a Spanish-ranked Accept-Language renders /sign-in, / and /no-access in Spanish, and sets <html lang>", async ({ page, baseURL }) => {
+//
+// The language is marked on AuthShell's <main lang>, NOT on <html>: the root
+// layout makes no session or header read for `lang` and stays "en" for every
+// request (orchestrator split, 2026-11-01; the signed-in <html lang> is T9's).
+test.describe("signed-out pages follow Accept-Language (both languages)", () => {
+  test("a Spanish-ranked Accept-Language renders /sign-in, / and /no-access in Spanish, marked on <main lang>", async ({ page }) => {
     await page.setExtraHTTPHeaders({ "accept-language": "es-MX,en;q=0.5" });
 
     await page.goto("/sign-in");
-    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "es");
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(page.getByRole("heading", { name: "Iniciar sesión" })).toBeVisible();
     // Clerk's own widget stays English (Q6) even though the page around it
     // is Spanish — the <h1> above it is the load-bearing contrast.
     await expect(page.getByLabel(/email/i).first()).toBeVisible();
 
     await page.goto("/");
-    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "es");
     await expect(page.getByRole("heading", { name: "BIS Platform" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Iniciar sesión" })).toBeVisible();
 
     await page.goto("/no-access?reason=off");
-    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "es");
     await expect(page.getByRole("button", { name: "Cerrar sesión" })).toBeVisible();
   });
 
   test("an en-ranked Accept-Language stays English even when es is also offered (the spec's own 'en-US,es;q=0.9' example)", async ({ page, baseURL }) => {
     await page.setExtraHTTPHeaders({ "accept-language": "en-US,es;q=0.9" });
     await visit(page, baseURL, "/sign-in", "light");
-    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page.locator("main").first()).toHaveAttribute("lang", "en");
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   });
 
-  // G9 (moved here from T1 by the PR 1 review): the pseudo-locale's +35%
-  // length must not clip the shell AuthShell paints — measured at the same
-  // 375px width the spec's own G9 line names, with the real Spanish text
-  // (the longest real string here, not a synthetic one) rather than the
-  // `?locale=pseudo` override, which never reaches a signed-out page (no
-  // BIS_I18N_QA flag is set for this project — that override is for the
-  // account-scoped QA header path only).
-  test("the shell survives Spanish text at 375px with nothing clipped (G9)", async ({ page }) => {
+  // A signed-out overflow check, NOT the spec's G9 (G9 is the dashboard
+  // shell at the pseudo-locale's +35%, which needs a signed-in Spanish e2e
+  // user with its own users.language — moved to T9). This measures AuthShell
+  // at 375px with the real Spanish text. It does not use `?locale=pseudo`:
+  // playwright.config.ts DOES set BIS_I18N_QA, but requestPseudoMode is
+  // called only by signed-in /dashboard pages and routes; the signed-out
+  // pages never call it and resolve their locale from Accept-Language alone.
+  test("the signed-out shell survives Spanish text at 375px with nothing clipped", async ({ page }) => {
     await page.setExtraHTTPHeaders({ "accept-language": "es-MX" });
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto("/no-access?reason=off");
@@ -288,7 +294,7 @@ test.describe("signed-out pages follow Accept-Language (G9, both languages)", ()
     const [scrollWidth, clientWidth] = await page.evaluate(() => [
       document.documentElement.scrollWidth, document.documentElement.clientWidth,
     ]);
-    expect(scrollWidth, "the page scrolls horizontally at 375px in Spanish").toBeLessThanOrEqual(clientWidth);
+    expect(clipFailure(scrollWidth, clientWidth, "the signed-out page at 375px in Spanish")).toBeNull();
   });
 });
 
