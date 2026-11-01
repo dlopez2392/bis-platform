@@ -1,8 +1,8 @@
 # The Spanish dashboard, in order of daily use (S-10 and F-013's next part): design
 
 Date: 2026-10-31. Author: bis-frontend. Base: `d4ada6c6` (branch `feat/spanish-dashboard`).
-Status: design for owner review. Nothing here is built. Six owner questions are open (section 7); every
-design choice that depends on one says which.
+Status: design, owner-approved. The six owner questions were answered on 2026-10-31, each as recommended
+(section 7); the design below states the answers. PR 1 (T0 + T1) is built on this branch.
 
 Every claim about current code cites `path:line` at `d4ada6c6`. Short forms: `WEB/` = `apps/web/src/`,
 `ACCT/` = `WEB/app/(dashboard)/dashboard/accounts/[accountId]/`, `I18N/` = `WEB/lib/i18n/`,
@@ -84,9 +84,9 @@ through `t()`.
 
 | | Today | After S-10 |
 |---|---|---|
-| Precedence for a signed-in person | user, then account (client roles), then English | **unchanged** (decisions 1 and 3 stand unless Q5 says otherwise) |
+| Precedence for a signed-in person | user, then account (client roles), then English | **unchanged**: decisions 1 and 3 stand (Q5, decided 2026-10-31) |
 | Screens that obey it | the shell, Dashboard's KPI row, To do, Contacts and the record kit, Documents, Conversations, Calendar's agenda, Mis preferencias | every screen an Owner, Staff or Technician can open (section 3), each page resolving the locale and every read going through `t()` |
-| `<html lang>` | always `en` | the resolved locale, computed once in the root layout from the same inputs; agency-only pages (if Q4 keeps them English) wrap themselves in `lang="en"`, and so does Clerk's widget; customer-authored text keeps its own `lang` |
+| `<html lang>` | always `en` | the resolved locale, computed once in the root layout from the same inputs; agency-only pages stay English (Q4) and wrap themselves in `lang="en"`, and so does Clerk's widget; customer-authored text keeps its own `lang` |
 | Signed out (`/sign-in`, `/`, `/no-access`, `/billing-done`) | English | the browser's `Accept-Language`, read by a new pure `localeFromAcceptLanguage(header)` in `I18N/` (q-values honoured; any `es`, `es-US`, `es-MX`, `es-419` range ranked above every `en` range gives Spanish; anything else gives English). The root layout already reads cookies through `getRequestTheme` (`WEB/app/(dashboard)/layout.tsx:102`), so reading one more header adds no new dynamic-rendering cost |
 | Owner emails (weekly report, lead alert, call alert) | English only, copy inline in `.ts` | the account's language (section 3.3) |
 
@@ -97,8 +97,8 @@ because Clerk's component localization is experimental and does not reach its ho
 from one template set per instance (`PLAN:1577`). S-10 therefore ships a sign-in page whose own words (title,
 the shell's rail) follow the browser and whose form does not, plus the Clerk `OrganizationSwitcher` and
 `UserButton` menus in the topbar (`WEB/components/topbar.tsx:1`, `WEB/components/user-menu.tsx:3`), which stay
-English on every Spanish screen. That is a visible seam on the first and every screen; Q6 asks whether to pull
-the widget half of F-117 forward. **ASSUMPTION:** `@clerk/localizations` ships an `esES` resource that covers
+English on every Spanish screen. That is a visible seam on the first and every screen; the owner chose to keep it until F-117 (Q6, decided
+2026-10-31), with every Clerk widget marked `lang="en"`. For when F-117 comes: **ASSUMPTION:** `@clerk/localizations` ships an `esES` resource that covers
 `<SignIn>` and the two topbar components and is passed through `ClerkProvider`'s `localization` prop; not
 installed here (`apps/web/package.json:19-20` lists only `@clerk/nextjs` and `@clerk/themes`). Verify on a
 Preview before costing.
@@ -123,7 +123,7 @@ turn:
    screens because Clerk keeps a session for long stretches (**ASSUMPTION**: the instance's session lifetime
    was not read).
 
-Agency-only screens are not ranked; Q4 decides whether they are in scope.
+Agency-only screens are not ranked: they stay English (Q4, decided 2026-10-31).
 
 ---
 
@@ -158,7 +158,7 @@ ratchet baseline's entries; **also English, unseen by the gates** = what neither
 | 18 | Signed out and entry: `/sign-in`, `/`, `/no-access`, `/billing-done` | 17 | 1 | 19 (5) | 0 | no `Accept-Language`; Clerk's form |
 | 19 | Owner emails: weekly report, lead alert, call alert | not in the catalogue | | | | about 20 English sentences inline in `WEB/lib/email/templates/weekly-report.ts` (`deltaPhrase` `:33`, "Open your dashboard" `:146`, `:154`), 3 in `lead-alert.ts` (`:24`), 5 in `voice.ts` (`:35`), none taking a locale. The owner's SMS alerts are already bilingual (`WEB/lib/sms/alerts.ts:63` takes a `Locale`) |
 
-Agency-only (out of scope unless Q4 says otherwise): Settings, Setup, Checklist, Voice and Automations inside an
+Agency-only (out of scope, Q4, decided 2026-10-31): Settings, Setup, Checklist, Voice and Automations inside an
 account (gated by `requireAgencyOnlyAccountAccess`, `WEB/lib/auth.ts:132-138`; hidden from clients in
 `WEB/lib/nav-groups.ts:148`, `:196`, `:210`), and the agency's top-level routes and `/styleguide`. Together
 439 missing keys, 961 direct reads in 85 files, 99 raw strings.
@@ -288,8 +288,9 @@ Read over all 2,064 twins:
 ### 5.1 Who writes the Spanish
 
 Each lane's agent drafts the Spanish against section 4.3, in the key's own line pair (`"x"` then `"x.es"` on
-the next line, the convention `WEB/lib/messages.test.ts:587-593` enforces where it is tested). Which human reads
-it before it reaches a client is Q1. Whatever Q1 decides, every lane PR carries a screenshot sheet, each converted
+the next line, the convention `WEB/lib/messages.test.ts:587-593` enforces where it is tested). Each PR merges on the
+draft plus the build checks; one paid Valley reviewer reads the whole catalogue once, from the screenshot
+sheets, before BIS calls it a Spanish dashboard (Q1, decided 2026-10-31). Every lane PR carries a screenshot sheet, each converted
 screen in English and Spanish at 375 px. The `?locale=es` override is dead on every Vercel deployment by
 construction (`I18N/request-locale.ts:31-33`), so bis-e2e-qa captures the sheet against a local `next start`
 with `BIS_I18N_QA=1`, or on Preview signed in as a fixture-account user whose own language is Español.
@@ -345,7 +346,7 @@ bis-frontend are **ASSUMPTION** from the agents' usual territories; the orchestr
 
 | Task | What | Tier | Lane, owner | ew |
 |---|---|---|---|---|
-| **T0** | Gates: regenerate G1; reference-based agency exemption (Q4); G2's styleguide pattern; G3 (new scanner and baseline); G4, G5, G6 with frozen lists; G7 widened; rename the 16 camel `…En`/`…Es` keys to `.en`/`.es` (call sites in `WEB/lib/voice/textback-body.ts`, `WEB/lib/automations/instant-reply-copy.ts`, voice settings: bis-voice's files, so their consent first); delete the dead keys | LOW | A, bis-frontend | 1–1.25 |
+| **T0** | Gates: regenerate G1; reference-based agency exemption (Q4 (a)); G2's styleguide pattern; G3 (new scanner and baseline); G4, G5, G6 with frozen lists; G7 widened; rename the 16 camel `…En`/`…Es` keys to `.en`/`.es` (call sites in `WEB/lib/voice/textback-body.ts`, `WEB/lib/automations/instant-reply-copy.ts`, voice settings: bis-voice's files, so their consent first); delete the dead keys | LOW | A, bis-frontend | 1–1.25 |
 | **T1** | Shell: `common`, `nav`, `shell`, `palette`, `error`, `notFound`, `theme`; ⌘K registry and `labels.ts` become functions of the locale; banners; `common.actionCrashed.es` and `theme.*` to *usted*; G9 for the shell | LOW | A, bis-frontend | 0.75 |
 | **T2** | Dashboard and Website: `dashboard`, `website`, `stat`; the `en-US` date pins of row 2 through `tag()`; the website page resolves its locale | LOW | A, bis-frontend | 0.75 |
 | **T3** | To do, Contacts, record, drawer, households, import, merge, Opportunities: `contact`, `contacts`, `record`, `drawer`, `bulk`, `groups`, `groupPage`, `relationships`, `places`, `equipment`, `pipeline`, `todo`, client `work.*`; the 18 server-action sentences into the catalogue | LOW | B, bis-crm | 1–1.25 |
@@ -355,7 +356,7 @@ bis-frontend are **ASSUMPTION** from the agents' usual territories; the orchestr
 | **T7** | Signed out: `localeFromAcceptLanguage`, `/sign-in`, `/`, `/no-access`, `/billing-done` (`signIn`, `landing`, `clientAccess`), `<html lang>` from the root layout, `lang="en"` on Clerk's widget and on agency-only pages; G8; the signed-out e2e asserts both languages and that the Clerk probes still pass | **MEDIUM** | A, bis-frontend with bis-platform (`auth-shell.tsx` is shared) | 0.5–0.75 |
 | **T8** | Owner emails in the account's language: weekly report (incl. `deltaPhrase` and the quiet week), lead alert, call alert; copy into the catalogue under `email.*`; tests render templates only, nothing is sent | **MEDIUM** | C, bis-comms | 0.5–0.75 |
 | **T9** | Close-out: regenerate and then delete the frozen lists; G1–G3 at zero, G4 and G6 frozen lists empty; G9 measurement run over every screen; Q1's review lands as copy-only commits; DESIGN.md amendments (section 8) | LOW | orchestrator, bis-e2e-qa | 0.5 |
-| | **Total** | | | **7.25–8.5** with Q4 (a). That is at and above the top of the plan's 5–8 (`PLAN:1412`): the plan priced writing the Spanish, and did not know about the 864 direct reads (G3), which are about a third of the work |
+| | **Total** | | | **7.25–8.5** (Q4 (a) decided). That is at and above the top of the plan's 5–8 (`PLAN:1412`): the plan priced writing the Spanish, and did not know about the 864 direct reads (G3), which are about a third of the work |
 
 Order: T0+T1 (PR 1) → then three lanes at once: A runs T2 and T7 (PR 2), then T6 (PR 5); B runs T3 (PR 3);
 C runs T4 and T5 (PR 4), then T8 (PR 6 with T6 if they finish together) → T9 (PR 7). Each PR is shippable on its
@@ -363,12 +364,15 @@ own and leaves every gate green, which is what rule 8's "split to ship" asks (`P
 
 ---
 
-## 7. Owner decisions
+## 7. Owner decisions (DECIDED 2026-10-31)
 
-Each question is written to be read on its own; the recommendation is first.
+The owner answered all six on 2026-10-31, each as recommended: Q1 (a), Q2 (a), Q3 (a), Q4 (a), Q5 (a),
+Q6 (a). The options are kept below for the record; the chosen one is marked **DECIDED**. Q2's conversion
+covers the 12 *tú* strings on the owner's screens; the 13th, `aiActs.notice.calendarFix.es`, is a customer email
+and is logged for its owners (section 10), not changed here.
 
 **Q1. Who reads the Spanish before a client sees it?**
-- **(a) Recommended.** The agent drafts against the glossary and the build checks (5.2); each PR merges on
+- **DECIDED (a).** The agent drafts against the glossary and the build checks (5.2); each PR merges on
   that. One paid Valley reviewer then reads the whole catalogue, the 2,064 twins already shipped included, from
   the screenshot sheets, and their fixes land as copy-only commits before BIS says "Spanish dashboard" to
   anyone. Fast, and the review covers the old Spanish too, which nobody has read either.
@@ -378,13 +382,13 @@ Each question is written to be read on its own; the recommendation is first.
 - (d) No human reader; the build checks only.
 
 **Q2. *Usted* or *tú* on the owner's own screens?**
-- **(a) Recommended.** *Usted* everywhere, as the plan settled (`PLAN:1935`): convert the 13 *tú* strings,
+- **DECIDED (a).** *Usted* everywhere, as the plan settled (`PLAN:1935`): convert the 13 *tú* strings,
   including Mis preferencias and the most common error line.
 - (b) *Usted* everywhere except Mis preferencias, which keeps *tú* because it is a page about the reader.
 - (c) *Tú* on the owner's screens (their own tool), *usted* to customers: rewrites about 447 shipped twins.
 
 **Q3. One big PR, or screen by screen?**
-- **(a) Recommended.** Seven PRs in daily-use order (section 6), three lanes at once after the first. Each
+- **DECIDED (a).** Seven PRs in daily-use order (section 6), three lanes at once after the first. Each
   leaves every check green, and the busiest screens reach Spanish clients first.
 - (b) One PR at the end: one review and one CI run, but nothing reaches a Spanish client for weeks, and it
   breaks the plan's own "split to ship" rule.
@@ -392,7 +396,7 @@ Each question is written to be read on its own; the recommendation is first.
 
 **Q4. Are BIS's own screens in scope?** (Decided English-only on 2026-10-10 for the runtime, `RT:463`; a staff
 member can now pick Español on Mis preferencias, so they would see Spanish on client screens and English on these.)
-- **(a) Recommended.** No. Settings, Setup, Checklist, Voice and Automations inside an account, and the agency's
+- **DECIDED (a).** No. Settings, Setup, Checklist, Voice and Automations inside an account, and the agency's
   top-level pages, stay English and carry `lang="en"`; the build exempts their copy by where it is used.
 - (b) Also the five in-account agency screens: up to 439 more keys (about 4,200 words) and up to 961 direct
   reads to route; about 1.5 to 2 ew more.
@@ -400,14 +404,14 @@ member can now pick Español on Mis preferencias, so they would see Spanish on c
 
 **Q5. Should the browser's language count after sign-in?** (Today a client with no choice of their own and an
 account with no language gets English, decision 3, `RT:467`.)
-- **(a) Recommended.** No: the browser's language picks only the signed-out pages. A client's language comes
+- **DECIDED (a).** No: the browser's language picks only the signed-out pages. A client's language comes
   from their own choice or their account's, which the agency sets at onboarding.
 - (b) Yes, for client roles only, after their own choice and the account's and before English. A Spanish
   browser then sees a Spanish dashboard with nothing set, and an English-speaking owner on a Spanish phone sees
   Spanish until they change it.
 
 **Q6. Clerk's sign-in form and topbar menus: Spanish now, or later as planned?**
-- **(a) Recommended.** Later, as planned (F-117's part). The page's own words follow the browser; the form and
+- **DECIDED (a).** Later, as planned (F-117's part). The page's own words follow the browser; the form and
   the account menus stay English, marked `lang="en"`.
 - (b) Now, the widgets only, through Clerk's own Spanish (**ASSUMPTION** in §1.2, to verify on Preview first);
   Clerk's emails stay English until F-117. About 0.25 to 0.5 ew, and an experimental Clerk feature on the
@@ -419,7 +423,7 @@ account with no language gets English, decision 3, `RT:467`.)
 
 1. Under Identity's Voice line, add: "Spanish is *usted*, sentence case, Valley trades Spanish, and follows
    the glossary in `docs/superpowers/specs/2026-10-31-spanish-dashboard-design.md` §4.3 until it moves into
-   this file." (Wording depends on Q2.)
+   this file." (Q2 (a): *usted*.)
 2. In the Definition of done's bilingual item, after "sets `lang` correctly", add: "and reads every string
    through `t()` (a twin that the screen never asks for is English on screen)."
 3. In Installation status, after the sentence about the `.dark` class, add: "`<html lang>` is the resolved
