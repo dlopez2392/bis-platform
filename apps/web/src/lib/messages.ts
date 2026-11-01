@@ -1455,6 +1455,7 @@ export const m = {
   "settings.alertPhoneStopped": "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.",
   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
   "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
+  "settings.alertPhoneCodeSent.es": "Código enviado: revise ese teléfono para ver el mensaje de texto.",
   // Deliberately does not say the number was right or wrong — only that
   // THIS code was. See verifyAlertPhoneCode's own comment for why "wrong"
   // and "expired" are kept as two different, narrow messages.
