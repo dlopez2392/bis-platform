@@ -33,9 +33,12 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const stopEmailsAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
 const resumeEmailsAction = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+// Review fix round (I-2): captured (not bare vi.fn()) so the Undo test below can assert
+// what ReadyRow's own `undo` closure (email-row.tsx:99) actually called it with.
+const undoStopEmailsActionMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true, view: { kind: "allowed", newestId: null } }));
 vi.mock("./email-actions", () => ({
   stopEmailsAction: (...a: unknown[]) => stopEmailsAction(...a),
-  undoStopEmailsAction: vi.fn(),
+  undoStopEmailsAction: (...a: unknown[]) => undoStopEmailsActionMock(...a),
   resumeEmailsAction: (...a: unknown[]) => resumeEmailsAction(...a),
 }));
 
@@ -92,5 +95,29 @@ describe("Stop emails and Resume emails thread the reader's locale to their serv
     expect(form).not.toBeNull();
     await (form!.props.onSubmit as (e: { preventDefault: () => void }) => void)({ preventDefault: () => {} });
     expect(resumeEmailsAction).toHaveBeenCalledWith("a1", "c1", "e1", "", "es");
+  });
+});
+
+/**
+ * Review fix round (I-2): the success toast's own Undo action (lib/consent/email-row.ts's
+ * runEmailAction) calls ReadyRow's own `undo` closure (email-row.tsx:99), which threads
+ * `locale` into undoStopEmailsAction — captured here from the mocked sonner's own call args,
+ * never asserted before this round (mutation: drop the locale arg from the `undo` closure -> FAILS).
+ */
+describe("the success toast's own Undo action threads the reader's locale too (review fix round, I-2)", () => {
+  it("undo Stop emails passes the reader's locale", async () => {
+    overrides = {};
+    const { toast } = await import("sonner");
+    vi.mocked(toast.success).mockClear();
+    stopEmailsAction.mockResolvedValueOnce({ ok: true, view: { kind: "stopped", eventId: "e9", since: "2026-10-04T02:30:00Z", how: { kind: "staff" }, canResume: true }, undo: { kind: "stop", eventId: "e9" } });
+    const tree = render({ kind: "allowed", newestId: "e9" });
+    const btn = find(tree, (el) => el.type === Button && el.props.children === m["contact.email.stopEmails.es"]);
+    (btn!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const [, opts] = vi.mocked(toast.success).mock.calls[0]!;
+    const onUndo = (opts as unknown as { action: { onClick: () => unknown } }).action.onClick;
+    onUndo();
+    await vi.waitFor(() => expect(undoStopEmailsActionMock).toHaveBeenCalled());
+    expect(undoStopEmailsActionMock).toHaveBeenCalledWith("a1", "c1", "e9", "es");
   });
 });
