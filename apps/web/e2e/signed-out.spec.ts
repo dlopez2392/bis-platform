@@ -231,6 +231,67 @@ for (const mode of ["light", "dark"] as const) {
   });
 }
 
+// S-10 T7 (spec §6 T7, §7 Q5): the browser's own language picks ONLY these
+// signed-out pages. Playwright's own default Accept-Language (whatever the
+// test runner's OS/locale sends, "en"-ish on every CI/local box this suite
+// has run on) is what every probe ABOVE already relies on staying English —
+// these cases set the header explicitly instead of trusting that default.
+test.describe("signed-out pages follow Accept-Language (G9, both languages)", () => {
+  test("a Spanish-ranked Accept-Language renders /sign-in, / and /no-access in Spanish, and sets <html lang>", async ({ page, baseURL }) => {
+    await page.setExtraHTTPHeaders({ "accept-language": "es-MX,en;q=0.5" });
+
+    await page.goto("/sign-in");
+    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.getByRole("heading", { name: "Iniciar sesión" })).toBeVisible();
+    // Clerk's own widget stays English (Q6) even though the page around it
+    // is Spanish — the <h1> above it is the load-bearing contrast.
+    await expect(page.getByLabel(/email/i).first()).toBeVisible();
+
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.getByRole("heading", { name: "BIS Platform" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Iniciar sesión" })).toBeVisible();
+
+    await page.goto("/no-access?reason=off");
+    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.getByRole("button", { name: "Cerrar sesión" })).toBeVisible();
+  });
+
+  test("an en-ranked Accept-Language stays English even when es is also offered (the spec's own 'en-US,es;q=0.9' example)", async ({ page, baseURL }) => {
+    await page.setExtraHTTPHeaders({ "accept-language": "en-US,es;q=0.9" });
+    await visit(page, baseURL, "/sign-in", "light");
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  });
+
+  // G9 (moved here from T1 by the PR 1 review): the pseudo-locale's +35%
+  // length must not clip the shell AuthShell paints — measured at the same
+  // 375px width the spec's own G9 line names, with the real Spanish text
+  // (the longest real string here, not a synthetic one) rather than the
+  // `?locale=pseudo` override, which never reaches a signed-out page (no
+  // BIS_I18N_QA flag is set for this project — that override is for the
+  // account-scoped QA header path only).
+  test("the shell survives Spanish text at 375px with nothing clipped (G9)", async ({ page }) => {
+    await page.setExtraHTTPHeaders({ "accept-language": "es-MX" });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto("/no-access?reason=off");
+
+    const rail = page.locator('[data-slot="auth-rail"]');
+    await expect(rail).toBeVisible();
+    const railBox = await rail.boundingBox();
+    expect(railBox, "the rail has no box at 375px").not.toBeNull();
+    expect(railBox!.width, "the rail should span the card below 640px").toBeGreaterThan(300);
+
+    // No horizontal scrollbar anywhere on the page — the structural proof
+    // that nothing (the longer Spanish strings included) pushed content
+    // past the viewport.
+    const [scrollWidth, clientWidth] = await page.evaluate(() => [
+      document.documentElement.scrollWidth, document.documentElement.clientWidth,
+    ]);
+    expect(scrollWidth, "the page scrolls horizontally at 375px in Spanish").toBeLessThanOrEqual(clientWidth);
+  });
+});
+
 test("the rail collapses to a brand bar on a phone", async ({ page, baseURL }) => {
   // Spec §4.2. Below 640px the card is one column and the rail is a bar
   // across the top, so the form keeps full width. Asserted by GEOMETRY, not
