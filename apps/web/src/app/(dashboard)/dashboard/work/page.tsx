@@ -22,8 +22,6 @@ import { contactDisplayName } from "@/lib/format";
 import { holdingLabel } from "@/lib/contacts/holding-label";
 import { m } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
-import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
 import { makeTr } from "@/lib/record/copy";
 import { renderZone } from "@/lib/zone";
 import { buildSuggestionView } from "@/lib/proposals/view";
@@ -76,7 +74,7 @@ export default async function AgencyWorkPage() {
   // The stale-usage read (client billing) joins the same Promise.all, and is
   // swallowed the same way as the lines-down read: a banner is cosmetic, the
   // queue is the page. `now` is the page's one clock reference.
-  const [rows, linesDown, proposalsRead, staleUsage, billingAlerts, prefs] = await Promise.all([
+  const [rows, linesDown, proposalsRead, staleUsage, billingAlerts] = await Promise.all([
     listAgencyWork(db),
     countLinesTurningCallersAway(db, since).catch((e: unknown) => {
       console.error(`work queue: lines-down read failed, rendering no banner: ${String(e)}`);
@@ -104,14 +102,15 @@ export default async function AgencyWorkPage() {
       console.error(`work queue: billing-alerts read failed, rendering no banner: ${String(e)}`);
       return { alerts: [], reconciliationUnchecked: false };
     }),
-    // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
-    getPersonPrefs(),
   ]);
   const proposals = proposalsRead.ok ? proposalsRead.rows : [];
 
-  // The cards' words (item 8b-2, plan ambiguity 9): an operator reads this page, so English unless the
-  // operator has their own language set; no one account's language speaks for a page of every account.
-  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language });
+  // Review fix round, Minor 5: this used to read the OPERATOR's own language (requestLocale with
+  // isOperator: true), which let a Spanish-reading agency staffer see Spanish here — but
+  // contactDisplayName below never took a locale, so a nameless row read a mixed "(no name) ·
+  // Archivado". Agency-only screens stay English (Q4(a)): this page carries no per-reader locale at
+  // all, never the operator's own Mis preferencias choice, same as every other agency-only screen.
+  const locale = "en";
   const tr = makeTr(locale);
 
   // What every card needs that its row does not carry (spec 5.2): each account's stage names (only the

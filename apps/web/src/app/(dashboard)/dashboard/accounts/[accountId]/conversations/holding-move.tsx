@@ -101,7 +101,7 @@ export function HoldingMove({ accountId, conversationId, holdingContactId, peopl
   const moveTo = async (contactId: string) => {
     setBusy(true);
     await moveAndToast({
-      move: () => moveHoldingThreadAction(accountId, conversationId, contactId),
+      move: () => moveHoldingThreadAction(accountId, locale, conversationId, contactId),
       undo: (u) => undoMoveHoldingThreadAction(accountId, u),
       toast, tr, open,
     });

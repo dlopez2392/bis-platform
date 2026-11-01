@@ -13,19 +13,6 @@ import type { ReplyActionResult } from "./inbound-actions";
 export type NoticeToast = { success: (message: string) => unknown; error: (message: string) => unknown };
 
 /**
- * The server's own `error` is English (`inbound-actions.ts`'s doc comment:
- * the toast is drawn here, which re-localises). Only `contact.email.changed`'s
- * English text gets its own localized key; every other server error reads as
- * the generic "that didn't save" in the reader's language — the server's
- * other strings were never meant to reach a screen untranslated.
- */
-function localizedError(error: string, locale: Locale): string {
-  return error === m["contact.email.changed"]
-    ? t(m, "contact.email.changed", locale)
-    : t(m, "conversations.held.failed", locale);
-}
-
-/**
  * Runs `undoReplyStopAction`. `onDone(expired)` is called only on a real
  * answer from the server — never on a throw, and never on a plain (non-
  * expired) failure, which is toasted instead. `expired` is read off the
@@ -33,6 +20,21 @@ function localizedError(error: string, locale: Locale): string {
  * matching `result.error`'s (translatable) text — the owner's 7-day-window
  * ruling: staff can Undo an automatic emailed stop only within 7 days of the
  * stop; past that only the customer's own reply-free re-subscribe can.
+ *
+ * S-10 T9a: `result.error` is shown VERBATIM, never re-mapped here. Before
+ * this task `inbound-actions.ts` always built its own fallback strings and
+ * called `emailContextFor`/`undoInboundStop`/`stopEmails` with the literal
+ * "en", so a non-English reader's toast had to be re-localized client-side —
+ * and only one sentence (`contact.email.changed`) had its own matching rule;
+ * every OTHER server error (a dead ledger read, `contact.email.noEmail`,
+ * `contact.email.failed`...) collapsed into the generic "that didn't save"
+ * line, discarding whatever more specific thing the server actually said.
+ * Now every path in `inbound-actions.ts` is handed THIS reader's own
+ * `locale` and builds its strings with `t(m, key, locale)` there, so
+ * `result.error` already IS the reader's language by the time it lands
+ * here — re-localizing it again would require matching it against the
+ * catalogue's ENGLISH default, which the server no longer ever returns to a
+ * non-English reader.
  */
 export async function runUndoReplyStop(
   run: () => Promise<ReplyActionResult>,
@@ -56,7 +58,7 @@ export async function runUndoReplyStop(
     onDone(true);
     return;
   }
-  toast.error(localizedError(result.error, locale));
+  toast.error(result.error);
 }
 
 /** Runs `stopEmailsFromReplyAction`. `onDone` fires only once the server answers `{ ok: true }`. */
@@ -78,5 +80,6 @@ export async function runStopEmailsFromReply(
     onDone();
     return;
   }
-  toast.error(localizedError(result.error, locale));
+  // See runUndoReplyStop's doc comment: already localized by inbound-actions.ts.
+  toast.error(result.error);
 }

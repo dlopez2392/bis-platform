@@ -453,14 +453,38 @@ describe("AgencyWorkPage", () => {
       expect(now).toBe(listAccountsWithStaleUsageMock.mock.calls[0]![1]);
     });
 
-    it("the operator's own language sets the cards' words (requestLocale for an operator; mutation: hard-code English -> FAILS)", async () => {
+    // Review fix round, Minor 5: this used to read the OPERATOR's own Mis preferencias choice
+    // (requestLocale, isOperator: true) — but contactDisplayName in the contacts batch below never
+    // took a locale at all, so a nameless/archived row's cell mixed languages ("(no name) ·
+    // Archivado") for a Spanish-reading operator. Agency-only screens stay English (Q4(a)): this
+    // page now carries no per-reader locale, so the operator's own preference must never reach it.
+    it("stays English even when the operator's own language is Spanish (Q4(a); mutation: resolve locale from the operator's own prefs again -> FAILS)", async () => {
       prefsMock.mockResolvedValue({ language: "es", theme: null });
       listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal()]);
       const html = renderToStaticMarkup(await AgencyWorkPage());
-      expect(html).toMatch(/<section[^>]*lang="es"[^>]*data-proposals|<section[^>]*data-proposals[^>]*lang="es"|<section lang="es"[^>]*data-proposals/);
-      expect(html).toMatch(/<h2[^>]*>Sugerencias<\/h2>/);
-      expect(html).toMatch(/>Aceptar</);
+      expect(html).toMatch(/<section[^>]*lang="en"[^>]*data-proposals|<section[^>]*data-proposals[^>]*lang="en"|<section lang="en"[^>]*data-proposals/);
+      expect(html).toMatch(/<h2[^>]*>Suggestions<\/h2>/);
+      expect(html).toMatch(/>Accept</);
+      expect(html).not.toContain("Sugerencias");
     });
+  });
+
+  // Review fix round, Minor 5: the exact regression the review named — a nameless, archived
+  // contact's cell reading "(no name) · Archivado" (English contactDisplayName beside a Spanish
+  // tr.text) when the operator's own Mis preferencias choice was Español. Pinning this page's own
+  // locale to "en" closes it: both halves of the cell now always agree.
+  it("a nameless, archived contact's cell never mixes languages, even when the operator's own preference is Spanish (mutation: pin only tr's locale, or only contactDisplayName's -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    listAgencyWorkMock.mockResolvedValueOnce([
+      row({ id: "task:noname", contactId: "ct-noname", title: "Follow up on the estimate" }),
+    ]);
+    fake.tables.contacts = [
+      { id: "ct-noname", first_name: null, last_name: null, archived_at: "2026-10-20T10:00:00Z" },
+    ];
+    const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+    expect(text).toContain(`${m["contact.noName"]} · ${m["contacts.archived.mark"]}`);
+    expect(text).not.toContain(m["contact.noName.es"]);
+    expect(text).not.toContain(m["contacts.archived.mark.es"]);
   });
 
   // Client billing: usage that has not reached Stripe in over a day.

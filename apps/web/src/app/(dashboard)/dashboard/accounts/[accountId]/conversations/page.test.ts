@@ -149,6 +149,33 @@ describe("ConversationsPage — Task 12: the 'Needs a look' filter and its list"
     expect(renderedText(childHtml)).toContain("Ana Ruiz");
   });
 
+  // S-10 T9a: the held row's suggested customer name (HeldEmailPane's own `contactDisplayName`
+  // call) was built with no locale — a nameless suggestion always read "(no name)".
+  it("a nameless held row's suggested name reads Spanish, not always English (mutation: call contactDisplayName with no locale → FAILS)", async () => {
+    held.count = 1;
+    held.items = [{ ...HELD_ITEM, contactFirstName: null, contactLastName: null }];
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const { m } = await import("@/lib/messages");
+      const { renderedText } = await import("@/lib/rendered-text");
+      const html = (await ConversationsPage({
+        params: Promise.resolve({ accountId: "acct1" }),
+        searchParams: Promise.resolve({ view: "held", locale: "es" }),
+      })) as React.ReactElement;
+      const els = all(html);
+      const boundary = els.find((e) => e.type === Suspense)!;
+      const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+      const resolved = await (child.type as (p: Record<string, unknown>) => Promise<ReactElement>)(child.props);
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const childHtml = renderToStaticMarkup(resolved);
+      expect(renderedText(childHtml)).toContain(m["contact.noName.es"]);
+      expect(renderedText(childHtml)).not.toContain(m["contact.noName"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("countHeldInboundEmails throwing still renders the inbox, with the link reading 'Needs a look' and no number (mutation: let the throw escape -> FAILS)", async () => {
     held.countThrows = true;
     held.mode = "bis"; // inbound replies are ON, so the filter still has a reason to show even with no known count.
@@ -234,6 +261,35 @@ describe("ConversationsPage in Spanish (requestLocale; F-085 follow-up, Task B)"
 
 // F-118 part 1 (spec §4.1; plan Task 9): opening a thread in the inbox is a record open. The guard
 // here already returns an agency access (`isAgency: true`).
+// S-10 T9a: the active thread's own header name (MessageThread's `contactName` prop) was built
+// with `contactDisplayName({...})`, no locale — a nameless contact always read "(no name)", even
+// for a Spanish-reading operator.
+describe("ConversationsPage's contactName follows the reader's own locale (S-10 T9a)", () => {
+  it("a nameless active contact's header name reads Spanish, not always English (mutation: call contactDisplayName with no locale → FAILS)", async () => {
+    const fixture = conversationsFixture[0] as { contactFirstName: string | null; contactLastName: string | null };
+    const original = { contactFirstName: fixture.contactFirstName, contactLastName: fixture.contactLastName };
+    fixture.contactFirstName = null;
+    fixture.contactLastName = null;
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const { m } = await import("@/lib/messages");
+      const html = (await ConversationsPage({
+        params: Promise.resolve({ accountId: "acct1" }),
+        searchParams: Promise.resolve({ c: "convo1", locale: "es" }),
+      })) as React.ReactElement;
+      const els = all(html);
+      const thread = els.find((e) => Object.hasOwn(e.props, "contactName"));
+      expect(thread?.props.contactName).toBe(m["contact.noName.es"]);
+      expect(thread?.props.contactName).not.toBe(m["contact.noName"]);
+    } finally {
+      fixture.contactFirstName = original.contactFirstName;
+      fixture.contactLastName = original.contactLastName;
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("ConversationsPage logs BIS's open of a resolved thread (F-118 part 1)", () => {
   it("1. a ?c= found on the current page is logged with the thread's own id, after it resolves (mutation: log c before it resolves -> FAILS)", async () => {
     await ConversationsPage(route("convo1"));

@@ -60,7 +60,7 @@ export function ConversationList({
           const name = held ? null : contactDisplayName({
             first_name: conversation.contactFirstName,
             last_name: conversation.contactLastName,
-          });
+          }, locale);
           const rowParams = new URLSearchParams();
           if (before) rowParams.set("before", before);
           if (who !== "all") rowParams.set("who", who);

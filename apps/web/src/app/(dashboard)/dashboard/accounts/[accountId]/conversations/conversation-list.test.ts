@@ -121,6 +121,15 @@ describe("ConversationList names a shared number's holding thread (S-47e Task 12
     expect(html).toContain("Ada Lovelace");
     expect(html).toContain(`data-conversation-row="${ROW.id}"`);
   });
+
+  // S-10 T9a: a nameless contact's row named "(no name)" even for a Spanish-reading operator —
+  // contactDisplayName was called with no locale at all.
+  it("a nameless contact's row reads the reader's own locale, not always English (mutation: call contactDisplayName with no locale → FAILS)", () => {
+    const NAMELESS = { ...ROW, id: "convoN", contactFirstName: null, contactLastName: null };
+    const html = render({ conversations: [NAMELESS], locale: "es" });
+    expect(html).toContain(m["contact.noName.es"]);
+    expect(html).not.toContain(m["contact.noName"]);
+  });
 });
 
 describe("ConversationList's row timestamp renders in the ACCOUNT's zone, not the runtime's", () => {

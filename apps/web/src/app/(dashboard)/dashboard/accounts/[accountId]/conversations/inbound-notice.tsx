@@ -102,7 +102,7 @@ export function InboundNotice({
           <Button
             variant="ghost" size="sm" className="min-h-11 md:min-h-8" disabled={pending} aria-busy={pending}
             onClick={() => runGuarded(busy, startTransition, () => runUndoReplyStop(
-              () => undoReplyStopAction(accountId, conversationId, eventId),
+              () => undoReplyStopAction(accountId, locale, conversationId, eventId),
               toast, locale,
               (wasExpired) => {
                 if (wasExpired) { setExpired(true); return; }
@@ -129,7 +129,7 @@ export function InboundNotice({
           <Button
             variant="ghost" size="sm" className="min-h-11 md:min-h-8" disabled={pending} aria-busy={pending}
             onClick={() => runGuarded(busy, startTransition, () => runStopEmailsFromReply(
-              () => stopEmailsFromReplyAction(accountId, conversationId, contactId),
+              () => stopEmailsFromReplyAction(accountId, locale, conversationId, contactId),
               toast, locale,
               () => {
                 setConsent({ kind: "none" });
