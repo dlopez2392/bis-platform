@@ -340,3 +340,22 @@ describe("account search route — the reader's language for call hits", () => {
     expect(body.calls[0]).toMatchObject({ label: "Unknown caller", sublabel: "Booked" });
   });
 });
+
+// S-10 T9a: a holding thread's hit (holdingLabel) was built with the literal "en", regardless of
+// the reader's own language, even though the call hits beside it already follow `locale`.
+describe("account search route — the reader's language for a shared number's holding hit", () => {
+  it("a Spanish-reading operator sees 'Número compartido', not 'Shared number' (mutation: pass \"en\" to holdingLabel regardless of locale -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    localeFixture.person = "es";
+    dbMocks.searchConversations.mockResolvedValue([
+      {
+        id: "vH", contactId: "ctH", contactFirstName: "Caller", contactLastName: null,
+        lastMessageAt: "2026-09-01T10:00:00Z", lastMessagePreview: "hi",
+        unreadCount: 0, holdsSharedNumber: true, sharedNumber: "+19565550142",
+      },
+    ]);
+    const body = await (await GET(req("rosa"), ctx())).json();
+    expect(body.conversations[0].label).toBe("Número compartido (956) 555-0142");
+    expect(body.conversations[0].label).not.toBe("Shared number (956) 555-0142");
+  });
+});

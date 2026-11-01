@@ -158,7 +158,7 @@ export async function GET(
     })),
     conversations: conversations.slice(0, PER_SOURCE).map((v): SearchHit => ({
       id: v.id,
-      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, "en") : (joinName(v.contactFirstName, v.contactLastName) || UNNAMED),
+      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, locale) : (joinName(v.contactFirstName, v.contactLastName) || UNNAMED),
       sublabel: v.lastMessagePreview,
       // Deliberately null. `sublabel` here is the MATCHED message, but
       // `lastMessageAt` is the thread's NEWEST message — pairing them would
