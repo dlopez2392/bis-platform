@@ -326,7 +326,7 @@ describe("countAwaitingOutcomeBefore — the 'earlier days' count", () => {
 
 describe("the hold: claim, stamp, notice, due list", () => {
   const CLAIM_SELECT = "id, status, notice_wanted, starts_at, ends_at, contact_id, calendar_id, place_id, meeting_url, "
-    + "cancel_token, rescheduled_from_id, author_id, hold_until, created_at";
+    + "cancel_token, rescheduled_from_id, author_id, hold_until, created_at, booker_timezone";
 
   it("claimJobHold writes ONLY hold_settled_at, on a booked row whose hold is due and unclaimed (mutation: drop the `is` → FAILS; mutation: drop the status term → FAILS; never updated_at, plan correction 13)", async () => {
     const claimed = { id: "bk_1", status: "booked", notice_wanted: "confirmation" };

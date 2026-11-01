@@ -10,7 +10,7 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import {
   bookingConfirmationEmail, bookingConfirmationSubject, bookingRescheduledEmail, bookingRescheduledSubject,
 } from "@/lib/email/templates/booking";
-import { formatWhen } from "@/lib/booking/time";
+import { formatWhen, safeZone } from "@/lib/booking/time";
 import { bookingCancelUrl, bookingMoveUrl } from "@/lib/booking/links";
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
@@ -78,7 +78,12 @@ export async function settleJobHold(accountId: string, bookingId: string, deps: 
     }
     const locale = recipientLanguage(contact.language ?? null, info.accountLanguage);
     const brand = emailBrand(info.branding);
-    const when = formatWhen(new Date(claim.starts_at), info.accountTimezone, locale);
+    // The booking's own zone first (a staff move of a customer's booking keeps the zone they booked in), the
+    // company's under it when it reads differently: the customer's own move email's rule (move/[token]/actions.ts).
+    const startsAt = new Date(claim.starts_at);
+    const bookerZone = safeZone(claim.booker_timezone ?? undefined, info.accountTimezone);
+    const whenBookerZone = formatWhen(startsAt, bookerZone, locale);
+    const whenCompanyZone = formatWhen(startsAt, info.accountTimezone, locale);
     // Owner decision 4: the address, on one line. The job's own "what" (its note) is never read here.
     const where = [trimmed(place?.label), trimmed(place?.address)].filter((x): x is string => x !== null).join(" · ");
     const links = {
@@ -88,7 +93,7 @@ export async function settleJobHold(accountId: string, bookingId: string, deps: 
       moveUrl: calendar.enabled ? bookingMoveUrl(deps.origin, calendar.public_id, claim.cancel_token, locale) : "",
     };
     const common = {
-      brand, locale, whenBookerZone: when, whenCompanyZone: when, meetingUrl: claim.meeting_url ?? undefined, where, ...links,
+      brand, locale, whenBookerZone, whenCompanyZone, meetingUrl: claim.meeting_url ?? undefined, where, ...links,
     };
     const confirmation = claim.notice_wanted === "confirmation";
     const { html, text } = confirmation ? bookingConfirmationEmail(common) : bookingRescheduledEmail(common);

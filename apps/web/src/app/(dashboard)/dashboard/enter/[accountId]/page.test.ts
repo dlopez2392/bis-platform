@@ -118,6 +118,18 @@ describe("the chooser — guards, before anything renders", () => {
     expect(dbFixture.calls).toBe(0);
   });
 
+  it("a live visit's bounce carries its Continue link in the reader's language, with lang set (mutation: drop continueLabel, or the lang wrapper -> FAILS)", async () => {
+    gateMocks.agencyVisitOk.mockResolvedValue(true);
+    const en = await page(A);
+    expect(en).toMatch(new RegExp(`<a[^>]*href="/dashboard/accounts/${A}/dashboard"[^>]*>Continue</a>`));
+    expect(en).toContain('lang="en"');
+    prefsFixture.language = "es";
+    const es = await page(A);
+    expect(es).toMatch(/>Continuar<\/a>/);
+    expect(renderedText(es)).toContain("Abriendo la cuenta");
+    expect(es).toContain('lang="es"');
+  });
+
   it("a live visit with no safe `to` bounces to this account's own home, never another account's path (mutation: bounce to `to` unvalidated -> FAILS, landing in B)", async () => {
     gateMocks.agencyVisitOk.mockResolvedValue(true);
     const html = await page(A, `/dashboard/accounts/${B}/x`);

@@ -24,13 +24,28 @@ describe("bounceIntoAccount", () => {
   });
 });
 
+// A Link would be a SOFT navigation, the one that replays the cached redirect; the fallback must never be one.
+vi.mock("next/link", () => ({ default: () => "SOFT-LINK" }));
+
 describe("VisitBounce", () => {
-  const html = renderToStaticMarkup(createElement(VisitBounce, { target: "/dashboard/accounts/a/tasks", label: "Opening the account" }));
+  const html = renderToStaticMarkup(createElement(VisitBounce, {
+    target: "/dashboard/accounts/a/tasks", label: "Opening the account", continueLabel: "Continue",
+  }));
 
   it("carries its target and announces itself to a screen reader, as a status, with no spinner (rule 7) (mutation: drop the label or the target -> FAILS)", () => {
     expect(html).toContain('data-bounce-to="/dashboard/accounts/a/tasks"');
     expect(html).toContain('role="status"');
     expect(html).toContain("Opening the account");
     expect(html).not.toMatch(/animate-spin|spinner/i);
+  });
+
+  // #308 follow-up M1: if the hard navigation never happens (a blocked script, a slow device), the person is
+  // not stuck on a skeleton: a visible link to the same target, a plain anchor so following it is a hard
+  // navigation too.
+  it("shows a visible Continue link to the same target, a plain <a>, never a next/link (mutation: no link, or a Link -> FAILS)", () => {
+    expect(html).toMatch(/<a[^>]*href="\/dashboard\/accounts\/a\/tasks"[^>]*>Continue<\/a>/);
+    expect(html).not.toContain("SOFT-LINK");
+    const anchor = /<a[^>]*>/.exec(html)![0];
+    expect(anchor).not.toMatch(/sr-only|hidden/);
   });
 });

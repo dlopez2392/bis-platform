@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { buttonVariants } from "@/components/ui/button";
 
 /**
  * The router-cache loop's second guard (2026-10-30, proven from production logs). The chooser renders
@@ -16,14 +17,22 @@ export function bounceIntoAccount(target: string): void {
   window.location.replace(target);
 }
 
-export function VisitBounce({ target, label }: { target: string; label: string }) {
+/**
+ * The visible way out (#308 follow-up M1): if the hard navigation never happens (a blocked script, a slow
+ * device), the person is not left on a skeleton. A plain <a>, never next/link: following a Link is the soft
+ * navigation that would replay the cached redirect; following an anchor is a hard one, like the bounce.
+ */
+export function VisitBounce({ target, label, continueLabel }: { target: string; label: string; continueLabel: string }) {
   useEffect(() => {
     bounceIntoAccount(target);
   }, [target]);
   return (
-    <div role="status" data-bounce-to={target} className="p-6">
-      <Skeleton aria-hidden="true" className="h-4 w-48" />
-      <span className="sr-only">{label}</span>
+    <div className="space-y-4 p-6">
+      <div role="status" data-bounce-to={target}>
+        <Skeleton aria-hidden="true" className="h-4 w-48" />
+        <span className="sr-only">{label}</span>
+      </div>
+      <a href={target} className={buttonVariants({ variant: "ghost", size: "sm" })}>{continueLabel}</a>
     </div>
   );
 }

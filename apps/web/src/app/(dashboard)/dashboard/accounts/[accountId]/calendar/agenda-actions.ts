@@ -266,7 +266,8 @@ export async function addJobAction(accountId: string, draft: JobDraft, seen: str
       first = customer.firstName;
       const e164 = normalisePhone(customer.phone)?.e164 ?? null;
       if (e164 && !customer.addAsNew) {
-        const { rows } = await listContactsOnNumber(db, accountId, e164);
+        // Live owners only: an archived owner cannot be booked (the existing-customer branch above refuses one).
+        const { rows } = await listContactsOnNumber(db, accountId, e164, { live: true });
         const owner = rows.find((r) => !r.holds_shared_number && isCallerIdNumber(r.phone, e164));
         if (owner) {
           const ownerFirst = trimmedOrNull(owner.first_name) ?? "";

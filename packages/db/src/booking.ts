@@ -1256,11 +1256,13 @@ export async function countAwaitingOutcomeBefore(db: SupabaseClient, accountId: 
 }
 
 const CLAIM_COLS = "id, status, notice_wanted, starts_at, ends_at, contact_id, calendar_id, place_id, meeting_url, "
-  + "cancel_token, rescheduled_from_id, author_id, hold_until, created_at";
+  + "cancel_token, rescheduled_from_id, author_id, hold_until, created_at, booker_timezone";
 export type JobHoldClaim = {
   id: string; status: BookingStatus; notice_wanted: NoticeWanted | null; starts_at: string; ends_at: string;
   contact_id: string; calendar_id: string; place_id: string | null; meeting_url: string | null; cancel_token: string;
   rescheduled_from_id: string | null; author_id: string | null; hold_until: string; created_at: string;
+  /** The zone the customer booked in (a staff move carries it over); null on a staff-made job. */
+  booker_timezone: string | null;
 };
 
 /**

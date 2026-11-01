@@ -1159,10 +1159,18 @@ export async function countContacts(
   q = withAssignee(q, opts.assignee);
   // 0103: the same archive rule as listContacts, so the header total and the rows agree in both views.
   q = withArchived(q, opts.archived);
-  const { count, error } = await q;
-  if (error) throw new Error(`countContacts failed: ${error.message}`);
+  const { count, error, status, statusText } = await q;
+  if (error) throw new Error(`countContacts failed: ${countFailureReason(error, status, statusText)}`);
   if (count === null) throw new Error("countContacts failed: no count returned");
   return count;
+}
+
+/** A count is a HEAD request: a refused one has no body, so postgrest-js reports `{ message: "" }` and the only
+ *  reason left is the response's status. Name the status always, the code when there is one, the message last. */
+function countFailureReason(error: { message?: string; code?: string }, status: number, statusText: string): string {
+  const http = `HTTP ${status}${statusText ? ` ${statusText}` : ""}`;
+  const head = error.code ? `${http}, code ${error.code}` : http;
+  return error.message ? `${head}: ${error.message}` : head;
 }
 
 type ContactListRow = NonNullable<Awaited<ReturnType<typeof listContacts>>>[number];
