@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { autoMap, mapRows, IMPORT_FIELDS } from "./csv";
+import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel } from "./csv";
 import { CSV_COLUMNS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route";
+import { m } from "@/lib/messages";
 
 describe("autoMap", () => {
   it("matches ignoring case, spaces, underscores and hyphens", () => {
@@ -33,6 +34,33 @@ describe("autoMap", () => {
   // so this is the pin that stops the two lists drifting apart.
   it("offers exactly the columns the export writes, in the same order", () => {
     expect([...IMPORT_FIELDS]).toEqual([...CSV_COLUMNS]);
+  });
+});
+
+// S-10 leftovers (#317 follow-up, item 1): the mapping dropdown rendered IMPORT_FIELDS' raw ids
+// ("first_name", "company_name", ...) as its OWN option labels, in both languages, since field was
+// read straight into JSX with no lookup through the catalogue at all.
+describe("importFieldLabel", () => {
+  it("gives every IMPORT_FIELDS id a readable English label, never the raw id itself (mutation: return field itself -> FAILS)", () => {
+    for (const field of IMPORT_FIELDS) {
+      const label = importFieldLabel(field);
+      expect(label).not.toBe(field);
+      expect(label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("reads Spanish when asked (mutation: ignore the locale param -> FAILS)", () => {
+    expect(importFieldLabel("first_name", "es")).toBe(m["contacts.firstName.es"]);
+    expect(importFieldLabel("last_name", "es")).toBe(m["contacts.lastName.es"]);
+    expect(importFieldLabel("email", "es")).toBe(m["contacts.email.es"]);
+    expect(importFieldLabel("phone", "es")).toBe(m["contacts.phone.es"]);
+    expect(importFieldLabel("company_name", "es")).toBe(m["contact.company.es"]);
+    expect(importFieldLabel("source", "es")).toBe(m["contact.source.label.es"]);
+    expect(importFieldLabel("tags", "es")).toBe(m["contact.tags.es"]);
+  });
+
+  it("defaults to English with no locale given", () => {
+    expect(importFieldLabel("first_name")).toBe(m["contacts.firstName"]);
   });
 });
 

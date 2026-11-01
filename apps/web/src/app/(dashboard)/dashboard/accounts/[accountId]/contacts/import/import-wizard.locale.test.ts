@@ -67,6 +67,23 @@ describe("ImportWizard in the reader's language (S-10 T3)", () => {
     expect(html).toContain(m["contacts.import.preview.es"].replace("{count}", "0"));
     expect(html).not.toContain(m["contacts.import.mapTitle"]);
   });
+
+  // S-10 leftovers (#317 follow-up, item 1): the mapping dropdown's own options read
+  // IMPORT_FIELDS' raw ids ("first_name", "email", ...) instead of a readable label, in
+  // either language.
+  it("the mapping dropdown's options read readable labels, not the raw IMPORT_FIELDS ids (mutation: render {field} directly -> FAILS)", () => {
+    phaseOverride = { name: "map" };
+    headersOverride = ["Email"];
+    const en = render("en", []);
+    expect(en).toContain(`>${m["contacts.firstName"]}<`);
+    expect(en).toContain(`>${m["contact.tags"]}<`);
+    expect(en).not.toContain(">first_name<");
+    expect(en).not.toContain(">company_name<");
+    const es = render("es", []);
+    expect(es).toContain(`>${m["contacts.firstName.es"]}<`);
+    expect(es).toContain(`>${m["contact.tags.es"]}<`);
+    expect(es).not.toContain(">first_name<");
+  });
   it("the done screen reads Spanish, including the business notes (mutation: hard-code en in importBusinessNotes -> FAILS)", () => {
     phaseOverride = { name: "done", totals: { created: 2, updated: 1, flagged: 0, businessTooLong: 1, businessLinkFailed: false } };
     const html = render("es");

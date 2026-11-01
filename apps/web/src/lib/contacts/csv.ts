@@ -1,5 +1,8 @@
 import type { ContactInput } from "@bis/db";
 import { EMAIL_SHAPE, FIELD_TO_INPUT_KEY } from "./field-input";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /** One parsed CSV record. `line` is the file line the row came from (the
  *  header is line 1), so an error can point the operator at the right row. */
@@ -86,6 +89,28 @@ function splitTags(value: string): string[] {
  */
 export const IMPORT_FIELDS = ["first_name", "last_name", "email", "phone",
   "company_name", "source", "tags"] as const;
+
+/**
+ * S-10 leftovers (#317 follow-up, item 1): the mapping dropdown used to render each
+ * IMPORT_FIELDS id as its own option text ("first_name", "company_name", ...) — a raw
+ * identifier, in both languages, because the option read `field` straight into JSX. Each
+ * maps to a key the catalogue already carries for that same field elsewhere (the drawer's
+ * own field labels, S-10's existing contacts.firstName/contact.company/etc twins) rather
+ * than a new label set invented for this screen alone.
+ */
+const IMPORT_FIELD_LABEL_KEY: Record<(typeof IMPORT_FIELDS)[number], MessageKey> = {
+  first_name: "contacts.firstName",
+  last_name: "contacts.lastName",
+  email: "contacts.email",
+  phone: "contacts.phone",
+  company_name: "contact.company",
+  source: "contact.source.label",
+  tags: "contact.tags",
+};
+
+export function importFieldLabel(field: (typeof IMPORT_FIELDS)[number], locale: Locale = "en"): string {
+  return t(m, IMPORT_FIELD_LABEL_KEY[field], locale);
+}
 
 /**
  * Guesses which column is which. The returned KEY is the header exactly as it

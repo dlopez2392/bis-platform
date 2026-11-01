@@ -4,7 +4,7 @@ import Link from "next/link";
 import Papa from "papaparse";
 import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
-import { autoMap, mapRows, IMPORT_FIELDS, type ParsedRow } from "@/lib/contacts/csv";
+import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel, type ParsedRow } from "@/lib/contacts/csv";
 import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, type ImportTotals } from "@/lib/contacts/import-summary";
 import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -214,7 +214,7 @@ export function ImportWizard(
               >
                 <option value={IGNORE}>{t(m, "contacts.import.ignore", locale)}</option>
                 {IMPORT_FIELDS.map((field) => (
-                  <option key={field} value={field}>{field}</option>
+                  <option key={field} value={field}>{importFieldLabel(field, locale)}</option>
                 ))}
               </select>
             </li>
