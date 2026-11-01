@@ -252,7 +252,6 @@ export const m = {
   "branding.nameHint": "What this company's own customers see — on their lead forms, booking page, website chat, emails and texts, and in their sidebar. Your internal name for them stays private.",
   "branding.logo": "Logo",
   "branding.logoHint": "PNG, JPEG or WebP, up to 512 KB.",
-  "branding.upload": "Upload",
   "branding.saved": "Branding updated",
   "branding.saveFailed": "Could not update branding",
   "branding.badFormat": "That file isn't a PNG, JPEG or WebP.",
@@ -305,9 +304,6 @@ export const m = {
   "common.retry.es": "Intentar de nuevo",
   "common.add": "Add",
   "common.add.es": "Agregar",
-  "common.import": "Import",
-  "common.filters": "Filters",
-  "common.sort": "Sort",
   "common.none": "—",
   "common.none.es": "—",
   "common.saving": "Saving…",
@@ -783,7 +779,6 @@ export const m = {
   "contact.opportunities": "Opportunities",
   "contact.opportunities.es": "Oportunidades",
   "contact.activity": "Activity",
-  "contact.notes": "Notes",
   "contact.tasks": "Tasks",
   "contact.tasks.es": "Pendientes",
   "contact.addNote": "Add a note…",
@@ -882,8 +877,6 @@ export const m = {
   "language.name.en.es": "inglés",
   "language.name.es": "Spanish",
   "language.name.es.es": "español",
-  "contact.noActivity": "No activity yet",
-  "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
   "contact.noOpportunities.es": "Todavía no hay ninguna.",
   "contact.noName": "(no name)",
@@ -1617,12 +1610,6 @@ export const m = {
   "conversations.channel.webchat": "Web chat",
   "conversations.channel.webchat.es": "Chat web",
   // "{channel}" is the house placeholder convention (see shell.presence.idle).
-  // Filled from MESSAGE_CHANNEL_LABEL (lib/labels.ts) so the timeline reads
-  // "Email sent"/"Text sent"/etc. from the real channel instead of a
-  // hardcoded "Email" for every message regardless of how it was sent.
-  "contact.activitySent": "{channel} sent",
-  "contact.activityReceived": "{channel} received",
-  "contact.formSubmission": "Form submission",
 
   // Every item but form_notify happens outside the platform. The help text
   // must say so plainly — implying the app performs these is a lie it would
@@ -1834,11 +1821,6 @@ export const m = {
   "calendar.settings.saveFailed": "Could not save booking settings.",
   "calendar.settings.saveCrashed": "Could not save — this page may be out of date. Reload it and try again.",
 
-  // Not "Upcoming": since D-030 the list (listCalendarBookings) also carries appointments that are
-  // over and still waiting for "Mark completed" or "No-show".
-  "calendar.bookings.title": "Bookings",
-  "calendar.bookings.empty": "Nothing here yet. Bookings from your booking page and phone calls show up here and stay until you mark them completed or no-show.",
-  "calendar.bookings.note": "Note",
   "calendar.bookings.join": "Join",
   "calendar.bookings.join.es": "Unirse",
   "calendar.bookings.cancel": "Cancel",
