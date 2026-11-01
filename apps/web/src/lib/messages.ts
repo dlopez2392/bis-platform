@@ -1334,7 +1334,7 @@ export const m = {
   "prefs.saved.theme.system": "The theme now follows your device.",
   "prefs.saved.theme.system.es": "Ahora se usa el tema de su dispositivo.",
   "prefs.saved.theme.none": "Back to the default theme for your login.",
-  "prefs.saved.theme.none.es": "Se volvió al tema predeterminado.",
+  "prefs.saved.theme.none.es": "Volvió al tema predeterminado.",
   "prefs.undo": "Undo",
   "prefs.undo.es": "Deshacer",
   "prefs.undone": "Changed back.",
@@ -3926,15 +3926,15 @@ export const m = {
   "palette.hint": "Keep typing to search your contacts, calls and conversations.",
   "palette.hint.es": "Siga escribiendo para buscar en sus contactos, llamadas y conversaciones.",
   "palette.empty": "Nothing matches “{query}”.",
-  "palette.empty.es": "Nada coincide con “{query}”.",
+  "palette.empty.es": "No hay resultados para “{query}”.",
   // Names the failure instead of showing an empty list. An empty list would
   // say "you have no such contact", which is a lie about a broken request.
   "palette.error": "Couldn't search your records just now.",
-  "palette.error.es": "No pudimos buscar en sus registros en este momento.",
+  "palette.error.es": "No pudimos buscar en este momento.",
   "palette.retry": "Try again",
   "palette.retry.es": "Intentar de nuevo",
   "palette.action.toggleTheme": "Switch between light and dark",
-  "palette.action.toggleTheme.es": "Cambiar entre claro y oscuro",
+  "palette.action.toggleTheme.es": "Cambiar entre modo claro y oscuro",
   // Staff and roles (Task 8): the agency's own ⌘K entry point into this
   // client's team management (registry.ts's own comment on why this is a
   // plain navigation entry, not a SETTINGS_SECTIONS anchor).
@@ -3949,7 +3949,7 @@ export const m = {
   "palette.settings.customValues": "Custom values",
   "palette.settings.customValues.es": "Valores personalizados",
   "palette.settings.alertPhone": "Alert texts",
-  "palette.settings.alertPhone.es": "Textos de aviso",
+  "palette.settings.alertPhone.es": "Avisos por texto",
   "palette.settings.billing": "Billing",
   "palette.settings.billing.es": "Facturación",
   "palette.settings.branding": "Branding",

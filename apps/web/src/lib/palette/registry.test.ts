@@ -465,3 +465,9 @@ describe("buildPaletteEntries in Spanish (S-10 T1)", () => {
     expect(buildPaletteEntries(BASE, false, true).find((e) => e.id === `nav:${BASE}/contacts`)?.label).toBe("Contacts");
   });
 });
+
+describe("one wording for the theme switch (S-10 review M-10)", () => {
+  it("the palette action and the topbar toggle say the same thing in Spanish (mutation: reword one → FAILS)", () => {
+    expect(m["palette.action.toggleTheme.es"]).toBe(m["theme.toggle.es"]);
+  });
+});

@@ -162,7 +162,7 @@ describe("prefs theme copy in Spanish names the theme, not the account", () => {
     }
   });
   it("says what the brief asked for", () => {
-    expect(m["prefs.saved.theme.none.es"]).toBe("Se volvió al tema predeterminado.");
+    expect(m["prefs.saved.theme.none.es"]).toBe("Volvió al tema predeterminado.");
     expect(m["prefs.theme.empty.es"]).toBe("Aún no ha elegido, así que ve el tema {mode}.");
   });
 });
