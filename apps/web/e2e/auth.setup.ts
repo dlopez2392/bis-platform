@@ -456,10 +456,13 @@ setup("authenticate as technician user", async ({ page }) => {
 // hours from here (AGENCY_VISIT_HOURS); a local run slower than that meets
 // the chooser late, which is the gate working, not a bug in this fixture.
 //
-// Registered LAST: it needs the client fixture file the "authenticate as
-// client user" test above writes, and it must run after every other setup
-// test so the two-hour clock starts as late as possible relative to the
-// specs that spend it.
+// Registered after every OTHER setup test that touches this account or
+// the seeded one (the Spanish client's own fixture below is unrelated —
+// a separate account this test never visits — so it does not have to
+// precede that one too): it needs the client fixture file the
+// "authenticate as client user" test above writes, and it runs as late
+// as the specs that spend the two-hour clock allow so that clock starts
+// as late as possible relative to them.
 //
 // Two other ways agency specs enter an account need no visit here:
 // blueprints.spec.ts and vetting.spec.ts each CREATE a company mid-spec, and
@@ -506,9 +509,10 @@ setup("agency gives a reason for the fixture account and Test Client One", async
 // everything buildNavGroups gives a client Owner, plus app-sidebar's own
 // Team footer link — Dashboard, To do, Website, Contacts/record/drawer,
 // Documents, Opportunities, Conversations, Calls, Activity, Forms, Calendar,
-// Billing, Branding and Team — so a later task that converts any of those
-// screens (T6, T9) can extend coverage on this SAME fixture without minting
-// a new one.
+// Billing, Branding and Team — so T6 (Billing/Branding/Team's own Spanish
+// conversion, #324) and T9 could both extend coverage onto this SAME
+// fixture without minting a new one, and spanish-dashboard.spec.ts now does
+// exactly that for all three once #324 merged.
 //
 // No logo, no form, no branding row: this fixture exists to read Spanish
 // strings on existing screens, not to prove uploads or brand derivation —
@@ -565,11 +569,14 @@ setup("authenticate as Spanish client user", async ({ page }) => {
     // S-53: an allowed trade, same reasoning as the shared fixture's own.
     trade: "hvac",
   });
-  await setClientAccess(db, accountId, true, user.id);
+  // Recorded immediately, BEFORE setClientAccess: if that call throws,
+  // teardown still has the real accountId to delete (its cascade does not
+  // depend on client_access_enabled being true).
   writeFileSync(
     SPANISH_CLIENT_FIXTURE_FILE,
     JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName }),
   );
+  await setClientAccess(db, accountId, true, user.id);
 
   const { error: langErr } = await db.from("users")
     .upsert({ clerk_user_id: user.id, email, name: "E2E Spanish", language: "es" }, { onConflict: "clerk_user_id" });
