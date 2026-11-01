@@ -54,8 +54,13 @@ vi.mock("@/components/ui/sheet", () => {
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 // Recorded, not run: the body's locale is what the drawer hands its provider (C1).
 const localeProps: unknown[] = [];
+// Review fix round (M-2): a controllable mock, not a bare "en" literal — the loading-state
+// header fallback (contact-drawer.tsx:210) reads `pageLocale` (useLocale()) directly, which a
+// hard-coded "en" literal here could never distinguish from. Defaults to "en" so every
+// pre-existing test (which never overrides it) is unchanged.
+const pageLocaleMock: { value: "en" | "es" } = { value: "en" };
 vi.mock("@/components/locale-provider", () => ({
-  useLocale: () => "en",
+  useLocale: () => pageLocaleMock.value,
   LocaleProvider: (p: { locale: unknown; children?: unknown }) => { localeProps.push(p.locale); return p.children; },
 }));
 const nextUpProps: unknown[] = [];
@@ -629,6 +634,23 @@ describe("ContactDrawer on the record kit (S-03 part 3)", () => {
     const html = renderOpen(undefined);
     expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(6);
     expect(html).toMatch(/data-drawer-section="recent" data-state="loading"/);
+  });
+
+  // Review fix round (M-2): while STILL LOADING (no body yet), the header falls back to
+  // `row ? contactDisplayName(row, locale) : ""` (contact-drawer.tsx:210) — a nameless row's
+  // "(no name)" placeholder read English even on a Spanish page, because the fallback never
+  // took `locale` at all before this round (mutation: call contactDisplayName(row) with no
+  // locale -> FAILS).
+  it("while loading, a nameless row's header fallback reads the Spanish placeholder on a Spanish page", () => {
+    pageLocaleMock.value = "es";
+    try {
+      const stub = { ...ROW, first_name: null, last_name: null };
+      const html = renderOpen(undefined, stub);
+      expect(html).toMatch(/<h2[^>]*>\(sin nombre\)<\/h2>/);
+      expect(html).not.toContain("(no name)");
+    } finally {
+      pageLocaleMock.value = "en";
+    }
   });
 
   it("a ?peek= stub row shows skeleton fields until the route's arrive (Q1; mutation: render the stub's blanks -> FAILS)", () => {
