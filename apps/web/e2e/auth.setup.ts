@@ -57,6 +57,12 @@ const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 // The same sidecar idea for the per-run agency user below: auth.teardown.ts
 // reads it to delete that user, whether or not any spec ran.
 const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
+// S-10 T9: the Spanish-language fixture's own saved session and sidecar
+// record — a SEPARATE account/org/Clerk user from CLIENT_FIXTURE_FILE above
+// (see fixtures/stale.ts's FIXTURE_CLIENT_ES_ACCOUNT_RE doc comment for
+// why: staff-roles.spec.ts hard-codes the shared fixture's team-row count).
+const SPANISH_CLIENT_AUTH_FILE = "e2e/.auth/client-es-state.json";
+const SPANISH_CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture-es.json";
 
 // A real 24x24 solid-blue PNG, built chunk by chunk with valid CRCs. Genuine
 // bytes on purpose: the upload path identifies format by decoded magic bytes,
@@ -475,4 +481,108 @@ setup("agency gives a reason for the fixture account and Test Client One", async
   } finally {
     await ctx.close();
   }
+});
+
+// S-10 T9: a signed-in Spanish e2e user, for the shell's G9 overflow check
+// and for proving the Spanish dashboard end to end SIGNED IN. The
+// `?locale=es`/`?locale=pseudo` QA override never reaches the shell (nav,
+// topbar, ⌘K) — Next layouts receive no `searchParams`, and the shell's own
+// locale is resolved once in dashboard/layout.tsx from `users.language`, not
+// from the URL (docs/superpowers/specs/2026-10-31-spanish-dashboard-design.md
+// §10's "the QA locale override never reaches the shell" finding) — so a
+// real `users.language` is the only way to see a Spanish SHELL at all.
+//
+// Deliberately its OWN account and Clerk org, never a fourth membership on
+// the shared client fixture above: see FIXTURE_CLIENT_ES_ACCOUNT_RE's own
+// doc comment in fixtures/stale.ts for why (staff-roles.spec.ts hard-codes
+// that account's own team-row count). Minted the same way the shared
+// fixture's Owner is — a fresh Clerk user, `createOrganization` (which makes
+// the creator its sole org:admin), a fresh `accounts` row, client access
+// turned on — so this user becomes an OWNER (not Staff or Technician) the
+// same way the shared fixture's Owner does: the per-request fallback
+// (`ensureAccountRole`) settles `org:admin` to "owner" on this user's very
+// first page load, exactly as it already does for the shared fixture. Owner
+// is the widest client audience on purpose: ONE identity can prove
+// everything buildNavGroups gives a client Owner, plus app-sidebar's own
+// Team footer link — Dashboard, To do, Website, Contacts/record/drawer,
+// Documents, Opportunities, Conversations, Calls, Activity, Forms, Calendar,
+// Billing, Branding and Team — so a later task that converts any of those
+// screens (T6, T9) can extend coverage on this SAME fixture without minting
+// a new one.
+//
+// No logo, no form, no branding row: this fixture exists to read Spanish
+// strings on existing screens, not to prove uploads or brand derivation —
+// client-access.spec.ts and client-branding.spec.ts already do that on the
+// shared fixture.
+//
+// `users.language` is written directly through serviceDb(), BEFORE sign-in,
+// the same reasoning the Technician block above gives for writing its BIS
+// role directly: the per-request fallback that creates this user's `users`
+// row on reconcile (`upsertUserFromClerk`, packages/db/src/team.ts) never
+// sets a language of its own — and, confirmed by reading that function, an
+// upsert whose payload omits `language` entirely never overwrites a value
+// already there — so leaving this to the fallback would sign this user in
+// and render English on their very first request.
+//
+// Sidecar file, teardown deletes it unconditionally — same reasoning as
+// CLIENT_FIXTURE_FILE's own doc comment: the "setup" project has no test
+// filter of its own, so a filtered invocation (`test:e2e some.spec.ts`)
+// still creates this fixture, and cleanup must be equally unconditional.
+setup("authenticate as Spanish client user", async ({ page }) => {
+  await clerkSetup();
+  const clerk_ = await clerkClient();
+
+  const stamp = Date.now();
+  const email = `e2e-spanish-${stamp}@example.com`;
+  const companyName = `E2E Client Co ES ${stamp}`;
+
+  const user = await clerk_.users.createUser({
+    emailAddress: [email],
+    firstName: "E2E", lastName: "Spanish",
+    skipPasswordRequirement: true, skipLegalChecks: true,
+  });
+
+  // Recorded before anything else can fail, so teardown always has the ids.
+  mkdirSync("e2e/.auth", { recursive: true });
+  writeFileSync(
+    SPANISH_CLIENT_FIXTURE_FILE,
+    JSON.stringify({ accountId: null, clerkOrgId: null, clerkUserId: user.id, email, companyName }),
+  );
+
+  // createdBy makes the new user an org:admin member automatically — the
+  // same call the shared client fixture's own setup test above makes.
+  const org = await clerk_.organizations.createOrganization({
+    name: companyName, createdBy: user.id,
+  });
+  writeFileSync(
+    SPANISH_CLIENT_FIXTURE_FILE,
+    JSON.stringify({ accountId: null, clerkOrgId: org.id, clerkUserId: user.id, email, companyName }),
+  );
+
+  const db = serviceDb();
+  const { id: accountId } = await createAccount(db, {
+    clerkOrgId: org.id, name: companyName, actorId: user.id,
+    // S-53: an allowed trade, same reasoning as the shared fixture's own.
+    trade: "hvac",
+  });
+  await setClientAccess(db, accountId, true, user.id);
+  writeFileSync(
+    SPANISH_CLIENT_FIXTURE_FILE,
+    JSON.stringify({ accountId, clerkOrgId: org.id, clerkUserId: user.id, email, companyName }),
+  );
+
+  const { error: langErr } = await db.from("users")
+    .upsert({ clerk_user_id: user.id, email, name: "E2E Spanish", language: "es" }, { onConflict: "clerk_user_id" });
+  if (langErr) throw new Error(`spanish client setup: users.language not written: ${langErr.message}`);
+
+  await signInWithTicket(page, clerk_, user.id);
+  await setActiveOrganization(page, org.id);
+
+  await page.goto("/");
+  // Same readiness signal as the shared client fixture's own setup test:
+  // the redirect this navigation's own fresh token triggers, not network
+  // idle (see that test's own comment for the CI trace behind this).
+  await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/dashboard$/);
+
+  await saveSignedInState(page.context(), SPANISH_CLIENT_AUTH_FILE);
 });
