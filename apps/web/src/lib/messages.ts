@@ -4157,12 +4157,18 @@ export const m = {
   // The callback To do a call leaves when the caller wants a person to call
   // them back. The English line is written into tasks.title when the To do is
   // made (the `todo.consent.*` precedent); the Spanish waits for an operator
-  // locale. "{number}" is the number as the caller said it, or their caller
-  // ID; "{reason}" is what they called about. The bare line is for a call
-  // with no reason recorded.
-  "todo.callback.en": "Call back at {number}: {reason}",
+  // locale (`callbackTaskTitle`, call-card.ts, still reads only the English
+  // half). The SAME pair now also backs the call-alert EMAIL's own callback
+  // line (`callbackAlertLine`, S-10 T8 review round 1 finding 1), which DOES
+  // follow `accounts.language` — read there through `t()`, the reason this
+  // pair was renamed off its old `.en`/`.es`-suffixed-on-both-sides shape (no
+  // bare English key) to the ordinary base/`.es` one `t()` expects.
+  // "{number}" is the number as the caller said it, or their caller ID;
+  // "{reason}" is what they called about. The bare line is for a call with
+  // no reason recorded.
+  "todo.callback": "Call back at {number}: {reason}",
   "todo.callback.es": "Devuelva la llamada al {number}: {reason}",
-  "todo.callback.bare.en": "Call back at {number}",
+  "todo.callback.bare": "Call back at {number}",
   "todo.callback.bare.es": "Devuelva la llamada al {number}",
 
   "setup.title": "Client setup",
@@ -6757,14 +6763,25 @@ export const m = {
   "email.weeklyReport.delta.fewer.es": "{size} menos que la semana anterior",
   "email.weeklyReport.delta.fewerOne": "{size} fewer than the week before",
   "email.weeklyReport.delta.fewerOne.es": "{size} menos que la semana anterior",
+  // S-10 T8 review round 1, finding 2: each row label agrees with its own
+  // count at 1 ("1 call answered", not "1 calls answered") in both
+  // languages — rendered through plural(), never t().
   "email.weeklyReport.label.calls": "calls answered",
   "email.weeklyReport.label.calls.es": "llamadas atendidas",
+  "email.weeklyReport.label.callsOne": "call answered",
+  "email.weeklyReport.label.callsOne.es": "llamada atendida",
   "email.weeklyReport.label.leads": "leads captured",
   "email.weeklyReport.label.leads.es": "clientes potenciales captados",
+  "email.weeklyReport.label.leadsOne": "lead captured",
+  "email.weeklyReport.label.leadsOne.es": "cliente potencial captado",
   "email.weeklyReport.label.bookings": "bookings",
   "email.weeklyReport.label.bookings.es": "citas",
+  "email.weeklyReport.label.bookingsOne": "booking",
+  "email.weeklyReport.label.bookingsOne.es": "cita",
   "email.weeklyReport.label.visitors": "website visitors",
   "email.weeklyReport.label.visitors.es": "visitantes del sitio web",
+  "email.weeklyReport.label.visitorsOne": "website visitor",
+  "email.weeklyReport.label.visitorsOne.es": "visitante del sitio web",
   "email.weeklyReport.visitors": "Your website had {count} visitors last week.",
   "email.weeklyReport.visitors.es": "Su sitio web tuvo {count} visitantes la semana pasada.",
   "email.weeklyReport.visitorsOne": "Your website had {count} visitor last week.",
@@ -6787,8 +6804,20 @@ export const m = {
   "email.weeklyReport.subject.visitors.es": "La semana pasada: {count} visitantes del sitio web",
   "email.weeklyReport.subject.visitorsOne": "Last week: {count} website visitor",
   "email.weeklyReport.subject.visitorsOne.es": "La semana pasada: {count} visitante del sitio web",
-  "email.weeklyReport.subject.pipeline": "Last week: {calls} calls, {leads} new leads",
-  "email.weeklyReport.subject.pipeline.es": "La semana pasada: {calls} llamadas, {leads} nuevos clientes potenciales",
+  // S-10 T8 review round 1, finding 2: {calls} and {leads} are now the
+  // ALREADY-PLURALIZED phrases below, each agreeing with its own count —
+  // "1 call" and "3 new leads" can both appear in the same subject, so each
+  // noun needs its own One/Other pair, not the sentence as a whole.
+  "email.weeklyReport.subject.pipeline": "Last week: {calls}, {leads}",
+  "email.weeklyReport.subject.pipeline.es": "La semana pasada: {calls}, {leads}",
+  "email.weeklyReport.subject.pipeline.calls": "{count} calls",
+  "email.weeklyReport.subject.pipeline.calls.es": "{count} llamadas",
+  "email.weeklyReport.subject.pipeline.callsOne": "{count} call",
+  "email.weeklyReport.subject.pipeline.callsOne.es": "{count} llamada",
+  "email.weeklyReport.subject.pipeline.leads": "{count} new leads",
+  "email.weeklyReport.subject.pipeline.leads.es": "{count} nuevos clientes potenciales",
+  "email.weeklyReport.subject.pipeline.leadsOne": "{count} new lead",
+  "email.weeklyReport.subject.pipeline.leadsOne.es": "{count} nuevo cliente potencial",
   "email.leadAlert.subject": "New lead: {formName}",
   "email.leadAlert.subject.es": "Nuevo cliente potencial: {formName}",
   "email.leadAlert.heading": "New lead",

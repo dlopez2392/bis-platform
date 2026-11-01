@@ -55,20 +55,23 @@ export function deltaPhrase(now: number, prior: number | null, locale: Locale = 
 
 type Line = { value: number; label: string; delta: string };
 
+// S-10 T8 review round 1, finding 2: each row label agrees with its own
+// value at 1 ("1 call answered", never "1 calls answered"), in both
+// languages — `plural()`, never a flat `t()` lookup, picks the word form.
 function lines(input: WeeklyReportInput): Line[] {
   const { now, prior } = input;
   const locale = input.locale ?? "en";
   const out: Line[] = [
     {
-      value: now.calls, label: t(m, "email.weeklyReport.label.calls", locale),
+      value: now.calls, label: plural(m, "email.weeklyReport.label.calls", now.calls, locale),
       delta: deltaPhrase(now.calls, prior?.calls ?? null, locale),
     },
     {
-      value: now.leads, label: t(m, "email.weeklyReport.label.leads", locale),
+      value: now.leads, label: plural(m, "email.weeklyReport.label.leads", now.leads, locale),
       delta: deltaPhrase(now.leads, prior?.leads ?? null, locale),
     },
     {
-      value: now.bookings, label: t(m, "email.weeklyReport.label.bookings", locale),
+      value: now.bookings, label: plural(m, "email.weeklyReport.label.bookings", now.bookings, locale),
       delta: deltaPhrase(now.bookings, prior?.bookings ?? null, locale),
     },
   ];
@@ -77,7 +80,7 @@ function lines(input: WeeklyReportInput): Line[] {
   // conclude their website is dead.
   if (now.visitors !== null) {
     out.push({
-      value: now.visitors, label: t(m, "email.weeklyReport.label.visitors", locale),
+      value: now.visitors, label: plural(m, "email.weeklyReport.label.visitors", now.visitors, locale),
       delta: deltaPhrase(now.visitors, prior?.visitors ?? null, locale),
     });
   }
@@ -125,8 +128,16 @@ function quietBody(input: WeeklyReportInput): { html: string; text: string } {
     textBack ? t(m, "email.weeklyReport.reassurance.textBack", locale) : null,
   ].filter(Boolean) as string[];
 
-  const reassurance = running.length > 0
-    ? `${running.join(join)}.`
+  // S-10 T8 review round 1, finding 5: when the receptionist clause is OFF
+  // and only the text-back one runs, the sentence used to start with that
+  // clause's own lower-case first word ("your…"/"su…") — a continuation
+  // clause, never meant to stand alone as a sentence. Capitalised here,
+  // once, after the join, rather than in either catalogue entry: the
+  // receptionist clause already starts with a capitalised persona name, so
+  // this is a no-op there and fixes only the case that needed it.
+  const joined = running.join(join);
+  const reassurance = joined
+    ? `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
     : "";
   const visitors = visitorsSentence(input.now, locale);
   const quietHeading = t(m, "email.weeklyReport.quiet.heading", locale);
@@ -210,5 +221,11 @@ export function weeklyReportSubject(now: WeeklyNumbers, locale: Locale = "en"): 
     }
     return t(m, "email.weeklyReport.quiet.heading", locale);
   }
-  return t(m, "email.weeklyReport.subject.pipeline", locale, { calls: now.calls, leads: now.leads });
+  // S-10 T8 review round 1, finding 2: calls and leads agree with their OWN
+  // counts independently ("1 call, 3 new leads" is a real case) — each
+  // phrase is built through its own plural() before the sentence composes
+  // them, never a single count driving the whole template's number.
+  const calls = plural(m, "email.weeklyReport.subject.pipeline.calls", now.calls, locale, { count: now.calls });
+  const leads = plural(m, "email.weeklyReport.subject.pipeline.leads", now.leads, locale, { count: now.leads });
+  return t(m, "email.weeklyReport.subject.pipeline", locale, { calls, leads });
 }

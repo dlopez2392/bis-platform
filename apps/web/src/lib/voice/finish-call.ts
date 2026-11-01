@@ -26,9 +26,11 @@ import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
 import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
-  callbackWanted, callbackNumberOf, callbackTaskTitle, recordedReason,
+  callbackWanted, callbackNumberOf, callbackTaskTitle, callbackAlertLine, recordedReason,
   cardReadable, readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { maskIdNumbers, maskTranscript } from "./id-mask";
 import { isPlaceholderName } from "./tools/placeholders";
 import type { TradeModuleId } from "@/lib/voice/modules";
@@ -658,24 +660,36 @@ export async function finishCall(
   let notified = false;
   if (meaningful) {
     try {
-      const callerDisplay = ctx.callerNumber ?? "Unknown caller";
+      // S-10 T8: the account's own language, matching the alert SMS's locale
+      // below (owner decision B) — same field, now the same email too.
+      // Computed before `callerDisplay` so the "no caller id" fallback below
+      // can read it.
+      const alertLocale = resolveLocale(undefined, ctx.accountLanguage ?? null);
+      // S-10 T8 review round 1, finding 1: English on a Spanish alert — this
+      // used to be the bare literal "Unknown caller" regardless of locale.
+      const callerDisplay = ctx.callerNumber ?? t(m, "calls.unknownCaller", alertLocale);
       const brand = emailBrand(ctx.branding);
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
-      // The callback line LEADS the alert (owner ruling, 2026-10-09): exactly
-      // the To do's own title (`callbackLine`, computed once above) —
-      // "Call back at {number}: {reason}" from what Sofía wrote down, or the
-      // bare "Call back at {number}" when she wrote nothing. Where no person
+      // The callback line LEADS the alert (owner ruling, 2026-10-09) — "Call
+      // back at {number}: {reason}" from what Sofía wrote down, or the bare
+      // "Call back at {number}" when she wrote nothing. Where no person
       // needs to call back (a booked call, whose appointment is the
       // follow-up) the alert is today's. A pure read of `state`: nothing here
       // waits on the card's post-call reading, and this leg's place and
       // isolation are unchanged.
-      // S-10 T8: the account's own language, matching the alert SMS's locale
-      // below (owner decision B) — same field, now the same email too.
-      const alertLocale = resolveLocale(undefined, ctx.accountLanguage ?? null);
+      //
+      // S-10 T8 review round 1, finding 1: this is NOT `callbackLine` (the
+      // To do's own, English-only title, computed once above) — it is built
+      // fresh, in THIS alert's own language, from the same `callbackNumber`
+      // and `reason` the title reads. Reusing `callbackLine` here put English
+      // into a Spanish alert's first line regardless of the account's
+      // language; `callbackLine` itself is untouched, so `ensureCallbackTask`
+      // below still stores and reads the one English value it always has.
+      const alertCallbackLine = callbackNumber ? callbackAlertLine(callbackNumber, reason, alertLocale) : null;
       const { html, text } = voiceCallAlertEmail({
-        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine, locale: alertLocale,
+        brand, outcome, summary, callerDisplay, contactUrl, callback: alertCallbackLine, locale: alertLocale,
       });
 
       const failures: string[] = [];

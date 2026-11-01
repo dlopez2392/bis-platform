@@ -5,7 +5,7 @@ import {
   type CallState,
 } from "./call-state";
 import {
-  recordedReason, callbackNumberOf, callbackWanted, callbackTaskTitle, cardReadable,
+  recordedReason, callbackNumberOf, callbackWanted, callbackTaskTitle, callbackAlertLine, cardReadable,
   readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
 import { openGateDb } from "@/lib/ai/testing/open-gate";
@@ -127,6 +127,34 @@ describe("callbackTaskTitle: the To do's English line", () => {
 
   it("a reason carrying `$&` is written literally, never as a replacement pattern (mutation: .replace(\"{reason}\", reason) → the placeholder echoes, FAILS)", () => {
     expect(callbackTaskTitle("956 555 0142", "Paid $& for nothing")).toBe("Call back at 956 555 0142: Paid $& for nothing");
+  });
+});
+
+// S-10 T8 review round 1, finding 1: the call-alert EMAIL's own callback
+// line, separate from the To do's — never English regardless of the
+// account's language, the defect this function exists to fix.
+describe("callbackAlertLine: the call-alert email's own line, in the account's language", () => {
+  it("English, names the number and the reason", () => {
+    expect(callbackAlertLine("956 555 0142", "Roof leak", "en")).toBe("Call back at 956 555 0142: Roof leak");
+  });
+
+  it("Spanish, names the number and the reason (mutation: read todo.callback.en regardless of locale → FAILS)", () => {
+    expect(callbackAlertLine("956 555 0142", "Roof leak", "es")).toBe("Devuelva la llamada al 956 555 0142: Roof leak");
+  });
+
+  it("no reason → the bare line in either language, never a dangling colon", () => {
+    expect(callbackAlertLine("956 555 0142", null, "en")).toBe("Call back at 956 555 0142");
+    expect(callbackAlertLine("956 555 0142", "  ", "es")).toBe("Devuelva la llamada al 956 555 0142");
+  });
+
+  it("a long reason is cut at a word with an ellipsis, in either language", () => {
+    const line = callbackAlertLine("956 555 0142", "word ".repeat(80).trim(), "es");
+    expect(line.startsWith("Devuelva la llamada al 956 555 0142: word word")).toBe(true);
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("the reason — the caller's own words, via Sofía — is never translated, in either language (owner design: call-card.ts's SYSTEM prompt writes it in English on purpose)", () => {
+    expect(callbackAlertLine("956 555 0142", "Roof leak", "es")).toContain("Roof leak");
   });
 });
 
