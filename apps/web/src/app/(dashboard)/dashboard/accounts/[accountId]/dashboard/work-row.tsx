@@ -31,22 +31,18 @@ import type { Locale } from "@/lib/i18n/locale";
  * bucketing already built, not a second way to compute it).
  *
  * `locale` (coordinator follow-up, S-10 lane A): optional, default "en".
- * `work.title`/`work.empty`/`work.row.*` have no `.es` twin on THIS
- * branch yet — lane B (feat/s10-contacts) owns and adds them — so a
- * Spanish request falls back to the same English text, `t()`'s own
- * documented behavior for a missing twin. That fallback is correct until
- * lane B merges, not a bug to work around here.
  */
 export function workRowText(total: number, overdue: number, locale: Locale = "en"): string {
   if (total === 0) return t(m, "work.empty", locale);
   // A whole-phrase pick by count, never the plural template reused for
   // one — see work.row.countOne's own comment in messages.ts for the bug
   // this avoids (the same shape as contacts.count/contacts.countOne).
-  // `work.row.count`/`work.row.countOne` is already the base/One pair
-  // `plural()` expects.
+  // `work.row.count`/`work.row.countOne` and `work.row.overdue`/
+  // `work.row.overdueOne` are the base/One pairs `plural()` expects; the
+  // overdue half needs its own pick too, or Spanish reads "1 atrasadas".
   const base = plural(m, "work.row.count", total, locale, { count: total });
   if (overdue === 0) return base;
-  return `${base} · ${t(m, "work.row.overdue", locale, { count: overdue })}`;
+  return `${base} · ${plural(m, "work.row.overdue", overdue, locale, { count: overdue })}`;
 }
 
 export function WorkRowCard({
