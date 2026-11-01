@@ -16,9 +16,10 @@ import type { TextsContext } from "./staff-actions";
  */
 export async function textsContextFor(
   accountId: string, contactId: string, userId: string,
-  // S-10 leftovers (#317 follow-up, item 7): default "en" so a caller that predates this
-  // param (texts-context.test.ts's own calls) is unchanged.
-  locale: Locale = "en",
+  // Review fix round: no default — every caller resolves its OWN reader's locale and
+  // chooses explicitly (a silent "en" default let two tasks/actions.ts call sites skip
+  // past their own already-resolved locale unnoticed).
+  locale: Locale,
 ): Promise<TextsContext | { ok: false; reason: "no_number" | "failed"; error: string }> {
   try {
     const db = await dbForRequest();

@@ -56,7 +56,7 @@ vi.mock("@/lib/consent/staff-actions", () => ({ confirmStop: texts.confirmStop, 
 import { revalidatePath } from "next/cache";
 import { readConsentHistory, completeTask, completeTasksForConsentEvents, HoldUndecidedError } from "@bis/db";
 import { m } from "@/lib/messages";
-import { completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking, confirmStopFromTask, notAStopFromTask, setTaskAssigneeAction } from "./actions";
+import { completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking, confirmStopFromTask, notAStopFromTask, undoHoldDecisionFromTask, setTaskAssigneeAction } from "./actions";
 
 /** A minimal fake Supabase client satisfying only the one chain
  *  `dismissToTask` reads directly (`accounts.timezone`) — everything else it
@@ -370,6 +370,48 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
       texts.textsContextFor.mockResolvedValue({ ok: false, reason: "no_number", error: m["contact.texts.noNumber"] });
       expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided.es"] });
       expect(vi.mocked(completeTasksForConsentEvents)).toHaveBeenCalled();
+    });
+
+    // Review fix round (I-1): on the GENUINELY-FAILED path (ctx.reason "failed"), decideFromTask
+    // returns `ctx` as-is — `ctx.error`, built by the REAL textsContextFor from whatever locale
+    // IT was given. The mock here always answers whatever the test tells it regardless of call
+    // args, so the only way to prove the real function would read Spanish on that path is to
+    // assert textsContextFor was actually CALLED with the reader's own locale, not "en" by
+    // default (mutation: call textsContextFor(accountId, task.contactId, userId) with no locale -> FAILS).
+    it("passes the reader's own resolved locale into textsContextFor, so a genuinely-failed read's error (returned as ctx, never re-worded) would be Spanish too", async () => {
+      getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      texts.textsContextFor.mockResolvedValue({ ok: false, reason: "failed", error: m["contact.texts.failed.es"] });
+      await confirmStopFromTask("acct_1", "t1");
+      expect(texts.textsContextFor).toHaveBeenCalledWith("acct_1", "c1", "user_1", "es");
+    });
+
+    it("an agency operator's call still passes 'en' explicitly (requestLocale's role split, carried into textsContextFor too)", async () => {
+      authFixture.access = { userId: "user_1", isAgency: true, role: null };
+      await confirmStopFromTask("acct_1", "t1");
+      expect(texts.textsContextFor).toHaveBeenCalledWith("acct_1", "c1", "user_1", "en");
+    });
+  });
+
+  // Review fix round (I-1): undoHoldDecisionFromTask resolved NO locale at all before calling
+  // textsContextFor — every error on its own failure path was English regardless of who clicked
+  // Undo on a hold decision from the To do tray (mutation: call textsContextFor with no locale,
+  // or drop the resolveTaskLocale call entirely -> FAILS).
+  describe("undoHoldDecisionFromTask passes its own resolved locale into textsContextFor (review fix round, I-1)", () => {
+    it("a client-role reader on a Spanish account", async () => {
+      authFixture.access = { userId: "user_1", isAgency: false, role: "owner" };
+      dbForRequestMock.mockResolvedValue(fakeDb({ data: { language: "es" } as never, error: null }));
+      texts.undoHoldDecision.mockResolvedValue({ ok: true, view: { kind: "allowed", newestId: null } });
+      await undoHoldDecisionFromTask("acct_1", "c1", "ev1", []);
+      expect(texts.textsContextFor).toHaveBeenCalledWith("acct_1", "c1", "user_1", "es");
+    });
+
+    it("an agency operator reads English even on a Spanish account (requestLocale's role split)", async () => {
+      authFixture.access = { userId: "user_1", isAgency: true, role: null };
+      dbForRequestMock.mockResolvedValue(fakeDb({ data: { language: "es" } as never, error: null }));
+      texts.undoHoldDecision.mockResolvedValue({ ok: true, view: { kind: "allowed", newestId: null } });
+      await undoHoldDecisionFromTask("acct_1", "c1", "ev1", []);
+      expect(texts.textsContextFor).toHaveBeenCalledWith("acct_1", "c1", "user_1", "en");
     });
   });
 });

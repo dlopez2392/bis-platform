@@ -53,7 +53,9 @@ export async function undoReplyStopAction(accountId: string, conversationId: str
   const owning = messages.find((msg) => metaOf(msg)?.consent?.kind === "stopped" && metaOf(msg)?.consent?.eventId === eventId);
   if (!owning) return { ok: false, error: m["conversations.held.changed"] };
   const targetContactId = metaOf(owning)?.sender?.contact_id ?? thread.contactId;
-  const ctx = await emailContextFor(accountId, targetContactId, userId);
+  // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
+  // silent default, until this screen resolves one of its own.
+  const ctx = await emailContextFor(accountId, targetContactId, userId, "en");
   if ("ok" in ctx) return { ok: false, error: ctx.error };
   const r = await undoInboundStop(ctx, eventId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -75,7 +77,9 @@ export async function stopEmailsFromReplyAction(accountId: string, conversationI
     const onThread = messages.some((msg) => metaOf(msg)?.sender?.contact_id === contactId);
     if (!onThread) return { ok: false, error: m["conversations.held.changed"] };
   }
-  const ctx = await emailContextFor(accountId, contactId, userId);
+  // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
+  // silent default, until this screen resolves one of its own.
+  const ctx = await emailContextFor(accountId, contactId, userId, "en");
   if ("ok" in ctx) return { ok: false, error: ctx.error };
   const newest = newestDecidingRow(await readConsentHistory(ctx.writer, accountId, "email", ctx.address));
   const r = await stopEmails(ctx, newest?.id ?? null);
@@ -227,7 +231,9 @@ export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Pr
     }
     const ok = await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId);
     if (ok && reversalTarget) {
-      const ctx = await emailContextFor(accountId, reversalTarget.contactId, userId);
+      // Conversations' own locale resolution is a later S-10 task; "en" explicitly, not a
+      // silent default, until this screen resolves one of its own.
+      const ctx = await emailContextFor(accountId, reversalTarget.contactId, userId, "en");
       if ("ok" in ctx) {
         stopNotReversed = ctx.error;
       } else {

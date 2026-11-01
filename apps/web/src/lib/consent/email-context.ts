@@ -16,9 +16,9 @@ import type { EmailContext } from "./email-staff-actions";
  */
 export async function emailContextFor(
   accountId: string, contactId: string, userId: string,
-  // S-10 leftovers (#317 follow-up, item 7): default "en" so a caller that predates this
-  // param is unchanged.
-  locale: Locale = "en",
+  // Review fix round: no default — every caller resolves its OWN reader's locale and
+  // chooses explicitly (the Texts row's own fix, mirrored for email).
+  locale: Locale,
 ): Promise<EmailContext | { ok: false; reason: "no_email" | "failed"; error: string }> {
   try {
     const db = await dbForRequest();

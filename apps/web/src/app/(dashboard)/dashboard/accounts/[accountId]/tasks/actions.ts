@@ -259,7 +259,7 @@ async function decideFromTask(
     const db = await dbForRequest();
     const task = await readTaskContact(db, accountId, taskId);
     if (!task?.contactId) return { ok: false, error: t(m, "todo.consent.decided", locale) };
-    const ctx = await textsContextFor(accountId, task.contactId, userId);
+    const ctx = await textsContextFor(accountId, task.contactId, userId, locale);
     if ("ok" in ctx) {
       if (ctx.reason === "no_number") {
         await closeStaleHoldTodo(db, accountId, taskId, task.consentEventId, userId);
@@ -294,8 +294,12 @@ export async function notAStopFromTask(accountId: string, taskId: string): Promi
 export async function undoHoldDecisionFromTask(
   accountId: string, contactId: string, eventId: string, reopenTaskIds: string[],
 ): Promise<TextsActionResult> {
-  const { userId } = await requireAccountAccess(accountId);
-  const ctx = await textsContextFor(accountId, contactId, userId);
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  // Review fix round (I-1): this action resolved no locale at all before calling
+  // textsContextFor, so its own failure path (ctx.error, returned as-is below) was always
+  // English regardless of who clicked Undo on a hold decision from the To do tray.
+  const locale = await resolveTaskLocale(accountId, isAgency);
+  const ctx = await textsContextFor(accountId, contactId, userId, locale);
   if ("ok" in ctx) return ctx;
   const result = await undoHoldDecision(ctx, eventId, reopenTaskIds);
   if (result.ok) revalidatePath(tasksPath(accountId));

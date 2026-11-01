@@ -25,9 +25,9 @@ beforeEach(() => {
  * own errors to read later. The Texts row's own fix (texts-context.ts), mirrored for email.
  */
 describe("emailContextFor reads the reader's own locale (S-10 leftovers item 7)", () => {
-  it("a contact with no email fails with reason 'no_email', in English by default", async () => {
+  it("a contact with no email fails with reason 'no_email', in English when given 'en'", async () => {
     getContact.mockResolvedValue({ email: null });
-    const result = await emailContextFor("a1", "c1", "user_1");
+    const result = await emailContextFor("a1", "c1", "user_1", "en");
     expect(result).toEqual({ ok: false, reason: "no_email", error: m["contact.email.noEmail"] });
   });
 
@@ -48,12 +48,5 @@ describe("emailContextFor reads the reader's own locale (S-10 leftovers item 7)"
     const result = await emailContextFor("a1", "c1", "user_1", "es");
     expect("ok" in result).toBe(false);
     if (!("ok" in result)) expect(result.locale).toBe("es");
-  });
-
-  it("defaults to English with no locale given, so a predating caller is unchanged", async () => {
-    getContact.mockResolvedValue({ email: "ana@example.com" });
-    const result = await emailContextFor("a1", "c1", "user_1");
-    expect("ok" in result).toBe(false);
-    if (!("ok" in result)) expect(result.locale).toBe("en");
   });
 });
