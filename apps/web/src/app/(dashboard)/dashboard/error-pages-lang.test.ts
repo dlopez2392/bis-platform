@@ -16,7 +16,9 @@ import DashboardNotFound from "./not-found";
 import DashboardError from "./error";
 
 const inLocale = (locale: "en" | "es", el: React.ReactElement) =>
-  renderToStaticMarkup(createElement(LocaleProvider, { locale, children: el }));
+  // `el` goes in as createElement's child argument (react/no-children-prop); the props are asserted because
+  // LocaleProvider's type requires `children` in props, which createElement supplies from that argument.
+  renderToStaticMarkup(createElement(LocaleProvider, { locale } as { locale: "en" | "es"; children: React.ReactNode }, el));
 
 describe("dashboard not-found", () => {
   it("in Spanish: Spanish words under lang=\"es\" (mutation: drop lang={locale} → FAILS)", () => {
