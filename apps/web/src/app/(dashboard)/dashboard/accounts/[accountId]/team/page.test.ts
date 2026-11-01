@@ -105,7 +105,7 @@ describe("the Team page", () => {
     expect(isValidElement(fallback) && fallback.type).toBe(TeamSkeleton);
     const child = boundary!.props.children as ReactElement<Record<string, unknown>>;
     expect(child.type).toBe(section.TeamSection);
-    expect(child.props).toEqual({ accountId: "a1", viewer: "owner", locale: "en" });
+    expect(child.props).toEqual({ accountId: "a1", viewer: "owner", locale: "en", pseudo: false });
   });
 
   it("the agency sees the agency's copy (mutation: viewer always owner -> FAILS)", async () => {

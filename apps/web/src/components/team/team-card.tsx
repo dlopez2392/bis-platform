@@ -15,8 +15,7 @@ import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import { cn } from "@/lib/utils";
 import { isAccountRole, isPersonLanguage, type PendingInvite } from "@/lib/team/team-view";
@@ -65,7 +64,7 @@ const INVITE_ROW = `border-t border-dashed border-[var(--line-strong)] py-[7px] 
 const INLINE_TRIGGER = "h-8 border-transparent bg-transparent px-1.5 shadow-none hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)] dark:bg-transparent dark:hover:bg-[var(--surface-2)]";
 
 export function TeamCard({
-  members, pending, room, clerkUnavailable, defaultLanguage, viewer, actions, locale = "en",
+  members, pending, room, clerkUnavailable, defaultLanguage, viewer, actions, locale = "en", pseudo = false,
 }: {
   members: TeamMember[];
   pending: PendingInvite[];
@@ -79,32 +78,37 @@ export function TeamCard({
    *  existing caller (the agency's Settings card, before this task) is
    *  unaffected; the client's own Team page passes its resolved locale. */
   locale?: Locale;
+  /** S-10 T9a: the QA pseudo-locale (`requestPseudoMode`), a prop like every
+   *  other card on a pseudo-wired page. Default `false` so every
+   *  pre-existing caller renders byte-identical to before. */
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const full = room !== null && room <= 0;
-  const roomLine = roomCopy(room, viewer, locale);
-  const empty = emptyCopy(viewer, members.length, pending.length, clerkUnavailable, locale);
+  const roomLine = roomCopy(room, viewer, locale, pseudo);
+  const empty = emptyCopy(viewer, members.length, pending.length, clerkUnavailable, locale, pseudo);
 
   return (
     <Card id="team" className="scroll-mt-24">
       <CardHeader>
-        <CardTitle>{t(m, "team.title", locale)}</CardTitle>
-        <CardDescription>{t(m, "team.body", locale)}</CardDescription>
+        <CardTitle>{tr.text("team.title")}</CardTitle>
+        <CardDescription>{tr.text("team.body")}</CardDescription>
         <CardAction>
-          <InviteDialog actions={actions} viewer={viewer} defaultLanguage={defaultLanguage} disabled={full} locale={locale} />
+          <InviteDialog actions={actions} viewer={viewer} defaultLanguage={defaultLanguage} disabled={full} locale={locale} pseudo={pseudo} />
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-4">
         {clerkUnavailable ? (
-          <Notice tone="warn" className="text-foreground">{t(m, "team.clerkUnavailable", locale)}</Notice>
+          <Notice tone="warn" className="text-foreground">{tr.text("team.clerkUnavailable")}</Notice>
         ) : null}
 
         {members.length + pending.length > 0 ? (
-          <ul className="flex flex-col" aria-label={t(m, "team.title", locale)}>
+          <ul className="flex flex-col" aria-label={tr.text("team.title")}>
             {members.map((member) => (
-              <MemberRow key={member.userId} member={member} defaultLanguage={defaultLanguage} viewer={viewer} actions={actions} locale={locale} />
+              <MemberRow key={member.userId} member={member} defaultLanguage={defaultLanguage} viewer={viewer} actions={actions} locale={locale} pseudo={pseudo} />
             ))}
             {pending.map((invite) => (
-              <InviteRow key={invite.id} invite={invite} viewer={viewer} actions={actions} locale={locale} />
+              <InviteRow key={invite.id} invite={invite} viewer={viewer} actions={actions} locale={locale} pseudo={pseudo} />
             ))}
           </ul>
         ) : null}
@@ -119,22 +123,26 @@ export function TeamCard({
           )
         ) : null}
 
-        <p className="text-xs text-muted-foreground">{t(m, "team.ownerHelp", locale)}</p>
+        <p className="text-xs text-muted-foreground">{tr.text("team.ownerHelp")}</p>
       </CardContent>
     </Card>
   );
 }
 
 function MemberRow({
-  member, defaultLanguage, viewer, actions, locale = "en",
-}: { member: TeamMember; defaultLanguage: PersonLanguage; viewer: TeamViewer; actions: BoundTeamActions; locale?: Locale }) {
+  member, defaultLanguage, viewer, actions, locale = "en", pseudo = false,
+}: {
+  member: TeamMember; defaultLanguage: PersonLanguage; viewer: TeamViewer; actions: BoundTeamActions;
+  locale?: Locale; pseudo?: boolean;
+}) {
   const [busy, startTransition] = useTransition();
+  const tr = makeTr(locale, pseudo);
   const name = displayName(member);
   // NULL means "follows the company's language" (spec §5); it is shown as
   // the language it resolves to.
   const language = member.language ?? defaultLanguage;
-  const rolePills = rolePill(locale);
-  const languageNames = languageName(locale);
+  const rolePills = rolePill(locale, pseudo);
+  const languageNames = languageName(locale, pseudo);
   return (
     <li className={ROW} data-team-row={member.userId}>
       <div className="min-w-0 flex-1">
@@ -148,7 +156,7 @@ function MemberRow({
           if (isAccountRole(v) && v !== member.role) startTransition(() => changeRole(actions, member, v, viewer, locale));
         }}
       >
-        <SelectTrigger size="sm" aria-label={fill(t(m, "team.roleFor", locale), { name })} className={INLINE_TRIGGER}>
+        <SelectTrigger size="sm" aria-label={fill(tr.text("team.roleFor"), { name })} className={INLINE_TRIGGER}>
           <SelectValue>
             <DotPill dense {...rolePills[member.role]} data-status={member.role} />
           </SelectValue>
@@ -157,7 +165,7 @@ function MemberRow({
           {(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)}
         </SelectContent>
       </Select>
-      <DotPill dense {...statusPill(locale).active} data-status="active" />
+      <DotPill dense {...statusPill(locale, pseudo).active} data-status="active" />
       <Select
         value={language}
         disabled={busy}
@@ -165,7 +173,7 @@ function MemberRow({
           if (isPersonLanguage(v) && v !== language) startTransition(() => changeLanguage(actions, member, v, viewer, locale));
         }}
       >
-        <SelectTrigger size="sm" aria-label={fill(t(m, "team.languageFor", locale), { name })} className={INLINE_TRIGGER}>
+        <SelectTrigger size="sm" aria-label={fill(tr.text("team.languageFor"), { name })} className={INLINE_TRIGGER}>
           <SelectValue>{languageNames[language]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
@@ -174,15 +182,15 @@ function MemberRow({
       </Select>
       <Button
         variant="ghost" size="sm" disabled={busy} className="justify-self-end"
-        aria-label={fill(t(m, "team.removeName", locale), { name })}
+        aria-label={fill(tr.text("team.removeName"), { name })}
         onClick={() => startTransition(() => removeMember(actions, member, viewer, Date.now, locale))}
       >
-        {t(m, "team.remove", locale)}
+        {tr.text("team.remove")}
       </Button>
       {/* Its own full-width line at the row's foot rather than inside the
           role column: that column is 8.5rem, and the sentence would wrap to
           three lines there and push the row's rule out of line. */}
-      <RoleHelp role={member.role} className="basis-full sm:col-span-full" locale={locale} />
+      <RoleHelp role={member.role} className="basis-full sm:col-span-full" locale={locale} pseudo={pseudo} />
     </li>
   );
 }
@@ -192,40 +200,44 @@ function MemberRow({
  * when Technician is chosen, and on a Technician's row. Nothing for Owner or
  * Staff, whose access the card's own help line already states.
  */
-export function RoleHelp({ role, className, locale = "en" }: { role: AccountRole; className?: string; locale?: Locale }) {
+export function RoleHelp({
+  role, className, locale = "en", pseudo = false,
+}: { role: AccountRole; className?: string; locale?: Locale; pseudo?: boolean }) {
   if (role !== "technician") return null;
-  return <p className={cn("text-muted-foreground text-xs", className)}>{t(m, "team.roleHelp.technician", locale)}</p>;
+  return <p className={cn("text-muted-foreground text-xs", className)}>{makeTr(locale, pseudo).text("team.roleHelp.technician")}</p>;
 }
 
 /** An invitation can only be cancelled; its role and language are what the person will get. */
 function InviteRow({
-  invite, viewer, actions, locale = "en",
-}: { invite: PendingInvite; viewer: TeamViewer; actions: BoundTeamActions; locale?: Locale }) {
+  invite, viewer, actions, locale = "en", pseudo = false,
+}: { invite: PendingInvite; viewer: TeamViewer; actions: BoundTeamActions; locale?: Locale; pseudo?: boolean }) {
   const [busy, startTransition] = useTransition();
-  const rolePills = rolePill(locale);
-  const languageNames = languageName(locale);
+  const tr = makeTr(locale, pseudo);
+  const rolePills = rolePill(locale, pseudo);
+  const languageNames = languageName(locale, pseudo);
   return (
     <li className={INVITE_ROW} data-team-invite={invite.id}>
       <p className="min-w-0 flex-1 truncate text-muted-foreground">{invite.email}</p>
       <span className="px-1.5"><DotPill dense {...rolePills[invite.role]} data-status={invite.role} /></span>
-      <DotPill dense {...statusPill(locale).invited} data-status="invited" />
+      <DotPill dense {...statusPill(locale, pseudo).invited} data-status="invited" />
       <span className="px-1.5 text-[13px] text-muted-foreground">{languageNames[invite.language]}</span>
       <Button
         variant="ghost" size="sm" disabled={busy} className="justify-self-end"
-        aria-label={fill(t(m, "team.revokeFor", locale), { email: invite.email })}
+        aria-label={fill(tr.text("team.revokeFor"), { email: invite.email })}
         onClick={() => startTransition(() => revokeInvite(actions, invite, viewer, locale))}
       >
-        {t(m, "team.revoke", locale)}
+        {tr.text("team.revoke")}
       </Button>
     </li>
   );
 }
 
 /** Takes `pending` by hand: useFormStatus reports only for `action`-prop forms, and this one has none. */
-function SendButton({ pending, locale = "en" }: { pending: boolean; locale?: Locale }) {
+function SendButton({ pending, locale = "en", pseudo = false }: { pending: boolean; locale?: Locale; pseudo?: boolean }) {
+  const tr = makeTr(locale, pseudo);
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? t(m, "team.invite.sending", locale) : t(m, "team.invite.send", locale)}
+      {pending ? tr.text("team.invite.sending") : tr.text("team.invite.send")}
     </Button>
   );
 }
@@ -245,14 +257,18 @@ function SendButton({ pending, locale = "en" }: { pending: boolean; locale?: Loc
  * closes, and its content unmounts.
  */
 function InviteDialog({
-  actions, viewer, defaultLanguage, disabled, locale = "en",
-}: { actions: BoundTeamActions; viewer: TeamViewer; defaultLanguage: PersonLanguage; disabled: boolean; locale?: Locale }) {
+  actions, viewer, defaultLanguage, disabled, locale = "en", pseudo = false,
+}: {
+  actions: BoundTeamActions; viewer: TeamViewer; defaultLanguage: PersonLanguage; disabled: boolean;
+  locale?: Locale; pseudo?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const defaultRole: AccountRole = "staff";
   const [role, setRole] = useState<AccountRole>(defaultRole);
-  const rolePills = rolePill(locale);
-  const languageNames = languageName(locale);
+  const tr = makeTr(locale, pseudo);
+  const rolePills = rolePill(locale, pseudo);
+  const languageNames = languageName(locale, pseudo);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     const refusal = await inviteMember(actions, formData, viewer, locale);
     if (refusal) { setError(refusal); return; }
@@ -262,34 +278,34 @@ function InviteDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) { setError(null); setRole(defaultRole); } }}>
       <DialogTrigger asChild>
-        <Button disabled={disabled}><UserPlus aria-hidden />{t(m, "team.invite", locale)}</Button>
+        <Button disabled={disabled}><UserPlus aria-hidden />{tr.text("team.invite")}</Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t(m, "team.invite.title", locale)}</DialogTitle>
-          <DialogDescription>{t(m, "team.invite.body", locale)}</DialogDescription>
+          <DialogTitle>{tr.text("team.invite.title")}</DialogTitle>
+          <DialogDescription>{tr.text("team.invite.body")}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={onSubmit}
           className="space-y-4"
         >
           <div className="space-y-1.5">
-            <Label htmlFor="team-invite-email">{t(m, "team.invite.email", locale)}</Label>
+            <Label htmlFor="team-invite-email">{tr.text("team.invite.email")}</Label>
             <Input id="team-invite-email" name="email" type="email" required autoFocus autoComplete="off" />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="team-invite-role">{t(m, "team.invite.role", locale)}</Label>
+              <Label htmlFor="team-invite-role">{tr.text("team.invite.role")}</Label>
               <Select name="role" value={role} onValueChange={(v) => { if (isAccountRole(v)) setRole(v); }}>
                 <SelectTrigger id="team-invite-role" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <RoleHelp role={role} locale={locale} />
+              <RoleHelp role={role} locale={locale} pseudo={pseudo} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="team-invite-language">{t(m, "team.invite.language", locale)}</Label>
+              <Label htmlFor="team-invite-language">{tr.text("team.invite.language")}</Label>
               <Select name="language" defaultValue={defaultLanguage}>
                 <SelectTrigger id="team-invite-language" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -299,7 +315,7 @@ function InviteDialog({
             </div>
           </div>
           {error ? <Notice tone="crit" className="text-foreground">{error}</Notice> : null}
-          <SendButton pending={pending} locale={locale} />
+          <SendButton pending={pending} locale={locale} pseudo={pseudo} />
         </form>
       </DialogContent>
     </Dialog>
@@ -314,12 +330,13 @@ function InviteDialog({
  * keeps its id: the hash scroll runs once, while this is showing.
  * `/team/loading.tsx` and every Suspense fallback share it.
  */
-export function TeamSkeleton({ locale = "en" }: { locale?: Locale }) {
+export function TeamSkeleton({ locale = "en", pseudo = false }: { locale?: Locale; pseudo?: boolean }) {
+  const tr = makeTr(locale, pseudo);
   return (
-    <Card id="team" className="scroll-mt-24" aria-busy="true" aria-label={t(m, "team.title", locale)}>
+    <Card id="team" className="scroll-mt-24" aria-busy="true" aria-label={tr.text("team.title")}>
       <CardHeader>
-        <CardTitle>{t(m, "team.title", locale)}</CardTitle>
-        <CardDescription>{t(m, "team.body", locale)}</CardDescription>
+        <CardTitle>{tr.text("team.title")}</CardTitle>
+        <CardDescription>{tr.text("team.body")}</CardDescription>
         <CardAction><Skeleton className="h-9 w-36" /></CardAction>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -350,15 +367,16 @@ export function TeamSkeleton({ locale = "en" }: { locale?: Locale }) {
  * Says why there is nothing to manage and where it is turned on, instead
  * of an Invite that the server would refuse with team.accessOff.
  */
-export function TeamAccessOff({ locale = "en" }: { locale?: Locale }) {
+export function TeamAccessOff({ locale = "en", pseudo = false }: { locale?: Locale; pseudo?: boolean }) {
+  const tr = makeTr(locale, pseudo);
   return (
     <Card id="team" className="scroll-mt-24">
       <CardHeader>
-        <CardTitle>{t(m, "team.title", locale)}</CardTitle>
-        <CardDescription>{t(m, "team.body", locale)}</CardDescription>
+        <CardTitle>{tr.text("team.title")}</CardTitle>
+        <CardDescription>{tr.text("team.body")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <Notice tone="warn" className="text-foreground">{t(m, "team.accessOffNote", locale)}</Notice>
+        <Notice tone="warn" className="text-foreground">{tr.text("team.accessOffNote")}</Notice>
       </CardContent>
     </Card>
   );
@@ -369,15 +387,16 @@ export function TeamAccessOff({ locale = "en" }: { locale?: Locale }) {
  * Rendered in place of the card so a failed read never takes the rest of
  * Settings (or the Team page's header) down with it.
  */
-export function TeamLoadError({ locale = "en" }: { locale?: Locale }) {
+export function TeamLoadError({ locale = "en", pseudo = false }: { locale?: Locale; pseudo?: boolean }) {
+  const tr = makeTr(locale, pseudo);
   return (
     <Card id="team" className="scroll-mt-24">
       <CardHeader>
-        <CardTitle>{t(m, "team.title", locale)}</CardTitle>
-        <CardDescription>{t(m, "team.body", locale)}</CardDescription>
+        <CardTitle>{tr.text("team.title")}</CardTitle>
+        <CardDescription>{tr.text("team.body")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <Notice tone="crit" className="text-foreground">{t(m, "team.loadFailed", locale)}</Notice>
+        <Notice tone="crit" className="text-foreground">{tr.text("team.loadFailed")}</Notice>
       </CardContent>
     </Card>
   );
