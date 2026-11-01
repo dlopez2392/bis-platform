@@ -328,7 +328,7 @@ const MOVE_EMPTY = { ok: false, error: "conversation.holding.moveEmpty" } as con
 const MOVE_ROLE = { ok: false, error: "conversation.holding.moveRole" } as const;
 
 export async function moveHoldingThreadAction(
-  accountId: string, conversationId: string, toContactId: string,
+  accountId: string, locale: Locale, conversationId: string, toContactId: string,
 ): Promise<MoveHoldingResult> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access)) return MOVE_ROLE;
@@ -351,7 +351,11 @@ export async function moveHoldingThreadAction(
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
     return {
       ok: true, toConversationId: target.id,
-      name: contactDisplayName({ first_name: person.first_name, last_name: person.last_name }),
+      // S-10 T9a: the mover's own reader locale — the "No name" fallback was English even for a
+      // Spanish-reading operator; a named target almost always has a name, so this matters only for
+      // that edge case, but it is the same `name` interpolated verbatim into the Spanish
+      // conversation.holding.moved toast (holding-move-handlers.ts), so it must agree.
+      name: contactDisplayName({ first_name: person.first_name, last_name: person.last_name }, locale),
       undo: { moveId: moved.moveId, fromConversationId: conversationId, toConversationId: target.id },
     };
   } catch (e) {

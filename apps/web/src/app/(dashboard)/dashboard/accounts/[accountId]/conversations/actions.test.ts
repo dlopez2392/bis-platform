@@ -183,6 +183,7 @@ import {
   readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed, moveHoldingThread, readBillingStanding,
 } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { sendRejectedReason } from "./send-errors";
 import { SmsProviderError } from "@/lib/sms/types";
 
@@ -879,7 +880,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
     it("refuses a Technician before any read is made (mutation: drop the role check -> FAILS)", async () => {
       requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "technician" });
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveRole" });
       expect(callerCanSeeMock).not.toHaveBeenCalled();
@@ -906,7 +907,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
       vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 9, messageIds: [], callIds: [] });
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result.ok).toBe(true);
     });
@@ -919,7 +920,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
       vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 41, messageIds: ["m1"], callIds: ["k1"] });
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "a1", CONV);
       expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["a1", CT2]);
@@ -930,6 +931,21 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
         undo: { moveId: 41, fromConversationId: CONV, toConversationId: BC },
       });
     });
+
+    // S-10 T9a: `name` is interpolated verbatim into the Spanish "conversation.holding.moved" toast
+    // (holding-move-handlers.ts) — the English "(no name)" fallback leaking through for a nameless
+    // target would read as two languages in one sentence.
+    it("a nameless target's name reads in the mover's own locale, not always English (mutation: call contactDisplayName with no locale → FAILS)", async () => {
+      requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+      vi.mocked(getContact).mockResolvedValueOnce({ id: CT2, first_name: null, last_name: null, holds_shared_number: false } as never);
+      vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
+      vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 41, messageIds: [], callIds: [] });
+
+      const result = await moveHoldingThreadAction("a1", "es", CONV, CT2);
+
+      expect(result).toMatchObject({ name: t(m, "contact.noName", "es") });
+      expect(result).not.toMatchObject({ name: m["contact.noName"] });
+    });
   });
 
   describe("moveFailed", () => {
@@ -939,7 +955,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
         { id: CT2, first_name: "Caller", last_name: null, holds_shared_number: true } as never,
       );
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       expect(vi.mocked(ensureConversation)).not.toHaveBeenCalled();
@@ -950,7 +966,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
       vi.mocked(getContact).mockResolvedValueOnce(null);
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       expect(vi.mocked(ensureConversation)).not.toHaveBeenCalled();
@@ -960,7 +976,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
       callerCanSeeMock.mockResolvedValueOnce(false);
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       expect(vi.mocked(getContact)).not.toHaveBeenCalled();
@@ -969,7 +985,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
     it("refuses a non-UUID conversation id without calling callerCanSee (mutation: drop the isUuid check -> FAILS)", async () => {
       requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
 
-      const result = await moveHoldingThreadAction("a1", "not-a-uuid", CT2);
+      const result = await moveHoldingThreadAction("a1", "en", "not-a-uuid", CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       expect(callerCanSeeMock).not.toHaveBeenCalled();
@@ -978,7 +994,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
     it("refuses a non-UUID target contact id without calling callerCanSee (mutation: drop the isUuid check -> FAILS)", async () => {
       requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
 
-      const result = await moveHoldingThreadAction("a1", CONV, "not-a-uuid");
+      const result = await moveHoldingThreadAction("a1", "en", CONV, "not-a-uuid");
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       expect(callerCanSeeMock).not.toHaveBeenCalled();
@@ -992,7 +1008,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
         vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
         vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status });
 
-        const result = await moveHoldingThreadAction("a1", CONV, CT2);
+        const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
         expect(result).toEqual({ ok: false, error: "conversation.holding.moveFailed" });
       },
@@ -1008,7 +1024,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       const { revalidatePath } = await import("next/cache");
       vi.mocked(revalidatePath).mockClear();
 
-      const result = await moveHoldingThreadAction("a1", CONV, CT2);
+      const result = await moveHoldingThreadAction("a1", "en", CONV, CT2);
 
       expect(result).toEqual({ ok: false, error: "conversation.holding.moveEmpty" });
       expect(vi.mocked(revalidatePath)).toHaveBeenCalledWith("/dashboard/accounts/a1/conversations");
@@ -1060,7 +1076,7 @@ describe("moveHoldingThreadAction / undoMoveHoldingThreadAction (S-47e E8)", () 
       vi.mocked(ensureConversation).mockResolvedValueOnce({ id: BC, created: false });
       vi.mocked(moveHoldingThread).mockResolvedValueOnce({ status: "ok", moveId: 50, messageIds: [], callIds: [] });
 
-      await moveHoldingThreadAction("a2", CONV, CT2);
+      await moveHoldingThreadAction("a2", "en", CONV, CT2);
 
       expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "a2", CONV);
       expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["a2", CT2]);
