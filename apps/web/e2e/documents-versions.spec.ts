@@ -157,7 +157,12 @@ test("2. the viewer's Versions list: newest first, the current one marked, the o
   await expect(list.locator(`[data-document-version-row="${v2!.id}"]`)).toContainText(m["documents.versionCurrent"]);
   await expect(list.locator(`[data-document-version-row="${v2!.id}"]`).getByRole("button")).toHaveCount(0);
 
-  const download = page.waitForEvent("download");
+  // The viewer shows the CURRENT version (v2) inline, in an iframe on a VIEW url, and headless Chromium has no
+  // PDF viewer, so that load is itself a "download" event. It lands whenever the view URL's mint does, often
+  // AFTER this wait is armed, and was caught instead of the button's file (CI, twice: v2's object id). The
+  // button's file is minted in DOWNLOAD mode, whose signed URL alone carries `download=` (storage-js
+  // createSignedUrl's `download` option), so wait for that one; the assertions below still read its path.
+  const download = page.waitForEvent("download", { predicate: (d) => new URL(d.url()).searchParams.has("download") });
   await list.getByRole("button", { name: fill(m["documents.downloadVersion"], { n: 1 }), exact: true }).click();
   const file = await download;
   // A signed URL on the OLDER version's own object (mutation: download ignores the version id -> v2's path -> FAILS).
