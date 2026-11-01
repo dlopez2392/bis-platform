@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { NumberChip } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup/steps/step-shared";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 
 export type AlertPhoneActionResult = { ok: true } | { ok: false; error: string };
@@ -80,7 +82,7 @@ export type AlertPhoneStartResult = { ok: true; phone: string } | { ok: false; e
  */
 export function AlertPhoneCard({
   isAgency, accountId, alertPhone, smsNotReady,
-  clearAction, startVerificationAction, confirmVerificationAction,
+  clearAction, startVerificationAction, confirmVerificationAction, locale = "en",
 }: {
   isAgency: boolean;
   /** For the agency-only Notice's link to this account's own Checklist —
@@ -112,6 +114,10 @@ export function AlertPhoneCard({
   /** Consumes a code against the claimed number and, only on a match, writes
    *  `accounts.alert_phone`. */
   confirmVerificationAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
+  /** S-10 T6: the reader's own locale. Optional, defaulting to "en" so the
+   *  agency's Settings card (which never passes one) renders byte-identical
+   *  to before; the client's own Branding page passes its resolved locale. */
+  locale?: Locale;
 }) {
   // Controlled, unlike the pre-0036 card's `defaultValue`: the button's own
   // label needs to react to what is typed, not to the value the page was
@@ -134,14 +140,14 @@ export function AlertPhoneCard({
       try {
         result = await clearAction(formData);
       } catch {
-        toast.error(m["common.actionCrashed"]);
+        toast.error(t(m, "common.actionCrashed", locale));
         return;
       }
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      toast.success(m["settings.alertPhoneSaved"]);
+      toast.success(t(m, "settings.alertPhoneSaved", locale));
       return;
     }
 
@@ -150,14 +156,14 @@ export function AlertPhoneCard({
     try {
       result = await startVerificationAction(formData);
     } catch {
-      toast.error(m["common.actionCrashed"]);
+      toast.error(t(m, "common.actionCrashed", locale));
       return;
     }
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    toast.success(m["settings.alertPhoneCodeSent"]);
+    toast.success(t(m, "settings.alertPhoneCodeSent", locale));
     // Displayed via NumberChip in the pending phase below: the E.164 the
     // SERVER normalised and texted, never a client-side guess at it.
     setPendingPhone(result.phone);
@@ -171,7 +177,7 @@ export function AlertPhoneCard({
     try {
       result = await confirmVerificationAction(formData);
     } catch {
-      toast.error(m["common.actionCrashed"]);
+      toast.error(t(m, "common.actionCrashed", locale));
       return;
     }
     if (!result.ok) {
@@ -181,7 +187,7 @@ export function AlertPhoneCard({
       toast.error(result.error);
       return;
     }
-    toast.success(m["settings.alertPhoneSaved"]);
+    toast.success(t(m, "settings.alertPhoneSaved", locale));
     setPhase("idle");
     setCode("");
   });
@@ -200,9 +206,9 @@ export function AlertPhoneCard({
         toast.error(result.error);
         return;
       }
-      toast.success(m["settings.alertPhoneCodeSent"]);
+      toast.success(t(m, "settings.alertPhoneCodeSent", locale));
     } catch {
-      toast.error(m["common.actionCrashed"]);
+      toast.error(t(m, "common.actionCrashed", locale));
     } finally {
       setResending(false);
     }
@@ -219,24 +225,24 @@ export function AlertPhoneCard({
   // setup-shell.tsx's own {steps} split does: the slot is where a live
   // element (a Link, a NumberChip) goes instead of a joined string.
   const [notReadyLead = "", notReadyTail = ""] =
-    m["settings.alertPhoneNotReady"].split("{checklistLink}");
+    t(m, "settings.alertPhoneNotReady", locale).split("{checklistLink}");
   const [pendingHintLead = "", pendingHintTail = ""] =
-    m["settings.alertPhonePendingHint"].split("{value}");
+    t(m, "settings.alertPhonePendingHint", locale).split("{value}");
   const [clientOnLead = "", clientOnTail = ""] =
-    m["settings.alertPhoneClientOn"].split("{value}");
+    t(m, "settings.alertPhoneClientOn", locale).split("{value}");
   const [clientNotReadyLead = "", clientNotReadyTail = ""] =
-    m["settings.alertPhoneClientNotReady"].split("{value}");
+    t(m, "settings.alertPhoneClientNotReady", locale).split("{value}");
 
   return (
     <Card id="alert-phone" className="scroll-mt-24">
       <CardHeader>
-        <CardTitle>{m["settings.alertPhone"]}</CardTitle>
+        <CardTitle>{t(m, "settings.alertPhone", locale)}</CardTitle>
       </CardHeader>
       <CardContent>
         {isAgency && phase === "idle" ? (
           <form onSubmit={onSendSubmit} className="flex flex-col gap-3">
             <fieldset className="flex flex-wrap items-center gap-4">
-              <legend className="sr-only">{m["settings.alertPhoneCountry"]}</legend>
+              <legend className="sr-only">{t(m, "settings.alertPhoneCountry", locale)}</legend>
               {(["US", "MX"] as const).map((c) => (
                 <label key={c} className="flex items-center gap-2 text-sm text-card-foreground">
                   <input
@@ -247,23 +253,23 @@ export function AlertPhoneCard({
                     onChange={() => setCountry(c)}
                     className="size-4 accent-[var(--accent)]"
                   />
-                  {c === "US" ? m["settings.alertPhoneCountryUs"] : m["settings.alertPhoneCountryMx"]}
+                  {c === "US" ? t(m, "settings.alertPhoneCountryUs", locale) : t(m, "settings.alertPhoneCountryMx", locale)}
                 </label>
               ))}
             </fieldset>
-            <Label htmlFor="alertPhone" className="sr-only">{m["settings.alertPhone"]}</Label>
+            <Label htmlFor="alertPhone" className="sr-only">{t(m, "settings.alertPhone", locale)}</Label>
             <Input
               id="alertPhone"
               name="alertPhone"
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder={m["settings.alertPhonePlaceholder"]}
+              placeholder={t(m, "settings.alertPhonePlaceholder", locale)}
             />
-            <p className="text-xs text-muted-foreground">{m["settings.alertPhoneHint"]}</p>
-            <p className="text-xs text-muted-foreground">{m["settings.alertPhoneNeedsVerification"]}</p>
+            <p className="text-xs text-muted-foreground">{t(m, "settings.alertPhoneHint", locale)}</p>
+            <p className="text-xs text-muted-foreground">{t(m, "settings.alertPhoneNeedsVerification", locale)}</p>
             {!alertPhone && (
-              <p className="text-xs text-muted-foreground">{m["settings.alertPhoneOff"]}</p>
+              <p className="text-xs text-muted-foreground">{t(m, "settings.alertPhoneOff", locale)}</p>
             )}
             {smsNotReady && (
               <Notice tone="warn" className="text-foreground">
@@ -272,17 +278,17 @@ export function AlertPhoneCard({
                   href={`/dashboard/accounts/${accountId}/checklist`}
                   className="underline underline-offset-2"
                 >
-                  {m["nav.checklist"]}
+                  {t(m, "nav.checklist", locale)}
                 </Link>
                 {notReadyTail}
               </Notice>
             )}
             <Button type="submit" disabled={sendPending} className="self-start">
               {sendPending
-                ? m["common.saving"]
+                ? t(m, "common.saving", locale)
                 : trimmedPhone
-                  ? m["settings.alertPhoneSendCode"]
-                  : m["common.save"]}
+                  ? t(m, "settings.alertPhoneSendCode", locale)
+                  : t(m, "common.save", locale)}
             </Button>
           </form>
         ) : isAgency ? (
@@ -292,7 +298,7 @@ export function AlertPhoneCard({
               {pendingHintLead}<NumberChip e164={pendingPhone} />{pendingHintTail}
             </p>
             <Label htmlFor="alertPhoneCode" className="sr-only">
-              {m["settings.alertPhoneCodeLabel"]}
+              {t(m, "settings.alertPhoneCodeLabel", locale)}
             </Label>
             <Input
               id="alertPhoneCode"
@@ -303,18 +309,18 @@ export function AlertPhoneCard({
               maxLength={6}
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder={m["settings.alertPhoneCodePlaceholder"]}
+              placeholder={t(m, "settings.alertPhoneCodePlaceholder", locale)}
               autoFocus
             />
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={confirmPending}>
-                {confirmPending ? m["common.saving"] : m["settings.alertPhoneConfirmCode"]}
+                {confirmPending ? t(m, "common.saving", locale) : t(m, "settings.alertPhoneConfirmCode", locale)}
               </Button>
               <Button type="button" variant="ghost" disabled={resending} onClick={handleResend}>
-                {m["settings.alertPhoneResendCode"]}
+                {t(m, "settings.alertPhoneResendCode", locale)}
               </Button>
               <Button type="button" variant="ghost" onClick={handleChangeNumber}>
-                {m["settings.alertPhoneChangeNumber"]}
+                {t(m, "settings.alertPhoneChangeNumber", locale)}
               </Button>
             </div>
           </form>
@@ -322,14 +328,14 @@ export function AlertPhoneCard({
           <div className="flex flex-col gap-2">
             <p className="text-sm text-card-foreground">
               {!alertPhone ? (
-                m["settings.alertPhoneClientOff"]
+                t(m, "settings.alertPhoneClientOff", locale)
               ) : smsNotReady ? (
                 <>{clientNotReadyLead}<NumberChip e164={alertPhone} />{clientNotReadyTail}</>
               ) : (
                 <>{clientOnLead}<NumberChip e164={alertPhone} />{clientOnTail}</>
               )}
             </p>
-            <p className="text-xs text-muted-foreground">{m["settings.alertPhoneClientBody"]}</p>
+            <p className="text-xs text-muted-foreground">{t(m, "settings.alertPhoneClientBody", locale)}</p>
           </div>
         )}
       </CardContent>

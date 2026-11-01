@@ -25,7 +25,7 @@ vi.mock("sonner", () => ({ toast: toasts }));
 
 const { TeamCard, TeamSkeleton, RoleHelp } = await import("./team-card");
 const { inviteMember, changeRole, changeLanguage, removeMember, revokeInvite, TEAM_TOAST_MS } = await import("./team-handlers");
-const { teamErrorCopy, roomCopy } = await import("./team-copy");
+const { teamErrorCopy, roomCopy, emptyCopy, fill } = await import("./team-copy");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ACTIONS_SRC = readFileSync(
@@ -186,7 +186,7 @@ describe("the invite form keeps what was typed when an invite is refused", () =>
   it("the send button takes pending by hand, since useFormStatus reports only for action forms (mutation: read useFormStatus again -> FAILS)", () => {
     expect(CARD_SRC).not.toContain("useFormStatus(");
     expect(CARD_SRC).not.toMatch(/import {[^}]*useFormStatus/);
-    expect(form).toContain("<SendButton pending={pending} />");
+    expect(form).toContain("<SendButton pending={pending} locale={locale} />");
   });
 });
 
@@ -346,6 +346,20 @@ describe("handlers: applied at once, with an Undo (rule 6)", () => {
     expect(toasts.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
   });
 
+  // Review fix round (minor): a Team handler's own toast AND its Undo
+  // label, in Spanish — every handler reads locale through to both
+  // t(m, "team.removed", locale) and t(m, "common.undo", locale), not just
+  // the catalogue string's own grammar (which "the Spanish role-change
+  // toast" block below already covers).
+  it("remove: the toast and its Undo label both read in Spanish when locale is es (mutation: drop the locale param from either read -> FAILS)", async () => {
+    const a = actions();
+    a.remove.mockResolvedValue({ ok: true, undo: { userId: STAFF.userId } } as never);
+    await removeMember(a, STAFF, "owner", undefined, "es");
+    expect(toasts.success.mock.calls[0]![0]).toBe(m["team.removed.es"].replace("{name}", "tom@rio.test"));
+    const opts = toasts.success.mock.calls[0]![1] as { action: { label: string; onClick: () => void } };
+    expect(opts.action.label).toBe(m["common.undo.es"]);
+  });
+
   it("role: saved at once, Undo puts back the PREVIOUS role (mutation: undo with the new role -> FAILS)", async () => {
     const a = actions();
     a.setRole.mockResolvedValue({ ok: true, previous: "staff" } as never);
@@ -425,15 +439,15 @@ describe("Technician on the Team card", () => {
   const invite = CARD_SRC.slice(CARD_SRC.indexOf("function InviteDialog("));
   const memberRow = CARD_SRC.slice(CARD_SRC.indexOf("function MemberRow("), CARD_SRC.indexOf("function InviteRow("));
 
-  it("a Technician's role is a dot AND the word (rule 3) (mutation: drop ROLE_PILL.technician -> FAILS)", () => {
+  it("a Technician's role is a dot AND the word (rule 3) (mutation: drop rolePills.technician -> FAILS)", () => {
     expect(card({ members: [OWNER, TECH] })).toMatch(pill("technician", m["team.role.technician"]));
   });
 
   it("the invite's role select and each member's role select list technician by its word (mutation: leave either list at two roles -> FAILS)", () => {
     expect(memberRow.length).toBeGreaterThan(0);
     expect(invite.length).toBeLessThan(CARD_SRC.length);
-    expect(memberRow).toContain('(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
-    expect(invite).toContain('(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
+    expect(memberRow).toContain('(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)');
+    expect(invite).toContain('(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{rolePills[r].label}</SelectItem>)');
     expect(m["team.role.technician"]).toBe("Technician");
   });
 
@@ -445,7 +459,7 @@ describe("Technician on the Team card", () => {
 
   it("choosing Technician in the invite shows the help line: the role is held in state and RoleHelp reads it (mutation: render RoleHelp for the default role only -> FAILS)", () => {
     expect(invite).toMatch(/<Select name="role" value=\{role\} onValueChange=\{\(v\) => \{ if \(isAccountRole\(v\)\) setRole\(v\); \}\}>/);
-    expect(invite).toContain("<RoleHelp role={role} />");
+    expect(invite).toContain("<RoleHelp role={role} locale={locale} />");
   });
 
   it("a member who is a Technician carries the help line on their row; a team without one does not (mutation: drop RoleHelp from the row -> FAILS)", () => {
@@ -456,5 +470,99 @@ describe("Technician on the Team card", () => {
   it("the help line has a Spanish twin", () => {
     expect(m["team.role.technician.es"]).toBe("Técnico");
     expect(m["team.roleHelp.technician.es"]).toBe("Solo ve los clientes que usted le asigne.");
+  });
+});
+
+// S-10 T6: every team.* key already carried a Spanish twin (spec row 16: "0
+// missing .es"), but the card read every one of them with a bare m[...],
+// English regardless of the reader's own stored choice. TeamCard,
+// MemberRow, InviteRow, InviteDialog, TeamSkeleton, TeamAccessOff and
+// TeamLoadError now take an optional `locale` prop (default "en", so every
+// existing `card()` call above — none of which passes one — is unaffected)
+// and read every string through t()/fill(t(...)).
+describe("TeamCard: Spanish (S-10 T6)", () => {
+  it("the card's own title, body and help line read in Spanish (mutation: hard-code m[key] → FAILS)", () => {
+    const text = renderedText(card({ locale: "es" }));
+    expect(text).toContain(m["team.title.es"]);
+    expect(text).toContain(m["team.body.es"]);
+    expect(text).toContain(m["team.ownerHelp.es"]);
+    expect(text).not.toContain(m["team.title"]);
+  });
+
+  // Review fix round (I-3): team.body is read on the client Owner's OWN
+  // Team page, not only on the agency's Settings card describing someone
+  // else's company — "empresa" is the glossary's word for the agency's OWN
+  // account label, never for addressing the Owner about their own business
+  // (DESIGN.md §4.3: "empresa (the agency's word for an account)").
+  it("team.body.es never says 'empresa' (mutation: restore '...de esta empresa.' → FAILS)", () => {
+    expect(m["team.body.es"]).not.toMatch(/\bempresa\b/i);
+    expect(m["team.body.es"]).toBe("Las personas que pueden entrar a esta cuenta.");
+  });
+
+  it("a member's role and status pills, and their language, read in Spanish (mutation: keep rolePills/languageNames English → FAILS)", () => {
+    const html = card({ locale: "es", members: [OWNER, STAFF], pending: [] });
+    expect(html).toMatch(pill("owner", m["team.role.owner.es"]));
+    expect(html).toMatch(pill("active", m["team.status.active.es"]));
+    expect(renderedText(html)).toContain(m["team.languageName.spanish.es"]);
+  });
+
+  it("a pending invitation's role, status and language read in Spanish (mutation: keep InviteRow's pills English → FAILS)", () => {
+    const html = card({ locale: "es", members: [], pending: [INVITE] });
+    expect(html).toMatch(pill("staff", m["team.role.staff.es"]));
+    expect(html).toMatch(pill("invited", m["team.status.invited.es"]));
+    expect(renderedText(html)).toContain(m["team.languageName.spanish.es"]);
+  });
+
+  // Radix renders a CLOSED Dialog's content to nothing on the server (the
+  // suite's own "invite" source slice above exists for exactly this reason),
+  // so the dialog's own words are pinned from source, not from a render.
+  it("the invite dialog's title, body, field labels and send button read through t(), not a bare m[...] (mutation: leave InviteDialog's own m[] reads → FAILS)", () => {
+    const FULL_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+    const src = FULL_SRC.slice(FULL_SRC.indexOf("function InviteDialog("), FULL_SRC.indexOf("function TeamSkeleton("));
+    for (const key of ["team.invite", "team.invite.title", "team.invite.body", "team.invite.email", "team.invite.role", "team.invite.language"]) {
+      expect(src, key).toContain(`t(m, "${key}", locale)`);
+      expect(src, key).not.toContain(`m["${key}"]`);
+    }
+  });
+
+  it("the room line and the empty sentence read in Spanish (mutation: call roomCopy/emptyCopy with no locale → FAILS)", () => {
+    expect(renderedText(card({ locale: "es", room: 3 }))).toContain("3 personas más");
+    expect(renderedText(card({ locale: "es", room: 1 }))).toContain(m["team.room.one.es"]);
+    expect(renderedText(card({ locale: "es", members: [OWNER], pending: [] }))).toContain(m["team.empty.es"]);
+  });
+
+  it("RoleHelp and the skeleton read in Spanish (mutation: leave either in English → FAILS)", () => {
+    expect(renderedText(renderToStaticMarkup(createElement(RoleHelp, { role: "technician", locale: "es" }))).trim()).toBe(m["team.roleHelp.technician.es"]);
+    expect(renderedText(renderToStaticMarkup(createElement(TeamSkeleton, { locale: "es" })))).toContain(m["team.title.es"]);
+  });
+});
+
+describe("TeamAccessOff and TeamLoadError: Spanish (S-10 T6)", () => {
+  it("TeamAccessOff reads its note in Spanish (mutation: hard-code m[key] → FAILS)", async () => {
+    const { TeamAccessOff } = await import("./team-card");
+    const html = renderToStaticMarkup(createElement(TeamAccessOff, { locale: "es" }));
+    expect(renderedText(html)).toContain(m["team.accessOffNote.es"]);
+  });
+
+  it("TeamLoadError reads its note in Spanish (mutation: hard-code m[key] → FAILS)", async () => {
+    const { TeamLoadError } = await import("./team-card");
+    const html = renderToStaticMarkup(createElement(TeamLoadError, { locale: "es" }));
+    expect(renderedText(html)).toContain(m["team.loadFailed.es"]);
+  });
+});
+
+describe("team-copy: functions of locale (S-10 T6)", () => {
+  it("roomCopy and emptyCopy read in Spanish, with the correct plural form (mutation: skip locale in the plural branch → FAILS)", () => {
+    expect(roomCopy(4, "owner", "es")).toBe(fill(m["team.room.many.es"], { count: 4 }));
+    expect(roomCopy(1, "owner", "es")).toBe(m["team.room.one.es"]);
+    expect(roomCopy(0, "owner", "es")).toBe(m["team.full.es"]);
+    expect(roomCopy(0, "agency", "es")).toBe(m["team.full.agency.es"]);
+    expect(emptyCopy("owner", 1, 0, false, "es")).toBe(m["team.empty.es"]);
+    expect(emptyCopy("agency", 0, 0, false, "es")).toBe(m["team.empty.agency.es"]);
+  });
+
+  it("teamErrorCopy reads every code in Spanish (mutation: drop the locale param → FAILS)", () => {
+    expect(teamErrorCopy("team.lastOwner", "owner", "es")).toBe(m["team.lastOwner.es"]);
+    expect(teamErrorCopy("team.full", "agency", "es")).toBe(m["team.full.agency.es"]);
   });
 });

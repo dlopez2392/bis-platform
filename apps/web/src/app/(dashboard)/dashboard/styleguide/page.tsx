@@ -42,7 +42,7 @@ import { EMAIL_TREATMENT } from "@/lib/consent/email-row";
 import { BillingBanner } from "@/components/billing-banner";
 import { BillingPausedBanner } from "@/components/billing-paused-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
-import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
+import { paymentProcessingTreatment } from "../accounts/[accountId]/billing/client-status";
 import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -959,7 +959,7 @@ export default async function StyleguidePage({
               payment still going through, in the client's words to whoever
               opens the page (the agency's Settings card says Payment failed). */}
           <div className="w-full space-y-4">
-            <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
+            <DotPill {...paymentProcessingTreatment("en")} data-status="payment_processing" />
             <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />
           </div>
         </Section>

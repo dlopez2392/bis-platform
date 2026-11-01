@@ -137,6 +137,26 @@ describe("TeamSection", () => {
     expect(el.type).toBe(TeamLoadError);
   });
 
+  // S-10 T6: the page now resolves the reader's own locale and this
+  // section threads it through, to TeamCard and to its two non-card states.
+  it("threads locale through to TeamCard, defaulting to 'en' for a caller that passes none (mutation: drop the prop -> FAILS)", async () => {
+    const withLocale = await TeamSection({ accountId: "a1", viewer: "owner", locale: "es" });
+    expect((withLocale.props as Props).locale).toBe("es");
+    const bare = await section();
+    expect((bare.props as Props).locale).toBe("en");
+  });
+
+  it("threads locale to TeamAccessOff and TeamLoadError too (mutation: drop either prop -> FAILS)", async () => {
+    fx.account = { clerk_org_id: "org_1", client_access_enabled: false };
+    const off = await TeamSection({ accountId: "a1", viewer: "owner", locale: "es" });
+    expect(off.type).toBe(TeamAccessOff);
+    expect((off.props as Props).locale).toBe("es");
+    fx.listAccountTeam.mockRejectedValue(new Error("boom"));
+    const failed = await TeamSection({ accountId: "a1", viewer: "owner", locale: "es" });
+    expect(failed.type).toBe(TeamLoadError);
+    expect((failed.props as Props).locale).toBe("es");
+  });
+
   it("binds every action to THIS account, the account id never travelling from the browser (mutation: bind another id -> FAILS)", async () => {
     const { actions } = (await section()).props as Props;
     await actions.remove!("u1");

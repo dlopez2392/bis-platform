@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_PREVIEW_BG, resolveSidebarAccent } from "@/lib/branding/color";
@@ -80,6 +82,7 @@ export function BrandingPanel({
   action,
   removeLogoAction,
   restoreLogoAction,
+  locale = "en",
 }: {
   audience?: BrandingAudience;
   brandName: string | null;
@@ -110,8 +113,12 @@ export function BrandingPanel({
    *  account behind it; every real page binds both together. */
   removeLogoAction?: () => Promise<RemoveLogoResult>;
   restoreLogoAction?: (path: string) => Promise<RestoreLogoResult>;
+  /** S-10 T6: the reader's own locale. Optional, defaulting to "en" so the
+   *  agency's Settings card (which never passes one) renders byte-identical
+   *  to before; the client's own Branding page passes its resolved locale. */
+  locale?: Locale;
 }) {
-  const copy = panelCopy(audience);
+  const copy = panelCopy(audience, locale);
 
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
@@ -141,7 +148,7 @@ export function BrandingPanel({
   const removeLogo = () => {
     if (!removeLogoAction || !restoreLogoAction) return;
     runGuarded(removeBusy, startRemoveTransition, async () => {
-      await runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast);
+      await runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast, locale);
     });
   };
 
@@ -154,7 +161,7 @@ export function BrandingPanel({
     // message, not the guarantee.
     const picked = formData.get("logo");
     if (picked instanceof File && picked.size > MAX_LOGO_BYTES) {
-      toast.error(m["branding.tooLarge"]);
+      toast.error(t(m, "branding.tooLarge", locale));
       return;
     }
     // notifyActionResult so a stale-deployment tab REJECTING its save toasts
@@ -164,7 +171,7 @@ export function BrandingPanel({
     await notifyActionResult(() => action(formData), {
       success: (msg) => { toast.success(msg); setFileKey((k) => k + 1); },
       error: toast.error,
-    }, { success: m["branding.saved"], crashed: m["common.actionCrashed"] });
+    }, { success: t(m, "branding.saved", locale), crashed: t(m, "common.actionCrashed", locale) });
   });
   const [color, setColor] = useState(brandColor ?? "");
   const [neutral, setNeutral] = useState<string>(brandNeutral ?? "");
@@ -245,13 +252,13 @@ export function BrandingPanel({
           className="space-y-3"
         >
           <div className="space-y-1.5">
-            <Label htmlFor="brand-name">{m["branding.name"]}</Label>
+            <Label htmlFor="brand-name">{t(m, "branding.name", locale)}</Label>
             <Input id="brand-name" name="brandName" defaultValue={brandName ?? ""} required />
             <p className="text-xs text-muted-foreground">{copy.nameHint}</p>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="brand-logo">{m["branding.logo"]}</Label>
+            <Label htmlFor="brand-logo">{t(m, "branding.logo", locale)}</Label>
             <Input
               key={fileKey}
               id="brand-logo"
@@ -262,11 +269,11 @@ export function BrandingPanel({
               // the browser and anyone can send whatever they like regardless.
               accept="image/png,image/jpeg,image/webp"
             />
-            <p className="text-xs text-muted-foreground">{m["branding.logoHint"]}</p>
+            <p className="text-xs text-muted-foreground">{t(m, "branding.logoHint", locale)}</p>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="reply-to-email">{m["branding.replyTo"]}</Label>
+            <Label htmlFor="reply-to-email">{t(m, "branding.replyTo", locale)}</Label>
             {/* type="email" for the keyboard and the browser's own nudge only.
                 The address is validated server-side in setBrandingAction: this
                 is a client component and must not import @/lib/forms/guards,
@@ -279,13 +286,13 @@ export function BrandingPanel({
             />
             <p className="text-xs text-muted-foreground">{copy.replyToHint}</p>
             {replyRoute ? (() => {
-              const line = repliesLine(audience, replyRoute);
+              const line = repliesLine(audience, replyRoute, locale);
               return line ? <p data-replies-line className="text-xs text-muted-foreground">{line}</p> : null;
             })() : null}
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="mailing-address">{m["branding.mailingAddress"]}</Label>
+            <Label htmlFor="mailing-address">{t(m, "branding.mailingAddress", locale)}</Label>
             {/* Several lines on purpose: an address is several lines, and the
                 reactivation email prints it with its line breaks. Trimmed,
                 blank-means-cleared and the length cap are all enforced in
@@ -300,7 +307,7 @@ export function BrandingPanel({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="brand-color">{m["branding.color"]}</Label>
+            <Label htmlFor="brand-color">{t(m, "branding.color", locale)}</Label>
             <div className="flex items-center gap-2">
               {/* The TEXT field is what submits. A bare <input type="color">
                   always posts a value whether or not anyone touched it — that
@@ -316,7 +323,7 @@ export function BrandingPanel({
               />
               <input
                 type="color"
-                aria-label={m["branding.color"]}
+                aria-label={t(m, "branding.color", locale)}
                 value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : FORM_ACCENT_FALLBACK}
                 onChange={(e) => setColor(e.target.value)}
                 className="h-9 w-12 shrink-0 rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
@@ -326,59 +333,59 @@ export function BrandingPanel({
           </div>
 
           <RadioRow
-            legend={m["branding.neutral"]}
+            legend={t(m, "branding.neutral", locale)}
             name="brandNeutral"
             value={neutral}
             onChange={setNeutral}
             hint={copy.neutralHint}
             options={[
-              ["", m["branding.themeDefault"]],
-              ["warm", m["branding.neutralWarm"]],
-              ["cool", m["branding.neutralCool"]],
-              ["slate", m["branding.neutralSlate"]],
+              ["", t(m, "branding.themeDefault", locale)],
+              ["warm", t(m, "branding.neutralWarm", locale)],
+              ["cool", t(m, "branding.neutralCool", locale)],
+              ["slate", t(m, "branding.neutralSlate", locale)],
             ]}
           />
           <RadioRow
-            legend={m["branding.corners"]}
+            legend={t(m, "branding.corners", locale)}
             name="brandCorners"
             value={corners}
             onChange={setCorners}
             options={[
-              ["", m["branding.themeDefault"]],
-              ["sharp", m["branding.cornersSharp"]],
-              ["soft", m["branding.cornersSoft"]],
-              ["round", m["branding.cornersRound"]],
+              ["", t(m, "branding.themeDefault", locale)],
+              ["sharp", t(m, "branding.cornersSharp", locale)],
+              ["soft", t(m, "branding.cornersSoft", locale)],
+              ["round", t(m, "branding.cornersRound", locale)],
             ]}
           />
           <RadioRow
-            legend={m["branding.type"]}
+            legend={t(m, "branding.type", locale)}
             name="brandType"
             value={typeface}
             onChange={setTypeface}
             options={[
-              ["", m["branding.themeDefault"]],
-              ["geist", m["branding.typeGeist"]],
-              ["inter", m["branding.typeInter"]],
-              ["serif", m["branding.typeSerif"]],
+              ["", t(m, "branding.themeDefault", locale)],
+              ["geist", t(m, "branding.typeGeist", locale)],
+              ["inter", t(m, "branding.typeInter", locale)],
+              ["serif", t(m, "branding.typeSerif", locale)],
             ]}
           />
           <RadioRow
-            legend={m["branding.mode"]}
+            legend={t(m, "branding.mode", locale)}
             name="brandMode"
             value={mode}
             onChange={setMode}
             hint={copy.modeHint}
             options={[
-              ["", m["branding.themeDefault"]],
-              ["light", m["branding.modeLight"]],
-              ["dark", m["branding.modeDark"]],
+              ["", t(m, "branding.themeDefault", locale)],
+              ["light", t(m, "branding.modeLight", locale)],
+              ["dark", t(m, "branding.modeDark", locale)],
               ["follow", copy.modeFollow],
             ]}
           />
 
           <div className="space-y-1.5">
             <div className="flex items-center gap-3">
-              <p className="text-sm font-medium text-card-foreground">{m["branding.colorPreview"]}</p>
+              <p className="text-sm font-medium text-card-foreground">{t(m, "branding.colorPreview", locale)}</p>
               {/* Only shown when there is a derived theme to switch. With no
                   theme the preview below is the two-swatch fallback, which has
                   no light and dark form — a control that changes nothing is
@@ -401,7 +408,7 @@ export function BrandingPanel({
                           "border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]",
                       )}
                     >
-                      {pm === "light" ? m["branding.previewLight"] : m["branding.previewDark"]}
+                      {pm === "light" ? t(m, "branding.previewLight", locale) : t(m, "branding.previewDark", locale)}
                     </button>
                   ))}
                 </div>
@@ -431,7 +438,7 @@ export function BrandingPanel({
                 >
                   <span className="h-4 w-1 rounded-r" style={{ backgroundColor: previewTheme.sidebarAccent }} />
                   <span className="text-xs" style={{ color: previewTheme.sidebarForeground }}>
-                    {m["branding.previewSidebar"]}
+                    {t(m, "branding.previewSidebar", locale)}
                   </span>
                 </span>
                 {/* A card inside a Card BY DESIGN — it is the live brand
@@ -446,8 +453,8 @@ export function BrandingPanel({
                     past its track at phone width. */}
                 <span className="min-w-0 flex-1 rounded-xl border border-border bg-card p-3"
                       style={{ borderRadius: "var(--radius)", fontFamily: "var(--font-sans)" }}>
-                  <span className="block text-sm font-medium text-card-foreground">{m["branding.previewHeading"]}</span>
-                  <span className="block text-xs text-muted-foreground">{m["branding.previewBody"]}</span>
+                  <span className="block text-sm font-medium text-card-foreground">{t(m, "branding.previewHeading", locale)}</span>
+                  <span className="block text-xs text-muted-foreground">{t(m, "branding.previewBody", locale)}</span>
                   <span
                     className="mt-2 inline-block px-4 py-2 text-sm font-medium"
                     style={{
@@ -456,7 +463,7 @@ export function BrandingPanel({
                       borderRadius: "var(--radius)",
                     }}
                   >
-                    {m["branding.previewSubmit"]}
+                    {t(m, "branding.previewSubmit", locale)}
                   </span>
                 </span>
               </div>
@@ -472,7 +479,7 @@ export function BrandingPanel({
                     borderRadius: "var(--radius)",
                   }}
                 >
-                  {m["branding.previewSubmit"]}
+                  {t(m, "branding.previewSubmit", locale)}
                 </span>
                 <span
                   className="flex items-center gap-2 rounded-md px-3 py-2"
@@ -483,7 +490,7 @@ export function BrandingPanel({
                     style={{ backgroundColor: previewSidebar ?? "var(--sidebar-accent)" }}
                   />
                   <span className="text-xs" style={{ color: SIDEBAR_FOREGROUND }}>
-                    {m["branding.previewSidebar"]}
+                    {t(m, "branding.previewSidebar", locale)}
                   </span>
                 </span>
               </div>
@@ -491,7 +498,7 @@ export function BrandingPanel({
           </div>
 
           <div className="space-y-1.5">
-            <p className="text-sm font-medium text-card-foreground">{m["branding.currentLogo"]}</p>
+            <p className="text-sm font-medium text-card-foreground">{t(m, "branding.currentLogo", locale)}</p>
             {logoUrl && hasLogo ? (
               <div className="flex items-center gap-3">
                 {/* Plain <img>, not next/image: this is a small asset on a
@@ -502,7 +509,7 @@ export function BrandingPanel({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={logoUrl}
-                  alt={brandName ?? m["branding.logo"]}
+                  alt={brandName ?? t(m, "branding.logo", locale)}
                   className="max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
                 />
                 {/* Ghost, never the card's primary (DESIGN rule 8: Save
@@ -513,16 +520,16 @@ export function BrandingPanel({
                     is a logo to remove. */}
                 {removeLogoAction && restoreLogoAction ? (
                   <Button type="button" variant="ghost" size="sm" onClick={removeLogo} disabled={removePending}>
-                    {m["branding.removeLogo"]}
+                    {t(m, "branding.removeLogo", locale)}
                   </Button>
                 ) : null}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{m["branding.noLogo"]}</p>
+              <p className="text-sm text-muted-foreground">{t(m, "branding.noLogo", locale)}</p>
             )}
           </div>
 
-          <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
+          <SubmitButton pending={pending} locale={locale}>{t(m, "common.save", locale)}</SubmitButton>
         </form>
       </CardContent>
     </Card>

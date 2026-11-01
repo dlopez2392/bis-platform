@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * The Billing PAGE's word for a first payment still going through
@@ -15,9 +17,11 @@ import { m } from "@/lib/messages";
  * reads BILLING_STATUS_TREATMENTS too.
  *
  * Token classes only: the Link-sent treatment's own, a dot AND a word.
+ *
+ * S-10 T6: was a module-level English constant (this PAGE's only reader);
+ * now a function of the reader's own locale, same shape as billing-view.ts's
+ * `billingStatusTreatment`.
  */
-export const PAYMENT_PROCESSING = {
-  label: m["billing.page.status.processing"],
-  dot: "bg-warning",
-  chip: "border-warning/30 bg-warning/10 text-foreground",
-} as const;
+export function paymentProcessingTreatment(locale: Locale): { label: string; dot: string; chip: string } {
+  return { label: t(m, "billing.page.status.processing", locale), dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" };
+}

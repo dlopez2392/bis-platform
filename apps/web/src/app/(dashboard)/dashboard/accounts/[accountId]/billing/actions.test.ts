@@ -115,6 +115,14 @@ describe("openBillingPortalAction", () => {
     expect(lines).toContain(ACCOUNT);
   });
 
+  // S-10 T6: the `failed` sentence was a module-level English constant, so
+  // every refusal read English regardless of the reader's own locale.
+  it("a Spanish-reading owner's portal failure reads in Spanish (mutation: drop the locale param from the error text → FAILS)", async () => {
+    billing.value = { stripeCustomerId: null };
+    expect(await openBillingPortalAction(ACCOUNT, "es")).toEqual({ ok: false, error: m["billing.page.portalFailed.es"] });
+    expect(await openBillingPortalAction(ACCOUNT)).toEqual({ ok: false, error: m["billing.page.portalFailed"] });
+  });
+
   it("the agency opening a client's portal leaves one info line naming the account; the client's own click leaves none (mutation: drop the agency log → FAILS; log every click → FAILS)", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     await openBillingPortalAction(ACCOUNT).catch(() => {});

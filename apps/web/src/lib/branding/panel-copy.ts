@@ -1,5 +1,7 @@
 import { BIS_REPLY_DOMAIN, type InboundMode } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Who is reading the branding panel.
@@ -35,32 +37,43 @@ export type PanelCopy = {
   mailingAddressHint: string;
 };
 
-const AGENCY: PanelCopy = {
-  title: m["branding.title"],
-  description: m["branding.body"],
-  nameHint: m["branding.nameHint"],
-  colorHint: m["branding.colorHint"],
-  neutralHint: m["branding.neutralHint"],
-  modeHint: m["branding.modeHint"],
-  modeFollow: m["branding.modeFollow"],
-  replyToHint: m["branding.replyToHint"],
-  mailingAddressHint: m["branding.mailingAddressHint"],
-};
+/**
+ * S-10 T6: these were module-level English constants, built once at
+ * import — branding-panel.tsx read them directly, English regardless of
+ * the reader's own stored choice. Now functions of locale (default "en",
+ * so the agency's Settings card, which never passes a locale, is
+ * byte-identical to before).
+ */
+function agencyCopy(locale: Locale): PanelCopy {
+  return {
+    title: t(m, "branding.title", locale),
+    description: t(m, "branding.body", locale),
+    nameHint: t(m, "branding.nameHint", locale),
+    colorHint: t(m, "branding.colorHint", locale),
+    neutralHint: t(m, "branding.neutralHint", locale),
+    modeHint: t(m, "branding.modeHint", locale),
+    modeFollow: t(m, "branding.modeFollow", locale),
+    replyToHint: t(m, "branding.replyToHint", locale),
+    mailingAddressHint: t(m, "branding.mailingAddressHint", locale),
+  };
+}
 
-const CLIENT: PanelCopy = {
-  title: m["branding.clientTitle"],
-  description: m["branding.clientBody"],
-  nameHint: m["branding.clientNameHint"],
-  colorHint: m["branding.clientColorHint"],
-  neutralHint: m["branding.clientNeutralHint"],
-  modeHint: m["branding.clientModeHint"],
-  modeFollow: m["branding.clientModeFollow"],
-  replyToHint: m["branding.clientReplyToHint"],
-  mailingAddressHint: m["branding.clientMailingAddressHint"],
-};
+function clientCopy(locale: Locale): PanelCopy {
+  return {
+    title: t(m, "branding.clientTitle", locale),
+    description: t(m, "branding.clientBody", locale),
+    nameHint: t(m, "branding.clientNameHint", locale),
+    colorHint: t(m, "branding.clientColorHint", locale),
+    neutralHint: t(m, "branding.clientNeutralHint", locale),
+    modeHint: t(m, "branding.clientModeHint", locale),
+    modeFollow: t(m, "branding.clientModeFollow", locale),
+    replyToHint: t(m, "branding.clientReplyToHint", locale),
+    mailingAddressHint: t(m, "branding.clientMailingAddressHint", locale),
+  };
+}
 
-export function panelCopy(audience: BrandingAudience): PanelCopy {
-  return audience === "client" ? CLIENT : AGENCY;
+export function panelCopy(audience: BrandingAudience, locale: Locale = "en"): PanelCopy {
+  return audience === "client" ? clientCopy(locale) : agencyCopy(locale);
 }
 
 /**
@@ -72,9 +85,11 @@ export function panelCopy(audience: BrandingAudience): PanelCopy {
  * domain for "own_domain" — never the other way around, which would tell an
  * operator customers reply to a domain nothing is actually listening on.
  */
-export function repliesLine(audience: BrandingAudience, s: { mode: InboundMode; domain: string | null }): string | null {
+export function repliesLine(
+  audience: BrandingAudience, s: { mode: InboundMode; domain: string | null }, locale: Locale = "en",
+): string | null {
   if (s.mode === "off") return null;
   const domain = s.mode === "bis" ? BIS_REPLY_DOMAIN : (s.domain ?? "");
   const key = audience === "client" ? "branding.replies.client" : "branding.replies.agency";
-  return m[key].replace("{domain}", domain);
+  return t(m, key, locale, { domain });
 }
