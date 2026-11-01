@@ -6,7 +6,12 @@ import { BisAccessFrame } from "@/components/access-log/bis-access-frame";
 import { BisAccessSection } from "@/components/access-log/bis-access-section";
 import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
 import { requireAccountOwner } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
+import { t } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -44,17 +49,32 @@ export default async function TeamPage({
 }) {
   const { accountId } = await params;
   const { isAgency } = await requireAccountOwner(accountId);
-  const { accessBefore, locale } = (await searchParams) ?? {};
+  const { accessBefore, locale: localeParam } = (await searchParams) ?? {};
+  // S-10 T6: the page itself read no locale at all; its title/subtitle and
+  // everything TeamSection renders (the card, or either of its non-card
+  // states) stayed English regardless of the reader's own stored choice.
+  // Same pattern as billing/page.tsx and branding/page.tsx: one more read
+  // off the account row this navigation already needs, beside the person's
+  // own preference.
+  const [account, prefs] = await Promise.all([
+    dbForRequest().then((db) => db.from("accounts").select("language").eq("id", accountId).maybeSingle())
+      .then(({ data, error }: { data: { language?: Locale | null } | null; error: { message: string } | null }) => {
+        if (error) throw new Error(`team page: account read failed: ${error.message}`);
+        return { language: (data?.language ?? null) as Locale | null };
+      }),
+    getPersonPrefs(),
+  ]);
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   return (
     <>
-      <PageHeader title={m["team.title"]} subtitle={m["team.page.subtitle"]} />
+      <PageHeader title={t(m, "team.title", locale)} subtitle={t(m, "team.page.subtitle", locale)} />
       <div className="p-6">
-        <Suspense fallback={<TeamSkeleton />}>
-          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} />
+        <Suspense fallback={<TeamSkeleton locale={locale} />}>
+          <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} />
         </Suspense>
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
-            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={locale} />
+            <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={localeParam} />
           </Suspense>
         </BisAccessFrame>
       </div>
