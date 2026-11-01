@@ -24,7 +24,7 @@ export function DuplicateLine({
   if (!canMerge || pairs.length === 0) return null;
   const strongest = pairs[0]!;
   const other = strongest.a.id === contactId ? strongest.b : strongest.a;
-  const name = contactDisplayName({ first_name: other.firstName, last_name: other.lastName });
+  const name = contactDisplayName({ first_name: other.firstName, last_name: other.lastName }, locale);
   const reason = t(m, reasonMessageKey(strongest.reason), locale);
   const more = pairs.length - 1;
   return (

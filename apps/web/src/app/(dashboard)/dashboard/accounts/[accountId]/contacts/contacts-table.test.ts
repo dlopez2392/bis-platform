@@ -157,6 +157,21 @@ describe("ContactsTable reads the LocaleProvider's locale (F-085 follow-up, Task
     const html = render([row(0)]);
     expect(html).toContain(m["contacts.col.name"]);
   });
+
+  // S-10 leftovers (#317 follow-up): contactDisplayName's own "(no name)" fallback never took the
+  // locale the table already resolves, so a nameless row still read English on a Spanish screen.
+  it("a nameless row's stand-in reads the Spanish placeholder (mutation: call contactDisplayName(c) with no locale -> FAILS)", () => {
+    const r = row(0);
+    r.first_name = null;
+    r.last_name = null;
+    const html = renderToStaticMarkup(
+      createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(ContactsTable, {
+        rows: [r], accountId: "acct1", existingTags: [], sort: "created", dir: "desc", timezone: "America/Chicago", canDelete: true,
+      })),
+    );
+    expect(html).toContain(m["contact.noName.es"]);
+    expect(html).not.toContain(m["contact.noName"]);
+  });
 });
 
 describe("sortHref", () => {

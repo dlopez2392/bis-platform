@@ -207,7 +207,7 @@ export function ContactDrawer({
     load.status === "loading" ? "loading" : s && s.status === "ready" ? "ready" : "error";
   const who = body && body.who.status === "ready" ? body.who : null;
   const fieldsRow = row ? drawerFieldsRow(row, load) : null;
-  const headerName = body?.header.name ?? (row ? contactDisplayName(row) : "");
+  const headerName = body?.header.name ?? (row ? contactDisplayName(row, locale) : "");
   // The list's own row says whether it is archived (listContacts reads archived_at); a `?peek=` stub does not
   // know, so the summary body's header says it (final review M2).
   const archivedAt = row?.archived_at ?? body?.header.archivedAt ?? null;
