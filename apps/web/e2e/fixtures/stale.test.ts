@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  FIXTURE_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
+  FIXTURE_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CLIENT_ES_ACCOUNT_RE,
+  FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
   FIXTURE_FORM_RE, FIXTURE_PLAN_RE, STALE_AFTER_MS,
   fixtureStamp, isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint,
   isStaleFixtureForm, isStaleFixturePlan, isUuid,
@@ -28,6 +29,11 @@ describe("fixtureStamp", () => {
     // alternation (`/^e2e-(?:client|agency|staff)-(\d{13})@example\.com$/`)
     // reds this line by name, since "technician" is no longer admitted.
     expect(fixtureStamp(`e2e-technician-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
+    // S-10 T9: the Spanish-language fixture's own Owner (auth.setup.ts).
+    // MUTATION: narrowing FIXTURE_EMAIL_RE back to its pre-spanish
+    // alternation (`/^e2e-(?:client|agency|staff|technician)-(\d{13})@example\.com$/`)
+    // reds this line by name, since "spanish" is no longer admitted.
+    expect(fixtureStamp(`e2e-spanish-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
   });
 
   it("refuses anything that is not exactly the fixture shape", () => {
@@ -166,17 +172,22 @@ describe("FIXTURE_FORM_RE", () => {
 });
 
 describe("isStaleFixtureAccount", () => {
-  // The per-run fixture and the company blueprints.spec.ts creates through
-  // the real "Add company" dialog — the second is the shape the sweep could
-  // not see before, stranding a real Clerk org + account on every killed run.
-  it("is true for both account shapes a spec mints, once older than the window", () => {
+  // The per-run fixture, the company blueprints.spec.ts creates through the
+  // real "Add company" dialog, and S-10 T9's own Spanish-language fixture —
+  // the second was the shape the sweep could not see before, stranding a
+  // real Clerk org + account on every killed run; the third is why that
+  // fixture is a SEPARATE account rather than a fourth membership (see
+  // FIXTURE_CLIENT_ES_ACCOUNT_RE's own doc comment in stale.ts).
+  it("is true for all three account shapes a spec mints, once older than the window", () => {
     expect(isStaleFixtureAccount(`E2E Client Co ${STAMP}`, LATER)).toBe(true);
     expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, LATER)).toBe(true);
+    expect(isStaleFixtureAccount(`E2E Client Co ES ${STAMP}`, LATER)).toBe(true);
   });
 
-  it("is false for either shape created moments ago", () => {
+  it("is false for any shape created moments ago", () => {
     expect(isStaleFixtureAccount(`E2E Client Co ${STAMP}`, STAMP + 1000)).toBe(false);
     expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP + 1000)).toBe(false);
+    expect(isStaleFixtureAccount(`E2E Client Co ES ${STAMP}`, STAMP + 1000)).toBe(false);
   });
 
   // The window is the caller's to widen or narrow (sweepStaleFixtures passes
@@ -186,9 +197,9 @@ describe("isStaleFixtureAccount", () => {
     expect(isStaleFixtureAccount(`E2E Co ${STAMP}`, STAMP + 10_000, 10_000)).toBe(true);
   });
 
-  // Every near-miss of BOTH shapes, however old the clock: a real company
-  // with a name close to either must never read as a fixture.
-  it("refuses anything that is not exactly one of the two shapes, however old", () => {
+  // Every near-miss of ALL THREE shapes, however old the clock: a real
+  // company with a name close to any of them must never read as a fixture.
+  it("refuses anything that is not exactly one of the three shapes, however old", () => {
     for (const value of [
       "Test Client One",
       `E2E Client Co-op ${STAMP}`,
@@ -206,6 +217,13 @@ describe("isStaleFixtureAccount", () => {
       "E2E Co 0000000000000",               // 13 digits, not a plausible time
       `E2E Blueprint ${STAMP}`,             // a blueprint name is not an account name
       `E2E Form ${STAMP}`,
+      `E2E Client Co Es ${STAMP}`,          // lowercase "Es"
+      `E2E Client Co-ES ${STAMP}`,          // no space before ES
+      `E2E Client ES Co ${STAMP}`,          // wrong word order
+      ` E2E Client Co ES ${STAMP}`,
+      `E2E Client Co ES ${STAMP} `,
+      `E2E Client Co ES ${STAMP}0`,
+      `E2E Client Co ES ${String(STAMP).slice(0, 12)}`,
     ]) {
       expect(isStaleFixtureAccount(value, Number.MAX_SAFE_INTEGER), value).toBe(false);
     }
@@ -229,6 +247,22 @@ describe("FIXTURE_CO_ACCOUNT_RE", () => {
     expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Co ${STAMP}0`)).toBe(false);
     expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Client Co ${STAMP}`)).toBe(false);
     expect(FIXTURE_ACCOUNT_RE.test(`E2E Co ${STAMP}`)).toBe(false);
+  });
+});
+
+// S-10 T9: the Spanish-language e2e fixture's own account/org shape — a
+// SEPARATE name from the shared `E2E Client Co <stamp>` fixture (see
+// stale.ts's own doc comment on FIXTURE_CLIENT_ES_ACCOUNT_RE for why).
+describe("FIXTURE_CLIENT_ES_ACCOUNT_RE", () => {
+  it("requires exactly 13 digits and nothing else around the words", () => {
+    expect(FIXTURE_CLIENT_ES_ACCOUNT_RE.test(`E2E Client Co ES ${STAMP}`)).toBe(true);
+    expect(FIXTURE_CLIENT_ES_ACCOUNT_RE.test(`E2E Client Co ES ${String(STAMP).slice(0, 12)}`)).toBe(false);
+    expect(FIXTURE_CLIENT_ES_ACCOUNT_RE.test(`E2E Client Co ES ${STAMP}0`)).toBe(false);
+    // Neither the shared fixture's own pattern nor the blueprint-company
+    // pattern admits this shape, and this pattern does not admit theirs.
+    expect(FIXTURE_CLIENT_ES_ACCOUNT_RE.test(`E2E Client Co ${STAMP}`)).toBe(false);
+    expect(FIXTURE_ACCOUNT_RE.test(`E2E Client Co ES ${STAMP}`)).toBe(false);
+    expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Client Co ES ${STAMP}`)).toBe(false);
   });
 });
 
