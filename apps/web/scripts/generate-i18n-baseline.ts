@@ -10,6 +10,8 @@
 //   with no ".es" twin today (agency-only prefixes, and since S-10 the keys
 //   only agency-only files read, excluded). Every key NOT on it must have a
 //   twin.
+// - spanish-style-baseline.json (S-10 G4, G6): today's tú strings and
+//   glossary breaches, frozen.
 // - direct-read-baseline.json (S-10 G3): per-file counts of `m[...]` reads,
 //   agency-only files excluded, nonzero files only.
 //
@@ -22,6 +24,7 @@ import {
   countsByFile, keysMissingSpanish, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts,
   AGENCY_ONLY_KEY_PREFIXES,
 } from "../src/lib/i18n/ratchet-scan";
+import { registerViolations, glossaryViolations } from "../src/lib/i18n/spanish-style";
 import { m } from "../src/lib/messages";
 
 const baseDir = path.join(__dirname, "..");
@@ -50,3 +53,9 @@ console.log(
   + `catalogue-baseline.json: ${missing.length} keys; `
   + `direct-read-baseline.json: ${Object.keys(direct).length} files, ${total(direct)} reads.`,
 );
+
+// S-10 G4 and G6: today's register and glossary breaches, frozen. A key that
+// stops breaching simply stops mattering; a NEW breach fails.
+const style = { register: registerViolations(m), glossary: glossaryViolations(m) };
+writeFileSync(path.join(dir, "spanish-style-baseline.json"), JSON.stringify(style, null, 2) + "\n");
+console.log(`spanish-style-baseline.json: ${style.register.length} register, ${style.glossary.length} glossary.`);
