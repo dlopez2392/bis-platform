@@ -168,11 +168,18 @@ export const m = {
   "shell.presence.idleShortOne": "1 call",
   "shell.presence.idleShortOne.es": "1 llamada",
 
+  // S-10 T7: the brand name itself ("BIS Platform", "Bespoke Intelligent
+  // Solutions") is a proper noun and stays identical in both languages.
   "landing.title": "BIS Platform",
+  "landing.title.es": "BIS Platform",
   "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",
+  "landing.tagline.es": "La plataforma todo en uno para clientes de Bespoke Intelligent Solutions.",
   "landing.signIn": "Sign in",
+  "landing.signIn.es": "Iniciar sesión",
   "landing.goToDashboard": "Go to dashboard",
+  "landing.goToDashboard.es": "Ir al panel",
   "landing.signOut": "Sign out",
+  "landing.signOut.es": "Cerrar sesión",
   // Reached by a signed-in user who belongs to no company at all — see the
   // note in dashboard/layout.tsx for why a CLIENT never lands here now.
   // "Isn't set up as an agency admin" described the one visitor this is not
@@ -180,26 +187,34 @@ export const m = {
   // failed to be staff, which is both wrong and unactionable. Say the thing
   // that is actually true of this state and what to do about it.
   "landing.noAccess.title": "No access yet",
+  "landing.noAccess.title.es": "Todavía no tiene acceso",
   "landing.noAccess.body": "This sign-in isn't connected to a company yet. If you were invited, open the invitation link from your email — it has to be accepted before you can sign in. Otherwise sign out and try the address the invitation was sent to.",
+  "landing.noAccess.body.es": "Este inicio de sesión todavía no está conectado a ninguna empresa. Si lo invitaron, abra el enlace de la invitación en su correo; debe aceptarlo antes de poder iniciar sesión. Si no, cierre sesión e intente con la dirección a la que se envió la invitación.",
 
   // The signed-out shell's rail. This is the line that does real work on
   // /sign-in: it answers "whose software is this", which is the question
   // somebody following a weekly bookmark actually has. There is deliberately
   // no tagline under the "Sign in" heading — see the spec, §10.
   "signIn.title": "Sign in",
+  "signIn.title.es": "Iniciar sesión",
   "signIn.railCopy": "by Bespoke Intelligent Solutions",
+  "signIn.railCopy.es": "por Bespoke Intelligent Solutions",
 
   // True whether access was switched off or never turned on: an adopted
   // half-created company starts with it off (review of D-087). Still its own
   // page, apart from "none" below (the invitation case, D-001).
   "clientAccess.off.title": "Access isn't turned on",
+  "clientAccess.off.title.es": "El acceso no está activado",
   "clientAccess.off.body": "Access to this account isn't turned on right now. Ask the person who invited you to turn it on.",
+  "clientAccess.off.body.es": "El acceso a esta cuenta no está activado en este momento. Pídale a la persona que lo invitó que lo active.",
   // Read by the person who was just invited, on their first visit, at the
   // moment it fails. "No account linked" stated a fact about our data model
   // and gave them nothing to do; "contact your account manager" is a title
   // nobody at a small business has. Say what happened and who can fix it.
   "clientAccess.none.title": "Your company isn't set up yet",
+  "clientAccess.none.title.es": "Su empresa todavía no está configurada",
   "clientAccess.none.body": "Your invitation worked, but this company hasn't finished being set up on our side. Let the person who invited you know — they can finish it, and your invitation stays valid.",
+  "clientAccess.none.body.es": "Su invitación funcionó, pero esta empresa todavía no ha terminado de configurarse de nuestro lado. Avísele a la persona que lo invitó: puede terminarla, y su invitación sigue siendo válida.",
 
   // The agency-side half of the same fault. See lib/accounts/orphans.ts.
   "accounts.orphan.title": "Set up in Clerk but not here",
@@ -4549,10 +4564,16 @@ export const m = {
   "work.agency.billing.mismatch": "Usage doesn't match Stripe:",
   "work.agency.billing.more": "and {n} more",
   "work.agency.billing.unchecked": "Couldn't check usage against Stripe just now.",
+  // S-10 T7: /billing-done, signed out and public (G17) — same frame as
+  // /sign-in and /no-access, same reason (DESIGN rule 9's exception).
   "billing.done.success.title": "You're all set",
+  "billing.done.success.title.es": "Todo listo",
   "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
+  "billing.done.success.body.es": "Su plan comienza en cuanto se confirme su pago, por lo general en un minuto. Puede cerrar esta pestaña.",
   "billing.done.cancelled.title": "Checkout wasn't finished",
+  "billing.done.cancelled.title.es": "No se completó el pago",
   "billing.done.cancelled.body": "Nothing was charged. Use the link you were sent to try again.",
+  "billing.done.cancelled.body.es": "No se le cobró nada. Use el enlace que le enviamos para intentarlo de nuevo.",
 
   // Consent chain PR-3: the footer every customer email carries (spec §4.3),
   // in the email's language. The link text is the second key.
