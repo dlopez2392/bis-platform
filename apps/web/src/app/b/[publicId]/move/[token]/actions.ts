@@ -22,7 +22,7 @@ import { bookingCancelUrl, bookingMoveUrl, isBookingToken } from "@/lib/booking/
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { clientIp, hashIp, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from "@/lib/forms/guards";
 import { bookingStrings } from "@/lib/booking/public-strings";
-import { resolveLocale } from "@/lib/i18n/locale";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { readMoveContext, moveState, movingOf, scrubToken, MOVE_CHAIN_MAX, type MoveContext } from "./data";
 
@@ -176,8 +176,6 @@ export async function confirmMoveAction(
   // own accounts read), never `lang`, the customer's page.
   const alertLocale = resolveLocale(undefined, account.language ?? null);
   const contactEmail = contact?.email?.trim() || null;
-  const contactName = [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim()
-    || contactEmail || ownerAlertFallbackName(alertLocale);
 
   // The business's record, in English and its own zone (the dashboard's);
   // the alert's two times in the alert's language, inside the same guard.
@@ -202,14 +200,27 @@ export async function confirmMoveAction(
   // S-10 T9a: the alert's own dates, in the account's language — guarded
   // on their OWN, AFTER the thread write above, so a formatter failure
   // here can never skip the thread line, which does not depend on it at
-  // all. Left "" on failure; the alert block below already skips sending
-  // when either is empty.
+  // all.
+  //
+  // m1 (review fix round): a formatting failure here must not drop the
+  // alert EMAIL — it falls back to the whole message in English instead
+  // (one message, one language), using `wasCompanyZone`/`nowCompanyZone`,
+  // the identical instants the thread write already proved safe.
+  // `alertEmailLocale` carries the fallback into the fallback contact
+  // name (computed below, AFTER this block, for exactly that reason) AND
+  // the email builder — never a half-Spanish alert with an English date.
+  let alertEmailLocale: Locale = alertLocale;
   try {
     wasForAlert = formatWhen(new Date(row.starts_at), timezone, alertLocale);
     nowForAlert = formatWhen(startsAt, timezone, alertLocale);
   } catch (e) {
-    console.error(`move ${row.id} -> ${moved.id}: alert-date formatting failed: ${String(e)}`);
+    console.error(`move ${row.id} -> ${moved.id}: alert-date formatting failed, falling back to English: ${String(e)}`);
+    wasForAlert = wasCompanyZone;
+    nowForAlert = nowCompanyZone;
+    alertEmailLocale = "en";
   }
+  const contactName = [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim()
+    || contactEmail || ownerAlertFallbackName(alertEmailLocale);
 
   const brand = emailBrand({
     brandName: account.brand_name, brandLogoPath: account.brand_logo_path,
@@ -223,7 +234,7 @@ export async function confirmMoveAction(
     const contactUrl = origin ? `${origin}/dashboard/accounts/${accountId}/contacts/${row.contact_id}` : null;
     const { subject, html, text } = bookingMovedAlertEmail({
       brand, whenCompanyZone: wasForAlert, newWhenCompanyZone: nowForAlert,
-      contactName: stripSubjectControlChars(contactName), contactUrl, locale: alertLocale,
+      contactName: stripSubjectControlChars(contactName), contactUrl, locale: alertEmailLocale,
     });
     const failures: string[] = [];
     for (const to of calendar.notify_emails) {

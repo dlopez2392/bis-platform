@@ -1042,18 +1042,26 @@ Note: Please call ahead`);
     expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking", body: expect.stringContaining(`Booking: ${whenEn}`) });
   });
 
-  // S-10 T9a: "skip the new-booking alert when its date is empty" — the
-  // move action already guarded its own alert the same way
-  // (move/[token]/actions.test.ts's "a contact with no email" case); this
-  // page's own alert had no such guard at all.
-  it("skips the owner's email alert entirely when its date failed to format, but the booker's own confirmation still goes (mutation: drop the whenForAlert guard → FAILS, an alert sends with a blank date)", async () => {
+  // m1 (review fix round): a formatter failure must never drop the owner
+  // alert — it falls back to the WHOLE message in English (one message,
+  // one language: never a Spanish subject with an English date), using
+  // the same instant the thread write already proved safe
+  // (`whenCompanyZone`). The booker's own confirmation is unaffected
+  // either way.
+  it("falls back to a fully English alert when its date failed to format, rather than dropping it (mutation: keep sending it in Spanish with the English date → FAILS, half-translated; mutation: skip the alert → FAILS, none sent)", async () => {
     accountRow.language = "es";
     formatWhenThrowsOnAlertRef.current = true;
 
     const result = await submitBookingAction(PUBLIC_ID, validFormData());
 
     expect(result.ok).toBe(true);
-    expect(gated().map((r) => r.kind)).not.toContain("operator.booking_alert");
+    const whenEn = formatWhen(slot.startsAt, accountRow.timezone);
+    const alert = gated().find((r) => r.kind === "operator.booking_alert");
+    expect(alert).toBeDefined();
+    expect(alert!.subject).toBe(`New booking: ${whenEn} — Maria Lopez`);
+    expect(alert!.body).toContain(`When: ${whenEn}`);
+    expect(alert!.subject).not.toContain("Nueva cita");
+    expect(alert!.body).not.toContain("Nueva cita");
     expect(gated().map((r) => r.kind)).toContain("booking.confirmation");
   });
 });

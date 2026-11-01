@@ -403,17 +403,26 @@ When: ${whenEn}`);
     expect(createMessageMock.mock.calls[0]![2]).toMatchObject({ subject: "Booking cancelled", body: `Cancelled their ${whenEn} booking` });
   });
 
-  // Same "skip when empty" rule the booking and move alerts both follow
-  // (S-10 T9a, item 7a): a notice email must never go out with a blank
-  // date.
-  it("skips the owner's cancel notice entirely when its date failed to format (mutation: drop the whenForNotice guard → FAILS, a notice sends with a blank date)", async () => {
+  // m1 (review fix round): a formatter failure must never drop the notice
+  // — it falls back to the WHOLE message in English (one message, one
+  // language: never a Spanish subject with an English date), using the
+  // same instant the thread write already proved safe (`whenCompanyZone`).
+  it("falls back to a fully English cancel notice when its date failed to format, rather than dropping it (mutation: keep sending it in Spanish with the English date → FAILS, half-translated; mutation: skip the notice → FAILS, none sent)", async () => {
     accountRow.language = "es";
     formatWhenThrowsOnNoticeRef.current = true;
 
     const result = await confirmCancelAction(PUBLIC_ID, TOKEN);
 
     expect(result).toEqual({ ok: true });
-    expect(sendMock).not.toHaveBeenCalled();
+    const whenEn = formatWhen(STARTS, "America/Chicago");
+    const [notice] = gated();
+    expect(notice).toBeDefined();
+    expect(notice!.subject).toBe(`Booking cancelled: ${whenEn} — Maria Lopez`);
+    expect(notice!.body).toBe(`Maria Lopez cancelled their booking.
+
+When: ${whenEn}`);
+    expect(notice!.subject).not.toContain("Cita cancelada");
+    expect(notice!.body).not.toContain("Cuándo");
   });
 });
 

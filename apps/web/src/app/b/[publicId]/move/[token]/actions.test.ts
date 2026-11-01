@@ -378,18 +378,44 @@ describe("confirmMoveAction — the owner's moved alert in the account's languag
     expect(m.createMessage.mock.calls[0]![2]).toMatchObject({ body: `Moved their booking from ${was("en")} to ${now("en")}` });
   });
 
-  // This action already guards its OWN alert against an empty date
-  // (`wasForAlert && nowForAlert` in the send condition) — this proves that
-  // guard still holds now that the formatting moved into its own block.
-  it("skips the owner's moved alert entirely when its dates failed to format, but the customer's own email still goes (mutation: drop the wasForAlert/nowForAlert guard → FAILS, an alert sends with a blank date)", async () => {
+  // m1 (review fix round): a formatter failure must never drop the alert
+  // — it falls back to the WHOLE message in English (one message, one
+  // language: never a Spanish subject with an English date), using the
+  // same instants the thread write already proved safe
+  // (`wasCompanyZone`/`nowCompanyZone`). The fallback contact name
+  // follows the same fallback locale.
+  it("falls back to a fully English moved alert when its dates failed to format, rather than dropping it (mutation: keep sending it in Spanish with the English dates → FAILS, half-translated; mutation: skip the alert → FAILS, none sent)", async () => {
     m.readMoveContext.mockResolvedValue(withLanguage("es"));
     formatWhenThrowsOnAlertRef.current = true;
 
     const result = await confirmMoveAction(TOKEN, "en", ELEVEN);
 
     expect(result.ok).toBe(true);
-    expect(gated().map((g) => g.kind)).not.toContain("operator.move_notice");
+    const staff = gated().find((g) => g.kind === "operator.move_notice");
+    expect(staff).toBeDefined();
+    expect(staff!.subject).toBe(`Booking moved: ${was("en")} to ${now("en")} — Jane Doe`);
+    expect(staff!.body).toBe(
+      `Booking moved.\nJane Doe moved their booking.\n\nWas: ${was("en")}\nNow: ${now("en")}\nWho: Jane Doe\n\n`
+      + "Open this contact: https://app.example/dashboard/accounts/acct_1/contacts/contact_1",
+    );
+    expect(staff!.subject).not.toContain("Cita cambiada");
     expect(gated().map((g) => g.kind)).toContain("booking.moved");
+  });
+
+  // Same fallback, for a contact with no name or email at all — the
+  // "Someone"/"Alguien" placeholder itself must follow the SAME English
+  // fallback, never a stray Spanish word in an otherwise-English alert.
+  it("the nameless-contact fallback follows the English fallback too (mutation: keep ownerAlertFallbackName(alertLocale) → FAILS, 'Alguien' in an English alert)", async () => {
+    m.readMoveContext.mockResolvedValue(withLanguage("es"));
+    m.getContact.mockResolvedValue({ id: "contact_1", first_name: null, last_name: null, email: null });
+    formatWhenThrowsOnAlertRef.current = true;
+
+    const result = await confirmMoveAction(TOKEN, "en", ELEVEN);
+
+    expect(result.ok).toBe(true);
+    const staff = gated().find((g) => g.kind === "operator.move_notice");
+    expect(staff!.subject).toMatch(/ — Someone$/);
+    expect(staff!.subject).not.toContain("Alguien");
   });
 });
 

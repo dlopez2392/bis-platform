@@ -118,22 +118,31 @@ export async function confirmCancelAction(
       // row just read), never `locale`, the customer's page — its date too.
       // Guarded on its OWN, AFTER the thread write above, so a formatter
       // failure here can never skip the thread line, which does not depend
-      // on it at all. Left "" on failure; the notify loop below skips
-      // sending when it is empty (the same rule the booking and move
-      // alerts both follow).
+      // on it at all.
+      //
+      // m1 (review fix round): a formatting failure here must not drop the
+      // notice EMAIL — it falls back to the whole message in English
+      // instead (one message, one language), using `whenCompanyZone`, the
+      // identical instant the thread write already proved safe.
+      // `noticeEmailLocale` carries the fallback into the fallback contact
+      // name AND the email builder, never a half-Spanish notice with an
+      // English date.
       const noticeLocale = resolveLocale(undefined, account?.language ?? null);
       let whenForNotice = "";
+      let noticeEmailLocale: Locale = noticeLocale;
       try {
         whenForNotice = formatWhen(new Date(row.starts_at), timezone, noticeLocale);
       } catch (e) {
-        console.error(`booking ${row.id} cancel notice-date formatting failed: ${String(e)}`);
+        console.error(`booking ${row.id} cancel notice-date formatting failed, falling back to English: ${String(e)}`);
+        whenForNotice = whenCompanyZone;
+        noticeEmailLocale = "en";
       }
 
       const contact = await getContact(db, row.account_id, row.contact_id);
       const contactName = contact
         ? ([contact.first_name, contact.last_name].filter(Boolean).join(" ").trim()
-          || contact.email || ownerAlertFallbackName(noticeLocale))
-        : ownerAlertFallbackName(noticeLocale);
+          || contact.email || ownerAlertFallbackName(noticeEmailLocale))
+        : ownerAlertFallbackName(noticeEmailLocale);
 
       // `loadCalendarNotifyEmails` selects only `notify_emails` — no
       // `enabled` column at all, deliberately: a disabled calendar stops NEW
@@ -151,7 +160,7 @@ export async function confirmCancelAction(
         });
 
         const { subject, text: body } = bookingCancelNoticeEmail({
-          whenCompanyZone: whenForNotice, contactName, note: row.note, locale: noticeLocale,
+          whenCompanyZone: whenForNotice, contactName, note: row.note, locale: noticeEmailLocale,
         });
 
         const failures: string[] = [];
