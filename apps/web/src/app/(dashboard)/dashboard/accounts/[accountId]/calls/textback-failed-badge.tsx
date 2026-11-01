@@ -12,14 +12,14 @@
 // under AA on the dark ramp. `text-foreground` reads in both themes.
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 
 /** `locale` defaults to English: this badge's two callers (the list row,
  *  the detail page) both now pass their own real locale (S-10 T5); the
  *  default only protects a future caller that forgets to. */
-export function TextbackFailedBadge({ className, locale = "en" }: { className?: string; locale?: Locale }) {
+export function TextbackFailedBadge({ className, locale = "en", pseudo = false }: { className?: string; locale?: Locale; pseudo?: boolean }) {
+  const tr = makeTr(locale, pseudo);
   return (
     <Badge
       variant="outline"
@@ -29,7 +29,7 @@ export function TextbackFailedBadge({ className, locale = "en" }: { className?: 
       )}
     >
       <span className="size-1.5 rounded-full bg-destructive" aria-hidden />
-      {t(m, "calls.textbackFailed", locale)}
+      {tr.text("calls.textbackFailed")}
     </Badge>
   );
 }

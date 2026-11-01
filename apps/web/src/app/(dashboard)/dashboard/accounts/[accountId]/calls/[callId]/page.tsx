@@ -35,7 +35,7 @@ import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
 import { loggableError } from "@/lib/loggable-error";
-import { m, type MessageKey } from "@/lib/messages";
+import type { MessageKey } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
 import { TextbackFailedBadge } from "../textback-failed-badge";
@@ -115,7 +115,8 @@ export default async function CallDetailPage({
   // request-locale-callers.test.ts scans each call's own braces.
   const accountLanguage = { language: account.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // F-118 part 1 (spec 4.1): the call page is a record surface, so BIS's own open of it is written to
   // the account's access log here — after the call is proven to exist in this account, and before any
@@ -169,7 +170,7 @@ export default async function CallDetailPage({
       // request client of a Technician sees only part of it — and only once
       // the contact read above, on the request client, proved the contact.
       resendClosedLine = contact
-        ? composerStateLine(await smsRecipientState(ledgerDb(), accountId, contact), timezone)
+        ? composerStateLine(await smsRecipientState(ledgerDb(), accountId, contact), timezone, locale)
         : tr.text("compose.smsStateUnknown");
     } catch (e) {
       console.error(`call detail ${callId}: recipient read failed, closing the resend: ${String(e)}`);
@@ -286,7 +287,7 @@ export default async function CallDetailPage({
     <>
       <PageHeader
         title={tr.text("calls.detail.title")}
-        tabs={<OutcomePill outcome={call.outcome} locale={locale} />}
+        tabs={<OutcomePill outcome={call.outcome} locale={locale} pseudo={pseudo} />}
         selector={
           // A description list, not a row of spans: each value here answers a
           // question the list page answers with a column header, and the
@@ -395,7 +396,7 @@ export default async function CallDetailPage({
               `formatCallTime` already renders its short name ("CDT") beside
               the time; this says which zone that abbreviation belongs to,
               and whether it is this account's own. */}
-          <ZoneNote zone={zone} isAgency={isAgency} />
+          <ZoneNote zone={zone} isAgency={isAgency} locale={locale} />
           {/* First, above everything that follows: the three-second read of
               the call. The failed text-back panel below still sits above the
               summary, as before. */}
@@ -406,6 +407,7 @@ export default async function CallDetailPage({
               personaName={personaName}
               language={call.language}
               locale={locale}
+              pseudo={pseudo}
             />
           ) : null}
           {/* Above the summary, because it is the only thing on this page that
@@ -425,7 +427,7 @@ export default async function CallDetailPage({
             <div className={cn(CARD, "border-destructive/30")}>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-destructive/5 p-5">
                 <div className="min-w-0 flex-1 space-y-1.5">
-                  <TextbackFailedBadge locale={locale} />
+                  <TextbackFailedBadge locale={locale} pseudo={pseudo} />
                   <p className="text-sm leading-6 text-muted-foreground">
                     {tr.text("calls.textbackFailedBody")}
                   </p>
@@ -462,6 +464,7 @@ export default async function CallDetailPage({
                     body={textbackFailure.body}
                     action={sendSmsAction.bind(null, accountId)}
                     locale={locale}
+                    pseudo={pseudo}
                   />
                 ) : null}
               </div>
@@ -524,7 +527,7 @@ export default async function CallDetailPage({
               {tr.text("calls.detail.transcript")}
             </h2>
             <div className="p-5">
-              <TranscriptView transcript={call.transcript} timezone={timezone} locale={locale} />
+              <TranscriptView transcript={call.transcript} timezone={timezone} locale={locale} pseudo={pseudo} />
             </div>
           </section>
         </div>

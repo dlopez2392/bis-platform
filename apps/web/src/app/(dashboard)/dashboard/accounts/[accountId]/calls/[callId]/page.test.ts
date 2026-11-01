@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -574,6 +575,14 @@ describe("CallDetailPage — the zone note", () => {
     expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
     expect(html).not.toContain("/settings");
   });
+
+  // S-10 fix round I1: the page's locale never reached the note.
+  it("names the zone in the reader's Spanish (mutation: drop locale from <ZoneNote> -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    const text = renderedText(await render(CALL));
+    expect(text).toContain(m["zone.note.es"].replace("{zone}", "America/Chicago"));
+    expect(text).not.toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+  });
 });
 
 /**
@@ -756,6 +765,36 @@ describe("CallDetailPage — the Suggestions section (item 8b-1)", () => {
   });
 });
 
+// S-10 fix round M1: the page built its own pseudo `tr` but handed only
+// `locale` to its children, so the pill, the badge, the card and the
+// transcript never wore the pseudo-locale.
+describe("CallDetailPage — the pseudo-locale reaches its children (M1)", () => {
+  beforeEach(() => {
+    vi.stubEnv("BIS_I18N_QA", "1"); vi.stubEnv("VERCEL", "");
+    getContactMock.mockReset().mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    getCallCardMock.mockReset().mockResolvedValue({ reason: "Roof leak", callbackNumber: null, callerWords: null });
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("the outcome pill, the text-back badge, the resend, the call card and the transcript (mutation: drop pseudo from any one -> FAILS)", async () => {
+    getCallMock.mockResolvedValue({ ...CALL, outcome: "abandoned", booking_id: null });
+    listFailedOutboundSmsMock.mockResolvedValue([FAILED_TEXTBACK]);
+    listProposalsForCallMock.mockResolvedValue([]);
+    const html = renderToStaticMarkup(await CallDetailPage({
+      params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+      searchParams: Promise.resolve({ locale: "pseudo" }),
+    }));
+    const text = renderedText(html);
+    expect(text).toContain(pseudoLocale(m["calls.outcome.abandoned"]));
+    expect(text).toContain(pseudoLocale(m["calls.textbackFailed"]));
+    expect(text).toContain(pseudoLocale(m["calls.textbackResend"]));
+    expect(text).toContain(pseudoLocale(m["calls.card.heading"]));
+    expect(text).toContain(pseudoLocale(m["calls.detail.caller"]));
+  });
+});
+
 describe("\"Send it now\" is closed on render when the number cannot be texted (review R3-M8)", () => {
   it("a stopped number shows the composer's own stopped line in place of the button (mutation: render the button regardless → FAILS)", async () => {
     getContactMock.mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
@@ -763,6 +802,17 @@ describe("\"Send it now\" is closed on render when the number cannot be texted (
     const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
     expect(html).not.toContain("Send it now");
     expect(renderedText(html)).toContain(m["compose.smsStopped"].replace("{date}", "Aug 25, 2026"));
+  });
+
+  // S-10 fix round I4: the resend-closed line was the composer's English
+  // sentence and English date on an otherwise Spanish page.
+  it("a Spanish reader gets the stopped line, and its date, in Spanish (mutation: drop locale from composerStateLine → FAILS)", async () => {
+    prefsFixture.language = "es";
+    getContactMock.mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockResolvedValue({ kind: "stopped", since: "2026-08-25T21:00:00Z" });
+    const text = renderedText(await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]));
+    expect(text).toContain(m["compose.smsStopped.es"].replace("{date}", "25 ago 2026"));
+    expect(text).not.toContain("Aug 25, 2026");
   });
 
   it("an ok number keeps the button (the discriminator; mutation: always close it → FAILS)", async () => {

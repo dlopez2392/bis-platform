@@ -12,12 +12,13 @@ import type { CallOutcome } from "@bis/db";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n/locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { OUTCOMES, outcomeLabel } from "./format";
 
 /** `locale` defaults to English so `../dashboard/calls-chart-card.tsx`'s own
  *  call site (owned by the dashboard lane, outside this task's consent)
  *  keeps rendering exactly what it does today without needing an edit. */
-export function OutcomePill({ outcome, locale = "en" }: { outcome: CallOutcome; locale?: Locale }) {
+export function OutcomePill({ outcome, locale = "en", pseudo = false }: { outcome: CallOutcome; locale?: Locale; pseudo?: boolean }) {
   const treatment = OUTCOMES[outcome];
   return (
     // `chip`, not `outline`: `outline`'s ground is `--surface-3` (.09) — the
@@ -29,7 +30,7 @@ export function OutcomePill({ outcome, locale = "en" }: { outcome: CallOutcome; 
       {/* 7px, the mockup's `.chip i` (148) — 6px reads as a speck at this
           text size, and the dot is the whole of DESIGN.md rule 3 here. */}
       <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
-      {outcomeLabel(outcome, locale)}
+      {pseudo ? pseudoLocale(outcomeLabel(outcome, locale)) : outcomeLabel(outcome, locale)}
     </Badge>
   );
 }

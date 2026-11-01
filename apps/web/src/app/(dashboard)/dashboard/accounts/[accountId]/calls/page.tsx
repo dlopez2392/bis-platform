@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
@@ -79,6 +80,7 @@ export default async function CallsPage({
 
   const accountLanguage = { language: account.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // …and the same config read, so the denominator on screen is the cap that
   // is actually enforced rather than a hard-coded 50.
@@ -149,7 +151,7 @@ export default async function CallsPage({
 
   return (
     <>
-      <PageHeader title={t(m, "calls.title", locale)} />
+      <PageHeader title={tr.text("calls.title")} />
       <div className="space-y-6 p-6">
         {todayCount !== null ? <UsageMeter used={todayCount} cap={cap} locale={locale} /> : null}
         {/* BELOW the meter and bound to the TABLE, deliberately.
@@ -163,7 +165,7 @@ export default async function CallsPage({
             Grouped with the table instead, so what it qualifies is
             unambiguous. */}
         <div className="space-y-3">
-          <ZoneNote zone={zone} isAgency={isAgency} />
+          <ZoneNote zone={zone} isAgency={isAgency} locale={locale} />
           {rows.length === 0 && !cursor ? (
             // The COLD-START reading of zero rows: no `?before=` cursor, so
             // this is page one and there is nothing behind it either — a
@@ -173,8 +175,8 @@ export default async function CallsPage({
             // and no pager rather than this.
             <EmptyState
               icon={PhoneIncoming}
-              title={t(m, "calls.empty.title", locale)}
-              body={t(m, "calls.empty.body", locale)}
+              title={tr.text("calls.empty.title")}
+              body={tr.text("calls.empty.body")}
             />
           ) : (
             <CallsTable

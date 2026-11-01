@@ -84,4 +84,11 @@ describe("UsageCard", () => {
       expect(many).toContain("5 omitidos");
     });
   });
+  // S-10 fix round I6: the month's top reasons are stored English sentences.
+  it("names the top held and skipped reasons in the reader's Spanish (mutation: interpolate the stored text raw -> FAILS)", () => {
+    const text = render({ state: { ok: true, usage }, monthLabel: "x", callCap: 50, locale: "es" });
+    expect(text).toContain("En espera hasta las 8:00 a.m. — horario de silencio");
+    expect(text).toContain("Identificada como llamada automática");
+    expect(text).not.toContain("Screened as a robocall");
+  });
 });

@@ -10,8 +10,8 @@ import { formatDateTimeInZone } from "@/lib/format";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import { makeTr } from "@/lib/record/copy";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
@@ -46,16 +46,17 @@ export default async function FormsPage({
   const zone = await renderZone(accountRow?.timezone);
   const accountLanguage = { language: accountRow?.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   return (
     <>
       <PageHeader
-        title={t(m, "forms.title", locale)}
+        title={tr.text("forms.title")}
         actions={<NewFormDialog action={createFormAction.bind(null, accountId)} locale={locale} pseudo={pseudo} />}
       />
       <div className="p-6">
         {forms.length === 0 ? (
-          <EmptyState icon={FileText} title={t(m, "forms.empty.title", locale)} body={t(m, "forms.empty.body", locale)} />
+          <EmptyState icon={FileText} title={tr.text("forms.empty.title")} body={tr.text("forms.empty.body")} />
         ) : (
           <ListPanel as="ul">
             {forms.map((form) => (
@@ -74,12 +75,12 @@ export default async function FormsPage({
                       {form.name}
                     </span>
                     <span className="block text-xs text-muted-foreground">
-                      {formatDateTimeInZone(form.created_at, zone.zone)}
+                      {formatDateTimeInZone(form.created_at, zone.zone, locale)}
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-3">
                     <span className="text-xs text-muted-foreground">
-                      {form.submissionCount} {t(m, "forms.submissions", locale).toLowerCase()}
+                      {tr.count("forms.submissionCount", form.submissionCount)}
                     </span>
                     {/* `default` is the solid primary fill — a second
                         primary-weight element in every row of the list, and
@@ -96,7 +97,7 @@ export default async function FormsPage({
                         )}
                         aria-hidden
                       />
-                      {labelIn(FORM_STATUS_KEY, form.status, locale)}
+                      {(pseudo ? pseudoLocale : String)(labelIn(FORM_STATUS_KEY, form.status, locale))}
                     </Badge>
                   </span>
                 </Link>

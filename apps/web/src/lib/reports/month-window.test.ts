@@ -18,6 +18,16 @@ describe("monthWindow — the calendar month `now` falls in, on the account's wa
       label: "November 2026",
     });
   });
+  // S-10 fix round I2: the card's label is copy the reader sees; it took no
+  // locale and printed "September 2026" on a Spanish page. The edges stay
+  // computed in en-US parts (that is arithmetic, not display).
+  it("the label follows the reader's locale; the edges do not (mutation: label pinned to en-US -> FAILS)", () => {
+    const instant = new Date("2026-10-01T03:00:00Z");
+    expect(monthWindow(instant, "America/Chicago", "es")).toEqual({
+      fromIso: "2026-09-01T05:00:00.000Z", toIso: "2026-10-01T05:00:00.000Z", label: "septiembre de 2026",
+    });
+    expect(monthWindow(instant, "America/Chicago", "en").label).toBe("September 2026");
+  });
   it("December rolls into the next year", () => {
     expect(monthWindow(new Date("2026-12-31T23:00:00Z"), "UTC")).toEqual({
       fromIso: "2026-12-01T00:00:00.000Z", toIso: "2027-01-01T00:00:00.000Z", label: "December 2026",

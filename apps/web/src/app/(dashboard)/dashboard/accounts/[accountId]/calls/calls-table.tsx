@@ -155,9 +155,9 @@ export function CallsTable({
                     sentence on a row that is untrue of that call. */}
                 <TableCell className={CELL}>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <OutcomePill outcome={row.outcome} locale={locale} />
+                    <OutcomePill outcome={row.outcome} locale={locale} pseudo={pseudo} />
                     {row.outcome === "abandoned" && textbackFailed?.has(row.id) ? (
-                      <TextbackFailedBadge locale={locale} />
+                      <TextbackFailedBadge locale={locale} pseudo={pseudo} />
                     ) : null}
                   </div>
                 </TableCell>

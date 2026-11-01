@@ -368,8 +368,12 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly one English-only reader (mutation: add a second without a test row → FAILS)", () => {
-    expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual(["src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts"]);
+  it("names exactly the two English-only readers (mutation: add a third without a test row → FAILS)", () => {
+    expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
+      // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
+    ]);
   });
 
   it("directReadCounts leaves agency-only files out (mutation: count every file → FAILS)", () => {

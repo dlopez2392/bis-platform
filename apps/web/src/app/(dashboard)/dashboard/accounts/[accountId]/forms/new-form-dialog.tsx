@@ -8,7 +8,6 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { SubmitButton } from "../../submit-button";
-import { m } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 

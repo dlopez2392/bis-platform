@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -314,6 +315,42 @@ describe("CallsPage — the zone note", () => {
     expect(renderedText(html)).toContain(m["zone.guessed.client"]);
     expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
     expect(html).not.toContain("/settings");
+  });
+
+  // S-10 fix round I1: the page resolved the reader's locale and then rendered the
+  // note without it, so a Spanish page carried one English line under its meter.
+  it("names the zone in the reader's Spanish (mutation: drop locale from <ZoneNote> -> FAILS)", async () => {
+    prefsFixture.language = "es";
+    try {
+      const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined))));
+      expect(text).toContain(m["zone.note.es"].replace("{zone}", "America/Chicago"));
+      expect(text).not.toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+    } finally {
+      prefsFixture.language = null;
+    }
+  });
+});
+
+// S-10 fix round M1: the QA pseudo-locale (?locale=pseudo, BIS_I18N_QA) was
+// resolved and handed to the table but never reached the title, the empty
+// state or the row's pills, so +35% length was never exercised on them.
+describe("CallsPage — the pseudo-locale (M1)", () => {
+  beforeEach(() => { vi.stubEnv("BIS_I18N_QA", "1"); vi.stubEnv("VERCEL", ""); prefsFixture.language = null; });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("reaches the title and the empty state (mutation: t(m, ...) instead of tr.text -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([]);
+    const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined, "pseudo"))));
+    expect(text).toContain(pseudoLocale(m["calls.title"]));
+    expect(text).toContain(pseudoLocale(m["calls.empty.title"]));
+  });
+
+  it("reaches a row's outcome pill and text-back badge (mutation: drop pseudo from <OutcomePill>/<TextbackFailedBadge> -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([ROW]);
+    listFailedOutboundSmsMock.mockResolvedValue([{ callId: "c1", conversationId: "cv1", messageId: "m1", body: "x", failedAt: "2026-08-25T19:16:00Z", supersededAt: null }]);
+    const text = renderedText(renderToStaticMarkup(await CallsPage(route(undefined, "pseudo"))));
+    expect(text).toContain(pseudoLocale(m["calls.outcome.abandoned"]));
+    expect(text).toContain(pseudoLocale(m["calls.textbackFailed"]));
   });
 });
 

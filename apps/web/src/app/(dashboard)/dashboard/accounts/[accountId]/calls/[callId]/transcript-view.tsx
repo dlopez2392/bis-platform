@@ -1,9 +1,8 @@
 import type { TranscriptEvent } from "@bis/db";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import { tag } from "@/lib/format";
 import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 
 /**
  * Clock time only — the date already leads the page header, and repeating it
@@ -66,17 +65,20 @@ export function TranscriptView({
   transcript,
   timezone,
   locale,
+  pseudo = false,
 }: {
   transcript: TranscriptEvent[];
   /** The ACCOUNT's IANA zone, already validated by the page — the company's
    *  wall clock, not the viewer's. */
   timezone: string;
   locale: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const turns = usableTurns(transcript);
 
   if (turns.length === 0) {
-    return <p className="text-sm text-muted-foreground">{t(m, "calls.detail.noTranscript", locale)}</p>;
+    return <p className="text-sm text-muted-foreground">{tr.text("calls.detail.noTranscript")}</p>;
   }
 
   return (
@@ -126,7 +128,7 @@ export function TranscriptView({
                     startsRun ? null : "sr-only",
                   )}
                 >
-                  {isCaller ? t(m, "calls.detail.caller", locale) : t(m, "calls.detail.assistant", locale)}
+                  {isCaller ? tr.text("calls.detail.caller") : tr.text("calls.detail.assistant")}
                 </span>
                 {clock ? (
                   // Full `--muted-foreground`, not a faded one. At 11px this is

@@ -6,6 +6,7 @@ import { ListPanel } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
+import { reasonInLanguage } from "./reason-words";
 import { sourceTitle, channelWord } from "@/lib/automations/log-titles";
 import { formatCallTime } from "../calls/format";
 import { LogStatusPill } from "./log-status-pill";
@@ -54,9 +55,9 @@ export function ActivityTable({
                 <TableCell className={cn(CELL, "hidden sm:table-cell")}>{row.contact_name ?? "—"}</TableCell>
                 <TableCell className={cn(CELL, "hidden sm:table-cell text-muted-foreground")}>{channelWord(row.channel, locale)}</TableCell>
                 <TableCell className={CELL}>
-                  <LogStatusPill status={row.status} locale={locale} />
+                  <LogStatusPill status={row.status} locale={locale} pseudo={pseudo} />
                   {row.status !== "sent" && row.reason ? (
-                    <p className="mt-1 text-xs text-muted-foreground" data-log-reason>{row.reason}</p>
+                    <p className="mt-1 text-xs text-muted-foreground" data-log-reason>{reasonInLanguage(row.reason, locale)}</p>
                   ) : null}
                 </TableCell>
               </TableRow>

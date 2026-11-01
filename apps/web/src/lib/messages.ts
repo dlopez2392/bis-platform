@@ -1515,9 +1515,15 @@ export const m = {
   // "pipeline.empty.body" ("your first deal"), which the agency also reads
   // from inside a company's workspace.
   "forms.empty.body": "Build a form, embed it on your website, and leads land here automatically.",
-  "forms.empty.body.es": "Cree un formulario, insértelo en su sitio web, y los clientes potenciales llegan aquí automáticamente.",
+  "forms.empty.body.es": "Cree un formulario, póngalo en su sitio web y los clientes potenciales llegarán aquí solos.",
   "forms.submissions": "Submissions",
   "forms.submissions.es": "Envíos",
+  // The Forms list's per-row count (S-10 fix round I3). A real singular,
+  // not the column title above lower-cased after a number ("1 submissions").
+  "forms.submissionCount": "{count} submissions",
+  "forms.submissionCount.es": "{count} envíos",
+  "forms.submissionCountOne": "1 submission",
+  "forms.submissionCountOne.es": "1 envío",
   "forms.status.draft": "Draft",
   "forms.status.draft.es": "Borrador",
   "forms.status.published": "Published",
@@ -1577,7 +1583,7 @@ export const m = {
   "forms.embedHint": "Paste this where the form should appear. Published forms only.",
   "forms.embedHint.es": "Pegue esto donde quiera que aparezca el formulario. Solo formularios publicados.",
   "forms.embedNotPublished": "Publish the form to get its embed snippet.",
-  "forms.embedNotPublished.es": "Publique el formulario para obtener su código de inserción.",
+  "forms.embedNotPublished.es": "Publique el formulario para obtener el código para su sitio web.",
   "forms.copy": "Copy",
   "forms.copy.es": "Copiar",
   "forms.copied": "Copied",
@@ -1660,7 +1666,7 @@ export const m = {
   "forms.unpublishWarning":
     "{assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
   "forms.unpublishWarning.es":
-    "{assistant} archiva sus clientes potenciales en este formulario — dejará de archivarlos aquí hasta que vuelva a poner el Estado en Publicado.",
+    "{assistant} guarda sus clientes potenciales en este formulario — dejará de guardarlos aquí hasta que vuelva a poner el Estado en Publicado.",
   // The success toast AFTER that save has gone through. Distinct from
   // forms.unpublishWarning (fix round 1 review, minor: the toast must say
   // the save itself succeeded, not only name the consequence) — this one
@@ -1669,7 +1675,7 @@ export const m = {
   "forms.unpublishedToast":
     "Saved. {assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
   "forms.unpublishedToast.es":
-    "Guardado. {assistant} archiva sus clientes potenciales en este formulario — dejará de archivarlos aquí hasta que vuelva a poner el Estado en Publicado.",
+    "Guardado. {assistant} guarda sus clientes potenciales en este formulario — dejará de guardarlos aquí hasta que vuelva a poner el Estado en Publicado.",
   "forms.republishFailed": "Could not republish the form.",
   "forms.republishFailed.es": "No se pudo volver a publicar el formulario.",
   // Fix round 1 review item 2: a stale Undo click — the form's status
@@ -3719,6 +3725,81 @@ export const m = {
   "activity.source.textback.es": "Texto por llamada perdida",
   "activity.source.documentRequest": "Document request",
   "activity.source.documentRequest.es": "Pedido de documentos",
+  // S-10 fix round I6: automation_log.reason is stored as the ENGLISH sentence
+  // lib/automations/hold-or-send.ts REASONS wrote. activity/reason-words.ts reads
+  // it back to one of these keys at render time; reason-words.test.ts pins each
+  // English line here to REASONS word for word. Reasons that already have a
+  // Spanish twin under automations.reason.* are read from there, not repeated.
+  "activity.reason.quietHours": "Held until {time} — quiet hours",
+  "activity.reason.quietHours.es": "En espera hasta las {time} — horario de silencio",
+  "activity.reason.windowAfterDeadline": "Not sent: quiet hours ran past the appointment",
+  "activity.reason.windowAfterDeadline.es": "No se envió: el horario de silencio terminó después de la cita",
+  "activity.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  "activity.reason.ledgerRetry.es": "Esperando unos minutos: no se pudo confirmar si puede recibir textos",
+  "activity.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
+  "activity.reason.emailLedgerRetry.es": "Esperando unos minutos: no se pudo confirmar si puede recibir correos",
+  "activity.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
+  "activity.reason.emailSetupRetry.es": "Esperando unos minutos: no se pudo agregar el enlace para darse de baja",
+  "activity.reason.tooLongAfterCall": "Not sent: too long after the call",
+  "activity.reason.tooLongAfterCall.es": "No se envió: pasó demasiado tiempo después de la llamada",
+  "activity.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  "activity.reason.tooLongAfterWriteIn.es": "No se envió: pasó demasiado tiempo después de que escribió",
+  "activity.reason.textsStopped": "They stopped texts from this business",
+  "activity.reason.textsStopped.es": "Dejó de recibir textos de este negocio",
+  "activity.reason.textsHeld": "Texts to them are on hold",
+  "activity.reason.textsHeld.es": "Los textos para esta persona están en espera",
+  "activity.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
+  "activity.reason.numberUnconfirmed.es": "Su número podría ser de México o de EE. UU. Elija el país en su contacto",
+  "activity.reason.noEmail": "No email address on file",
+  "activity.reason.noEmail.es": "No hay un correo registrado",
+  "activity.reason.noPhone": "No phone number we can text",
+  "activity.reason.noPhone.es": "No hay un número al que se le pueda mandar un texto",
+  "activity.reason.smsGate": "Texting isn't set up for this company yet",
+  "activity.reason.smsGate.es": "Los textos todavía no están configurados para este negocio",
+  "activity.reason.dailyCap": "Daily limit reached",
+  "activity.reason.dailyCap.es": "Se alcanzó el límite diario",
+  "activity.reason.failed": "Couldn't be delivered",
+  "activity.reason.failed.es": "No se pudo entregar",
+  "activity.reason.appointmentStarted": "Appointment already started",
+  "activity.reason.appointmentStarted.es": "La cita ya empezó",
+  "activity.reason.noLongerDue": "No longer due",
+  "activity.reason.noLongerDue.es": "Ya no corresponde",
+  "activity.reason.recipeOff": "This automation was turned off",
+  "activity.reason.recipeOff.es": "Esta automatización se desactivó",
+  "activity.reason.timezone": "The company's time zone isn't set",
+  "activity.reason.timezone.es": "La zona horaria del negocio no está configurada",
+  "activity.reason.calendarOff": "The booking page is switched off",
+  "activity.reason.calendarOff.es": "La página de citas está desactivada",
+  "activity.reason.recentText": "A text already went to this person today",
+  "activity.reason.recentText.es": "Ya se le mandó un texto a esta persona hoy",
+  "activity.reason.smsCooldown": "Waiting before trying this text again",
+  "activity.reason.smsCooldown.es": "Esperando antes de volver a intentar este texto",
+  "activity.reason.tooCloseToAppointment": "Too close to the appointment to ask",
+  "activity.reason.tooCloseToAppointment.es": "Demasiado cerca de la cita para preguntar",
+  "activity.reason.reviewFirst": "Waiting for the review request to go first",
+  "activity.reason.reviewFirst.es": "Esperando a que primero salga la solicitud de reseña",
+  "activity.reason.heardBack": "They've been in touch since",
+  "activity.reason.heardBack.es": "Se ha comunicado desde entonces",
+  "activity.reason.stageGone": "The stage this automation watches is gone",
+  "activity.reason.stageGone.es": "La etapa que vigila esta automatización ya no existe",
+  "activity.reason.noMailingAddress": "The company's mailing address isn't set",
+  "activity.reason.noMailingAddress.es": "La dirección postal del negocio no está configurada",
+  "activity.reason.noReplyTo": "The company has no reply-to address",
+  "activity.reason.noReplyTo.es": "El negocio no tiene una dirección de respuesta",
+  "activity.reason.optedOutEmail": "They asked not to get these emails",
+  "activity.reason.optedOutEmail.es": "Pidió no recibir estos correos",
+  "activity.reason.suppressedEmail": "This address bounced or was marked as spam",
+  "activity.reason.suppressedEmail.es": "Este correo rebotó o se marcó como spam",
+  "activity.reason.outsideRegion": "Number is outside the US, Canada or Mexico",
+  "activity.reason.outsideRegion.es": "El número está fuera de EE. UU., Canadá o México",
+  "activity.reason.consentWithheld": "They didn't agree to texts",
+  "activity.reason.consentWithheld.es": "No aceptó recibir textos",
+  "activity.reason.robocall": "Screened as a robocall",
+  "activity.reason.robocall.es": "Identificada como llamada automática",
+  "activity.reason.callerHungUp": "The caller hung up before anyone could help",
+  "activity.reason.callerHungUp.es": "La persona colgó antes de que alguien pudiera ayudar",
+  "activity.reason.transferNoAnswer": "Nobody answered the transfer",
+  "activity.reason.transferNoAnswer.es": "Nadie atendió la transferencia",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
@@ -3782,7 +3863,7 @@ export const m = {
   // still sitting there un-texted, and no part of that sentence should make
   // them wonder whether it might yet go out on its own. It won't.
   "calls.textbackFailed": "Text-back didn't send",
-  "calls.textbackFailed.es": "El texto de regreso no se envió",
+  "calls.textbackFailed.es": "El texto por llamada perdida no se envió",
   // The detail page only — the list row is a whole-row click target and gets
   // the badge alone (a nested button there would double-fire the row's own
   // navigation and confuse the tab order).
@@ -3841,7 +3922,7 @@ export const m = {
   "calls.detail.assistant": "Assistant",
   "calls.detail.assistant.es": "Asistente",
   "calls.detail.caller": "Caller",
-  "calls.detail.caller.es": "Quien llama",
+  "calls.detail.caller.es": "Quien llamó",
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
   "calls.detail.noTranscript.es": "No se grabó transcripción de esta llamada.",
   // The call card: who called, why, the number to call back and the caller's

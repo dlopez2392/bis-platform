@@ -4,9 +4,8 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
 import { isSendRejected, sendRejectedReason } from "../../conversations/send-errors";
 
 /**
@@ -33,19 +32,22 @@ export function TextbackResend({
   body,
   action,
   locale = "en",
+  pseudo = false,
 }: {
   contactId: string;
   /** The exact body of the failed message, resent verbatim. */
   body: string;
   action: (formData: FormData) => Promise<void>;
   locale?: Locale;
+  pseudo?: boolean;
 }) {
+  const tr = makeTr(locale, pseudo);
   const router = useRouter();
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     try {
       await action(formData);
-      toast.success(t(m, "compose.smsSent", locale));
+      toast.success(tr.text("compose.smsSent"));
       // `sendSmsAction` revalidates the conversation and contact pages, not
       // this one — it has no idea it was called from a call. The BADGE is not
       // what this refresh is for: that records a fact about this call's
@@ -61,8 +63,8 @@ export function TextbackResend({
       // else is a provider failure and gets the generic line.
       toast.error(
         isSendRejected(e)
-          ? (sendRejectedReason(e) ?? t(m, "compose.smsSendRejected", locale))
-          : t(m, "compose.smsFailed", locale),
+          ? (sendRejectedReason(e) ?? tr.text("compose.smsSendRejected"))
+          : tr.text("compose.smsFailed"),
       );
     }
   });
@@ -75,7 +77,7 @@ export function TextbackResend({
           that reaches a real phone, so a double-click costs a duplicate
           text — `useFormSubmit` holds its own ref guard behind this. */}
       <Button type="submit" size="sm" variant="outline" disabled={pending}>
-        {pending ? t(m, "compose.sending", locale) : t(m, "calls.textbackResend", locale)}
+        {pending ? tr.text("compose.sending") : tr.text("calls.textbackResend")}
       </Button>
     </form>
   );

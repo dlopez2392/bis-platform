@@ -1,8 +1,8 @@
 import type { AutomationUsage } from "@bis/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { m } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
+import { reasonInLanguage } from "./reason-words";
 import { AUTOMATION_DAILY_CAP } from "@/lib/automations/caps";
 import { CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY } from "@/lib/concierge/guards";
 
@@ -60,12 +60,12 @@ export function UsageCard({
             </dl>
             <p className="mt-4 text-sm text-muted-foreground" data-testid="usage-held">
               {tr.text("activity.usage.held", { n: state.usage.held })}
-              {state.usage.topHeldReason ? ` · ${tr.text("activity.usage.topReason", { reason: state.usage.topHeldReason })}` : ""}
+              {state.usage.topHeldReason ? ` · ${tr.text("activity.usage.topReason", { reason: reasonInLanguage(state.usage.topHeldReason, locale) })}` : ""}
             </p>
             <p className="text-sm text-muted-foreground" data-testid="usage-skipped">
               {/* S-10 T5: "omitido/omitidos" agrees in number too. */}
               {tr.count("activity.usage.skipped", state.usage.skipped, { n: state.usage.skipped })}
-              {state.usage.topSkippedReason ? ` · ${tr.text("activity.usage.topReason", { reason: state.usage.topSkippedReason })}` : ""}
+              {state.usage.topSkippedReason ? ` · ${tr.text("activity.usage.topReason", { reason: reasonInLanguage(state.usage.topSkippedReason, locale) })}` : ""}
             </p>
           </>
         )}
