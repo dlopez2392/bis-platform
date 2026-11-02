@@ -5,10 +5,14 @@
 // admit a new one) and fail only on a NEW breach; fixing one never needs a
 // baseline edit.
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   twinPairs, registerViolations, placeholderMismatches, glossaryViolations, GLOSSARY_RULES, TU_WORDS,
+  companyViolations,
 } from "./spanish-style";
-import { parityViolations } from "./ratchet-scan";
+import {
+  parityViolations, scanSources, agencyOnlyFiles, agencyOnlyKeys, agencyFilesForExemption,
+} from "./ratchet-scan";
 import frozen from "./spanish-style-baseline.json";
 import { m } from "@/lib/messages";
 
@@ -100,6 +104,35 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
   });
 });
 
+describe("G6 companyViolations — 'empresa' is the agency's word for an account, never a business's word for itself", () => {
+  const cat = (es: string) => ({ "k": "English", "k.es": es });
+
+  it("fails on 'Su empresa todavía…' in a client key (mutation: drop the regex check → FAILS)", () => {
+    expect(companyViolations(cat("Su empresa todavía no tiene un número activo."))).toEqual(["k.es"]);
+  });
+
+  it("passes the same string when the key is agency-only (mutation: ignore exemptKeys → FAILS)", () => {
+    expect(companyViolations(cat("Su empresa todavía no tiene un número activo."), new Set(["k"]))).toEqual([]);
+  });
+
+  it("catches the plural 'empresas' too (mutation: drop the s? → FAILS)", () => {
+    expect(companyViolations(cat("Buscar empresas…"))).toEqual(["k.es"]);
+  });
+
+  it("does not key off the English at all — fires even when the English says nothing about a company (mutation: require an English match → FAILS)", () => {
+    expect(companyViolations({ "k": "Hello", "k.es": "Hola, soy de su empresa." })).toEqual(["k.es"]);
+  });
+
+  it("an exempt key is checked against both the plain and the .en-suffixed base (mutation: check only the plain base → FAILS)", () => {
+    const cat2 = { "x.en": "Hello", "x.es": "Hola de parte de su empresa." };
+    expect(companyViolations(cat2, new Set(["x.en"]))).toEqual([]);
+  });
+
+  it("passes copy that never says the word at all", () => {
+    expect(companyViolations(cat("Su negocio todavía no tiene un número activo."))).toEqual([]);
+  });
+});
+
 describe("G4 and G6, live", () => {
   it("no NEW tú string (mutation: put 'Inténtalo de nuevo.' in any .es → FAILS naming the key)", () => {
     const v = parityViolations(registerViolations(m), frozen.register);
@@ -110,4 +143,18 @@ describe("G4 and G6, live", () => {
     const v = parityViolations(glossaryViolations(m), frozen.glossary);
     expect(v, `use the glossary word (spec §4.3) for: ${v.join(", ")}`).toEqual([]);
   });
+
+  // S-10 T9b: zero today, hard from day one (G5's own pattern) — every
+  // 'empresa' a client or an Owner could read was reworded to "su negocio"
+  // (the business's own self-reference) or "cuenta" (the agency's
+  // third-person view of a client's account, where the file is too broadly
+  // shared to exempt by reference); only genuinely agency-only files keep
+  // the word.
+  it("no 'empresa' in any .es string a client or Owner can read (mutation: put 'Su empresa todavía…' in a client key → FAILS naming it)", () => {
+    const baseDir = path.join(__dirname, "../../..");
+    const scan = scanSources(baseDir, new Set(Object.keys(m)));
+    const exempt = agencyOnlyKeys(scan.refs, agencyFilesForExemption(agencyOnlyFiles(scan.imports)));
+    const v = companyViolations(m, exempt);
+    expect(v, `say "su negocio" (or "cuenta", for the agency's own view of a client) instead, for: ${v.join(", ")}`).toEqual([]);
+  }, 30_000); // scans every source file under apps/web/src, same cost ratchet.test.ts's own live tests pay
 });

@@ -63,7 +63,7 @@ export const m = {
   "nav.setup": "Setup",
   "nav.setup.es": "Configuración",
   "nav.accounts": "Companies",
-  "nav.accounts.es": "Empresas",
+  "nav.accounts.es": "Cuentas",
   "nav.blueprints": "Blueprints",
   "nav.blueprints.es": "Plantillas",
   "nav.plans": "Plans",
@@ -119,7 +119,7 @@ export const m = {
   "shell.expand": "Expand sidebar",
   "shell.expand.es": "Expandir panel lateral",
   "shell.backToAgency": "Back to companies",
-  "shell.backToAgency.es": "Volver a las empresas",
+  "shell.backToAgency.es": "Volver a las cuentas",
   // Topbar's AI presence indicator (DESIGN.md "AI presence" key pattern).
   // The dot itself is a separate aria-hidden element (topbar-presence.tsx);
   // this string carries the meaning on its own per DESIGN.md's status rule
@@ -268,7 +268,7 @@ export const m = {
   "branding.replyTo": "Reply-to address",
   "branding.replyTo.es": "Dirección de respuesta",
   "branding.replyToHint": "Where replies land when this company emails a contact, and when they reply to one of their own lead alerts. Leave blank and those replies come to the BIS mailbox instead.",
-  "branding.replyToHint.es": "A dónde llegan las respuestas cuando esta empresa le escribe a un contacto, y cuando responden a una de sus propias alertas de clientes potenciales. Si lo deja en blanco, esas respuestas llegan al buzón de BIS.",
+  "branding.replyToHint.es": "A dónde llegan las respuestas cuando su negocio le escribe a un contacto, y cuando responden a una de sus propias alertas de clientes potenciales. Si lo deja en blanco, esas respuestas llegan al buzón de BIS.",
   "branding.clientReplyToHint": "Where replies land when you email a contact, and when you reply to one of your lead alerts. Leave blank and those replies come to us instead of you.",
   "branding.clientReplyToHint.es": "A dónde llegan las respuestas cuando usted le escribe a un contacto, y cuando responde a una de sus alertas de clientes potenciales. Si lo deja en blanco, esas respuestas nos llegan a nosotros en lugar de a usted.",
   "branding.badReplyTo": "Enter an email address, like hello@yourcompany.com.",
@@ -276,7 +276,7 @@ export const m = {
   "branding.mailingAddress": "Mailing address",
   "branding.mailingAddress.es": "Dirección postal",
   "branding.mailingAddressHint": "Printed at the bottom of the emails this company sends to past customers. The law asks for a real postal address on those, so use one where mail actually reaches them.",
-  "branding.mailingAddressHint.es": "Se imprime al final de los correos que esta empresa envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde realmente llegue el correo.",
+  "branding.mailingAddressHint.es": "Se imprime al final de los correos que su negocio envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde realmente llegue el correo.",
   "branding.clientMailingAddressHint": "Printed at the bottom of the emails you send to past customers. The law asks for a real postal address on those, so use one where you actually get mail.",
   "branding.clientMailingAddressHint.es": "Se imprime al final de los correos que usted envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde usted realmente reciba correo.",
   "branding.mailingAddressTooLong": "That mailing address is too long. Keep it to 300 characters or fewer.",
@@ -284,11 +284,11 @@ export const m = {
   "checklist.reply_to.title": "Set a reply-to address",
   "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach, and do it before setting a sending address. Until it is set, a reply lands wherever the mail came from: the BIS mailbox while they still send from the platform address, and their own sending domain once one is set — which for the send-only subdomain recommended above usually has no mailbox at all, so the reply bounces or vanishes.",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
-  "branding.body.es": "Se muestra a los usuarios de esta empresa en lugar del nombre y el logotipo de BIS, y en sus formularios públicos de clientes potenciales.",
+  "branding.body.es": "Se muestra a los usuarios de su negocio en lugar del nombre y el logotipo de BIS, y en sus formularios públicos de clientes potenciales.",
   "branding.name": "Display name",
   "branding.name.es": "Nombre para mostrar",
   "branding.nameHint": "What this company's own customers see — on their lead forms, booking page, website chat, emails and texts, and in their sidebar. Your internal name for them stays private.",
-  "branding.nameHint.es": "Lo que ven los propios clientes de esta empresa: en sus formularios de clientes potenciales, la página para agendar citas, el chat del sitio web, los correos y los mensajes de texto, y en su barra lateral. El nombre interno que usted usa para ellos sigue siendo privado.",
+  "branding.nameHint.es": "Lo que ven los propios clientes de su negocio: en sus formularios de clientes potenciales, la página para agendar citas, el chat del sitio web, los correos y los mensajes de texto, y en su barra lateral. El nombre interno que usted usa para ellos sigue siendo privado.",
   "branding.logo": "Logo",
   "branding.logo.es": "Logotipo",
   "branding.logoHint": "PNG, JPEG or WebP, up to 512 KB.",
@@ -1654,9 +1654,9 @@ export const m = {
   "compose.noPhoneOnContact.es": "Este contacto no tiene número de teléfono.",
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
-  "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de esta empresa",
+  "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de su negocio",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
-  "compose.smsBlockedNoNumber.es": "Para mandar textos, esta empresa necesita un número de teléfono activo",
+  "compose.smsBlockedNoNumber.es": "Para mandar textos, su negocio necesita un número de teléfono activo",
   // M7a PR-4: the staff composer's own refusal while an account is paused
   // for billing (G7a's last line — non-automation sends are refused with a
   // sentence, not held).
@@ -3975,7 +3975,7 @@ export const m = {
   "activity.empty.title": "Nothing has gone out yet",
   "activity.empty.title.es": "Todavía no se ha enviado nada",
   "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
-  "activity.empty.body.es": "Cada texto, correo y conversación que el sistema maneja para esta empresa aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
+  "activity.empty.body.es": "Cada texto, correo y conversación que el sistema maneja para su negocio aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
   // The same sentence, second person: this page is BOTH audiences (its own
   // top comment), and a client reading about THEIR OWN business should
   // never read "this company" the way an agency describing a client does.
@@ -4418,7 +4418,7 @@ export const m = {
   "setup.openStep": "Open",
   "setup.tickFailed": "Could not save that. Reload and try again.",
   "setup.rename.empty": "A company needs a name — this one can't be blank.",
-  "setup.rename.empty.es": "Una empresa necesita un nombre; este no puede quedar vacío.",
+  "setup.rename.empty.es": "Todo negocio necesita un nombre; este no puede quedar vacío.",
   "setup.rename.failed": "Couldn't rename this company. Try again.",
   "setup.rename.label": "Company name",
   // This copy has answered the audience question wrongly twice. "They never
@@ -4814,11 +4814,11 @@ export const m = {
   "zone.guessed.agency":
     "This company has no timezone of its own, so times use the agency's.",
   "zone.guessed.agency.es":
-    "Esta empresa no tiene zona horaria propia, así que las horas usan la de la agencia.",
+    "Esta cuenta no tiene zona horaria propia, así que las horas usan la de la agencia.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
   "zone.guessed.fallback.es":
-    "Ni esta empresa ni la agencia tienen una zona horaria válida, así que las horas usan UTC.",
+    "Ni esta cuenta ni la agencia tienen una zona horaria válida, así que las horas usan UTC.",
   // D-076: this used to be a Link to Settings ("Set it in Settings"),
   // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
   // would have been redirected straight back to their own dashboard — but
@@ -4829,7 +4829,7 @@ export const m = {
   // this string just hadn't caught up to its own sibling's rule. Plain
   // text now, naming the real constraint instead of a destination.
   "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
-  "zone.guessed.fix.es": "Todavía no hay un campo para esto en Ajustes: la zona horaria de una empresa solo se fija al crear su cuenta.",
+  "zone.guessed.fix.es": "Todavía no hay un campo para esto en Ajustes: la zona horaria de una cuenta solo se fija al crearla.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they
@@ -5319,13 +5319,13 @@ export const m = {
   "team.empty.es": "Por ahora solo está usted. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   // The agency is never on the list, so "just you" would be false for it.
   "team.empty.agency": "Nobody at this company can sign in yet. Invite the people who answer their phones and run their jobs.",
-  "team.empty.agency.es": "Nadie de esta empresa puede entrar todavía. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
+  "team.empty.agency.es": "Nadie de esta cuenta puede entrar todavía. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   "team.clerkUnavailable": "We couldn't reach the sign-in service, so invitations aren't shown. Your team list is below.",
   "team.clerkUnavailable.es": "No pudimos comunicarnos con el servicio de inicio de sesión, así que no se muestran las invitaciones. Su lista de equipo está abajo.",
   // The agency on /team while client access is off (spec §8). Only the agency
   // can land there, and Settings is where the switch lives.
   "team.accessOffNote": "Client access is off for this company, so nobody can sign in and nobody can be invited. Turn it on in Settings to manage the team.",
-  "team.accessOffNote.es": "El acceso del cliente está desactivado para esta empresa, así que nadie puede entrar ni recibir una invitación. Actívelo en Ajustes para administrar el equipo.",
+  "team.accessOffNote.es": "El acceso del cliente está desactivado para esta cuenta, así que nadie puede entrar ni recibir una invitación. Actívelo en Ajustes para administrar el equipo.",
   "team.loadFailed": "We couldn't load the team just now. Refresh the page to try again.",
   "team.loadFailed.es": "No pudimos cargar el equipo en este momento. Actualice la página para intentarlo de nuevo.",
   "team.role.changed": "{name} is now {role}.",
@@ -5345,7 +5345,7 @@ export const m = {
   "team.full.es": "Su equipo está completo. Pídale a BIS que haga espacio.",
   // The agency raises the cap by hand (decision 33), so it is never told to ask itself.
   "team.full.agency": "This team is full. Raise the company's login limit to make room.",
-  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la empresa para hacer espacio.",
+  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la cuenta para hacer espacio.",
   "team.accessOff": "Turn client access on before inviting anyone.",
   "team.accessOff.es": "Active el acceso del cliente antes de invitar a alguien.",
   "team.lastOwner": "Every team needs at least one Owner. Make someone else an Owner first.",

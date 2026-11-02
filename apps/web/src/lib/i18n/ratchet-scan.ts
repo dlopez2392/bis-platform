@@ -369,6 +369,10 @@ export const RUNTIME_AGENCY_ONLY_FILES: readonly { file: string; reason: string 
     file: "src/components/back-to-setup.tsx",
     reason: "renders only when a link carries `?from=setup`, which nothing but the agency-only Setup wizard ever generates — reached from client pages (Branding, Calendar) only because those are Setup's own deep-link targets for an agency operator mid-setup",
   },
+  {
+    file: "src/components/account-switcher.tsx",
+    reason: "its one export, AccountSwitcher, is rendered only inside app-sidebar.tsx's own `isAgency` branch — switching between client accounts is an agency-only action, reached from the sidebar only because the sidebar itself is universal",
+  },
 ];
 
 export function agencyOnlyFiles(

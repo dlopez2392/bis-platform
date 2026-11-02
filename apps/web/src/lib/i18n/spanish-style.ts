@@ -45,7 +45,7 @@ export function registerViolations(catalogue: Catalogue): string[] {
 
 const PLACEHOLDER_RE = /\{(\w+)\}/g;
 const placeholders = (s: string) => [...s.matchAll(PLACEHOLDER_RE)].map((x) => x[1]).sort().join(",");
-const stripPlaceholders = (s: string) => s.replace(PLACEHOLDER_RE, " ");
+export const stripPlaceholders = (s: string) => s.replace(PLACEHOLDER_RE, " ");
 
 /** G5. Twins whose `{placeholders}` differ from the English: a dropped
  *  `{count}` renders a sentence with a hole, a renamed one renders the raw
@@ -95,6 +95,32 @@ export function glossaryViolations(catalogue: Catalogue, rules: readonly Glossar
     const en = stripPlaceholders(p.en);
     const es = stripPlaceholders(p.es);
     for (const r of rules) if (r.en.test(en) && r.never.test(es)) out.push(`${p.key}|${r.id}`);
+  }
+  return out.sort();
+}
+
+const COMPANY_RE = /\bempresas?\b/i;
+
+/**
+ * G6's one FILE-conditioned rule (S-10 T9b, spec §4.3's "client" row):
+ * "empresa" is the agency's own word for an account (`nav.accounts.es`) —
+ * never the word a business's OWN copy uses for itself, which is "su
+ * negocio". Unlike every other glossary rule, this one does not key off
+ * the English text at all (the English of an Owner's own screen is never
+ * literally "a company" in the way "settings"/"delete"/"book" are single
+ * words) — it keys off WHO can read the Spanish: `exemptKeys` is the same
+ * reference-based agency-only set G1 computes (`agencyOnlyKeys`), so a key
+ * every literal reference to which sits in an agency-only file may say
+ * "empresa" about the account it describes; any other key may not.
+ */
+export function companyViolations(
+  catalogue: Catalogue, exemptKeys: ReadonlySet<string> = new Set(),
+): string[] {
+  const out: string[] = [];
+  for (const p of twinPairs(catalogue)) {
+    const base = p.key.slice(0, -3);
+    if (exemptKeys.has(base) || exemptKeys.has(`${base}.en`)) continue;
+    if (COMPANY_RE.test(stripPlaceholders(p.es))) out.push(p.key);
   }
   return out.sort();
 }

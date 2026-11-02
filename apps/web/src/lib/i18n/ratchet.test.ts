@@ -330,21 +330,22 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [{ file: override }])]).toContain(override);
     });
 
-    it("names exactly the three real files, each with a reason (mutation: add a fourth without a test row → FAILS)", () => {
+    it("names exactly the four real files, each with a reason (mutation: add a fifth without a test row → FAILS)", () => {
       expect(RUNTIME_AGENCY_ONLY_FILES.map((r) => r.file)).toEqual([
         "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx",
         "src/lib/checklist-catalogue.ts",
         "src/components/back-to-setup.tsx",
+        "src/components/account-switcher.tsx",
       ]);
       for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(r.reason.length, r.file).toBeGreaterThan(20);
     });
 
-    it("the default agencyOnlyFiles call wires the real three in, over the real repo's own import graph (live)", () => {
+    it("the default agencyOnlyFiles call wires the real four in, over the real repo's own import graph (live)", () => {
       const baseDir = path.join(__dirname, "../../..");
       const scan = scanSources(baseDir, new Set(Object.keys(m)));
       const agency = agencyOnlyFiles(scan.imports);
       for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(agency.has(r.file), r.file).toBe(true);
-    });
+    }, 30_000);
   });
 
   it("the routes include the five in-account agency screens (mutation: drop checklist from the pattern → FAILS by name)", () => {
