@@ -22,7 +22,8 @@ import { withRollback, actAsOwner } from "./db";
  * RED BEFORE APPLY: every case except the armed controls inside the probes. GREEN AFTER APPLY: all of them.
  */
 
-/** The 38 SECURITY DEFINER functions in public and app at 0110 (0107's 37, 0108 and 0109 add none, 0110 adds
+/** The 39 SECURITY DEFINER functions in public and app at 0111 (0110's 38 and app.record_changes_capture). (0110's 38:
+ *  0107's 37, 0108 and 0109 add none, 0110 adds
  *  app.contact_match_ids), with their whole proconfig after it. (0107's 37: 0106's 36 and app.bookings_slot_guard.) (0106's 36: 0103's 29, 0104 and 0105 add none, 0106 part A adds three:
  *  app.contacts_flag_pairs, public.dismiss_duplicate_pair, public.undismiss_duplicate_pair; part B adds four:
  *  app.follow_merge, app.follow_merge_related, public.merge_contacts, public.undo_contact_merge. 0103's 29: 0098's
@@ -46,6 +47,7 @@ const EXPECTED_DEFINERS: Record<string, string[]> = {
   "app.my_client_group_ids()": PG_CATALOG_PG_TEMP,
   "app.my_contact_ids()": PG_CATALOG_PG_TEMP,
   "app.my_place_ids()": PG_CATALOG_PG_TEMP,
+  "app.record_changes_capture()": PG_CATALOG_PG_TEMP,
   "app.sees_all_customers(uuid)": PG_CATALOG_PG_TEMP,
   "app.sync_company_name()": PG_CATALOG_PG_TEMP,
   "public.ai_gate_check(uuid,text,text)": PG_CATALOG_PG_TEMP,
@@ -79,12 +81,12 @@ const searchPathOf = (cfg: string[] | null) => cfg?.find((c) => c.startsWith("se
 const endsWithPgTemp = (path: string | undefined) => path !== undefined && path.split(",").map((s) => s.trim()).at(-1) === "pg_temp";
 
 describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
-  it("the definers in public and app are exactly these 38, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
+  it("the definers in public and app are exactly these 39, each with exactly this proconfig (a new definer fails here until it is listed)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows).toHaveLength(38);
+      expect(rows).toHaveLength(39);
       expect(Object.fromEntries(rows.map((r) => [r.sig, r.proconfig]))).toEqual(EXPECTED_DEFINERS);
     }));
 
@@ -93,7 +95,7 @@ describe("0096: every SECURITY DEFINER function lists pg_temp last", () => {
       const { rows } = await c.query<Fn>(
         `select ${SIG} as sig, p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where p.prosecdef and n.nspname in ('public', 'app')`);
-      expect(rows.length).toBeGreaterThanOrEqual(38); // not vacuous
+      expect(rows.length).toBeGreaterThanOrEqual(39); // not vacuous
       const offenders = rows.filter((r) => !endsWithPgTemp(searchPathOf(r.proconfig))).map((r) => `${r.sig}: ${String(r.proconfig)}`);
       expect(offenders).toEqual([]);
     }));
