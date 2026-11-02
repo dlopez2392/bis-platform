@@ -91,11 +91,14 @@ describe("runEmailAction — at once, the answer shown, Undo on the toast (rule 
     expect(toast.error).toHaveBeenCalledWith("changed");
   });
 
-  it("the two treatments are dot + word with token classes only (rule 3; mutation: a hex colour → FAILS)", () => {
+  // S-10 T9b: EMAIL_TREATMENT carries only dot/chip now — the word is
+  // emailStatusWord, in the reader's own language (checked below).
+  it("the two treatments are dot + chip with token classes only (rule 3; mutation: a hex colour → FAILS)", () => {
     for (const t of Object.values(EMAIL_TREATMENT)) {
-      expect(t.label.length).toBeGreaterThan(0);
       expect(`${t.dot} ${t.chip}`).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(/i);
     }
+    expect(emailStatusWord("allowed", "en").length).toBeGreaterThan(0);
+    expect(emailStatusWord("stopped", "en").length).toBeGreaterThan(0);
   });
 });
 

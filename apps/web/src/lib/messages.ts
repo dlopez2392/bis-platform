@@ -2629,7 +2629,10 @@ export const m = {
   // rather than inlined at the append site because it is customer-facing copy
   // like every other string here — and because a carrier reads it.
   "sms.optOut.en": "Reply STOP to opt out.",
-  "sms.optOut.es": "Responde STOP para cancelar.",
+  // S-10 T9b (owner decision 2026-11-01): usted, not tú — "Responde" (G4's
+  // own scanner cannot catch a bare imperative; "responda" is the same
+  // length, so no SMS grows).
+  "sms.optOut.es": "Responda STOP para cancelar.",
   // The consent replies: the ONE stop confirmation, the start/opt-in
   // confirmation and the help reply. Rewritten 2026-10-05 after TCR rejected
   // BIS's own 10DLC campaign (MNO_REJECTED, reason 611): the opt-in

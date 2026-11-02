@@ -474,4 +474,16 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/lib/voice/call-card.ts",
     reason: "callbackTaskTitle's own doc comment: tasks.title is STORED text, rendered verbatim by every To do surface (the consent To do's precedent) — its .es twin deliberately waits for an operator locale project this lane does not open; the sibling callbackAlertLine in the same file already takes a real locale for the call-alert email",
   },
+  {
+    file: "src/lib/consent/replies.ts",
+    reason: "the LINES table picks one of a `.en`/`.es` SUFFIX PAIR by the caller's own already-resolved language before the m[...] read — that naming (unlike t()'s bare-key/+.es) needs an explicit branch the scanner cannot tell from an English-only read",
+  },
+  {
+    file: "src/lib/consent/email-gate.ts",
+    reason: "the unsubscribe footer picks a `.en`/`.es` suffixed key by the email's own resolved language, the same `.en`/`.es` PAIR convention as replies.ts above",
+  },
+  {
+    file: "src/lib/consent/inbound.ts",
+    reason: "todo.consent.cancel.en/hold.en are STORED To-do titles (the consent To do's own precedent call-card.ts cites) — this file ALSO reads todo.sharedNumber.* through t() with a real resolved locale a few lines away; only the two stored-title reads are English on purpose",
+  },
 ];

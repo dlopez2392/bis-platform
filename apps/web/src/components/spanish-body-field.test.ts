@@ -38,4 +38,13 @@ describe("SpanishBodyField (spec §12.2)", () => {
     expect(html({ stored: { bodyEs: accented, stale: false } })).toMatch(/make this text cost \d+ parts instead of \d+\./);
     expect(html({ stored: { bodyEs: accented, stale: false }, sms: false })).not.toContain("make this text cost");
   });
+
+  // S-10 T9b: the one client-reachable caller (Calendar settings' follow-up
+  // section, shown to the Owner too) needs this in the reader's own
+  // language — every read used to be a hard-coded `m[...]` English literal.
+  it("reads every label in Spanish when the reader's locale is es (mutation: ignore the locale prop -> FAILS)", () => {
+    const out = html({ locale: "es", stored: { bodyEs: "Viejo.", stale: true } });
+    expect(out).toContain("El mensaje en español todavía dice lo de antes.");
+    expect(out).not.toContain("The Spanish still says the old message.");
+  });
 });

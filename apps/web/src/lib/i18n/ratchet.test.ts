@@ -415,7 +415,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the twelve English-only readers (mutation: add a thirteenth without a test row → FAILS)", () => {
+  it("names exactly the fifteen English-only readers (mutation: add a sixteenth without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -447,6 +447,17 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       // callbackAlertLine (same file) already takes a real locale for the
       // call-alert email; only the stored title stays English, on purpose.
       "src/lib/voice/call-card.ts",
+      // S-10 T9b: a `.en`/`.es` SUFFIX PAIR, picked by the caller's own
+      // already-resolved language before the m[...] read — t()'s bare-key
+      // convention cannot express this, and the scanner cannot tell the
+      // branch from an English-only read.
+      "src/lib/consent/replies.ts",
+      "src/lib/consent/email-gate.ts",
+      // S-10 T9b: todo.consent.cancel.en/hold.en are STORED To-do titles,
+      // the same precedent as call-card.ts above; this file ALSO reads
+      // todo.sharedNumber.* through t() with a real resolved locale a few
+      // lines away — only the two stored-title reads are English on purpose.
+      "src/lib/consent/inbound.ts",
     ]);
   });
 

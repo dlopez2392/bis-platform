@@ -463,7 +463,7 @@ describe("S-09 PR 2: no-show nudges in the customer's language", () => {
     await noShowNudgePass.run(ctx());
     const sent = smsSend.mock.calls[0]![0] as { body: string };
     expect(sent.body.startsWith("Le estuvimos esperando en su cita con Rio Roofing.")).toBe(true);
-    expect(sent.body.endsWith("Responde STOP para cancelar.")).toBe(true);
+    expect(sent.body.endsWith("Responda STOP para cancelar.")).toBe(true);
     expect(sent.body).toContain(URL);
     expect(segmentsFor(sent.body).encoding).toBe("gsm7");
   });

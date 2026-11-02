@@ -30,10 +30,16 @@ describe("the Texts row's lines (spec §6)", () => {
     expect(long).toContain(`“${"a".repeat(59)}…”`);
   });
 
-  it("status is a dot and a word from the token classes (rule 3; mutation: stopped borrows allowed's dot → FAILS)", () => {
-    expect(TEXTS_TREATMENT.allowed).toMatchObject({ label: "Allowed", dot: "bg-success" });
-    expect(TEXTS_TREATMENT.stopped).toMatchObject({ label: "Stopped", dot: "bg-destructive" });
-    expect(TEXTS_TREATMENT.held).toMatchObject({ label: "On hold", dot: "bg-warning" });
+  // S-10 T9b: TEXTS_TREATMENT carries only dot/chip now (the word is
+  // textsStatusWord, in the reader's own language, never read off this
+  // object — every real caller already overrode the old `.label` field).
+  it("status is a dot from the token classes, and the word reads in the caller's language (rule 3; mutation: stopped borrows allowed's dot → FAILS)", () => {
+    expect(TEXTS_TREATMENT.allowed).toMatchObject({ dot: "bg-success" });
+    expect(TEXTS_TREATMENT.stopped).toMatchObject({ dot: "bg-destructive" });
+    expect(TEXTS_TREATMENT.held).toMatchObject({ dot: "bg-warning" });
+    expect(textsStatusWord("allowed", "en")).toBe("Allowed");
+    expect(textsStatusWord("stopped", "en")).toBe("Stopped");
+    expect(textsStatusWord("held", "en")).toBe("On hold");
   });
 });
 

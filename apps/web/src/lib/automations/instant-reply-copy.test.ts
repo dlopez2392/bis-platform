@@ -75,7 +75,7 @@ describe("the SENT string — the default plus the opt-out disclosure, in the le
     // disclose Spanish in English → the Spanish half reds.
     const en = withOptOut(defaultInstantReplyBody("Rio Roofing", "en"), "en");
     const es = withOptOut(defaultInstantReplyBody("Rio Roofing", "es"), "es");
-    expect(es.endsWith(" Responde STOP para cancelar.")).toBe(true);
+    expect(es.endsWith(" Responda STOP para cancelar.")).toBe(true);
     expect(segmentsFor(en)).toEqual({ encoding: "gsm7", chars: 139, segments: 1 });
     expect(segmentsFor(es)).toEqual({ encoding: "gsm7", chars: 133, segments: 1 });
   });

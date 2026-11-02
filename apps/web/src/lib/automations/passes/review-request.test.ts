@@ -552,7 +552,7 @@ describe("S-09 PR 2: review requests in the customer's language", () => {
     await reviewRequestPass.run(ctx());
     const sent = smsSend.mock.calls[0]![0] as { body: string };
     expect(sent.body.startsWith("¡Gracias por elegir a Rio Roofing!")).toBe(true);
-    expect(sent.body.endsWith("Responde STOP para cancelar.")).toBe(true);
+    expect(sent.body.endsWith("Responda STOP para cancelar.")).toBe(true);
     expect(sent.body).toContain(URL);
     expect(segmentsFor(sent.body).encoding).toBe("gsm7");
   });

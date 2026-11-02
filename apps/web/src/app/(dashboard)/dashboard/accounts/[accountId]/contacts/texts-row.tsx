@@ -166,7 +166,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
         <div ref={status} tabIndex={-1} data-testid="texts-row-status"
           className="flex items-center gap-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <span>{t(m, "contact.messages.texts", locale)}</span>
-          {picked ? null : <DotPill {...pill} label={view.kind === "allowed" || view.kind === "stopped" || view.kind === "held" ? textsStatusWord(view.kind, locale) : pill.label} dense data-status={view.kind} />}
+          {picked ? null : <DotPill {...pill} label={view.kind === "allowed" || view.kind === "stopped" || view.kind === "held" ? textsStatusWord(view.kind, locale) : phoneCheckTreatment(locale).label} dense data-status={view.kind} />}
         </div>
         {checkNumber ? (
           <>

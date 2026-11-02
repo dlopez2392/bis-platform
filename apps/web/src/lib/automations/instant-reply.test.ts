@@ -253,7 +253,7 @@ describe("sendInstantReply — the send", () => {
     // one pass that has a locale to offer, and a Spanish reply signed off
     // with "Reply STOP to opt out." would undo the point of having a bodyEs.
     expect(smsSend).toHaveBeenCalledWith({
-      to: "+19565550101", from: "+19565550000", body: `${ES} Responde STOP para cancelar.`,
+      to: "+19565550101", from: "+19565550000", body: `${ES} Responda STOP para cancelar.`,
     });
   });
 
