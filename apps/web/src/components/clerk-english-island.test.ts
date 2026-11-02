@@ -11,6 +11,7 @@ import { createElement } from "react";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
+import ts from "typescript";
 
 const h = vi.hoisted(() => ({ providers: [] as { getContainer: unknown }[] }));
 vi.mock("@clerk/nextjs", () => ({
@@ -28,7 +29,8 @@ beforeEach(() => { h.providers = []; });
 describe("ClerkEnglishIsland", () => {
   it("server-renders its children inside lang=\"en\", through Clerk's portal provider (mutation: drop lang, or the provider -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(ClerkEnglishIsland, null, createElement("span", null, "menu")));
-    expect(html).toMatch(/^<div lang="en"[^>]*><clerk-portal-provider><span>menu<\/span><\/clerk-portal-provider><div data-clerk-portal="" class="absolute"><\/div><\/div>$/);
+    // Lookaheads, so the attributes' order is free (review M-6); each one still has to be there.
+    expect(html).toMatch(/^<div(?=[^>]*\slang="en")[^>]*><clerk-portal-provider><span>menu<\/span><\/clerk-portal-provider><div(?=[^>]*\sdata-clerk-portal="")(?=[^>]*\sclass="absolute")[^>]*><\/div><\/div>$/);
     expect(h.providers).toHaveLength(1);
     expect(typeof h.providers[0]!.getContainer).toBe("function");
   });
@@ -38,8 +40,27 @@ describe("ClerkEnglishIsland", () => {
   // portal wrapper is a static <div>, so mounting into the island would make
   // it a flex item and shift both triggers by one gap whenever a menu opened.
   it("points Clerk's portals at an absolutely positioned element inside the island (mutation: return document.body, or the island itself -> FAILS)", () => {
-    expect(src).toMatch(/getContainer=\{\(\) => portalRef\.current\}/);
-    expect(src).toMatch(/<div lang="en"[^>]*>[\s\S]*<div ref=\{portalRef\} data-clerk-portal="" className="absolute" \/>\s*<\/div>/);
+    // Read from the syntax tree, so the order of the attributes is free (review M-6).
+    const sf = ts.createSourceFile("clerk-english-island.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const attr = (el: ts.JsxOpeningLikeElement, name: string) => {
+      const a = el.attributes.properties.find((p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(sf) === name);
+      if (!a?.initializer) return a ? "" : null;
+      return ts.isStringLiteral(a.initializer) ? a.initializer.text : a.initializer.expression?.getText(sf) ?? null;
+    };
+    let container: ts.JsxOpeningLikeElement | undefined;
+    let getContainer: string | null = null;
+    const visit = (n: ts.Node) => {
+      if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && attr(n, "ref") === "portalRef") container = n;
+      if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf) === "UNSAFE_PortalProvider") getContainer = attr(n, "getContainer");
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    expect(getContainer).toBe("() => portalRef.current");
+    expect(container, "an element carrying ref={portalRef}").toBeDefined();
+    expect(attr(container!, "className")).toBe("absolute");
+    // Its parent element is the island, and the island is the one carrying lang="en".
+    const island = container!.parent as ts.JsxElement;
+    expect(ts.isJsxElement(island) && attr(island.openingElement, "lang")).toBe("en");
   });
 
   it("keeps the topbar's own spacing between the two widgets: the header's gap, tighter below sm (mutation: drop the gap -> FAILS)", () => {

@@ -28,8 +28,13 @@ import { UNSAFE_PortalProvider } from "@clerk/nextjs";
  * fixed modal mounted here positions and stacks exactly as it did in <body>
  * (phone-width.spec.ts opens the organization switcher at 375px and checks
  * it stays on screen; spanish-dashboard.spec.ts reads the open menu's lang).
- * The UNSAFE_ prefix is Clerk's: if a Clerk upgrade drops it, the import
- * fails the build rather than silently mislabelling the menus.
+ * The UNSAFE_ prefix is Clerk's, and no build pins what it does: Clerk's UI
+ * bundle (clerk-js) loads from Clerk's CDN at runtime and floats within its
+ * major version, so a change in how it honours this provider can reach
+ * production with no build of ours at all (review M-3). Removing the export
+ * would fail our build; changing its behaviour would not. The pin is the e2e:
+ * spanish-dashboard.spec.ts opens the user menu and the organization list on
+ * the built app and reads lang="en" from what the browser actually has.
  *
  * Known seam, stated rather than hidden: UserMenu adds ONE item of ours,
  * Preferences, whose label follows the reader's locale ("Preferencias"), and

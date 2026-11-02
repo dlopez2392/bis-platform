@@ -19,7 +19,7 @@ function find(node: unknown, type: unknown): ReactElement<Record<string, unknown
 describe("EnglishOnly", () => {
   it("server-renders its children inside lang=\"en\" (mutation: drop lang from the wrapper -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(EnglishOnly, null, createElement("h1", null, "Work")));
-    expect(html).toMatch(/^<div lang="en"[^>]*><h1>Work<\/h1><\/div>$/);
+    expect(html).toMatch(/^<div(?=[^>]*\slang="en")[^>]*><h1>Work<\/h1><\/div>$/);
   });
 
   it("claims the document as an ISLAND, in English (mutation: island={false}, or lang=\"es\" -> FAILS)", () => {
