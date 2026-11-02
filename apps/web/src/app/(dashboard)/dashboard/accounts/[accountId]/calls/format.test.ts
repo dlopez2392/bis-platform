@@ -109,10 +109,10 @@ describe("OUTCOMES", () => {
     );
   });
 
-  it("gives every outcome a word as well as a dot — DESIGN.md rule 3, never colour alone", () => {
-    for (const [key, treatment] of Object.entries(OUTCOMES)) {
-      expect(treatment.label, `${key} has no label`).toBeTruthy();
-      expect(treatment.dot, `${key} has no dot`).toBeTruthy();
+  it("gives every outcome a word (via outcomeLabel) as well as a dot — DESIGN.md rule 3, never colour alone", () => {
+    for (const key of Object.keys(OUTCOMES) as (keyof typeof OUTCOMES)[]) {
+      expect(outcomeLabel(key, "en"), `${key} has no label`).toBeTruthy();
+      expect(OUTCOMES[key].dot, `${key} has no dot`).toBeTruthy();
     }
   });
 
@@ -147,20 +147,22 @@ describe("OUTCOMES", () => {
   });
 
   it("takes its label from the copy catalogue, never a literal", () => {
-    expect(OUTCOMES.transferred.label).toBe(m["calls.outcome.transferred"]);
+    expect(outcomeLabel("transferred", "en")).toBe(m["calls.outcome.transferred"]);
     // Plain words a business owner reads at 7 AM: no template syntax, no
     // internal codes, no carrier jargon.
-    expect(OUTCOMES.transferred.label).not.toMatch(/[{}]|\bM\d[a-z]?\b/);
+    expect(outcomeLabel("transferred", "en")).not.toMatch(/[{}]|\bM\d[a-z]?\b/);
   });
 });
 
 // S-10 T5: `OutcomePill` used to read `OUTCOMES[outcome].label` directly —
 // English on every locale, the calendar lane's confirm-reply.ts mistake,
-// caught here before `outcome-pill.tsx` shipped it.
+// caught here before `outcome-pill.tsx` shipped it. `OUTCOMES` itself no
+// longer carries a `label` field at all (S-10 T9b): the only reader left
+// was this file's own tests, so the dead field was removed outright.
 describe("outcomeLabel (S-10 T5)", () => {
   it("covers every outcome in both locales (mutation: hard-code English -> FAILS)", () => {
     for (const outcome of Object.keys(OUTCOMES) as (keyof typeof OUTCOMES)[]) {
-      expect(outcomeLabel(outcome, "en")).toBe(OUTCOMES[outcome].label);
+      expect(outcomeLabel(outcome, "en")).toBe(m[`calls.outcome.${outcome}` as keyof typeof m]);
       expect(outcomeLabel(outcome, "es")).toBe(m[`calls.outcome.${outcome}.es` as keyof typeof m]);
       // "spam" is a legitimate identical twin (section 0 of the design spec); every other outcome differs.
       if (outcome !== "spam") expect(outcomeLabel(outcome, "es")).not.toBe(outcomeLabel(outcome, "en"));

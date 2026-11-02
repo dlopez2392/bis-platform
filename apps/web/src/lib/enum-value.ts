@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Accepts only a value that is one of the listed options (an enum column,
@@ -15,8 +17,8 @@ import { m } from "@/lib/messages";
  * the reasoning `normalizeRequired`'s own doc gives for `setup.rename.empty`.
  */
 export function validateEnumValue<V extends string>(
-  options: readonly { value: V; label: string }[], raw: string,
+  options: readonly { value: V; label: string }[], raw: string, locale: Locale = "en",
 ): { ok: true; value: V } | { ok: false; error: string } {
   const hit = options.find((o) => o.value === raw);
-  return hit ? { ok: true, value: hit.value } : { ok: false, error: m["inline.invalidOption"] };
+  return hit ? { ok: true, value: hit.value } : { ok: false, error: t(m, "inline.invalidOption", locale) };
 }

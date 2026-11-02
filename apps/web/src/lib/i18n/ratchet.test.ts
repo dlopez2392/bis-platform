@@ -415,7 +415,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the fifteen English-only readers (mutation: add a sixteenth without a test row → FAILS)", () => {
+  it("names exactly the twenty-six English-only readers (mutation: add a twenty-seventh without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -458,6 +458,53 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       // todo.sharedNumber.* through t() with a real resolved locale a few
       // lines away — only the two stored-title reads are English on purpose.
       "src/lib/consent/inbound.ts",
+      // S-10 T9b: the To do screen's own doc comment — ACTION_FAILED and
+      // todo.consent.decideFirst's English reads are a fallback for a caller
+      // that reads only `error`; the real client (work-row-actions.tsx's
+      // failureText) always prefers `errorKey` and resolves it with t() in
+      // the reader's language. decideFromTask, the same file's other
+      // action, already resolves and uses a real locale a few lines away.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts",
+      // S-10 T9b: a .en/.es SUFFIX PAIR picked by a `language` the send gate
+      // already resolved and handed it — the same convention replies.ts and
+      // email-gate.ts are exempted for above.
+      "src/lib/sms/opt-out.ts",
+      // S-10 T9b: confirmMoveAction's thread line is STORED text, the same
+      // "waits for an operator locale project" precedent as call-card.ts —
+      // its own test file pins the .es twin as written out but unread.
+      "src/app/b/[publicId]/move/[token]/actions.ts",
+      // S-10 T9b: proveBooking's refusal is the same calendar.bookings.
+      // statusUpdateFailed producer side as calendar/actions.ts, consumed
+      // by server-words.ts's BY_ENGLISH map.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/prove-booking.ts",
+      // S-10 T9b: refuse()'s English fallback for AddContactErrorKey — the
+      // real client, add-contact-dialog.tsx, always prefers errorKey.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts",
+      // S-10 T9b: exportEnded()'s 409 is reached only by an agency_admin
+      // session with no live visit (agencyVisitMissing's own doc comment);
+      // the route's other read (the filename) already resolves a real
+      // locale for every caller.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route.ts",
+      // S-10 T9b: normalizeRequired's only caller is the agency-only
+      // account rename (setup/steps/account.tsx); every other InlineField
+      // caller is already locale-aware.
+      "src/components/inline-field.tsx",
+      // S-10 T9b: customerPage's not_found branch has no token at all, so
+      // no language to read — the same /u, /d "no reader language"
+      // precedent; its `business` placeholder is never read by page.tsx.
+      "src/lib/document-requests/customer-upload.ts",
+      // S-10 T9b: DEFAULT_FOLLOWUP_BODY is a byte-identity anchor (the
+      // calendar's blank-detection belt AND the settings placeholder both
+      // compare against this EXACT English text) — localizing it is a
+      // cross-file behavior change outside this task's scope.
+      "src/lib/email/templates/followup.ts",
+      // S-10 T9b: words()'s own doc comment — the English twin joins the
+      // keywords on purpose, never shown as copy.
+      "src/lib/palette/registry.ts",
+      // S-10 T9b: label()'s own doc comment — the model always gets the
+      // English word; LANGUAGE_LINE asks it for the reader's language
+      // separately. An AI prompt input, never UI copy.
+      "src/lib/record/ai-summary-prompt.ts",
     ]);
   });
 

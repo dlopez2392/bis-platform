@@ -39,6 +39,13 @@ describe("cancelStep — the dialog only when there is a notice to compose", () 
   it("cancelling at once asks for no notice at all", () => {
     expect(NO_NOTICE.send).toBe(false);
   });
+
+  it("reads the toast in the reader's own language (mutation: ignore the locale param -> FAILS)", () => {
+    expect(cancelStep(null, null, "es")).toEqual({ kind: "now", toast: m["calendar.bookings.cancelledToast.es"] });
+    expect(cancelStep("maria@example.com", "address_blocked", "es"))
+      .toEqual({ kind: "now", toast: m["calendar.bookings.cancelledToastAddressBlocked.es"] });
+    expect(m["calendar.bookings.cancelledToast.es"]).not.toBe(m["calendar.bookings.cancelledToast"]);
+  });
 });
 
 /**
@@ -96,5 +103,11 @@ describe("runCancelButton — what pressing Cancel does (F-048 I-1, M-a)", () =>
     const h = harness(async () => { throw new Error("stale action"); });
     await runCancelButton({ contactEmail: "maria@example.com", ...h });
     expect(h.calls).toEqual(["probe", `now:${HAVENT}`]);
+  });
+
+  it("(7) a Spanish-reading operator gets the toast in Spanish (mutation: drop the locale arg -> FAILS)", async () => {
+    const h = harness({ ok: true, notice: "available" });
+    await runCancelButton({ contactEmail: null, ...h, locale: "es" });
+    expect(h.calls).toEqual([`now:${m["calendar.bookings.cancelledToast.es"]}`]);
   });
 });

@@ -34,34 +34,28 @@ import type { Locale } from "@/lib/i18n/locale";
  * sole filled chip — and the WORD is what actually distinguishes them, per
  * DESIGN.md rule 3.
  */
-export const OUTCOMES: Record<CallOutcome, { label: string; dot: string; chip: string }> = {
+export const OUTCOMES: Record<CallOutcome, { dot: string; chip: string }> = {
   booked: {
-    label: m["calls.outcome.booked"],
     dot: "bg-success",
     chip: "border-success/30 bg-success/10 text-foreground",
   },
   lead: {
-    label: m["calls.outcome.lead"],
     dot: "bg-primary",
     chip: "border-primary/30 bg-primary/5 text-foreground",
   },
   message: {
-    label: m["calls.outcome.message"],
     dot: "bg-accent",
     chip: "border-accent/30 bg-accent/5 text-foreground",
   },
   transferred: {
-    label: m["calls.outcome.transferred"],
     dot: "bg-success",
     chip: "border-success/30 bg-success/5 text-foreground",
   },
   abandoned: {
-    label: m["calls.outcome.abandoned"],
     dot: "bg-muted-foreground/60",
     chip: "border-border bg-transparent text-muted-foreground",
   },
   spam: {
-    label: m["calls.outcome.spam"],
     dot: "bg-destructive",
     chip: "border-destructive/25 bg-transparent text-muted-foreground",
   },

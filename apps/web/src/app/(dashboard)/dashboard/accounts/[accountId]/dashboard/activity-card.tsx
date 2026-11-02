@@ -65,7 +65,6 @@ import type { EventRow, CallOutcome } from "@bis/db";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { m } from "@/lib/messages";
 import { relativeTime } from "@/lib/dashboard/relative-time";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
@@ -274,7 +273,7 @@ export function ActivityCard({
 
       <div className="mt-3.5">
         <Link href={pipelineHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
-          {m["pipeline.add"]}
+          {tr.text("pipeline.add")}
         </Link>
       </div>
     </div>

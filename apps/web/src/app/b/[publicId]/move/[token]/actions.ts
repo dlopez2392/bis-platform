@@ -179,6 +179,11 @@ export async function confirmMoveAction(
 
   // The business's record, in English and its own zone (the dashboard's);
   // the alert's two times in the alert's language, inside the same guard.
+  // The thread line stays English on purpose (S-10 T9b review: the same
+  // "STORED text, waits for an operator locale project this lane does not
+  // open" precedent as lib/voice/call-card.ts — its own .es twin is written
+  // out beside it, ready, but not read yet; pinned in this file's own test,
+  // "the thread line's words").
   let wasCompanyZone = "";
   let nowCompanyZone = "";
   let wasForAlert = "";

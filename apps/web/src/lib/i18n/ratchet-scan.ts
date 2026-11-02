@@ -486,4 +486,48 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/lib/consent/inbound.ts",
     reason: "todo.consent.cancel.en/hold.en are STORED To-do titles (the consent To do's own precedent call-card.ts cites) — this file ALSO reads todo.sharedNumber.* through t() with a real resolved locale a few lines away; only the two stored-title reads are English on purpose",
   },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts",
+    reason: "its own doc comment: `ACTION_FAILED` and `todo.consent.decideFirst`'s English m[...] reads are a fallback for any caller that reads only `error`; the real client, work-row-actions.tsx's failureText, always prefers `errorKey` and resolves it through t() in the reader's language. closeOutBooking's BY_ENGLISH-style reverse match onto CALENDAR_CLOSE_OUT_KEYS is the same producer pattern calendar/actions.ts/server-words.ts already use — decideFromTask, the file's other action, already resolves and uses a real locale a few lines away",
+  },
+  {
+    file: "src/lib/sms/opt-out.ts",
+    reason: "withOptOut picks between the catalogue's own sms.optOut.en/sms.optOut.es — a .en/.es SUFFIX PAIR, not a bare key — by the `language` the send gate already resolved and handed it; the same convention replies.ts and email-gate.ts are exempted for",
+  },
+  {
+    file: "src/app/b/[publicId]/move/[token]/actions.ts",
+    reason: "confirmMoveAction's thread line (calendar.move.thread.subject.en/body.en) is STORED text, rendered verbatim by Conversations — the same 'waits for an operator locale project this lane does not open' precedent as lib/voice/call-card.ts; this file's own test ('the thread line's words') pins the .es twin as written out but not yet read, and the account-language describe block explicitly keeps the thread line English even when the account's language is es",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/prove-booking.ts",
+    reason: "proveBooking answers its generic refusal as calendar.bookings.statusUpdateFailed's ENGLISH sentence — the exact key server-words.ts's own BY_ENGLISH map already reverse-maps back to the drawer's language; the same producer side calendar/actions.ts is already exempted for",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts",
+    reason: "refuse()'s own doc comment: AddContactErrorKey's English m[errorKey] read is a fallback for a caller that reads only `error`; the real client, add-contact-dialog.tsx, always prefers `errorKey` and resolves it through t() in the reader's language — the same tasks/actions.ts ACTION_FAILED pattern",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route.ts",
+    reason: "exportEnded()'s 409 is reached only when agencyVisitMissing(accountId) is true, which that function's own doc comment limits to an agency_admin session with no live visit — a client Owner's export never sees it; the route's OTHER read (the downloaded filename, a few lines down) already resolves a real locale for every caller, Owner included",
+  },
+  {
+    file: "src/components/inline-field.tsx",
+    reason: "normalizeRequired's English m[\"setup.rename.empty\"] is reached only through the `required` prop arm, whose only caller (its own doc comment) is setup/steps/account.tsx's account rename — an agency-only file under the settings|setup|checklist|voice|automations route regex; every other InlineField caller takes the `field`/`options`/`rule` arm instead, all already locale-aware",
+  },
+  {
+    file: "src/lib/document-requests/customer-upload.ts",
+    reason: "customerPage's not_found branch resolves no token at all, so there is no account and no language to read — the same 'nothing to resolve a reader's language from' shape /u and /d's own error boundary are exempted for; its `business` value is never read by the real page (page.tsx recomputes its own from `branding`, which is null here) — a typed placeholder, not a shown English string",
+  },
+  {
+    file: "src/lib/email/templates/followup.ts",
+    reason: "DEFAULT_FOLLOWUP_BODY is a byte-identity anchor, not only a displayed string: calendar/actions.ts's own doc comment compares a raw submission against this EXACT English text to collapse it back to an empty column, and calendar-settings.tsx imports the same constant as its textarea's placeholder so the preview can never drift from what that comparison, and bookingFollowupEmail's own fallback, actually use. Localizing the placeholder without updating the comparison in lockstep would let a Spanish-reading operator's verbatim placeholder text be stored as a REAL body instead of collapsing to empty — a cross-file behavior change outside this gate-closing task's scope, flagged for the calendar lane",
+  },
+  {
+    file: "src/lib/palette/registry.ts",
+    reason: "words()'s own doc comment: in Spanish, an entry's ENGLISH twin joins its search keywords on purpose (\"a bilingual owner who types 'contacts' still finds Contactos\") — the displayed label a few lines above already reads through t(); this read is a second, deliberately-English SEARCH term, never shown as copy",
+  },
+  {
+    file: "src/lib/record/ai-summary-prompt.ts",
+    reason: "label()'s own doc comment: a stored code is handed to the MODEL as the catalogue's ENGLISH word, always, regardless of the reader's language — the rules are English and LANGUAGE_LINE asks the model for the reader's language separately; this is an AI prompt input, never UI copy a person reads",
+  },
 ];

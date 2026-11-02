@@ -38,7 +38,7 @@ describe("setRequiredDocumentCategoriesAction", () => {
     for (const who of [OWNER, AGENCY]) {
       calls.length = 0;
       requireAccountAccess.mockResolvedValue(who);
-      expect(await setRequiredDocumentCategoriesAction(ACC, form("insurance", "id", "insurance"))).toEqual({ ok: true, list: ["id", "insurance"] });
+      expect(await setRequiredDocumentCategoriesAction(ACC, "en", form("insurance", "id", "insurance"))).toEqual({ ok: true, list: ["id", "insurance"] });
       expect(calls).toEqual([["serviceDb"], ["set", SVC, ACC, ["id", "insurance"]]]);
       expect(revalidatePath).toHaveBeenLastCalledWith(`/dashboard/accounts/${ACC}/settings`);
       expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${ACC}/documents`);
@@ -46,23 +46,30 @@ describe("setRequiredDocumentCategoriesAction", () => {
   });
   it("Staff may not change it, and nothing is written (mutation: drop the role check -> FAILS)", async () => {
     requireAccountAccess.mockResolvedValue(STAFF);
-    expect(await setRequiredDocumentCategoriesAction(ACC, form("id"))).toEqual({ ok: false, error: m["settings.requiredDocuments.role"] });
+    expect(await setRequiredDocumentCategoriesAction(ACC, "en", form("id"))).toEqual({ ok: false, error: m["settings.requiredDocuments.role"] });
     expect(m["settings.requiredDocuments.role"]).toBe("Only an Owner can change this list.");
     expect(calls).toEqual([]);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
   it("Other, or anything not requirable, refuses the whole save before any write (mutation: skip the action's clean -> FAILS by the log)", async () => {
-    expect(await setRequiredDocumentCategoriesAction(ACC, form("id", "other"))).toEqual({ ok: false, error: m["settings.requiredDocuments.failed"] });
+    expect(await setRequiredDocumentCategoriesAction(ACC, "en", form("id", "other"))).toEqual({ ok: false, error: m["settings.requiredDocuments.failed"] });
     expect(m["settings.requiredDocuments.failed"]).toBe("Couldn't save the list. Try again.");
     expect(calls).toEqual([]);
   });
   it("no category at all turns the list off", async () => {
-    expect(await setRequiredDocumentCategoriesAction(ACC, form())).toEqual({ ok: true, list: [] });
+    expect(await setRequiredDocumentCategoriesAction(ACC, "en", form())).toEqual({ ok: true, list: [] });
     expect(calls).toEqual([["serviceDb"], ["set", SVC, ACC, []]]);
   });
   it("a failed write is the display failure, and the page is not revalidated", async () => {
     setRequiredDocumentCategories.mockRejectedValueOnce(new Error("down"));
-    expect(await setRequiredDocumentCategoriesAction(ACC, form("id"))).toEqual({ ok: false, error: m["settings.requiredDocuments.failed"] });
+    expect(await setRequiredDocumentCategoriesAction(ACC, "en", form("id"))).toEqual({ ok: false, error: m["settings.requiredDocuments.failed"] });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("Staff's refusal and the clean failure read in the reader's own language (mutation: ignore the locale param -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    expect(await setRequiredDocumentCategoriesAction(ACC, "es", form("id"))).toEqual({ ok: false, error: m["settings.requiredDocuments.role.es"] });
+    requireAccountAccess.mockResolvedValue(OWNER);
+    expect(await setRequiredDocumentCategoriesAction(ACC, "es", form("id", "other"))).toEqual({ ok: false, error: m["settings.requiredDocuments.failed.es"] });
+    expect(m["settings.requiredDocuments.role.es"]).not.toBe(m["settings.requiredDocuments.role"]);
   });
 });

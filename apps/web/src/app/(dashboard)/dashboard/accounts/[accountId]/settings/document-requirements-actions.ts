@@ -5,6 +5,8 @@ import { requireAccountAccess } from "@/lib/auth";
 import { serviceDb, setRequiredDocumentCategories, cleanRequiredCategories } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Saves the account's required documents (spec 5.2). D6 (owner ruling 2026-10-16): the agency edits
@@ -14,12 +16,12 @@ import { m } from "@/lib/messages";
  * before any write (I3). `error` is display text, as setReportEmailsAction's is: the card toasts it.
  */
 export async function setRequiredDocumentCategoriesAction(
-  accountId: string, formData: FormData,
+  accountId: string, locale: Locale, formData: FormData,
 ): Promise<{ ok: true; list: string[] } | { ok: false; error: string }> {
   const access = await requireAccountAccess(accountId);
-  if (!access.canManage) return { ok: false, error: m["settings.requiredDocuments.role"] };
+  if (!access.canManage) return { ok: false, error: t(m, "settings.requiredDocuments.role", locale) };
   const list = cleanRequiredCategories(formData.getAll("category").map(String));
-  if (!list) return { ok: false, error: m["settings.requiredDocuments.failed"] };
+  if (!list) return { ok: false, error: t(m, "settings.requiredDocuments.failed", locale) };
   try {
     const saved = await setRequiredDocumentCategories(serviceDb(), accountId, list);
     revalidatePath(`/dashboard/accounts/${accountId}/documents`);
@@ -27,6 +29,6 @@ export async function setRequiredDocumentCategoriesAction(
     return { ok: true, list: saved };
   } catch (e) {
     console.error(`required documents save (account ${accountId}): ${loggableError(e)}`);
-    return { ok: false, error: m["settings.requiredDocuments.failed"] };
+    return { ok: false, error: t(m, "settings.requiredDocuments.failed", locale) };
   }
 }
