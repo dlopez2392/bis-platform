@@ -3,7 +3,10 @@
 // proxy matcher where a bare auth() throws. So its <html lang> makes NO
 // session, account or preference read: it stays "en" for every request. The
 // signed-out pages set their own `lang` on AuthShell's <main> from
-// Accept-Language (auth-shell.test.ts); the signed-in <html lang> is T9's.
+// Accept-Language (auth-shell.test.ts). S-10 T9b sets the signed-in
+// <html lang> from the dashboard shell in the browser (dashboard/layout.tsx's
+// DocumentLang), so this file's pins are unchanged: the root still reads
+// nothing for lang.
 //
 // Every session/DB reader below is mocked to THROW: if the layout ever calls
 // one again, rendering it throws and these cases fail by name. The ONE

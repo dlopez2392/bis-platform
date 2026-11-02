@@ -105,14 +105,20 @@ export default async function RootLayout({
   // -- by never having a theme to emit, so there is no branch to invert later.
   const theme = deriveTheme(inputs, serverMode);
 
-  // S-10 T7 (spec §6 T7, split 2026-11-01): <html lang> stays "en" for every
-  // request, and this layout makes NO session, account or preference read to
-  // decide it. It wraps /sign-in and /no-access and every path outside the
-  // proxy matcher, where a bare auth() throws and an account lookup failing
-  // would 500 the very pages that explain a failure. The signed-out pages set
-  // their own `lang` from Accept-Language on AuthShell's <main>; a signed-in
-  // person's <html lang> (and lang="en" on agency-only pages and Clerk's
-  // topbar menus) is T9's. Pinned in layout.test.ts, whose readers all throw.
+  // S-10 T7 (spec §6 T7, split 2026-11-01): this layout server-renders
+  // <html lang="en"> for every request and makes NO session, account or
+  // preference read to decide it. It wraps /sign-in and /no-access and every
+  // path outside the proxy matcher, where a bare auth() throws and an account
+  // lookup failing would 500 the very pages that explain a failure. The
+  // signed-out pages set their own `lang` from Accept-Language on AuthShell's
+  // <main>. Pinned in layout.test.ts, whose readers all throw.
+  //
+  // S-10 T9b: a signed-in person's <html lang> is set one level down, by the
+  // dashboard shell that already resolves their locale: its wrapper carries
+  // `lang={locale}` in the server HTML and its DocumentLang claims <html lang>
+  // in the browser (dashboard/layout.tsx, lib/i18n/document-lang.ts), giving
+  // it back to this layout's "en" when the dashboard tree unmounts. Nothing
+  // here changed for it, and nothing here may.
 
   return (
     <ClerkProvider>
