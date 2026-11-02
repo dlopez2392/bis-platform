@@ -29,6 +29,12 @@
 - Voice: plain language a business owner reads at 7 AM. Never expose internal
   milestone codes (M2/M5/M1c), carrier jargon, or `{{template_syntax}}` in
   client-facing copy.
+- Spanish is *usted*, sentence case, Valley trades Spanish, and follows the
+  glossary in `docs/superpowers/specs/2026-10-31-spanish-dashboard-design.md`
+  §4.3 until it moves into this file. *Usted* everywhere, the customer-facing
+  copy included: the booking page, emails, texts, the web chat and Sofía's
+  notices (owner decision, 2026-11-01). The client's business is *su negocio*,
+  never *empresa*.
 
 ## Foundations
 
@@ -342,6 +348,19 @@ notational deviation from this file's own DoD line: themes are keyed on the
 app's `.dark` class (next-themes), not `data-theme="light"` — verify "renders
 in dark AND light" against the `.dark` toggle.
 
+**Language marking (S-10, 2026-11-02; replaces decision D of 2026-10-10,
+which put `lang` on converted subtrees only).** The root layout server-renders
+`<html lang="en">` and reads nothing to decide it, so sign-in, no-access and
+unmatched paths can never fail on a language read. A signed-in page carries
+the reader's language in two places: the dashboard shell's wrapper is
+server-rendered with `lang={locale}`, and after hydration `DocumentLang` sets
+`<html lang>` itself. English-only islands (agency-only pages via
+`EnglishOnly`, Clerk's widgets via `ClerkEnglishIsland`) claim `lang="en"` at
+the document level and outrank the shell; content that portals out of a
+wrapper carries its own `lang`. Signed-out pages mark the browser's language
+on AuthShell's `<main lang>`. New screens follow this; never add a session or
+account read to the root layout for `lang`.
+
 Resolved 2026-08-31 (Phase 1): tokens restructured to the app's
 `:root`(light)/`.dark` scaffolding — values unchanged; the mockup HTML
 remains the visual source of truth. The alpha glow token is `--ring-glow`
@@ -395,7 +414,9 @@ shadcn-`--accent` case asserts the new `@theme inline` mapping directly.
 - [ ] Keyboard: focus ring visible, Esc closes overlays, row nav works
 - [ ] Copy passes the "landscaper at 7 AM" read
 - [ ] (added 2026-10) Renders correctly in English and Spanish, survives
-      the pseudo-locale's +35% length, sets `lang` correctly, and passes
+      the pseudo-locale's +35% length, sets `lang` correctly, reads every
+      string through `t()` (a twin that the screen never asks for is
+      English on screen), and passes
       the 7 AM read in both languages — once a surface carries bilingual
       copy at all; this item does not retroactively fail today's
       English-only screens
