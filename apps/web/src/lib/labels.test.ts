@@ -1,13 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
-  messageChannelLabel, MESSAGE_CHANNEL_LABEL, labelIn, OPPORTUNITY_STATUS_KEY, FORM_STATUS_KEY, ACCOUNT_STATUS_KEY, MESSAGE_STATUS_KEY,
-  STATUS_LABEL, FORM_STATUS_LABEL, ACCOUNT_STATUS_LABEL, MESSAGE_STATUS_LABEL,
+  messageChannelLabel, labelIn, OPPORTUNITY_STATUS_KEY, FORM_STATUS_KEY, ACCOUNT_STATUS_KEY, MESSAGE_STATUS_KEY,
 } from "./labels";
 
 describe("messageChannelLabel (spec G8; S-06 part 3)", () => {
   it("names all five channels in English, the default, exactly as before plus Web chat (mutation: drop webchat from the map → the raw 'webchat' prints, FAILS)", () => {
     expect(["email", "sms", "form", "voice", "webchat"].map((c) => messageChannelLabel(c))).toEqual(["Email", "Text", "Form submission", "Call", "Web chat"]);
-    expect(MESSAGE_CHANNEL_LABEL.webchat).toBe("Web chat");
+    expect(messageChannelLabel("webchat")).toBe("Web chat");
   });
   it("and in Spanish (mutation: ignore the locale → English, FAILS)", () => {
     expect(["email", "sms", "form", "voice", "webchat"].map((c) => messageChannelLabel(c, "es"))).toEqual(["Correo", "Texto", "Formulario", "Llamada", "Chat web"]);
@@ -33,12 +32,17 @@ describe("labelIn and the key tables (S-10 T1)", () => {
   it("prints a value the table does not know as itself, never blank (mutation: return '' → FAILS)", () => {
     expect(labelIn(table, "mystery", "es", cat)).toBe("mystery");
   });
-  it("keeps the English constants word for word, each equal to its key table read in English (mutation: drift a constant from its table → FAILS)", () => {
-    const en = (tbl: Record<string, string>) => Object.fromEntries(Object.keys(tbl).map((v) => [v, labelIn(tbl as never, v, "en")]));
-    expect(STATUS_LABEL).toEqual(en(OPPORTUNITY_STATUS_KEY));
-    expect(ACCOUNT_STATUS_LABEL).toEqual(en(ACCOUNT_STATUS_KEY));
-    expect(MESSAGE_STATUS_LABEL).toEqual(en(MESSAGE_STATUS_KEY));
-    expect(FORM_STATUS_LABEL).toEqual(en(FORM_STATUS_KEY));
-    expect(STATUS_LABEL.won).toBe("Won");
+  // S-10 T9b: the English-only `*_LABEL` constants this test used to pin
+  // against their key tables (STATUS_LABEL, ACCOUNT_STATUS_LABEL,
+  // MESSAGE_STATUS_LABEL, FORM_STATUS_LABEL) are gone — every real caller
+  // had already moved to `labelIn` itself, so there was nothing left for
+  // them to serve but a direct `m[...]` read nobody used. labelIn's own
+  // English-default behaviour, over each real key table, is what their
+  // drift-guard actually protected; it survives here instead.
+  it("reads every real key table in English by default, the same words the deleted *_LABEL constants held (mutation: drop the locale default → FAILS)", () => {
+    expect(labelIn(OPPORTUNITY_STATUS_KEY, "won")).toBe("Won");
+    expect(labelIn(ACCOUNT_STATUS_KEY, "active")).toBe("Active");
+    expect(labelIn(MESSAGE_STATUS_KEY, "sent")).toBe("Sent");
+    expect(labelIn(FORM_STATUS_KEY, "draft")).toBe("Draft");
   });
 });

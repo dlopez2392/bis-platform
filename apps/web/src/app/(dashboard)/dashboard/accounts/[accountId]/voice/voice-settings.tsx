@@ -25,7 +25,7 @@ import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
-import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
+import { numberStatusLabel } from "@/lib/voice/number-status";
 import { switchesSofiaOn } from "@/lib/vetting/sofia-state";
 import { t } from "@/lib/i18n/t";
 import type { ActionResult, EnableConciergeResult } from "./actions";
@@ -1105,7 +1105,7 @@ function NumberStatusSelect({
       <SelectContent>
         {STATUS_VALUES.map((v) => (
           <SelectItem key={v} value={v} disabled={locked.has(v)}>
-            {NUMBER_STATUS_LABEL[v]}
+            {numberStatusLabel(v)}
             {locked.has(v) && vettingLock
               ? <span lang={vettingLock.locale}>{" — "}{t(m, "vetting.numberStatusLocked", vettingLock.locale)}</span>
               : null}

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { SetupMoveNumberButton } from "../setup-move-number-button";
 import {
-  NumberChip, NumberStatusChip, NUMBER_STATUS_LABEL, type MovableNumber,
+  NumberChip, NumberStatusChip, numberStatusLabel, type MovableNumber,
   type SetupMoveNumberAction, type StepDetailProps,
 } from "./step-shared";
 
@@ -37,7 +37,7 @@ function MovableNumbers({
                   n.accountName ?? m["setup.number.unknownAccount"],
                 )}
                 {" · "}
-                {NUMBER_STATUS_LABEL[n.status]}
+                {numberStatusLabel(n.status)}
               </p>
             </div>
             <SetupMoveNumberButton

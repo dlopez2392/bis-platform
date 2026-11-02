@@ -454,4 +454,24 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/app/s/[token]/error.tsx",
     reason: "the /d boundary's own twin (S-07 3b) — same no-locale reasoning, same stacked pattern",
   },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts",
+    reason: "the producer side of server-words.ts's own pattern (T11/T12 review): these booking actions deliberately answer a refusal as the catalogue's ENGLISH sentence, and the job drawer (cancel-booking.ts, job-drawer-handlers.ts) translates it back by matching the words via server-words.ts's BY_ENGLISH map, never by a locale this \"use server\" module is handed",
+  },
+  {
+    file: "src/lib/automations/hold-or-send.ts",
+    reason: "automation_log.reason is stored as these ENGLISH sentences (reason-words.ts's own doc comment names this file as the writer); reason-words.ts reads them back by matching the words, in the Activity reader's own language, never by a locale this module is handed",
+  },
+  {
+    file: "src/lib/automations/closures.ts",
+    reason: "the same automation_log.reason producer, for the closed/storm/billing-paused hold reasons — reason-words.ts's REASON_KEYS names every one of these",
+  },
+  {
+    file: "src/lib/automations/pause-hold.ts",
+    reason: "compares a stored automation_log.reason against the same English constant hold-or-send.ts writes, to detect one specific hold cause — a string match, not a display, and still the producer side of reason-words.ts's pattern",
+  },
+  {
+    file: "src/lib/voice/call-card.ts",
+    reason: "callbackTaskTitle's own doc comment: tasks.title is STORED text, rendered verbatim by every To do surface (the consent To do's precedent) — its .es twin deliberately waits for an operator locale project this lane does not open; the sibling callbackAlertLine in the same file already takes a real locale for the call-alert email",
+  },
 ];

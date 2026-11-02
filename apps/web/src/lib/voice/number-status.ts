@@ -13,14 +13,32 @@
  */
 
 import type { PhoneNumberStatus } from "@bis/db";
+import type { MessageKey } from "@/lib/messages";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
-export const NUMBER_STATUS_LABEL: Record<PhoneNumberStatus, string> = {
-  provisioned: m["voice.numbers.status.provisioned"],
-  testing: m["voice.numbers.status.testing"],
-  live: m["voice.numbers.status.live"],
-  released: m["voice.numbers.status.released"],
+/** S-10 T9b: was a module-level `Record<PhoneNumberStatus, string>` built
+ *  once from `m[...]` at import time (English always, whatever the
+ *  reader's language) — this file is loaded transitively by the client's
+ *  own Branding page (step-shared.tsx's `NumberChip` re-exports
+ *  `NUMBER_STATUS_LABEL` alongside it), even though nothing there actually
+ *  renders a number's status. A lazy function, parameterised on locale,
+ *  reads nothing at import time, so which pages transitively load this
+ *  module stops mattering for the i18n ratchet. Every real caller today
+ *  (the Voice page, the numbers inventory, the setup wizard) is
+ *  agency-only, hence the English default — unchanged behaviour, not a new
+ *  translation. */
+const NUMBER_STATUS_KEY: Record<PhoneNumberStatus, MessageKey> = {
+  provisioned: "voice.numbers.status.provisioned",
+  testing: "voice.numbers.status.testing",
+  live: "voice.numbers.status.live",
+  released: "voice.numbers.status.released",
 };
+
+export function numberStatusLabel(status: PhoneNumberStatus, locale: Locale = "en"): string {
+  return t(m, NUMBER_STATUS_KEY[status], locale);
+}
 
 /** Service state, most-committed first — the order the inventory sorts rows
  *  in and the order its count strip reads them out, so the screen says the

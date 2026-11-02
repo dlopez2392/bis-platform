@@ -415,7 +415,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the seven English-only readers (mutation: add an eighth without a test row → FAILS)", () => {
+  it("names exactly the twelve English-only readers (mutation: add a thirteenth without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -428,6 +428,25 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       "src/app/u/[token]/unsubscribe-form.tsx",
       "src/app/d/[token]/error.tsx",
       "src/app/s/[token]/error.tsx",
+      // S-10 T9b: the producer side of server-words.ts's own pattern (T11/T12
+      // review, server-words.ts's own doc comment) — these booking actions
+      // deliberately answer a refusal as the catalogue's ENGLISH sentence,
+      // and the drawer translates it back by matching the words, never by a
+      // locale this "use server" module is handed.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts",
+      // S-10 T9b: automation_log.reason is STORED as these same English
+      // sentences (reason-words.ts's own doc comment: "the ENGLISH sentence
+      // REASONS... wrote when the row was logged"), read back through
+      // reason-words.ts at render time — these three are the producer side.
+      "src/lib/automations/hold-or-send.ts",
+      "src/lib/automations/closures.ts",
+      "src/lib/automations/pause-hold.ts",
+      // S-10 T9b: tasks.title is STORED text, rendered verbatim by every To
+      // do surface (the consent To do's own precedent) — its own doc
+      // comment: "the .es twin waits for an operator locale". The sibling
+      // callbackAlertLine (same file) already takes a real locale for the
+      // call-alert email; only the stored title stays English, on purpose.
+      "src/lib/voice/call-card.ts",
     ]);
   });
 
