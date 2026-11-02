@@ -172,7 +172,7 @@ const ALLOWED: Record<string, Reason> = {
   // "What Sofía knew" (S-47c, spec 5.8): a sub-page of this agency-only section, same guard.
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/knowledge/[version]/page.tsx": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/page.tsx": "agency-only",
-  "app/(dashboard)/dashboard/accounts/[accountId]/website/actions.ts": "agency-only",
+  "app/(dashboard)/dashboard/accounts/[accountId]/settings/website-link-actions.ts": "agency-only",
   // The drawer's Texts and Email rows: ledgerDb after getContact on the request client.
   "app/api/accounts/[accountId]/contacts/[contactId]/email/route.ts": "proven-target",
   "app/api/accounts/[accountId]/contacts/[contactId]/texts/route.ts": "proven-target",

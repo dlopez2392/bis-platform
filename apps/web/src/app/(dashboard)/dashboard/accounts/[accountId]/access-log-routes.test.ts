@@ -154,7 +154,7 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
     "undoRemoveTeamMemberAction", "revokeTeamInvitationAction", "undoRevokeTeamInvitationAction"], "the team, not customers"),
   ...each(`${A}/voice/actions.ts`, ["saveVoiceProfileAction", "saveBusinessHoursAction", "saveServicesAction", "assignNumberAction",
     "moveNumberAction", "setNumberStatusAction", "setTransferPhoneAction", "enableConciergeAction", "disableConciergeAction", "setForwardCallsAction"], AG),
-  ...each(`${A}/website/actions.ts`, ["saveSiteAction", "unlinkSiteAction", "testSiteConnectionAction"], AG),
+  ...each(`${A}/settings/website-link-actions.ts`, ["saveSiteAction", "unlinkSiteAction", "testSiteConnectionAction"], AG),
   ...each("lib/ai-acts/actions.ts", ["undoAiActAction", "redoAiFieldFillAction"], W),
   ...each("lib/proposals/actions.ts", ["acceptSuggestionAction", "editAcceptSuggestionAction", "discardSuggestionAction", "undoSuggestionAction"],
     `${W}; from /dashboard/work these run with no visit (owner ruling 3, plan C11)`),
