@@ -88,7 +88,7 @@ describe("loading and failing on its own (rules 5, 7)", () => {
   });
   it("the error card says so in the reader's language and keeps the anchor", () => {
     const es = renderToStaticMarkup(createElement(AiCardError, { locale: "es" }));
-    expect(renderedText(es)).toContain("La configuración de IA no se pudo cargar ahora. El resto de la configuración sigue funcionando.");
+    expect(renderedText(es)).toContain("Los ajustes de IA no se pudieron cargar ahora. El resto de los ajustes sigue funcionando.");
     expect([count(es, 'id="ai"'), count(es, "data-ai-error")]).toEqual([1, 1]);
   });
 });

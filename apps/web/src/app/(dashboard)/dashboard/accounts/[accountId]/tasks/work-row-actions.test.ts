@@ -16,7 +16,7 @@ const cat = m as Record<string, string>;
 describe("failureText", () => {
   it("renders a keyed failure in the reader's language (mutation: return r.error regardless -> FAILS)", () => {
     const r = { ok: false as const, error: m["work.actionFailed"], errorKey: "work.actionFailed" as const };
-    expect(failureText(r, "es")).toBe("No se pudo actualizar ahora. Vuelva a intentarlo en un momento.");
+    expect(failureText(r, "es")).toBe("No se pudo actualizar ahora. Inténtelo de nuevo en un momento.");
     expect(failureText(r, "en")).toBe(m["work.actionFailed"]);
   });
 

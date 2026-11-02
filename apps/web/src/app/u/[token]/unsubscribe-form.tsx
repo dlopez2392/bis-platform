@@ -51,14 +51,14 @@ export function UnsubscribeForm({ token, initial, brandName }: {
       {state === "ask" || state === "resubscribed" ? (
         <p className="bis-unsub-actions">
           <button ref={button} type="button" className="bis-unsub-primary" disabled={pending} onClick={() => run(unsubscribeAction)}>
-            {m["unsubscribe.button"]}
+            {`${m["unsubscribe.button"]} / ${m["unsubscribe.button.es"]}`}
           </button>
         </p>
       ) : null}
       {state === "stopped" ? (
         <p className="bis-unsub-actions">
           <button ref={button} type="button" className="bis-unsub-ghost" disabled={pending} onClick={() => run(resubscribeAction)}>
-            {m["unsubscribe.resubscribe"]}
+            {`${m["unsubscribe.resubscribe"]} / ${m["unsubscribe.resubscribe.es"]}`}
           </button>
         </p>
       ) : null}

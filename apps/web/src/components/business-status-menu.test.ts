@@ -92,7 +92,7 @@ describe("buildChangeToast (spec §5.6.1, SD19)", () => {
 
   it("Spanish, persona and To-do together", () => {
     expect(buildChangeToast({ state: "open" }, 2, "Max", "es")).toBe(
-      "Abierto de nuevo. Su página de citas acepta reservas como siempre. "
+      "Abierto de nuevo. Su página para agendar citas funciona como siempre. "
       + "Max también lo dice. Una tarea en Pendientes lista las 2 citas afectadas.",
     );
   });

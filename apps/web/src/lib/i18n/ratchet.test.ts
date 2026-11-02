@@ -415,11 +415,19 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the two English-only readers (mutation: add a third without a test row → FAILS)", () => {
+  it("names exactly the seven English-only readers (mutation: add an eighth without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
       "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
+      // S-10 T9b: a public surface with no locale at all reads BOTH languages
+      // on purpose, each in its own `lang` — the /u tree's own pattern,
+      // described at d/[token]/error.tsx's own doc comment.
+      "src/lib/consent/unsubscribe-copy.ts",
+      "src/app/u/[token]/page.tsx",
+      "src/app/u/[token]/unsubscribe-form.tsx",
+      "src/app/d/[token]/error.tsx",
+      "src/app/s/[token]/error.tsx",
     ]);
   });
 

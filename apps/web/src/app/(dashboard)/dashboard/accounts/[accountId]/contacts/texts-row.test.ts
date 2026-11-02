@@ -149,7 +149,7 @@ describe("TextsRow in Spanish (S-03 part 3 §10)", () => {
   });
   it("the error line and its Retry (mutation: keep m[\"common.retry\"] -> FAILS)", () => {
     const out = es({ status: "error" }, () => {});
-    expect(out).toContain("No se pudo cargar la configuración de mensajes. Intente de nuevo.");
+    expect(out).toContain("No se pudieron cargar los ajustes de mensajes. Intente de nuevo.");
     expect(out).toContain(">Intentar de nuevo<");
   });
   // S-10 T3: the Check number chip's own word (phoneCheckTreatment) and the country buttons.

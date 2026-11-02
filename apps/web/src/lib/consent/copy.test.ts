@@ -131,8 +131,14 @@ describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email
 
   it("the page's unsubscribed, resubscribed and bad-link lines, English and Spanish, and its two buttons", () => {
     expect(m["unsubscribe.done.en"]).toBe("You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.");
-    expect(m["unsubscribe.done.es"]).toBe("Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.");
-    expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe / Volver a suscribirme");
+    expect(m["unsubscribe.done.es"]).toBe("Listo. {Business} ya no le enviará correos automáticos. Si agenda o pide algo, sí recibirá la confirmación.");
+    // S-10 T9b: split into its own en/es pair, concatenated `${en} / ${es}`
+    // at the render site (unsubscribe-form.tsx) — the house pattern for a
+    // page with no locale at all — rather than baked into one value, which
+    // would have carried "Resubscribe"'s English half into a string G6
+    // checks as this key's Spanish.
+    expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe");
+    expect(m["unsubscribe.resubscribe.es"]).toBe("Volver a suscribirme");
     expect(m["unsubscribe.resubscribed.en"]).toBe("You'll get emails from {Business} again.");
     expect(m["unsubscribe.resubscribed.es"]).toBe("Volverá a recibir correos de {Business}.");
     // Spec §6 as corrected 2026-09-30 (review R1-M2): most of these emails
@@ -144,7 +150,9 @@ describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email
   it("the question and its one button, in both languages (decisions Q1 and P2: the button says what the title asks; mutation: 'Unsubscribe / Cancelar suscripción' → FAILS)", () => {
     expect(m["unsubscribe.confirm.en"]).toBe("Stop emails from {Business}?");
     expect(m["unsubscribe.confirm.es"]).toBe("¿Dejar de recibir correos de {Business}?");
-    expect(m["unsubscribe.button"]).toBe("Stop emails / Dejar de recibir correos");
+    // S-10 T9b: same split as unsubscribe.resubscribe above.
+    expect(m["unsubscribe.button"]).toBe("Stop emails");
+    expect(m["unsubscribe.button.es"]).toBe("Dejar de recibir correos");
   });
 
   it("the composer's unsubscribed notice, with its date as {date}", () => {

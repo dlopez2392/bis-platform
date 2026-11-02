@@ -427,4 +427,31 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     file: "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
     reason: "maps an automation_log reason, stored as REASONS' ENGLISH sentence, back to its key (BY_ENGLISH), so it must read the English to say it in the Activity reader's language",
   },
+  // S-10 T9b: a public surface with NO locale to resolve at all — the /u
+  // unsubscribe token and an error boundary both carry no session, no
+  // account and no Accept-Language read — shows BOTH languages stacked, on
+  // purpose, each in its own `lang` attribute (DESIGN.md's bilingual
+  // pattern, first built for /d and /s). Reading `m["x"]` AND `m["x.es"]`
+  // directly is not "ignoring the reader's language": there is no reader
+  // language to ignore, and the Spanish IS always shown, never dropped.
+  {
+    file: "src/lib/consent/unsubscribe-copy.ts",
+    reason: "pageLines/fillBusiness build the /u page's English AND Spanish lines together — the token carries no language, so both are always shown, stacked",
+  },
+  {
+    file: "src/app/u/[token]/page.tsx",
+    reason: "the tab title and the 'Powered by BIS' footer read both unsubscribe.pageTitle/poweredBy and their .es twins, concatenated `${en} / ${es}` — no locale to resolve on this token-only page",
+  },
+  {
+    file: "src/app/u/[token]/unsubscribe-form.tsx",
+    reason: "the Stop-emails and Resubscribe buttons read both unsubscribe.button/resubscribe and their .es twins, concatenated `${en} / ${es}` — same reason as page.tsx above",
+  },
+  {
+    file: "src/app/d/[token]/error.tsx",
+    reason: "an error boundary receives no locale at all (its own doc comment); both customerDocs.error.* strings and their .es twins render stacked, each in its own lang",
+  },
+  {
+    file: "src/app/s/[token]/error.tsx",
+    reason: "the /d boundary's own twin (S-07 3b) — same no-locale reasoning, same stacked pattern",
+  },
 ];
