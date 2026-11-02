@@ -248,8 +248,8 @@ describe("settleJobHold — the confirmation and the moved email (spec 6.5 step 
     expect(await settle()).toBe("sent");
     const req = sent()[0]!;
     expect(req.language).toBe("es");
-    expect(req.subject).toBe("Tu cita quedó agendada");
-    expect(req.body).toContain("Tu cita quedó agendada.");
+    expect(req.subject).toBe("Su cita quedó agendada");
+    expect(req.body).toContain("Su cita quedó agendada.");
     expect(req.body).toContain("Dónde: Home · 1 Main St");
     expect(req.body).toContain(`${ORIGIN}/b/pub_1/cancel/tok_new?locale=es`);
     expect(req.body).not.toContain("You're booked in");

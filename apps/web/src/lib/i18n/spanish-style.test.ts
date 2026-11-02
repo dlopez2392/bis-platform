@@ -92,7 +92,11 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
 
   it("the S-10 review's rules have no breach today, so they are hard: none of them is on the frozen list (mutation: freeze one → FAILS)", () => {
     const hard = ["dashboard", "deal", "reschedule", "answered", "trade", "to-do"];
-    expect(frozen.glossary.filter((e) => hard.includes(e.split("|")[1]!))).toEqual([]);
+    // Cast, not a type change to spanish-style-baseline.json's own shape
+    // (ratchet.test.ts's own catalogueBaseline precedent): once this list
+    // regenerates to genuinely empty, TS infers `never[]` for a bare `[]`
+    // JSON literal, and `.split()` on a `never` element does not typecheck.
+    expect((frozen.glossary as string[]).filter((e) => hard.includes(e.split("|")[1]!))).toEqual([]);
   });
 
   it("ignores placeholders, so {email} is not the word 'email' (mutation: test the raw strings → FAILS)", () => {

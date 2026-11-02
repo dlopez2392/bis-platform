@@ -22,11 +22,13 @@ const COPY = {
     body: "Thanks for reaching out. We received your message and will be in touch shortly.",
     reply: "If you'd like to add anything, just reply to this email.",
   },
+  // S-10 T9b (owner decision 2026-11-01): usted everywhere, customer-facing
+  // included — this table spoke tú before.
   es: {
-    subject: (brand: string) => `Recibimos tu mensaje — ${brand}`,
+    subject: (brand: string) => `Recibimos su mensaje — ${brand}`,
     greeting: (name: string | null) => (name ? `Hola ${name}:` : "Hola:"),
-    body: "Gracias por escribirnos. Recibimos tu mensaje y nos pondremos en contacto pronto.",
-    reply: "Si quieres agregar algo, solo responde a este correo.",
+    body: "Gracias por escribirnos. Recibimos su mensaje y nos pondremos en contacto pronto.",
+    reply: "Si desea agregar algo, solo responda a este correo.",
   },
 } as const;
 

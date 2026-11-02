@@ -25,23 +25,30 @@ const STRINGS = {
     // never `accounts.name`, the agency's internal label.
     tabTitleWithBrand: "{business} · Form",
     tabTitleNoBrand: "Form",
+    // S-10 T9b (G2's own raw-JSX ratchet): the honeypot field's label, off-
+    // screen and aria-hidden — only a bot scanning the raw DOM ever reads
+    // it, but it moves into the catalogue all the same.
+    honeypot: "Do not fill this in",
   },
+  // S-10 T9b (owner decision 2026-11-01): usted everywhere, customer-facing
+  // included — this table spoke tú before.
   es: {
     submit: "Enviar",
     submitting: "Enviando…",
     success: "Gracias — nos pondremos en contacto pronto.",
     required: "Este campo es obligatorio.",
-    invalidEmail: "Escribe un correo electrónico válido.",
-    invalidPhone: "Escribe un número de teléfono válido.",
-    consentRequired: "Marca esta casilla para continuar.",
-    unavailable: "Algo salió mal. Vuelve a intentarlo.",
-    tokenExpired: "Este formulario venció. Actualiza la página y envíalo de nuevo.",
+    invalidEmail: "Escriba un correo electrónico válido.",
+    invalidPhone: "Escriba un número de teléfono válido.",
+    consentRequired: "Marque esta casilla para continuar.",
+    unavailable: "Algo salió mal. Inténtelo de nuevo.",
+    tokenExpired: "Este formulario venció. Actualice la página y envíelo de nuevo.",
     optional: "opcional",
     tryAgain: "Intentar de nuevo",
     notFoundTitle: "No encontramos esta página.",
-    notFoundBody: "El enlace podría estar desactualizado. Consulta con el negocio que lo compartió.",
+    notFoundBody: "El enlace podría estar desactualizado. Consulte con el negocio que lo compartió.",
     tabTitleWithBrand: "{business} · Formulario",
     tabTitleNoBrand: "Formulario",
+    honeypot: "No complete esto",
   },
 } as const;
 

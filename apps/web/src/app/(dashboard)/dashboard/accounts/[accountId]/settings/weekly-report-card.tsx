@@ -55,7 +55,7 @@ export function WeeklyReportCard({
             id="reportEmails"
             name="reportEmails"
             defaultValue={reportEmails.join(", ")}
-            placeholder="owner@theircompany.com, manager@theircompany.com"
+            placeholder={m["settings.weeklyReportPlaceholder"]}
           />
           <p className="text-xs text-muted-foreground">{m["settings.weeklyReportHint"].replace("{max}", String(WEEKLY_REPORT_MAX_RECIPIENTS))}</p>
           {reportEmails.length === 0 && (

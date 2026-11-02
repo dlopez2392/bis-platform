@@ -236,7 +236,7 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
     const result = await submitFormAction(PUBLIC_ID, IDLE, formData);
 
     expect(result.status).toBe("invalid");
-    if (result.status === "invalid") expect(result.formError).toMatch(/actualiza/i);
+    if (result.status === "invalid") expect(result.formError).toMatch(/actualice/i);
   });
 
   it("a normal, well-timed submission still succeeds (no regression on the happy path)", async () => {
@@ -658,7 +658,7 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
     const sent = sendMock.mock.calls[0]![0];
     expect(sent.to).toBe("customer@example.com");
-    expect(sent.subject).toBe("Recibimos tu mensaje — Rio Roofing");
+    expect(sent.subject).toBe("Recibimos su mensaje — Rio Roofing");
     expect(sent.fromName).toBe("Rio Roofing");
     // Customer-facing outbound, the booking confirmation's shape: the
     // account's own sending address, unlike the staff-facing alert.
@@ -668,7 +668,7 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
     // The fixture account has no reply-to address, so the receipt neither
     // sets one nor invites a reply that would land nowhere.
     expect(sent.replyTo).toBeUndefined();
-    expect(sent.body).not.toContain("responde a este correo");
+    expect(sent.body).not.toContain("responda a este correo");
   });
 
   it("goes after the company's alert, never instead of it", async () => {

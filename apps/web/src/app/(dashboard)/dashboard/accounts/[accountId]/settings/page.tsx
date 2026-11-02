@@ -13,7 +13,7 @@ import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
 import { ClientAccessSection } from "./client-access-section";
 import { ClientAccessSkeleton } from "./client-access-panel";
 import { WebsiteSection } from "./website-section";
-import { LinkSiteSkeleton } from "../website/link-site-card";
+import { LinkSiteSkeleton } from "./link-site-card";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
 import { RequiredDocumentsCard } from "./required-documents-card";

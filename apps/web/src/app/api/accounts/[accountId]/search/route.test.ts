@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { m } from "@/lib/messages";
 
 const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
@@ -279,17 +280,17 @@ describe("account search route", () => {
     expect(body.calls[0].sublabel).toBe("brand_new_outcome");
   });
 
-  it("names an unnamed contact instead of rendering a blank row", async () => {
+  it("names an unnamed contact instead of rendering a blank row (S-10 T9b: the catalogue's own contact.noName, not a route-local literal)", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     dbMocks.searchContacts.mockResolvedValue([
       { id: "c2", first_name: null, last_name: null, email: null, phone: "+19565550000" },
     ]);
     const body = await (await GET(req("956"), ctx())).json();
-    expect(body.contacts[0].label).toBe("Unnamed contact");
+    expect(body.contacts[0].label).toBe(m["contact.noName"]);
     expect(body.contacts[0].sublabel).toBe("+19565550000");
   });
 
-  // F-092 final review M-4a: "Unnamed contact" is the route's own stand-in, not the customer's name, so it says
+  // F-092 final review M-4a: the stand-in is not the customer's name, so it says
   // so on the hit and no client marks "contact" in it as though the search had matched a name.
   it("flags the unnamed contact's label as a stand-in, and only that one (mutation: never set unnamed -> FAILS)", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
@@ -298,8 +299,21 @@ describe("account search route", () => {
       { id: "c3", first_name: "Contact", last_name: "Ruiz", email: null, phone: null },
     ]);
     const body = await (await GET(req("contact"), ctx())).json();
-    expect(body.contacts[0]).toMatchObject({ label: "Unnamed contact", unnamed: true });
+    expect(body.contacts[0]).toMatchObject({ label: m["contact.noName"], unnamed: true });
     expect(body.contacts[1].unnamed).toBeUndefined();
+  });
+
+  // S-10 T9b: the stand-in now follows the reader's own locale, like every
+  // other label this route resolves — it used to be a hard-coded English
+  // literal regardless of who asked.
+  it("names an unnamed contact in Spanish for a Spanish reader (mutation: hard-code the English literal -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    localeFixture.person = "es";
+    dbMocks.searchContacts.mockResolvedValue([
+      { id: "c2", first_name: null, last_name: null, email: null, phone: "+19565550000" },
+    ]);
+    const body = await (await GET(req("956"), ctx())).json();
+    expect(body.contacts[0].label).toBe(m["contact.noName.es"]);
   });
 
   it("500s rather than reporting an empty result when a source throws", async () => {

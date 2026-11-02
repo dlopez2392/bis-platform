@@ -1008,7 +1008,7 @@ Nota: Please call ahead`);
     await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
     const [alert, confirmation] = gated();
     expect(alert!.subject).toMatch(/^Nueva cita: /);
-    expect(confirmation!.subject).toBe("Tu cita quedó agendada");
+    expect(confirmation!.subject).toBe("Su cita quedó agendada");
   });
 
   it("no language on the account (null): the alert is English, byte for byte, even for a Spanish booker (mutation: default the alert locale to the booker's or to es → FAILS)", async () => {
@@ -1248,8 +1248,8 @@ describe("submitBookingAction — a Spanish booker gets a Spanish confirmation",
     if (result.ok) expect(result.cancelUrl).toBe(`https://book.example.com/b/${PUBLIC_ID}/cancel/tok_1?locale=es`);
 
     const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
-    expect(confirmation.subject).toBe("Tu cita quedó agendada");
-    expect(confirmation.body).toContain("Tu cita quedó agendada.");
+    expect(confirmation.subject).toBe("Su cita quedó agendada");
+    expect(confirmation.body).toContain("Su cita quedó agendada.");
     // Booker in New York, company in Chicago: both lines, both in Spanish.
     expect(confirmation.body).toContain("para nosotros");
     expect(confirmation.body).not.toMatch(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/);
@@ -1288,7 +1288,7 @@ describe("submitBookingAction — a Spanish booker gets a Spanish confirmation",
 
     expect(result.ok).toBe(true);
     const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
-    expect(confirmation.subject).toBe("Tu cita quedó agendada");
+    expect(confirmation.subject).toBe("Su cita quedó agendada");
   });
 });
 
@@ -1333,7 +1333,7 @@ describe("submitBookingAction — F-048: the add-to-calendar link", () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
     expect(result).toMatchObject({ ok: true, calendarUrl: `https://book.example.com/b/${PUBLIC_ID}/ics/tok_1?locale=es` });
     const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
-    expect(confirmation.body).toContain(`Agregar a tu calendario: https://book.example.com/b/${PUBLIC_ID}/ics/tok_1?locale=es`);
+    expect(confirmation.body).toContain(`Agregar a su calendario: https://book.example.com/b/${PUBLIC_ID}/ics/tok_1?locale=es`);
   });
 
   it("with no host to build on, the url is empty and the email carries no calendar line", async () => {

@@ -43,7 +43,7 @@ function input(overrides: Partial<InstantReplyInput> = {}): InstantReplyInput {
   };
 }
 const EN = "Hi, this is Rio Roofing. We got your message.";
-const ES = "Hola, somos Rio Roofing. Recibimos tu mensaje.";
+const ES = "Hola, somos Rio Roofing. Recibimos su mensaje.";
 const ROW = {
   id: "au_ir", account_id: "acct_1", recipe_key: "instant_reply", enabled: true,
   body: EN, config: { bodyEs: ES },

@@ -12,7 +12,7 @@ vi.mock("@/lib/vercel/web-analytics", async (importOriginal) => ({
 
 import { VercelApiError } from "@/lib/vercel/web-analytics";
 import { m } from "@/lib/messages";
-import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "./actions";
+import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "./website-link-actions";
 
 const fd = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f; };
 

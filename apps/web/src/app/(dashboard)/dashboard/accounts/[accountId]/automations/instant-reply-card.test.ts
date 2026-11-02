@@ -51,34 +51,38 @@ function previewText(html: string, lang: "en" | "es"): string {
 }
 
 describe("the instant-reply card's previews and counters", () => {
-  it("MEASURED: each counter counts the DISCLOSED default — 139 and 135 characters, not 116 and 106", () => {
+  it("MEASURED: each counter counts the DISCLOSED default — 139 and 133 characters, not 116 and 104", () => {
     // Measured with segmentsFor/withOptOut/defaultInstantReplyBody for "Rio
     // Roofing": English 116 septets composed, 139 disclosed (+23); Spanish
-    // 106 composed, 135 disclosed (+29) — one segment each. Mutation: drop
-    // `withOptOut` from the card's preview → this reds BY NAME.
+    // 104 composed, 133 disclosed (+29) — one segment each (S-10 T9b: the
+    // Spanish default shrank by two septets when it moved to usted — was
+    // 106 composed, 135 disclosed). Mutation: drop `withOptOut` from the
+    // card's preview → this reds BY NAME.
     const html = render();
     expect(countText(html, "en")).toBe("139 characters · 1 message(s)");
-    expect(countText(html, "es")).toBe("135 characters · 1 message(s)");
+    expect(countText(html, "es")).toBe("133 characters · 1 message(s)");
   });
 
   it("MEASURED: \"Valley Air Conditioning\" is ONE message in both languages, disclosed", () => {
-    // The ledger's case: under the old Spanish default this name was 142
+    // The ledger's case: under the old tú Spanish default this name was 142
     // composed and 171 disclosed, TWO billed messages. With the shorter
-    // default it is 118 → 147 in Spanish and 128 → 151 in English, one each.
+    // usted default (S-10 T9b) it is 116 → 145 in Spanish and 128 → 151 in
+    // English, one each.
     // Mutation: restore the old Spanish default → the Spanish half reds.
     const html = render({ brandName: "Valley Air Conditioning" });
-    expect(countText(html, "es")).toBe("147 characters · 1 message(s)");
+    expect(countText(html, "es")).toBe("145 characters · 1 message(s)");
     expect(countText(html, "en")).toBe("151 characters · 1 message(s)");
   });
 
   it("MEASURED: a 39-character name shows ONE message undisclosed and bills TWO, in both languages", () => {
-    // "Valley Air Conditioning and Heating LLC" (39): Spanish 134 septets
-    // composed (one), 163 disclosed (two) — the Spanish default holds a name
-    // of 36 characters or fewer; English 144 composed (one), 167 disclosed
-    // (two) — the English holds 32. Mutation: drop `withOptOut` → this reds
-    // on the MESSAGE COUNT, not merely on the character count.
+    // "Valley Air Conditioning and Heating LLC" (39): Spanish 132 septets
+    // composed (one), 161 disclosed (two) — the Spanish default holds a name
+    // of 38 characters or fewer (S-10 T9b: was 36 before the usted
+    // rewrite); English 144 composed (one), 167 disclosed (two) — the
+    // English holds 32. Mutation: drop `withOptOut` → this reds on the
+    // MESSAGE COUNT, not merely on the character count.
     const html = render({ brandName: "Valley Air Conditioning and Heating LLC" });
-    expect(countText(html, "es")).toBe("163 characters · 2 message(s)");
+    expect(countText(html, "es")).toBe("161 characters · 2 message(s)");
     expect(countText(html, "en")).toBe("167 characters · 2 message(s)");
   });
 

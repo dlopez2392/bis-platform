@@ -25,13 +25,15 @@ const CONFIRMATION_COPY = {
     // F-046: where a job staff put on the calendar happens (the place's label and address).
     where: "Where",
   },
+  // S-10 T9b (owner decision 2026-11-01): usted everywhere, customer-facing
+  // included — this table spoke tú before.
   es: {
-    subject: "Tu cita quedó agendada",
-    title: "Tu cita quedó agendada.",
+    subject: "Su cita quedó agendada",
+    title: "Su cita quedó agendada.",
     forUs: (when: string) => `${when} para nosotros`,
     join: "Unirse a la videollamada",
     cancel: "Cancelar esta cita",
-    addToCalendar: "Agregar a tu calendario",
+    addToCalendar: "Agregar a su calendario",
     move: "Cambiar el horario",
     where: "Dónde",
   },
@@ -277,7 +279,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
 /**
  * The reschedule email's copy, per language (D-038: it had no Spanish
  * version, so a caller who moved their appointment in Spanish got English).
- * Same tú register as `CONFIRMATION_COPY` and `CANCELLED_COPY`.
+ * Same usted register as `CONFIRMATION_COPY` and `CANCELLED_COPY` (S-10 T9b).
  */
 const RESCHEDULED_COPY = {
   en: {
@@ -292,11 +294,11 @@ const RESCHEDULED_COPY = {
     where: CONFIRMATION_COPY.en.where,
   },
   es: {
-    subject: "Tu cita fue reprogramada",
-    title: "Tu cita fue reprogramada.",
+    subject: "Su cita fue reprogramada",
+    title: "Su cita fue reprogramada.",
     forUs: (when: string) => `${when} para nosotros`,
     join: "Unirse a la videollamada",
-    replaces: "Este enlace reemplaza al de tu confirmación anterior.",
+    replaces: "Este enlace reemplaza al de su confirmación anterior.",
     cancel: "Cancelar esta cita",
     addToCalendar: CONFIRMATION_COPY.es.addToCalendar,
     move: CONFIRMATION_COPY.es.move,
@@ -625,10 +627,11 @@ const CANCELLED_COPY = {
     title: "Your booking has been cancelled.",
     notYou: "If you didn't ask for this, please contact us right away.",
   },
+  // S-10 T9b: usted, same as the other copy tables above.
   es: {
-    subject: "Tu cita fue cancelada",
-    title: "Tu cita fue cancelada.",
-    notYou: "Si no pediste esta cancelación, comunícate con nosotros cuanto antes.",
+    subject: "Su cita fue cancelada",
+    title: "Su cita fue cancelada.",
+    notYou: "Si no pidió esta cancelación, comuníquese con nosotros cuanto antes.",
   },
 } as const;
 
@@ -668,7 +671,7 @@ export function bookingCancelledEmail(input: BookingCancelledInput): { html: str
 
 /**
  * F-048: the customer's copy of a cancel the BUSINESS made, from the Calendar
- * page. Same tú register as `CONFIRMATION_COPY`; the subject and title are
+ * page. Same usted register as `CONFIRMATION_COPY` (S-10 T9b); the subject and title are
  * `CANCELLED_COPY`'s own words, so a customer reads the same sentence
  * whoever cancelled. The owner's own message (shown, and editable, in the
  * Cancel dialog) sits between the time and the way to book again.

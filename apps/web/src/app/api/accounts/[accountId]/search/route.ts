@@ -8,6 +8,8 @@ import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { holdingLabel } from "@/lib/contacts/holding-label";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -38,8 +40,6 @@ const PER_SOURCE = 5;
 const MIN_QUERY = 2;
 
 const EMPTY: SearchResults = { contacts: [], calls: [], conversations: [] };
-
-const UNNAMED = "Unnamed contact";
 
 /** F-092: `types` narrows which searches run (Add job and held email want contacts only, and should not pay for
  *  the other two). A comma list kept to the three known names; none left (or no `types`) means all three. */
@@ -138,13 +138,18 @@ export async function GET(
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
   // F-092: a phone search shows the number it matched, not the email beside it.
   const plan = contactSearchPlan(raw);
+  // S-10 T9b: in the reader's own language, like every other label this
+  // route resolves below — a hard-coded English placeholder here used to be
+  // the one exception, which held-email-search.ts's own `localizeHit` had to
+  // patch over by matching this literal text.
+  const unnamed = t(m, "contact.noName", locale);
 
   const body: SearchResults = {
     contacts: (contacts ?? []).slice(0, PER_SOURCE).map((c): SearchHit => {
       const name = joinName(c.first_name, c.last_name);
       return {
         id: c.id,
-        label: name || UNNAMED,
+        label: name || unnamed,
         ...(name ? {} : { unnamed: true as const }),
         sublabel: phoneMatches(plan, c.phone) ? c.phone : c.email ?? c.phone ?? null,
         at: null,
@@ -163,7 +168,7 @@ export async function GET(
     })),
     conversations: conversations.slice(0, PER_SOURCE).map((v): SearchHit => ({
       id: v.id,
-      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, locale) : (joinName(v.contactFirstName, v.contactLastName) || UNNAMED),
+      label: v.holdsSharedNumber ? holdingLabel(v.sharedNumber, locale) : (joinName(v.contactFirstName, v.contactLastName) || unnamed),
       sublabel: v.lastMessagePreview,
       // Deliberately null. `sublabel` here is the MATCHED message, but
       // `lastMessageAt` is the thread's NEWEST message — pairing them would

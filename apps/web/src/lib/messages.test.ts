@@ -1359,7 +1359,7 @@ describe("Sofía's acts on the timeline, their Undo, reasons, notice and created
   });
 
   it("the undo notice's Spanish sentence is tú, matching the email it sits in (design I-6; mutation: back to usted -> FAILS)", () => {
-    expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.");
+    expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregó la nueva hora a su calendario, cámbiela de nuevo a esta, por favor.");
   });
 });
 
@@ -1451,7 +1451,7 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
       "{persona} · AI assistant", "{persona} · asistente de IA"]);
     expect([m["concierge.aiIntro"], m["concierge.aiIntro.es"]]).toEqual([
       "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
-      "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento."]);
+      "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento."]);
   });
 
   it("the plural pair differs only by number, the contacts.count/contacts.countOne shape (mutation: template the singular with {count} -> FAILS)", () => {

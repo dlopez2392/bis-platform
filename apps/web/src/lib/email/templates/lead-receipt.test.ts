@@ -25,8 +25,8 @@ describe("leadReceiptEmail", () => {
   it("speaks Spanish when the form was submitted in Spanish", () => {
     const { html, text } = leadReceiptEmail({ brand, locale: "es", firstName: "María", canReply: true });
     expect(html).toContain("Hola María:");
-    expect(html).toContain("Recibimos tu mensaje");
-    expect(text).toContain("responde a este correo");
+    expect(html).toContain("Recibimos su mensaje");
+    expect(text).toContain("responda a este correo");
     expect(html).not.toContain("We received");
   });
 
@@ -56,6 +56,6 @@ describe("leadReceiptEmail", () => {
 
   it("subjects carry the brand name in the right language", () => {
     expect(leadReceiptSubject("en", "Rio Roofing")).toBe("We received your message — Rio Roofing");
-    expect(leadReceiptSubject("es", "Rio Roofing")).toBe("Recibimos tu mensaje — Rio Roofing");
+    expect(leadReceiptSubject("es", "Rio Roofing")).toBe("Recibimos su mensaje — Rio Roofing");
   });
 });

@@ -79,7 +79,7 @@ import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
 import { AgendaDemo } from "./agenda-demo";
 import { JobDemo } from "./job-demo";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
-import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
+import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/link-site-card";
 import {
   DisclosureResultsView, DisclosureResultsSkeleton,
 } from "@/app/(dashboard)/dashboard/accounts/[accountId]/voice/disclosure-results-view";

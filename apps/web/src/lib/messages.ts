@@ -323,6 +323,10 @@ export const m = {
   "branding.nameRequired.es": "Los clientes ven este nombre en cada correo y mensaje de texto. Póngale un nombre al negocio antes de guardar.",
   "branding.colorPreview": "Preview",
   "branding.colorPreview.es": "Vista previa",
+  // S-10 T9b (G2's own raw-JSX ratchet): a hex example, not language —
+  // identical in both, same treatment as badColor's own inline example above.
+  "branding.colorPlaceholder": "#0f766e",
+  "branding.colorPlaceholder.es": "#0f766e",
   "branding.previewSubmit": "Submit",
   "branding.previewSubmit.es": "Enviar",
   "branding.previewSidebar": "Sidebar",
@@ -1393,6 +1397,9 @@ export const m = {
   // F-196: {max} is WEEKLY_REPORT_MAX_RECIPIENTS (lib/automations/caps.ts), filled by the card.
   "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas. Up to {max} addresses.",
   "settings.weeklyReportHint.es": "Quién recibe los números del lunes. Separa las direcciones con comas. Hasta {max} direcciones.",
+  // S-10 T9b (G2's own raw-JSX ratchet): an example shape, not language —
+  // identical in both, same treatment as the review-link placeholder above.
+  "settings.weeklyReportPlaceholder": "owner@theircompany.com, manager@theircompany.com",
   "settings.weeklyReportSaved": "Saved. The next report goes out Monday morning.",
   "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
   // F-196: the weekly report goes to at most WEEKLY_REPORT_MAX_RECIPIENTS
@@ -1436,6 +1443,11 @@ export const m = {
   // to save yet when this shows. The copy says so in the present tense, not
   // as a note about a number already stored.
   "settings.alertPhoneSelfWarning": "Can't send a code there — that's this account's own texting number, and a code sent there would loop straight back with nobody to read it. Use a different number.",
+  // S-10 T9b: the styleguide demos this exact refusal (settings-field-
+  // cards.tsx's demoSelfLoopRefusal), which disqualifies the usual
+  // reference-based exemption even though the real caller
+  // (startAlertPhoneVerificationAction) is agency-only.
+  "settings.alertPhoneSelfWarning.es": "No se puede enviar un código ahí: ese es el número de mensajes de texto de esta cuenta, y un código enviado ahí regresaría sin que nadie lo leyera. Use otro número.",
   // The client's read-only view (branding page) — honest about the
   // asymmetry rather than silent about it: says where alerts go and who can
   // change it, never implies the field is unfinished.
@@ -1485,6 +1497,7 @@ export const m = {
   // THIS code was. See verifyAlertPhoneCode's own comment for why "wrong"
   // and "expired" are kept as two different, narrow messages.
   "settings.alertPhoneWrongCode": "That code doesn't match. Check the digits and try again.",
+  "settings.alertPhoneWrongCode.es": "Ese código no coincide. Revise los dígitos e inténtelo de nuevo.",
   "settings.alertPhoneCodeExpired": "That code has expired, or none was ever sent for this number. Request a new one.",
   // The agency's idle-phase button: "Save" only ever clears the field
   // (setAlertPhoneAction's one remaining direct write); typing any number,
@@ -2717,11 +2730,19 @@ export const m = {
   "voice.numbers.assignFailed": "Could not assign this number.",
   "voice.numbers.badE164": "Enter a valid phone number.",
   "voice.numbers.empty": "No phone numbers assigned yet.",
+  // S-10 T9b: client-reachable transitively (step-shared.tsx's NumberChip is
+  // read by the client's own Branding page via alert-phone-card.tsx), so
+  // translated for real rather than exempted.
   "voice.numbers.status": "Status",
+  "voice.numbers.status.es": "Estado",
   "voice.numbers.status.provisioned": "Provisioned",
+  "voice.numbers.status.provisioned.es": "Asignado",
   "voice.numbers.status.testing": "Testing",
+  "voice.numbers.status.testing.es": "En prueba",
   "voice.numbers.status.live": "Live",
+  "voice.numbers.status.live.es": "Activo",
   "voice.numbers.status.released": "Released",
+  "voice.numbers.status.released.es": "Liberado",
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
@@ -3411,7 +3432,7 @@ export const m = {
   // concierge.aiIntro: the chat's first message on Trial or On, spoken in the
   // chat's own tú register like aiLabel above.
   "concierge.aiIntro": "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
-  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
+  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento.",
 
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
@@ -3437,7 +3458,12 @@ export const m = {
   "voice.assistant.factsBlankOn": "Nothing is written about the business, so the assistant has nothing to answer questions from. Add it in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
   "voice.assistant.noFormTitle": "No published form yet",
+  // S-10 T9b: the styleguide demos EmbedSnippet (a client component) with
+  // these exact keys, which disqualifies the usual exemption even though
+  // today's only real callers are agency-only (voice-settings.tsx,
+  // website-assistant.tsx) — translated for real instead.
   "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",
+  "voice.assistant.noFormBody.es": "El asistente del sitio web necesita un formulario para enviar sus clientes potenciales. Publique uno y vuelva aquí para activarlo.",
   "voice.assistant.goToForms": "Go to Forms",
   "voice.assistant.enabledToast": "Website assistant turned on",
   "voice.assistant.disabledToast": "Website assistant turned off",
@@ -3450,10 +3476,15 @@ export const m = {
   "voice.assistant.formUnpublishedOff": "This form is no longer published. Publish it again or pick another one first.",
   "voice.assistant.unpublishedFormOption": "This form (no longer published)",
   "voice.assistant.snippetTitle": "Add it to your website",
+  "voice.assistant.snippetTitle.es": "Agréguelo a su sitio web",
   "voice.assistant.snippetHint": "Paste this line into your site, right before </body>.",
+  "voice.assistant.snippetHint.es": "Pegue esta línea en su sitio, justo antes de </body>.",
   "voice.assistant.copy": "Copy the code",
+  "voice.assistant.copy.es": "Copiar el código",
   "voice.assistant.copied": "Copied",
+  "voice.assistant.copied.es": "Copiado",
   "voice.assistant.publicLink": "Direct link",
+  "voice.assistant.publicLink.es": "Enlace directo",
 
   // ── The agency numbers inventory (/dashboard/numbers) ──────────────────
   //
@@ -3585,16 +3616,18 @@ export const m = {
   // never resolves a name; the NoName variants drop the opening clause rather
   // than invent a noun. Every one of the four is ONE GSM-7 segment for a
   // GSM-7 company name (measured in instant-reply-copy.test.ts); SENT, with
-  // the opt-out sentence, the Spanish holds a name of up to 36 characters and
-  // the English up to 32 (the Spanish was trimmed for this: its first draft
-  // crossed into a second billed message at 13). The Spanish
+  // the opt-out sentence, the Spanish holds a name of up to 38 characters
+  // (S-10 T9b: was 36, before the usted rewrite shortened the body by two
+  // septets) and the English up to 32 (the Spanish was trimmed for this: its
+  // first draft crossed into a second billed message at 13). The Spanish
   // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
-  // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
+  // in usted, the same register the receipt email now uses (S-10 T9b;
+  // "Recibimos su mensaje…" — both spoke tú before). No em
   // dash anywhere: it is outside GSM-7.
   "automations.instantReply.defaultBody": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos su mensaje y le contactaremos pronto. Responda si desea agregar algo.",
   "automations.instantReply.defaultBodyNoName": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyNoName.es": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoName.es": "Recibimos su mensaje y le contactaremos pronto. Responda si desea agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
@@ -3604,6 +3637,9 @@ export const m = {
   // locale here; granted outside this lane's own prefixes (orchestrator).
   "automations.bodyTooLong.es": "Use 1,000 caracteres como máximo.",
   "automations.review.title": "Review requests",
+  // S-10 T9b: genuinely client-visible — log-titles.ts's sourceTitle() reads
+  // this for every Activity source label, in the reader's own language.
+  "automations.review.title.es": "Solicitudes de reseña",
   "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
   "automations.review.enabled": "Send review requests",
   "automations.review.channel": "Send by",
@@ -3611,7 +3647,10 @@ export const m = {
   "automations.review.channel.sms": "Text message",
   "automations.review.url": "Review link",
   "automations.review.urlHint": "Where the customer leaves the review, for example your Google Business review link. It is added to the end of the message.",
-  "automations.review.message": "Message",
+  // S-10 T9b (G2's own raw-JSX ratchet): an example URL shape, not language
+  // — identical in both, the same treatment the hex-colour placeholder and
+  // the honeypot label get.
+  "automations.review.urlPlaceholder": "https://g.page/r/.../review",
   "automations.review.messageHint": "Leave blank to send our default message.",
   "automations.review.save": "Save review requests",
   "automations.review.saved": "Review requests saved",
@@ -3622,10 +3661,10 @@ export const m = {
   "automations.channel.email": "Email",
   "automations.channel.sms": "Text message",
   "automations.noShow.title": "No-show follow-ups",
+  "automations.noShow.title.es": "Seguimiento de inasistencias",
   "automations.noShow.body": "The morning after a booking is marked no-show, invite the customer to pick a new time. Your booking page link is added to the end of the message. Off until you turn it on.",
   "automations.noShow.enabled": "Send no-show follow-ups",
   "automations.noShow.channel": "Send by",
-  "automations.noShow.message": "Message",
   "automations.noShow.messageHint": "Leave blank to send our default message.",
   "automations.noShow.linkHint": "Added to the end: {link}",
   "automations.noShow.calendarOff": "Your booking page is off, so there is nowhere to send people yet. Turn it on under Calendar first.",
@@ -3633,15 +3672,22 @@ export const m = {
   "automations.noShow.saved": "No-show follow-ups saved",
   "automations.noShow.saveFailed": "Could not save no-show follow-ups.",
   "automations.smsReminder.title": "Text reminders",
+  "automations.smsReminder.title.es": "Recordatorios por texto",
   "automations.smsReminder.body": "About two hours before an appointment, text the customer a reminder with the time, on top of the email reminder the day before. Text only. Off until you turn it on.",
   "automations.smsReminder.enabled": "Send text reminders",
   "automations.smsReminder.message": "Closing line",
   "automations.smsReminder.messageHint": "Comes after the appointment time. Leave blank to send our default.",
   "automations.smsReminder.preview": "Preview",
+  // S-10 T9b: the styleguide demos this card too, which disqualifies the
+  // reference-based exemption (it demos client components) even though
+  // sms-reminder-card.tsx itself is agency-only — translating is simpler
+  // than fighting that rule for one word.
+  "automations.smsReminder.preview.es": "Vista previa",
   "automations.smsReminder.save": "Save text reminders",
   "automations.smsReminder.saved": "Text reminders saved",
   "automations.smsReminder.saveFailed": "Could not save text reminders.",
   "automations.instantReply.title": "Instant reply to new leads",
+  "automations.instantReply.title.es": "Respuesta instantánea a clientes potenciales nuevos",
   "automations.instantReply.body": "The moment someone submits one of your forms with a phone number, text them from your number in the language they used, on top of the email receipt they already get. Off until you turn it on, and only for companies whose A2P registration is approved.",
   "automations.instantReply.enabled": "Send an instant reply",
   "automations.instantReply.messageEn": "English message",
@@ -3670,6 +3716,7 @@ export const m = {
   "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
   "automations.appointmentConfirm.leadNoName.es": "Tiene cita el {when}. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.",
   "automations.appointmentConfirm.title": "Appointment confirmations",
+  "automations.appointmentConfirm.title.es": "Confirmaciones de citas",
   "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
   "automations.appointmentConfirm.enabled": "Ask customers to confirm",
   "automations.appointmentConfirm.message": "Closing line",
@@ -3737,10 +3784,10 @@ export const m = {
   "automations.referral.emailSubjectNoName": "One favor",
   "automations.referral.emailSubjectNoName.es": "Un favor",
   "automations.referral.title": "Referral asks",
+  "automations.referral.title.es": "Solicitudes de referidos",
   "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",
   "automations.referral.channel": "Send by",
-  "automations.referral.message": "Message",
   "automations.referral.messageHint": "Leave blank to send our default message. No link is added — this asks for a name, not a rating.",
   "automations.referral.save": "Save referral asks",
   "automations.referral.saved": "Referral asks saved",
@@ -3770,12 +3817,12 @@ export const m = {
   "automations.reactivation.subjectNoName": "Checking in",
   "automations.reactivation.subjectNoName.es": "Pasamos a saludar",
   "automations.reactivation.title": "Checking in with past customers",
+  "automations.reactivation.title.es": "Seguimiento a clientes anteriores",
   "automations.reactivation.body": "Email a past customer who hasn't been in touch for a while. Only people whose job you completed, at most five a day, and only once each — ever. Email only. Off until you turn it on.",
   "automations.reactivation.enabled": "Check in with past customers",
   "automations.reactivation.months": "Quiet for at least",
   "automations.reactivation.monthsUnit": "months",
   "automations.reactivation.monthsHint": "Between 6 and 18. Nine is a good default for seasonal work: last spring's customer still knows you.",
-  "automations.reactivation.message": "Message",
   "automations.reactivation.messageHint": "Leave blank to send our default message. No discount, no offer — just an open door.",
   "automations.reactivation.limitNote": "At most five a day, oldest first, and never twice to the same person.",
   "automations.reactivation.save": "Save check-ins",
@@ -3861,6 +3908,9 @@ export const m = {
   "automations.previewEs": "Spanish preview",
   "automations.previewEs.es": "Vista previa en español",
   "automations.quoteFollowup.title": "Quote follow-ups",
+  // Glossary (spec §4.3): quote/estimate -> "estimado", never
+  // presupuesto/cotización.
+  "automations.quoteFollowup.title.es": "Seguimiento de estimados",
   "automations.quoteFollowup.body": "This watches your pipeline. Deals only get there when you or your team put them there, so nothing happens on its own. Move a deal into the stage you pick, and after a few quiet days with no reply it checks in about the quote. Off until you turn it on.",
   "automations.quoteFollowup.enabled": "Follow up on quiet quotes",
   "automations.quoteFollowup.stage": "Pipeline stage to watch",
@@ -3873,7 +3923,6 @@ export const m = {
   "automations.quoteFollowup.quietDaysInvalid": "Choose a number of days between 1 and 30.",
   "automations.quoteFollowup.stageRequired": "Pick the stage to watch before saving.",
   "automations.quoteFollowup.channel": "Send by",
-  "automations.quoteFollowup.message": "Message",
   "automations.quoteFollowup.messageHint": "Leave blank to send our default message. The price and the deal's name are never included.",
   "automations.quoteFollowup.save": "Save quote follow-ups",
   "automations.quoteFollowup.saved": "Quote follow-ups saved",
@@ -3887,15 +3936,26 @@ export const m = {
   // lib/automations/hold-or-send.ts points at these; its older lines stay
   // there (the automation engine's precedent, Global Constraints).
   "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  // S-10 T9b: genuinely client-visible — Activity's reason-words.ts (one of
+  // this gate's own ENGLISH_ONLY_READERS, for the REVERSE lookup only) reads
+  // these in the reader's own language for every hold-reason row.
+  "automations.reason.ledgerRetry.es": "Esperando unos minutos: no se pudo verificar si pueden recibir mensajes de texto",
   "automations.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
+  "automations.reason.emailLedgerRetry.es": "Esperando unos minutos: no se pudo verificar si pueden recibir correos",
   "automations.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
+  "automations.reason.emailSetupRetry.es": "Esperando unos minutos: no se pudo agregar el enlace para cancelar la suscripción",
   "automations.reason.textsStopped": "They stopped texts from this business",
+  "automations.reason.textsStopped.es": "Pidieron dejar de recibir mensajes de texto de este negocio",
   "automations.reason.textsHeld": "Texts to them are on hold",
+  "automations.reason.textsHeld.es": "Los mensajes de texto a esta persona están en pausa",
   "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
+  "automations.reason.numberUnconfirmed.es": "Su número podría ser mexicano o estadounidense. Elija el país en su contacto",
   // The re-hold age cap (orchestrator, 2026-09-26): an outage never produces
   // "Sorry we missed your call" days later.
   "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
+  "automations.reason.tooLongAfterCall.es": "No se envió: pasó demasiado tiempo desde la llamada",
   "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  "automations.reason.tooLongAfterWriteIn.es": "No se envió: pasó demasiado tiempo desde que escribieron",
   // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
   // account the agency has otherwise marked not real. Not "pre-go-live":
   // go-live's own migration (0063) never reads or writes this column, so
@@ -4505,8 +4565,14 @@ export const m = {
 
   // ── /styleguide ────────────────────────────────────────────────────────
   "styleguide.title": "Style guide",
+  "styleguide.title.es": "Guía de estilo",
   "styleguide.body":
     "Every component this app draws, in the theme you're looking at right now. Switch themes with the toggle to check both.",
+  // S-10 T9b: agency-only (requireAgency), but its own styleguide-demo
+  // exclusion disqualifies the usual reference-based exemption — cheaper to
+  // translate than to carve out an exception for one page's own heading.
+  "styleguide.body.es":
+    "Todos los componentes que dibuja esta aplicación, en el tema que está viendo ahora. Cambie de tema con el interruptor para revisar ambos.",
   // Mis preferencias (F-096, Task 6): the choice-tiles demo section title.
   "styleguide.choiceTiles": "Choice tiles",
   "styleguide.choiceTiles.es": "Opciones en mosaico",
@@ -7542,7 +7608,7 @@ export const m = {
   "aiActs.contactDialog.confirm.es": "Quitar cliente",
   // item 8c, Task 5 review fixes (orchestrator ruling): I-1's sentence in the move-undo notice, and M-4's two refusals.
   "aiActs.notice.calendarFix": "If you added the new time to your calendar, please change it back to this one.",
-  "aiActs.notice.calendarFix.es": "Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.",
+  "aiActs.notice.calendarFix.es": "Si agregó la nueva hora a su calendario, cámbiela de nuevo a esta, por favor.",
   "aiActs.toast.typedNameMismatch": "The name didn't match. Type it exactly as shown.",
   "aiActs.toast.typedNameMismatch.es": "El nombre no coincide. Escríbalo tal como aparece.",
   "aiActs.reason.gone": "It was already undone or removed",

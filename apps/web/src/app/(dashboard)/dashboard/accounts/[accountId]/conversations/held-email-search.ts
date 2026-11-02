@@ -20,19 +20,20 @@ export type HeldSearchState =
   | { status: "error" };
 
 /**
- * `/api/accounts/[accountId]/search/route.ts`'s own `UNNAMED` constant
- * ("Unnamed contact") is not exported, and is never localized there — the
- * route answers every caller (the ⌘K palette included) in one language on
- * purpose. This is the one place that label reaches a Spanish render (this
- * search box), so it is localized HERE, by matching the known literal: a
- * fragile seam, flagged so a future rename of that constant is visible
- * here too rather than silently falling back to the English fallback name
- * forever.
+ * `/api/accounts/[accountId]/search/route.ts` now resolves the reader's own
+ * locale for every label it returns, this placeholder included (S-10 T9b) —
+ * before, it answered every caller in English only, and this was the one
+ * place that label reached a Spanish render, patched by matching the known
+ * English literal, a fragile seam a future rename of the route's own
+ * wording would have silently broken. `hit.unnamed` is the STRUCTURAL
+ * signal the route sets instead of a text match (same field
+ * command-palette.tsx reads to skip highlighting this placeholder's own
+ * letters), so this still re-localizes defensively — belt and suspenders
+ * if this box's own `locale` ever disagrees with the route's — without
+ * caring what words the route used.
  */
-const UNNAMED_CONTACT_LITERAL = "Unnamed contact";
-
 export function localizeHit(hit: SearchHitLite, locale: Locale): SearchHitLite {
-  return hit.label === UNNAMED_CONTACT_LITERAL ? { ...hit, label: t(m, "contact.noName", locale) } : hit;
+  return hit.unnamed ? { ...hit, label: t(m, "contact.noName", locale) } : hit;
 }
 
 /** Fetches, localizes every hit's label, and never throws — an abort (the
