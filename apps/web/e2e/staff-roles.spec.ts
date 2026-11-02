@@ -292,7 +292,13 @@ test.describe("the Owner runs the team", () => {
       // none at all) leaves the combobox reading "Owner" here, and the
       // read-back below would answer "owner" instead of "staff".
       await expect(staffRoleBox).toContainText(m["team.role.staff"]);
-      expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+      // A single read races the write: the combobox above reflects the
+      // client's own optimistic/revalidated state, which can resolve a beat
+      // before setAccountMemberRole's DB write actually commits. Poll the
+      // service-role read instead of taking it once (same class as the
+      // :239 fix elsewhere in this file: a plain assertion where the real
+      // state settles asynchronously flakes on a one-shot read).
+      await expect.poll(() => readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
 
       // --- revoke the invitation, then Undo --------------------------------
       // Not matched by m["team.revoke"] ("Cancel invitation"): the row's own
