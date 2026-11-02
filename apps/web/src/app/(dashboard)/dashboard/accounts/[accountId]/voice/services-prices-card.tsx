@@ -289,7 +289,9 @@ export function ServiceRowEditor({
           <Label htmlFor={`${rowId}-kind`}>{tr.text("voice.services.kind")}</Label>
           <Select value={row.price_kind} onValueChange={(v) => onChange({ price_kind: v as PriceKind })}>
             <SelectTrigger id={`${rowId}-kind`} className="w-full"><SelectValue placeholder={tr.text("voice.services.kindPlaceholder")} /></SelectTrigger>
-            <SelectContent>
+            {/* lang: Radix portals this list into <body>, outside the row's own lang={locale}, where the
+                agency-only island makes <html lang> "en" (S-10 T9b review M-2). */}
+            <SelectContent lang={locale}>
               {PRICE_KINDS.map((k) => (
                 <SelectItem key={k} value={k}>{tr.text(KIND_LABEL_KEY[k])}</SelectItem>
               ))}

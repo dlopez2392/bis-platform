@@ -17,8 +17,14 @@ import { DocumentLang } from "@/components/document-lang";
  *    this wrapper) inherits "en" from <html> as well.
  *
  * Parts of these pages that DO follow the operator's language (the trade
- * card, the AI card, Voice's disclosure copy, …) already carry their own
- * lang={locale}, which outranks this wrapper's.
+ * card, the AI card, Voice's disclosure copy, …) carry their own
+ * lang={locale}. Rendered INLINE, that outranks this wrapper's, because it is
+ * the nearer ancestor. PORTALLED content does not sit inside this wrapper at
+ * all: it inherits <html lang>, which this island has made "en", so any
+ * dialog, menu or select list in the operator's language must carry its own
+ * lang (the AI card's confirm dialog, Voice's services kind list; review M-2).
+ * And a page that is the operator's language end to end does not go in an
+ * island at all (agency-only-lang.test.ts's NOT_ENGLISH).
  */
 export function EnglishOnly({ children }: { children: React.ReactNode }) {
   return (
