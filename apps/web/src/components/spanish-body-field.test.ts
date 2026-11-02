@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { SpanishBodyField, type SpanishBodyFieldProps } from "./spanish-body-field";
 
 const base: SpanishBodyFieldProps = {
-  idPrefix: "t", stored: { bodyEs: null, stale: false }, defaultEs: "Nuestro español.", composeEs: (x) => x, sms: true,
+  idPrefix: "t", locale: "en", stored: { bodyEs: null, stale: false }, defaultEs: "Nuestro español.", composeEs: (x) => x, sms: true,
 };
 const html = (p: Partial<SpanishBodyFieldProps>) => renderToStaticMarkup(createElement(SpanishBodyField, { ...base, ...p }));
 

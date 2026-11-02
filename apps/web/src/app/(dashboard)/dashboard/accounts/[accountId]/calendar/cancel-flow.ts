@@ -52,9 +52,9 @@ export async function runCancelButton(deps: {
   probe: () => Promise<CancelNoticeOptionResult>;
   openDialog: () => void;
   cancelNow: (noNoticeMessage: string) => Promise<unknown>;
-  locale?: Locale;
+  locale: Locale;
 }): Promise<void> {
-  const locale = deps.locale ?? "en";
+  const { locale } = deps;
   const first = cancelStep(deps.contactEmail, null, locale);
   if (first.kind === "now") {
     await deps.cancelNow(first.toast);

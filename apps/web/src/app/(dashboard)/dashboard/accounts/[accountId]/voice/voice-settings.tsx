@@ -390,6 +390,7 @@ export function VoiceProfileForm({
                   fallback (textback.ts), the card's own preview rule. */}
               <SpanishBodyField
                 idPrefix="voice-textback"
+                locale="en"
                 stored={{ bodyEs: p.textback_body_es, stale: textbackStale }}
                 defaultEs={defaultTextbackBody(brandName, "es")}
                 composeEs={(x) => withOptOut(x || defaultTextbackBody(brandName, "es"), "es")}

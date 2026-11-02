@@ -25,8 +25,15 @@ export type SpanishBodyFieldProps = {
   sms: boolean;
   /** S-10 T9b: the reader's own language — the agency's own cards (Automations,
    *  Voice) bind "en"; the one client-reachable caller (Calendar settings'
-   *  follow-up section, shown to the Owner too) binds its own resolved locale. */
-  locale?: Locale;
+   *  follow-up section, shown to the Owner too) binds its own resolved locale.
+   *  Required (S-10 T9b review round 2): a silent "en" default let several
+   *  agency-only automations cards and voice-settings.tsx go unnoticed with
+   *  no locale wired at all — explicit now, so a missed hookup fails tsc,
+   *  not a silent English fallback. Every one of those callers is still
+   *  genuinely agency-only (settings|setup|checklist|voice|automations),
+   *  so they pass "en" literally rather than threading a real reader
+   *  locale that does not exist on those pages. */
+  locale: Locale;
 };
 
 /**
@@ -35,7 +42,7 @@ export type SpanishBodyFieldProps = {
  * emptied (Spanish customers get the English); else theirs. The stale line reads the STORED row
  * (plan deviation 5); the emptied line reads the box (what Save will store).
  */
-export function SpanishBodyField({ idPrefix, stored, defaultEs, composeEs, sms, locale = "en" }: SpanishBodyFieldProps) {
+export function SpanishBodyField({ idPrefix, stored, defaultEs, composeEs, sms, locale }: SpanishBodyFieldProps) {
   const [text, setText] = useState(stored.bodyEs ?? defaultEs);
   const [useOurs, setUseOurs] = useState(false);
   const id = `${idPrefix}-body-es`;

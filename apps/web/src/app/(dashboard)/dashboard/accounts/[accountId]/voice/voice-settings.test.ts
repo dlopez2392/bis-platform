@@ -673,8 +673,8 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
   });
 
   it("MEASURED: a Spanish line previews the DISCLOSED Spanish default — 123 characters, not the 94 the composed default alone would show", () => {
-    // The disclosure is `withOptOut`'s own Spanish sentence, "Responde STOP
-    // para cancelar." (29 septets on top of 94) — never the English one, and
+    // The disclosure is `withOptOut`'s own Spanish sentence, "Responda STOP
+    // para cancelar." (29 septets on top of 94, S-10 T9b: usted, was tú) — never the English one, and
     // never the operator's-own-body branch, because `textback_body` is blank
     // here. Mutation: count without `withOptOut` → this reds BY NAME (would
     // read "94 characters · 1 message(s)").
@@ -705,8 +705,8 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     // `automations.optOutCounted` quotes the English sentence verbatim
     // ("Reply STOP to opt out.") — reusing it here on a Spanish preview would
     // claim a caller receives English words they never will, since the
-    // Spanish default is disclosed with "Responde STOP para cancelar."
-    // instead. `voice.textback.optOutCounted` says the same thing without
+    // Spanish default is disclosed with "Responda STOP para cancelar."
+    // instead (S-10 T9b: usted, was tú). `voice.textback.optOutCounted` says the same thing without
     // naming either language's exact words, so it stays true in both faces.
     // Mutation: delete the note → this reds; render the automations key
     // instead → this reds too, and the Spanish-preview assertion below would

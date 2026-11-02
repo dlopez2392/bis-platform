@@ -149,7 +149,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
     const undo = vi.fn(async () => ({ ok: true as const }));
     const save = vi.fn(async () => ({ ok: true as const, undo }));
     const shown: (string | null)[] = [];
-    await applyAssignee(save, ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(save, ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith(ANA.userId);
     expect(shown).toEqual([ANA.userId]);
@@ -164,7 +164,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
 
   it("unassigning says 'Now unassigned.'", async () => {
     const save = vi.fn(async () => ({ ok: true as const, undo: vi.fn(async () => ({ ok: true as const })) }));
-    await applyAssignee(save, null, ANA.userId, (id) => assigneeName(id, OPTIONS), () => {});
+    await applyAssignee(save, null, ANA.userId, (id) => assigneeName(id, OPTIONS), () => {}, "en");
     expect(save).toHaveBeenCalledWith(null);
     expect(toasts.success.mock.calls[0]![0]).toBe(m["assign.doneUnassigned"]);
   });
@@ -172,7 +172,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
   it("undo: null (nothing changed) shows NO toast (mutation: toast every success -> FAILS)", async () => {
     const save = okSave();
     const shown: (string | null)[] = [];
-    await applyAssignee(save, ANA.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(save, ANA.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     expect(toasts.success).not.toHaveBeenCalled();
     expect(toasts.error).not.toHaveBeenCalled();
   });
@@ -180,7 +180,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
   it("a refused save shows the code's own sentence and keeps the old value (mutation: show the pick anyway -> FAILS)", async () => {
     const save = vi.fn(async () => ({ ok: false as const, error: "assign.customerFirst" as const }));
     const shown: (string | null)[] = [];
-    await applyAssignee(save, TOM.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(save, TOM.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     expect(toasts.error).toHaveBeenCalledWith(m["assign.customerFirst"]);
     expect(toasts.success).not.toHaveBeenCalled();
     expect(shown).toEqual([]);
@@ -189,7 +189,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
   it("a save that throws (a stale tab) says 'That didn't save', keeps the old value", async () => {
     const save = vi.fn(async () => { throw new Error("stale action id"); });
     const shown: (string | null)[] = [];
-    await applyAssignee(save, TOM.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(save, TOM.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     expect(toasts.error).toHaveBeenCalledWith(m["assign.failed"]);
     expect(shown).toEqual([]);
   });
@@ -206,7 +206,7 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
     const undo = vi.fn(async () => ({ ok: false as const, error: "assign.refused" as const }));
     const save = vi.fn(async () => ({ ok: true as const, undo }));
     const shown: (string | null)[] = [];
-    await applyAssignee(save, ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(save, ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     undoOf(toasts.success.mock.calls[0])();
     await flush();
     expect(toasts.error).toHaveBeenCalledWith(m["assign.refused"]);
@@ -231,7 +231,7 @@ describe("contactAssigneeSave: a customer's save and its exact Undo", () => {
     contactActions.assignContactsAction.mockResolvedValue({ ok: true, previous: [] });
     const r = await contactAssigneeSave(ACCT, CONTACT)(ANA.userId);
     expect(r).toEqual({ ok: true, undo: null });
-    await applyAssignee(contactAssigneeSave(ACCT, CONTACT), ANA.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), () => {});
+    await applyAssignee(contactAssigneeSave(ACCT, CONTACT), ANA.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), () => {}, "en");
     expect(toasts.success).not.toHaveBeenCalled();
     expect(contactActions.undoAssignContactsAction).not.toHaveBeenCalled();
   });
@@ -240,7 +240,7 @@ describe("contactAssigneeSave: a customer's save and its exact Undo", () => {
     contactActions.assignContactsAction.mockResolvedValue({ ok: true, previous: PREVIOUS });
     contactActions.undoAssignContactsAction.mockResolvedValue({ ok: false, error: "assign.changed" });
     const shown: (string | null)[] = [];
-    await applyAssignee(contactAssigneeSave(ACCT, CONTACT), ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    await applyAssignee(contactAssigneeSave(ACCT, CONTACT), ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v), "en");
     undoOf(toasts.success.mock.calls[0])();
     await flush();
     expect(toasts.error).toHaveBeenCalledWith(m["assign.changed"]);

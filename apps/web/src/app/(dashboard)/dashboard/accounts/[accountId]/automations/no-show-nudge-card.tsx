@@ -152,6 +152,7 @@ export function NoShowNudgeCard({
             </div>
             <SpanishBodyField
               idPrefix="noshow"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultNoShowNudgeBody(brandName, "es")}
               composeEs={(text) => (channel === "sms" ? withOptOut(composeNoShowNudgeSms(text, bookingUrl), "es") : text)}

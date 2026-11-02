@@ -167,6 +167,7 @@ export function AutomationsSettings({
             </div>
             <SpanishBodyField
               idPrefix="review"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultReviewRequestBody(brandName, "es")}
               composeEs={(text) => (channel === "sms" ? withOptOut(composeReviewRequestSms(text, reviewUrl.trim()), "es") : text)}

@@ -88,7 +88,7 @@ export function taskAssigneeSave(accountId: string, taskId: string): AssignSave 
 export async function applyAssignee(
   save: AssignSave, next: string | null, prior: string | null,
   nameOf: (id: string | null) => string, show: (value: string | null) => void,
-  locale: Locale = "en",
+  locale: Locale,
 ): Promise<void> {
   let r: AssignSaveResult;
   try {
