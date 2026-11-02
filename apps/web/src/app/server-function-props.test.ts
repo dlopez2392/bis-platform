@@ -85,13 +85,22 @@ function tsxFiles(dir: string): string[] {
   });
 }
 
-describe("no server component passes a function literal as a JSX prop (S-10 T9b gate)", () => {
-  const files = ROOTS.flatMap((r) => tsxFiles(path.join(WEB, r)));
+// Parsed once, at collection, not inside a test: a whole-tree parse beside the
+// full suite ran past vitest's 5s test timeout (measured: 8-10s under load),
+// the same reason request-pseudo-callers.test.ts scans at module scope.
+const scanned = ROOTS.flatMap((r) => tsxFiles(path.join(WEB, r))).map((abs) => {
+  const source = readFileSync(abs, "utf8");
+  const statements = ts.createSourceFile(abs, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX).statements;
+  return {
+    key: path.relative(WEB, abs).replace(/\\/g, "/"),
+    server: !hasDirective(statements, "use client"),
+    found: functionLiteralProps(abs, source),
+  };
+});
 
+describe("no server component passes a function literal as a JSX prop (S-10 T9b gate)", () => {
   it("scans the server files at all (non-vacuity: the branding and settings pages, and the topbar, are among them)", () => {
-    const server = files
-      .filter((f) => !hasDirective(ts.createSourceFile(f, readFileSync(f, "utf8"), ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX).statements, "use client"))
-      .map((f) => path.relative(WEB, f).replace(/\\/g, "/"));
+    const server = scanned.filter((s) => s.server).map((s) => s.key);
     expect(server).toContain("src/app/(dashboard)/dashboard/accounts/[accountId]/branding/page.tsx");
     expect(server).toContain("src/app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx");
     expect(server).toContain("src/components/topbar.tsx");
@@ -99,9 +108,7 @@ describe("no server component passes a function literal as a JSX prop (S-10 T9b 
   });
 
   it("finds none in src/app or src/components (mutation: seed `onClick={() => null}` into a server page -> FAILS naming it)", () => {
-    const found = files.flatMap((f) =>
-      functionLiteralProps(f, readFileSync(f, "utf8")).map((v) => `${path.relative(WEB, f).replace(/\\/g, "/")}:${v}`));
-    expect(found).toEqual([]);
+    expect(scanned.flatMap((s) => s.found.map((v) => `${s.key}:${v}`))).toEqual([]);
   });
 });
 
