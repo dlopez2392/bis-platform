@@ -215,7 +215,7 @@ test("Chat, Spanish: the AI label and the disclosed first message", async ({ pag
   await page.goto(`/c/${publicId}?locale=es`);
   await expect(page.locator("[data-ai-label]")).toHaveText("Sofía · asistente de IA");
   await expect(page.locator(".bis-msg-assistant").first()).toHaveText(
-    "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento. Hola desde el taller.",
+    "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento. Hola desde el taller.",
   );
 });
 

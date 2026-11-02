@@ -172,17 +172,19 @@ test.describe("the Automations page — Milestone C card", () => {
     await expect(card.getByText("Instant reply to new leads", { exact: true })).toBeVisible();
     // MEASURED for the fixture's 25-character BRAND name (`Rio Roofing
     // ${stamp}`, auth.setup.ts): English 130 septets composed, 153 with
-    // "Reply STOP to opt out." — one segment; Spanish 120 composed, 149 with
-    // "Responde STOP para cancelar." — one segment. The Spanish default holds
-    // a GSM-7 name of up to 36 characters, the English up to 32 (pinned in
+    // "Reply STOP to opt out." — one segment; Spanish 118 composed, 147 with
+    // "Responda STOP para cancelar." — one segment (S-10 T9b: the usted
+    // rewrite shortened the Spanish default by 2 characters, 120→118
+    // composed, 149→147 with the opt-out). The Spanish default holds a
+    // GSM-7 name of up to 38 characters, the English up to 32 (pinned in
     // instant-reply-copy.test.ts; the longer Spanish default this replaced
     // measured 173 here, two).
     await expect(card.getByTestId("instant-reply-preview-en")).toContainText("We got your message");
     await expect(card.getByTestId("instant-reply-preview-en")).toContainText("Reply STOP to opt out.");
     await expect(card.getByTestId("instant-reply-count-en")).toHaveText("153 characters · 1 message(s)");
-    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Recibimos tu mensaje");
-    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Responde STOP para cancelar.");
-    await expect(card.getByTestId("instant-reply-count-es")).toHaveText("149 characters · 1 message(s)");
+    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Recibimos su mensaje");
+    await expect(card.getByTestId("instant-reply-preview-es")).toContainText("Responda STOP para cancelar.");
+    await expect(card.getByTestId("instant-reply-count-es")).toHaveText("147 characters · 1 message(s)");
 
     // Typing redraws the preview and the counter — the counter counts the
     // string that sends, which is the typed text PLUS the opt-out sentence
