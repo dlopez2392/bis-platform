@@ -7,6 +7,7 @@ import {
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
+import { EnglishOnly } from "@/components/english-only";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -257,7 +258,10 @@ export default async function VoicePage({
   const boundSaveServices = saveServicesAction.bind(null, accountId);
 
   return (
-    <>
+    // S-10 T9b (owner decision Q4; review M-1): agency-only and English, but rooted HERE rather than in a
+    // voice/layout.tsx, which would also cover voice/knowledge/[version] — that page is the operator's
+    // language end to end (components/english-only.tsx; lib/i18n/agency-only-lang.test.ts).
+    <EnglishOnly>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
       <PageHeader title={m["voice.title"]} />
       <div className="max-w-2xl space-y-6 p-6">
@@ -294,6 +298,6 @@ export default async function VoicePage({
           vettingLock={vettingLock}
         />
       </div>
-    </>
+    </EnglishOnly>
   );
 }

@@ -78,6 +78,7 @@ const { requestLocale } = await import("@/lib/i18n/request-locale");
 const { AppSidebar } = await import("@/components/app-sidebar");
 const { Topbar } = await import("@/components/topbar");
 const { LocaleProvider } = await import("@/components/locale-provider");
+const { DocumentLang } = await import("@/components/document-lang");
 
 describe("dashboard/layout generateMetadata — the tab title (D-072)", () => {
   beforeEach(() => {
@@ -316,20 +317,39 @@ describe("dashboard/layout mounts LocaleProvider as an ancestor of BOTH AppSideb
     expect(providers.map((p) => p.props.locale)).toEqual(["es"]);
   });
 
-  // Decision D (orchestrator, 2026-10-10): `lang` sits only on the parts that
-  // are actually Spanish — the sidebar's <nav>, the topbar presence and the
-  // dashboard KPI row — never on the shell around them, most of which (the
-  // account switcher, the search, the Clerk menus) is still English.
-  it("puts no lang attribute on the shell, even for a Spanish account (decision D; mutation: restore lang={locale} on the shell's outer div → FAILS)", async () => {
+  // S-10 T9b (design spec §1.1 and §8 item 3): the signed-in document reads
+  // the person's resolved locale. This REPLACES decision D (2026-10-10), which
+  // kept `lang` off the shell because the account switcher and the Clerk
+  // menus were still English: those are now marked lang="en" themselves
+  // (topbar.tsx, account-switcher.tsx), as is every agency-only page
+  // (english-only.tsx). Two halves: the shell's own wrapper carries the
+  // locale in the server HTML, and DocumentLang claims <html lang> for it in
+  // the browser — the root layout reads nothing to decide it.
+  const langNodes = (node: unknown): { lang?: string }[] => {
+    if (!node || typeof node !== "object") return [];
+    if (Array.isArray(node)) return node.flatMap(langNodes);
+    if (!("type" in node)) return [];
+    const props = (node as { props?: { lang?: string; children?: unknown } }).props;
+    return [...(props?.lang !== undefined && (node as { type: unknown }).type !== DocumentLang ? [props!] : []), ...langNodes(props?.children)];
+  };
+
+  it("puts the resolved locale on the shell's outer wrapper, the one around the sidebar, the topbar and <main> (mutation: drop lang={locale} from the shell's div -> FAILS)", async () => {
     stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
     const tree = await DashboardLayout({ children: "page" });
-    const withLang = (node: unknown): object[] => {
-      if (!node || typeof node !== "object") return [];
-      if (Array.isArray(node)) return node.flatMap(withLang);
-      if (!("type" in node)) return [];
-      const props = (node as { props?: { lang?: string; children?: unknown } }).props;
-      return [...(props?.lang !== undefined ? [node] : []), ...withLang(props?.children)];
-    };
-    expect(withLang(tree)).toEqual([]);
+    const outer = langNodes(tree)[0] as { lang?: string; children?: unknown } | undefined;
+    expect(outer?.lang).toBe("es");
+    expect(find(outer?.children, AppSidebar)).toHaveLength(1);
+    expect(find(outer?.children, Topbar)).toHaveLength(1);
+    expect(find(outer?.children, "main")).toHaveLength(1);
+  });
+
+  it("claims <html lang> for the same locale, as the shell and not as an island (mutation: pass a literal \"en\", or island -> FAILS)", async () => {
+    stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
+    const tree = await DashboardLayout({ children: "page" });
+    expect(find(tree, DocumentLang).map((d) => (d as { props: object }).props)).toEqual([{ lang: "es" }]);
+    authFixture.isAgency = true;
+    const agencyTree = await DashboardLayout({ children: "page" });
+    expect(find(agencyTree, DocumentLang).map((d) => (d as { props: object }).props)).toEqual([{ lang: "en" }]);
+    expect(langNodes(agencyTree)[0]?.lang).toBe("en");
   });
 });

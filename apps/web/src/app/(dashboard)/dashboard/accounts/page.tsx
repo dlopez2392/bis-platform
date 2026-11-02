@@ -6,6 +6,7 @@ import { createClientAccount, adoptOrphanOrgAction } from "./actions";
 import { CreateAccountDialog } from "./create-account-dialog";
 import { AdoptOrgDialog } from "./adopt-org-dialog";
 import { PageHeader } from "@/components/page-header";
+import { EnglishOnly } from "@/components/english-only";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { requireAgency } from "@/lib/auth";
@@ -80,7 +81,8 @@ export default async function AccountsPage({
     locale,
   };
   return (
-    <>
+    // S-10 T9b (owner decision Q4): agency-only, English for every reader (components/english-only.tsx).
+    <EnglishOnly>
       <PageHeader
         title={m["accounts.title"]}
         count={`${accounts.length}`}
@@ -247,6 +249,6 @@ export default async function AccountsPage({
           </ul>
         )}
       </div>
-    </>
+    </EnglishOnly>
   );
 }

@@ -1,5 +1,6 @@
 import { serviceDb, listAccounts, sumOpenOpportunities } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { EnglishOnly } from "@/components/english-only";
 import { StatTile } from "@/components/stat-tile";
 import { requireAgency } from "@/lib/auth";
 import { formatCurrency } from "@/lib/format";
@@ -48,7 +49,8 @@ export default async function DashboardPage() {
     : formatCurrency(openOpps.result!.value);
 
   return (
-    <>
+    // S-10 T9b (owner decision Q4): agency-only, English for every reader (components/english-only.tsx).
+    <EnglishOnly>
       <PageHeader title={m["dashboard.title"]} />
       <div className="grid gap-4 p-6 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label={m["dashboard.companies"]} value={String(accounts.length)} period={m["common.allTime"]} />
@@ -60,6 +62,6 @@ export default async function DashboardPage() {
           period={m["common.allTime"]}
         />
       </div>
-    </>
+    </EnglishOnly>
   );
 }

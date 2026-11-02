@@ -2,6 +2,7 @@ import { OrganizationSwitcher } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TopbarPresence } from "@/components/topbar-presence";
 import { UserMenu } from "@/components/user-menu";
+import { ClerkEnglishIsland } from "@/components/clerk-english-island";
 
 // Design spec section 6: "No 'Back to agency', no Blueprints, no account
 // switcher in the topbar." OrganizationSwitcher is Clerk's own org chrome —
@@ -123,6 +124,10 @@ export function Topbar({
           key above, verified at runtime by phone-width.spec.ts's own
           computed-style probe). The X button (UserButton beside it) needs no
           matching cap: Clerk sizes it to its avatar alone, never to a name. */}
+      {/* S-10 T9b (owner decision Q6): Clerk's widgets stay English until
+          F-117, inside a shell that reads the person's own language — one
+          English island around both (clerk-english-island.tsx). */}
+      <ClerkEnglishIsland>
       {isAgency ? (
         <OrganizationSwitcher
           hidePersonal
@@ -140,6 +145,7 @@ export function Topbar({
         />
       ) : null}
       <UserMenu />
+      </ClerkEnglishIsland>
     </header>
   );
 }
