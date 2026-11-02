@@ -152,3 +152,19 @@ describe("the user menu", () => {
     expect(src).not.toMatch(/<UserButton\b/);
   });
 });
+
+// S-10 T9b (owner decision Q6, 2026-10-31): Clerk's two topbar widgets stay
+// English until F-117, inside a Spanish shell (dashboard/layout.tsx puts the
+// reader's locale on the shell), so they sit in one English island.
+describe("Topbar — Clerk's OrganizationSwitcher and UserButton are an English island (S-10 T9b)", () => {
+  const island = src.match(/<ClerkEnglishIsland>([\s\S]*?)<\/ClerkEnglishIsland>/);
+  it("wraps BOTH Clerk widgets, and nothing else of ours (mutation: move <UserMenu /> outside the island -> FAILS)", () => {
+    expect(island, "a <ClerkEnglishIsland> in topbar.tsx").not.toBeNull();
+    expect(island![1]).toMatch(/<OrganizationSwitcher\b/);
+    expect(island![1]).toContain("<UserMenu />");
+    expect(island![1]).not.toMatch(/<(ThemeToggle|TopbarPresence)\b/);
+    // Exactly one of each in the file: neither is ALSO rendered outside it.
+    expect(src.match(/<OrganizationSwitcher\b/g)).toHaveLength(1);
+    expect(src.match(/<UserMenu \/>/g)).toHaveLength(1);
+  });
+});
