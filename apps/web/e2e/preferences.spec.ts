@@ -2,7 +2,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, watchRouterTraffic } from "./support";
 import { THEME_COOKIE } from "../src/lib/branding/theme-mode";
 import { m } from "../src/lib/messages";
 
@@ -182,8 +182,29 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
   test("a saved theme outranks a disagreeing cookie in the server's own first paint", async ({ page, baseURL }) => {
     await page.goto("/dashboard/preferences");
 
+    const themeCookieNow = async () =>
+      (await page.context().cookies(baseURL)).find((c) => c.name === THEME_COOKIE)?.value;
+    // Watching starts BEFORE the click (support.ts's watchRouterTraffic,
+    // same convention as setup.spec.ts): the radio's own handler writes the
+    // cookie optimistically at once (preferences-panel.tsx's applyTheme), so
+    // by the time the toast appears the cookie already reads this save's
+    // value for a reason that has nothing to do with ThemeCookieSync. The
+    // toast fires on the save action's bare response, which only KICKS OFF
+    // its own `router.refresh()` without awaiting it — so the refresh that
+    // delivers this save's value to ThemeCookieSync's props (and whose
+    // effect re-asserts the cookie once it lands) is still in flight when
+    // the toast appears. Overriding the cookie right after the toast races
+    // that refresh: if it lands after the override, ThemeCookieSync's effect
+    // sees its own `userTheme` prop disagree with the now-overridden cookie
+    // and "corrects" it right back, clobbering the override this test needs
+    // — exactly what made this flake ~2/3 of local base runs. Wait for every
+    // router request this click causes (the action, then the refresh) to
+    // finish and go quiet before touching the cookie.
+    let traffic = watchRouterTraffic(page);
     await prefs(page).getByRole("radio", { name: "Light", exact: true }).click();
     await expect(toastWithText(page, m["prefs.saved.theme.light"])).toBeVisible({ timeout: 15_000 });
+    await traffic.waitUntilQuiet();
+    expect(await themeCookieNow(), "the save's own write landed before the override below").toBe("light");
     // Manufacture the disagreement: without this, the cookie ThemeCookieSync
     // itself just wrote already matches the choice, and the test could pass
     // on a server that read the cookie instead of the stored theme.
@@ -193,8 +214,6 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // assertion could pass on a server that reads the cookie. page.request
     // shares the context's cookie jar; the positive control below proves the
     // disagreeing value is what that request carried.
-    const themeCookieNow = async () =>
-      (await page.context().cookies(baseURL)).find((c) => c.name === THEME_COOKIE)?.value;
     await page.context().addCookies([{ name: THEME_COOKIE, value: "dark", url: baseURL }]);
     const litUrl = page.url();
     expect(await themeCookieNow()).toBe("dark");
@@ -205,8 +224,12 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // the disagreeing cookie's "dark" instead of the saved "light" → FAILS.
     expect(rawServerThemeDefault(litHtml)).toBe("light");
 
+    // Same race as the Light half above.
+    traffic = watchRouterTraffic(page);
     await prefs(page).getByRole("radio", { name: "Dark", exact: true }).click();
     await expect(toastWithText(page, m["prefs.saved.theme.dark"])).toBeVisible({ timeout: 15_000 });
+    await traffic.waitUntilQuiet();
+    expect(await themeCookieNow(), "the save's own write landed before the override below").toBe("dark");
     await page.context().addCookies([{ name: THEME_COOKIE, value: "light", url: baseURL }]);
     const darkUrl = page.url();
     expect(await themeCookieNow()).toBe("light");
