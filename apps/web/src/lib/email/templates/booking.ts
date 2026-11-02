@@ -11,7 +11,11 @@ import type { Locale } from "@/lib/i18n/locale";
  * account's, else English), resolved by the due-list. The owner's alerts
  * follow the ACCOUNT's language (S-10; see `bookingAlertEmail` below).
  */
-const CONFIRMATION_COPY = {
+// Exported (S-10 T9b review round 2) so spanish-style.test.ts's live scan
+// (inlineTableViolations, lib/i18n/spanish-style.ts) can read this table
+// directly, the same way it reads messages.ts — no production behavior
+// change, every existing call site is untouched.
+export const CONFIRMATION_COPY = {
   en: {
     subject: "You're booked in",
     title: "You're booked in.",
@@ -281,7 +285,8 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
  * version, so a caller who moved their appointment in Spanish got English).
  * Same usted register as `CONFIRMATION_COPY` and `CANCELLED_COPY` (S-10 T9b).
  */
-const RESCHEDULED_COPY = {
+// Exported for the same reason as CONFIRMATION_COPY above.
+export const RESCHEDULED_COPY = {
   en: {
     subject: "Your booking has been moved",
     title: "Your booking has been moved.",
@@ -621,7 +626,8 @@ export function bookingMovedAlertEmail(input: BookingMovedAlertInput):
  * The customer's copy of a phone cancellation. Bilingual like the
  * confirmation, because the person who reads it is the same stranger.
  */
-const CANCELLED_COPY = {
+// Exported for the same reason as CONFIRMATION_COPY above.
+export const CANCELLED_COPY = {
   en: {
     subject: "Your booking has been cancelled",
     title: "Your booking has been cancelled.",
@@ -676,7 +682,8 @@ export function bookingCancelledEmail(input: BookingCancelledInput): { html: str
  * whoever cancelled. The owner's own message (shown, and editable, in the
  * Cancel dialog) sits between the time and the way to book again.
  */
-const BUSINESS_CANCELLED_COPY = {
+// Exported for the same reason as CONFIRMATION_COPY above.
+export const BUSINESS_CANCELLED_COPY = {
   en: {
     subject: CANCELLED_COPY.en.subject,
     title: CANCELLED_COPY.en.title,

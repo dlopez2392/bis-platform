@@ -8,13 +8,18 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import {
   twinPairs, registerViolations, placeholderMismatches, glossaryViolations, GLOSSARY_RULES, TU_WORDS,
-  companyViolations,
+  companyViolations, inlineTableViolations,
 } from "./spanish-style";
 import {
   parityViolations, scanSources, agencyOnlyFiles, agencyOnlyKeys, agencyFilesForExemption,
 } from "./ratchet-scan";
 import frozen from "./spanish-style-baseline.json";
 import { m } from "@/lib/messages";
+import { bookingStrings } from "@/lib/booking/public-strings";
+import { publicStrings } from "@/lib/forms/public-strings";
+import { conciergeStrings } from "@/lib/concierge/strings";
+import { CONFIRMATION_COPY, RESCHEDULED_COPY, CANCELLED_COPY, BUSINESS_CANCELLED_COPY } from "@/lib/email/templates/booking";
+import { COPY as LEAD_RECEIPT_COPY } from "@/lib/email/templates/lead-receipt";
 
 describe("twinPairs", () => {
   it("pairs x with x.es and x.en with x.es, and skips a .es with no English (mutation: drop the .en lookup → FAILS)", () => {
@@ -161,4 +166,52 @@ describe("G4 and G6, live", () => {
     const v = companyViolations(m, exempt);
     expect(v, `say "su negocio" (or "cuenta", for the agency's own view of a client) instead, for: ${v.join(", ")}`).toEqual([]);
   }, 30_000); // scans every source file under apps/web/src, same cost ratchet.test.ts's own live tests pay
+});
+
+describe("inlineTableViolations — G4/G6 for the tables outside messages.ts", () => {
+  it("catches a bare tú-imperative the plain TU_WORDS list would miss (mutation: drop CUSTOMER_IMPERATIVE_WORDS from the regex → FAILS)", () => {
+    const en = { placeholder: "Type your message…" };
+    const es = { placeholder: "Escribe su mensaje…" }; // correct "su", wrong VERB form
+    expect(inlineTableViolations(en, es).register).toEqual(["placeholder"]);
+  });
+
+  it("still catches every plain TU_WORDS hit too (mutation: use CUSTOMER_IMPERATIVE_WORDS alone → FAILS)", () => {
+    const en = { a: "Your time" };
+    const es = { a: "Tu horario" };
+    expect(inlineTableViolations(en, es).register).toEqual(["a"]);
+  });
+
+  it("reuses GLOSSARY_RULES unchanged (mutation: skip the glossary check entirely → FAILS)", () => {
+    const en = { a: "Book an appointment" };
+    const es = { a: "Reservar una cita" };
+    expect(inlineTableViolations(en, es).glossary).toEqual(["a|book"]);
+  });
+
+  it("skips a key whose value is a function in either language, never crashes on it (mutation: call esValue.toLowerCase() unconditionally → throws, FAILS)", () => {
+    const en = { forUs: (w: string) => `${w} for us`, ok: "Confirmed" };
+    const es = { forUs: (w: string) => `${w} para nosotros`, ok: "Confirmado" };
+    expect(inlineTableViolations(en, es)).toEqual({ register: [], glossary: [] });
+  });
+
+  it("passes clean usted copy with no banned words", () => {
+    const en = { a: "Your details", b: "Pick a time" };
+    const es = { a: "Sus datos", b: "Elija un horario" };
+    expect(inlineTableViolations(en, es)).toEqual({ register: [], glossary: [] });
+  });
+});
+
+describe("inlineTableViolations, live — the five customer-facing tables outside messages.ts", () => {
+  it.each([
+    ["lib/booking/public-strings.ts", bookingStrings("en"), bookingStrings("es")],
+    ["lib/forms/public-strings.ts", publicStrings("en"), publicStrings("es")],
+    ["lib/concierge/strings.ts", conciergeStrings("en"), conciergeStrings("es")],
+    ["lib/email/templates/booking.ts (CONFIRMATION_COPY)", CONFIRMATION_COPY.en, CONFIRMATION_COPY.es],
+    ["lib/email/templates/booking.ts (RESCHEDULED_COPY)", RESCHEDULED_COPY.en, RESCHEDULED_COPY.es],
+    ["lib/email/templates/booking.ts (CANCELLED_COPY)", CANCELLED_COPY.en, CANCELLED_COPY.es],
+    ["lib/email/templates/booking.ts (BUSINESS_CANCELLED_COPY)", BUSINESS_CANCELLED_COPY.en, BUSINESS_CANCELLED_COPY.es],
+    ["lib/email/templates/lead-receipt.ts", LEAD_RECEIPT_COPY.en, LEAD_RECEIPT_COPY.es],
+  ] as const)("%s has no tú and no glossary breach (mutation: a tú successTitle in booking, or 'Escribe tu mensaje…' in concierge → FAILS naming the key)", (_label, en, es) => {
+    const v = inlineTableViolations(en, es);
+    expect(v, `register: ${v.register.join(", ")}; glossary: ${v.glossary.join(", ")}`).toEqual({ register: [], glossary: [] });
+  });
 });

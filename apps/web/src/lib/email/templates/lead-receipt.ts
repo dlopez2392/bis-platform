@@ -15,7 +15,10 @@ export type LeadReceiptInput = {
   canReply: boolean;
 };
 
-const COPY = {
+// Exported (S-10 T9b review round 2) so spanish-style.test.ts's live scan
+// (inlineTableViolations) can read this table directly — no production
+// behavior change, every existing call site is untouched.
+export const COPY = {
   en: {
     subject: (brand: string) => `We received your message — ${brand}`,
     greeting: (name: string | null) => (name ? `Hi ${name},` : "Hi,"),

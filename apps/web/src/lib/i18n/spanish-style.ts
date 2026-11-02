@@ -103,15 +103,17 @@ const COMPANY_RE = /\bempresas?\b/i;
 
 /**
  * G6's one FILE-conditioned rule (S-10 T9b, spec §4.3's "client" row):
- * "empresa" is the agency's own word for an account (`nav.accounts.es`) —
- * never the word a business's OWN copy uses for itself, which is "su
- * negocio". Unlike every other glossary rule, this one does not key off
- * the English text at all (the English of an Owner's own screen is never
- * literally "a company" in the way "settings"/"delete"/"book" are single
- * words) — it keys off WHO can read the Spanish: `exemptKeys` is the same
- * reference-based agency-only set G1 computes (`agencyOnlyKeys`), so a key
- * every literal reference to which sits in an agency-only file may say
- * "empresa" about the account it describes; any other key may not.
+ * "empresa" is the agency's own word for an account (`shell.switchAccount.es`,
+ * the account switcher — agency-only, `RUNTIME_AGENCY_ONLY_FILES`'s own
+ * `account-switcher.tsx` entry) — never the word a business's OWN copy uses
+ * for itself, which is "su negocio". Unlike every other glossary rule, this
+ * one does not key off the English text at all (the English of an Owner's
+ * own screen is never literally "a company" in the way
+ * "settings"/"delete"/"book" are single words) — it keys off WHO can read
+ * the Spanish: `exemptKeys` is the same reference-based agency-only set G1
+ * computes (`agencyOnlyKeys`), so a key every literal reference to which
+ * sits in an agency-only file may say "empresa" about the account it
+ * describes; any other key may not.
  */
 export function companyViolations(
   catalogue: Catalogue, exemptKeys: ReadonlySet<string> = new Set(),
@@ -123,4 +125,57 @@ export function companyViolations(
     if (COMPANY_RE.test(stripPlaceholders(p.es))) out.push(p.key);
   }
   return out.sort();
+}
+
+/**
+ * S-10 T9b (review round 2): a SHORT, deliberately narrow list of bare
+ * tú-imperative VERB forms, on top of `TU_WORDS` above — safe only for the
+ * tables `inlineTableViolations` feeds (lib/booking/public-strings.ts,
+ * lib/forms/public-strings.ts, lib/concierge/strings.ts, and the email copy
+ * tables in lib/email/templates/{booking,lead-receipt}.ts), where every
+ * string is unambiguously addressed to the one visitor reading it. NOT
+ * merged into `TU_WORDS` itself: messages.ts's own broader surface is where
+ * a bare imperative is genuinely ambiguous with the third person ("el
+ * sistema revisa"), which is why `TU_WORDS`'s own doc comment excludes them.
+ * Catches, for example, "Escribe tu mensaje…" even on a day its "tu" alone
+ * would not have been enough — a verb-only regression ("Escriba" → "Escribe")
+ * that leaves a correct "su" sitting right next to it.
+ */
+export const CUSTOMER_IMPERATIVE_WORDS: readonly string[] = [
+  "escribe", "revisa", "elige", "confirma", "cancela", "guarda", "intenta", "actualiza", "llama", "escoge",
+];
+const CUSTOMER_TU_RE = new RegExp(
+  `(?<![\\p{L}])(${[...TU_WORDS, ...CUSTOMER_IMPERATIVE_WORDS].join("|")})(?![\\p{L}])`, "iu",
+);
+
+/**
+ * G4 and G6, extended to the inline customer-facing tables OUTSIDE
+ * messages.ts (S-10 T9b review round 2, spec §5.2's G3 row and §10): each of
+ * those ships its own `{ en: {...}, es: {...} }` object, not a catalogue's
+ * `key`/`key.es` pair, so this takes the two resolved objects directly
+ * rather than forcing a fake catalogue shape on every caller. A key whose
+ * value is a function in EITHER language (`forUs`, a handful of email
+ * subjects/greetings that take an argument) is skipped — there is no static
+ * string to check without supplying one, and every one of those handful is
+ * hand-read in the usted pass already recorded in this task's commits.
+ * Reuses `GLOSSARY_RULES` unchanged; the register check uses
+ * `CUSTOMER_TU_RE` (`TU_WORDS` plus the short imperative list above) rather
+ * than the plain `TU_RE` `registerViolations` uses on messages.ts.
+ */
+export function inlineTableViolations(
+  en: Readonly<Record<string, unknown>>,
+  es: Readonly<Record<string, unknown>>,
+  rules: readonly GlossaryRule[] = GLOSSARY_RULES,
+): { register: string[]; glossary: string[] } {
+  const register: string[] = [];
+  const glossary: string[] = [];
+  for (const [key, esValue] of Object.entries(es)) {
+    const enValue = en[key];
+    if (typeof esValue !== "string" || typeof enValue !== "string") continue;
+    const strippedEs = stripPlaceholders(esValue);
+    const strippedEn = stripPlaceholders(enValue);
+    if (CUSTOMER_TU_RE.test(strippedEs)) register.push(key);
+    for (const r of rules) if (r.en.test(strippedEn) && r.never.test(strippedEs)) glossary.push(`${key}|${r.id}`);
+  }
+  return { register: register.sort(), glossary: glossary.sort() };
 }
