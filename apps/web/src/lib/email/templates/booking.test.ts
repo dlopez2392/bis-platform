@@ -322,7 +322,7 @@ describe("bookingConfirmationEmail — Spanish", () => {
       cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
     });
     for (const part of [html, text]) {
-      expect(part).toContain("Tu cita quedó agendada.");
+      expect(part).toContain("Su cita quedó agendada.");
       expect(part).toContain(`${WHEN_COMPANY_ES} para nosotros`);
       expect(part).toContain("Unirse a la videollamada");
       expect(part).toContain("Cancelar esta cita");
@@ -349,12 +349,12 @@ describe("bookingRescheduledEmail — Spanish", () => {
       brand, locale: "es", whenBookerZone: WHEN_BOOKER_ES, whenCompanyZone: WHEN_COMPANY_ES,
       cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
     });
-    expect(bookingRescheduledSubject("es")).toBe("Tu cita fue reprogramada");
+    expect(bookingRescheduledSubject("es")).toBe("Su cita fue reprogramada");
     for (const part of [html, text]) {
-      expect(part).toContain("Tu cita fue reprogramada.");
+      expect(part).toContain("Su cita fue reprogramada.");
       expect(part).toContain(`${WHEN_COMPANY_ES} para nosotros`);
       expect(part).toContain("Unirse a la videollamada");
-      expect(part).toContain("Este enlace reemplaza al de tu confirmación anterior.");
+      expect(part).toContain("Este enlace reemplaza al de su confirmación anterior.");
       expect(part).toContain("Cancelar esta cita");
       expect(part.toLowerCase()).not.toContain("moved");
       expect(part).not.toContain(" for us");
@@ -470,11 +470,11 @@ describe("bookingCancelledEmail", () => {
 
   it("Spanish: speaks Spanish throughout", () => {
     const { html, text } = bookingCancelledEmail({ brand, locale: "es", whenCompanyZone: WHEN_COMPANY_ES });
-    expect(bookingCancelledSubject("es")).toBe("Tu cita fue cancelada");
+    expect(bookingCancelledSubject("es")).toBe("Su cita fue cancelada");
     for (const part of [html, text]) {
-      expect(part).toContain("Tu cita fue cancelada.");
+      expect(part).toContain("Su cita fue cancelada.");
       expect(part).toContain(WHEN_COMPANY_ES);
-      expect(part).toContain("Si no pediste esta cancelación, comunícate con nosotros cuanto antes.");
+      expect(part).toContain("Si no pidió esta cancelación, comuníquese con nosotros cuanto antes.");
       expect(part).not.toContain("cancelled");
       expect(part).not.toContain("contact us");
     }
@@ -512,7 +512,7 @@ describe("bookingConfirmationEmail — the add-to-calendar link (F-048)", () => 
       brand, locale: "es", whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL, calendarUrl: ICS_URL,
     });
     for (const part of [html, text]) {
-      expect(part).toContain("Agregar a tu calendario");
+      expect(part).toContain("Agregar a su calendario");
       expect(part).not.toContain("Add to your calendar");
     }
   });
@@ -580,9 +580,9 @@ describe("bookingCancelledByBusinessEmail", () => {
       brand, locale: "es", whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
       message: "Lo sentimos.", rebookUrl: REBOOK,
     });
-    expect(bookingCancelledByBusinessSubject("es")).toBe("Tu cita fue cancelada");
+    expect(bookingCancelledByBusinessSubject("es")).toBe("Su cita fue cancelada");
     for (const part of [es.html, es.text]) {
-      expect(part).toContain("Tu cita fue cancelada.");
+      expect(part).toContain("Su cita fue cancelada.");
       expect(part).toContain("Agendar otro horario");
       expect(part).toContain("para nosotros");
       expect(part).not.toContain("cancelled");
@@ -608,7 +608,7 @@ describe("the move link and the moved email's calendar file (F-048)", () => {
 
   for (const locale of ["en", "es"] as const) {
     const label = locale === "es" ? "Cambiar el horario" : "Change the time";
-    const calendarLabel = locale === "es" ? "Agregar a tu calendario" : "Add to your calendar";
+    const calendarLabel = locale === "es" ? "Agregar a su calendario" : "Add to your calendar";
 
     it(`${locale}: the confirmation links a change of time plainly, in both parts (mutation: drop the link → FAILS)`, () => {
       const { html, text } = bookingConfirmationEmail({

@@ -145,7 +145,7 @@ export function PublicForm({
           {/* Off-screen rather than display:none — some bots skip hidden
               inputs but fill anything they can find in the DOM. */}
           <div className="bis-form-hp" aria-hidden>
-            <label htmlFor={HONEYPOT_FIELD}>Do not fill this in</label>
+            <label htmlFor={HONEYPOT_FIELD}>{strings.honeypot}</label>
             <input id={HONEYPOT_FIELD} name={HONEYPOT_FIELD} type="text" tabIndex={-1}
                    autoComplete="off" />
           </div>

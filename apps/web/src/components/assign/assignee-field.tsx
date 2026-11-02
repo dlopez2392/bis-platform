@@ -59,7 +59,7 @@ export function AssigneeField({ label, value, options, readOnly, save }: {
   const pick = (next: string | null) => {
     if (next === current) return;
     const prior = current;
-    startTransition(() => applyAssignee(save, next, prior, nameOf, setCurrent));
+    startTransition(() => applyAssignee(save, next, prior, nameOf, setCurrent, locale));
   };
   return (
     <Select value={current ?? NONE} onValueChange={(v) => pick(v === NONE ? null : v)} disabled={pending}>

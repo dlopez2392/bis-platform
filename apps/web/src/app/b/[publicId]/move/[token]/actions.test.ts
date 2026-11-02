@@ -295,7 +295,7 @@ describe("confirmMoveAction — who is told", () => {
     const g = mine[0]!;
     expect([g.to, g.accountId, g.contactId, g.language, g.fromAddress, g.replyTo, g.origin])
       .toEqual(["jane@example.com", ACCOUNT_ID, "contact_1", "es", "hello@acme.com", "owner-reply@acme.com", "https://app.example"]);
-    expect(g.subject).toBe("Tu cita fue reprogramada");
+    expect(g.subject).toBe("Su cita fue reprogramada");
     expect(g.body).toContain(`https://app.example/b/pubrow12345/cancel/${NEW_TOKEN}?locale=es`);
     expect(g.body).toContain(`https://app.example/b/pubrow12345/move/${NEW_TOKEN}?locale=es`);
     expect(g.body).toContain(`https://app.example/b/pubrow12345/ics/${NEW_TOKEN}?locale=es`);

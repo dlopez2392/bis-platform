@@ -87,7 +87,7 @@ describe("/b/[publicId]/cancel/[token] metadata (F-102 — the title was always 
       params: Promise.resolve({ publicId: "pub1", token: "tok123" }),
       searchParams: Promise.resolve({ locale: "es" }),
     });
-    expect(meta.title).toBe("Cancela tu cita con Acme Plumbing");
+    expect(meta.title).toBe("Cancele su cita con Acme Plumbing");
   });
 
   // F-102 review round, fix 1 (widened) — see

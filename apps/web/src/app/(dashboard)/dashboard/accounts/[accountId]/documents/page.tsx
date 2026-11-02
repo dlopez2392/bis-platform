@@ -125,7 +125,7 @@ export default async function DocumentsPage({ params, searchParams }: {
           <RequiredDocumentsSummary
             required={required ?? null}
             locale={locale}
-            save={setRequiredDocumentCategoriesAction.bind(null, accountId)}
+            save={setRequiredDocumentCategoriesAction.bind(null, accountId, locale)}
             undo={undoRequiredDocumentsAction.bind(null, accountId)}
           />
         ) : null}

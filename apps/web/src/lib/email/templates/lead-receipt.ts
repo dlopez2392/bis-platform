@@ -15,18 +15,23 @@ export type LeadReceiptInput = {
   canReply: boolean;
 };
 
-const COPY = {
+// Exported (S-10 T9b review round 2) so spanish-style.test.ts's live scan
+// (inlineTableViolations) can read this table directly — no production
+// behavior change, every existing call site is untouched.
+export const COPY = {
   en: {
     subject: (brand: string) => `We received your message — ${brand}`,
     greeting: (name: string | null) => (name ? `Hi ${name},` : "Hi,"),
     body: "Thanks for reaching out. We received your message and will be in touch shortly.",
     reply: "If you'd like to add anything, just reply to this email.",
   },
+  // S-10 T9b (owner decision 2026-11-01): usted everywhere, customer-facing
+  // included — this table spoke tú before.
   es: {
-    subject: (brand: string) => `Recibimos tu mensaje — ${brand}`,
+    subject: (brand: string) => `Recibimos su mensaje — ${brand}`,
     greeting: (name: string | null) => (name ? `Hola ${name}:` : "Hola:"),
-    body: "Gracias por escribirnos. Recibimos tu mensaje y nos pondremos en contacto pronto.",
-    reply: "Si quieres agregar algo, solo responde a este correo.",
+    body: "Gracias por escribirnos. Recibimos su mensaje y nos pondremos en contacto pronto.",
+    reply: "Si desea agregar algo, solo responda a este correo.",
   },
 } as const;
 

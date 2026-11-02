@@ -47,7 +47,7 @@ export const OTHERS_ROLLUP = "Others";
  * so every caller — the total and all four breakdowns — gets a window
  * that closes exactly at the `until` it was given. `countVisits()` is
  * unchanged and still used only by the Test Connection probe
- * (`website/actions.ts`), which is a rough last-7-days sanity check, not
+ * (`settings/website-link-actions.ts`), which is a rough last-7-days sanity check, not
  * a stored day — its UTC-floor and inclusive-until are both irrelevant
  * there.
  */

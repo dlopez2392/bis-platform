@@ -18,6 +18,7 @@ import {
   keysMissingSpanish, parityViolations, COPY_ATTRIBUTE_NAMES, AGENCY_ONLY_KEY_PREFIXES,
   scanSourceText, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts, resolveImport,
   AGENCY_ONLY_ROUTES, type SourceScan, withPluralForms, agencyFilesForExemption, ENGLISH_ONLY_READERS,
+  RUNTIME_AGENCY_ONLY_FILES,
 } from "./ratchet-scan";
 import baseline from "./ratchet-baseline.json";
 import directReadBaseline from "./direct-read-baseline.json";
@@ -267,15 +268,21 @@ describe("G1's exemption and G3's scan — the pieces", () => {
   const A = "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/";
   it("a file under an agency route is agency-only when only agency files import it", () => {
     const imports = new Map([[`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []]]);
-    expect([...agencyOnlyFiles(imports)].sort()).toEqual([`${A}card.tsx`, `${A}page.tsx`]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])].sort()).toEqual([`${A}card.tsx`, `${A}page.tsx`]);
   });
 
+  // These four pass `[]` for the runtime-override param (its own tests live
+  // in the "RUNTIME_AGENCY_ONLY_FILES" describe below) — they test the plain
+  // import-closure mechanics in isolation, over tiny invented graphs that
+  // share no path with the three real override entries, and the default
+  // override would otherwise inject those three real paths into every
+  // result here regardless of what the synthetic graph says.
   it("a file under an agency route that a client screen imports is NOT agency-only (mutation: return every in-route file → FAILS)", () => {
     const imports = new Map<string, string[]>([
       [`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/documents/page.tsx", [`${A}card.tsx`]],
     ]);
-    expect([...agencyOnlyFiles(imports)]).toEqual([`${A}page.tsx`]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual([`${A}page.tsx`]);
   });
 
   it("...and neither is what that file imports in turn, through a shared component (mutation: follow one level of imports only → FAILS)", () => {
@@ -284,7 +291,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       ["src/components/x.tsx", [`${A}card.tsx`]],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", ["src/components/x.tsx"]],
     ]);
-    expect([...agencyOnlyFiles(imports)]).toEqual([]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual([]);
   });
 
   it("a shared component that only agency routes render is agency-only (mutation: treat every file outside the routes as a client way in → FAILS)", () => {
@@ -293,12 +300,52 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       ["src/components/line-down-banner.tsx", []],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", []],
     ]);
-    expect([...agencyOnlyFiles(imports)].sort()).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx", "src/components/line-down-banner.tsx"]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])].sort()).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx", "src/components/line-down-banner.tsx"]);
   });
 
   it("a file nothing reaches is not agency-only (mutation: return every file the client side does not reach → FAILS)", () => {
     const imports = new Map<string, string[]>([["src/lib/orphan.ts", []], ["src/app/(dashboard)/dashboard/work/page.tsx", []]]);
-    expect([...agencyOnlyFiles(imports)]).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx"]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx"]);
+  });
+
+  // S-10 T9b finding: a file whose own content is entirely agency-only (the
+  // onboarding checklist's row and catalogue, the setup-wizard breadcrumb)
+  // can still be reached by the plain import-graph closure above, because a
+  // client-reachable page imports it unconditionally and only an `isAgency`
+  // RUNTIME branch — invisible to a static import scan — keeps it from ever
+  // rendering for a client. `RUNTIME_AGENCY_ONLY_FILES` names those files by
+  // hand, each with the test proving WHY (ratchet.test.ts's own convention
+  // for ENGLISH_ONLY_READERS, reused here for the opposite reason: not "this
+  // file must read English", but "this file is never seen by a client at
+  // all").
+  describe("RUNTIME_AGENCY_ONLY_FILES — agency-only despite being reachable from a client route", () => {
+    it("agencyOnlyFiles includes a runtime-override file even when a client way-in imports it directly (mutation: drop the override merge → FAILS)", () => {
+      const override = "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx";
+      const imports = new Map<string, string[]>([
+        ["src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx", [override]],
+        [override, []],
+      ]);
+      // The plain closure (no override) would call this file client-reachable.
+      expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).not.toContain(override);
+      expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [{ file: override }])]).toContain(override);
+    });
+
+    it("names exactly the four real files, each with a reason (mutation: add a fifth without a test row → FAILS)", () => {
+      expect(RUNTIME_AGENCY_ONLY_FILES.map((r) => r.file)).toEqual([
+        "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx",
+        "src/lib/checklist-catalogue.ts",
+        "src/components/back-to-setup.tsx",
+        "src/components/account-switcher.tsx",
+      ]);
+      for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(r.reason.length, r.file).toBeGreaterThan(20);
+    });
+
+    it("the default agencyOnlyFiles call wires the real four in, over the real repo's own import graph (live)", () => {
+      const baseDir = path.join(__dirname, "../../..");
+      const scan = scanSources(baseDir, new Set(Object.keys(m)));
+      const agency = agencyOnlyFiles(scan.imports);
+      for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(agency.has(r.file), r.file).toBe(true);
+    }, 30_000);
   });
 
   it("the routes include the five in-account agency screens (mutation: drop checklist from the pattern → FAILS by name)", () => {
@@ -368,11 +415,96 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the two English-only readers (mutation: add a third without a test row → FAILS)", () => {
+  it("names exactly the twenty-six English-only readers (mutation: add a twenty-seventh without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
       "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
+      // S-10 T9b: a public surface with no locale at all reads BOTH languages
+      // on purpose, each in its own `lang` — the /u tree's own pattern,
+      // described at d/[token]/error.tsx's own doc comment.
+      "src/lib/consent/unsubscribe-copy.ts",
+      "src/app/u/[token]/page.tsx",
+      "src/app/u/[token]/unsubscribe-form.tsx",
+      "src/app/d/[token]/error.tsx",
+      "src/app/s/[token]/error.tsx",
+      // S-10 T9b: the producer side of server-words.ts's own pattern (T11/T12
+      // review, server-words.ts's own doc comment) — these booking actions
+      // deliberately answer a refusal as the catalogue's ENGLISH sentence,
+      // and the drawer translates it back by matching the words, never by a
+      // locale this "use server" module is handed.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts",
+      // S-10 T9b: automation_log.reason is STORED as these same English
+      // sentences (reason-words.ts's own doc comment: "the ENGLISH sentence
+      // REASONS... wrote when the row was logged"), read back through
+      // reason-words.ts at render time — these three are the producer side.
+      "src/lib/automations/hold-or-send.ts",
+      "src/lib/automations/closures.ts",
+      "src/lib/automations/pause-hold.ts",
+      // S-10 T9b: tasks.title is STORED text, rendered verbatim by every To
+      // do surface (the consent To do's own precedent) — its own doc
+      // comment: "the .es twin waits for an operator locale". The sibling
+      // callbackAlertLine (same file) already takes a real locale for the
+      // call-alert email; only the stored title stays English, on purpose.
+      "src/lib/voice/call-card.ts",
+      // S-10 T9b: a `.en`/`.es` SUFFIX PAIR, picked by the caller's own
+      // already-resolved language before the m[...] read — t()'s bare-key
+      // convention cannot express this, and the scanner cannot tell the
+      // branch from an English-only read.
+      "src/lib/consent/replies.ts",
+      "src/lib/consent/email-gate.ts",
+      // S-10 T9b: todo.consent.cancel.en/hold.en are STORED To-do titles,
+      // the same precedent as call-card.ts above; this file ALSO reads
+      // todo.sharedNumber.* through t() with a real resolved locale a few
+      // lines away — only the two stored-title reads are English on purpose.
+      "src/lib/consent/inbound.ts",
+      // S-10 T9b: the To do screen's own doc comment — ACTION_FAILED and
+      // todo.consent.decideFirst's English reads are a fallback for a caller
+      // that reads only `error`; the real client (work-row-actions.tsx's
+      // failureText) always prefers `errorKey` and resolves it with t() in
+      // the reader's language. decideFromTask, the same file's other
+      // action, already resolves and uses a real locale a few lines away.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts",
+      // S-10 T9b: a .en/.es SUFFIX PAIR picked by a `language` the send gate
+      // already resolved and handed it — the same convention replies.ts and
+      // email-gate.ts are exempted for above.
+      "src/lib/sms/opt-out.ts",
+      // S-10 T9b: confirmMoveAction's thread line is STORED text, the same
+      // "waits for an operator locale project" precedent as call-card.ts —
+      // its own test file pins the .es twin as written out but unread.
+      "src/app/b/[publicId]/move/[token]/actions.ts",
+      // S-10 T9b: proveBooking's refusal is the same calendar.bookings.
+      // statusUpdateFailed producer side as calendar/actions.ts, consumed
+      // by server-words.ts's BY_ENGLISH map.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/prove-booking.ts",
+      // S-10 T9b: refuse()'s English fallback for AddContactErrorKey — the
+      // real client, add-contact-dialog.tsx, always prefers errorKey.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts",
+      // S-10 T9b: exportEnded()'s 409 is reached only by an agency_admin
+      // session with no live visit (agencyVisitMissing's own doc comment);
+      // the route's other read (the filename) already resolves a real
+      // locale for every caller.
+      "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route.ts",
+      // S-10 T9b: normalizeRequired's only caller is the agency-only
+      // account rename (setup/steps/account.tsx); every other InlineField
+      // caller is already locale-aware.
+      "src/components/inline-field.tsx",
+      // S-10 T9b: customerPage's not_found branch has no token at all, so
+      // no language to read — the same /u, /d "no reader language"
+      // precedent; its `business` placeholder is never read by page.tsx.
+      "src/lib/document-requests/customer-upload.ts",
+      // S-10 T9b: DEFAULT_FOLLOWUP_BODY is a byte-identity anchor (the
+      // calendar's blank-detection belt AND the settings placeholder both
+      // compare against this EXACT English text) — localizing it is a
+      // cross-file behavior change outside this task's scope.
+      "src/lib/email/templates/followup.ts",
+      // S-10 T9b: words()'s own doc comment — the English twin joins the
+      // keywords on purpose, never shown as copy.
+      "src/lib/palette/registry.ts",
+      // S-10 T9b: label()'s own doc comment — the model always gets the
+      // English word; LANGUAGE_LINE asks it for the reader's language
+      // separately. An AI prompt input, never UI copy.
+      "src/lib/record/ai-summary-prompt.ts",
     ]);
   });
 

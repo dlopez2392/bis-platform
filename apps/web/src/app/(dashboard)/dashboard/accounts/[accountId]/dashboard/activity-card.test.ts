@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EventRow } from "@bis/db";
+import type { Locale } from "@/lib/i18n/locale";
 import { ActivityCard } from "./activity-card";
 
 // Same shape as calls-chart-card.test.ts: a server component with no client
@@ -18,8 +19,8 @@ function row(overrides: Partial<EventRow>): EventRow {
   };
 }
 
-function render(events: EventRow[], now: Date = NOW, personaName: string | null = null) {
-  return renderToStaticMarkup(createElement(ActivityCard, { accountId: "acct1", events, now, personaName }));
+function render(events: EventRow[], now: Date = NOW, personaName: string | null = null, locale: Locale = "en") {
+  return renderToStaticMarkup(createElement(ActivityCard, { accountId: "acct1", events, now, personaName, locale }));
 }
 
 describe("ActivityCard", () => {
@@ -125,6 +126,12 @@ describe("ActivityCard", () => {
     expect(populated).toContain("/dashboard/accounts/acct1/pipeline");
     expect(empty).toContain("Add opportunity");
     expect(empty).toContain("/dashboard/accounts/acct1/pipeline");
+  });
+
+  it("the footer's Add-opportunity link reads in the reader's own language (mutation: hard-code m[\"pipeline.add\"] -> FAILS)", () => {
+    const es = render([row({ id: "e1" })], NOW, null, "es");
+    expect(es).toContain("Agregar oportunidad");
+    expect(es).not.toContain("Add opportunity");
   });
 });
 

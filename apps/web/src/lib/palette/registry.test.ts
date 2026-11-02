@@ -301,7 +301,7 @@ describe("buildPaletteEntries", () => {
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx",
       // S-53: the Trade card (settings:trade).
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/trade-card.tsx",
-      "../../app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card.tsx",
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/link-site-card.tsx",
       "../../components/alert-phone-card.tsx",
       "../../components/branding-panel.tsx",
     ];

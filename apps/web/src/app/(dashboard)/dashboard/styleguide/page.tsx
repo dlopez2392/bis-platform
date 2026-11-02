@@ -37,13 +37,13 @@ import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill"
 import { CONFIRM_REPLY_TREATMENTS, confirmReplyLabel } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
 import { phoneCheckTreatment } from "@/lib/contacts/phone-country";
-import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
-import { EMAIL_TREATMENT } from "@/lib/consent/email-row";
+import { TEXTS_TREATMENT, textsStatusWord } from "@/lib/consent/texts-row";
+import { EMAIL_TREATMENT, emailStatusWord } from "@/lib/consent/email-row";
 import { BillingBanner } from "@/components/billing-banner";
 import { BillingPausedBanner } from "@/components/billing-paused-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { paymentProcessingTreatment } from "../accounts/[accountId]/billing/client-status";
-import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
+import { BILLING_STATUS_TREATMENTS, billingStatusTreatment, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
 import {
@@ -79,7 +79,7 @@ import { FeedCardStates, FEED_CARD_SECTION } from "./feed-card-states";
 import { AgendaDemo } from "./agenda-demo";
 import { JobDemo } from "./job-demo";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
-import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
+import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/link-site-card";
 import {
   DisclosureResultsView, DisclosureResultsSkeleton,
 } from "@/app/(dashboard)/dashboard/accounts/[accountId]/voice/disclosure-results-view";
@@ -287,9 +287,9 @@ export default async function StyleguidePage({
           </p>
           <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-texts-state">
             <span className="text-sm">{m["contact.messages.texts"]}</span>
-            <DotPill {...TEXTS_TREATMENT.allowed} dense data-status="allowed" />
-            <DotPill {...TEXTS_TREATMENT.stopped} dense data-status="stopped" />
-            <DotPill {...TEXTS_TREATMENT.held} dense data-status="held" />
+            <DotPill {...TEXTS_TREATMENT.allowed} label={textsStatusWord("allowed", "en")} dense data-status="allowed" />
+            <DotPill {...TEXTS_TREATMENT.stopped} label={textsStatusWord("stopped", "en")} dense data-status="stopped" />
+            <DotPill {...TEXTS_TREATMENT.held} label={textsStatusWord("held", "en")} dense data-status="held" />
             <DotPill {...phoneCheckTreatment("en")} dense data-status="unconfirmed_number" />
           </div>
           <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
@@ -297,8 +297,8 @@ export default async function StyleguidePage({
           </p>
           <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-email-state">
             <span className="text-sm">{m["contact.messages.email"]}</span>
-            <DotPill {...EMAIL_TREATMENT.allowed} dense data-status="allowed" />
-            <DotPill {...EMAIL_TREATMENT.stopped} dense data-status="stopped" />
+            <DotPill {...EMAIL_TREATMENT.allowed} label={emailStatusWord("allowed", "en")} dense data-status="allowed" />
+            <DotPill {...EMAIL_TREATMENT.stopped} label={emailStatusWord("stopped", "en")} dense data-status="stopped" />
           </div>
         </section>
 
@@ -909,7 +909,7 @@ export default async function StyleguidePage({
           <div className="w-full space-y-5">
             <div className="flex flex-wrap gap-2">
               {(Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]).map((s) => (
-                <DotPill key={s} label={BILLING_STATUS_TREATMENTS[s].label} chip={BILLING_STATUS_TREATMENTS[s].chip}
+                <DotPill key={s} label={billingStatusTreatment(s, "en").label} chip={BILLING_STATUS_TREATMENTS[s].chip}
                   dot={BILLING_STATUS_TREATMENTS[s].dot} data-status={s} />
               ))}
             </div>

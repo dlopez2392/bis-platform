@@ -63,7 +63,7 @@ export const m = {
   "nav.setup": "Setup",
   "nav.setup.es": "Configuración",
   "nav.accounts": "Companies",
-  "nav.accounts.es": "Empresas",
+  "nav.accounts.es": "Cuentas",
   "nav.blueprints": "Blueprints",
   "nav.blueprints.es": "Plantillas",
   "nav.plans": "Plans",
@@ -119,7 +119,7 @@ export const m = {
   "shell.expand": "Expand sidebar",
   "shell.expand.es": "Expandir panel lateral",
   "shell.backToAgency": "Back to companies",
-  "shell.backToAgency.es": "Volver a las empresas",
+  "shell.backToAgency.es": "Volver a las cuentas",
   // Topbar's AI presence indicator (DESIGN.md "AI presence" key pattern).
   // The dot itself is a separate aria-hidden element (topbar-presence.tsx);
   // this string carries the meaning on its own per DESIGN.md's status rule
@@ -268,7 +268,7 @@ export const m = {
   "branding.replyTo": "Reply-to address",
   "branding.replyTo.es": "Dirección de respuesta",
   "branding.replyToHint": "Where replies land when this company emails a contact, and when they reply to one of their own lead alerts. Leave blank and those replies come to the BIS mailbox instead.",
-  "branding.replyToHint.es": "A dónde llegan las respuestas cuando esta empresa le escribe a un contacto, y cuando responden a una de sus propias alertas de clientes potenciales. Si lo deja en blanco, esas respuestas llegan al buzón de BIS.",
+  "branding.replyToHint.es": "A dónde llegan las respuestas cuando su negocio le escribe a un contacto, y cuando responden a una de sus propias alertas de clientes potenciales. Si lo deja en blanco, esas respuestas llegan al buzón de BIS.",
   "branding.clientReplyToHint": "Where replies land when you email a contact, and when you reply to one of your lead alerts. Leave blank and those replies come to us instead of you.",
   "branding.clientReplyToHint.es": "A dónde llegan las respuestas cuando usted le escribe a un contacto, y cuando responde a una de sus alertas de clientes potenciales. Si lo deja en blanco, esas respuestas nos llegan a nosotros en lugar de a usted.",
   "branding.badReplyTo": "Enter an email address, like hello@yourcompany.com.",
@@ -276,7 +276,7 @@ export const m = {
   "branding.mailingAddress": "Mailing address",
   "branding.mailingAddress.es": "Dirección postal",
   "branding.mailingAddressHint": "Printed at the bottom of the emails this company sends to past customers. The law asks for a real postal address on those, so use one where mail actually reaches them.",
-  "branding.mailingAddressHint.es": "Se imprime al final de los correos que esta empresa envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde realmente llegue el correo.",
+  "branding.mailingAddressHint.es": "Se imprime al final de los correos que su negocio envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde realmente llegue el correo.",
   "branding.clientMailingAddressHint": "Printed at the bottom of the emails you send to past customers. The law asks for a real postal address on those, so use one where you actually get mail.",
   "branding.clientMailingAddressHint.es": "Se imprime al final de los correos que usted envía a clientes anteriores. La ley exige una dirección postal real en esos correos, así que use una donde usted realmente reciba correo.",
   "branding.mailingAddressTooLong": "That mailing address is too long. Keep it to 300 characters or fewer.",
@@ -284,11 +284,11 @@ export const m = {
   "checklist.reply_to.title": "Set a reply-to address",
   "checklist.reply_to.help": "In this company's Branding, add the address their replies should reach, and do it before setting a sending address. Until it is set, a reply lands wherever the mail came from: the BIS mailbox while they still send from the platform address, and their own sending domain once one is set — which for the send-only subdomain recommended above usually has no mailbox at all, so the reply bounces or vanishes.",
   "branding.body": "Shown to this company's users in place of the BIS name and mark, and on their public lead forms.",
-  "branding.body.es": "Se muestra a los usuarios de esta empresa en lugar del nombre y el logotipo de BIS, y en sus formularios públicos de clientes potenciales.",
+  "branding.body.es": "Se muestra a los usuarios de su negocio en lugar del nombre y el logotipo de BIS, y en sus formularios públicos de clientes potenciales.",
   "branding.name": "Display name",
   "branding.name.es": "Nombre para mostrar",
   "branding.nameHint": "What this company's own customers see — on their lead forms, booking page, website chat, emails and texts, and in their sidebar. Your internal name for them stays private.",
-  "branding.nameHint.es": "Lo que ven los propios clientes de esta empresa: en sus formularios de clientes potenciales, la página para agendar citas, el chat del sitio web, los correos y los mensajes de texto, y en su barra lateral. El nombre interno que usted usa para ellos sigue siendo privado.",
+  "branding.nameHint.es": "Lo que ven los propios clientes de su negocio: en sus formularios de clientes potenciales, la página para agendar citas, el chat del sitio web, los correos y los mensajes de texto, y en su barra lateral. El nombre interno que usted usa para ellos sigue siendo privado.",
   "branding.logo": "Logo",
   "branding.logo.es": "Logotipo",
   "branding.logoHint": "PNG, JPEG or WebP, up to 512 KB.",
@@ -323,6 +323,10 @@ export const m = {
   "branding.nameRequired.es": "Los clientes ven este nombre en cada correo y mensaje de texto. Póngale un nombre al negocio antes de guardar.",
   "branding.colorPreview": "Preview",
   "branding.colorPreview.es": "Vista previa",
+  // S-10 T9b (G2's own raw-JSX ratchet): a hex example, not language —
+  // identical in both, same treatment as badColor's own inline example above.
+  "branding.colorPlaceholder": "#0f766e",
+  "branding.colorPlaceholder.es": "#0f766e",
   "branding.previewSubmit": "Submit",
   "branding.previewSubmit.es": "Enviar",
   "branding.previewSidebar": "Sidebar",
@@ -1052,7 +1056,7 @@ export const m = {
   "contact.source.machine.voice": "They called in",
   "contact.source.machine.voice.es": "Llamaron por teléfono",
   "contact.source.machine.booking": "They booked online",
-  "contact.source.machine.booking.es": "Reservaron en línea",
+  "contact.source.machine.booking.es": "Agendaron en línea",
   "contact.source.machine.form": "Saved to your “{name}” form",
   "contact.source.machine.form.es": "Guardado en su formulario “{name}”",
   // S-09 (a language on every customer): the record's and the drawer's Language line. Spec §15.2's
@@ -1168,7 +1172,7 @@ export const m = {
   "contact.email.customerOnly": "They can resubscribe from the unsubscribe link in any email from you.",
   "contact.email.customerOnly.es": "Puede volver a suscribirse desde el enlace para darse de baja en cualquier correo que usted le mande.",
   "contact.email.loadFailed": "Couldn't load their email settings. Try again.",
-  "contact.email.loadFailed.es": "No se pudo cargar la configuración de correo. Intente de nuevo.",
+  "contact.email.loadFailed.es": "No se pudieron cargar los ajustes de correo. Intente de nuevo.",
   "contact.email.changed": "Their emails changed while you were looking. This is where they stand now.",
   "contact.email.changed.es": "Sus correos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.email.failed": "Couldn't save that — please try again.",
@@ -1255,7 +1259,7 @@ export const m = {
   "contact.texts.releasedToast": "Hold lifted. Texts to them are back on.",
   "contact.texts.releasedToast.es": "Se quitó la pausa. Se le vuelven a mandar textos.",
   "contact.texts.loadFailed": "Couldn't load their message settings. Try again.",
-  "contact.texts.loadFailed.es": "No se pudo cargar la configuración de mensajes. Intente de nuevo.",
+  "contact.texts.loadFailed.es": "No se pudieron cargar los ajustes de mensajes. Intente de nuevo.",
   "contact.texts.changed": "Their texts changed while you were looking. This is where they stand now.",
   "contact.texts.changed.es": "Sus textos cambiaron mientras usted los revisaba. Así están ahora.",
   "contact.texts.failed": "Couldn't save that — please try again.",
@@ -1288,7 +1292,7 @@ export const m = {
   "todo.consent.timelineHint": "Close this one from the To do page.",
   "todo.consent.timelineHint.es": "Ciérrelo desde la página de Pendientes.",
   "todo.consent.failed": "Couldn't save that — please try again.",
-  "todo.consent.failed.es": "No se guardó. Vuelva a intentarlo.",
+  "todo.consent.failed.es": "No se guardó. Inténtelo de nuevo.",
 
   // The contact list's drawer (S-03 part 3): the record's quick look.
   "drawer.recent": "Recent",
@@ -1393,6 +1397,9 @@ export const m = {
   // F-196: {max} is WEEKLY_REPORT_MAX_RECIPIENTS (lib/automations/caps.ts), filled by the card.
   "settings.weeklyReportHint": "Who gets Monday's numbers. Separate addresses with commas. Up to {max} addresses.",
   "settings.weeklyReportHint.es": "Quién recibe los números del lunes. Separa las direcciones con comas. Hasta {max} direcciones.",
+  // S-10 T9b (G2's own raw-JSX ratchet): an example shape, not language —
+  // identical in both, same treatment as the review-link placeholder above.
+  "settings.weeklyReportPlaceholder": "owner@theircompany.com, manager@theircompany.com",
   "settings.weeklyReportSaved": "Saved. The next report goes out Monday morning.",
   "settings.weeklyReportBadEmail": "That doesn't look like an email address: {value}",
   // F-196: the weekly report goes to at most WEEKLY_REPORT_MAX_RECIPIENTS
@@ -1436,6 +1443,11 @@ export const m = {
   // to save yet when this shows. The copy says so in the present tense, not
   // as a note about a number already stored.
   "settings.alertPhoneSelfWarning": "Can't send a code there — that's this account's own texting number, and a code sent there would loop straight back with nobody to read it. Use a different number.",
+  // S-10 T9b: the styleguide demos this exact refusal (settings-field-
+  // cards.tsx's demoSelfLoopRefusal), which disqualifies the usual
+  // reference-based exemption even though the real caller
+  // (startAlertPhoneVerificationAction) is agency-only.
+  "settings.alertPhoneSelfWarning.es": "No se puede enviar un código ahí: ese es el número de mensajes de texto de esta cuenta, y un código enviado ahí regresaría sin que nadie lo leyera. Use otro número.",
   // The client's read-only view (branding page) — honest about the
   // asymmetry rather than silent about it: says where alerts go and who can
   // change it, never implies the field is unfinished.
@@ -1485,6 +1497,7 @@ export const m = {
   // THIS code was. See verifyAlertPhoneCode's own comment for why "wrong"
   // and "expired" are kept as two different, narrow messages.
   "settings.alertPhoneWrongCode": "That code doesn't match. Check the digits and try again.",
+  "settings.alertPhoneWrongCode.es": "Ese código no coincide. Revise los dígitos e inténtelo de nuevo.",
   "settings.alertPhoneCodeExpired": "That code has expired, or none was ever sent for this number. Request a new one.",
   // The agency's idle-phase button: "Save" only ever clears the field
   // (setAlertPhoneAction's one remaining direct write); typing any number,
@@ -1654,9 +1667,9 @@ export const m = {
   "compose.noPhoneOnContact.es": "Este contacto no tiene número de teléfono.",
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
-  "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de esta empresa",
+  "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de su negocio",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
-  "compose.smsBlockedNoNumber.es": "Para mandar textos, esta empresa necesita un número de teléfono activo",
+  "compose.smsBlockedNoNumber.es": "Para mandar textos, su negocio necesita un número de teléfono activo",
   // M7a PR-4: the staff composer's own refusal while an account is paused
   // for billing (G7a's last line — non-automation sends are refused with a
   // sentence, not held).
@@ -2334,7 +2347,7 @@ export const m = {
   "calendar.agenda.addedByYou": "Added by you",
   "calendar.agenda.addedByYou.es": "Agregado por usted",
   "calendar.agenda.bookedOnline": "Booked online",
-  "calendar.agenda.bookedOnline.es": "Reservada en línea",
+  "calendar.agenda.bookedOnline.es": "Agendada en línea",
   "calendar.agenda.bookedBy": "Booked by {persona}",
   "calendar.agenda.bookedBy.es": "Agendada por {persona}",
   "calendar.agenda.pastOpen": "{count} past jobs still need Completed or No-show · To do",
@@ -2527,7 +2540,7 @@ export const m = {
   "calendar.feed.loadError": "We couldn't load your link. Try again.",
   "calendar.feed.loadError.es": "No pudimos cargar su enlace. Inténtelo de nuevo.",
   "calendar.feed.retry": "Try again",
-  "calendar.feed.retry.es": "Reintentar",
+  "calendar.feed.retry.es": "Intentar de nuevo",
   "calendar.feed.howTo": "How to add it",
   "calendar.feed.howTo.es": "Cómo agregarlo",
   "calendar.feed.iphone.title": "iPhone",
@@ -2616,7 +2629,10 @@ export const m = {
   // rather than inlined at the append site because it is customer-facing copy
   // like every other string here — and because a carrier reads it.
   "sms.optOut.en": "Reply STOP to opt out.",
-  "sms.optOut.es": "Responde STOP para cancelar.",
+  // S-10 T9b (owner decision 2026-11-01): usted, not tú — "Responde" (G4's
+  // own scanner cannot catch a bare imperative; "responda" is the same
+  // length, so no SMS grows).
+  "sms.optOut.es": "Responda STOP para cancelar.",
   // The consent replies: the ONE stop confirmation, the start/opt-in
   // confirmation and the help reply. Rewritten 2026-10-05 after TCR rejected
   // BIS's own 10DLC campaign (MNO_REJECTED, reason 611): the opt-in
@@ -2700,8 +2716,9 @@ export const m = {
   // WITHOUT quoting the English disclosure verbatim: this card's preview
   // language switches with the operator's `languages` selection
   // (previewLanguage, voice-settings.tsx), and a Spanish preview counts
-  // "Responde STOP para cancelar." — a note that named the English sentence
-  // there would be describing text nobody is about to receive.
+  // "Responda STOP para cancelar." (S-10 T9b: usted, was tú) — a note that
+  // named the English sentence there would be describing text nobody is
+  // about to receive.
   "voice.textback.optOutCounted": "Every text ends with an opt-out line. That sentence is included in the count above.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
@@ -2717,11 +2734,19 @@ export const m = {
   "voice.numbers.assignFailed": "Could not assign this number.",
   "voice.numbers.badE164": "Enter a valid phone number.",
   "voice.numbers.empty": "No phone numbers assigned yet.",
+  // S-10 T9b: client-reachable transitively (step-shared.tsx's NumberChip is
+  // read by the client's own Branding page via alert-phone-card.tsx), so
+  // translated for real rather than exempted.
   "voice.numbers.status": "Status",
+  "voice.numbers.status.es": "Estado",
   "voice.numbers.status.provisioned": "Provisioned",
+  "voice.numbers.status.provisioned.es": "Asignado",
   "voice.numbers.status.testing": "Testing",
+  "voice.numbers.status.testing.es": "En prueba",
   "voice.numbers.status.live": "Live",
+  "voice.numbers.status.live.es": "Activo",
   "voice.numbers.status.released": "Released",
+  "voice.numbers.status.released.es": "Liberado",
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
@@ -2837,7 +2862,7 @@ export const m = {
   "voice.tradeRules.insurance_pc": "Insurance (property & casualty)",
   "voice.tradeRules.insurance_pc.es": "Seguros de daños (auto, casa y negocio)",
   "voice.tradeRules.insurance_pcHint": "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy. Before reading, moving or cancelling an appointment, {persona} asks for the full name and the email on file.",
-  "voice.tradeRules.insurance_pcHint.es": "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza. Antes de consultar, cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado.",
+  "voice.tradeRules.insurance_pcHint.es": "{persona} toma solicitudes de estimado para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza. Antes de consultar, cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado.",
   "voice.tradeRules.events": "Events and venues",
   "voice.tradeRules.events.es": "Eventos y salones",
   "voice.tradeRules.eventsHint": "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Services & prices, or from Facts when there is no list.",
@@ -3183,7 +3208,7 @@ export const m = {
   "business.toast.late": "Running late today. Booking stays open.",
   "business.toast.late.es": "Con retraso hoy. Se siguen aceptando citas.",
   "business.toast.open": "Open again. Your booking page takes bookings as usual.",
-  "business.toast.open.es": "Abierto de nuevo. Su página de citas acepta reservas como siempre.",
+  "business.toast.open.es": "Abierto de nuevo. Su página para agendar citas funciona como siempre.",
   "business.toast.persona": "{persona} says so too.",
   "business.toast.persona.es": "{persona} también lo dice.",
   "business.toast.todo": "A To-do lists the {n} affected appointments.",
@@ -3411,7 +3436,7 @@ export const m = {
   // concierge.aiIntro: the chat's first message on Trial or On, spoken in the
   // chat's own tú register like aiLabel above.
   "concierge.aiIntro": "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
-  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
+  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento.",
 
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
@@ -3437,7 +3462,12 @@ export const m = {
   "voice.assistant.factsBlankOn": "Nothing is written about the business, so the assistant has nothing to answer questions from. Add it in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
   "voice.assistant.noFormTitle": "No published form yet",
+  // S-10 T9b: the styleguide demos EmbedSnippet (a client component) with
+  // these exact keys, which disqualifies the usual exemption even though
+  // today's only real callers are agency-only (voice-settings.tsx,
+  // website-assistant.tsx) — translated for real instead.
   "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",
+  "voice.assistant.noFormBody.es": "El asistente del sitio web necesita un formulario para enviar sus clientes potenciales. Publique uno y vuelva aquí para activarlo.",
   "voice.assistant.goToForms": "Go to Forms",
   "voice.assistant.enabledToast": "Website assistant turned on",
   "voice.assistant.disabledToast": "Website assistant turned off",
@@ -3450,10 +3480,15 @@ export const m = {
   "voice.assistant.formUnpublishedOff": "This form is no longer published. Publish it again or pick another one first.",
   "voice.assistant.unpublishedFormOption": "This form (no longer published)",
   "voice.assistant.snippetTitle": "Add it to your website",
+  "voice.assistant.snippetTitle.es": "Agréguelo a su sitio web",
   "voice.assistant.snippetHint": "Paste this line into your site, right before </body>.",
+  "voice.assistant.snippetHint.es": "Pegue esta línea en su sitio, justo antes de </body>.",
   "voice.assistant.copy": "Copy the code",
+  "voice.assistant.copy.es": "Copiar el código",
   "voice.assistant.copied": "Copied",
+  "voice.assistant.copied.es": "Copiado",
   "voice.assistant.publicLink": "Direct link",
+  "voice.assistant.publicLink.es": "Enlace directo",
 
   // ── The agency numbers inventory (/dashboard/numbers) ──────────────────
   //
@@ -3585,16 +3620,18 @@ export const m = {
   // never resolves a name; the NoName variants drop the opening clause rather
   // than invent a noun. Every one of the four is ONE GSM-7 segment for a
   // GSM-7 company name (measured in instant-reply-copy.test.ts); SENT, with
-  // the opt-out sentence, the Spanish holds a name of up to 36 characters and
-  // the English up to 32 (the Spanish was trimmed for this: its first draft
-  // crossed into a second billed message at 13). The Spanish
+  // the opt-out sentence, the Spanish holds a name of up to 38 characters
+  // (S-10 T9b: was 36, before the usted rewrite shortened the body by two
+  // septets) and the English up to 32 (the Spanish was trimmed for this: its
+  // first draft crossed into a second billed message at 13). The Spanish
   // is written with no á/í/ó/ú, the text-back's rule (voice.textback.*), and
-  // in the tú form the receipt email uses ("Recibimos tu mensaje…"). No em
+  // in usted, the same register the receipt email now uses (S-10 T9b;
+  // "Recibimos su mensaje…" — both spoke tú before). No em
   // dash anywhere: it is outside GSM-7.
   "automations.instantReply.defaultBody": "Hi, this is {name}. We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBody.es": "Hola, somos {name}. Recibimos su mensaje y le contactaremos pronto. Responda si desea agregar algo.",
   "automations.instantReply.defaultBodyNoName": "We got your message and will be in touch shortly. Reply here if you'd like to add anything.",
-  "automations.instantReply.defaultBodyNoName.es": "Recibimos tu mensaje y te contactaremos pronto. Responde si quieres agregar algo.",
+  "automations.instantReply.defaultBodyNoName.es": "Recibimos su mensaje y le contactaremos pronto. Responda si desea agregar algo.",
   // Automations page — agency-only, like Voice. Plain admin language; the
   // recipe names are the things a business owner would call them.
   "automations.title": "Automations",
@@ -3604,6 +3641,9 @@ export const m = {
   // locale here; granted outside this lane's own prefixes (orchestrator).
   "automations.bodyTooLong.es": "Use 1,000 caracteres como máximo.",
   "automations.review.title": "Review requests",
+  // S-10 T9b: genuinely client-visible — log-titles.ts's sourceTitle() reads
+  // this for every Activity source label, in the reader's own language.
+  "automations.review.title.es": "Solicitudes de reseña",
   "automations.review.body": "The morning after a job is marked completed, ask the customer for a review. If the follow-up email is on, this waits one more morning so the two never land together. Off until you turn it on.",
   "automations.review.enabled": "Send review requests",
   "automations.review.channel": "Send by",
@@ -3611,7 +3651,10 @@ export const m = {
   "automations.review.channel.sms": "Text message",
   "automations.review.url": "Review link",
   "automations.review.urlHint": "Where the customer leaves the review, for example your Google Business review link. It is added to the end of the message.",
-  "automations.review.message": "Message",
+  // S-10 T9b (G2's own raw-JSX ratchet): an example URL shape, not language
+  // — identical in both, the same treatment the hex-colour placeholder and
+  // the honeypot label get.
+  "automations.review.urlPlaceholder": "https://g.page/r/.../review",
   "automations.review.messageHint": "Leave blank to send our default message.",
   "automations.review.save": "Save review requests",
   "automations.review.saved": "Review requests saved",
@@ -3622,10 +3665,10 @@ export const m = {
   "automations.channel.email": "Email",
   "automations.channel.sms": "Text message",
   "automations.noShow.title": "No-show follow-ups",
+  "automations.noShow.title.es": "Seguimiento de inasistencias",
   "automations.noShow.body": "The morning after a booking is marked no-show, invite the customer to pick a new time. Your booking page link is added to the end of the message. Off until you turn it on.",
   "automations.noShow.enabled": "Send no-show follow-ups",
   "automations.noShow.channel": "Send by",
-  "automations.noShow.message": "Message",
   "automations.noShow.messageHint": "Leave blank to send our default message.",
   "automations.noShow.linkHint": "Added to the end: {link}",
   "automations.noShow.calendarOff": "Your booking page is off, so there is nowhere to send people yet. Turn it on under Calendar first.",
@@ -3633,15 +3676,22 @@ export const m = {
   "automations.noShow.saved": "No-show follow-ups saved",
   "automations.noShow.saveFailed": "Could not save no-show follow-ups.",
   "automations.smsReminder.title": "Text reminders",
+  "automations.smsReminder.title.es": "Recordatorios por texto",
   "automations.smsReminder.body": "About two hours before an appointment, text the customer a reminder with the time, on top of the email reminder the day before. Text only. Off until you turn it on.",
   "automations.smsReminder.enabled": "Send text reminders",
   "automations.smsReminder.message": "Closing line",
   "automations.smsReminder.messageHint": "Comes after the appointment time. Leave blank to send our default.",
   "automations.smsReminder.preview": "Preview",
+  // S-10 T9b: the styleguide demos this card too, which disqualifies the
+  // reference-based exemption (it demos client components) even though
+  // sms-reminder-card.tsx itself is agency-only — translating is simpler
+  // than fighting that rule for one word.
+  "automations.smsReminder.preview.es": "Vista previa",
   "automations.smsReminder.save": "Save text reminders",
   "automations.smsReminder.saved": "Text reminders saved",
   "automations.smsReminder.saveFailed": "Could not save text reminders.",
   "automations.instantReply.title": "Instant reply to new leads",
+  "automations.instantReply.title.es": "Respuesta instantánea a clientes potenciales nuevos",
   "automations.instantReply.body": "The moment someone submits one of your forms with a phone number, text them from your number in the language they used, on top of the email receipt they already get. Off until you turn it on, and only for companies whose A2P registration is approved.",
   "automations.instantReply.enabled": "Send an instant reply",
   "automations.instantReply.messageEn": "English message",
@@ -3670,6 +3720,7 @@ export const m = {
   "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
   "automations.appointmentConfirm.leadNoName.es": "Tiene cita el {when}. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.",
   "automations.appointmentConfirm.title": "Appointment confirmations",
+  "automations.appointmentConfirm.title.es": "Confirmaciones de citas",
   "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
   "automations.appointmentConfirm.enabled": "Ask customers to confirm",
   "automations.appointmentConfirm.message": "Closing line",
@@ -3737,10 +3788,10 @@ export const m = {
   "automations.referral.emailSubjectNoName": "One favor",
   "automations.referral.emailSubjectNoName.es": "Un favor",
   "automations.referral.title": "Referral asks",
+  "automations.referral.title.es": "Solicitudes de referidos",
   "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",
   "automations.referral.channel": "Send by",
-  "automations.referral.message": "Message",
   "automations.referral.messageHint": "Leave blank to send our default message. No link is added — this asks for a name, not a rating.",
   "automations.referral.save": "Save referral asks",
   "automations.referral.saved": "Referral asks saved",
@@ -3770,12 +3821,12 @@ export const m = {
   "automations.reactivation.subjectNoName": "Checking in",
   "automations.reactivation.subjectNoName.es": "Pasamos a saludar",
   "automations.reactivation.title": "Checking in with past customers",
+  "automations.reactivation.title.es": "Seguimiento a clientes anteriores",
   "automations.reactivation.body": "Email a past customer who hasn't been in touch for a while. Only people whose job you completed, at most five a day, and only once each — ever. Email only. Off until you turn it on.",
   "automations.reactivation.enabled": "Check in with past customers",
   "automations.reactivation.months": "Quiet for at least",
   "automations.reactivation.monthsUnit": "months",
   "automations.reactivation.monthsHint": "Between 6 and 18. Nine is a good default for seasonal work: last spring's customer still knows you.",
-  "automations.reactivation.message": "Message",
   "automations.reactivation.messageHint": "Leave blank to send our default message. No discount, no offer — just an open door.",
   "automations.reactivation.limitNote": "At most five a day, oldest first, and never twice to the same person.",
   "automations.reactivation.save": "Save check-ins",
@@ -3861,6 +3912,9 @@ export const m = {
   "automations.previewEs": "Spanish preview",
   "automations.previewEs.es": "Vista previa en español",
   "automations.quoteFollowup.title": "Quote follow-ups",
+  // Glossary (spec §4.3): quote/estimate -> "estimado", never
+  // presupuesto/cotización.
+  "automations.quoteFollowup.title.es": "Seguimiento de estimados",
   "automations.quoteFollowup.body": "This watches your pipeline. Deals only get there when you or your team put them there, so nothing happens on its own. Move a deal into the stage you pick, and after a few quiet days with no reply it checks in about the quote. Off until you turn it on.",
   "automations.quoteFollowup.enabled": "Follow up on quiet quotes",
   "automations.quoteFollowup.stage": "Pipeline stage to watch",
@@ -3873,7 +3927,6 @@ export const m = {
   "automations.quoteFollowup.quietDaysInvalid": "Choose a number of days between 1 and 30.",
   "automations.quoteFollowup.stageRequired": "Pick the stage to watch before saving.",
   "automations.quoteFollowup.channel": "Send by",
-  "automations.quoteFollowup.message": "Message",
   "automations.quoteFollowup.messageHint": "Leave blank to send our default message. The price and the deal's name are never included.",
   "automations.quoteFollowup.save": "Save quote follow-ups",
   "automations.quoteFollowup.saved": "Quote follow-ups saved",
@@ -3884,18 +3937,17 @@ export const m = {
   // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
   "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
   // Consent chain PR-1: the Activity page's reasons this PR adds. REASONS in
-  // lib/automations/hold-or-send.ts points at these; its older lines stay
-  // there (the automation engine's precedent, Global Constraints).
-  "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
-  "automations.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
-  "automations.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
-  "automations.reason.textsStopped": "They stopped texts from this business",
-  "automations.reason.textsHeld": "Texts to them are on hold",
-  "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
-  // The re-hold age cap (orchestrator, 2026-09-26): an outage never produces
-  // "Sorry we missed your call" days later.
-  "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
-  "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  // lib/automations/hold-or-send.ts used to point at eight of these as a
+  // second, never-translated-back catalogue key for the SAME English text
+  // `activity.reason.*` already carries (reason-words.ts's `BY_ENGLISH` map
+  // matches by string value, not by which key wrote it) — ledgerRetry,
+  // emailLedgerRetry, emailSetupRetry, textsStopped, textsHeld,
+  // numberUnconfirmed, tooLongAfterCall and tooLongAfterWriteIn. Deleted
+  // (S-10 T9b review round 2, proved orphaned by grep): hold-or-send.ts's
+  // own English literal is the source of truth for each now, the same
+  // shape `noEmail`/`noPhone` already had there. The three below
+  // (heldBillingPaused, skippedBillingPaused, billingPaused) are genuinely
+  // read back through reason-words.ts's own REASON_KEYS and stay.
   // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
   // account the agency has otherwise marked not real. Not "pre-go-live":
   // go-live's own migration (0063) never reads or writes this column, so
@@ -3975,7 +4027,7 @@ export const m = {
   "activity.empty.title": "Nothing has gone out yet",
   "activity.empty.title.es": "Todavía no se ha enviado nada",
   "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
-  "activity.empty.body.es": "Cada texto, correo y conversación que el sistema maneja para esta empresa aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
+  "activity.empty.body.es": "Cada texto, correo y conversación que el sistema maneja para su negocio aparece aquí en el momento en que un recordatorio, una solicitud de reseña o el asistente del sitio o del teléfono envía algo.",
   // The same sentence, second person: this page is BOTH audiences (its own
   // top comment), and a client reading about THEIR OWN business should
   // never read "this company" the way an agency describing a client does.
@@ -4418,7 +4470,7 @@ export const m = {
   "setup.openStep": "Open",
   "setup.tickFailed": "Could not save that. Reload and try again.",
   "setup.rename.empty": "A company needs a name — this one can't be blank.",
-  "setup.rename.empty.es": "Una empresa necesita un nombre; este no puede quedar vacío.",
+  "setup.rename.empty.es": "Todo negocio necesita un nombre; este no puede quedar vacío.",
   "setup.rename.failed": "Couldn't rename this company. Try again.",
   "setup.rename.label": "Company name",
   // This copy has answered the audience question wrongly twice. "They never
@@ -4505,8 +4557,14 @@ export const m = {
 
   // ── /styleguide ────────────────────────────────────────────────────────
   "styleguide.title": "Style guide",
+  "styleguide.title.es": "Guía de estilo",
   "styleguide.body":
     "Every component this app draws, in the theme you're looking at right now. Switch themes with the toggle to check both.",
+  // S-10 T9b: agency-only (requireAgency), but its own styleguide-demo
+  // exclusion disqualifies the usual reference-based exemption — cheaper to
+  // translate than to carve out an exception for one page's own heading.
+  "styleguide.body.es":
+    "Todos los componentes que dibuja esta aplicación, en el tema que está viendo ahora. Cambie de tema con el interruptor para revisar ambos.",
   // Mis preferencias (F-096, Task 6): the choice-tiles demo section title.
   "styleguide.choiceTiles": "Choice tiles",
   "styleguide.choiceTiles.es": "Opciones en mosaico",
@@ -4719,7 +4777,7 @@ export const m = {
   "work.booking.noShow.toast.es": "La cita quedó como “No llegó”. Es posible que se envíe un mensaje de seguimiento.",
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
   // The To do's actions return this by key (errorKey); the client renders it in the reader's language.
-  "work.actionFailed.es": "No se pudo actualizar ahora. Vuelva a intentarlo en un momento.",
+  "work.actionFailed.es": "No se pudo actualizar ahora. Inténtelo de nuevo en un momento.",
   // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
   // (Task 3) already carries the zero-queue sentence, reused rather than
   // duplicated. The two below compose the non-empty count: "{count} things
@@ -4814,11 +4872,11 @@ export const m = {
   "zone.guessed.agency":
     "This company has no timezone of its own, so times use the agency's.",
   "zone.guessed.agency.es":
-    "Esta empresa no tiene zona horaria propia, así que las horas usan la de la agencia.",
+    "Esta cuenta no tiene zona horaria propia, así que las horas usan la de la agencia.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
   "zone.guessed.fallback.es":
-    "Ni esta empresa ni la agencia tienen una zona horaria válida, así que las horas usan UTC.",
+    "Ni esta cuenta ni la agencia tienen una zona horaria válida, así que las horas usan UTC.",
   // D-076: this used to be a Link to Settings ("Set it in Settings"),
   // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
   // would have been redirected straight back to their own dashboard — but
@@ -4829,7 +4887,7 @@ export const m = {
   // this string just hadn't caught up to its own sibling's rule. Plain
   // text now, naming the real constraint instead of a destination.
   "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
-  "zone.guessed.fix.es": "Todavía no hay un campo para esto en Ajustes: la zona horaria de una empresa solo se fija al crear su cuenta.",
+  "zone.guessed.fix.es": "Todavía no hay un campo para esto en Ajustes: la zona horaria de una cuenta solo se fija al crearla.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they
@@ -5224,15 +5282,25 @@ export const m = {
   // that does not open names no business). Decision Q1: the page asks, and
   // its one primary button records; decision P2: the button says "Stop
   // emails", as the title asks.
+  // pageTitle/button/resubscribe/poweredBy (S-10 T9b) now carry real `.es`
+  // twins, each rendered as `${en} / ${es}` at the call site — the house
+  // pattern for a surface with no locale at all (the /d, /s error
+  // boundaries' own retry button), not baked into one value: a bilingual
+  // value duplicated into its OWN `.es` twin would carry the English half
+  // ("Email"/"emails") into a string G6 checks AS Spanish, and trip the
+  // email-glossary rule on itself.
   "unsubscribe.pageTitle": "Email preferences",
+  "unsubscribe.pageTitle.es": "Preferencias de correo",
   "unsubscribe.confirm.en": "Stop emails from {Business}?",
   "unsubscribe.confirm.es": "¿Dejar de recibir correos de {Business}?",
   "unsubscribe.confirmBody.en": "{Business} will stop sending you automated emails. You'll still get a confirmation when you book or ask for something.",
-  "unsubscribe.confirmBody.es": "{Business} dejará de enviarle correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
-  "unsubscribe.button": "Stop emails / Dejar de recibir correos",
+  "unsubscribe.confirmBody.es": "{Business} dejará de enviarle correos automáticos. Si agenda o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.button": "Stop emails",
+  "unsubscribe.button.es": "Dejar de recibir correos",
   "unsubscribe.done.en": "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.",
-  "unsubscribe.done.es": "Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
-  "unsubscribe.resubscribe": "Resubscribe / Volver a suscribirme",
+  "unsubscribe.done.es": "Listo. {Business} ya no le enviará correos automáticos. Si agenda o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.resubscribe": "Resubscribe",
+  "unsubscribe.resubscribe.es": "Volver a suscribirme",
   "unsubscribe.resubscribed.en": "You'll get emails from {Business} again.",
   "unsubscribe.resubscribed.es": "Volverá a recibir correos de {Business}.",
   "unsubscribe.badLink.en": "This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.",
@@ -5242,6 +5310,7 @@ export const m = {
   "unsubscribe.business.en": "the business",
   "unsubscribe.business.es": "el negocio",
   "unsubscribe.poweredBy": "Powered by BIS",
+  "unsubscribe.poweredBy.es": "Con tecnología de BIS",
 
   // Staff and roles (spec §8): the Team card, on the client Owner's /team
   // page and under the agency's Client access switch. Every key has its
@@ -5319,13 +5388,13 @@ export const m = {
   "team.empty.es": "Por ahora solo está usted. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   // The agency is never on the list, so "just you" would be false for it.
   "team.empty.agency": "Nobody at this company can sign in yet. Invite the people who answer their phones and run their jobs.",
-  "team.empty.agency.es": "Nadie de esta empresa puede entrar todavía. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
+  "team.empty.agency.es": "Nadie de esta cuenta puede entrar todavía. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   "team.clerkUnavailable": "We couldn't reach the sign-in service, so invitations aren't shown. Your team list is below.",
   "team.clerkUnavailable.es": "No pudimos comunicarnos con el servicio de inicio de sesión, así que no se muestran las invitaciones. Su lista de equipo está abajo.",
   // The agency on /team while client access is off (spec §8). Only the agency
   // can land there, and Settings is where the switch lives.
   "team.accessOffNote": "Client access is off for this company, so nobody can sign in and nobody can be invited. Turn it on in Settings to manage the team.",
-  "team.accessOffNote.es": "El acceso del cliente está desactivado para esta empresa, así que nadie puede entrar ni recibir una invitación. Actívelo en Ajustes para administrar el equipo.",
+  "team.accessOffNote.es": "El acceso del cliente está desactivado para esta cuenta, así que nadie puede entrar ni recibir una invitación. Actívelo en Ajustes para administrar el equipo.",
   "team.loadFailed": "We couldn't load the team just now. Refresh the page to try again.",
   "team.loadFailed.es": "No pudimos cargar el equipo en este momento. Actualice la página para intentarlo de nuevo.",
   "team.role.changed": "{name} is now {role}.",
@@ -5345,7 +5414,7 @@ export const m = {
   "team.full.es": "Su equipo está completo. Pídale a BIS que haga espacio.",
   // The agency raises the cap by hand (decision 33), so it is never told to ask itself.
   "team.full.agency": "This team is full. Raise the company's login limit to make room.",
-  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la empresa para hacer espacio.",
+  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la cuenta para hacer espacio.",
   "team.accessOff": "Turn client access on before inviting anyone.",
   "team.accessOff.es": "Active el acceso del cliente antes de invitar a alguien.",
   "team.lastOwner": "Every team needs at least one Owner. Make someone else an Owner first.",
@@ -5634,7 +5703,7 @@ export const m = {
   "documents.category.contract": "Contract",
   "documents.category.contract.es": "Contrato",
   "documents.category.estimate": "Estimate or quote",
-  "documents.category.estimate.es": "Presupuesto",
+  "documents.category.estimate.es": "Estimado",
   "documents.category.invoice": "Invoice or receipt",
   "documents.category.invoice.es": "Factura o recibo",
   "documents.category.photo": "Photo",
@@ -5944,7 +6013,7 @@ export const m = {
   "documents.expiryTask.contract": "{name}'s contract expires on {date}",
   "documents.expiryTask.contract.es": "El contrato de {name} vence el {date}",
   "documents.expiryTask.estimate": "{name}'s estimate expires on {date}",
-  "documents.expiryTask.estimate.es": "El presupuesto de {name} vence el {date}",
+  "documents.expiryTask.estimate.es": "El estimado de {name} vence el {date}",
   "documents.expiryTask.invoice": "{name}'s invoice expires on {date}",
   "documents.expiryTask.invoice.es": "La factura de {name} vence el {date}",
   "documents.expiryTask.photo": "{name}'s photo expires on {date}",
@@ -6327,7 +6396,7 @@ export const m = {
   // since — a foreign-key error (23503), never the generic "try again" (nothing to retry: the missing
   // thing is gone).
   "contacts.merge.undoBlocked": "Can't undo: a tag, group or customer from before the merge was deleted since.",
-  "contacts.merge.undoBlocked.es": "No se puede deshacer: se eliminó una etiqueta, un grupo o un cliente de antes de la unión.",
+  "contacts.merge.undoBlocked.es": "No se puede deshacer: se borró una etiqueta, un grupo o un cliente de antes de la unión.",
   "contacts.archive.failed": "Couldn't archive. Nothing changed. Try again.",
   "contacts.archive.failed.es": "No se pudo archivar. No cambió nada. Intente de nuevo.",
   "contacts.restore.failed": "Couldn't restore. Nothing changed. Try again.",
@@ -7210,17 +7279,17 @@ export const m = {
   "aiSettings.save": "Save",
   "aiSettings.save.es": "Guardar",
   "aiSettings.saved": "Saved. This account's AI settings are updated.",
-  "aiSettings.saved.es": "Guardado. La configuración de IA de esta cuenta está actualizada.",
+  "aiSettings.saved.es": "Guardado. Los ajustes de IA de esta cuenta están actualizados.",
   "aiSettings.undone": "Put back the earlier AI settings.",
-  "aiSettings.undone.es": "Se restauró la configuración de IA anterior.",
+  "aiSettings.undone.es": "Se restauraron los ajustes de IA anteriores.",
   "aiSettings.error.budget": "Enter a whole-dollar amount from $0 to $1,000.",
   "aiSettings.error.budget.es": "Escriba una cantidad en dólares enteros de $0 a $1,000.",
   "aiSettings.error.failed": "Couldn't save the AI settings. Try again.",
-  "aiSettings.error.failed.es": "No se pudo guardar la configuración de IA. Inténtelo de nuevo.",
+  "aiSettings.error.failed.es": "No se pudieron guardar los ajustes de IA. Inténtelo de nuevo.",
   "aiSettings.crashed": "Something went wrong. Reload the page and try again.",
   "aiSettings.crashed.es": "Algo salió mal. Vuelva a cargar la página e inténtelo de nuevo.",
   "aiSettings.loadError": "The AI settings couldn't load right now. The rest of Settings still works.",
-  "aiSettings.loadError.es": "La configuración de IA no se pudo cargar ahora. El resto de la configuración sigue funcionando.",
+  "aiSettings.loadError.es": "Los ajustes de IA no se pudieron cargar ahora. El resto de los ajustes sigue funcionando.",
   "aiSettings.global.label": "AI for every account",
   "aiSettings.global.label.es": "IA para todas las cuentas",
   "aiSettings.global.onHelp": "On. Turning it off stops summaries, cards and suggestions in every account at once. Sofía's calls and every account's website chat keep running; those switches are on each account's Voice page.",
@@ -7385,7 +7454,7 @@ export const m = {
   "suggestions.out.deal_closed": "Out of date: this deal has been closed.",
   "suggestions.out.deal_closed.es": "Ya no aplica: esta oportunidad se cerró.",
   "suggestions.out.deal_gone": "Out of date: this deal was deleted.",
-  "suggestions.out.deal_gone.es": "Ya no aplica: esta oportunidad se eliminó.",
+  "suggestions.out.deal_gone.es": "Ya no aplica: esta oportunidad se borró.",
   "suggestions.out.aged": "Out of date: this suggestion is more than 30 days old.",
   "suggestions.out.aged.es": "Ya no aplica: esta sugerencia tiene más de 30 días.",
   "suggestions.out.superseded": "Out of date: another suggestion covered this.",
@@ -7399,7 +7468,7 @@ export const m = {
   "suggestions.reason.deal_closed": "This deal has been closed.",
   "suggestions.reason.deal_closed.es": "Esta oportunidad se cerró.",
   "suggestions.reason.deal_gone": "This deal was deleted.",
-  "suggestions.reason.deal_gone.es": "Esta oportunidad se eliminó.",
+  "suggestions.reason.deal_gone.es": "Esta oportunidad se borró.",
   "suggestions.reason.aged": "More than 30 days old.",
   "suggestions.reason.aged.es": "Tiene más de 30 días.",
   "suggestions.reason.superseded": "Another suggestion covered this.",
@@ -7454,7 +7523,7 @@ export const m = {
   "timeline.what.aiActs": "the assistant's actions",
   "timeline.what.aiActs.es": "las acciones de la asistente",
   "aiActs.verb.booked": "booked {when}",
-  "aiActs.verb.booked.es": "reservó {when}",
+  "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",
   "aiActs.verb.rescheduled.es": "movió una cita al {when}",
   "aiActs.detail.movedFrom": "From {when}",
@@ -7482,7 +7551,7 @@ export const m = {
   "aiActs.reason.alreadyHappened": "Already happened",
   "aiActs.reason.alreadyHappened.es": "Ya pasó",
   "aiActs.reason.rebooked": "Already re-booked",
-  "aiActs.reason.rebooked.es": "Ya se volvió a reservar",
+  "aiActs.reason.rebooked.es": "Ya se volvió a agendar",
   "aiActs.reason.timePassed": "The time has passed",
   "aiActs.reason.timePassed.es": "La hora ya pasó",
   "aiActs.reason.timeTaken": "That time is taken now",
@@ -7498,7 +7567,7 @@ export const m = {
   "aiActs.reason.hasBooking": "They have a booking, so they stay",
   "aiActs.reason.hasBooking.es": "Tiene una cita, así que se queda",
   "aiActs.reason.otherBooking": "They booked another time since",
-  "aiActs.reason.otherBooking.es": "Reservó otra hora desde entonces",
+  "aiActs.reason.otherBooking.es": "Agendó otra hora desde entonces",
   "aiActs.reason.ownerOnly": "Only an Owner can remove a customer",
   "aiActs.reason.ownerOnly.es": "Solo el Dueño puede quitar a un cliente",
   "aiActs.undoneBy": "Undone by {name} · {date}",
@@ -7531,7 +7600,7 @@ export const m = {
   "aiActs.contactDialog.confirm.es": "Quitar cliente",
   // item 8c, Task 5 review fixes (orchestrator ruling): I-1's sentence in the move-undo notice, and M-4's two refusals.
   "aiActs.notice.calendarFix": "If you added the new time to your calendar, please change it back to this one.",
-  "aiActs.notice.calendarFix.es": "Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.",
+  "aiActs.notice.calendarFix.es": "Si agregó la nueva hora a su calendario, cámbiela de nuevo a esta, por favor.",
   "aiActs.toast.typedNameMismatch": "The name didn't match. Type it exactly as shown.",
   "aiActs.toast.typedNameMismatch.es": "El nombre no coincide. Escríbalo tal como aparece.",
   "aiActs.reason.gone": "It was already undone or removed",
@@ -7635,7 +7704,7 @@ export const m = {
   "accessLog.error": "We couldn't load BIS's visits. Try again.",
   "accessLog.error.es": "No pudimos cargar las visitas de BIS. Inténtelo de nuevo.",
   "accessLog.retry": "Try again",
-  "accessLog.retry.es": "Reintentar",
+  "accessLog.retry.es": "Intentar de nuevo",
   "accessLog.loading": "Loading BIS's visits",
   "accessLog.loading.es": "Cargando las visitas de BIS",
   "accessLog.total": "{count} visits",
@@ -7719,13 +7788,13 @@ export const m = {
   "accessLog.name.trashed": "{title} (in the trash)",
   "accessLog.name.trashed.es": "{title} (en la papelera)",
   "accessLog.gone.customer": "A customer who was later deleted",
-  "accessLog.gone.customer.es": "Un cliente que se eliminó después",
+  "accessLog.gone.customer.es": "Un cliente que se borró después",
   "accessLog.gone.group": "A household or business that was later deleted",
-  "accessLog.gone.group.es": "Un hogar o negocio que se eliminó después",
+  "accessLog.gone.group.es": "Un hogar o negocio que se borró después",
   "accessLog.gone.file": "A file that was later deleted for good",
-  "accessLog.gone.file.es": "Un archivo que se eliminó para siempre después",
+  "accessLog.gone.file.es": "Un archivo que se borró para siempre después",
   "accessLog.gone.other": "A record that was later deleted",
-  "accessLog.gone.other.es": "Un registro que se eliminó después",
+  "accessLog.gone.other.es": "Un registro que se borró después",
   "accessLog.more": "and {count} more",
   "accessLog.more.es": "y {count} más",
   "accessLog.exportEnded": "Your visit to this account has ended, so nothing was downloaded. Open the account again, choose why, then download the list.",

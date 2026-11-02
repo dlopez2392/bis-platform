@@ -1,4 +1,5 @@
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 
 /**
  * What a missed caller receives when the operator has not written their own.
@@ -69,17 +70,20 @@ import { m } from "@/lib/messages";
  * textback-body.test.ts.
  */
 export function defaultTextbackBody(brandName: string, language: "en" | "es", held = false): string {
+  const trimmed = brandName.trim();
   // `held`: sent at 08:00 for a call missed overnight, so no "just now".
-  if (!brandName.trim()) {
-    return language === "es"
-      ? m["voice.textback.defaultBodyNoName.es"]
-      : m[held ? "voice.textback.defaultBodyHeldNoName" : "voice.textback.defaultBodyNoName"];
-  }
-  const template = language === "es"
-    ? m["voice.textback.defaultBody.es"]
-    : m[held ? "voice.textback.defaultBodyHeld" : "voice.textback.defaultBody"];
+  // S-10 T9b: one `t()` call now picks the Spanish twin through `language`
+  // itself (a real Locale shape already) instead of a raw `m[...]` branch
+  // per language — Spanish's held keys are BYTE-IDENTICAL to their
+  // non-held siblings (spec §3.2: "Spanish needs no variant; its default
+  // never said 'just now'"), so the same four-key shape covers both.
+  const key: MessageKey = trimmed
+    ? (held ? "voice.textback.defaultBodyHeld" : "voice.textback.defaultBody")
+    : (held ? "voice.textback.defaultBodyHeldNoName" : "voice.textback.defaultBodyNoName");
+  const template = t(m, key, language);
+  if (!trimmed) return template;
   // Function replacement, not a plain string: a company name containing `$&`
   // or `$'` would otherwise be re-interpreted by String.replace as a
   // substitution pattern and mangle the message.
-  return template.replace("{name}", () => brandName);
+  return template.replace("{name}", () => trimmed);
 }

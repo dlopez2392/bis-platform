@@ -7,7 +7,7 @@ import { m, type MessageKey } from "@/lib/messages";
 import { t, plural, type PluralKey } from "@/lib/i18n/t";
 import { tag } from "@/lib/format";
 import type { Locale } from "@/lib/i18n/locale";
-import { formatCents } from "./plan-form";
+import { formatCents } from "./plan-money";
 import { PAUSE_FORWARD_MS, pauseCause } from "./standing";
 
 /**
@@ -52,15 +52,19 @@ export function showsPaymentFailedBanner(billing: AccountBilling | null, verdict
     && billing.subscriptionStatus !== null && PAST_DUE_STATUSES.includes(billing.subscriptionStatus);
 }
 
-/** DESIGN rule 3: a dot AND a word. Token classes only (pinned by a test). */
-export const BILLING_STATUS_TREATMENTS: Record<BillingStatus, { label: string; dot: string; chip: string }> = {
-  active: { label: m["billing.status.active"], dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
-  payment_failed: { label: m["billing.status.payment_failed"], dot: "bg-destructive", chip: "border-destructive/30 bg-destructive/10 text-foreground" },
-  paused: { label: m["billing.status.paused"], dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
-  canceled: { label: m["billing.status.canceled"], dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
-  complimentary: { label: m["billing.status.complimentary"], dot: "bg-success", chip: "border-border bg-transparent text-foreground" },
-  link_sent: { label: m["billing.status.link_sent"], dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
-  unbilled: { label: m["billing.status.unbilled"], dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
+/** DESIGN rule 3: a dot AND a word — the word is `billingStatusTreatment`
+ *  below, never read off this object (S-10 T9b: the settings card and the
+ *  styleguide demo that used to read `.label` here now call that function
+ *  with their own English locale instead). Token classes only (pinned by a
+ *  test). */
+export const BILLING_STATUS_TREATMENTS: Record<BillingStatus, { dot: string; chip: string }> = {
+  active: { dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
+  payment_failed: { dot: "bg-destructive", chip: "border-destructive/30 bg-destructive/10 text-foreground" },
+  paused: { dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
+  canceled: { dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
+  complimentary: { dot: "bg-success", chip: "border-border bg-transparent text-foreground" },
+  link_sent: { dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
+  unbilled: { dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
 };
 
 const BILLING_STATUS_KEY: Record<BillingStatus, MessageKey> = {
@@ -70,10 +74,10 @@ const BILLING_STATUS_KEY: Record<BillingStatus, MessageKey> = {
 };
 
 /**
- * S-10 T6: BILLING_STATUS_TREATMENTS above is a module-level English
- * constant — correct for its agency-only and styleguide readers (Q4 stays
- * English), wrong for the client Billing page, which reads the SAME status
- * word. Same dot/chip token classes; only the label is re-read through t().
+ * S-10 T6/T9b: the one way to get this status's word, in the reader's own
+ * language — BILLING_STATUS_TREATMENTS above carries only the dot/chip
+ * token classes now. Every caller (the client Billing page, the agency's
+ * Settings card, the styleguide demo) goes through this.
  */
 export function billingStatusTreatment(status: BillingStatus, locale: Locale): { label: string; dot: string; chip: string } {
   return { ...BILLING_STATUS_TREATMENTS[status], label: t(m, BILLING_STATUS_KEY[status], locale) };

@@ -52,7 +52,9 @@ const BILLING_PAUSED_BLOCK_MESSAGE = "email not sent: billing_paused";
  * could see a message say "Bounced" and nothing about why.
  *
  * Returns null for anything that is not a terminal failure (every other
- * status already has an honest label of its own via MESSAGE_STATUS_LABEL).
+ * status already has an honest label of its own — message-thread.tsx's own
+ * `statusWord`/`STATUS_KEY`, since S-10 T9b deleted the old
+ * English-only MESSAGE_STATUS_LABEL constant this comment used to cite).
  * For a terminal one, this recognises ONLY `COMPLAINT_ERROR_MARKER` as a
  * SPECIFIC reason; every other `error` value — including a raw provider
  * string, which is most of what this column actually holds — falls back to

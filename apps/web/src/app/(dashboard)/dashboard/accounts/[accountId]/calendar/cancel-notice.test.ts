@@ -152,8 +152,8 @@ describe("queueCancelNotice — the thread row is written QUEUED in the cancel i
 
   it("speaks Spanish when the owner chose Spanish, the link to book again included", async () => {
     const { email } = await queueCancelNotice(fakeDb as never, { ...QREQ, locale: "es", message: "Lo sentimos." });
-    expect(email).toMatchObject({ locale: "es", subject: "Tu cita fue cancelada" });
-    expect(email.text).toContain("Tu cita fue cancelada.");
+    expect(email).toMatchObject({ locale: "es", subject: "Su cita fue cancelada" });
+    expect(email.text).toContain("Su cita fue cancelada.");
     expect(email.text).toContain("para nosotros");
     expect(email.text).toContain("Agendar otro horario: https://app.bis-rgv.com/b/pub1?locale=es");
   });

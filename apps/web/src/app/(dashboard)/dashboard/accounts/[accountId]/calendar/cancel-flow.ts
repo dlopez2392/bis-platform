@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import type { CancelNoticeChoice, CancelNoticeOptionResult } from "./actions";
 
 /** Whether a customer notice can go for one booking (`cancelNoticeAvailability`,
@@ -19,12 +21,18 @@ export type CancelStep =
  * (`cancelNoticeOptionAction`), because only it knows whether the account
  * sends and whether the address has bounced.
  */
-export function cancelStep(contactEmail: string | null, availability: NoticeAvailability | null): CancelStep {
-  if (!contactEmail?.trim()) return { kind: "now", toast: m["calendar.bookings.cancelledToast"] };
+export function cancelStep(
+  contactEmail: string | null,
+  availability: NoticeAvailability | null,
+  locale: Locale = "en",
+): CancelStep {
+  if (!contactEmail?.trim()) return { kind: "now", toast: t(m, "calendar.bookings.cancelledToast", locale) };
   if (availability === null) return { kind: "probe" };
   if (availability === "available") return { kind: "dialog" };
-  if (availability === "address_blocked") return { kind: "now", toast: m["calendar.bookings.cancelledToastAddressBlocked"] };
-  return { kind: "now", toast: m["calendar.bookings.cancelledToast"] };
+  if (availability === "address_blocked") {
+    return { kind: "now", toast: t(m, "calendar.bookings.cancelledToastAddressBlocked", locale) };
+  }
+  return { kind: "now", toast: t(m, "calendar.bookings.cancelledToast", locale) };
 }
 
 /** A cancel that asks for no notice: the cancel-at-once path. */
@@ -44,8 +52,10 @@ export async function runCancelButton(deps: {
   probe: () => Promise<CancelNoticeOptionResult>;
   openDialog: () => void;
   cancelNow: (noNoticeMessage: string) => Promise<unknown>;
+  locale: Locale;
 }): Promise<void> {
-  const first = cancelStep(deps.contactEmail, null);
+  const { locale } = deps;
+  const first = cancelStep(deps.contactEmail, null, locale);
   if (first.kind === "now") {
     await deps.cancelNow(first.toast);
     return;
@@ -57,10 +67,10 @@ export async function runCancelButton(deps: {
     option = null;
   }
   if (!option || !option.ok) {
-    await deps.cancelNow(m["calendar.bookings.cancelledToast"]);
+    await deps.cancelNow(t(m, "calendar.bookings.cancelledToast", locale));
     return;
   }
-  const next = cancelStep(deps.contactEmail, option.notice);
+  const next = cancelStep(deps.contactEmail, option.notice, locale);
   if (next.kind === "dialog") deps.openDialog();
   else if (next.kind === "now") await deps.cancelNow(next.toast);
 }

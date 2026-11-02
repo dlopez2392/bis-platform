@@ -3,7 +3,7 @@ import { LIST_PANEL } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import {
-  NUMBER_STATUS_DOT, NUMBER_STATUS_LABEL, NUMBER_STATUS_ORDER,
+  NUMBER_STATUS_DOT, numberStatusLabel, NUMBER_STATUS_ORDER,
 } from "@/lib/voice/number-status";
 import type { StatusCounts } from "@/lib/voice/number-inventory";
 
@@ -30,7 +30,7 @@ export function StatusCountStrip({
       {NUMBER_STATUS_ORDER.map((status) => (
         <Cell
           key={status}
-          label={NUMBER_STATUS_LABEL[status]}
+          label={numberStatusLabel(status)}
           value={counts[status]}
           status={status}
         />

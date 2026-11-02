@@ -204,3 +204,14 @@ describe("AppSidebar — the setup meter's lang (S-10 review I-3)", () => {
     expect(src).toMatch(/href=\{`\$\{base\}\/setup`\}\s*lang=\{locale\}/);
   });
 });
+
+// S-10 T9b (review round 2): account-switcher.tsx is exempt from G1/G3/G6
+// (RUNTIME_AGENCY_ONLY_FILES, ratchet-scan.ts) ONLY because AccountSwitcher
+// renders exclusively inside this isAgency branch — a client never reaches
+// it. The exemption's whole premise is this one gate, so it is pinned here,
+// the same source-pin convention every other block in this file uses.
+describe("AppSidebar — AccountSwitcher is gated on isAgency (the RUNTIME_AGENCY_ONLY_FILES premise)", () => {
+  it("renders AccountSwitcher only when isAgency, never unconditionally (mutation: change `isAgency ?` to `true ?` → FAILS)", () => {
+    expect(src).toContain("isAgency ? (\n        <AccountSwitcher");
+  });
+});

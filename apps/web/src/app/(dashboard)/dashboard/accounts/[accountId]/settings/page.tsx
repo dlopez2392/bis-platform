@@ -13,7 +13,7 @@ import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
 import { ClientAccessSection } from "./client-access-section";
 import { ClientAccessSkeleton } from "./client-access-panel";
 import { WebsiteSection } from "./website-section";
-import { LinkSiteSkeleton } from "../website/link-site-card";
+import { LinkSiteSkeleton } from "./link-site-card";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
 import { RequiredDocumentsCard } from "./required-documents-card";
@@ -137,11 +137,11 @@ export default async function CrmSettingsPage({
   const boundSetAccountLanguage = setAccountLanguageAction.bind(null, accountId);
   const boundSetInboundMode = setInboundModeAction.bind(null, accountId);
   const boundCheckInboundDns = checkInboundDnsAction.bind(null, accountId);
-  const boundSetRequiredDocumentCategories = setRequiredDocumentCategoriesAction.bind(null, accountId);
   // S-53: the Trade card reads in the operator's own language; the rest of Settings stays as it is.
   const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
   const pseudo = requestPseudoMode({ locale: localeParam });
   const tr = makeTr(locale, pseudo);
+  const boundSetRequiredDocumentCategories = setRequiredDocumentCategoriesAction.bind(null, accountId, locale);
   const currentTrade = { trade: account.trade ?? null, tradeOther: account.trade_other ?? null };
   const tradeGate = sofiaGate(currentTrade.trade);
   const tradeStatus = currentTrade.trade === null ? tr.text("vetting.card.empty")

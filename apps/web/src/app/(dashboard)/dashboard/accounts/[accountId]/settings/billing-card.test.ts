@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BillingCardView } from "@/lib/billing/billing-view";
-import { BILLING_STATUS_TREATMENTS } from "@/lib/billing/billing-view";
+import { billingStatusTreatment } from "@/lib/billing/billing-view";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 
@@ -137,7 +137,7 @@ describe("BillingCard", () => {
     const html = render(active);
     expect(html).toContain('id="billing"');
     expect(html).toContain('data-status="active"');
-    expect(renderedText(html)).toContain(BILLING_STATUS_TREATMENTS.active.label);
+    expect(renderedText(html)).toContain(billingStatusTreatment("active", "en").label);
   });
 
   it("carries at most ONE primary button, and it is Send billing link (DESIGN rule 8): unbilled has it, active has none (mutation: render Change plan as the default variant → two primaries, FAILS)", () => {

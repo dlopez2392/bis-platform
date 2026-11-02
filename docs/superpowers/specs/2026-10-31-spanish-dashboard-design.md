@@ -308,7 +308,7 @@ has, `I18N/ratchet-scan.ts:113-116`).
 |---|---|---|---|
 | G1 Catalogue parity | frozen list of 999 (`I18N/catalogue-baseline.json`) | regenerated (984); exemption for agency-only screens computed from references, not prefixes (Q4): a key is exempt only if every literal reference to it sits in an agency-only file. **As built (T0, corrected by the PR 1 review):** the exemption follows where the LITERAL sits, not where the words end up. "Agency-only" means only agency routes reach the file through imports (every `src/app` file is a way in); a file nothing reaches is never agency-only. Two refinements: a plural's `One`/`Other` form is referenced wherever its base key is (`plural`, `tr.count`), and a reference in the styleguide never exempts, because it demos client components. Consequence to know: a customer message whose only literal sits in an agency-only builder (the instant-reply prefill, `WEB/lib/automations/instant-reply-copy.ts`, reached only by the agency's Automations card) IS exempt, so its Spanish is guarded by its own tests, not by G1 | frozen list empty and deleted: any non-exempt key without `.es` fails |
 | G2 JSX ratchet | 115 in 17 files | `/styleguide` added to `AGENCY_ONLY_ALLOWLIST` as a seventh pattern with its own test row (`I18N/ratchet.test.ts` pins "exactly six"); the 14 client and 2 public strings keyed | baseline `{}` and deleted: any copy literal in a scanned file fails |
-| G3 **Direct reads (new)** | none | an AST count of `m[...]` per file, same roots plus `src/lib`, same allowlist, baseline from today's 864 client reads (and 12 public) | `{}`: `m` is read only by `t()`, `plural()` and `makeTr` (`WEB/lib/record/copy.ts:15-21`) with the reader's locale. **As built:** G3 also counts `t(m, key, "en")` and `plural(m, key, n, "en")`, since a literal locale hard-codes the language exactly as `m["key"]` does, and it follows an aliased import (`import { m as messages }`). Its named exceptions (`ENGLISH_ONLY_READERS`, each with a reason and a test row) are files whose English read is the point: today only `ACCT/calendar/server-words.ts`'s reverse map. The styleguide needs no entry: it is agency-only, and agency-only files are outside G3 |
+| G3 **Direct reads (new)** | none | an AST count of `m[...]` per file, same roots plus `src/lib`, same allowlist, baseline from today's 864 client reads (and 12 public) | `{}`: `m` is read only by `t()`, `plural()` and `makeTr` (`WEB/lib/record/copy.ts:15-21`) with the reader's locale. **As built:** G3 also counts `t(m, key, "en")` and `plural(m, key, n, "en")`, since a literal locale hard-codes the language exactly as `m["key"]` does, and it follows an aliased import (`import { m as messages }`). **At T9b close (review round 2):** two named-exception lists, both in `I18N/ratchet-scan.ts`, each with a reason and a test row pinning the exact count by name. `ENGLISH_ONLY_READERS` (26 entries) are files whose English read IS the point — a producer/consumer reverse-map's producer side (`ACCT/calendar/server-words.ts`'s own pattern, and the automations/activity/consent reason tables that share it), a `.en`/`.es` SUFFIX PAIR picked by an already-resolved language (`sms/opt-out.ts`, `consent/replies.ts`), a public page with no session and so no language to resolve (`/u`, `/d`, `/s`), a deliberately-English AI prompt input (`record/ai-summary-prompt.ts`) or search keyword (`palette/registry.ts`), or a byte-identity anchor compared verbatim elsewhere (`email/templates/followup.ts`). `RUNTIME_AGENCY_ONLY_FILES` (4 entries: `dashboard/checklist-row.tsx`, `lib/checklist-catalogue.ts`, `components/back-to-setup.tsx`, `components/account-switcher.tsx`) are files reached by a client route's own imports but agency-only by a RUNTIME condition (an `isAgency` branch) invisible to the static import-closure `agencyOnlyFiles` otherwise computes from routes alone; `agencyOnlyFiles` merges this list into the agency set it returns, so it also exempts G1's `keysMissingSpanish` (via `agencyOnlyKeys`) and G6's `companyViolations`, not only G3 — a key or an "empresa" read ONLY from one of these four files is exempt from all three, the same as a key read only from an agency ROUTE. The styleguide needs no entry in either list: it is agency-only on its own, and agency-only files are outside every gate |
 | G4 Register (new) | eight namespaces | one test over every `.es`: an unambiguous *tú* lexicon (tu, tus, ti, contigo, puedes, tienes, verás, elijas, recárgala, inténtalo, agregaste, cámbiala, ...), never a suffix rule: "-iste" catches *existe* (three false hits measured) | frozen list of today's 13 (section 4.2) shrinks to empty in T1 and T6 |
 | G5 Placeholder parity (new) | per namespace | over every twin | 0 today; hard from day one |
 | G6 Glossary (new) | none | each row of 4.3 with a "Never" becomes a banned-word check, applied when the English holds the row's word (whole word, case-insensitive). **As built, 19 rules:** settings→configuración, delete→eliminar, book→reserv-, try again→Reintentar / Vuelva a intentarlo, estimate→presupuesto/cotización, add→añadir, email→e-mail, text→SMS, lead→prospecto, staff (the role, not "agency staff")→personal, owner→propietario, upload→cargar, and from the PR 1 review dashboard→tablero, deal→trato, appointment/booking→reserva, reschedule→reprogramar, answered→contestada, trade→oficio, to do→tareas (the last six have no breach and are hard). **Excluded on purpose:** "servicio" for job (also "service", as in Services & prices), "registro" for record (also a log: the access log's word; 14 legitimate uses measured), "inicio" for dashboard (also "inicio de sesión"), and "contacto" for customer in prose (a contact row is one) | frozen list of today's hits shrinks to empty |
@@ -420,6 +420,20 @@ account with no language gets English, decision 3, `RT:467`.)
   Clerk's emails stay English until F-117. About 0.25 to 0.5 ew, and an experimental Clerk feature on the
   sign-in path.
 
+**Q2 addendum. *Usted* on CUSTOMER-facing surfaces too?** (The owner decision above (Q2) settled the
+agency's and the Owner's OWN screens; it did not by itself reach the booking page, public forms, the
+web concierge chat, or the emails those surfaces send, which a separate pass of this same task had been
+leaving in *tú* — fix round C6's own note, superseded below.)
+- **DECIDED 2026-11-01 (owner).** *Usted* everywhere, customer-facing included. Converted:
+  `lib/booking/public-strings.ts`, `lib/forms/public-strings.ts`, `lib/concierge/strings.ts`, the booking and
+  lead-receipt email copy tables (`lib/email/templates/{booking,lead-receipt}.ts`), the instant-reply and
+  text-back defaults, and `sms.optOut.es` ("Responda STOP para cancelar."). G4 and G6 were extended
+  (review round 2) from messages.ts alone to these five inline tables too, via `inlineTableViolations`
+  (`I18N/spanish-style.ts`) — the same `TU_WORDS`/`GLOSSARY_RULES`, plus a short, narrow list of bare
+  tú-imperative verb forms (`CUSTOMER_IMPERATIVE_WORDS`) safe only because every string in these five
+  tables is unambiguously addressed to the one visitor reading it, unlike messages.ts's own broader
+  surface (4.2's own reasoning for excluding bare imperatives there).
+
 ---
 
 ## 8. DESIGN.md amendments proposed (the orchestrator lands them as `docs(design)`)
@@ -452,16 +466,41 @@ account with no language gets English, decision 3, `RT:467`.)
 
 ## 10. Findings outside this design's scope (for the ledger)
 
-- **Customer-facing *tú* still ships**, though the customer-language spec's Q5 decided *usted* everywhere: the
-  public booking pages (`WEB/lib/booking/public-strings.ts:171-223`, "Te enviamos una confirmación a tu
-  correo"), booking emails (`WEB/lib/email/templates/booking.ts:33`, `:241`), the lead receipt
-  (`WEB/lib/email/templates/lead-receipt.ts:26-28`), and `aiActs.notice.calendarFix.es`. Owner: bis-booking
-  and bis-comms.
+- ~~**Customer-facing *tú* still ships**~~ **RESOLVED 2026-11-01 (review round 2, T9b).** The owner decision
+  recorded in §7's Q2 addendum converted every surface this row named: the public booking pages
+  (`WEB/lib/booking/public-strings.ts`), booking emails (`WEB/lib/email/templates/booking.ts`), the lead
+  receipt (`WEB/lib/email/templates/lead-receipt.ts`), and the public forms table
+  (`WEB/lib/forms/public-strings.ts`) are all *usted* now, checked live by `inlineTableViolations` (§5.2's
+  G3 row). `aiActs.notice.calendarFix.es` was converted in the same pass. Only the STORED-row and
+  AI-example-line findings below remain open.
 - ~~The held text-back has no Spanish~~ **Withdrawn 2026-10-31 (T0):** the Spanish default never said "just
   now", so the held text-back already sends it (`MSG:2314-2316`); see section 3.2.
-- **The web chat's AI introduction is in *tú*** ("para que el equipo te dé seguimiento",
-  `concierge.aiIntro.es`), found by G4 during T0; customer copy, so Q5 of the customer-language spec applies.
-  Owner: whoever owns the web concierge.
+- ~~**The web chat's AI introduction is in *tú***~~ **RESOLVED 2026-11-01 (review round 2, T9b).**
+  `concierge.aiIntro.es` now reads "para que el equipo le dé seguimiento" (*usted*), part of the same Q2
+  addendum conversion; `e2e/ai-disclosure.spec.ts`'s own assertion was stale and is fixed in the same
+  commit.
+- **Stored-English rows shown to Spanish clients (NEW, found in review round 2, T9b) — owner: follow-up
+  task S-10b.** Several rows are written to the database in English at WRITE time and rendered VERBATIM at
+  READ time, never through `t()`, so a Spanish-reading client sees them in English regardless of their own
+  language: the callback To-do's stored title (`WEB/lib/voice/call-card.ts:129-130`, `todo.callback`), the
+  consent To-do's two stored titles (`WEB/lib/consent/inbound.ts:171,188`, `todo.consent.cancel.en` /
+  `todo.consent.hold.en`), and the booking-move action's conversation thread line
+  (`WEB/app/b/[publicId]/move/[token]/actions.ts:197-198`, `calendar.move.thread.subject.en` /
+  `.body.en` — its `.es` twin is already written out, unread). **Fix shape:** the same pattern
+  `WEB/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts` already uses for
+  `automation_log.reason` — store the English sentence as the row's own stable identity, then translate it
+  BACK at RENDER time through a `BY_ENGLISH`-style reverse map keyed to the reader's own resolved locale,
+  never by changing what gets written. None of these are fixed in T9b itself: each is a stored-data read
+  path outside a copy-catalogue gate's reach, and doing it for real means auditing every reader of each row
+  (the To-do tray, the Activity timeline, Conversations), which is its own task.
+- **Sofía's website-chat example lines still teach *tú* (NEW, found in review round 2, T9b) — owner:
+  bis-voice, needs the eval set rerun.** The realtime voice assistant's few-shot example turns
+  (`WEB/lib/voice/modules/events.ts:61-62,97` and `WEB/lib/voice/modules/insurance-pc.ts:97,107,114`) model
+  the Spanish the model should SPEAK back, in *tú*, which is outside this task's catalogue/inline-table
+  scope (they are prompt content, not UI copy any gate scans) but directly contradicts the 2026-11-01
+  customer-usted decision once Sofía is actually speaking Spanish to a caller. Converting the example turns
+  to *usted* needs bis-voice's own eval set rerun first, since the examples are tuned against measured
+  model behavior, not just text — flagged here rather than hand-edited blind.
 - **The QA locale override never reaches the shell** (found building T1): Next layouts receive no
   `searchParams`, and the shell's locale is resolved in `WEB/app/(dashboard)/dashboard/layout.tsx:195`, so
   `?locale=es` turns pages Spanish under a still-English sidebar, topbar and ⌘K. G9 for the shell therefore

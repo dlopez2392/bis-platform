@@ -12,11 +12,11 @@ describe("searchHeldContacts", () => {
   it("ok: localizes every hit's label, passes sublabel through, and answers the query the hits answered (mutation: drop sublabel -> FAILS)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
-      json: async () => ({ contacts: [{ id: "c1", label: "Unnamed contact", sublabel: "ana@example.com" }, { id: "c2", label: "Pat Nguyen", sublabel: "555-1234" }] }),
+      json: async () => ({ contacts: [{ id: "c1", label: "Unnamed contact", unnamed: true, sublabel: "ana@example.com" }, { id: "c2", label: "Pat Nguyen", sublabel: "555-1234" }] }),
     })));
     const r = await searchHeldContacts("a1", "an", "es", controller().signal);
     expect(r).toEqual({ status: "ok", query: "an", hits: [
-      { id: "c1", label: m["contact.noName.es"], sublabel: "ana@example.com" },
+      { id: "c1", label: m["contact.noName.es"], unnamed: true, sublabel: "ana@example.com" },
       { id: "c2", label: "Pat Nguyen", sublabel: "555-1234" },
     ] });
   });
@@ -40,11 +40,14 @@ describe("searchHeldContacts", () => {
 });
 
 describe("localizeHit", () => {
-  it("replaces the search route's own 'Unnamed contact' literal with contact.noName (mutation: compare against a different literal -> FAILS)", () => {
-    expect(localizeHit({ id: "c1", label: "Unnamed contact", sublabel: null }, "en")).toEqual({ id: "c1", label: m["contact.noName"], sublabel: null });
+  // S-10 T9b: keyed off the structural `unnamed` flag now, never a text
+  // match against the route's own English wording.
+  it("replaces a hit's label with contact.noName when it is the route's own stand-in (mutation: check hit.label instead of hit.unnamed -> FAILS)", () => {
+    expect(localizeHit({ id: "c1", label: "Unnamed contact", unnamed: true, sublabel: null }, "en")).toEqual({ id: "c1", label: m["contact.noName"], unnamed: true, sublabel: null });
   });
 
-  it("leaves a real name untouched", () => {
+  it("leaves a real name untouched, even one that happens to read like the placeholder (mutation: match on hit.label -> FAILS)", () => {
     expect(localizeHit({ id: "c1", label: "Ana Ruiz", sublabel: "ana@example.com" }, "es")).toEqual({ id: "c1", label: "Ana Ruiz", sublabel: "ana@example.com" });
+    expect(localizeHit({ id: "c2", label: "Unnamed contact", sublabel: null }, "es")).toEqual({ id: "c2", label: "Unnamed contact", sublabel: null });
   });
 });

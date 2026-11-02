@@ -104,6 +104,7 @@ export function AppointmentConfirmCard({
                 empty string — its English has no default either. */}
             <SpanishBodyField
               idPrefix="confirm"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs=""
               composeEs={(text) => withOptOut(

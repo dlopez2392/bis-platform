@@ -54,12 +54,15 @@ describe("billingStatusOf (G13)", () => {
     expect(billingStatusOf(row({ subscriptionStatus: "canceled" }), link("2026-10-16T00:00:00Z"), NOW)).toBe("link_sent");
   });
 
+  // S-10 T9b: BILLING_STATUS_TREATMENTS carries only dot/chip now — the word
+  // is billingStatusTreatment(status, locale).
   it("every treatment is a dot AND a word, in token classes only: no raw palette colour can slip in (PR-1 carried F1) (mutation: write bg-red-500 for payment_failed → FAILS; drop a label → FAILS)", () => {
     const TOKEN = /^(bg|border|text)-(success|destructive|warning|muted-foreground|border|foreground|transparent)(\/\d{1,2})?$/;
     const labels = new Set<string>();
     for (const [status, t] of Object.entries(BILLING_STATUS_TREATMENTS)) {
-      expect(t.label, status).toBe(m[`billing.status.${status as BillingStatus}`]);
-      labels.add(t.label);
+      const label = billingStatusTreatment(status as BillingStatus, "en").label;
+      expect(label, status).toBe(m[`billing.status.${status as BillingStatus}`]);
+      labels.add(label);
       for (const cls of `${t.dot} ${t.chip}`.split(/\s+/)) expect(cls, `${status}: ${cls}`).toMatch(TOKEN);
     }
     expect(labels.size).toBe(7);
@@ -334,6 +337,6 @@ describe("billing-view: Spanish (S-10 T6)", () => {
       expect(es.dot).toBe(BILLING_STATUS_TREATMENTS[status].dot);
       expect(es.chip).toBe(BILLING_STATUS_TREATMENTS[status].chip);
     }
-    expect(billingStatusTreatment("active", "en")).toEqual(BILLING_STATUS_TREATMENTS.active);
+    expect(billingStatusTreatment("active", "en")).toEqual({ ...BILLING_STATUS_TREATMENTS.active, label: m["billing.status.active"] });
   });
 });

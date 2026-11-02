@@ -39,6 +39,13 @@ describe("cancelStep — the dialog only when there is a notice to compose", () 
   it("cancelling at once asks for no notice at all", () => {
     expect(NO_NOTICE.send).toBe(false);
   });
+
+  it("reads the toast in the reader's own language (mutation: ignore the locale param -> FAILS)", () => {
+    expect(cancelStep(null, null, "es")).toEqual({ kind: "now", toast: m["calendar.bookings.cancelledToast.es"] });
+    expect(cancelStep("maria@example.com", "address_blocked", "es"))
+      .toEqual({ kind: "now", toast: m["calendar.bookings.cancelledToastAddressBlocked.es"] });
+    expect(m["calendar.bookings.cancelledToast.es"]).not.toBe(m["calendar.bookings.cancelledToast"]);
+  });
 });
 
 /**
@@ -64,37 +71,43 @@ describe("runCancelButton — what pressing Cancel does (F-048 I-1, M-a)", () =>
 
   it("(1) no email on file: cancels at once and never asks the server (mutation L1: open the dialog at once without asking → FAILS)", async () => {
     const h = harness({ ok: true, notice: "available" });
-    await runCancelButton({ contactEmail: null, ...h });
+    await runCancelButton({ contactEmail: null, locale: "en", ...h });
     expect(h.calls).toEqual([`now:${HAVENT}`]);
   });
 
   it("(2) a notice can go: asks the server, then opens the dialog (mutation L1 → the probe is skipped, FAILS)", async () => {
     const h = harness({ ok: true, notice: "available" });
-    await runCancelButton({ contactEmail: "maria@example.com", ...h });
+    await runCancelButton({ contactEmail: "maria@example.com", locale: "en", ...h });
     expect(h.calls).toEqual(["probe", "dialog"]);
   });
 
   it("(3) the address cannot receive email: cancels at once with the blocked-address toast, no dialog", async () => {
     const h = harness({ ok: true, notice: "address_blocked" });
-    await runCancelButton({ contactEmail: "maria@example.com", ...h });
+    await runCancelButton({ contactEmail: "maria@example.com", locale: "en", ...h });
     expect(h.calls).toEqual(["probe", `now:${BLOCKED}`]);
   });
 
   it("(4) an account marked not to send: cancels at once, no dialog offering an email", async () => {
     const h = harness({ ok: true, notice: "suppressed_account" });
-    await runCancelButton({ contactEmail: "maria@example.com", ...h });
+    await runCancelButton({ contactEmail: "maria@example.com", locale: "en", ...h });
     expect(h.calls).toEqual(["probe", `now:${HAVENT}`]);
   });
 
   it("(5) the server answers not-ok: fails OPEN, cancelling at once with no notice and the we-haven't-told-them toast (mutation L2: a failed probe cancels nothing → FAILS)", async () => {
     const h = harness({ ok: false, error: "Could not update this booking." });
-    await runCancelButton({ contactEmail: "maria@example.com", ...h });
+    await runCancelButton({ contactEmail: "maria@example.com", locale: "en", ...h });
     expect(h.calls).toEqual(["probe", `now:${HAVENT}`]);
   });
 
   it("(6) the probe throws: fails OPEN the same way, never a dialog (mutation L2 → FAILS)", async () => {
     const h = harness(async () => { throw new Error("stale action"); });
-    await runCancelButton({ contactEmail: "maria@example.com", ...h });
+    await runCancelButton({ contactEmail: "maria@example.com", locale: "en", ...h });
     expect(h.calls).toEqual(["probe", `now:${HAVENT}`]);
+  });
+
+  it("(7) a Spanish-reading operator gets the toast in Spanish (mutation: drop the locale arg -> FAILS)", async () => {
+    const h = harness({ ok: true, notice: "available" });
+    await runCancelButton({ contactEmail: null, ...h, locale: "es" });
+    expect(h.calls).toEqual([`now:${m["calendar.bookings.cancelledToast.es"]}`]);
   });
 });

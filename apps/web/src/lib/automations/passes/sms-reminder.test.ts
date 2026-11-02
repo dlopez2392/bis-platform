@@ -275,7 +275,7 @@ describe("S-09 PR 2: the text reminder in the customer's language", () => {
     expect(body.startsWith("Recordatorio: su cita con ")).toBe(true);
     expect(body).toContain("es el sab, 17 de oct");
     expect(body).toContain("Si necesita hacer un cambio, responda a este mensaje.");
-    expect(body.endsWith(m["sms.optOut.es"])).toBe(true);   // "Responde STOP para cancelar." (messages.ts:1807), not the English
+    expect(body.endsWith(m["sms.optOut.es"])).toBe(true);   // "Responda STOP para cancelar." (messages.ts, S-10 T9b: usted, was tú), not the English
     expect(segmentsFor(body).encoding).toBe("gsm7");
   });
   it("es with an emptied box: the whole text is English, opt-out included (C11; mutation: lead in row.language -> FAILS)", async () => {

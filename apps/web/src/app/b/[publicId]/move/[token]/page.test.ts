@@ -136,7 +136,7 @@ describe("/b/[publicId]/move/[token] metadata", () => {
   it("noindex always, the MOVE wording, in the customer's language, and never a throw", async () => {
     const meta = await generateMetadata({ params: params(), searchParams: query({ locale: "es" }) });
     expect(meta.robots).toEqual({ index: false, follow: false });
-    expect(meta.title).toBe("Cambia tu cita con Acme Plumbing");
+    expect(meta.title).toBe("Cambie su cita con Acme Plumbing");
     m.loadMoveContextSafe.mockResolvedValueOnce(null);
     expect(await generateMetadata({ params: params(), searchParams: query() })).toEqual({ robots: { index: false, follow: false } });
     expect(await generateMetadata({ params: params("pub1", "bad"), searchParams: query() })).toEqual({ robots: { index: false, follow: false } });

@@ -9,7 +9,7 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
-import { requiredFormEntries } from "../settings/required-documents-card";
+import { requiredFormEntries } from "../settings/required-documents-entries";
 import { requiredListHandlers } from "./required-documents-handlers";
 import type { RequiredUndoAnswer } from "./required-documents-actions";
 

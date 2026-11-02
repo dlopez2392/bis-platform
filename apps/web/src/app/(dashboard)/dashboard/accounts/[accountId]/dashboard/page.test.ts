@@ -187,7 +187,13 @@ vi.mock("./activity-card", () => ({
 // handed it (done/total) without re-asserting checklist-row.tsx's own
 // markup — that's checklist-row.test.ts's job.
 const checklistRowProps = vi.hoisted(() => ({ current: null as { accountId: string; done: number; total: number } | null }));
-vi.mock("./checklist-row", () => ({
+// `ChecklistReviewLink` (S-10 T9b) is left as the REAL component via
+// importOriginal — only `ChecklistRow` is replaced — so this file's existing
+// completed-state assertions (the English text, the m["checklist.reviewLink"]
+// strings below) keep proving what page.tsx actually renders, not a second
+// mock of it.
+vi.mock("./checklist-row", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./checklist-row")>()),
   ChecklistRow: (props: { accountId: string; done: number; total: number }) => {
     checklistRowProps.current = props;
     return null;

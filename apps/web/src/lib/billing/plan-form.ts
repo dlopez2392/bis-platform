@@ -1,5 +1,6 @@
 import { METER_KEYS, type MeterAmounts, type PlanTerms } from "@bis/db";
 import { m } from "@/lib/messages";
+import { assertCents } from "./plan-money";
 
 /**
  * The Plans dialog's form, parsed into integer cents. The bounds are
@@ -37,22 +38,10 @@ export function parseWholeNumber(raw: string): number | null {
   return WHOLE_MAGNITUDE.test(s) ? Number(s.replace(/,/g, "")) : null;
 }
 
-function assertCents(cents: number): void {
-  if (!Number.isInteger(cents) || cents < 0) {
-    throw new RangeError(`cents must be a non-negative integer, got ${cents}`);
-  }
-}
-
 /** The value an input shows: 4900 → "49.00", 3 → "0.03". */
 export function centsToDollars(cents: number): string {
   assertCents(cents);
   return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
-}
-
-/** The value a reader sees: 104900 → "$1,049.00". */
-export function formatCents(cents: number): string {
-  assertCents(cents);
-  return `$${Math.floor(cents / 100).toLocaleString("en-US")}.${String(cents % 100).padStart(2, "0")}`;
 }
 
 export type PlanFormResult = { ok: true; terms: PlanTerms } | { ok: false; error: string };

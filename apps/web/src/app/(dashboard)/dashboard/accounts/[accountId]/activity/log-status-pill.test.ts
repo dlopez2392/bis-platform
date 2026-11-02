@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { STATUS_TREATMENTS } from "@/lib/automations/log-titles";
+import { STATUS_TREATMENTS, statusWord } from "@/lib/automations/log-titles";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
@@ -22,22 +22,24 @@ describe("LogStatusPill", () => {
     for (const cls of STATUS_TREATMENTS[status].chip.split(" ")) expect(tag).toContain(cls);
     expect(tag).toContain(`data-status="${status}"`);
     expect(html).toContain(STATUS_TREATMENTS[status].dot);
-    expect(html).toContain(`</span>${STATUS_TREATMENTS[status].label}</span>`);
+    expect(html).toContain(`</span>${statusWord(status, "en")}</span>`);
   });
 });
 
 // S-10 fix round I5: the Spanish word had no render test of its own; a pill
-// back on STATUS_TREATMENTS[status].label (English, built at load) stayed green.
+// back on STATUS_TREATMENTS[status].label (English, built at load) stayed
+// green. S-10 T9b: that field is gone entirely now (never existed to fall
+// back to) — statusWord("skipped", "en") is the only English source left.
 describe("LogStatusPill — the reader's language", () => {
-  it("reads 'Omitido' for a skipped row under es (mutation: label={treatment.label} → FAILS)", () => {
+  it("reads 'Omitido' for a skipped row under es (mutation: label={statusWord(status, \"en\")} → FAILS)", () => {
     const text = renderedText(renderToStaticMarkup(createElement(LogStatusPill, { status: "skipped", locale: "es" })));
     expect(text).toContain(m["activity.status.skipped.es"]);
     expect(text).toContain("Omitido");
-    expect(text).not.toContain(STATUS_TREATMENTS.skipped.label);
+    expect(text).not.toContain(statusWord("skipped", "en"));
   });
 
   it("wears the pseudo-locale under the QA override (mutation: ignore pseudo → FAILS)", () => {
     const text = renderedText(renderToStaticMarkup(createElement(LogStatusPill, { status: "skipped", locale: "en", pseudo: true })));
-    expect(text).toContain(pseudoLocale(STATUS_TREATMENTS.skipped.label));
+    expect(text).toContain(pseudoLocale(statusWord("skipped", "en")));
   });
 });

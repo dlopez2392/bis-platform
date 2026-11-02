@@ -13,7 +13,7 @@ import { requireAgency } from "@/lib/auth";
 import { formatDateInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
+import { ACCOUNT_STATUS_KEY, labelIn } from "@/lib/labels";
 import { orphanedOrgs, type ClerkOrgSummary } from "@/lib/accounts/orphans";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -214,7 +214,7 @@ export default async function AccountsPage({
                         )}
                         aria-hidden
                       />
-                      {ACCOUNT_STATUS_LABEL[a.status] ?? a.status}
+                      {labelIn(ACCOUNT_STATUS_KEY, a.status, locale)}
                     </Badge>
                   </div>
                   <p className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground">{a.name}</p>

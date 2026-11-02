@@ -9,7 +9,7 @@ describe("withOptOut", () => {
     expect(withOptOut("Your appointment is tomorrow at 9."))
       .toBe("Your appointment is tomorrow at 9. Reply STOP to opt out.");
     expect(withOptOut("Su cita es manana a las 9.", "es"))
-      .toBe("Su cita es manana a las 9. Responde STOP para cancelar.");
+      .toBe("Su cita es manana a las 9. Responda STOP para cancelar.");
     // English is the default, and that default is load-bearing:
     // sendAutomationSms calls this with no language because no pass carries
     // one. If the default ever flips, every automated text changes language.
@@ -27,7 +27,7 @@ describe("withOptOut", () => {
     // rather than having ours stapled on after it.
     const theirs = "Sorry we missed you. Text STOP to unsubscribe anytime.";
     expect(withOptOut(theirs)).toBe(theirs);
-    // Spanish disclosure recognised by the same guard — "Responde STOP" is an
+    // Spanish disclosure recognised by the same guard — "Responda STOP" is an
     // instruction, and the keyword is the English STOP in both languages.
     const spanish = withOptOut("Perdon, no alcanzamos a contestar.", "es");
     expect(withOptOut(spanish, "es")).toBe(spanish);
@@ -55,7 +55,7 @@ describe("withOptOut", () => {
   });
 
   it("an opt-out instruction in either language is not given a second one", () => {
-    for (const body of ["Reply STOP to opt out.", "Text STOP to unsubscribe", "Responde STOP para cancelar."]) {
+    for (const body of ["Reply STOP to opt out.", "Text STOP to unsubscribe", "Responda STOP para cancelar."]) {
       expect(withOptOut(body, "en"), body).toBe(body);
       expect(withOptOut(body, "es"), body).toBe(body);
     }
@@ -146,7 +146,7 @@ describe("hasOptOutInstruction", () => {
     for (const body of [
       "Reply STOP", "reply stop", "Reply STOP.", "Reply STOP, and we'll stop.", "Reply STOP!",
       "Reply STOP; that's all.", "Reply STOP: done.", "(Reply STOP)", "Reply 'STOP'.",
-      "Reply STOP to opt out.", "Text STOP to unsubscribe", "Responde STOP para cancelar.",
+      "Reply STOP to opt out.", "Text STOP to unsubscribe", "Responda STOP para cancelar.",
       "Reply STOP or call us.", "Responde STOP o llamanos.", "Reply STOP anytime",
       "Reply STOP at any time.", "Responde STOP en cualquier momento.",
     ]) {

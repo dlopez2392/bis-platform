@@ -15,9 +15,9 @@ const DEFAULT_ES = "Gracias por su visita.";
 export function SpanishBodyFieldDemo() {
   return (
     <div className="grid w-full gap-4 md:grid-cols-2">
-      <SpanishBodyField idPrefix="sg-sbf-our" stored={{ bodyEs: null, stale: false }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
-      <SpanishBodyField idPrefix="sg-sbf-stale" stored={{ bodyEs: "Mensaje viejo.", stale: true }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
-      <SpanishBodyField idPrefix="sg-sbf-emptied" stored={{ bodyEs: "", stale: false }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
+      <SpanishBodyField idPrefix="sg-sbf-our" locale="en" stored={{ bodyEs: null, stale: false }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
+      <SpanishBodyField idPrefix="sg-sbf-stale" locale="en" stored={{ bodyEs: "Mensaje viejo.", stale: true }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
+      <SpanishBodyField idPrefix="sg-sbf-emptied" locale="en" stored={{ bodyEs: "", stale: false }} defaultEs={DEFAULT_ES} composeEs={compose} sms />
     </div>
   );
 }

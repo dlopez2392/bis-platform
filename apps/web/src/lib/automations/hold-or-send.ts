@@ -135,19 +135,29 @@ export const REASONS = {
   /** Choice 21: the hours opened only after the thing this send was for. */
   windowAfterDeadline: "Not sent: quiet hours ran past the appointment",
   /** Review R2-I4: the consent state could not be read, so the send waits
-   *  LEDGER_RETRY_MS and the release pass tries again. */
-  ledgerRetry: m["automations.reason.ledgerRetry"],
+   *  LEDGER_RETRY_MS and the release pass tries again. A plain literal
+   *  (S-10 T9b review round 2), the same shape as `noEmail`/`noPhone`
+   *  below: the catalogue's OWN English twin of this text,
+   *  `activity.reason.ledgerRetry`, is what `reason-words.ts`'s
+   *  `BY_ENGLISH` map actually resolves to at render time (it matches by
+   *  STRING VALUE, not by which key wrote it) — `automations.reason.
+   *  ledgerRetry` and its seven siblings below used to duplicate that same
+   *  English text under a second, never-translated-back catalogue key,
+   *  whose `.es` twin nothing ever read. Deleted; this file's own English
+   *  stays the literal source, as it already did for `noEmail` etc. */
+  ledgerRetry: "Waiting a few minutes: couldn't check whether they can get texts",
   /** S-47d (spec 5.5.2): heldClosedToday, heldStorm, heldClosedDay (a closure covers the appointment),
    *  heldClosureUnknown (the status could not be read) and skippedClosed (the deadline passed, or, D13, an
    *  after-appointment send for a closure that has ended). Written once, in closures.ts (review M3). */
   ...CLOSURE_REASONS,
   /** The email gate's two outages (consent PR-3): each a LEDGER_RETRY_MS
-   *  re-hold, never a skip, so the email goes once the outage ends. */
-  emailLedgerRetry: m["automations.reason.emailLedgerRetry"],
-  emailSetupRetry: m["automations.reason.emailSetupRetry"],
-  /** The re-hold age cap (orchestrator, 2026-09-26; RETRY_MAX_AGE_MS). */
-  tooLongAfterCall: m["automations.reason.tooLongAfterCall"],
-  tooLongAfterWriteIn: m["automations.reason.tooLongAfterWriteIn"],
+   *  re-hold, never a skip, so the email goes once the outage ends. Plain
+   *  literals now — see `ledgerRetry`'s own comment above. */
+  emailLedgerRetry: "Waiting a few minutes: couldn't check whether they can get emails",
+  emailSetupRetry: "Waiting a few minutes: the unsubscribe link couldn't be added",
+  /** The re-hold age cap (orchestrator, 2026-09-26; RETRY_MAX_AGE_MS). Plain literals — see `ledgerRetry` above. */
+  tooLongAfterCall: "Not sent: too long after the call",
+  tooLongAfterWriteIn: "Not sent: too long after they wrote in",
   /** M7a PR-4 (owner answer I6): the account is paused for non-payment, so the
    *  send waits (pause-hold.ts); and the one it becomes once the subject's
    *  pause deadline has passed. */
@@ -157,10 +167,10 @@ export const REASONS = {
    *  the "too late" line above. */
   billingPaused: m["automations.reason.billingPaused"],
   /** The consent gate's refusals (lib/consent/gate.ts), in the words the
-   *  client reads on the Activity page. */
-  textsStopped: m["automations.reason.textsStopped"],
-  textsHeld: m["automations.reason.textsHeld"],
-  numberUnconfirmed: m["automations.reason.numberUnconfirmed"],
+   *  client reads on the Activity page. Plain literals — see `ledgerRetry` above. */
+  textsStopped: "They stopped texts from this business",
+  textsHeld: "Texts to them are on hold",
+  numberUnconfirmed: "Their number could be Mexican or US. Pick its country on their contact",
   noEmail: "No email address on file",
   noPhone: "No phone number we can text",
   smsGate: "Texting isn't set up for this company yet",

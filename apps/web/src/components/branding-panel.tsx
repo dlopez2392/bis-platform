@@ -333,7 +333,7 @@ export function BrandingPanel({
                 name="brandColor"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                placeholder="#0f766e"
+                placeholder={tr.text("branding.colorPlaceholder")}
                 className="font-mono"
               />
               <input

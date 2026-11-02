@@ -132,7 +132,7 @@ export function InlineField(
   // rule instead of branching four ways.
   const normalize = (raw: string): ValidateResult =>
     rule ? validateInlineRule(rule, raw, locale)
-    : options ? validateEnumValue(options, raw)
+    : options ? validateEnumValue(options, raw, locale)
     : required ? normalizeRequired(raw)
     : normalizeFieldInput(field as EditableField, raw, locale);
   const [editing, setEditingState] = useState(false);

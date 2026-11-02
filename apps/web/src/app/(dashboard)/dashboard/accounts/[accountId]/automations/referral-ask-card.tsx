@@ -197,6 +197,7 @@ export function ReferralAskCard({
             </div>
             <SpanishBodyField
               idPrefix="referral"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultReferralAskBody(brandName, "es")}
               composeEs={(text) => (channel === "sms" ? withOptOut(text, "es") : text)}

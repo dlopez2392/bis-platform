@@ -109,7 +109,7 @@ vi.mock("../never-log-actions", () => ({ addNeverLogAction: noop, removeNeverLog
 vi.mock("../branding/actions", () => ({
   setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,
 }));
-vi.mock("../website/actions", () => ({
+vi.mock("./website-link-actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));
 const blueprintActions = vi.hoisted(() => ({ captureBlueprintAction: async () => {}, applyBlueprintAction: vi.fn(async () => ({ ok: true })) }));
@@ -132,7 +132,7 @@ const { BillingSection, BillingCardSkeleton } = await import("./billing-section"
 const { ClientAccessSection } = await import("./client-access-section");
 const { ClientAccessSkeleton } = await import("./client-access-panel");
 const { WebsiteSection } = await import("./website-section");
-const { LinkSiteSkeleton } = await import("../website/link-site-card");
+const { LinkSiteSkeleton } = await import("./link-site-card");
 const { ApplyBlueprintDialog } = await import("./apply-blueprint-dialog");
 const { RequiredDocumentsCard } = await import("./required-documents-card");
 

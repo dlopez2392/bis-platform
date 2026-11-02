@@ -102,6 +102,7 @@ export function SmsReminderCard({
             </div>
             <SpanishBodyField
               idPrefix="smsrem"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultSmsReminderBody("es")}
               composeEs={(text) => withOptOut(

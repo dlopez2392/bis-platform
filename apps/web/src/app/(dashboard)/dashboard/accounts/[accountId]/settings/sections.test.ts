@@ -35,14 +35,14 @@ const noop = async () => ({ ok: true });
 vi.mock("./actions", () => ({ setClientAccessAction: noop }));
 const team = vi.hoisted(() => ({ TeamSection: () => null }));
 vi.mock("@/components/team/team-section", () => team);
-vi.mock("../website/actions", () => ({
+vi.mock("./website-link-actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));
 
 const { ClientAccessSection } = await import("./client-access-section");
 const { WebsiteSection } = await import("./website-section");
 const { ClientAccessPanel, ClientAccessSkeleton } = await import("./client-access-panel");
-const { LinkSiteCard, LinkSiteSkeleton } = await import("../website/link-site-card");
+const { LinkSiteCard, LinkSiteSkeleton } = await import("./link-site-card");
 const { TeamSkeleton } = await import("@/components/team/team-card");
 
 const here = path.dirname(fileURLToPath(import.meta.url));

@@ -347,15 +347,46 @@ function closure(imports: ReadonlyMap<string, readonly string[]>, entries: reado
  *  components/ that only /dashboard/work renders is agency-only. A file
  *  nothing reaches (dead, or reached only from outside the scan, such as
  *  src/proxy.ts) is NOT agency-only: nothing proves a client cannot see it. */
+/**
+ * Files whose own content is agency-only, but whose import graph makes the
+ * STATIC closure above call them client-reachable: a client-reachable page
+ * imports them unconditionally, and only a RUNTIME `isAgency`/`isOperator`
+ * branch (invisible to an import scan) keeps them from ever rendering for a
+ * client. Each entry needs its own test row (ratchet.test.ts) naming the
+ * gate that proves it, the same discipline `ENGLISH_ONLY_READERS` already
+ * uses for its own named exceptions.
+ */
+export const RUNTIME_AGENCY_ONLY_FILES: readonly { file: string; reason: string }[] = [
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx",
+    reason: "imported unconditionally by the client-reachable dashboard page, but both its exports (ChecklistRow, ChecklistReviewLink) render only inside that page's own `isAgency` branch — the setup checklist is agency-only by DESIGN.md",
+  },
+  {
+    file: "src/lib/checklist-catalogue.ts",
+    reason: "its CHECKLIST_CATALOGUE titles/help are read only by the agency-only /checklist route and by checklist-row.tsx (above); the client-reachable dashboard page that also imports this module uses only mergeChecklist's numeric done/total fields, never a title or help string",
+  },
+  {
+    file: "src/components/back-to-setup.tsx",
+    reason: "renders only when a link carries `?from=setup`, which nothing but the agency-only Setup wizard ever generates — reached from client pages (Branding, Calendar) only because those are Setup's own deep-link targets for an agency operator mid-setup",
+  },
+  {
+    file: "src/components/account-switcher.tsx",
+    reason: "its one export, AccountSwitcher, is rendered only inside app-sidebar.tsx's own `isAgency` branch — switching between client accounts is an agency-only action, reached from the sidebar only because the sidebar itself is universal",
+  },
+];
+
 export function agencyOnlyFiles(
   imports: ReadonlyMap<string, readonly string[]>,
   routes: readonly RegExp[] = AGENCY_ONLY_ROUTES,
+  runtimeAgencyOnly: readonly { file: string }[] = RUNTIME_AGENCY_ONLY_FILES,
 ): Set<string> {
   const inRoute = (f: string) => routes.some((re) => re.test(f));
   const ways = [...imports.keys()].filter((f) => f.startsWith("src/app/"));
   const client = closure(imports, ways.filter((f) => !inRoute(f)));
   const agency = closure(imports, ways.filter(inRoute));
-  return new Set([...agency].filter((f) => !client.has(f)));
+  const out = new Set([...agency].filter((f) => !client.has(f)));
+  for (const { file } of runtimeAgencyOnly) out.add(file);
+  return out;
 }
 
 /** Keys every literal reference to which sits in an agency-only file. A key
@@ -395,5 +426,108 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
   {
     file: "src/app/(dashboard)/dashboard/accounts/[accountId]/activity/reason-words.ts",
     reason: "maps an automation_log reason, stored as REASONS' ENGLISH sentence, back to its key (BY_ENGLISH), so it must read the English to say it in the Activity reader's language",
+  },
+  // S-10 T9b: a public surface with NO locale to resolve at all — the /u
+  // unsubscribe token and an error boundary both carry no session, no
+  // account and no Accept-Language read — shows BOTH languages stacked, on
+  // purpose, each in its own `lang` attribute (DESIGN.md's bilingual
+  // pattern, first built for /d and /s). Reading `m["x"]` AND `m["x.es"]`
+  // directly is not "ignoring the reader's language": there is no reader
+  // language to ignore, and the Spanish IS always shown, never dropped.
+  {
+    file: "src/lib/consent/unsubscribe-copy.ts",
+    reason: "pageLines/fillBusiness build the /u page's English AND Spanish lines together — the token carries no language, so both are always shown, stacked",
+  },
+  {
+    file: "src/app/u/[token]/page.tsx",
+    reason: "the tab title and the 'Powered by BIS' footer read both unsubscribe.pageTitle/poweredBy and their .es twins, concatenated `${en} / ${es}` — no locale to resolve on this token-only page",
+  },
+  {
+    file: "src/app/u/[token]/unsubscribe-form.tsx",
+    reason: "the Stop-emails and Resubscribe buttons read both unsubscribe.button/resubscribe and their .es twins, concatenated `${en} / ${es}` — same reason as page.tsx above",
+  },
+  {
+    file: "src/app/d/[token]/error.tsx",
+    reason: "an error boundary receives no locale at all (its own doc comment); both customerDocs.error.* strings and their .es twins render stacked, each in its own lang",
+  },
+  {
+    file: "src/app/s/[token]/error.tsx",
+    reason: "the /d boundary's own twin (S-07 3b) — same no-locale reasoning, same stacked pattern",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts",
+    reason: "the producer side of server-words.ts's own pattern (T11/T12 review): these booking actions deliberately answer a refusal as the catalogue's ENGLISH sentence, and the job drawer (cancel-booking.ts, job-drawer-handlers.ts) translates it back by matching the words via server-words.ts's BY_ENGLISH map, never by a locale this \"use server\" module is handed",
+  },
+  {
+    file: "src/lib/automations/hold-or-send.ts",
+    reason: "automation_log.reason is stored as these ENGLISH sentences (reason-words.ts's own doc comment names this file as the writer); reason-words.ts reads them back by matching the words, in the Activity reader's own language, never by a locale this module is handed",
+  },
+  {
+    file: "src/lib/automations/closures.ts",
+    reason: "the same automation_log.reason producer, for the closed/storm/billing-paused hold reasons — reason-words.ts's REASON_KEYS names every one of these",
+  },
+  {
+    file: "src/lib/automations/pause-hold.ts",
+    reason: "compares a stored automation_log.reason against the same English constant hold-or-send.ts writes, to detect one specific hold cause — a string match, not a display, and still the producer side of reason-words.ts's pattern",
+  },
+  {
+    file: "src/lib/voice/call-card.ts",
+    reason: "callbackTaskTitle's own doc comment: tasks.title is STORED text, rendered verbatim by every To do surface (the consent To do's precedent) — its .es twin deliberately waits for an operator locale project this lane does not open; the sibling callbackAlertLine in the same file already takes a real locale for the call-alert email",
+  },
+  {
+    file: "src/lib/consent/replies.ts",
+    reason: "the LINES table picks one of a `.en`/`.es` SUFFIX PAIR by the caller's own already-resolved language before the m[...] read — that naming (unlike t()'s bare-key/+.es) needs an explicit branch the scanner cannot tell from an English-only read",
+  },
+  {
+    file: "src/lib/consent/email-gate.ts",
+    reason: "the unsubscribe footer picks a `.en`/`.es` suffixed key by the email's own resolved language, the same `.en`/`.es` PAIR convention as replies.ts above",
+  },
+  {
+    file: "src/lib/consent/inbound.ts",
+    reason: "todo.consent.cancel.en/hold.en are STORED To-do titles (the consent To do's own precedent call-card.ts cites) — this file ALSO reads todo.sharedNumber.* through t() with a real resolved locale a few lines away; only the two stored-title reads are English on purpose",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts",
+    reason: "its own doc comment: `ACTION_FAILED` and `todo.consent.decideFirst`'s English m[...] reads are a fallback for any caller that reads only `error`; the real client, work-row-actions.tsx's failureText, always prefers `errorKey` and resolves it through t() in the reader's language. closeOutBooking's BY_ENGLISH-style reverse match onto CALENDAR_CLOSE_OUT_KEYS is the same producer pattern calendar/actions.ts/server-words.ts already use — decideFromTask, the file's other action, already resolves and uses a real locale a few lines away",
+  },
+  {
+    file: "src/lib/sms/opt-out.ts",
+    reason: "withOptOut picks between the catalogue's own sms.optOut.en/sms.optOut.es — a .en/.es SUFFIX PAIR, not a bare key — by the `language` the send gate already resolved and handed it; the same convention replies.ts and email-gate.ts are exempted for",
+  },
+  {
+    file: "src/app/b/[publicId]/move/[token]/actions.ts",
+    reason: "confirmMoveAction's thread line (calendar.move.thread.subject.en/body.en) is STORED text, rendered verbatim by Conversations — the same 'waits for an operator locale project this lane does not open' precedent as lib/voice/call-card.ts; this file's own test ('the thread line's words') pins the .es twin as written out but not yet read, and the account-language describe block explicitly keeps the thread line English even when the account's language is es",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/prove-booking.ts",
+    reason: "proveBooking answers its generic refusal as calendar.bookings.statusUpdateFailed's ENGLISH sentence — the exact key server-words.ts's own BY_ENGLISH map already reverse-maps back to the drawer's language; the same producer side calendar/actions.ts is already exempted for",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts",
+    reason: "refuse()'s own doc comment: AddContactErrorKey's English m[errorKey] read is a fallback for a caller that reads only `error`; the real client, add-contact-dialog.tsx, always prefers `errorKey` and resolves it through t() in the reader's language — the same tasks/actions.ts ACTION_FAILED pattern",
+  },
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route.ts",
+    reason: "exportEnded()'s 409 is reached only when agencyVisitMissing(accountId) is true, which that function's own doc comment limits to an agency_admin session with no live visit — a client Owner's export never sees it; the route's OTHER read (the downloaded filename, a few lines down) already resolves a real locale for every caller, Owner included",
+  },
+  {
+    file: "src/components/inline-field.tsx",
+    reason: "normalizeRequired's English m[\"setup.rename.empty\"] is reached only through the `required` prop arm, whose only caller (its own doc comment) is setup/steps/account.tsx's account rename — an agency-only file under the settings|setup|checklist|voice|automations route regex; every other InlineField caller takes the `field`/`options`/`rule` arm instead, all already locale-aware",
+  },
+  {
+    file: "src/lib/document-requests/customer-upload.ts",
+    reason: "customerPage's not_found branch resolves no token at all, so there is no account and no language to read — the same 'nothing to resolve a reader's language from' shape /u and /d's own error boundary are exempted for; its `business` value is never read by the real page (page.tsx recomputes its own from `branding`, which is null here) — a typed placeholder, not a shown English string",
+  },
+  {
+    file: "src/lib/email/templates/followup.ts",
+    reason: "DEFAULT_FOLLOWUP_BODY is a byte-identity anchor, not only a displayed string: calendar/actions.ts's own doc comment compares a raw submission against this EXACT English text to collapse it back to an empty column, and calendar-settings.tsx imports the same constant as its textarea's placeholder so the preview can never drift from what that comparison, and bookingFollowupEmail's own fallback, actually use. Localizing the placeholder without updating the comparison in lockstep would let a Spanish-reading operator's verbatim placeholder text be stored as a REAL body instead of collapsing to empty — a cross-file behavior change outside this gate-closing task's scope, flagged for the calendar lane",
+  },
+  {
+    file: "src/lib/palette/registry.ts",
+    reason: "words()'s own doc comment: in Spanish, an entry's ENGLISH twin joins its search keywords on purpose (\"a bilingual owner who types 'contacts' still finds Contactos\") — the displayed label a few lines above already reads through t(); this read is a second, deliberately-English SEARCH term, never shown as copy",
+  },
+  {
+    file: "src/lib/record/ai-summary-prompt.ts",
+    reason: "label()'s own doc comment: a stored code is handed to the MODEL as the catalogue's ENGLISH word, always, regardless of the reader's language — the rules are English and LANGUAGE_LINE asks the model for the reader's language separately; this is an AI prompt input, never UI copy a person reads",
   },
 ];

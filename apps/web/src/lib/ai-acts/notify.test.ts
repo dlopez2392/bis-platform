@@ -85,7 +85,7 @@ describe("sendBookingUndoNotice", () => {
   it("a Spanish customer on an English account reads it in Spanish, subject, date and all (S-09; mutation: the account's language first -> FAILS)", async () => {
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: created, contact: { email: "ana@example.com", language: "es" }, origin: null });
-    expect(sent()).toMatchObject({ language: "es", subject: "Tu cita fue cancelada" });
+    expect(sent()).toMatchObject({ language: "es", subject: "Su cita fue cancelada" });
     expect(sent().body).toContain("jue, 22 de oct, 10:00 a.m. CDT");
   });
 
@@ -93,7 +93,7 @@ describe("sendBookingUndoNotice", () => {
     bis.loadAccountBrandInfo.mockResolvedValue(brand("es"));
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: created, contact: { email: "ana@example.com", language: null }, origin: null });
-    expect(sent()).toMatchObject({ language: "es", subject: "Tu cita fue cancelada" });
+    expect(sent()).toMatchObject({ language: "es", subject: "Su cita fue cancelada" });
   });
 
   it("a cancel undone: the confirmation, with this account's booking's own cancel link, calendar file and video link (second account holds the same id)", async () => {
@@ -110,18 +110,18 @@ describe("sendBookingUndoNotice", () => {
   it("A6: a move undone is the restored OLD time, with its own links, and NO calendar file: the moved time's file carries a higher SEQUENCE, so a file for the old time would never replace it in their calendar (mutation: offer calendarFileUrl -> FAILS)", async () => {
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: moved, contact: { email: "ana@example.com", language: "es" }, origin: "https://app.example" });
-    expect(sent().subject).toBe("Tu cita fue reprogramada");
+    expect(sent().subject).toBe("Su cita fue reprogramada");
     expect(sent().body).toContain("vie, 23 de oct, 2:30 p.m. CDT");
     expect(sent().body).toContain(`https://app.example/b/pub1/cancel/${TOKEN}?locale=es`);
     expect(sent().body).toContain(`https://app.example/b/pub1/move/${TOKEN}?locale=es`);
     expect(sent().body).not.toContain("/ics/");
-    expect(sent().body).not.toContain("Agregar a tu calendario");
+    expect(sent().body).not.toContain("Agregar a su calendario");
   });
 
   it("review I-1: a move undone asks them to change their calendar back, in their language, in both parts; the other two notices do not (mutation: drop the sentence -> FAILS)", async () => {
     const EN = "If you added the new time to your calendar, please change it back to this one.";
-    // Design I-6: tú, as the booking templates the sentence sits in.
-    const ES = "Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.";
+    // Design I-6; S-10 T9b: usted (was tú until this lane's rewrite).
+    const ES = "Si agregó la nueva hora a su calendario, cámbiela de nuevo a esta, por favor.";
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: moved, contact: { email: "ana@example.com", language: "en" }, origin: "https://app.example" });
     expect(sent().body).toContain(EN);

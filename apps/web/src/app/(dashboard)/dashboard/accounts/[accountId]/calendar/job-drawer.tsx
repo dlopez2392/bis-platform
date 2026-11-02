@@ -89,6 +89,7 @@ export function JobDrawer({ accountId, view, closeHref, timezone, locale, pseudo
     probe: () => cancelNoticeOptionAction(accountId, view.id),
     openDialog: () => setDialogOpen(true),
     cancelNow: (noNoticeMessage) => cancelWith(NO_NOTICE, noNoticeMessage),
+    locale,
   });
 
   return (

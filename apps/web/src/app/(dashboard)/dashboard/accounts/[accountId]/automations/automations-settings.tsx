@@ -133,7 +133,7 @@ export function AutomationsSettings({
             <Input
               id="review_url" name="review_url" type="url" inputMode="url"
               value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)}
-              placeholder="https://g.page/r/.../review"
+              placeholder={m["automations.review.urlPlaceholder"]}
             />
             <p className="text-xs text-muted-foreground">{m["automations.review.urlHint"]}</p>
           </div>
@@ -167,6 +167,7 @@ export function AutomationsSettings({
             </div>
             <SpanishBodyField
               idPrefix="review"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultReviewRequestBody(brandName, "es")}
               composeEs={(text) => (channel === "sms" ? withOptOut(composeReviewRequestSms(text, reviewUrl.trim()), "es") : text)}

@@ -14,7 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { requiresMoveConfirm } from "@/lib/setup/setup-view";
-import { NUMBER_STATUS_DOT, NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
+import { NUMBER_STATUS_DOT, numberStatusLabel } from "@/lib/voice/number-status";
 import type { InventoryRow } from "@/lib/voice/number-inventory";
 import { canRepairRouting, type RoutingStatus } from "@/lib/voice/number-routing";
 import {
@@ -83,7 +83,7 @@ function StatusChip({ status }: { status: PhoneNumberStatus }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
       <span className={cn("size-1.5 shrink-0 rounded-full", NUMBER_STATUS_DOT[status])} aria-hidden />
-      {NUMBER_STATUS_LABEL[status]}
+      {numberStatusLabel(status)}
     </span>
   );
 }

@@ -480,8 +480,8 @@ describe("book_appointment", () => {
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(sendMock).toHaveBeenCalledOnce();
     const sent = sendMock.mock.calls[0]![0] as { subject: string; body: string; html: string };
-    expect(sent.subject).toBe("Tu cita quedó agendada");
-    expect(sent.body).toContain("Tu cita quedó agendada.");
+    expect(sent.subject).toBe("Su cita quedó agendada");
+    expect(sent.body).toContain("Su cita quedó agendada.");
     // The gate picks the footer's language from this.
     expect(gated().find((r) => r.kind === "voice.booked")).toMatchObject({ language: "es" });
     // Asserted different first, so the next lines cannot pass vacuously.
@@ -517,7 +517,7 @@ describe("book_appointment", () => {
     await runTool(pre, esCtx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     const sent = sendMock.mock.calls[0]![0] as { body: string };
-    expect(sent.body).toContain("Agregar a tu calendario: https://x.example/b/pub1/ics/tok123?locale=es");
+    expect(sent.body).toContain("Agregar a su calendario: https://x.example/b/pub1/ics/tok123?locale=es");
     // F-010 review m4: the cancel link opens in Spanish too, exactly as the
     // web confirmation's does (`b/[publicId]/actions.ts`). Mutation: drop
     // the parameter → FAILS.
@@ -1482,8 +1482,8 @@ describe("reschedule / cancel", () => {
       expect(result).toEqual({ ok: true });
       const customer = sentTo("ana@example.com");
       expect(customer).toHaveLength(1);
-      expect(customer[0]!.subject).toBe("Tu cita fue cancelada");
-      expect(customer[0]!.body).toContain("Si no pediste esta cancelación");
+      expect(customer[0]!.subject).toBe("Su cita fue cancelada");
+      expect(customer[0]!.body).toContain("Si no pidió esta cancelación");
       // The appointment time is written the way a Spanish reader reads it,
       // not the English rendering dropped into Spanish copy. The two
       // renderings are asserted different first, so this cannot pass
@@ -1509,8 +1509,8 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: true, bookingId: "new1" });
       const customer = sentTo("ana@example.com");
       expect(customer).toHaveLength(1);
-      expect(customer[0]!.subject).toBe("Tu cita fue reprogramada");
-      expect(customer[0]!.body).toContain("Tu cita fue reprogramada.");
+      expect(customer[0]!.subject).toBe("Su cita fue reprogramada");
+      expect(customer[0]!.body).toContain("Su cita fue reprogramada.");
       expect(customer[0]!.body).toContain("https://x.example/b/pub1/cancel/newtok");
       expect(gated().find((r) => r.kind === "voice.moved")).toMatchObject({ language: "es" });
       const whenEs = formatWhen(new Date(NEW_ISO), notifyCtx.timezone, "es");

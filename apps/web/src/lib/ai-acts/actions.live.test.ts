@@ -162,8 +162,8 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
     as(A, "owner");
     expect(await undoAiActAction(A.id, actId, { notify: true })).toEqual({ ok: true, control: "booking", told: "yes" });
     expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({ to: "lucia-live@example.invalid", subject: "Tu cita fue cancelada" });
-    expect(sends[0]!.body).toContain("Si no pediste esta cancelación");
+    expect(sends[0]).toMatchObject({ to: "lucia-live@example.invalid", subject: "Su cita fue cancelada" });
+    expect(sends[0]!.body).toContain("Si no pidió esta cancelación");
     expect(await actRow(A, actId)).toMatchObject({ undoNotified: true });
   });
 

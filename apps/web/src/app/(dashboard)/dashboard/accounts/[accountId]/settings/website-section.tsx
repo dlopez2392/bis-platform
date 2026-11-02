@@ -1,6 +1,6 @@
 import { vercelAnalyticsFromEnv } from "@/lib/vercel/web-analytics";
-import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
-import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
+import { LinkSiteCard, type VercelProjectOption } from "./link-site-card";
+import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "./website-link-actions";
 
 /**
  * The "link a website" card, with the Vercel project list it picks from.

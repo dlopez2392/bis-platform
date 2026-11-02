@@ -10,7 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
-import { STEP_COPY } from "./steps/step-shared";
+import { STEP_COPY } from "./steps/step-copy";
 import {
   SetupRail, STATE_LABEL, STATE_TONE, SETUP_PANE_ID, SETUP_PANE_HEADING_ID,
 } from "./setup-rail";

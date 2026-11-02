@@ -239,7 +239,7 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     const { chat, html } = await render({ ...PROFILE, disclosure: "trial" }, { locale: "es" });
     expect(html).toContain("Sofía · asistente de IA");
     expect(chat.props.greeting).toBe(
-      "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento. ¡Hola!",
+      "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento. ¡Hola!",
     );
   });
 

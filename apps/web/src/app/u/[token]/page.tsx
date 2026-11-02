@@ -11,9 +11,11 @@ import "@/styles/public-brand.css";
 
 export const dynamic = "force-dynamic";
 
-/** Never indexed, and no Referer carries the token to the logo's host. */
+/** Never indexed, and no Referer carries the token to the logo's host. The
+ *  title is bilingual, `${en} / ${es}` (S-10 T9b, the /d, /s error
+ *  boundaries' own pattern): the token carries no language. */
 export const metadata: Metadata = {
-  title: m["unsubscribe.pageTitle"],
+  title: `${m["unsubscribe.pageTitle"]} / ${m["unsubscribe.pageTitle.es"]}`,
   robots: { index: false, follow: false },
   referrer: "no-referrer",
 };
@@ -66,7 +68,9 @@ export default async function UnsubscribePage({ params }: { params: Promise<{ to
       <div className="bis-unsub">
         <UnsubscribeForm token={token} initial={initial} brandName={branding?.brandName ?? null} />
         <p className="bis-unsub-poweredby">
-          <a href="https://bis-rgv.com" target="_blank" rel="noopener noreferrer">{m["unsubscribe.poweredBy"]}</a>
+          <a href="https://bis-rgv.com" target="_blank" rel="noopener noreferrer">
+            {m["unsubscribe.poweredBy"]} / {m["unsubscribe.poweredBy.es"]}
+          </a>
         </p>
       </div>
     </main>

@@ -4,9 +4,9 @@ import { t, type CatalogueKey } from "./i18n/t";
 import { m, type MessageKey } from "./messages";
 
 // S-10 T1: each table maps a DB value to its catalogue KEY, so a label can be
-// read in either language (`labelIn`); the English `*_LABEL` constants are
-// kept, word for word, for the callers that have not moved yet (a test pins
-// each constant to its key table, so the two cannot drift).
+// read in either language (`labelIn`). S-10 T9b deleted the English-only
+// `*_LABEL` constants T1 had kept "for the callers that have not moved
+// yet" — every real caller had, by then.
 
 /** Opportunity `status` column -> its key. Shared so the pipeline drawer,
  *  contact detail page, and activity timeline never drift on wording (the raw
@@ -51,38 +51,23 @@ export function labelIn<C extends Readonly<Record<string, string>> = typeof m>(
   return Object.hasOwn(table, value) ? t(catalogue, table[value]!, locale) : value;
 }
 
-// The English constants below stay as direct reads ON PURPOSE (S-10 review
-// I-1): each is English whatever the reader's language, so the G3 ratchet
-// keeps counting them until every caller has moved to `labelIn`.
-export const STATUS_LABEL: Record<string, string> = {
-  open: m["pipeline.status.open"],
-  won: m["pipeline.status.won"],
-  lost: m["pipeline.status.lost"],
-};
-
-export const ACCOUNT_STATUS_LABEL: Record<string, string> = {
-  active: m["accounts.status.active"],
-  paused: m["accounts.status.paused"],
-  archived: m["accounts.status.archived"],
-};
-
-export const MESSAGE_STATUS_LABEL: Record<string, string> = {
-  queued: m["conversations.status.queued"],
-  sent: m["conversations.status.sent"],
-  delivered: m["conversations.status.delivered"],
-  opened: m["conversations.status.opened"],
-  bounced: m["conversations.status.bounced"],
-  failed: m["conversations.status.failed"],
-};
-
-export const FORM_STATUS_LABEL: Record<string, string> = {
-  draft: m["forms.status.draft"],
-  published: m["forms.status.published"],
-  archived: m["forms.status.archived"],
-};
+// S-10 T9b: the five English-only `*_LABEL` constants that used to live
+// here (STATUS_LABEL, ACCOUNT_STATUS_LABEL, MESSAGE_STATUS_LABEL,
+// FORM_STATUS_LABEL, MESSAGE_CHANNEL_LABEL — T1's own comment called them
+// "kept, word for word, for the callers that have not moved yet") are
+// gone: every real caller had already moved to `labelIn`/
+// `messageChannelLabel` (confirmed by grep — the few remaining mentions of
+// their names were doc comments, not imports), except `accounts/page.tsx`
+// (the agency's own Companies list), which now calls `labelIn` directly
+// with its own English-literal locale, same as that page's own role
+// default. Deleting the dead constants, not just their last caller, is
+// what actually zeroes this file's direct-read count: the reads lived in
+// the CONSTANTS' own initializers, not in who imported them.
 
 /** Message `channel` column -> its catalogue key (S-06 part 3, spec G8), so a label can be read in
- *  either language; exhaustive over the union for the same reason as the map below. */
+ *  either language; exhaustive over the union for the same reason
+ *  `messageChannelLabel` is typed to the full union, not `Record<string, string>` —
+ *  a dropped channel is a compile error here, never a silent runtime gap. */
 const CHANNEL_KEY: Record<NewMessage["channel"], MessageKey> = {
   email: "conversations.channel.email",
   form: "conversations.channel.form",
@@ -92,32 +77,14 @@ const CHANNEL_KEY: Record<NewMessage["channel"], MessageKey> = {
   webchat: "conversations.channel.webchat",
 };
 
-/** Message `channel` column -> display label. A form submission must never be
- *  labelled "Note": the words are the contact's own, not the operator's.
- *
- *  Typed to the full channel union, not `Record<string, string>` — the
- *  previous shape let a call site fall through to `?? message.channel` and
- *  render the raw DB value (e.g. the literal string "sms") for any channel
- *  missing an entry here, with no compiler check that every channel has
- *  one. Dropping a key now is a compile error instead of a silent runtime
- *  gap. S-06 part 3: these are the English labels; a reader in another
- *  language goes through `messageChannelLabel(channel, locale)`. */
-export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
-  email: m["conversations.channel.email"],
-  form: m["conversations.channel.form"],
-  voice: m["conversations.channel.voice"],
-  sms: m["conversations.channel.sms"],
-  webchat: m["conversations.channel.webchat"],
-};
-
 /** The one place that widens an untyped DB `channel` string against
- *  MESSAGE_CHANNEL_LABEL. The Supabase client here is untyped (no generated
+ *  CHANNEL_KEY. The Supabase client here is untyped (no generated
  *  schema types), so a raw `.select()` column comes back as `string`, not
  *  `NewMessage["channel"]` — every call site used to re-cast it locally
  *  (message-thread.tsx did, and activity-timeline.tsx was about to grow a
  *  second copy). One helper means the widening — and its fallback to the raw
  *  value for anything outside the known union — happens exactly once, while
- *  MESSAGE_CHANNEL_LABEL itself stays exhaustively typed and a dropped key is
+ *  CHANNEL_KEY itself stays exhaustively typed and a dropped key is
  *  still a compile error. S-06 part 3 (spec G8): in the reader's `locale` (English by default, so
  *  every existing caller reads exactly what it did), through the catalogue's `.es` twins. */
 export function messageChannelLabel(channel: string, locale: Locale = "en"): string {

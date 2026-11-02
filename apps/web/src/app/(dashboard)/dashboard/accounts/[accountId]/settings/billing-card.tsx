@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BILLING_STATUS_TREATMENTS, type BillingCardView, type PlanOption } from "@/lib/billing/billing-view";
+import { billingStatusTreatment, type BillingCardView, type PlanOption } from "@/lib/billing/billing-view";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../submit-button";
@@ -106,7 +106,7 @@ export function BillingCard({ view, send, markComplimentary, stopComplimentary, 
   undoLiftPause: (liftedAt: string, pausedAt: string) => Promise<BillingActionResult>;
 }) {
   const router = useRouter();
-  const t = BILLING_STATUS_TREATMENTS[view.status];
+  const t = billingStatusTreatment(view.status, "en");
 
   type Undo = { go: () => Promise<BillingActionResult>; success: string };
   // Generic in the action's OWN result type `T` (never just BillingActionResult):

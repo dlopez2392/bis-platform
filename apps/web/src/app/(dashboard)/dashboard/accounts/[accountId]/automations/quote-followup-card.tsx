@@ -223,6 +223,7 @@ export function QuoteFollowupCard({
             </div>
             <SpanishBodyField
               idPrefix="quote-followup"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultQuoteFollowupBody(brandName, "es")}
               composeEs={(text) => (channel === "sms" ? withOptOut(text, "es") : text)}

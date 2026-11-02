@@ -147,6 +147,11 @@ export type CustomerPage = {
 export async function customerPage(db: SupabaseClient, token: string, now: Date): Promise<CustomerPage> {
   const r = await resolveToken(db, token, now);
   if (r.kind === "not_found") {
+    // No token resolved, so no account and no language to read — the same
+    // "nothing to resolve a reader's language from" shape as /u and /d's
+    // own error boundary (ENGLISH_ONLY_READERS, ratchet-scan.ts). `business`
+    // here is never read by the real page (page.tsx recomputes its own from
+    // `branding`, which is null here) — this value is a typed placeholder.
     return { state: "not_found", language: "en", business: m["customerDocs.business"], logoUrl: null, branding: null, phone: null, items: [] };
   }
   const { request } = r;

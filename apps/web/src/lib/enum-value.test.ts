@@ -16,6 +16,12 @@ describe("validateEnumValue", () => {
     expect(validateEnumValue(LANGUAGE_OPTIONS, " es").ok).toBe(false);
     expect(validateEnumValue(LANGUAGE_OPTIONS, "ES").ok).toBe(false);
   });
+
+  it("reads the refusal in the reader's own language (mutation: ignore the locale param -> FAILS)", () => {
+    const r = validateEnumValue(LANGUAGE_OPTIONS, "fr", "es");
+    expect(r).toEqual({ ok: false, error: "Elija una de las opciones mostradas." });
+    expect(r).not.toEqual(validateEnumValue(LANGUAGE_OPTIONS, "fr", "en"));
+  });
 });
 
 describe("LANGUAGE_OPTIONS", () => {

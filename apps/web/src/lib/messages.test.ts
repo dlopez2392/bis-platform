@@ -171,7 +171,7 @@ describe("the document vault's copy (S-07 part 1)", () => {
   const CATEGORIES = ["id", "contract", "estimate", "invoice", "photo", "permit", "insurance", "warranty", "other"] as const;
   it("the nine category words are the spec's table, in both languages (mutation: change documents.category.estimate.es -> FAILS)", () => {
     const want: Record<(typeof CATEGORIES)[number], [string, string]> = {
-      id: ["ID", "Identificación"], contract: ["Contract", "Contrato"], estimate: ["Estimate or quote", "Presupuesto"],
+      id: ["ID", "Identificación"], contract: ["Contract", "Contrato"], estimate: ["Estimate or quote", "Estimado"],
       invoice: ["Invoice or receipt", "Factura o recibo"], photo: ["Photo", "Foto"], permit: ["Permit or license", "Permiso o licencia"],
       insurance: ["Insurance", "Seguro"], warranty: ["Warranty", "Garantía"], other: ["Other", "Otro"],
     };
@@ -1326,7 +1326,7 @@ describe("Sofía's acts on the timeline, their Undo, reasons, notice and created
 
   it("the named params interpolate through t() for both languages", () => {
     expect(t(m, "aiActs.verb.booked", "en", { when: "2:00 PM" })).toBe("booked 2:00 PM");
-    expect(t(m, "aiActs.verb.booked", "es", { when: "2:00 PM" })).toBe("reservó 2:00 PM");
+    expect(t(m, "aiActs.verb.booked", "es", { when: "2:00 PM" })).toBe("agendó 2:00 PM");
     expect(t(m, "aiActs.verb.fieldFilled", "en", { field: "phone number", value: "(956) 555-0101" }))
       .toBe("filled in the phone number: (956) 555-0101");
     expect(t(m, "aiActs.undoneBy", "es", { name: "Ana", date: "Oct 20" })).toBe("Deshecho por Ana · Oct 20");
@@ -1359,7 +1359,7 @@ describe("Sofía's acts on the timeline, their Undo, reasons, notice and created
   });
 
   it("the undo notice's Spanish sentence is tú, matching the email it sits in (design I-6; mutation: back to usted -> FAILS)", () => {
-    expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.");
+    expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregó la nueva hora a su calendario, cámbiela de nuevo a esta, por favor.");
   });
 });
 
@@ -1451,7 +1451,7 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
       "{persona} · AI assistant", "{persona} · asistente de IA"]);
     expect([m["concierge.aiIntro"], m["concierge.aiIntro.es"]]).toEqual([
       "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
-      "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento."]);
+      "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo le dé seguimiento."]);
   });
 
   it("the plural pair differs only by number, the contacts.count/contacts.countOne shape (mutation: template the singular with {count} -> FAILS)", () => {
@@ -1543,7 +1543,7 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
       ["voice.tradeRules.insurance_pc", "Insurance (property & casualty)", "Seguros de daños (auto, casa y negocio)"],
       ["voice.tradeRules.insurance_pcHint",
         "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy. Before reading, moving or cancelling an appointment, {persona} asks for the full name and the email on file.",
-        "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza. Antes de consultar, cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado."],
+        "{persona} toma solicitudes de estimado para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza. Antes de consultar, cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado."],
       ["voice.tradeRules.events", "Events and venues", "Eventos y salones"],
       ["voice.tradeRules.eventsHint",
         "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Services & prices, or from Facts when there is no list.",
@@ -2050,7 +2050,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
       ["business.toast.closedToday", "Closed for today. Your booking page now says so.", "Cerrado por hoy. Su página de citas ya lo dice."],
       ["business.toast.storm", "Closed for a storm. Your booking page now says so.", "Cerrado por tormenta. Su página de citas ya lo dice."],
       ["business.toast.late", "Running late today. Booking stays open.", "Con retraso hoy. Se siguen aceptando citas."],
-      ["business.toast.open", "Open again. Your booking page takes bookings as usual.", "Abierto de nuevo. Su página de citas acepta reservas como siempre."],
+      ["business.toast.open", "Open again. Your booking page takes bookings as usual.", "Abierto de nuevo. Su página para agendar citas funciona como siempre."],
       ["business.toast.persona", "{persona} says so too.", "{persona} también lo dice."],
       ["business.toast.todo", "A To-do lists the {n} affected appointments.", "Una tarea en Pendientes lista las {n} citas afectadas."],
       ["business.toast.todoOne", "A To-do lists the affected appointment.", "Una tarea en Pendientes lista la cita afectada."],
@@ -2844,7 +2844,7 @@ describe("F-046 part 1: the agenda and job copy, English and Spanish (plan Task 
     "calendar.agenda.addedByYou": "Added by you",
     "calendar.agenda.addedByYou.es": "Agregado por usted",
     "calendar.agenda.bookedOnline": "Booked online",
-    "calendar.agenda.bookedOnline.es": "Reservada en línea",
+    "calendar.agenda.bookedOnline.es": "Agendada en línea",
     "calendar.agenda.bookedBy": "Booked by {persona}",
     "calendar.agenda.bookedBy.es": "Agendada por {persona}",
     "calendar.agenda.pastOpen": "{count} past jobs still need Completed or No-show · To do",

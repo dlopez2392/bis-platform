@@ -16,11 +16,15 @@ export type TextsLoad =
   | { status: "error" }
   | { status: "ready"; view: TextsView; zone: string; phone: string | null };
 
-/** Dot + word (rule 3), token classes only. On hold is a warning: staff must decide it. */
+/** Dot + chip (rule 3), token classes only — the word is `textsStatusWord`
+ *  below, never read off this object (S-10 T9b: the old `.label` field was
+ *  an English-only module-level `m[...]` read; every real caller already
+ *  overrode it with `textsStatusWord`'s own result). On hold is a warning:
+ *  staff must decide it. */
 export const TEXTS_TREATMENT = {
-  allowed: { label: m["contact.texts.allowed"], dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
-  stopped: { label: m["contact.texts.stopped"], dot: "bg-destructive", chip: "border-destructive/25 bg-transparent text-muted-foreground" },
-  held: { label: m["contact.texts.held"], dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
+  allowed: { dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
+  stopped: { dot: "bg-destructive", chip: "border-destructive/25 bg-transparent text-muted-foreground" },
+  held: { dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
 } as const;
 
 const TEXTS_WORD = {

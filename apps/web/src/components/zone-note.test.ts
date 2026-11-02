@@ -216,7 +216,7 @@ describe("ZoneNote — the reader's language (F-085 follow-ups)", () => {
   // the reader's language instead of the temporary lang="en".
   it("the guessed-zone warning reads Spanish on a Spanish page, marked lang=\"es\" (mutation: keep m[...] / lang=\"en\" -> FAILS)", () => {
     const html = renderLocale(FROM_AGENCY, "es");
-    expect(html).toMatch(/<div[^>]*lang="es"[^>]*>[^<]*Esta empresa no tiene zona horaria propia/);
+    expect(html).toMatch(/<div[^>]*lang="es"[^>]*>[^<]*Esta cuenta no tiene zona horaria propia/);
     expect(plain(html)).toContain("Todavía no hay un campo para esto en Ajustes");
     expect(plain(html)).not.toContain("This company");
   });
@@ -225,7 +225,7 @@ describe("ZoneNote — the reader's language (F-085 follow-ups)", () => {
     const client = plain(renderToStaticMarkup(createElement(ZoneNote, { zone: FROM_FALLBACK, isAgency: false, locale: "es" })));
     expect(client).toContain("Su zona horaria necesita corregirse");
     const agencyFallback = plain(renderLocale(FROM_FALLBACK, "es"));
-    expect(agencyFallback).toContain("Ni esta empresa ni la agencia tienen una zona horaria válida");
+    expect(agencyFallback).toContain("Ni esta cuenta ni la agencia tienen una zona horaria válida");
     const accountless = plain(renderToStaticMarkup(createElement(ZoneNote, { zone: FROM_FALLBACK, isAgency: true, accountless: true, locale: "es" })));
     expect(accountless).toContain("La agencia tampoco tiene una zona horaria válida");
   });

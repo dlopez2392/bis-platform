@@ -52,7 +52,7 @@ describe("the registry", () => {
 describe("describe, in English, Spanish and the pseudo-locale, in the account's zone", () => {
   it("a booking: the time Sofía booked", () => {
     expect(describeAct(created(), { tr: en, zone: ZONE })).toEqual({ verb: "booked Thu, Oct 22, 5:00 AM GMT+9", detail: null });
-    expect(describeAct(created(), { tr: es, zone: ZONE })).toEqual({ verb: "reservó jue, 22 de oct, 5:00 a.m. GMT+9", detail: null });
+    expect(describeAct(created(), { tr: es, zone: ZONE })).toEqual({ verb: "agendó jue, 22 de oct, 5:00 a.m. GMT+9", detail: null });
   });
   it("a move: the new time, and the old one as its detail", () => {
     expect(describeAct(moved(), { tr: en, zone: ZONE }))

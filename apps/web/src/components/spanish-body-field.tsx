@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SmsPreview } from "@/components/sms-preview";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { segmentsFor, accentCost } from "@/lib/sms/segments";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 
@@ -21,6 +23,17 @@ export type SpanishBodyFieldProps = {
   composeEs: (text: string) => string;
   /** SMS cards count parts and show the accent line; email cards do not. */
   sms: boolean;
+  /** S-10 T9b: the reader's own language — the agency's own cards (Automations,
+   *  Voice) bind "en"; the one client-reachable caller (Calendar settings'
+   *  follow-up section, shown to the Owner too) binds its own resolved locale.
+   *  Required (S-10 T9b review round 2): a silent "en" default let several
+   *  agency-only automations cards and voice-settings.tsx go unnoticed with
+   *  no locale wired at all — explicit now, so a missed hookup fails tsc,
+   *  not a silent English fallback. Every one of those callers is still
+   *  genuinely agency-only (settings|setup|checklist|voice|automations),
+   *  so they pass "en" literally rather than threading a real reader
+   *  locale that does not exist on those pages. */
+  locale: Locale;
 };
 
 /**
@@ -29,7 +42,7 @@ export type SpanishBodyFieldProps = {
  * emptied (Spanish customers get the English); else theirs. The stale line reads the STORED row
  * (plan deviation 5); the emptied line reads the box (what Save will store).
  */
-export function SpanishBodyField({ idPrefix, stored, defaultEs, composeEs, sms }: SpanishBodyFieldProps) {
+export function SpanishBodyField({ idPrefix, stored, defaultEs, composeEs, sms, locale }: SpanishBodyFieldProps) {
   const [text, setText] = useState(stored.bodyEs ?? defaultEs);
   const [useOurs, setUseOurs] = useState(false);
   const id = `${idPrefix}-body-es`;
@@ -41,46 +54,46 @@ export function SpanishBodyField({ idPrefix, stored, defaultEs, composeEs, sms }
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id}>{m["automations.bodyEs.label"]}</Label>
+      <Label htmlFor={id}>{t(m, "automations.bodyEs.label", locale)}</Label>
       <Textarea
         id={id} name="body_es" lang="es" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={text}
         className="min-h-11 md:min-h-8"
         onChange={(e) => { setText(e.target.value); setUseOurs(false); }}
       />
       <input type="hidden" name="body_es_use_ours" value={useOurs ? "1" : ""} />
-      <p className="text-xs text-muted-foreground">{m["automations.bodyEs.hint"]}</p>
+      <p className="text-xs text-muted-foreground">{t(m, "automations.bodyEs.hint", locale)}</p>
       {stored.stale && !emptied ? (
         <div className="space-y-1.5">
           <p className="flex items-center gap-2 text-xs">
             <span data-stale-dot aria-hidden="true" className="inline-block size-2 rounded-full bg-[var(--accent)]" />
-            {m["automations.bodyEs.stale"]}
+            {t(m, "automations.bodyEs.stale", locale)}
           </p>
           <div className="flex items-center gap-2">
             <Checkbox id={`${id}-matches`} name="body_es_still_matches" />
-            <Label htmlFor={`${id}-matches`}>{m["automations.bodyEs.stillMatches"]}</Label>
+            <Label htmlFor={`${id}-matches`}>{t(m, "automations.bodyEs.stillMatches", locale)}</Label>
           </div>
         </div>
       ) : null}
       {emptied ? (
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span>{m["automations.bodyEs.emptied"]}</span>
+          <span>{t(m, "automations.bodyEs.emptied", locale)}</span>
           <Button type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
             onClick={() => { setText(defaultEs); setUseOurs(true); }}>
-            {m["automations.bodyEs.useOurs"]}
+            {t(m, "automations.bodyEs.useOurs", locale)}
           </Button>
         </div>
       ) : null}
       {cost && cost.parts > cost.foldedParts ? (
         <p className="text-xs text-muted-foreground">
-          {m["automations.bodyEs.accentCost"].replace("{n}", String(cost.parts)).replace("{m}", String(cost.foldedParts))}
+          {t(m, "automations.bodyEs.accentCost", locale, { n: cost.parts, m: cost.foldedParts })}
         </p>
       ) : null}
       {sms ? (
         <div className="space-y-1.5" lang="es">
-          <SmsPreview id={`${id}-preview`} label={m["automations.previewEs"]} text={sent} testId={`${idPrefix}-preview-es`} />
+          <SmsPreview id={`${id}-preview`} label={t(m, "automations.previewEs", locale)} text={sent} testId={`${idPrefix}-preview-es`} />
           {parts ? (
             <p className="text-xs text-muted-foreground" data-testid={`${idPrefix}-count-es`}>
-              {m["compose.smsSegments"].replace("{chars}", String(parts.chars)).replace("{segments}", String(parts.segments))}
+              {t(m, "compose.smsSegments", locale, { chars: parts.chars, segments: parts.segments })}
             </p>
           ) : null}
         </div>

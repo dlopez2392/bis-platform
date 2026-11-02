@@ -27,8 +27,10 @@ const html = (status: string) => renderToStaticMarkup(createElement(ActivityTime
 // instead of its label — exactly the dot-and-word-style defect DESIGN.md
 // rule 3 names for colour, applied here to plain text: a column value is
 // never shown to an operator as itself when a label for it already exists
-// (lib/labels.ts's own MESSAGE_STATUS_LABEL, the SAME map conversations.spec
-// and the opportunity row two lines below it already use).
+// (S-10 T9b: message-thread.tsx's own locale-aware STATUS_KEY/statusWord —
+// the SAME map conversations.spec and the opportunity row two lines below
+// it already use — replaced lib/labels.ts's now-deleted, English-only
+// MESSAGE_STATUS_LABEL this comment used to cite).
 describe("the timeline's message status (D-014)", () => {
   it("shows the label, not the raw column value, for every known status (mutation: print item.status directly → FAILS)", () => {
     expect(renderedText(html("failed"))).toContain(m["conversations.status.failed"]);

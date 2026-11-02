@@ -287,6 +287,7 @@ export function CalendarSettings({
                 defaultEs={defaultFollowupBody("es")}
                 composeEs={(x) => x}
                 sms={false}
+                locale={locale}
               />
             </div>
           </div>

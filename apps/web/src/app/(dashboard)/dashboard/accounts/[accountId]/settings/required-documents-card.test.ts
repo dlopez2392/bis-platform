@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { RequiredDocumentsCard, requiredFormEntries } = await import("./required-documents-card");
+const { RequiredDocumentsCard } = await import("./required-documents-card");
+const { requiredFormEntries } = await import("./required-documents-entries");
 
 const action = vi.fn(async () => ({ ok: true as const, list: [] as string[] }));
 

@@ -17,10 +17,12 @@ export type EmailLoad =
   | { status: "error" }
   | { status: "ready"; view: EmailView; zone: string };
 
-/** Dot + word (rule 3), the Texts row's token classes. */
+/** Dot + chip (rule 3), the Texts row's token classes — the word is
+ *  `emailStatusWord` below, never read off this object (S-10 T9b: same fix
+ *  as texts-row.ts's own TEXTS_TREATMENT). */
 export const EMAIL_TREATMENT = {
-  allowed: { label: m["contact.email.allowed"], dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
-  stopped: { label: m["contact.email.stopped"], dot: "bg-destructive", chip: "border-destructive/25 bg-transparent text-muted-foreground" },
+  allowed: { dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
+  stopped: { dot: "bg-destructive", chip: "border-destructive/25 bg-transparent text-muted-foreground" },
 } as const;
 
 const EMAIL_WORD = { allowed: "contact.email.allowed", stopped: "contact.email.stopped" } as const satisfies Record<keyof typeof EMAIL_TREATMENT, MessageKey>;

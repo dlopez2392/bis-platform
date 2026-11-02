@@ -5,12 +5,21 @@
 // admit a new one) and fail only on a NEW breach; fixing one never needs a
 // baseline edit.
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   twinPairs, registerViolations, placeholderMismatches, glossaryViolations, GLOSSARY_RULES, TU_WORDS,
+  companyViolations, inlineTableViolations,
 } from "./spanish-style";
-import { parityViolations } from "./ratchet-scan";
+import {
+  parityViolations, scanSources, agencyOnlyFiles, agencyOnlyKeys, agencyFilesForExemption,
+} from "./ratchet-scan";
 import frozen from "./spanish-style-baseline.json";
 import { m } from "@/lib/messages";
+import { bookingStrings } from "@/lib/booking/public-strings";
+import { publicStrings } from "@/lib/forms/public-strings";
+import { conciergeStrings } from "@/lib/concierge/strings";
+import { CONFIRMATION_COPY, RESCHEDULED_COPY, CANCELLED_COPY, BUSINESS_CANCELLED_COPY } from "@/lib/email/templates/booking";
+import { COPY as LEAD_RECEIPT_COPY } from "@/lib/email/templates/lead-receipt";
 
 describe("twinPairs", () => {
   it("pairs x with x.es and x.en with x.es, and skips a .es with no English (mutation: drop the .en lookup → FAILS)", () => {
@@ -88,7 +97,11 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
 
   it("the S-10 review's rules have no breach today, so they are hard: none of them is on the frozen list (mutation: freeze one → FAILS)", () => {
     const hard = ["dashboard", "deal", "reschedule", "answered", "trade", "to-do"];
-    expect(frozen.glossary.filter((e) => hard.includes(e.split("|")[1]!))).toEqual([]);
+    // Cast, not a type change to spanish-style-baseline.json's own shape
+    // (ratchet.test.ts's own catalogueBaseline precedent): once this list
+    // regenerates to genuinely empty, TS infers `never[]` for a bare `[]`
+    // JSON literal, and `.split()` on a `never` element does not typecheck.
+    expect((frozen.glossary as string[]).filter((e) => hard.includes(e.split("|")[1]!))).toEqual([]);
   });
 
   it("ignores placeholders, so {email} is not the word 'email' (mutation: test the raw strings → FAILS)", () => {
@@ -97,6 +110,35 @@ describe("G6 glossaryViolations — the glossary's 'Never' column", () => {
 
   it("'agency staff' is not the Staff role (mutation: drop the lookbehind → FAILS)", () => {
     expect(glossaryViolations({ "k": "Agency staff stay in English.", "k.es": "El personal de la agencia sigue en inglés." })).toEqual([]);
+  });
+});
+
+describe("G6 companyViolations — 'empresa' is the agency's word for an account, never a business's word for itself", () => {
+  const cat = (es: string) => ({ "k": "English", "k.es": es });
+
+  it("fails on 'Su empresa todavía…' in a client key (mutation: drop the regex check → FAILS)", () => {
+    expect(companyViolations(cat("Su empresa todavía no tiene un número activo."))).toEqual(["k.es"]);
+  });
+
+  it("passes the same string when the key is agency-only (mutation: ignore exemptKeys → FAILS)", () => {
+    expect(companyViolations(cat("Su empresa todavía no tiene un número activo."), new Set(["k"]))).toEqual([]);
+  });
+
+  it("catches the plural 'empresas' too (mutation: drop the s? → FAILS)", () => {
+    expect(companyViolations(cat("Buscar empresas…"))).toEqual(["k.es"]);
+  });
+
+  it("does not key off the English at all — fires even when the English says nothing about a company (mutation: require an English match → FAILS)", () => {
+    expect(companyViolations({ "k": "Hello", "k.es": "Hola, soy de su empresa." })).toEqual(["k.es"]);
+  });
+
+  it("an exempt key is checked against both the plain and the .en-suffixed base (mutation: check only the plain base → FAILS)", () => {
+    const cat2 = { "x.en": "Hello", "x.es": "Hola de parte de su empresa." };
+    expect(companyViolations(cat2, new Set(["x.en"]))).toEqual([]);
+  });
+
+  it("passes copy that never says the word at all", () => {
+    expect(companyViolations(cat("Su negocio todavía no tiene un número activo."))).toEqual([]);
   });
 });
 
@@ -109,5 +151,67 @@ describe("G4 and G6, live", () => {
   it("no NEW glossary breach (mutation: 'Eliminar' as the twin of an English 'Delete' → FAILS naming key|rule)", () => {
     const v = parityViolations(glossaryViolations(m), frozen.glossary);
     expect(v, `use the glossary word (spec §4.3) for: ${v.join(", ")}`).toEqual([]);
+  });
+
+  // S-10 T9b: zero today, hard from day one (G5's own pattern) — every
+  // 'empresa' a client or an Owner could read was reworded to "su negocio"
+  // (the business's own self-reference) or "cuenta" (the agency's
+  // third-person view of a client's account, where the file is too broadly
+  // shared to exempt by reference); only genuinely agency-only files keep
+  // the word.
+  it("no 'empresa' in any .es string a client or Owner can read (mutation: put 'Su empresa todavía…' in a client key → FAILS naming it)", () => {
+    const baseDir = path.join(__dirname, "../../..");
+    const scan = scanSources(baseDir, new Set(Object.keys(m)));
+    const exempt = agencyOnlyKeys(scan.refs, agencyFilesForExemption(agencyOnlyFiles(scan.imports)));
+    const v = companyViolations(m, exempt);
+    expect(v, `say "su negocio" (or "cuenta", for the agency's own view of a client) instead, for: ${v.join(", ")}`).toEqual([]);
+  }, 30_000); // scans every source file under apps/web/src, same cost ratchet.test.ts's own live tests pay
+});
+
+describe("inlineTableViolations — G4/G6 for the tables outside messages.ts", () => {
+  it("catches a bare tú-imperative the plain TU_WORDS list would miss (mutation: drop CUSTOMER_IMPERATIVE_WORDS from the regex → FAILS)", () => {
+    const en = { placeholder: "Type your message…" };
+    const es = { placeholder: "Escribe su mensaje…" }; // correct "su", wrong VERB form
+    expect(inlineTableViolations(en, es).register).toEqual(["placeholder"]);
+  });
+
+  it("still catches every plain TU_WORDS hit too (mutation: use CUSTOMER_IMPERATIVE_WORDS alone → FAILS)", () => {
+    const en = { a: "Your time" };
+    const es = { a: "Tu horario" };
+    expect(inlineTableViolations(en, es).register).toEqual(["a"]);
+  });
+
+  it("reuses GLOSSARY_RULES unchanged (mutation: skip the glossary check entirely → FAILS)", () => {
+    const en = { a: "Book an appointment" };
+    const es = { a: "Reservar una cita" };
+    expect(inlineTableViolations(en, es).glossary).toEqual(["a|book"]);
+  });
+
+  it("skips a key whose value is a function in either language, never crashes on it (mutation: call esValue.toLowerCase() unconditionally → throws, FAILS)", () => {
+    const en = { forUs: (w: string) => `${w} for us`, ok: "Confirmed" };
+    const es = { forUs: (w: string) => `${w} para nosotros`, ok: "Confirmado" };
+    expect(inlineTableViolations(en, es)).toEqual({ register: [], glossary: [] });
+  });
+
+  it("passes clean usted copy with no banned words", () => {
+    const en = { a: "Your details", b: "Pick a time" };
+    const es = { a: "Sus datos", b: "Elija un horario" };
+    expect(inlineTableViolations(en, es)).toEqual({ register: [], glossary: [] });
+  });
+});
+
+describe("inlineTableViolations, live — the five customer-facing tables outside messages.ts", () => {
+  it.each([
+    ["lib/booking/public-strings.ts", bookingStrings("en"), bookingStrings("es")],
+    ["lib/forms/public-strings.ts", publicStrings("en"), publicStrings("es")],
+    ["lib/concierge/strings.ts", conciergeStrings("en"), conciergeStrings("es")],
+    ["lib/email/templates/booking.ts (CONFIRMATION_COPY)", CONFIRMATION_COPY.en, CONFIRMATION_COPY.es],
+    ["lib/email/templates/booking.ts (RESCHEDULED_COPY)", RESCHEDULED_COPY.en, RESCHEDULED_COPY.es],
+    ["lib/email/templates/booking.ts (CANCELLED_COPY)", CANCELLED_COPY.en, CANCELLED_COPY.es],
+    ["lib/email/templates/booking.ts (BUSINESS_CANCELLED_COPY)", BUSINESS_CANCELLED_COPY.en, BUSINESS_CANCELLED_COPY.es],
+    ["lib/email/templates/lead-receipt.ts", LEAD_RECEIPT_COPY.en, LEAD_RECEIPT_COPY.es],
+  ] as const)("%s has no tú and no glossary breach (mutation: a tú successTitle in booking, or 'Escribe tu mensaje…' in concierge → FAILS naming the key)", (_label, en, es) => {
+    const v = inlineTableViolations(en, es);
+    expect(v, `register: ${v.register.join(", ")}; glossary: ${v.glossary.join(", ")}`).toEqual({ register: [], glossary: [] });
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { m } from "@/lib/messages";
+import { REASONS } from "@/lib/automations/hold-or-send";
 
 /**
  * Consent chain spec §6 gives some of PR-1's words VERBATIM; they are
@@ -40,19 +41,29 @@ describe("the spec's own words (§6)", () => {
 
   it("no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)", () => {
     const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback|voice\.textback\.defaultBodyHeld|automations\.reason\.)/.test(k));
-    // 45, read off messages.ts: 11 contact.phoneCountry (the 11th,
+    // 37, read off messages.ts: 11 contact.phoneCountry (the 11th,
     // `inlineChanged`, is the inline phone edit's own Undo — never sent by
     // a pick, only by an inline text edit), 3 contact.messages (PR-3 adds
     // `contact.messages.email`, the Email row's tab label), 5 compose,
     // 5 settings.alertPhone (Country, CountryUs, CountryMx, CountryMismatch,
     // Stopped), the hours sentence, the textback title, the 2 held
-    // text-back bodies, and 17 automations.reason lines (PR-3 adds
-    // `emailLedgerRetry` and `emailSetupRetry`; D-061 adds `accountSuppressed`; S-47d adds five:
-    // `heldClosedToday`, `heldStorm`, `heldClosedDay`, `heldClosureUnknown` and `skippedClosed`;
-    // M7a PR-4 adds three: `heldBillingPaused`, `skippedBillingPaused` and `billingPaused`).
-    // The count is of the ENGLISH lines; a Spanish twin (`<key>.es`, S-03 1b) matches the same
-    // prefixes and is scanned below like its English line, but does not move the 45.
-    expect(keys.filter((k) => !k.endsWith(".es")).length).toBe(45);
+    // text-back bodies, and 9 automations.reason lines (D-061 adds
+    // `accountSuppressed`; S-47d adds five: `heldClosedToday`, `heldStorm`,
+    // `heldClosedDay`, `heldClosureUnknown` and `skippedClosed`; M7a PR-4
+    // adds three: `heldBillingPaused`, `skippedBillingPaused` and
+    // `billingPaused`). S-10 T9b review round 2 DELETED eight more
+    // (`ledgerRetry`, `emailLedgerRetry`, `emailSetupRetry`, `textsStopped`,
+    // `textsHeld`, `numberUnconfirmed`, `tooLongAfterCall`,
+    // `tooLongAfterWriteIn`): each duplicated `activity.reason.*`'s own
+    // English under a second key whose `.es` twin nothing ever read
+    // (reason-words.ts's `BY_ENGLISH` map matches by string value, so it
+    // resolved to `activity.reason.*` regardless) — `REASONS` in
+    // hold-or-send.ts now carries each as a plain literal, pinned by
+    // copy.test.ts's own "the re-hold age cap's words" block above, not by
+    // this count. The count is of the ENGLISH lines; a Spanish twin
+    // (`<key>.es`, S-03 1b) matches the same prefixes and is scanned below
+    // like its English line, but does not move the 37.
+    expect(keys.filter((k) => !k.endsWith(".es")).length).toBe(37);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);
@@ -60,10 +71,17 @@ describe("the spec's own words (§6)", () => {
   });
 });
 
+// S-10 T9b review round 2: these used to be read through
+// `m["automations.reason.tooLongAfterCall"]`/`tooLongAfterWriteIn`, a
+// second catalogue key duplicating `activity.reason.*`'s own English —
+// never translated back by anything, so its `.es` twin was dead weight
+// (proved by grep, deleted with the other six in its batch). REASONS'
+// own literal, the same shape `noEmail`/`noPhone` already had there, is
+// the source of truth now.
 describe("the re-hold age cap's words (orchestrator, 2026-09-26)", () => {
   it("say why a text-back or an instant reply never went, in plain words (mutation: reword either → FAILS)", () => {
-    expect(m["automations.reason.tooLongAfterCall"]).toBe("Not sent: too long after the call");
-    expect(m["automations.reason.tooLongAfterWriteIn"]).toBe("Not sent: too long after they wrote in");
+    expect(REASONS.tooLongAfterCall).toBe("Not sent: too long after the call");
+    expect(REASONS.tooLongAfterWriteIn).toBe("Not sent: too long after they wrote in");
   });
 });
 
@@ -131,8 +149,14 @@ describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email
 
   it("the page's unsubscribed, resubscribed and bad-link lines, English and Spanish, and its two buttons", () => {
     expect(m["unsubscribe.done.en"]).toBe("You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.");
-    expect(m["unsubscribe.done.es"]).toBe("Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.");
-    expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe / Volver a suscribirme");
+    expect(m["unsubscribe.done.es"]).toBe("Listo. {Business} ya no le enviará correos automáticos. Si agenda o pide algo, sí recibirá la confirmación.");
+    // S-10 T9b: split into its own en/es pair, concatenated `${en} / ${es}`
+    // at the render site (unsubscribe-form.tsx) — the house pattern for a
+    // page with no locale at all — rather than baked into one value, which
+    // would have carried "Resubscribe"'s English half into a string G6
+    // checks as this key's Spanish.
+    expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe");
+    expect(m["unsubscribe.resubscribe.es"]).toBe("Volver a suscribirme");
     expect(m["unsubscribe.resubscribed.en"]).toBe("You'll get emails from {Business} again.");
     expect(m["unsubscribe.resubscribed.es"]).toBe("Volverá a recibir correos de {Business}.");
     // Spec §6 as corrected 2026-09-30 (review R1-M2): most of these emails
@@ -144,7 +168,9 @@ describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email
   it("the question and its one button, in both languages (decisions Q1 and P2: the button says what the title asks; mutation: 'Unsubscribe / Cancelar suscripción' → FAILS)", () => {
     expect(m["unsubscribe.confirm.en"]).toBe("Stop emails from {Business}?");
     expect(m["unsubscribe.confirm.es"]).toBe("¿Dejar de recibir correos de {Business}?");
-    expect(m["unsubscribe.button"]).toBe("Stop emails / Dejar de recibir correos");
+    // S-10 T9b: same split as unsubscribe.resubscribe above.
+    expect(m["unsubscribe.button"]).toBe("Stop emails");
+    expect(m["unsubscribe.button.es"]).toBe("Dejar de recibir correos");
   });
 
   it("the composer's unsubscribed notice, with its date as {date}", () => {

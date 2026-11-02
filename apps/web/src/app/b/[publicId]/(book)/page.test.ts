@@ -99,7 +99,7 @@ describe("/b/[publicId] metadata (F-102, defect :870 — the tab title was alway
       params: Promise.resolve({ publicId: "abc123" }),
       searchParams: Promise.resolve({ locale: "es" }),
     });
-    expect(meta.title).toBe("Reserva con Acme Plumbing");
+    expect(meta.title).toBe("Agende con Acme Plumbing");
   });
 
   it("falls back to the brand-free English title when the business name is blank", async () => {

@@ -190,6 +190,7 @@ export function ReactivationCard({
             </div>
             <SpanishBodyField
               idPrefix="reactivation"
+              locale="en"
               stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
               defaultEs={defaultReactivationBody(brandName, "es")}
               composeEs={(text) => text}
