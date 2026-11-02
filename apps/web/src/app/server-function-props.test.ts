@@ -9,6 +9,17 @@
 // server action (`action.bind(null, id)`), or mark an inline one "use server".
 // Both are allowed here; everything else fails, naming file, line and prop.
 //
+// What it sees, and what it does not (review M-5): function LITERALS only, an
+// arrow or `function` expression written in the prop's own value. It does not
+// see a NAMED reference (`const go = () => …; <X onPick={go} />`, or an
+// imported helper), nor a function passed as CHILDREN (`<X>{(row) => …}</X>`
+// is a JSX expression child, not a prop), nor anything reached through a
+// spread (`{...props}`). Those need the type checker and the client/server
+// boundary of the receiving component, which a syntax scan cannot know. Handed
+// to a client component, React still refuses them at render, so they fail
+// loudly when the page renders rather than silently; the detector cases
+// below pin this boundary so it cannot widen or narrow unnoticed.
+//
 // Scope: every .tsx under src/app and src/components that does NOT open with
 // "use client" (a client file may pass handlers freely). The rule is stricter
 // than React's on purpose: a render prop handed to another SERVER component is
@@ -135,6 +146,12 @@ describe("the detector itself (each case can fail)", () => {
     expect(functionLiteralProps("p.tsx", server('<X action={async function (fd) { "use server"; await save(fd); }} />'))).toEqual([]);
     expect(functionLiteralProps("p.tsx", server("<X rows={rows.map((r) => r.id)} />"))).toEqual([]);
     expect(functionLiteralProps("p.tsx", server("<X locale={locale} palette={<Y />} />"))).toEqual([]);
+  });
+
+  it("does NOT see a named reference, a function child or a spread: the stated scope is literals in a prop's own value", () => {
+    expect(functionLiteralProps("p.tsx", server("<X onPick={go} />"))).toEqual([]);
+    expect(functionLiteralProps("p.tsx", server("<X>{(row) => row.name}</X>"))).toEqual([]);
+    expect(functionLiteralProps("p.tsx", server("<X {...{ onPick: () => go() }} />"))).toEqual([]);
   });
 
   it("does not let a \"use server\" string LATER in the body pass (only a directive counts)", () => {
