@@ -74,6 +74,9 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   // (unlike suggestions and ai_acts), and loadRecent now reads through the tombstone id set too
   // (loaders.ts), so the drawer's Recent can carry either row and must not drop it as unknown.
   merge: true, mergeUndone: true,
+  // F-115 part 1 (S-04), plan Task 4: the type's exhaustive case only. The drawer's Recent never
+  // reads the changes source either (loaders.ts's loadRecent passes no `changes`).
+  change: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,

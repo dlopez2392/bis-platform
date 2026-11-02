@@ -442,3 +442,10 @@ export {
   JOB_ERROR_MAX_CHARS, boundJobError, JobPayloadTooLarge, DEAD_JOB_COUNT_CAP,
   type JobState, type JobRow, type NewJob, type JobFence, type DeadJobCounts,
 } from "./jobs";
+
+// F-115 part 1 (S-04), plan Task 4: the record timeline's own change-history source (migration 0111).
+// See ./record-changes.ts.
+export {
+  groupChanges, foldVia, listChangeRows, COLLAPSE_MINUTES,
+  type ChangeRecordType, type ChangeRow, type ChangeGroup, type ViaOnPage,
+} from "./record-changes";

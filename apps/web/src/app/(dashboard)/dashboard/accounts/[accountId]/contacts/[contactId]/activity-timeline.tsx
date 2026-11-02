@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -326,6 +326,11 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
+    // F-115 part 1 (S-04), plan Task 4: a placeholder only, to keep this switch exhaustive now that
+    // `TimelineEntry` carries a "change" variant. Plan Task 5 (bis-frontend, PR E) replaces this with
+    // the real row: field list, the "Was"/"Now" disclosure, and Put back.
+    case "change":
+      return <TimelineItem {...head} icon={History} />;
     default:
       return unknownKind(e);
   }

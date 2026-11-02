@@ -84,6 +84,11 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // undid it (undone_by is NOT NULL exactly when undone_at is, 0106's own check).
     case "merge": return { kind: "person", personId: entry.merge.mergedBy };
     case "mergeUndone": return { kind: "person", personId: entry.merge.undoneBy };
+    // F-115 part 1 (S-04), plan Task 4: the group's own author — 0111's capture trigger decides it
+    // once per write (person/ai/automation/customer/import) and stamps every row of that write with
+    // it. `authorKind` is null only in observe mode, before 0113 turns enforce on everywhere; per the
+    // plan (Task 5), a NULL author reads as the automation mark, never a sixth kind.
+    case "change": return { kind: entry.group.authorKind ?? "automation", personId: entry.group.authorId };
   }
 }
 

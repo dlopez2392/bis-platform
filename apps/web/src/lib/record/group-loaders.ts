@@ -140,7 +140,7 @@ export async function loadGroupTimeline(
   let page: TimelinePage;
   try {
     page = await listTimelinePage(db, accountId, contactIds, before, {
-      onError: (source, e) => log(`activity (${source})`, accountId, e), groupId,
+      onError: (source, e) => log(`activity (${source})`, accountId, e), groupId, changes: true,
     });
   } catch (e) {
     log("activity", accountId, e);

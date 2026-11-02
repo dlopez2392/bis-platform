@@ -432,3 +432,28 @@ describe("record loaders: Sofía's acts (item 8c)", () => {
     } finally { errors.mockRestore(); }
   });
 });
+
+describe("record loaders: the change history source (F-115 part 1, S-04, plan Task 4)", () => {
+  beforeEach(() => {
+    listTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [], sources: SOURCES });
+    mergedIdsOfMock.mockReset().mockResolvedValue([]);
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
+    holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
+    readActFactsMock.mockReset().mockResolvedValue(FACTS);
+  });
+
+  it("the record page's timeline reads the changes source; the drawer's Recent does not (mutation: pass it in loadRecent -> FAILS)", async () => {
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ changes: true });
+    await loadRecent(db, "acct1", "ct1");
+    expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("changes");
+  });
+
+  it("a failed changes read is named in the ready load's failed list, same as any other source (mutation: drop the pass-through -> FAILS)", async () => {
+    listTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["changes"], sources: [...SOURCES, "changes"] });
+    const load = await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(load).toMatchObject({ status: "ready" });
+    if (load.status === "ready") expect(load.page.failed).toEqual(["changes"]);
+  });
+});

@@ -57,6 +57,8 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
   documents: "timeline.what.documents", chats: "timeline.what.chats", archive: "timeline.what.archive",
   merge: "timeline.what.merge", suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
+  // F-115 part 1 (S-04), plan Task 4.
+  changes: "timeline.what.changes",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -234,6 +236,10 @@ function phrase(
         : tr.text("timeline.mergeOtherHidden");
       return { verb: tr.text("timeline.mergeUndone", { name }), status: null, detail: null };
     }
+    // F-115 part 1 (S-04), plan Task 4: a placeholder only, to keep this switch exhaustive now that
+    // `TimelineEntry` carries a "change" variant. Plan Task 5 (bis-frontend, PR E) replaces this with
+    // the real verb (field list), status-free, and the Was/Now disclosure, built from `entry.group`.
+    case "change": return { verb: tr.text("timeline.what.changes"), status: null, detail: null };
   }
 }
 

@@ -100,6 +100,7 @@ export async function loadTimeline(
     page = await listTimelinePage(db, accountId, [contactId, ...tombstones], before, {
       suggestions: true,
       aiActs: true,
+      changes: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
     });
   } catch (e) {

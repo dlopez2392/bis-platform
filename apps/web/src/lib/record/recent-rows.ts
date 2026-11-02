@@ -67,6 +67,10 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     // since loadRecent reads through mergedIdsOf's id set too (loaders.ts). The excerpt stays null
     // either way.
     case "merge": case "mergeUndone": return null;
+    // F-115 part 1 (S-04), plan Task 4: the head already says what changed ("changed phone and
+    // email"); the drawer's Recent never asks for this source either (loaders.ts: loadRecent passes
+    // no `changes`), so this case only keeps the switch exhaustive.
+    case "change": return null;
   }
 }
 

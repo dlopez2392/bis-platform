@@ -7522,6 +7522,28 @@ export const m = {
   // rather than duplicating them — see messages.test.ts's Task 2 describe.
   "timeline.what.aiActs": "the assistant's actions",
   "timeline.what.aiActs.es": "las acciones de la asistente",
+  // F-115 part 1 (S-04), plan Task 4: the record timeline's own change-history source
+  // (migration 0111). T5 (PR E) adds the rest of the history.* keys.
+  "timeline.what.changes": "changes",
+  "timeline.what.changes.es": "cambios",
+  // F-115 part 1 (S-04), plan Task 8 Step 1: the history download's CSV header, in the reader's
+  // locale (spec Copy, history.csv.*). T5 (PR E) adds the rest of history.*.
+  "history.csv.when": "When",
+  "history.csv.when.es": "Cuándo",
+  "history.csv.who": "Who",
+  "history.csv.who.es": "Quién",
+  "history.csv.kind": "Kind",
+  "history.csv.kind.es": "Tipo",
+  "history.csv.record": "Record",
+  "history.csv.record.es": "Registro",
+  "history.csv.field": "Field",
+  "history.csv.field.es": "Campo",
+  "history.csv.before": "Before",
+  "history.csv.before.es": "Antes",
+  "history.csv.after": "After",
+  "history.csv.after.es": "Después",
+  "history.csv.cause": "Cause",
+  "history.csv.cause.es": "Causa",
   "aiActs.verb.booked": "booked {when}",
   "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",
