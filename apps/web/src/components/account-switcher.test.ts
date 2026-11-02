@@ -66,3 +66,15 @@ describe("AccountSwitcher — F-107 (rider part): below `sm` the trigger is icon
     expect(src).toContain('<ChevronsUpDown className="hidden size-4 shrink-0 opacity-60 sm:block" aria-hidden />');
   });
 });
+
+// S-10 T9b (owner decision Q4, 2026-10-31): the switcher is the agency's own,
+// English for every reader (its words are direct `m[...]` reads), inside a
+// shell that now carries the reader's locale (dashboard/layout.tsx). Both the
+// trigger and the list are marked: the list is portalled into <body>, outside
+// the trigger and the sidebar, so a mark on the trigger alone never reaches it.
+describe("AccountSwitcher — an English island, trigger AND portalled list (S-10 T9b)", () => {
+  it("marks the trigger and the popover content lang=\"en\" (mutation: drop either -> FAILS)", () => {
+    expect(src).toMatch(/<PopoverTrigger\s+lang="en"/);
+    expect(src).toMatch(/<PopoverContent\s+lang="en"/);
+  });
+});
