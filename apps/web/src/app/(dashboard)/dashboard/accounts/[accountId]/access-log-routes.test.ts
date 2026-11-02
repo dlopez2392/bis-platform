@@ -71,7 +71,7 @@ const NOT_A_RECORD: Record<string, string> = {
   [`${API}/shell/route.ts`]: "the shell's counts and status (a list read inside the visit); no record",
   // S-10 T9b (owner decision Q4): the agency-only sections' English island, a one-line re-export of
   // components/english-only.tsx's EnglishOnlyLayout. It reads nothing; each page below it keeps its own guard.
-  ...Object.fromEntries(["automations", "checklist", "settings", "setup", "voice"].map((s) =>
+  ...Object.fromEntries(["automations", "checklist", "settings", "setup"].map((s) =>
     [`${A}/${s}/layout.tsx`, "an English island wrapper (lang=\"en\"); reads nothing, renders no record"])),
 };
 

@@ -26,6 +26,10 @@ const NOT_ENGLISH: Record<string, string> = {
   // makeTr(locale) and marks its own content lang={locale} (page.tsx, both
   // returns), as the owner approved for that screen.
   "src/app/(dashboard)/dashboard/enter/[accountId]/page.tsx": "every word is the operator's language, marked lang={locale}",
+  // Review M-1: Sofía's knowledge snapshot reads every word through makeTr(locale) and marks its own
+  // content lang={tr.locale}; under an island its <html lang> read "en" over an all-Spanish page.
+  "src/app/(dashboard)/dashboard/accounts/[accountId]/voice/knowledge/[version]/page.tsx":
+    "every word is the operator's language, marked lang={tr.locale}",
 };
 
 function pages(dir: string): string[] {
@@ -96,6 +100,10 @@ describe("every agency-only page sits in an English island (S-10 T9b, owner deci
   it("each one is wrapped in EnglishOnly, by its own segment's layout or at the root of its own return (mutation: delete work/layout.tsx -> FAILS naming work/page.tsx)", () => {
     const outside = agencyPages.filter((p) => !(p.key in NOT_ENGLISH) && !inIsland(p.abs)).map((p) => p.key);
     expect(outside).toEqual([]);
+  });
+
+  it("no NOT_ENGLISH page sits in an island either, or its <html lang> would read \"en\" over its operator-language content (mutation: put voice/layout.tsx back as the EnglishOnlyLayout -> FAILS naming the knowledge page)", () => {
+    expect(agencyPages.filter((p) => p.key in NOT_ENGLISH && inIsland(p.abs)).map((p) => p.key)).toEqual([]);
   });
 
   it("each NOT_ENGLISH entry is still an agency-only page, so the list cannot go stale", () => {
