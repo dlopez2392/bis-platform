@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { ListChecks } from "lucide-react";
 import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
@@ -33,7 +32,7 @@ import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
 import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, countAfterHours } from "@/lib/dashboard/metrics";
 import { CallsChartCard } from "./calls-chart-card";
 import { ActivityCard } from "./activity-card";
-import { ChecklistRow } from "./checklist-row";
+import { ChecklistRow, ChecklistReviewLink } from "./checklist-row";
 import { WorkRowCard } from "./work-row";
 // S-47d Task 11 (spec §5.6.2): the one switch's status, in its own boundary. The boundary itself is
 // `BusinessStatusCardBoundary` (Task 15 finding), not `RecordCardBoundary` directly — its `fallback`
@@ -485,14 +484,10 @@ export default async function AccountDashboardPage({
             // A finished checklist should not compete with the rest of the
             // dashboard, but it still has to stay reachable — un-ticking an
             // item, adding a custom step, or just reviewing what was done had
-            // no path back in once the panel above stopped rendering.
-            <Link
-              href={`/dashboard/accounts/${accountId}/checklist`}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ListChecks className="size-3.5" aria-hidden />
-              {m["checklist.reviewLink"]}
-            </Link>
+            // no path back in once the panel above stopped rendering. Moved
+            // to checklist-row.tsx (S-10 T9b): same agency-only content as
+            // the row above, now covered by the same file-level exemption.
+            <ChecklistReviewLink accountId={accountId} />
           )
         ) : null}
       </div>

@@ -8,7 +8,8 @@ import {
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { STEP_COPY, TONE } from "./steps/step-shared";
+import { TONE } from "./steps/step-shared";
+import { STEP_COPY } from "./steps/step-copy";
 
 /**
  * The stepper rail — DESIGN.md's "stepper rail (done ✓ / current / todo /

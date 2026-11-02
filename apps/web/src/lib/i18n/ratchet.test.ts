@@ -18,6 +18,7 @@ import {
   keysMissingSpanish, parityViolations, COPY_ATTRIBUTE_NAMES, AGENCY_ONLY_KEY_PREFIXES,
   scanSourceText, scanSources, agencyOnlyFiles, agencyOnlyKeys, directReadCounts, resolveImport,
   AGENCY_ONLY_ROUTES, type SourceScan, withPluralForms, agencyFilesForExemption, ENGLISH_ONLY_READERS,
+  RUNTIME_AGENCY_ONLY_FILES,
 } from "./ratchet-scan";
 import baseline from "./ratchet-baseline.json";
 import directReadBaseline from "./direct-read-baseline.json";
@@ -267,15 +268,21 @@ describe("G1's exemption and G3's scan — the pieces", () => {
   const A = "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/";
   it("a file under an agency route is agency-only when only agency files import it", () => {
     const imports = new Map([[`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []]]);
-    expect([...agencyOnlyFiles(imports)].sort()).toEqual([`${A}card.tsx`, `${A}page.tsx`]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])].sort()).toEqual([`${A}card.tsx`, `${A}page.tsx`]);
   });
 
+  // These four pass `[]` for the runtime-override param (its own tests live
+  // in the "RUNTIME_AGENCY_ONLY_FILES" describe below) — they test the plain
+  // import-closure mechanics in isolation, over tiny invented graphs that
+  // share no path with the three real override entries, and the default
+  // override would otherwise inject those three real paths into every
+  // result here regardless of what the synthetic graph says.
   it("a file under an agency route that a client screen imports is NOT agency-only (mutation: return every in-route file → FAILS)", () => {
     const imports = new Map<string, string[]>([
       [`${A}page.tsx`, [`${A}card.tsx`]], [`${A}card.tsx`, []],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/documents/page.tsx", [`${A}card.tsx`]],
     ]);
-    expect([...agencyOnlyFiles(imports)]).toEqual([`${A}page.tsx`]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual([`${A}page.tsx`]);
   });
 
   it("...and neither is what that file imports in turn, through a shared component (mutation: follow one level of imports only → FAILS)", () => {
@@ -284,7 +291,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       ["src/components/x.tsx", [`${A}card.tsx`]],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", ["src/components/x.tsx"]],
     ]);
-    expect([...agencyOnlyFiles(imports)]).toEqual([]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual([]);
   });
 
   it("a shared component that only agency routes render is agency-only (mutation: treat every file outside the routes as a client way in → FAILS)", () => {
@@ -293,12 +300,51 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       ["src/components/line-down-banner.tsx", []],
       ["src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/page.tsx", []],
     ]);
-    expect([...agencyOnlyFiles(imports)].sort()).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx", "src/components/line-down-banner.tsx"]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])].sort()).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx", "src/components/line-down-banner.tsx"]);
   });
 
   it("a file nothing reaches is not agency-only (mutation: return every file the client side does not reach → FAILS)", () => {
     const imports = new Map<string, string[]>([["src/lib/orphan.ts", []], ["src/app/(dashboard)/dashboard/work/page.tsx", []]]);
-    expect([...agencyOnlyFiles(imports)]).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx"]);
+    expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).toEqual(["src/app/(dashboard)/dashboard/work/page.tsx"]);
+  });
+
+  // S-10 T9b finding: a file whose own content is entirely agency-only (the
+  // onboarding checklist's row and catalogue, the setup-wizard breadcrumb)
+  // can still be reached by the plain import-graph closure above, because a
+  // client-reachable page imports it unconditionally and only an `isAgency`
+  // RUNTIME branch — invisible to a static import scan — keeps it from ever
+  // rendering for a client. `RUNTIME_AGENCY_ONLY_FILES` names those files by
+  // hand, each with the test proving WHY (ratchet.test.ts's own convention
+  // for ENGLISH_ONLY_READERS, reused here for the opposite reason: not "this
+  // file must read English", but "this file is never seen by a client at
+  // all").
+  describe("RUNTIME_AGENCY_ONLY_FILES — agency-only despite being reachable from a client route", () => {
+    it("agencyOnlyFiles includes a runtime-override file even when a client way-in imports it directly (mutation: drop the override merge → FAILS)", () => {
+      const override = "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx";
+      const imports = new Map<string, string[]>([
+        ["src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx", [override]],
+        [override, []],
+      ]);
+      // The plain closure (no override) would call this file client-reachable.
+      expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [])]).not.toContain(override);
+      expect([...agencyOnlyFiles(imports, AGENCY_ONLY_ROUTES, [{ file: override }])]).toContain(override);
+    });
+
+    it("names exactly the three real files, each with a reason (mutation: add a fourth without a test row → FAILS)", () => {
+      expect(RUNTIME_AGENCY_ONLY_FILES.map((r) => r.file)).toEqual([
+        "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx",
+        "src/lib/checklist-catalogue.ts",
+        "src/components/back-to-setup.tsx",
+      ]);
+      for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(r.reason.length, r.file).toBeGreaterThan(20);
+    });
+
+    it("the default agencyOnlyFiles call wires the real three in, over the real repo's own import graph (live)", () => {
+      const baseDir = path.join(__dirname, "../../..");
+      const scan = scanSources(baseDir, new Set(Object.keys(m)));
+      const agency = agencyOnlyFiles(scan.imports);
+      for (const r of RUNTIME_AGENCY_ONLY_FILES) expect(agency.has(r.file), r.file).toBe(true);
+    });
   });
 
   it("the routes include the five in-account agency screens (mutation: drop checklist from the pattern → FAILS by name)", () => {

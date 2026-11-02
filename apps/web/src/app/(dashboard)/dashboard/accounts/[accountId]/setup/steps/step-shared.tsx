@@ -1,7 +1,6 @@
 import type { PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView, StateKind, AssignedNumber } from "@/lib/setup/setup-view";
-import { m } from "@/lib/messages";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 
 // Types, maps and tiny presentational helpers shared by more than one step
@@ -48,23 +47,6 @@ export type MovableNumber = {
  *  lib/voice/number-status.ts when the agency numbers inventory would have
  *  become its third copy. This line keeps every existing importer working. */
 export { NUMBER_STATUS_LABEL };
-
-export const STEP_COPY: Record<SetupStepKey, { title: string; help: string }> = {
-  account: { title: m["setup.step.account.title"], help: m["setup.step.account.help"] },
-  branding: { title: m["setup.step.branding.title"], help: m["setup.step.branding.help"] },
-  hours: { title: m["setup.step.hours.title"], help: m["setup.step.hours.help"] },
-  voice_profile: {
-    title: m["setup.step.voice_profile.title"], help: m["setup.step.voice_profile.help"],
-  },
-  website_assistant: {
-    title: m["setup.step.website_assistant.title"], help: m["setup.step.website_assistant.help"],
-  },
-  number: { title: m["setup.step.number.title"], help: m["setup.step.number.help"] },
-  email: { title: m["setup.step.email.title"], help: m["setup.step.email.help"] },
-  forwarding: { title: m["setup.step.forwarding.title"], help: m["setup.step.forwarding.help"] },
-  test_call: { title: m["setup.step.test_call.title"], help: m["setup.step.test_call.help"] },
-  go_live: { title: m["setup.step.go_live.title"], help: m["setup.step.go_live.help"] },
-};
 
 /** Where the work for a step actually happens. `?from=setup` is what makes
  *  the target page render its BackToSetup breadcrumb — a one-way trip into a

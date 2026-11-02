@@ -8,10 +8,11 @@ import { cn } from "@/lib/utils";
 import { Meter } from "@/components/meter";
 import { m } from "@/lib/messages";
 import {
-  STEP_COPY, STEP_PATH, type StepDetailProps,
+  STEP_PATH, type StepDetailProps,
   type SetupTick, type SetupTickAction, type SetupGoLiveAction, type SetupMoveNumberAction,
   type SetNumberStatusAction, type MovableNumber, type SetupRenameAction,
 } from "./steps/step-shared";
+import { STEP_COPY } from "./steps/step-copy";
 import { AccountStep } from "./steps/account";
 import { BrandingStep } from "./steps/branding";
 import { HoursStep } from "./steps/hours";

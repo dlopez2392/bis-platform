@@ -347,15 +347,42 @@ function closure(imports: ReadonlyMap<string, readonly string[]>, entries: reado
  *  components/ that only /dashboard/work renders is agency-only. A file
  *  nothing reaches (dead, or reached only from outside the scan, such as
  *  src/proxy.ts) is NOT agency-only: nothing proves a client cannot see it. */
+/**
+ * Files whose own content is agency-only, but whose import graph makes the
+ * STATIC closure above call them client-reachable: a client-reachable page
+ * imports them unconditionally, and only a RUNTIME `isAgency`/`isOperator`
+ * branch (invisible to an import scan) keeps them from ever rendering for a
+ * client. Each entry needs its own test row (ratchet.test.ts) naming the
+ * gate that proves it, the same discipline `ENGLISH_ONLY_READERS` already
+ * uses for its own named exceptions.
+ */
+export const RUNTIME_AGENCY_ONLY_FILES: readonly { file: string; reason: string }[] = [
+  {
+    file: "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/checklist-row.tsx",
+    reason: "imported unconditionally by the client-reachable dashboard page, but both its exports (ChecklistRow, ChecklistReviewLink) render only inside that page's own `isAgency` branch — the setup checklist is agency-only by DESIGN.md",
+  },
+  {
+    file: "src/lib/checklist-catalogue.ts",
+    reason: "its CHECKLIST_CATALOGUE titles/help are read only by the agency-only /checklist route and by checklist-row.tsx (above); the client-reachable dashboard page that also imports this module uses only mergeChecklist's numeric done/total fields, never a title or help string",
+  },
+  {
+    file: "src/components/back-to-setup.tsx",
+    reason: "renders only when a link carries `?from=setup`, which nothing but the agency-only Setup wizard ever generates — reached from client pages (Branding, Calendar) only because those are Setup's own deep-link targets for an agency operator mid-setup",
+  },
+];
+
 export function agencyOnlyFiles(
   imports: ReadonlyMap<string, readonly string[]>,
   routes: readonly RegExp[] = AGENCY_ONLY_ROUTES,
+  runtimeAgencyOnly: readonly { file: string }[] = RUNTIME_AGENCY_ONLY_FILES,
 ): Set<string> {
   const inRoute = (f: string) => routes.some((re) => re.test(f));
   const ways = [...imports.keys()].filter((f) => f.startsWith("src/app/"));
   const client = closure(imports, ways.filter((f) => !inRoute(f)));
   const agency = closure(imports, ways.filter(inRoute));
-  return new Set([...agency].filter((f) => !client.has(f)));
+  const out = new Set([...agency].filter((f) => !client.has(f)));
+  for (const { file } of runtimeAgencyOnly) out.add(file);
+  return out;
 }
 
 /** Keys every literal reference to which sits in an agency-only file. A key
