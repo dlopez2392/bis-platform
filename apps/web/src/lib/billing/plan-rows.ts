@@ -1,6 +1,6 @@
 import type { Plan } from "@bis/db";
 import { m } from "@/lib/messages";
-import { formatCents } from "./plan-form";
+import { formatCents } from "./plan-money";
 
 export type PlanStatus = "active" | "archived";
 

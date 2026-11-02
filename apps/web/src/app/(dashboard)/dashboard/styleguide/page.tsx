@@ -43,7 +43,7 @@ import { BillingBanner } from "@/components/billing-banner";
 import { BillingPausedBanner } from "@/components/billing-paused-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { paymentProcessingTreatment } from "../accounts/[accountId]/billing/client-status";
-import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
+import { BILLING_STATUS_TREATMENTS, billingStatusTreatment, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
 import {
@@ -909,7 +909,7 @@ export default async function StyleguidePage({
           <div className="w-full space-y-5">
             <div className="flex flex-wrap gap-2">
               {(Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]).map((s) => (
-                <DotPill key={s} label={BILLING_STATUS_TREATMENTS[s].label} chip={BILLING_STATUS_TREATMENTS[s].chip}
+                <DotPill key={s} label={billingStatusTreatment(s, "en").label} chip={BILLING_STATUS_TREATMENTS[s].chip}
                   dot={BILLING_STATUS_TREATMENTS[s].dot} data-status={s} />
               ))}
             </div>

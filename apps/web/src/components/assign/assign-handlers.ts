@@ -5,6 +5,8 @@ import {
 import { setTaskAssigneeAction } from "@/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions";
 import { fill } from "@/components/team/team-copy";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * What a pick in an "Assigned to" field does (F-085 part 1, spec §9; DESIGN.md
@@ -86,30 +88,31 @@ export function taskAssigneeSave(accountId: string, taskId: string): AssignSave 
 export async function applyAssignee(
   save: AssignSave, next: string | null, prior: string | null,
   nameOf: (id: string | null) => string, show: (value: string | null) => void,
+  locale: Locale = "en",
 ): Promise<void> {
   let r: AssignSaveResult;
   try {
     r = await save(next);
   } catch {
-    toast.error(m["assign.failed"]);
+    toast.error(t(m, "assign.failed", locale));
     return;
   }
   if (!r.ok) {
-    toast.error(m[r.error]);
+    toast.error(t(m, r.error, locale));
     return;
   }
   show(next);
   const undo = r.undo;
   if (!undo) return;
-  const message = next === null ? m["assign.doneUnassigned"] : fill(m["assign.done"], { name: nameOf(next) });
+  const message = next === null ? t(m, "assign.doneUnassigned", locale) : fill(t(m, "assign.done", locale), { name: nameOf(next) });
   toast.success(message, {
     duration: ASSIGN_TOAST_MS,
     action: {
-      label: m["assign.undo"],
+      label: t(m, "assign.undo", locale),
       onClick: () => {
         void undo()
-          .then((u) => { if (u.ok) show(prior); else toast.error(m[u.error]); })
-          .catch(() => toast.error(m["assign.failed"]));
+          .then((u) => { if (u.ok) show(prior); else toast.error(t(m, u.error, locale)); })
+          .catch(() => toast.error(t(m, "assign.failed", locale)));
       },
     },
   });

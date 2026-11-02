@@ -194,6 +194,14 @@ describe("applyAssignee: a pick saves at once, then says so with Undo (rule 6)",
     expect(shown).toEqual([]);
   });
 
+  // S-10 T9b: every string here used to be a hard-coded English m[...]
+  // read, regardless of the reader's own language.
+  it("reads the toast and the refusal in the reader's own language (mutation: ignore the locale argument -> FAILS)", async () => {
+    const save = vi.fn(async () => ({ ok: false as const, error: "assign.customerFirst" as const }));
+    await applyAssignee(save, TOM.userId, ANA.userId, (id) => assigneeName(id, OPTIONS), () => {}, "es");
+    expect(toasts.error).toHaveBeenCalledWith(m["assign.customerFirst.es"]);
+  });
+
   it("a refused Undo says so and leaves the pick on screen", async () => {
     const undo = vi.fn(async () => ({ ok: false as const, error: "assign.refused" as const }));
     const save = vi.fn(async () => ({ ok: true as const, undo }));
