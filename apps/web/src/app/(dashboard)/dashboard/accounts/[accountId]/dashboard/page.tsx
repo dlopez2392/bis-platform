@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,

@@ -102,7 +102,8 @@ export function PaletteHitContent({
   return (
     <span className="flex min-w-0 flex-col">
       <span className="truncate">
-        {/* A stand-in label ("Unnamed contact") is not the customer's name: nothing in it is marked (final review M-4a). */}
+        {/* A stand-in label (the catalogue's contact.noName, in the reader's own language — S-10 T9b: used to be
+            the literal English "Unnamed contact") is not the customer's name: nothing in it is marked (final review M-4a). */}
         {isContacts ? <HighlightedText text={hit.label} ranges={hit.unnamed ? [] : nameRanges(hit.label, query)} /> : hit.label}
       </span>
       {hit.sublabel || hit.at ? (

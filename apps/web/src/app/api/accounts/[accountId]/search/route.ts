@@ -17,7 +17,8 @@ export type SearchHit = {
   id: string;
   label: string;
   /** F-092 final review M-4a: set (only ever `true`) when `label` is this route's stand-in for a contact with no
-   *  name ("Unnamed contact"), never the customer's own words, so no client marks a search's letters in it. */
+   *  name — the catalogue's `contact.noName`, in the reader's own language (S-10 T9b: used to be the literal
+   *  English "Unnamed contact") — never the customer's own words, so no client marks a search's letters in it. */
   unnamed?: true;
   sublabel: string | null;
   /** Raw ISO, formatted by the CLIENT. Never formatted here: Intl on the

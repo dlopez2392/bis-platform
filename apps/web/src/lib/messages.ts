@@ -2716,8 +2716,9 @@ export const m = {
   // WITHOUT quoting the English disclosure verbatim: this card's preview
   // language switches with the operator's `languages` selection
   // (previewLanguage, voice-settings.tsx), and a Spanish preview counts
-  // "Responde STOP para cancelar." — a note that named the English sentence
-  // there would be describing text nobody is about to receive.
+  // "Responda STOP para cancelar." (S-10 T9b: usted, was tú) — a note that
+  // named the English sentence there would be describing text nobody is
+  // about to receive.
   "voice.textback.optOutCounted": "Every text ends with an opt-out line. That sentence is included in the count above.",
   "voice.profile.save": "Save voice profile",
   "voice.profile.saved": "Voice profile saved",
@@ -3936,29 +3937,17 @@ export const m = {
   // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
   "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
   // Consent chain PR-1: the Activity page's reasons this PR adds. REASONS in
-  // lib/automations/hold-or-send.ts points at these; its older lines stay
-  // there (the automation engine's precedent, Global Constraints).
-  "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
-  // S-10 T9b: genuinely client-visible — Activity's reason-words.ts (one of
-  // this gate's own ENGLISH_ONLY_READERS, for the REVERSE lookup only) reads
-  // these in the reader's own language for every hold-reason row.
-  "automations.reason.ledgerRetry.es": "Esperando unos minutos: no se pudo verificar si pueden recibir mensajes de texto",
-  "automations.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
-  "automations.reason.emailLedgerRetry.es": "Esperando unos minutos: no se pudo verificar si pueden recibir correos",
-  "automations.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
-  "automations.reason.emailSetupRetry.es": "Esperando unos minutos: no se pudo agregar el enlace para cancelar la suscripción",
-  "automations.reason.textsStopped": "They stopped texts from this business",
-  "automations.reason.textsStopped.es": "Pidieron dejar de recibir mensajes de texto de este negocio",
-  "automations.reason.textsHeld": "Texts to them are on hold",
-  "automations.reason.textsHeld.es": "Los mensajes de texto a esta persona están en pausa",
-  "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
-  "automations.reason.numberUnconfirmed.es": "Su número podría ser mexicano o estadounidense. Elija el país en su contacto",
-  // The re-hold age cap (orchestrator, 2026-09-26): an outage never produces
-  // "Sorry we missed your call" days later.
-  "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
-  "automations.reason.tooLongAfterCall.es": "No se envió: pasó demasiado tiempo desde la llamada",
-  "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
-  "automations.reason.tooLongAfterWriteIn.es": "No se envió: pasó demasiado tiempo desde que escribieron",
+  // lib/automations/hold-or-send.ts used to point at eight of these as a
+  // second, never-translated-back catalogue key for the SAME English text
+  // `activity.reason.*` already carries (reason-words.ts's `BY_ENGLISH` map
+  // matches by string value, not by which key wrote it) — ledgerRetry,
+  // emailLedgerRetry, emailSetupRetry, textsStopped, textsHeld,
+  // numberUnconfirmed, tooLongAfterCall and tooLongAfterWriteIn. Deleted
+  // (S-10 T9b review round 2, proved orphaned by grep): hold-or-send.ts's
+  // own English literal is the source of truth for each now, the same
+  // shape `noEmail`/`noPhone` already had there. The three below
+  // (heldBillingPaused, skippedBillingPaused, billingPaused) are genuinely
+  // read back through reason-words.ts's own REASON_KEYS and stay.
   // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
   // account the agency has otherwise marked not real. Not "pre-go-live":
   // go-live's own migration (0063) never reads or writes this column, so

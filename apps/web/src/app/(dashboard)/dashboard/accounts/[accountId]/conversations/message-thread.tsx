@@ -28,7 +28,9 @@ import { readWebchatMeta, firstWebchatRows } from "./webchat-meta";
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
 
 /** G26: the status word in the staff member's language (conversations.status.* carry .es); a value outside
- *  the six prints as itself, as MESSAGE_STATUS_LABEL's `?? message.status` did. */
+ *  the six prints as itself — the same fallback shape the now-deleted MESSAGE_STATUS_LABEL's
+ *  `?? message.status` once had (S-10 T9b: that constant is gone; `statusWord` below, keyed off
+ *  `STATUS_KEY` through `t()`, is the locale-aware replacement). */
 const STATUS_KEY: Readonly<Record<string, MessageKey>> = {
   queued: "conversations.status.queued", sent: "conversations.status.sent", delivered: "conversations.status.delivered",
   opened: "conversations.status.opened", bounced: "conversations.status.bounced", failed: "conversations.status.failed",
