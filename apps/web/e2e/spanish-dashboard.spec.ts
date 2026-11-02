@@ -295,7 +295,25 @@ test.describe("the document's language, read from the browser (S-10 T9b)", () =>
         const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         return !!hit && el.contains(hit);
       }), "the element at the menu's centre is the menu").toBe(true);
+      // Review M-7: Clerk's account MODAL also mounts in the island's
+      // container now. Opened from the menu it must cover the page (the
+      // element at its centre is the modal, not the sidebar or the topbar),
+      // read English, and close on Esc.
+      await card.locator(".cl-userButtonPopoverActionButton__manageAccount").click();
+      const modal = page.locator(".cl-modalContent").first();
+      await expect(modal).toBeVisible({ timeout: 10_000 });
+      expect(await modal.evaluate(langOf), "Clerk's Manage account modal").toBe("en");
+      expect(await modal.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit);
+      }), "the element at the modal's centre is the modal").toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(modal).toBeHidden();
+
       // Our own item inside Clerk's menu still works from there.
+      await trigger.click();
+      await expect(card).toBeVisible({ timeout: 10_000 });
       await card.getByText(t(m, "prefs.menuItem", "es"), { exact: true }).click();
       await expect(page).toHaveURL(/\/dashboard\/preferences$/);
     });
@@ -352,14 +370,20 @@ test.describe("the document's language, read from the browser (S-10 T9b)", () =>
         await assertNoRedirect(page, settings);
         await expect(page.locator("html")).toHaveAttribute("lang", "en");
         expect(await main().locator("[data-english-only]").first().evaluate(langOf)).toBe("en");
+
+        // Review M-8: a top-level agency-only page, checked WHILE the
+        // operator is still Spanish, so "en" here can only come from
+        // work/layout.tsx's island (the shell around it reads "es").
+        await page.goto("/dashboard/work");
+        await assertNoRedirect(page, "/dashboard/work");
+        await expect(page.locator("html")).toHaveAttribute("lang", "en");
+        expect(await page.locator("aside nav").evaluate(langOf), "the shell's nav on /dashboard/work").toBe("es");
+        expect(await main().getByRole("heading", { level: 1 }).first().evaluate(langOf), "/dashboard/work's own content").toBe("en");
       } finally {
         await page.goto("/dashboard/preferences");
         await main().getByRole("radio", { name: "English", exact: true }).click();
         await expect(main().getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
       }
-      await page.goto("/dashboard/work");
-      await expect(page.locator("html")).toHaveAttribute("lang", "en");
-      expect(await main().getByRole("heading", { level: 1 }).first().evaluate(langOf), "/dashboard/work's own content").toBe("en");
     });
   });
 });

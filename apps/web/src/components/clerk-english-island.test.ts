@@ -45,7 +45,8 @@ describe("ClerkEnglishIsland", () => {
     const attr = (el: ts.JsxOpeningLikeElement, name: string) => {
       const a = el.attributes.properties.find((p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(sf) === name);
       if (!a?.initializer) return a ? "" : null;
-      return ts.isStringLiteral(a.initializer) ? a.initializer.text : a.initializer.expression?.getText(sf) ?? null;
+      if (ts.isStringLiteral(a.initializer)) return a.initializer.text;
+      return ts.isJsxExpression(a.initializer) ? a.initializer.expression?.getText(sf) ?? null : null;
     };
     let container: ts.JsxOpeningLikeElement | undefined;
     let getContainer: string | null = null;
