@@ -16,6 +16,7 @@ import { ensureAccountRole, readStoredRole } from "@/lib/team/ensure-role";
 import { requestLocale } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { LocaleProvider } from "@/components/locale-provider";
+import { DocumentLang } from "@/components/document-lang";
 import type { Locale } from "@/lib/i18n/locale";
 
 // generateMetadata and the layout body below are separate invocations that
@@ -220,16 +221,28 @@ export default async function DashboardLayout({
     // separate per-navigation POSTs.
     <ShellDataProvider>
       <LocaleProvider locale={locale}>
-        {/* No `lang` on the shell as a whole yet (decision D, 2026-10-10):
-            the account switcher and the Clerk menus are still English, and
-            the root is still <html lang="en"> until S-10 T7 sets it from the
-            locale. `lang={locale}` sits on each converted part instead: the
-            sidebar's <nav> and toggle and its setup meter (app-sidebar.tsx),
-            the presence wrapper (topbar-presence.tsx), the ⌘K search
-            triggers and its portalled dialog (command-palette.tsx), the
-            theme toggle, the dashboard's error and not-found pages, and the
-            dashboard KPI row ([accountId]/dashboard/page.tsx). */}
-        <div className="relative flex min-h-screen">
+        {/* S-10 T9b: the signed-in document reads the person's resolved
+            locale (design spec §1.1; this replaces decision D of 2026-10-10,
+            which kept `lang` off the shell while its English parts were
+            unmarked). Two halves:
+            - `lang={locale}` on this wrapper, server-rendered, so the HTML
+              under <html> is right before any script runs;
+            - DocumentLang, which claims <html lang> itself in the browser.
+              The root layout cannot know the locale without a session read
+              it must not make (it wraps /sign-in, /no-access and unmatched
+              paths; layout.test.ts there), and a layout cannot set an
+              ancestor's attribute while rendering. What a page portals into
+              <body> (dialogs, menus, toasts) inherits from <html>, so this
+              half is what labels those.
+            The English islands inside label themselves lang="en": Clerk's
+            OrganizationSwitcher and UserButton (topbar.tsx), the agency's
+            account switcher (account-switcher.tsx) and every agency-only
+            page (english-only.tsx, checked route by route in
+            agency-only-lang.test.ts). The per-part `lang={locale}` that
+            decision D put on the sidebar's <nav>, the presence wrapper, ⌘K
+            and the KPI row are now redundant but harmless, and stay. */}
+        <DocumentLang lang={locale} />
+        <div lang={locale} className="relative flex min-h-screen">
           <Ground />
           <AppSidebar
             accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}

@@ -2,7 +2,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { recordPage } from "./support";
+import { recordPage, readClientFixture } from "./support";
 import { clipFailure } from "./overflow-check";
 import { assertNoRedirect, waitForHeaderSettled, assertHeaderChildrenInBounds } from "./shell-geometry";
 import { m, type MessageKey } from "../src/lib/messages";
@@ -238,6 +238,156 @@ test.describe("the Spanish dashboard, signed in end to end (S-10 T9)", () => {
  * scrollbar appearing); checking costs one extra navigation and removes a
  * blind spot rather than assuming the shell is inert to it.
  */
+/**
+ * S-10 T9b: the signed-in document's language, read from the BROWSER (what a
+ * screen reader and the translate offer actually get), plus the raw server
+ * HTML where the claim is about what arrives before any script runs.
+ *
+ * The root layout server-renders <html lang="en"> and reads nothing to decide
+ * it (it wraps /sign-in and /no-access too); the dashboard shell puts the
+ * reader's locale on its own wrapper in the HTML and claims <html lang> for it
+ * in the browser (components/document-lang.tsx). English islands (agency-only
+ * pages, Clerk's topbar widgets) mark themselves lang="en", and an agency-only
+ * page's island also claims <html lang>, so what it portals into <body> reads
+ * English even for a Spanish-speaking operator.
+ */
+test.describe("the document's language, read from the browser (S-10 T9b)", () => {
+  // `closest('[lang]')`: the language an element is actually in, the way the
+  // browser resolves it — the nearest ancestor-or-self carrying `lang`.
+  const langOf = (el: Element) => el.closest("[lang]")?.getAttribute("lang") ?? null;
+
+  test.describe("as the Spanish client", () => {
+    test.use({ storageState: SPANISH_AUTH_FILE });
+
+    test("<html lang> is \"es\" on a dashboard page, the server sent the shell in Spanish, and Clerk's user menu is an English island", async ({ page }) => {
+      const fixture = spanishFixture();
+      if (!fixture) { test.skip(true, SKIP_REASON); return; }
+      const route = `/dashboard/accounts/${fixture.accountId}/dashboard`;
+      await page.goto(route);
+      await assertNoRedirect(page, route);
+      await expect(page.locator("html")).toHaveAttribute("lang", "es");
+
+      // What the server sent, before any script: the root's own "en" on
+      // <html> (unchanged: it reads no session for lang), the shell's wrapper
+      // already "es".
+      const raw = await (await page.request.get(route)).text();
+      expect(raw).toMatch(/<html[^>]*\blang="en"/);
+      expect(raw).toContain('<div lang="es" class="relative flex min-h-screen">');
+
+      const trigger = page.locator(".cl-userButtonTrigger");
+      await expect(trigger).toBeVisible();
+      expect(await trigger.evaluate(langOf), "Clerk's UserButton trigger").toBe("en");
+      await trigger.click();
+      const card = page.locator(".cl-userButtonPopoverCard").first();
+      await expect(card).toBeVisible({ timeout: 10_000 });
+      expect(await card.evaluate(langOf), "Clerk's user menu, wherever Clerk mounts it").toBe("en");
+      // The menu now mounts inside the topbar (clerk-english-island.tsx's
+      // portal container), not in <body>: prove it still opens on screen and
+      // on top — the element at its centre is the menu itself, not the
+      // sidebar or the page painting over it.
+      const box = await card.boundingBox();
+      expect(box, "the open user menu has no box").not.toBeNull();
+      const viewport = page.viewportSize()!;
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+      expect(await card.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit);
+      }), "the element at the menu's centre is the menu").toBe(true);
+      // Review M-7: Clerk's account MODAL also mounts in the island's
+      // container now. Opened from the menu it must cover the page (the
+      // element at its centre is the modal, not the sidebar or the topbar),
+      // read English, and close on Esc.
+      await card.locator(".cl-userButtonPopoverActionButton__manageAccount").click();
+      const modal = page.locator(".cl-modalContent").first();
+      await expect(modal).toBeVisible({ timeout: 10_000 });
+      expect(await modal.evaluate(langOf), "Clerk's Manage account modal").toBe("en");
+      expect(await modal.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit);
+      }), "the element at the modal's centre is the modal").toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(modal).toBeHidden();
+
+      // Our own item inside Clerk's menu still works from there.
+      await trigger.click();
+      await expect(card).toBeVisible({ timeout: 10_000 });
+      await card.getByText(t(m, "prefs.menuItem", "es"), { exact: true }).click();
+      await expect(page).toHaveURL(/\/dashboard\/preferences$/);
+    });
+  });
+
+  // The agency's own per-run throwaway identity (default storage state; never
+  // a real person), switched to Español through Mis preferencias the same way
+  // preferences.spec.ts does, and back to English in `finally`. Serial: one
+  // identity, one stored language.
+  test.describe.serial("as the agency, with its own language set to Spanish", () => {
+    test("an agency-only page is English at the document level inside a Spanish shell, a client page is Spanish, and a soft navigation between them moves <html lang>", async ({ page }) => {
+      const client = readClientFixture();
+      if (!client) { test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite."); return; }
+      const main = () => page.getByRole("main");
+      await page.goto("/dashboard/preferences");
+      await main().getByRole("radio", { name: "Español", exact: true }).click();
+      await expect(main().getByRole("heading", { level: 1, name: "Sus preferencias" })).toBeVisible({ timeout: 15_000 });
+      try {
+        // A client page: the operator's own language everywhere.
+        const clientRoute = `/dashboard/accounts/${client.accountId}/dashboard`;
+        await page.goto(clientRoute);
+        await assertNoRedirect(page, clientRoute);
+        await expect(page.locator("html")).toHaveAttribute("lang", "es");
+
+        // The agency's own Clerk widget, opened on that Spanish page: its
+        // portalled organization list reads English (clerk-english-island.tsx).
+        await page.locator(".cl-organizationSwitcherTrigger").first().click();
+        const orgCard = page.locator(".cl-organizationSwitcherPopoverCard").first();
+        await expect(orgCard).toBeVisible({ timeout: 10_000 });
+        expect(await orgCard.evaluate(langOf), "Clerk's organization list").toBe("en");
+        await page.keyboard.press("Escape");
+        await expect(orgCard).toBeHidden();
+
+        // Soft navigation (a Next <Link>, no reload) to an agency-only page:
+        // its island claims the document, so <html lang> moves to "en" while
+        // the shell around it stays Spanish.
+        await page.locator("aside").getByRole("link", { name: t(m, "shell.backToAgency", "es"), exact: true }).click();
+        await expect(page).toHaveURL(/\/dashboard\/accounts$/);
+        await expect(page.locator("html")).toHaveAttribute("lang", "en");
+        const heading = main().getByRole("heading", { level: 1, name: m["accounts.title"], exact: true });
+        await expect(heading).toBeVisible();
+        expect(await heading.evaluate(langOf), "the agency-only page's own content").toBe("en");
+        expect(await page.locator("aside nav").evaluate(langOf), "the shell's nav").toBe("es");
+
+        // And back (browser history, still no reload): the island releases.
+        await page.goBack();
+        await expect(page).toHaveURL(new RegExp(`${clientRoute}$`));
+        await expect(page.locator("html")).toHaveAttribute("lang", "es");
+
+        // A full load of an in-account agency-only screen (Settings): English
+        // from the first paint, island and document both.
+        const settings = `/dashboard/accounts/${client.accountId}/settings`;
+        await page.goto(settings);
+        await assertNoRedirect(page, settings);
+        await expect(page.locator("html")).toHaveAttribute("lang", "en");
+        expect(await main().locator("[data-english-only]").first().evaluate(langOf)).toBe("en");
+
+        // Review M-8: a top-level agency-only page, checked WHILE the
+        // operator is still Spanish, so "en" here can only come from
+        // work/layout.tsx's island (the shell around it reads "es").
+        await page.goto("/dashboard/work");
+        await assertNoRedirect(page, "/dashboard/work");
+        await expect(page.locator("html")).toHaveAttribute("lang", "en");
+        expect(await page.locator("aside nav").evaluate(langOf), "the shell's nav on /dashboard/work").toBe("es");
+        expect(await main().getByRole("heading", { level: 1 }).first().evaluate(langOf), "/dashboard/work's own content").toBe("en");
+      } finally {
+        await page.goto("/dashboard/preferences");
+        await main().getByRole("radio", { name: "English", exact: true }).click();
+        await expect(main().getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
+      }
+    });
+  });
+});
+
 test.describe("G9 overflow — 375px, real Spanish and pseudo-Spanish (S-10 T9)", () => {
   test.use({ storageState: SPANISH_AUTH_FILE });
   const WIDTH = 375;

@@ -39,7 +39,11 @@ export function AccountSwitcher({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
+      {/* S-10 T9b (owner decision Q4): the agency's own control, English for
+          every reader, inside a shell that carries the reader's locale. The
+          list below is portalled into <body>, so it is marked on its own. */}
       <PopoverTrigger
+        lang="en"
         aria-label={m["shell.switchAccount"]}
         className={cn(
           // Mobile-first (F-107, rider part): "justify-center px-0" — the
@@ -79,7 +83,7 @@ export function AccountSwitcher({
           </>
         )}
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-0">
+      <PopoverContent lang="en" align="start" className="w-64 p-0">
         <Command>
           <CommandInput placeholder={m["shell.searchAccounts"]} />
           <CommandList>

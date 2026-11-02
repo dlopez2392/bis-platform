@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,5 +65,32 @@ describe("AccountSwitcher — F-107 (rider part): below `sm` the trigger is icon
 
   it("the chevron is hidden below `sm` even when expanded (mutation: drop `hidden`/`sm:block` → FAILS)", () => {
     expect(src).toContain('<ChevronsUpDown className="hidden size-4 shrink-0 opacity-60 sm:block" aria-hidden />');
+  });
+});
+
+// S-10 T9b (owner decision Q4, 2026-10-31): the switcher is the agency's own,
+// English for every reader (its words are direct `m[...]` reads), inside a
+// shell that now carries the reader's locale (dashboard/layout.tsx). Both the
+// trigger and the list are marked: the list is portalled into <body>, outside
+// the trigger and the sidebar, so a mark on the trigger alone never reaches it.
+describe("AccountSwitcher — an English island, trigger AND portalled list (S-10 T9b)", () => {
+  // Read from the syntax tree, so the order of the attributes is free (review M-6).
+  const langOf = (tag: string): (string | null)[] => {
+    const sf = ts.createSourceFile("account-switcher.tsx", readFileSync(path.join(here, "account-switcher.tsx"), "utf8"),
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const out: (string | null)[] = [];
+    const visit = (n: ts.Node) => {
+      if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText(sf) === tag) {
+        const lang = n.attributes.properties.find((a): a is ts.JsxAttribute => ts.isJsxAttribute(a) && a.name.getText(sf) === "lang");
+        out.push(lang?.initializer && ts.isStringLiteral(lang.initializer) ? lang.initializer.text : null);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return out;
+  };
+  it("marks the trigger and the popover content lang=\"en\", in any attribute order (mutation: drop either -> FAILS)", () => {
+    expect(langOf("PopoverTrigger")).toEqual(["en"]);
+    expect(langOf("PopoverContent")).toEqual(["en"]);
   });
 });
