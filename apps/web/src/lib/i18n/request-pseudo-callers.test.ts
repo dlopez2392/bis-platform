@@ -48,30 +48,60 @@ function calls(sf: ts.SourceFile, name: string): ts.CallExpression[] {
   return out;
 }
 
-function isUsed(call: ts.CallExpression, sf: ts.SourceFile): boolean {
+/** One file, type-checked on its own (no imports resolved, no lib): enough for the checker to bind each
+ *  identifier to the declaration it names, which is all `isUsed` asks of it. */
+const BOUND_OPTIONS: ts.CompilerOptions = { noResolve: true, noLib: true, jsx: ts.JsxEmit.Preserve, target: ts.ScriptTarget.Latest };
+/** One host for every file (building one per file was most of this scan's cost); `current` is the file in hand. */
+const current = { name: "", file: undefined as ts.SourceFile | undefined, source: "" };
+const host = ts.createCompilerHost(BOUND_OPTIONS);
+host.getSourceFile = (f) => (f === current.name ? current.file : undefined);
+host.fileExists = (f) => f === current.name;
+host.readFile = (f) => (f === current.name ? current.source : undefined);
+function bound(fileName: string, source: string): { sf: ts.SourceFile; checker: ts.TypeChecker } {
+  current.name = fileName;
+  current.source = source;
+  current.file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const program = ts.createProgram([fileName], BOUND_OPTIONS, host);
+  return { sf: program.getSourceFile(fileName)!, checker: program.getTypeChecker() };
+}
+
+/** Review I-1: a READ of the variable `call` initialises, found by symbol, not by spelling. A JSX attribute
+ *  name (`pseudo={false}`), an object key (`{ pseudo: false }`), a property name (`opts.pseudo`) and a
+ *  shadowing variable of the same name all resolve to other symbols; a shorthand `{ pseudo }` resolves to
+ *  the variable through getShorthandAssignmentValueSymbol. */
+function isUsed(call: ts.CallExpression, sf: ts.SourceFile, checker: ts.TypeChecker): boolean {
   let p: ts.Node = call.parent;
   while (ts.isParenthesizedExpression(p)) p = p.parent;
   if (ts.isExpressionStatement(p)) return false;
   if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) {
-    const name = p.name.text;
+    const decl = p.name;
+    const symbol = checker.getSymbolAtLocation(decl);
+    if (!symbol) return false;
     let reads = 0;
     const visit = (n: ts.Node) => {
-      if (ts.isIdentifier(n) && n.text === name && n !== p.name) reads += 1;
+      if (ts.isIdentifier(n) && n !== decl && n.text === decl.text) {
+        const at = ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n
+          ? checker.getShorthandAssignmentValueSymbol(n.parent)
+          : checker.getSymbolAtLocation(n);
+        if (at === symbol) reads += 1;
+      }
       ts.forEachChild(n, visit);
     };
     visit(sf);
     return reads > 0;
   }
-  return true; // an argument, a JSX attribute, a property, a return value: passed on
+  return true; // an argument, a JSX attribute's value, a property's value, a return value: passed on
 }
 
 /** What a file does wrong, or [] when it calls requestLocale correctly (or not at all). */
 export function pseudoViolations(fileName: string, source: string): string[] {
-  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // Most files never name it: skip building a checker for them (a program per file is the cost).
+  if (!/\brequestLocale\b/.test(source)) return [];
+  const { sf, checker } = bound(fileName, source);
   const locales = calls(sf, "requestLocale");
   if (locales.length === 0) return [];
   const pseudos = calls(sf, "requestPseudoMode");
-  const line = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const line = (n: ts.Node) => `${fileName}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
   const out: string[] = [];
   for (const call of locales) {
     const query = call.arguments[1];
@@ -81,7 +111,7 @@ export function pseudoViolations(fileName: string, source: string): string[] {
     }
     const twin = pseudos.filter((p) => p.arguments[0] && norm(p.arguments[0], sf) === norm(query, sf));
     if (twin.length === 0) out.push(`${line(call)}: no requestPseudoMode(${query.getText(sf)}) beside it`);
-    else if (!twin.some((p) => isUsed(p, sf))) out.push(`${line(twin[0]!)}: requestPseudoMode's answer is never used`);
+    else if (!twin.some((p) => isUsed(p, sf, checker))) out.push(`${line(twin[0]!)}: requestPseudoMode's answer is never used`);
   }
   return out;
 }
@@ -110,7 +140,7 @@ describe("every requestLocale caller also honours ?locale=pseudo (S-10 T9b gate)
   it("finds no violation outside the two lists (mutation: drop requestPseudoMode from a page, or stop passing `pseudo` on -> FAILS naming it)", () => {
     const bad = scanned
       .filter((s) => s.violations.length > 0 && !(s.key in CANNOT) && !(s.key in KNOWN_GAPS))
-      .map((s) => `${s.key} ${s.violations.join("; ")}`);
+      .map((s) => s.violations.join("; "));
     expect(bad).toEqual([]);
   });
 
@@ -138,18 +168,51 @@ describe("the detector itself (each case can fail)", () => {
 
   it("flags a page that drops pseudo entirely (the seeded page)", () => {
     expect(pseudoViolations("p.tsx", page(`${LOCALE}\n  return <X locale={locale} />;`)))
-      .toEqual(["3: no requestPseudoMode({ locale: localeParam }) beside it"]);
+      .toEqual(["p.tsx:3: no requestPseudoMode({ locale: localeParam }) beside it"]);
   });
 
   it("flags requestLocale with no query, a pseudo read of a DIFFERENT query, and an answer never used", () => {
     expect(pseudoViolations("p.tsx", page("  const locale = requestLocale({ account, isOperator, userLanguage });\n  return <X />;")))
-      .toEqual(["3: requestLocale is given no query (second argument)"]);
+      .toEqual(["p.tsx:3: requestLocale is given no query (second argument)"]);
     expect(pseudoViolations("p.tsx", page(`${LOCALE}\n  const pseudo = requestPseudoMode({ locale: undefined });\n  return <X pseudo={pseudo} />;`)))
-      .toEqual(["3: no requestPseudoMode({ locale: localeParam }) beside it"]);
+      .toEqual(["p.tsx:3: no requestPseudoMode({ locale: localeParam }) beside it"]);
     expect(pseudoViolations("p.tsx", page(`${LOCALE}\n  const pseudo = requestPseudoMode({ locale: localeParam });\n  return <X locale={locale} />;`)))
-      .toEqual(["4: requestPseudoMode's answer is never used"]);
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
     expect(pseudoViolations("p.tsx", page(`${LOCALE}\n  requestPseudoMode({ locale: localeParam });\n  return <X locale={locale} />;`)))
-      .toEqual(["4: requestPseudoMode's answer is never used"]);
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
+  });
+
+  // Review I-1: a name SPELLED `pseudo` is not a read of the variable. The first cut counted every
+  // identifier with that text, so a page that kept `const pseudo = requestPseudoMode(...)` but handed
+  // every consumer `false` passed (probed on calendar/page.tsx: 8/8 green).
+  it("flags a kept `const pseudo` whose every consumer gets `false`: a JSX attribute name, an object key and a property name are not reads (mutation: count identifiers by text -> FAILS)", () => {
+    const kept = `${LOCALE}
+  const pseudo = requestPseudoMode({ locale: localeParam });
+`;
+    expect(pseudoViolations("p.tsx", page(`${kept}  return <X locale={locale} pseudo={false} />;`)))
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
+    expect(pseudoViolations("p.tsx", page(`${kept}  const tr = makeTr(locale, { pseudo: false });
+  return <X tr={tr} />;`)))
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
+    expect(pseudoViolations("p.tsx", page(`${kept}  return <X locale={locale} on={opts.pseudo} />;`)))
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
+  });
+
+  it("does not count a different variable that shadows the name (mutation: compare by text, not by symbol -> FAILS)", () => {
+    expect(pseudoViolations("p.tsx", page(`${LOCALE}
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const Inner = () => { const pseudo = false; return <X pseudo={pseudo} />; };
+  return <Inner />;`)))
+      .toEqual(["p.tsx:4: requestPseudoMode's answer is never used"]);
+  });
+
+  it("counts a shorthand property and a plain expression as reads", () => {
+    const kept = `${LOCALE}
+  const pseudo = requestPseudoMode({ locale: localeParam });
+`;
+    expect(pseudoViolations("p.tsx", page(`${kept}  return <X copy={{ locale, pseudo }} />;`))).toEqual([]);
+    expect(pseudoViolations("p.tsx", page(`${kept}  const tr = makeTr(locale, pseudo);
+  return <X tr={tr} />;`))).toEqual([]);
   });
 
   it("ignores a file that never calls requestLocale", () => {
