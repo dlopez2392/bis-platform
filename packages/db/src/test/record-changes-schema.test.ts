@@ -155,7 +155,7 @@ describe("0111: the record_changes table", () => {
       expect(idx.find((r) => r.indexname === "record_changes_record_idx")!.indexdef).toContain("(account_id, record_type, record_id, created_at DESC)");
     }));
 
-  it("grants: anon none; authenticated and service_role SELECT only; nobody UPDATE/DELETE/TRUNCATE (mutation: grant insert to service_role -> FAILS)", () =>
+  it("grants: anon none; authenticated and service_role SELECT only; nobody UPDATE/DELETE/TRUNCATE; nothing on the sequence (mutation: grant insert to service_role -> FAILS; grant usage on the sequence to service_role -> FAILS)", () =>
     withRollback(async (c) => {
       const held: string[] = [];
       for (const r of ["anon", "authenticated", "service_role"]) {
@@ -173,6 +173,15 @@ describe("0111: the record_changes table", () => {
         }
       }
       expect(settings).toEqual([]);
+      // Its identity sequence: no role inserts, so none holds anything on it (review m2).
+      const seq: string[] = [];
+      for (const r of ["anon", "authenticated", "service_role"]) {
+        for (const p of ["USAGE", "SELECT", "UPDATE"]) {
+          const { rows: [h] } = await c.query<{ h: boolean }>("select has_sequence_privilege($1, 'public.record_changes_id_seq', $2) as h", [r, p]);
+          if (h!.h) seq.push(`${r} ${p}`);
+        }
+      }
+      expect(seq).toEqual([]);
       const { rows: [rls] } = await c.query<{ on: boolean }>("select relrowsecurity as on from pg_class where oid = 'public.record_changes'::regclass");
       expect(rls!.on).toBe(true);
       // The capture is not callable by any API role (a trigger function needs no EXECUTE to fire); a PUBLIC grant
@@ -239,7 +248,7 @@ describe("0111: what the capture writes", () => {
       expect(rows[0]!.after).toMatchObject({ first_name: "Rita", phone: "+19565550111", custom: {}, dnd: {}, email: null });
     }));
 
-  it("precedence: a GUC beats the header; a person-called definer is the person whatever the header; the client path keeps only import and restore: (mutation: read the header before bis.author -> (a) FAILS; mutation: honour any client kind -> (d) FAILS; mutation: drop 'person needs an id' -> (f) FAILS)", () =>
+  it("precedence: a GUC beats the header; a person-called definer is the person whatever the header; the client path keeps only import and restore: (mutation: read the header before bis.author -> (a) FAILS; mutation: honour any client kind -> (d) FAILS; mutation: no restore length bound -> (d) FAILS; mutation: drop the sub's btrim -> (g) FAILS; mutation: drop 'person needs an id' -> (f) FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "prec");
       await observe(c);
@@ -270,6 +279,9 @@ describe("0111: what the capture writes", () => {
       const cases: [object, string | null][] = [
         [{ kind: "ai" }, null], [{ kind: "person", via: "merge:5" }, null], [{ kind: "person", via: "restore:12" }, "restore:12"],
         [{ kind: "person", via: "restore:" }, null], [{ kind: "person", via: "restore:12x" }, null], [{ kind: "person", via: "xrestore:12" }, null],
+        // A change id is a bigint: 19 digits at most (9223372036854775807); a 20-digit id cannot name a row.
+        [{ kind: "person", via: "restore:9223372036854775807" }, "restore:9223372036854775807"],
+        [{ kind: "person", via: "restore:12345678901234567890" }, null],
       ];
       for (const [hdr, via] of cases) {
         const id = await contact(c, a.accountId);
@@ -294,6 +306,16 @@ describe("0111: what the capture writes", () => {
         expect(await authors(c, id), JSON.stringify(hdr)).toEqual([{ field: "first_name", ...want }]);
       }
 
+      // (g) The sub is trimmed and a blank one is no id (0073's nullif(btrim(sub)) for contacts.author_id). The
+      //     agency, so the padded sub needs no membership to reach the row.
+      for (const [raw, want] of [["  user_pad  ", "user_pad"], ["   ", null]] as const) {
+        const id = await contact(c, a.accountId);
+        await actAs(c, { app_role: "agency_admin", sub: raw });
+        await header(c);
+        await c.query("update public.contacts set first_name = 'G' where id = $1", [id]);
+        expect(await authors(c, id), JSON.stringify(raw)).toEqual([{ field: "first_name", author_kind: "person", author_id: want, via: null }]);
+      }
+
       // (f) A header that is not an author is no author (observe mode: NULL).
       for (const bad of [{ kind: "person" }, { kind: "person", id: "" }, { kind: "robot" }, "not json", JSON.stringify("ai"), "[1]"]) {
         const id = await contact(c, a.accountId);
@@ -303,7 +325,7 @@ describe("0111: what the capture writes", () => {
       }
     }));
 
-  it("enforce on: a service request with no author is refused and the update rolls back (mutation: step 5 writes NULL in enforce mode -> FAILS)", () =>
+  it("enforce on: a service request with no author is refused and the update rolls back (mutation: step 5 writes NULL in enforce mode -> FAILS; mutation: read the role from the claim -> 7d FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "enforce");
       const id = await contact(c, a.accountId, { first: "Before" });
@@ -325,7 +347,8 @@ describe("0111: what the capture writes", () => {
       // 7d: a direct session that still carries a client's claims (a fixture seeding as postgres after actAs) is
       // still a direct session: the role decides, never a claim (0110's rule).
       const id2 = await contact(c, a.accountId);
-      await actAsMember(c, a.accountId, a.orgId, "staff");
+      const sub7 = await actAsMember(c, a.accountId, a.orgId, "staff");
+      await actAs(c, { role: "authenticated", org_id: a.orgId, sub: sub7 } as unknown as { org_id: string; sub: string });
       await actAsOwner(c);
       await c.query("update public.contacts set first_name = 'Fixture' where id = $1", [id2]);
       expect(await authors(c, id2)).toEqual([{ field: "first_name", author_kind: "automation", author_id: null, via: "sql" }]);
@@ -391,6 +414,64 @@ describe("0111: what the capture writes", () => {
       expect(await refusal(c, "delete from public.accounts where id = $1", [a.accountId])).toBeNull();
       const { rows: [n] } = await c.query<{ n: number }>("select count(*)::int as n from public.record_changes where account_id = $1", [a.accountId]);
       expect(n!.n).toBe(0);
+    }));
+
+  it("enforce on: an update that changes no audited field writes nothing and is never refused; an audited change still is (mutation: decide the author before the no-change return -> (a) and (b) FAIL)", () =>
+    withRollback(async (c) => {
+      // stampReactivationSent (automations.ts) sends first and stamps second: a refused stamp would resend.
+      const a = await seedAccount(c, "nochange");
+      const id = await contact(c, a.accountId, { first: "Same" });
+      await c.query("update app.record_changes_settings set enforce = true");
+      await asServiceWith(c);
+      // (a) Only an EXCLUDED column. expect.soft, so a mutation shows (a) and (b) failing each on its own line.
+      expect.soft(await refusal(c, "update public.contacts set reactivation_sent_at = now() where id = $1", [id])).toBeNull();
+      // (b) A no-op.
+      expect.soft(await refusal(c, "update public.contacts set first_name = first_name where id = $1", [id])).toBeNull();
+      expect(await changes(c, id, "update")).toEqual([]);
+      await actAsOwner(c);
+      const { rows: [r] } = await c.query<{ stamped: boolean }>("select reactivation_sent_at is not null as stamped from public.contacts where id = $1", [id]);
+      expect(r!.stamped).toBe(true);
+      // (c) An audited field: still refused.
+      await asServiceWith(c);
+      expect(await refusal(c, "update public.contacts set first_name = 'Other', reactivation_sent_at = null where id = $1", [id]))
+        .toEqual({ code: "42501", message: "record_changes: a server write must say who made it" });
+    }));
+
+  it("headers: only x-bis-author is read, and nothing else in request.headers reaches a row (mutations: the client path takes the header's id -> FAILS; via falls back to authorization -> FAILS; the author is read from another key -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "headers");
+      await observe(c);
+      const SECRET = "Bearer SECRET_X";
+      const noise = { authorization: SECRET, "x-author": JSON.stringify({ kind: "ai" }) };
+      const leaks = async (id: string) => {
+        await actAsOwner(c);
+        const { rows: [n] } = await c.query<{ n: number }>(
+          "select count(*)::int as n from public.record_changes r where r.record_id = $1 and r::text like '%SECRET_X%'", [id]);
+        return n!.n;
+      };
+      // (a) The client path: an import header naming someone else is an import by the caller's OWN sub.
+      const ia = await contact(c, a.accountId);
+      const sub = await actAsMember(c, a.accountId, a.orgId, "staff");
+      await c.query("select set_config('request.headers', $1, true)",
+        [JSON.stringify({ ...noise, "x-bis-author": JSON.stringify({ kind: "import", id: "someone_else" }) })]);
+      await c.query("update public.contacts set first_name = 'A' where id = $1", [ia]);
+      expect(await authors(c, ia)).toEqual([{ field: "first_name", author_kind: "import", author_id: sub, via: null }]);
+      expect(await leaks(ia)).toBe(0);
+      // (b) The service path: the author is x-bis-author's, with no via; the bearer goes nowhere.
+      const ib = await contact(c, a.accountId);
+      await asService(c);
+      await c.query("select set_config('request.headers', $1, true)",
+        [JSON.stringify({ ...noise, "x-bis-author": JSON.stringify({ kind: "automation" }) })]);
+      await c.query("update public.contacts set first_name = 'B' where id = $1", [ib]);
+      expect(await authors(c, ib)).toEqual([{ field: "first_name", author_kind: "automation", author_id: null, via: null }]);
+      expect(await leaks(ib)).toBe(0);
+      // (c) The service path with no x-bis-author: another key is no author (observe: NULL), and leaks nothing.
+      const ic = await contact(c, a.accountId);
+      await asService(c);
+      await c.query("select set_config('request.headers', $1, true)", [JSON.stringify(noise)]);
+      await c.query("update public.contacts set first_name = 'C' where id = $1", [ic]);
+      expect(await authors(c, ic)).toEqual([{ field: "first_name", author_kind: null, author_id: null, via: null }]);
+      expect(await leaks(ic)).toBe(0);
     }));
 
   it("the settings row is one row (mutation: drop the check (id) -> a second insert succeeds -> FAILS)", () =>
