@@ -1,8 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit, type ActorType } from "./events";
+import { emit } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { contactSearchPlan } from "./contact-search";
 import { isTimelineInstant, type TimelineCursor } from "./timeline-cursor";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, emitActorOf } from "./row-author";
 
 /**
  * Client groups (S-02 part 1, migration 0069): households and business
@@ -44,8 +46,12 @@ class RpcError extends Error {
   constructor(message: string, readonly code: string | undefined) { super(message); }
 }
 
-async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unknown>): Promise<T> {
-  const { data, error } = await db.rpc(fn, args);
+/** F-115 (0112 load-bearing 4): every group RPC is service_role only, so the header is the only
+ *  author 0111/0112 can read on it; `withAuthor` on every call. */
+async function rpc<T>(
+  db: SupabaseClient, fn: string, args: Record<string, unknown>, author: RowAuthor, via?: string,
+): Promise<T> {
+  const { data, error } = await withAuthor(db.rpc(fn, args), author, via);
   if (error) throw new RpcError(`${fn} failed: ${error.message}`, error.code);
   return data as T;
 }
@@ -264,16 +270,18 @@ export async function listGroupPeople(
  * `memberId` null clears. Answers the member that held it before, for the Undo.
  */
 export async function setGroupPrimaryContact(
-  db: SupabaseClient, accountId: string, groupId: string, memberId: string | null, actorId: string,
+  db: SupabaseClient, accountId: string, groupId: string, memberId: string | null, author: RowAuthor,
 ): Promise<{ status: "ok"; previous: string | null } | { status: "not_found" }> {
+  author = requireAuthor(db, author, "setGroupPrimaryContact");
   const r = await rpc<{ status: string; previous?: string | null }>(
-    db, "set_group_primary_contact", { p_account_id: accountId, p_group_id: groupId, p_member_id: memberId });
+    db, "set_group_primary_contact", { p_account_id: accountId, p_group_id: groupId, p_member_id: memberId }, author);
   if (r.status !== "ok") return { status: "not_found" };
   const previous = r.previous ?? null;
   // Choosing who already holds it (or clearing when nobody does) changed nothing: no event.
   if (previous !== memberId) {
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "client_group.member_updated", actorId,
-      { groupId, memberId, previous, fields: ["is_primary_contact"] });
+      { groupId, memberId, previous, fields: ["is_primary_contact"] }, actorType);
   }
   return { status: "ok", previous };
 }
@@ -284,15 +292,17 @@ export async function setGroupPrimaryContact(
  */
 export async function createGroupWithMember(
   db: SupabaseClient, accountId: string, contactId: string, kind: GroupKind, name: string, role: string | null,
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<
   | { status: "ok"; groupId: string; memberId: string; existed: boolean; name: string }
   | { status: "not_found" | "invalid_name" | "too_long" }
 > {
+  author = requireAuthor(db, author, "createGroupWithMember");
   if (roleTooLong(role)) return { status: "too_long" };
   const r = await rpc<{ status: string; group_id?: string; member_id?: string; existed?: boolean; name?: string }>(
-    db, "create_group_with_member", { p_account_id: accountId, p_contact_id: contactId, p_kind: kind, p_name: name, p_role: role });
+    db, "create_group_with_member", { p_account_id: accountId, p_contact_id: contactId, p_kind: kind, p_name: name, p_role: role }, author);
   if (r.status !== "ok") return { status: r.status === "invalid_name" ? "invalid_name" : "not_found" };
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, r.existed ? "client_group.member_added" : "client_group.created", actorId,
     { contactId, groupId: r.group_id, memberId: r.member_id, kind }, actorType);
   return { status: "ok", groupId: r.group_id!, memberId: r.member_id!, existed: r.existed === true, name: r.name! };
@@ -301,12 +311,14 @@ export async function createGroupWithMember(
 /** Deviation from the brief's literal return type: a third status, `"too_long"` (see createGroupWithMember). */
 export async function addContactToGroup(
   db: SupabaseClient, accountId: string, contactId: string, groupId: string, role: string | null,
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<{ status: "ok"; memberId: string } | { status: "not_found" | "too_long" }> {
+  author = requireAuthor(db, author, "addContactToGroup");
   if (roleTooLong(role)) return { status: "too_long" };
   const r = await rpc<{ status: string; member_id?: string }>(
-    db, "add_contact_to_group", { p_account_id: accountId, p_contact_id: contactId, p_group_id: groupId, p_role: role });
+    db, "add_contact_to_group", { p_account_id: accountId, p_contact_id: contactId, p_group_id: groupId, p_role: role }, author);
   if (r.status !== "ok") return { status: "not_found" };
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "client_group.member_added", actorId, { contactId, groupId, memberId: r.member_id }, actorType);
   return { status: "ok", memberId: r.member_id! };
 }
@@ -314,18 +326,22 @@ export async function addContactToGroup(
 /** The Business name write: the field, the CSV import (one call per batch) and the forms lead. */
 export async function setContactsBusiness(
   db: SupabaseClient, accountId: string, rows: readonly { contactId: string; name: string }[],
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<BusinessResult[]> {
+  author = requireAuthor(db, author, "setContactsBusiness");
   if (rows.length === 0) return [];
   type Row = { contact_id: string; status: BusinessResult["status"]; removed: GroupMemberSnapshot | null; added: string | null };
   const args = { p_account_id: accountId, p_contact_ids: rows.map((r) => r.contactId), p_names: rows.map((r) => r.name) };
   // set_contacts_business locks contacts in id order, but another writer (a reconcile, a cascade) can
   // still deadlock with it. One RPC is one transaction, so a 40P01 rolled back ALL of it: running it
-  // again is safe, and nothing is emitted until a call has succeeded.
+  // again is safe, and nothing is emitted until a call has succeeded. F-115: withAuthor (inside rpc())
+  // rides every attempt, including the retry (the same pattern mergeRpc got in contact-merge.ts).
   let out: Row[];
   for (let attempt = 0; ; attempt++) {
     try {
-      out = await rpc<Row[]>(db, "set_contacts_business", args);
+      out = await rpc<Row[]>(db, "set_contacts_business", args, author, via);
       break;
     } catch (e) {
       if (!(e instanceof RpcError && e.code === DEADLOCK && attempt < DEADLOCK_RETRIES)) throw e;
@@ -337,10 +353,11 @@ export async function setContactsBusiness(
   // that member (groups-actions.ts's removedByCaller), so a delete with no event would leave an older
   // removal standing as the newest, and its call-first flag replayable.
   for (const r of results) {
-    if (r.status === "ok" && r.removed) await emitRemoved(db, accountId, r.removed, actorId, actorType);
+    if (r.status === "ok" && r.removed) await emitRemoved(db, accountId, r.removed, author);
   }
   const changed = results.filter((r) => r.status === "ok").map((r) => r.contactId);
   if (changed.length > 0) {
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "client_group.business_set", actorId, { contactIds: changed }, actorType);
   }
   return results;
@@ -350,8 +367,9 @@ export async function setContactsBusiness(
 async function emitRemoved(
   db: SupabaseClient, accountId: string,
   row: Pick<GroupMemberSnapshot, "id" | "contact_id" | "client_group_id" | "is_primary_contact">,
-  actorId: string, actorType: ActorType,
+  author: RowAuthor,
 ) {
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "client_group.member_removed", actorId,
     { memberId: row.id, contactId: row.contact_id, groupId: row.client_group_id, wasPrimaryContact: row.is_primary_contact === true },
     actorType);
@@ -366,8 +384,9 @@ async function emitRemoved(
  */
 export async function undoSetBusiness(
   db: SupabaseClient, accountId: string, contactId: string, added: string | null, removed: GroupMemberSnapshot | null,
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<"ok" | "not_found"> {
+  author = requireAuthor(db, author, "undoSetBusiness");
   let doomed: Pick<GroupMemberSnapshot, "id" | "contact_id" | "client_group_id" | "is_primary_contact"> | null = null;
   if (added !== null) {
     const { data, error } = await db.from("client_group_members").select("id, contact_id, client_group_id, is_primary_contact")
@@ -376,44 +395,51 @@ export async function undoSetBusiness(
     doomed = data as typeof doomed;
   }
   const r = await rpc<"ok" | "not_found">(db, "undo_set_business",
-    { p_account_id: accountId, p_contact_id: contactId, p_added: added, p_removed: removed });
-  if (r === "ok" && doomed) await emitRemoved(db, accountId, doomed, actorId, actorType);
+    { p_account_id: accountId, p_contact_id: contactId, p_added: added, p_removed: removed }, author);
+  if (r === "ok" && doomed) await emitRemoved(db, accountId, doomed, author);
   return r;
 }
 
-export async function setPrimaryMembership(db: SupabaseClient, accountId: string, memberId: string, actorId: string) {
+export async function setPrimaryMembership(db: SupabaseClient, accountId: string, memberId: string, author: RowAuthor) {
+  author = requireAuthor(db, author, "setPrimaryMembership");
   const r = await rpc<{ status: string; previous?: string | null }>(
-    db, "set_primary_group_membership", { p_account_id: accountId, p_member_id: memberId });
+    db, "set_primary_group_membership", { p_account_id: accountId, p_member_id: memberId }, author);
   if (r.status !== "ok") return { status: "not_found" as const };
-  await emit(db, accountId, "client_group.member_updated", actorId, { memberId, fields: ["is_primary"] });
+  const { actorId, actorType } = emitActorOf(db, author);
+  await emit(db, accountId, "client_group.member_updated", actorId, { memberId, fields: ["is_primary"] }, actorType);
   return { status: "ok" as const, previous: r.previous ?? null };
 }
 
-export async function removeMembership(db: SupabaseClient, accountId: string, memberId: string, actorId: string) {
+export async function removeMembership(db: SupabaseClient, accountId: string, memberId: string, author: RowAuthor) {
+  author = requireAuthor(db, author, "removeMembership");
   const r = await rpc<{ status: string; removed?: GroupMemberSnapshot }>(
-    db, "remove_group_membership", { p_account_id: accountId, p_member_id: memberId });
+    db, "remove_group_membership", { p_account_id: accountId, p_member_id: memberId }, author);
   if (r.status !== "ok" || !r.removed) return { status: "not_found" as const };
   // Every id from the row the database deleted, never the caller's string (S-03 2a final review): jsonb
   // `@>` compares strings exactly, so a case-variant memberId would hide this removal from the lookup.
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "client_group.member_removed", actorId,
     { memberId: r.removed.id, contactId: r.removed.contact_id, groupId: r.removed.client_group_id,
       // S-03 part 2 (spec §10): a narrow caller's Undo restores the call-first flag only when THIS says so.
-      wasPrimaryContact: r.removed.is_primary_contact === true });
+      wasPrimaryContact: r.removed.is_primary_contact === true }, actorType);
   return { status: "ok" as const, removed: r.removed };
 }
 
-export async function restoreMembership(db: SupabaseClient, accountId: string, snapshot: GroupMemberSnapshot, actorId: string) {
-  const r = await rpc<"ok" | "not_found">(db, "restore_group_membership", { p_account_id: accountId, p_snapshot: snapshot });
+export async function restoreMembership(db: SupabaseClient, accountId: string, snapshot: GroupMemberSnapshot, author: RowAuthor) {
+  author = requireAuthor(db, author, "restoreMembership");
+  const r = await rpc<"ok" | "not_found">(db, "restore_group_membership", { p_account_id: accountId, p_snapshot: snapshot }, author);
   if (r === "ok") {
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "client_group.member_added", actorId,
-      { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id, undo: true });
+      { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id, undo: true }, actorType);
   }
   return r;
 }
 
 export async function updateMembership(
-  db: SupabaseClient, accountId: string, memberId: string, patch: { role?: string | null; isBilling?: boolean }, actorId: string,
+  db: SupabaseClient, accountId: string, memberId: string, patch: { role?: string | null; isBilling?: boolean }, author: RowAuthor,
 ): Promise<{ status: "ok"; previous: { role: string | null; isBilling: boolean } } | { status: "not_found" }> {
+  author = requireAuthor(db, author, "updateMembership");
   const { data: cur, error: readErr } = await db.from("client_group_members").select("role, is_billing")
     .eq("account_id", accountId).eq("id", memberId).maybeSingle();
   if (readErr) throw new Error(`updateMembership read failed: ${readErr.message}`);
@@ -421,16 +447,19 @@ export async function updateMembership(
   const row: Record<string, unknown> = {};
   if (patch.role !== undefined) row.role = patch.role === null || patch.role.trim() === "" ? null : patch.role.trim();
   if (patch.isBilling !== undefined) row.is_billing = patch.isBilling;
-  const { error } = await db.from("client_group_members").update(row).eq("account_id", accountId).eq("id", memberId);
+  const { error } = await withAuthor(db.from("client_group_members").update(row), author)
+    .eq("account_id", accountId).eq("id", memberId);
   if (error) throw new Error(`updateMembership failed: ${error.message}`);
-  await emit(db, accountId, "client_group.member_updated", actorId, { memberId, fields: Object.keys(row) });
+  const { actorId, actorType } = emitActorOf(db, author);
+  await emit(db, accountId, "client_group.member_updated", actorId, { memberId, fields: Object.keys(row) }, actorType);
   const c = cur as { role: string | null; is_billing: boolean };
   return { status: "ok", previous: { role: c.role, isBilling: c.is_billing } };
 }
 
 export async function updateGroup(
-  db: SupabaseClient, accountId: string, groupId: string, patch: { name?: string; billingAddress?: string | null }, actorId: string,
+  db: SupabaseClient, accountId: string, groupId: string, patch: { name?: string; billingAddress?: string | null }, author: RowAuthor,
 ): Promise<{ status: "ok"; previous: { name: string; billingAddress: string | null } } | { status: "not_found" | "name_taken" }> {
+  author = requireAuthor(db, author, "updateGroup");
   const cur = await readGroup(db, accountId, groupId);
   if (!cur) return { status: "not_found" };
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -438,9 +467,11 @@ export async function updateGroup(
   if (patch.billingAddress !== undefined) {
     row.billing_address = patch.billingAddress === null || patch.billingAddress.trim() === "" ? null : patch.billingAddress.trim();
   }
-  const { error } = await db.from("client_groups").update(row).eq("account_id", accountId).eq("id", groupId);
+  const { error } = await withAuthor(db.from("client_groups").update(row), author)
+    .eq("account_id", accountId).eq("id", groupId);
   if (error?.code === "23505") return { status: "name_taken" };
   if (error) throw new Error(`updateGroup failed: ${error.message}`);
-  await emit(db, accountId, "client_group.renamed", actorId, { groupId, fields: Object.keys(row).filter((k) => k !== "updated_at") });
+  const { actorId, actorType } = emitActorOf(db, author);
+  await emit(db, accountId, "client_group.renamed", actorId, { groupId, fields: Object.keys(row).filter((k) => k !== "updated_at") }, actorType);
   return { status: "ok", previous: { name: cur.name, billingAddress: cur.billingAddress } };
 }

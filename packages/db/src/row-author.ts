@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActorType } from "./events";
 import type { RowAuthor } from "./provenance";
 import { SEED_ACTORS } from "./provenance";
+import { isUserClient } from "./user-client";
 
 /**
  * F-115: the header 0111's app.record_changes_capture() reads on a service-role request (migration
@@ -76,4 +77,21 @@ export function eventActorOf(author: RowAuthor): { actorId: string; actorType: A
     case "automation":
       return { actorType: "system", actorId: author.authorId ?? "automation" };
   }
+}
+
+/**
+ * F-115 Step 7: `eventActorOf(author)`, with its `actorType` forced to `"user"` on a client made by
+ * `userDb()`. `emit()`'s own user-client branch (0053) refuses any `actorType` but `"user"` on such a
+ * client — the `record_event` RPC it calls takes the actor from the request's own JWT and never reads
+ * `actorType`/`actorId` at all, so the check exists only to catch a client/actor mismatch, and anything
+ * but "user" on a user client is exactly that: a non-"user" `authorKind` (import, ai, automation,
+ * customer) paired with a signed-in person's own client, which `updateContact` found and fixed once
+ * (the CSV import wizard, which stamps `{authorKind:"import",...}` while running on `dbForRequest()`).
+ * Centralizes that fix for every other writer that can run on either client. `actorId` is left exactly
+ * as `eventActorOf` answers it — the override is `actorType` only, matching `updateContact`'s own
+ * `isUserClient(db) ? "user" : actorType` — because `record_event` ignores both anyway on a user client.
+ */
+export function emitActorOf(db: SupabaseClient, author: RowAuthor): { actorId: string; actorType: ActorType } {
+  const mapped = eventActorOf(author);
+  return { actorId: mapped.actorId, actorType: isUserClient(db) ? "user" : mapped.actorType };
 }

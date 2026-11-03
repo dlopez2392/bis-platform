@@ -16,6 +16,8 @@ import {
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
 import { createOpportunity } from "../opportunities";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * T5 (0103, owner ruling Q2): a scheduled send that would START a new
@@ -154,9 +156,9 @@ describe("0103 (T5): scheduled sends skip archived contacts", () => {
           await upsertAutomation(db, accountId, "quote_followup",
             { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "sms" } }, "user_test");
           const { id: contactId } = await createContact(db, accountId, { firstName, phone }, "user_test");
-          const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
-          const { error } = await db.from("opportunities")
-            .update({ stage_id: stageId, stage_changed_at: new Date(now.getTime() - 5 * DAY).toISOString() })
+          const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, { authorKind: "person", authorId: "user_test" });
+          const { error } = await withAuthor(db.from("opportunities")
+            .update({ stage_id: stageId, stage_changed_at: new Date(now.getTime() - 5 * DAY).toISOString() }), SEED_AUTHOR, SEED_VIA)
             .eq("id", opp.id);
           if (error) throw new Error(`park failed: ${error.message}`);
           return { oppId: opp.id, contactId };

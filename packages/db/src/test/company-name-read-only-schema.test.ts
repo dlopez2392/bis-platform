@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAs, sendAuthor } from "./db";
 
 /**
  * 0072 (S-02 follow-up G9): contacts.company_name is read-only. The client
@@ -178,6 +178,8 @@ describe("0072: the group sync still decides the column", () => {
       await c.query("update client_groups set name = 'Beta Pools & Spas' where id = $1", [beta]);
       expect(await companyOf(c, ct)).toBe("Beta Pools & Spas");
       await c.query("set local role service_role");
+      // 0112: group writes are recorded; the app's service call names its author (enforce), a staff member here.
+      await sendAuthor(c, { authorKind: "person", authorId: `user_ro_staff_${RUN}` });
       const [r] = await call(c, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [a, [ct], ["Gamma Lawn"]]) as Array<{ status: string }>;
       expect(r!.status).toBe("ok");
       expect(await companyOf(c, ct)).toBe("Gamma Lawn");

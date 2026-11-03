@@ -7,7 +7,7 @@ import {
 } from "@bis/db";
 import { proposalExpiresAt } from "@bis/db/proposal-rules";
 import { m, type MessageKey } from "../src/lib/messages";
-import { readClientFixture, e2eAuthor } from "./support";
+import { readClientFixture, e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from the Playwright runner
 // process directly (seeding, cleanup), not through a Next request (calls.spec.ts, work-queue.spec.ts,
@@ -56,7 +56,6 @@ loadEnv({ path: ".env.local" });
 test.describe.configure({ mode: "serial", timeout: 90_000 });
 
 const stamp = Date.now();
-const ACTOR = "e2e-suggestions-spec";
 const callerFirstName = "E2E";
 const callerLastName = `Suggestion ${stamp}`;
 const numberE164 = `+1558${String(stamp).slice(-7)}`;
@@ -133,7 +132,7 @@ test.beforeAll(async () => {
   stage2Name = (stages[2] as { name: string }).name;
 
   const opp = await createOpportunity(
-    db, accountId, { contactId, pipelineId, name: `Deal ${stamp}` }, ACTOR,
+    db, accountId, { contactId, pipelineId, name: `Deal ${stamp}` }, E2E_AUTHOR,
   );
   opportunityId = opp.id;
 
@@ -183,7 +182,7 @@ test.afterAll(async () => {
   if (callId) await step("calls", () => db.from("calls").delete().eq("account_id", accountId).eq("id", callId));
   if (phoneNumberId) await step("phone_numbers", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", phoneNumberId));
   await step("tasks (defensive)", () => db.from("tasks").delete().eq("account_id", accountId).eq("title", taskTitle));
-  if (opportunityId) await step("opportunities", () => db.from("opportunities").delete().eq("account_id", accountId).eq("id", opportunityId));
+  if (opportunityId) await step("opportunities", () => e2eAuthor(db.from("opportunities").delete()).eq("account_id", accountId).eq("id", opportunityId));
   if (contactId) await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId));
 
   // Re-read to prove each is gone (record-summary.spec.ts's own cleanup discipline).

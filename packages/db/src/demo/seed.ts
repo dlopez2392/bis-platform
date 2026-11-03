@@ -444,7 +444,8 @@ async function seedContacts(
       // Fail loudly, unlike the forms lead: a seed script has no submission
       // to record a quiet processing_error against, and a demo tenant with a
       // silently missing business is worse than one that failed to build.
-      const [result] = await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }], ACTOR, "system");
+      const [result] = await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }],
+        { authorKind: "automation", authorId: null }, "seed");
       if (result && result.status !== "ok" && result.status !== "unchanged") {
         throw new Error(`demo seed: setContactsBusiness ${result.status} for ${person.first} ${person.last}`);
       }
@@ -838,12 +839,13 @@ async function seedPipeline(
     const deal = DEALS[i]!;
     const contact = contacts[(i * 11 + 4) % contacts.length]!;
     const { id } = await createOpportunity(db, accountId,
-      { contactId: contact.id, pipelineId, name: deal.name, value: deal.value }, ACTOR);
+      { contactId: contact.id, pipelineId, name: deal.name, value: deal.value },
+      { authorKind: "automation", authorId: null }, "seed");
 
     if (deal.stage > 0) {
-      await moveOpportunityToStage(db, accountId, id, stages[deal.stage]!.id, ACTOR);
+      await moveOpportunityToStage(db, accountId, id, stages[deal.stage]!.id, { authorKind: "automation", authorId: null }, "seed");
     }
-    if (deal.won) await setOpportunityStatus(db, accountId, id, "won", ACTOR);
+    if (deal.won) await setOpportunityStatus(db, accountId, id, "won", { authorKind: "automation", authorId: null }, "seed");
 
     // Taken from the deal, not computed from its stage. See DEALS above.
     const createdAt = now - deal.daysAgo * DAY;

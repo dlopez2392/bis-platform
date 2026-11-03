@@ -301,7 +301,8 @@ export async function addJobAction(accountId: string, draft: JobDraft, seen: str
     if (!contactId) return saveFailed;
     let placeId = newPlace ? null : f.placeId;
     if (newPlace?.ok) {
-      const place = await addPlace(db, accountId, { contactId, groupId: null }, newPlace.fields, { subjectId: contactId, actorId: access.userId });
+      const place = await addPlace(db, accountId, { contactId, groupId: null }, newPlace.fields,
+        { subjectId: contactId, author: { authorKind: "person", authorId: access.userId } });
       placeId = place.id.toLowerCase();
     }
     const meetingUrl = f.meetingType === "video" ? await mintRoom(calendar, range.endsAt, tag) : null;

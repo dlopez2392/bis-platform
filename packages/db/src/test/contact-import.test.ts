@@ -95,7 +95,7 @@ describe("applyImportBatch", () => {
   it("an empty tags cell leaves an existing contact's tags untouched", () =>
     withTestAccount(async (db, accountId) => {
       const existing = await createContact(db, accountId, { email: "tagged@example.com" }, "user_test");
-      await addTagToContact(db, accountId, existing.id, "vip");
+      await addTagToContact(db, accountId, existing.id, "vip", { authorKind: "person", authorId: "user_test" });
       const index = await buildMatchIndex(db, accountId);
       await applyImportBatch(db, accountId,
         [{ input: { email: "tagged@example.com", firstName: "Updated" }, tags: [] }],
@@ -144,7 +144,7 @@ describe("applyImportBatch", () => {
       // it to a contact, so an unrelated contact seeds "vip" into the
       // account's vocabulary without ever touching the target.
       const seed = await createContact(db, accountId, { email: "seed@example.com" }, "user_test");
-      await addTagToContact(db, accountId, seed.id, "vip");
+      await addTagToContact(db, accountId, seed.id, "vip", { authorKind: "person", authorId: "user_test" });
 
       const target = await createContact(db, accountId, { email: "target@example.com" }, "user_test");
       const index = await buildMatchIndex(db, accountId);

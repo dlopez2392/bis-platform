@@ -161,7 +161,7 @@ export async function enrich(
     const business = byKind.get("core.company_name") || "";
     if (!created.existing && business) {
       try {
-        const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+        const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], leadAuthor(chatSource));
         if (result && result.status !== "ok" && result.status !== "unchanged") {
           // No business name in the log — contact/submission ids only.
           console.error(`form ${form.id} submission ${submissionId}: business write ${result.status} for contact ${contactId}`);
@@ -388,7 +388,7 @@ async function fillBlanks(
   const business = byKind.get("core.company_name") ?? "";
   if (business && !current.company_name) {
     try {
-      const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+      const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], leadAuthor(chatSource));
       if (result && result.status !== "ok" && result.status !== "unchanged") {
         // No business name in the log — contact id only.
         console.error(`fillBlanks: business write ${result.status} for contact ${contactId}`);

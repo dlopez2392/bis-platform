@@ -52,6 +52,7 @@ export function visitSummary(counts: AccessLogCounts, tr: Tr): string {
     sentences.push(tr.text("accessLog.summary.opened", { list }));
   }
   if (counts.customer_list_export > 0) sentences.push(tr.count("accessLog.summary.downloads", counts.customer_list_export));
+  if (counts.record_history_export > 0) sentences.push(tr.count("accessLog.summary.historyDownloads", counts.record_history_export));
   if (sentences.length === 0) sentences.push(tr.text("accessLog.summary.nothing"));
   return sentences.join(" ");
 }
@@ -176,6 +177,19 @@ function buildItem(it: AccessLogItem, names: AccessLogNames, tr: Tr, zone: strin
     case "customer_list_export": {
       const count = it.itemCount ?? 0;
       return { key, text: tr.count("accessLog.item.export", count), href: null };
+    }
+    // F-115 (0112, owner ruling Q5): recordId is a contact's or a group's id — tried in that order,
+    // the same two name lookups the "contact" and "group" cases above use.
+    case "record_history_export": {
+      const id = it.recordId!;
+      const label = contactLabel(id, names, tr);
+      if (label !== null) {
+        return { key, text: tr.text("accessLog.item.historyExport", { name: label }), href: `${base}/contacts/${id}` };
+      }
+      const g = names.groups.get(id);
+      return !g
+        ? { key, text: tr.text("accessLog.gone.other"), href: null }
+        : { key, text: tr.text("accessLog.item.historyExport", { name: g.name }), href: `${base}/groups/${id}` };
     }
     default: {
       const neverKind: never = it.kind;

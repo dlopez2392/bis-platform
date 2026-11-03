@@ -219,7 +219,8 @@ export async function applyImportBatch(
 
   for (const [name, contactIds] of tagPlan) {
     if (contactIds.size === 0) continue; // documents the invariant; see Trap 3
-    await addTagToContacts(db, accountId, [...contactIds], name);
+    // F-115: the same import author every row of this batch already carries.
+    await addTagToContacts(db, accountId, [...contactIds], name, author);
   }
 
   // One call per batch (S-02 §6 row 8). The client groups are server-written
@@ -245,7 +246,8 @@ export async function applyImportBatch(
   let businessTooLong = 0;
   if (businesses.length > 0) {
     try {
-      const results = await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+      // F-115: the same import author every row of this batch already carries.
+      const results = await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, author);
       for (const r of results) {
         if (r.status === "too_long") {
           businessTooLong++;

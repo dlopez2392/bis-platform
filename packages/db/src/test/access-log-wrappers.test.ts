@@ -40,17 +40,18 @@ function fake(answer: Answer) {
 const ok = (data: unknown): Answer => ({ data, error: null });
 const ACTOR = { clerkUserId: "user_1", sessionId: "sess_1" };
 
-const ZERO = { contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0 };
+const ZERO = { contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0,
+  record_history_export: 0 };
 const rawVisit = (id: string, o: Record<string, unknown> = {}) => ({
   id, actor_name: "Dan Lopez", reason: "support", started_at: "2026-10-29T10:00:00+00:00", ended_at: null,
   counts: ZERO, item_total: 0, items: [], ...o,
 });
 
 describe("access-log constants", () => {
-  it("name the four reasons and nine kinds 0105's checks hold, and the reader's sizes", () => {
+  it("name the four reasons and ten kinds 0105's and 0112's checks hold, and the reader's sizes", () => {
     expect(AGENCY_VISIT_REASONS).toEqual(["setup", "support", "fix", "billing"]);
     expect(ACCESS_LOG_KINDS).toEqual(["contact", "group", "call", "conversation", "document_view", "document_download",
-      "document_share", "form_answers", "customer_list_export"]);
+      "document_share", "form_answers", "customer_list_export", "record_history_export"]);
     expect([ACCESS_LOG_PAGE_SIZE, ACCESS_LOG_ITEMS_SHOWN]).toEqual([20, 100]);
     expect(isAgencyVisitReason("fix")).toBe(true);
     expect(isAgencyVisitReason("curious")).toBe(false);
@@ -130,9 +131,12 @@ describe("noteAgencyOpen", () => {
     const f = fake(ok("ok"));
     await noteAgencyOpen(f.db, "A", ACTOR, { kind: "customer_list_export", itemCount: 212 });
     await noteAgencyOpen(f.db, "A", ACTOR, { kind: "document_share", recordId: "d1" });
+    // 0112: a history download names its record (a contact's or a group's id) and carries no count.
+    await noteAgencyOpen(f.db, "A", ACTOR, { kind: "record_history_export", recordId: "c1" });
     expect(f.rpcs.map((r) => [r.args.p_kind, r.args.p_record_id, r.args.p_item_count])).toEqual([
       ["customer_list_export", null, 212],
       ["document_share", "d1", null],
+      ["record_history_export", "c1", null],
     ]);
   });
   it("no_visit passes through; an unknown answer or an error throws naming the wrapper", async () => {

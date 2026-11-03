@@ -70,7 +70,7 @@ test.afterAll(async () => {
     const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", id);
     expect(error, `deleting ${id}`).toBeNull();
   }
-  const { error } = await db.from("client_groups").delete().eq("account_id", accountId).in("name", [HOUSEHOLD, BUSINESS]);
+  const { error } = await e2eAuthor(db.from("client_groups").delete()).eq("account_id", accountId).in("name", [HOUSEHOLD, BUSINESS]);
   expect(error, "deleting the probe groups").toBeNull();
 });
 

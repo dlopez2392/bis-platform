@@ -179,8 +179,8 @@ describe("contacts service", () => {
       expect(emailWithDigit).toHaveLength(1);
       expect(emailWithDigit![0]!.first_name).toBe("Maria5");
 
-      await addTagToContact(db, accountId, id, "vip");
-      await addTagToContact(db, accountId, id, "vip"); // idempotent
+      await addTagToContact(db, accountId, id, "vip", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, id, "vip", { authorKind: "person", authorId: "user_test" }); // idempotent
       const tags = await listContactTags(db, accountId, id);
       expect(tags.map(t => t.name)).toEqual(["vip"]);
 
@@ -190,7 +190,7 @@ describe("contacts service", () => {
       // comma would export fine and re-import as two tags. The comma is
       // refused at creation (not quoted/escaped on export), so the stored
       // name never has one to round-trip badly in the first place.
-      await addTagToContact(db, accountId, id, "smith, john");
+      await addTagToContact(db, accountId, id, "smith, john", { authorKind: "person", authorId: "user_test" });
       const afterComma = await listContactTags(db, accountId, id);
       const stored = afterComma.map((t) => t.name).find((n) => n !== "vip");
       expect(stored).toBeDefined();
@@ -661,7 +661,7 @@ describe("listContacts sort", () => {
         { contactId: mango.id, name: "Mango LLC" },
         { contactId: acme.id, name: "Acme Inc" },
         { contactId: bravo.id, name: "Bravo Co" },
-      ], "user_test");
+      ], { authorKind: "person", authorId: "user_test" });
 
       const asc = await pageAll(db, accountId, "company", "asc");
       expect(asc).toHaveLength(6);
@@ -750,15 +750,15 @@ describe("bulk contact ops", () => {
     withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
       const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
-      const r1 = await addTagToContacts(db, accountId, [a.id, b.id], "VIP");
+      const r1 = await addTagToContacts(db, accountId, [a.id, b.id], "VIP", { authorKind: "person", authorId: "user_test" });
       expect(r1.applied).toBe(2);
       // idempotent — re-applying does not duplicate contact_tags rows
-      const r2 = await addTagToContacts(db, accountId, [a.id, b.id], "vip");
+      const r2 = await addTagToContacts(db, accountId, [a.id, b.id], "vip", { authorKind: "person", authorId: "user_test" });
       expect(r2.tagId).toBe(r1.tagId); // trims + lowercases like addTagToContact
       const tagsA = await listContactTags(db, accountId, a.id);
       expect(tagsA).toHaveLength(1);
       // undo path: removeTagFromContacts strips it from both
-      await removeTagFromContacts(db, accountId, [a.id, b.id], r1.tagId);
+      await removeTagFromContacts(db, accountId, [a.id, b.id], r1.tagId, { authorKind: "person", authorId: "user_test" });
       expect(await listContactTags(db, accountId, a.id)).toHaveLength(0);
       expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
     }));
@@ -769,14 +769,14 @@ describe("bulk contact ops", () => {
       const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
       // a already has VIP before the bulk tag below is applied to a, b and c.
-      const pre = await addTagToContacts(db, accountId, [a.id], "VIP");
-      const r = await addTagToContacts(db, accountId, [a.id, b.id, c.id], "VIP");
+      const pre = await addTagToContacts(db, accountId, [a.id], "VIP", { authorKind: "person", authorId: "user_test" });
+      const r = await addTagToContacts(db, accountId, [a.id, b.id, c.id], "VIP", { authorKind: "person", authorId: "user_test" });
       expect(r.tagId).toBe(pre.tagId);
       expect(r.applied).toBe(3);
       expect([...r.addedIds].sort()).toEqual([b.id, c.id].sort());
       expect(r.addedIds).not.toContain(a.id);
       // Undo with ONLY addedIds: a keeps the tag, b and c lose it.
-      await removeTagFromContacts(db, accountId, r.addedIds, r.tagId);
+      await removeTagFromContacts(db, accountId, r.addedIds, r.tagId, { authorKind: "person", authorId: "user_test" });
       expect(await listContactTags(db, accountId, a.id)).toHaveLength(1);
       expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
       expect(await listContactTags(db, accountId, c.id)).toHaveLength(0);
@@ -787,9 +787,9 @@ describe("bulk contact ops", () => {
       const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
       const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test"); // no tags
-      await addTagToContact(db, accountId, a.id, "urgent");
-      await addTagToContact(db, accountId, a.id, "vip");
-      await addTagToContact(db, accountId, b.id, "vip");
+      await addTagToContact(db, accountId, a.id, "urgent", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, a.id, "vip", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, b.id, "vip", { authorKind: "person", authorId: "user_test" });
       const map = await listTagNamesForContacts(db, accountId, [a.id, b.id, c.id]);
       expect(map.get(a.id)).toBe("urgent,vip");
       expect(map.get(b.id)).toBe("vip");
@@ -807,8 +807,8 @@ describe("bulk contact ops", () => {
   it("doesn't blow the request URL on a full export chunk's worth of ids (500) — batches instead of one unbounded .in() (mutation: one batch → fetch failed, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ids: string[] = await seedContacts(db, accountId, 500, "2026-01-01T00:00:00Z");
-      await addTagToContact(db, accountId, ids[0]!, "vip");
-      await addTagToContact(db, accountId, ids[499]!, "urgent");
+      await addTagToContact(db, accountId, ids[0]!, "vip", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, ids[499]!, "urgent", { authorKind: "person", authorId: "user_test" });
       const map = await listTagNamesForContacts(db, accountId, ids);
       expect(map.get(ids[0]!)).toBe("vip");
       expect(map.get(ids[499]!)).toBe("urgent");
@@ -824,10 +824,10 @@ describe("bulk contact ops", () => {
       const { data: stage } = await db.from("pipeline_stages")
         .insert({ account_id: accountId, pipeline_id: pipe!.id, name: "S", position: 1 })
         .select("id").single();
-      await db.from("opportunities").insert({
+      await withAuthor(db.from("opportunities").insert({
         account_id: accountId, contact_id: blocked.id, pipeline_id: pipe!.id,
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
-      });
+      }), SEED_AUTHOR, SEED_VIA);
       const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [blocked.id], lateKept: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
@@ -837,7 +837,7 @@ describe("bulk contact ops", () => {
   it("deleteContacts cascades tags/notes and null-scoped: ignores other-account ids", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
-      await addTagToContact(db, accountId, c.id, "temp");
+      await addTagToContact(db, accountId, c.id, "temp", { authorKind: "person", authorId: "user_test" });
       const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db }, SEED_AUTHOR);
       expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
     }));
@@ -845,8 +845,8 @@ describe("bulk contact ops", () => {
   it("listTags returns the account's tag vocabulary alphabetically, normalized", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Z" }, "user_test");
-      await addTagToContact(db, accountId, c.id, "zeta");
-      await addTagToContact(db, accountId, c.id, "Alpha ");
+      await addTagToContact(db, accountId, c.id, "zeta", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, c.id, "Alpha ", { authorKind: "person", authorId: "user_test" });
       const tags = await listTags(db, accountId);
       expect(tags.map((t) => ({ name: t.name }))).toEqual([{ name: "alpha" }, { name: "zeta" }]);
     }));
@@ -1084,9 +1084,9 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const { data: pipe } = await db.from("pipelines").insert({ account_id: accountId, name: "P" }).select("id").single();
       const { data: stage } = await db.from("pipeline_stages")
         .insert({ account_id: accountId, pipeline_id: pipe!.id, name: "S", position: 1 }).select("id").single();
-      const o = await db.from("opportunities").insert({
+      const o = await withAuthor(db.from("opportunities").insert({
         account_id: accountId, contact_id: dealt, pipeline_id: pipe!.id, stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
-      });
+      }), SEED_AUTHOR, SEED_VIA);
       if (o.error) throw o.error;
       const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1, skippedIds: [dealt], lateKept: 0 });

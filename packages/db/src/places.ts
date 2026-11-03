@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit, type ActorType } from "./events";
+import { emit } from "./events";
 import { isUserClient } from "./user-client";
 import type { GroupKind } from "./client-groups";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, emitActorOf } from "./row-author";
 
 /**
  * Properties and equipment (spec §6, migration 0071). Every function runs on whichever client the
@@ -31,13 +33,15 @@ function assertUuid(v: string, what: string): void {
 }
 
 /**
- * `emit()` already refuses a non-'user' actor on a user client (0053), but only AFTER the caller's
- * write has landed. Refusing here, before any read or write, means a disallowed actor never gets as
- * far as a partial write (relationships.ts's guard, same reason).
+ * `emit()` already refuses a non-'user' actor on a user client (0053), but `emitActorOf` (F-115) now
+ * forces `"user"` there before `emit()` ever sees the mismatch, so that old backstop would stay
+ * silent. Refusing a non-person author on a user client HERE, before any read or write, keeps the
+ * same protection it always gave: a disallowed author never gets as far as a partial write
+ * (relationships.ts's guard, same reason).
  */
-function assertActorAllowed(db: SupabaseClient, actorType: ActorType): void {
-  if (isUserClient(db) && actorType !== "user") {
-    throw new PlaceDbError(`a signed-in user's client cannot record a '${actorType}' actor on a place`, undefined);
+function assertActorAllowed(db: SupabaseClient, author: RowAuthor): void {
+  if (isUserClient(db) && author.authorKind !== "person") {
+    throw new PlaceDbError(`a signed-in user's client cannot record a '${author.authorKind}' author on a place`, undefined);
   }
 }
 
@@ -72,14 +76,16 @@ export type ContactPlaces = {
   groups: ContactPlaceGroup[]; places: PlaceRow[]; placeCount: number; equipment: EquipmentRow[]; equipmentCount: number;
 };
 /** subjectId: the record the action was taken from, carried in every event payload; a group's page (S-03
- *  part 2, C12) records it as `groupId`, a contact's as `contactId`. */
-export type PlaceCtx = { subjectId: string; subjectKind?: "contact" | "group"; actorId: string; actorType?: ActorType };
+ *  part 2, C12) records it as `groupId`, a contact's as `contactId`. F-115: `author` replaces
+ *  `actorId`/`actorType` — every writer below runs it through `requireAuthor` before any query. */
+export type PlaceCtx = { subjectId: string; subjectKind?: "contact" | "group"; author: RowAuthor };
 
 const now = () => new Date().toISOString();
 
 async function event(db: SupabaseClient, accountId: string, type: string, ctx: PlaceCtx, ids: Record<string, unknown>) {
   const subject = ctx.subjectKind === "group" ? { groupId: ctx.subjectId } : { contactId: ctx.subjectId };
-  await emit(db, accountId, type, ctx.actorId, { ...subject, ...ids }, ctx.actorType ?? "user");
+  const { actorId, actorType } = emitActorOf(db, ctx.author);
+  await emit(db, accountId, type, actorId, { ...subject, ...ids }, actorType);
 }
 
 /** Named columns only: `fields` may have come from a browser, and a wider object must never reach
@@ -216,10 +222,11 @@ export async function getEquipment(db: SupabaseClient, accountId: string, equipm
 export async function addPlace(
   db: SupabaseClient, accountId: string, owner: PlaceOwner, fields: PlaceFields, ctx: PlaceCtx,
 ): Promise<PlaceRow> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
-  const { data, error } = await db.from("places").insert({
+  const author = requireAuthor(db, ctx.author, "addPlace");
+  assertActorAllowed(db, author);
+  const { data, error } = await withAuthor(db.from("places").insert({
     account_id: accountId, contact_id: owner.contactId, client_group_id: owner.groupId, ...placeFieldsOf(fields),
-  }).select(PLACE_COLUMNS).single();
+  }), author).select(PLACE_COLUMNS).single();
   if (error) throw dbError("addPlace failed", error);
   const row = data as unknown as PlaceRow;
   await event(db, accountId, "place.added", ctx, { placeId: row.id });
@@ -229,13 +236,14 @@ export async function addPlace(
 export async function updatePlace(
   db: SupabaseClient, accountId: string, placeId: string, patch: PlacePatch, ctx: PlaceCtx,
 ): Promise<{ previous: PlacePatch; row: PlaceRow } | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "updatePlace");
+  assertActorAllowed(db, author);
   assertPatchKeys(Object.keys(patch), PLACE_FIELD_KEYS, "updatePlace");
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
   const { previous, changed, fields } = planPatch(patch, current);
   if (fields.length === 0) return { previous, row: current };
-  const { data, error } = await db.from("places").update({ ...changed, updated_at: now() })
+  const { data, error } = await withAuthor(db.from("places").update({ ...changed, updated_at: now() }), author)
     .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
   if (error) throw dbError("updatePlace failed", error);
   const row = ((data ?? []) as unknown as PlaceRow[])[0];
@@ -272,7 +280,8 @@ const sameId = (a: string | null, b: string | null) => (a === null || b === null
 export async function setPlaceOwner(
   db: SupabaseClient, accountId: string, placeId: string, owner: PlaceOwner, ctx: PlaceCtx,
 ): Promise<{ previous: PlaceOwner; row: PlaceRow } | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "setPlaceOwner");
+  assertActorAllowed(db, author);
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
   const previous: PlaceOwner = current.contact_id !== null
@@ -281,8 +290,8 @@ export async function setPlaceOwner(
   if (sameId(current.contact_id, owner.contactId) && sameId(current.client_group_id, owner.groupId)) {
     return { previous, row: current };
   }
-  const { data, error } = await db.from("places")
-    .update({ contact_id: owner.contactId, client_group_id: owner.groupId, updated_at: now() })
+  const { data, error } = await withAuthor(db.from("places")
+    .update({ contact_id: owner.contactId, client_group_id: owner.groupId, updated_at: now() }), author)
     .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
   if (error) throw dbError("setPlaceOwner failed", error);
   const row = ((data ?? []) as unknown as PlaceRow[])[0];
@@ -292,8 +301,11 @@ export async function setPlaceOwner(
   return { previous, row };
 }
 
-async function writeArchived(db: SupabaseClient, accountId: string, placeId: string, archived: boolean): Promise<PlaceRow | null> {
-  const { data, error } = await db.from("places").update({ archived_at: archived ? now() : null, updated_at: now() })
+async function writeArchived(
+  db: SupabaseClient, accountId: string, placeId: string, archived: boolean, author: RowAuthor,
+): Promise<PlaceRow | null> {
+  const { data, error } = await withAuthor(db.from("places")
+    .update({ archived_at: archived ? now() : null, updated_at: now() }), author)
     .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
   if (error) throw dbError("archive write failed", error);
   return ((data ?? []) as unknown as PlaceRow[])[0] ?? null;
@@ -309,7 +321,8 @@ async function writeArchived(db: SupabaseClient, accountId: string, placeId: str
 export async function removePlace(
   db: SupabaseClient, accountId: string, placeId: string, ctx: PlaceCtx,
 ): Promise<{ mode: "deleted"; snapshot: PlaceRow } | { mode: "archived"; row: PlaceRow } | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "removePlace");
+  assertActorAllowed(db, author);
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
   const { count: unitCount, error: uErr } = await db.from("equipment").select("id", { count: "exact", head: true })
@@ -321,7 +334,7 @@ export async function removePlace(
   if (bErr) throw dbError("removePlace booking count failed", bErr);
   if (bookingCount === null) throw dbError("removePlace booking count failed", { message: "no count returned" });
   if (unitCount === 0 && bookingCount === 0) {
-    const { data, error } = await db.from("places").delete()
+    const { data, error } = await withAuthor(db.from("places").delete(), author)
       .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
     if (error && !(error.code === "23503" && error.message.includes("bookings_place_fkey"))) {
       throw dbError("removePlace delete failed", error);
@@ -342,7 +355,7 @@ export async function removePlace(
   }
   // Already archived: nothing to write, no event, the stored row as it is (review round 1).
   if (current.archived_at !== null) return { mode: "archived", row: current };
-  const row = await writeArchived(db, accountId, placeId, true);
+  const row = await writeArchived(db, accountId, placeId, true, author);
   if (!row) return "refused";
   await event(db, accountId, "place.removed", ctx, { placeId, mode: "archived" });
   return { mode: "archived", row };
@@ -352,12 +365,13 @@ export async function removePlace(
 export async function setPlaceArchived(
   db: SupabaseClient, accountId: string, placeId: string, archived: boolean, ctx: PlaceCtx,
 ): Promise<PlaceRow | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "setPlaceArchived");
+  assertActorAllowed(db, author);
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
   // Already in that state: no re-stamp of archived_at, no event (review round 1).
   if ((current.archived_at !== null) === archived) return current;
-  const row = await writeArchived(db, accountId, placeId, archived);
+  const row = await writeArchived(db, accountId, placeId, archived, author);
   if (!row) return "refused";
   if (archived) await event(db, accountId, "place.removed", ctx, { placeId, mode: "archived" });
   else await event(db, accountId, "place.restored", ctx, { placeId });
@@ -371,16 +385,17 @@ export async function setPlaceArchived(
  * would decide where the row sorts).
  */
 export async function restorePlace(db: SupabaseClient, accountId: string, snapshot: PlaceRow, ctx: PlaceCtx): Promise<PlaceRow> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "restorePlace");
+  assertActorAllowed(db, author);
   if (snapshot.account_id !== accountId) throw new PlaceDbError("restorePlace: another account's row", "22023");
-  const { data, error } = await db.from("places").insert({
+  const { data, error } = await withAuthor(db.from("places").insert({
     id: snapshot.id,
     account_id: snapshot.account_id,
     contact_id: snapshot.contact_id,
     client_group_id: snapshot.client_group_id,
     ...placeFieldsOf(snapshot),
     archived_at: snapshot.archived_at,
-  }).select(PLACE_COLUMNS).single();
+  }), author).select(PLACE_COLUMNS).single();
   if (error) throw dbError("restorePlace failed", error);
   const row = data as unknown as PlaceRow;
   await event(db, accountId, "place.restored", ctx, { placeId: row.id });
@@ -390,10 +405,11 @@ export async function restorePlace(db: SupabaseClient, accountId: string, snapsh
 export async function addEquipment(
   db: SupabaseClient, accountId: string, placeId: string, fields: EquipmentFields, ctx: PlaceCtx,
 ): Promise<EquipmentRow> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
-  const { data, error } = await db.from("equipment").insert({
+  const author = requireAuthor(db, ctx.author, "addEquipment");
+  assertActorAllowed(db, author);
+  const { data, error } = await withAuthor(db.from("equipment").insert({
     account_id: accountId, place_id: placeId, ...equipmentFieldsOf(fields),
-  }).select(EQUIPMENT_COLUMNS).single();
+  }), author).select(EQUIPMENT_COLUMNS).single();
   if (error) throw dbError("addEquipment failed", error);
   const row = data as unknown as EquipmentRow;
   await event(db, accountId, "equipment.added", ctx, { placeId: row.place_id, equipmentId: row.id });
@@ -407,12 +423,13 @@ export async function addEquipment(
 export async function replaceEquipment(
   db: SupabaseClient, accountId: string, equipmentId: string, fields: EquipmentFields, ctx: PlaceCtx,
 ): Promise<EquipmentRow | "not_found"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "replaceEquipment");
+  assertActorAllowed(db, author);
   const old = await getEquipment(db, accountId, equipmentId);
   if (!old) return "not_found";
-  const { data, error } = await db.from("equipment").insert({
+  const { data, error } = await withAuthor(db.from("equipment").insert({
     account_id: accountId, place_id: old.place_id, replaces_id: old.id, ...equipmentFieldsOf(fields),
-  }).select(EQUIPMENT_COLUMNS).single();
+  }), author).select(EQUIPMENT_COLUMNS).single();
   if (error) throw dbError("replaceEquipment failed", error);
   const row = data as unknown as EquipmentRow;
   await event(db, accountId, "equipment.replaced", ctx, { placeId: row.place_id, equipmentId: row.id, replacedId: old.id });
@@ -422,13 +439,14 @@ export async function replaceEquipment(
 export async function updateEquipment(
   db: SupabaseClient, accountId: string, equipmentId: string, patch: EquipmentPatch, ctx: PlaceCtx,
 ): Promise<{ previous: EquipmentPatch; row: EquipmentRow } | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "updateEquipment");
+  assertActorAllowed(db, author);
   assertPatchKeys(Object.keys(patch), EQUIPMENT_FIELD_KEYS, "updateEquipment");
   const current = await getEquipment(db, accountId, equipmentId);
   if (!current) return "not_found";
   const { previous, changed, fields } = planPatch(patch, current);
   if (fields.length === 0) return { previous, row: current };
-  const { data, error } = await db.from("equipment").update({ ...changed, updated_at: now() })
+  const { data, error } = await withAuthor(db.from("equipment").update({ ...changed, updated_at: now() }), author)
     .eq("account_id", accountId).eq("id", equipmentId).select(EQUIPMENT_COLUMNS);
   if (error) throw dbError("updateEquipment failed", error);
   const row = ((data ?? []) as unknown as EquipmentRow[])[0];
@@ -444,10 +462,11 @@ export async function updateEquipment(
 export async function removeEquipment(
   db: SupabaseClient, accountId: string, equipmentId: string, ctx: PlaceCtx,
 ): Promise<EquipmentRow | "not_found" | "refused"> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "removeEquipment");
+  assertActorAllowed(db, author);
   const current = await getEquipment(db, accountId, equipmentId);
   if (!current) return "not_found";
-  const { data, error } = await db.from("equipment").delete()
+  const { data, error } = await withAuthor(db.from("equipment").delete(), author)
     .eq("account_id", accountId).eq("id", equipmentId).select(EQUIPMENT_COLUMNS);
   if (error) throw dbError("removeEquipment failed", error);
   const row = ((data ?? []) as unknown as EquipmentRow[])[0];
@@ -460,15 +479,16 @@ export async function removeEquipment(
 export async function restoreEquipment(
   db: SupabaseClient, accountId: string, snapshot: EquipmentRow, ctx: PlaceCtx,
 ): Promise<EquipmentRow> {
-  assertActorAllowed(db, ctx.actorType ?? "user");
+  const author = requireAuthor(db, ctx.author, "restoreEquipment");
+  assertActorAllowed(db, author);
   if (snapshot.account_id !== accountId) throw new PlaceDbError("restoreEquipment: another account's row", "22023");
-  const { data, error } = await db.from("equipment").insert({
+  const { data, error } = await withAuthor(db.from("equipment").insert({
     id: snapshot.id,
     account_id: snapshot.account_id,
     place_id: snapshot.place_id,
     replaces_id: snapshot.replaces_id,
     ...equipmentFieldsOf(snapshot),
-  }).select(EQUIPMENT_COLUMNS).single();
+  }), author).select(EQUIPMENT_COLUMNS).single();
   if (error) throw dbError("restoreEquipment failed", error);
   const row = data as unknown as EquipmentRow;
   await event(db, accountId, "equipment.restored", ctx, { placeId: row.place_id, equipmentId: row.id });

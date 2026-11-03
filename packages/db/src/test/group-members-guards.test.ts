@@ -18,6 +18,16 @@ type Call = [string, unknown[]];
 type Query = { table: string; calls: Call[] };
 type Answer = { data?: unknown; count?: number | null; error?: { message: string; code?: string } | null };
 
+/**
+ * F-115 (PR B): the group writers wrap their rpc builder in `withAuthor`, which calls
+ * `builder.setHeader(...)` and awaits the builder that call returns. `recordingDb`'s rpc answers with a
+ * promise, so the answer gets a `setHeader` that hands the same promise back (its `from` chain is a
+ * Proxy, which already answers any method, `setHeader` included, with itself).
+ */
+function headerable<T extends Promise<unknown>>(p: T): T & { setHeader(name: string, value: string): T } {
+  return Object.assign(p, { setHeader: () => p });
+}
+
 function recordingDb(respond: (q: Query) => Answer, rpcAnswer?: unknown) {
   const queries: Query[] = [];
   const rpcs: { fn: string; args: Record<string, unknown> }[] = [];
@@ -38,9 +48,9 @@ function recordingDb(respond: (q: Query) => Answer, rpcAnswer?: unknown) {
       });
       return chain;
     },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
+    rpc: (fn: string, args: Record<string, unknown>) => {
       rpcs.push({ fn, args });
-      return { data: rpcAnswer, error: null };
+      return headerable(Promise.resolve({ data: rpcAnswer, error: null }));
     },
   };
   return { db: db as unknown as SupabaseClient, queries, rpcs };
@@ -138,7 +148,7 @@ describe("countGroupMembers and listGroupPeople", () => {
 describe("setGroupPrimaryContact and removeMembership's event", () => {
   it("calls 0075's function with the three named arguments and hands back the previous holder", async () => {
     const { db, rpcs, queries } = recordingDb(() => ({}), { status: "ok", previous: M });
-    expect(await setGroupPrimaryContact(db, "acct", G, null, "user_1")).toEqual({ status: "ok", previous: M });
+    expect(await setGroupPrimaryContact(db, "acct", G, null, { authorKind: "person", authorId: "user_1" })).toEqual({ status: "ok", previous: M });
     expect(rpcs).toEqual([{ fn: "set_group_primary_contact", args: { p_account_id: "acct", p_group_id: G, p_member_id: null } }]);
     const ev = queries.find((q) => q.table === "events")!;
     expect(ev.calls[0]![1][0]).toMatchObject({ type: "client_group.member_updated", payload: { groupId: G, memberId: null, previous: M, fields: ["is_primary_contact"] } });
@@ -146,14 +156,14 @@ describe("setGroupPrimaryContact and removeMembership's event", () => {
 
   it("a refusal is not_found and records no event (mutation: emit before the status check -> FAILS)", async () => {
     const { db, queries } = recordingDb(() => ({}), { status: "not_found" });
-    expect(await setGroupPrimaryContact(db, "acct", G, M, "user_1")).toEqual({ status: "not_found" });
+    expect(await setGroupPrimaryContact(db, "acct", G, M, { authorKind: "person", authorId: "user_1" })).toEqual({ status: "not_found" });
     expect(queries.filter((q) => q.table === "events")).toEqual([]);
   });
 
   it("choosing who already holds it (or clearing when nobody does) records no event (mutation: emit whenever status is ok -> FAILS)", async () => {
     for (const [memberId, previous] of [[M, M], [null, null]] as const) {
       const { db, queries } = recordingDb(() => ({}), { status: "ok", previous });
-      expect(await setGroupPrimaryContact(db, "acct", G, memberId, "user_1")).toEqual({ status: "ok", previous });
+      expect(await setGroupPrimaryContact(db, "acct", G, memberId, { authorKind: "person", authorId: "user_1" })).toEqual({ status: "ok", previous });
       expect(queries.filter((q) => q.table === "events")).toEqual([]);
     }
   });
@@ -162,7 +172,7 @@ describe("setGroupPrimaryContact and removeMembership's event", () => {
     for (const flag of [true, false]) {
       const removed = { id: M, account_id: "acct", client_group_id: G, contact_id: "c1", role: null, is_primary: false, is_billing: false, is_primary_contact: flag, created_at: T };
       const { db, queries } = recordingDb(() => ({}), { status: "ok", removed });
-      await removeMembership(db, "acct", M, "user_1");
+      await removeMembership(db, "acct", M, { authorKind: "person", authorId: "user_1" });
       const ev = queries.find((q) => q.table === "events")!;
       expect((ev.calls[0]![1][0] as { payload: unknown }).payload).toEqual({ memberId: M, contactId: "c1", groupId: G, wasPrimaryContact: flag });
     }
@@ -174,8 +184,8 @@ describe("places: a group subject and the group's own places (C12)", () => {
 
   it("an event taken from a group's page names groupId and never contactId; a contact's still names contactId (mutation: ignore subjectKind -> FAILS)", async () => {
     for (const [ctx, want, not] of [
-      [{ subjectId: G, subjectKind: "group" as const, actorId: "user_1" }, { groupId: G }, "contactId"],
-      [{ subjectId: "c1", actorId: "user_1" }, { contactId: "c1" }, "groupId"],
+      [{ subjectId: G, subjectKind: "group" as const, author: { authorKind: "person", authorId: "user_1" } }, { groupId: G }, "contactId"],
+      [{ subjectId: "c1", author: { authorKind: "person", authorId: "user_1" } }, { contactId: "c1" }, "groupId"],
     ] as const) {
       const { db, queries } = recordingDb((q) => q.table === "places" ? { data: { id: "p1" } } : {});
       await addPlace(db, "acct", { contactId: null, groupId: G }, fields, ctx);

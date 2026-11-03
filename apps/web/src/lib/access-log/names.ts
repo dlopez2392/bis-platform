@@ -49,7 +49,9 @@ export async function resolveAccessLogNames(db: SupabaseClient, accountId: strin
   const callIds = idsOf(page, ["call"]);
   const conversationIds = idsOf(page, ["conversation"]);
   const documentIds = idsOf(page, ["document_view", "document_download", "document_share"]);
-  const groupIds = idsOf(page, ["group"]);
+  // F-115 (0112, I1): a record_history_export's recordId is a contact's OR a group's id, so it joins
+  // both id sets below — whichever table actually has the row answers it, the other read just misses.
+  const groupIds = idsOf(page, ["group", "record_history_export"]);
   const formIds = idsOf(page, ["form_answers"]);
 
   const [callRows, conversationRows, documentRows, groupRows, formRows] = await Promise.all([
@@ -62,7 +64,7 @@ export async function resolveAccessLogNames(db: SupabaseClient, accountId: strin
 
   // The contacts read runs SECOND: a call's or conversation's caller needs a name too (spec 6.2), so
   // their contact ids join the "contact" kind's own item ids before the one contacts read.
-  const directContactIds = idsOf(page, ["contact"]);
+  const directContactIds = idsOf(page, ["contact", "record_history_export"]);
   const fromCalls = callRows.map((c) => c.contact_id).filter((v): v is string => v !== null);
   const fromConversations = conversationRows.map((c) => c.contact_id).filter((v): v is string => v !== null);
   const contactIds = [...new Set([...directContactIds, ...fromCalls, ...fromConversations])];

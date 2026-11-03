@@ -160,7 +160,7 @@ describe("listAccountWork", () => {
   it("an expiry To-do carries its file, its category and its household; a plain To-do carries no such key (S-07 3a; mutations: always set documentFocus -> the plain row FAILS; drop the embed -> category null -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_wq")).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa Ana", null, "user_wq");
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa Ana", null, { authorKind: "person", authorId: "user_wq" });
       if (g.status !== "ok") throw new Error(g.status);
       const onAna = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "S", category: "insurance", expiresOn: "2030-03-10", ownersOnly: false, source: "upload", createdBy: "user_wq" });
       const onCasa = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "P", category: "permit", expiresOn: "2030-03-12", ownersOnly: false, source: "upload", createdBy: "user_wq" });

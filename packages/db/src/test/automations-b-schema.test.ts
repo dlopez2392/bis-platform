@@ -140,10 +140,10 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
       const { data: stage } = await db.from("pipeline_stages")
         .insert({ account_id: accountId, pipeline_id: pipe!.id, name: "Quoted", position: 0 })
         .select("id").single();
-      const { data: opp, error: oppErr } = await db.from("opportunities").insert({
+      const { data: opp, error: oppErr } = await withAuthor(db.from("opportunities").insert({
         account_id: accountId, contact_id: ct!.id, pipeline_id: pipe!.id, stage_id: stage!.id,
         name: "Reroof",
-      }).select("quote_followup_sent_at, quote_followup_sms_failed_at").single();
+      }), SEED_AUTHOR, SEED_VIA).select("quote_followup_sent_at, quote_followup_sms_failed_at").single();
       expect(oppErr).toBeNull();
       expect(opp).toEqual({ quote_followup_sent_at: null, quote_followup_sms_failed_at: null });
     });

@@ -148,7 +148,7 @@ describe("opportunity_stage: apply and inverse", () => {
     const { db: d } = dealDb(null);
     const p = { ...stored, toStageId: "s2" };
     expect(await opportunityStageKind.apply(ctxWith(d), p)).toEqual({ ref: p });
-    expect(db.moveOpportunityToStage).toHaveBeenCalledWith(d, "a1", "o1", "s2", "user_1");
+    expect(db.moveOpportunityToStage).toHaveBeenCalledWith(d, "a1", "o1", "s2", { authorKind: "person", authorId: "user_1" });
   });
 
   const undo = (d: Db, ref: unknown) => {
@@ -160,7 +160,7 @@ describe("opportunity_stage: apply and inverse", () => {
   it("moves back while the deal is still open at the stage the Accept moved it to", async () => {
     const { db: d } = dealDb({ stage_id: "s2", status: "open" });
     expect(await undo(d, ref)).toBe("undone");
-    expect(db.moveOpportunityToStage).toHaveBeenCalledWith(d, "a1", "o1", "s0", "user_1");
+    expect(db.moveOpportunityToStage).toHaveBeenCalledWith(d, "a1", "o1", "s0", { authorKind: "person", authorId: "user_1" });
   });
 
   it("a deal moved, closed or gone since is left alone", async () => {

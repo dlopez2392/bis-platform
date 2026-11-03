@@ -17,13 +17,13 @@ const ZONE = "America/Chicago";
 const BASE = "/dashboard/accounts/A1";
 
 const ZERO: AccessLogCounts = {
-  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0,
+  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0, record_history_export: 0,
 };
 
 describe("visitSummary", () => {
   it("counts customers, a call and a file, in the spec's fixed order, whatever order the object lists them (mutation: Object.keys(counts) order -> FAILS)", () => {
     // Scrambled on purpose: file and call are written before contact.
-    const counts: AccessLogCounts = { file: 1, call: 1, group: 0, conversation: 0, contact: 4, form_answers: 0, customer_list_export: 0 };
+    const counts: AccessLogCounts = { file: 1, call: 1, group: 0, conversation: 0, contact: 4, form_answers: 0, customer_list_export: 0, record_history_export: 0 };
     expect(visitSummary(counts, trEn)).toBe("Opened 4 customers, 1 call and 1 file.");
     expect(visitSummary(counts, trEs)).toBe("Abrió 4 clientes, 1 llamada y 1 archivo.");
   });
@@ -36,11 +36,25 @@ describe("visitSummary", () => {
 
   it("every counted kind, in the spec's order (customers, households or businesses, calls, conversations, files, form answers), reversed in the object literal on purpose (mutation: Object.keys(counts) order -> FAILS)", () => {
     const counts: AccessLogCounts = {
-      customer_list_export: 1, form_answers: 1, file: 1, conversation: 1, call: 1, group: 1, contact: 1,
+      customer_list_export: 1, form_answers: 1, file: 1, conversation: 1, call: 1, group: 1, contact: 1, record_history_export: 1,
     };
     expect(visitSummary(counts, trEn)).toBe(
-      "Opened 1 customer, 1 household or business, 1 call, 1 conversation, 1 file and the answers to 1 form. Downloaded your customer list.",
+      "Opened 1 customer, 1 household or business, 1 call, 1 conversation, 1 file and the answers to 1 form. Downloaded your customer list. Downloaded a record's history.",
     );
+  });
+
+  it("a history download (record_history_export) is counted in its own sentence, after the customer-list download sentence (F-115 I1; mutation: drop the history-download check -> FAILS)", () => {
+    const counts: AccessLogCounts = { ...ZERO, customer_list_export: 1, record_history_export: 2 };
+    expect(visitSummary(counts, trEn)).toBe("Downloaded your customer list. Downloaded a record's history 2 times.");
+  });
+
+  it("a history download alone reads well as the only item, singular and plural, in English and Spanish (F-115 I1; mutation: always use the plural form -> FAILS)", () => {
+    const one: AccessLogCounts = { ...ZERO, record_history_export: 1 };
+    const three: AccessLogCounts = { ...ZERO, record_history_export: 3 };
+    expect(visitSummary(one, trEn)).toBe("Downloaded a record's history.");
+    expect(visitSummary(one, trEs)).toBe("Descargó el historial de un registro.");
+    expect(visitSummary(three, trEn)).toBe("Downloaded a record's history 3 times.");
+    expect(visitSummary(three, trEs)).toBe("Descargó el historial de un registro 3 veces.");
   });
 
   it("a download after opened records is its OWN sentence, never merged into the list (mutation: fold it into the opened list -> FAILS)", () => {
@@ -132,7 +146,7 @@ describe("buildVisitRows: every item kind, its own text, href and label", () => 
 
   const visitA: AccessLogVisit = {
     id: "visit_a", actorName: "Dan Lopez", reason: "support", startedAt: "2026-10-29T19:10:00Z", endedAt: "2026-10-29T19:25:00Z",
-    counts: { contact: 1, group: 2, call: 1, conversation: 1, file: 3, form_answers: 1, customer_list_export: 1 },
+    counts: { contact: 1, group: 2, call: 1, conversation: 1, file: 3, form_answers: 1, customer_list_export: 1, record_history_export: 1 },
     itemTotal: 10,
     items: [
       item({ kind: "contact", recordId: "c_archived" }),
@@ -256,6 +270,29 @@ describe("buildVisitRows: every item kind, its own text, href and label", () => 
     expect(rowEn!.more).toBe("and 37 more");
     const [rowEs] = buildVisitRows(pageC, EMPTY_NAMES, { tr: trEs, zone: ZONE, base: BASE });
     expect(rowEs!.more).toBe("y 37 más");
+  });
+
+  it("a history download (record_history_export) resolves a contact OR a group by the SAME id field, and falls back to gone when neither resolves (F-115 I1; mutation: drop the new kind from the names read -> the contact case FAILS)", () => {
+    const histNames: AccessLogNames = {
+      ...EMPTY_NAMES,
+      contacts: new Map([["c_hist_live", { first: "Ana", last: "Ruiz", archived: false }]]),
+      groups: new Map([["g_hist_live", { name: "The Smiths", kind: "household" }]]),
+    };
+    const v: AccessLogVisit = {
+      ...visitA, id: "visit_hist", counts: { ...ZERO, record_history_export: 3 }, itemTotal: 3,
+      items: [
+        item({ kind: "record_history_export", recordId: "c_hist_live" }),
+        item({ kind: "record_history_export", recordId: "g_hist_live" }),
+        item({ kind: "record_history_export", recordId: "hist_gone" }),
+      ],
+    };
+    const one: AccessLogPage = { total: 1, hasOlder: false, visits: [v] };
+    const [row] = buildVisitRows(one, histNames, { tr: trEn, zone: ZONE, base: BASE });
+    expect(row!.items).toEqual([
+      { key: "record_history_export-c_hist_live", text: "History · Ana Ruiz · downloaded", href: `${BASE}/contacts/c_hist_live` },
+      { key: "record_history_export-g_hist_live", text: "History · The Smiths · downloaded", href: `${BASE}/groups/g_hist_live` },
+      { key: "record_history_export-hist_gone", text: "A record that was later deleted", href: null },
+    ]);
   });
 
   it("an empty visit still carries its own label, when and summary (no items, nothing to show)", () => {

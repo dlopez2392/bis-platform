@@ -126,17 +126,20 @@ export async function updateContactAction(accountId: string, formData: FormData)
 }
 
 export async function addTagAction(accountId: string, formData: FormData): Promise<void> {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   const { contactId, path } = ids(accountId, formData);
   const tag = String(formData.get("tag") ?? "");
-  if (tag.trim()) await addTagToContact(await dbForRequest(), accountId, contactId, tag);
+  if (tag.trim()) {
+    await addTagToContact(await dbForRequest(), accountId, contactId, tag, { authorKind: "person", authorId: userId });
+  }
   revalidatePath(path);
 }
 
 export async function removeTagAction(accountId: string, formData: FormData): Promise<void> {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   const { contactId, path } = ids(accountId, formData);
-  await removeTagFromContact(await dbForRequest(), accountId, contactId, String(formData.get("tagId")));
+  await removeTagFromContact(await dbForRequest(), accountId, contactId, String(formData.get("tagId")),
+    { authorKind: "person", authorId: userId });
   revalidatePath(path);
 }
 

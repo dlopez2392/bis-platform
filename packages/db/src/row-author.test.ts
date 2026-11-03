@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { authorHeaderValue, withAuthor, requireAuthor, eventActorOf, AUTHOR_HEADER } from "./row-author";
+import { authorHeaderValue, withAuthor, requireAuthor, eventActorOf, emitActorOf, AUTHOR_HEADER } from "./row-author";
 import { contactAuthor } from "./provenance";
 import { updateContact } from "./contacts";
+
+/** The same symbol user-client.ts's `isUserClient` checks for, used here to build a fake "user" client
+ *  without a real Supabase client (row-author.test.ts's own existing tests use the identical shape). */
+const USER_CLIENT = Symbol.for("@bis/db:user-client");
 
 describe("row-author", () => {
   it("serialises kind, id and via (mutation: drop via -> FAILS)", () => {
@@ -134,6 +138,32 @@ describe("row-author", () => {
       "record_event",
       { p_account_id: "acct_1", p_type: "contact.updated", p_payload: { contactId: "contact_1", fields: ["firstName"] } },
     ]]);
+  });
+
+  // F-115 Step 7: emitActorOf centralizes updateContact's own isUserClient override so the other
+  // converted writers (client-groups, places, opportunities, relationships) do not each have to
+  // repeat it.
+  describe("emitActorOf", () => {
+    it("matches eventActorOf exactly on a service client (mutation: always force 'user' -> FAILS)", () => {
+      const service = {} as never;
+      const author = { authorKind: "import", authorId: "user_1" } as const;
+      expect(emitActorOf(service, author)).toEqual(eventActorOf(author));
+      expect(emitActorOf(service, author).actorType).toBe("system");
+    });
+
+    it("forces actorType to 'user' on a user client for a non-person author, keeping eventActorOf's own actorId (mutation: drop the isUserClient override -> FAILS)", () => {
+      const user = { [USER_CLIENT]: true } as unknown as never;
+      const author = { authorKind: "import", authorId: "user_1" } as const;
+      expect(emitActorOf(user, author)).toEqual({ actorId: eventActorOf(author).actorId, actorType: "user" });
+      // eventActorOf alone would have answered "system" here — this is exactly the override.
+      expect(eventActorOf(author).actorType).toBe("system");
+    });
+
+    it("a person author on a user client is unchanged either way (mutation: swap actorId for a literal -> FAILS)", () => {
+      const user = { [USER_CLIENT]: true } as unknown as never;
+      const author = { authorKind: "person", authorId: "user_2" } as const;
+      expect(emitActorOf(user, author)).toEqual({ actorId: "user_2", actorType: "user" });
+    });
   });
 });
 

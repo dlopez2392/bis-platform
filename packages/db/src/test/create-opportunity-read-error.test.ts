@@ -18,6 +18,8 @@ function stubDb(contactRead: { data: unknown; error: { message: string } | null 
         order: async () => ({ data: [{ id: "st-1", name: "New", position: 0 }], error: null }),
         maybeSingle: async () => contactRead,
         insert: () => { inserted.push(table); return chain; },
+        // F-115: withAuthor calls setHeader on the insert builder before it is awaited.
+        setHeader: () => chain,
         single: async () => ({ data: { id: "opp-1" }, error: null }),
       };
       return chain;
@@ -29,14 +31,14 @@ function stubDb(contactRead: { data: unknown; error: { message: string } | null 
 describe("createOpportunity: a failed contact read", () => {
   it("throws the read's own error and inserts nothing (mutation: ignore the read's error -> \"contact not in account\", FAILS)", async () => {
     const { db, inserted } = stubDb({ data: null, error: { message: "canceling statement due to statement timeout" } });
-    await expect(createOpportunity(db, "acct-1", { contactId: "ct-1", pipelineId: "pipe-1", name: "Roof" }, "user_1"))
+    await expect(createOpportunity(db, "acct-1", { contactId: "ct-1", pipelineId: "pipe-1", name: "Roof" }, { authorKind: "person", authorId: "user_1" }))
       .rejects.toThrow("createOpportunity: contact read failed: canceling statement due to statement timeout");
     expect(inserted).toEqual([]);
   });
 
   it("a read that finds no such contact still says so", async () => {
     const { db, inserted } = stubDb({ data: null, error: null });
-    await expect(createOpportunity(db, "acct-1", { contactId: "ct-1", pipelineId: "pipe-1", name: "Roof" }, "user_1"))
+    await expect(createOpportunity(db, "acct-1", { contactId: "ct-1", pipelineId: "pipe-1", name: "Roof" }, { authorKind: "person", authorId: "user_1" }))
       .rejects.toThrow("contact not in account");
     expect(inserted).toEqual([]);
   });
@@ -52,19 +54,19 @@ describe("createOpportunity: an archived or merged-away contact", () => {
 
   it("refuses an archived contact and inserts nothing (mutation: skip the archived check -> FAILS)", async () => {
     const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: "2026-10-01T00:00:00Z", merged_into: null }, error: null });
-    await expect(createOpportunity(db, "acct-1", input, "user_1")).rejects.toThrow("createOpportunity: the contact is archived");
+    await expect(createOpportunity(db, "acct-1", input, { authorKind: "person", authorId: "user_1" })).rejects.toThrow("createOpportunity: the contact is archived");
     expect(inserted).toEqual([]);
   });
 
   it("refuses a merged-away contact and inserts nothing (mutation: skip the merged check -> FAILS)", async () => {
     const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: null, merged_into: "ct-kept" }, error: null });
-    await expect(createOpportunity(db, "acct-1", input, "user_1")).rejects.toThrow("createOpportunity: the contact was merged into another");
+    await expect(createOpportunity(db, "acct-1", input, { authorKind: "person", authorId: "user_1" })).rejects.toThrow("createOpportunity: the contact was merged into another");
     expect(inserted).toEqual([]);
   });
 
   it("a live contact gets the deal", async () => {
     const { db, inserted } = stubDb({ data: { id: "ct-1", archived_at: null, merged_into: null }, error: null });
-    await expect(createOpportunity(db, "acct-1", input, "user_1")).resolves.toEqual({ id: "opp-1" });
+    await expect(createOpportunity(db, "acct-1", input, { authorKind: "person", authorId: "user_1" })).resolves.toEqual({ id: "opp-1" });
     expect(inserted).toContain("opportunities");
   });
 });

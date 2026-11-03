@@ -6,7 +6,7 @@ import { phoneNational } from "./dedupe-keys";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 import { contactAuthor, type RowAuthor } from "./provenance";
-import { requireAuthor, withAuthor, eventActorOf } from "./row-author";
+import { requireAuthor, withAuthor, eventActorOf, emitActorOf } from "./row-author";
 import { isUserClient } from "./user-client";
 import type { ContactFieldName } from "./proposal-rules";
 
@@ -746,7 +746,9 @@ export async function fillContactBlanksReport(
     .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
   {
-    const { actorId, actorType } = eventActorOf(author);
+    // F-115 Step 7: emitActorOf, not eventActorOf, so a non-person author on a user client (the same
+    // shape updateContact fixed for the CSV import wizard) never throws here either.
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
   }
   // D-012 via this fill path too: a returning caller's email/phone can land
@@ -1145,25 +1147,33 @@ function normalizeTagName(tagName: string): string {
   return tagName.replace(/,/g, "").trim().toLowerCase();
 }
 
+/**
+ * F-115 (migration 0112, plan Task 3 Step 7): `contact_tags` is Q1's `contact_tag` type, AUDITED
+ * nothing — a tag is added or removed (an insert or a delete row), never edited — so only the
+ * `contact_tags` write itself (never the `tags` vocabulary upsert, which is not a Q1 table) carries
+ * the author.
+ */
 export async function addTagToContact(
-  db: SupabaseClient, accountId: string, contactId: string, tagName: string,
+  db: SupabaseClient, accountId: string, contactId: string, tagName: string, author: RowAuthor,
 ): Promise<void> {
+  author = requireAuthor(db, author, "addTagToContact");
   const name = normalizeTagName(tagName);
   if (!name) return;
   const { data: tag, error: tErr } = await db.from("tags")
     .upsert({ account_id: accountId, name }, { onConflict: "account_id,name" })
     .select("id").single();
   if (tErr || !tag) throw new Error(`tag upsert failed: ${tErr?.message}`);
-  const { error } = await db.from("contact_tags")
+  const { error } = await withAuthor(db.from("contact_tags")
     .upsert({ contact_id: contactId, tag_id: tag.id, account_id: accountId },
-            { onConflict: "contact_id,tag_id" });
+            { onConflict: "contact_id,tag_id" }), author);
   if (error) throw new Error(`contact_tags upsert failed: ${error.message}`);
 }
 
 export async function removeTagFromContact(
-  db: SupabaseClient, accountId: string, contactId: string, tagId: string,
+  db: SupabaseClient, accountId: string, contactId: string, tagId: string, author: RowAuthor,
 ): Promise<void> {
-  const { error } = await db.from("contact_tags").delete()
+  author = requireAuthor(db, author, "removeTagFromContact");
+  const { error } = await withAuthor(db.from("contact_tags").delete(), author)
     .eq("account_id", accountId).eq("contact_id", contactId).eq("tag_id", tagId);
   if (error) throw new Error(error.message);
 }
@@ -1272,8 +1282,9 @@ export async function searchContacts(
  * are the same tag. Returns the tagId so the caller can offer undo.
  */
 export async function addTagToContacts(
-  db: SupabaseClient, accountId: string, contactIds: string[], tagName: string,
+  db: SupabaseClient, accountId: string, contactIds: string[], tagName: string, author: RowAuthor,
 ): Promise<{ tagId: string; applied: number; addedIds: string[] }> {
+  author = requireAuthor(db, author, "addTagToContacts");
   const name = normalizeTagName(tagName);
   if (!name || contactIds.length === 0) throw new Error("addTagToContacts: nothing to do");
   const { data: tag, error: tErr } = await db.from("tags")
@@ -1304,18 +1315,19 @@ export async function addTagToContacts(
   const rows = contactIds.map((contactId) => ({
     contact_id: contactId, tag_id: tag.id, account_id: accountId,
   }));
-  const { error } = await db.from("contact_tags")
-    .upsert(rows, { onConflict: "contact_id,tag_id" });
+  const { error } = await withAuthor(db.from("contact_tags")
+    .upsert(rows, { onConflict: "contact_id,tag_id" }), author);
   if (error) throw new Error(`contact_tags bulk upsert failed: ${error.message}`);
   return { tagId: tag.id, applied: contactIds.length, addedIds };
 }
 
 /** Undo for addTagToContacts: strip ONE tag from the same id set. */
 export async function removeTagFromContacts(
-  db: SupabaseClient, accountId: string, contactIds: string[], tagId: string,
+  db: SupabaseClient, accountId: string, contactIds: string[], tagId: string, author: RowAuthor,
 ): Promise<void> {
+  author = requireAuthor(db, author, "removeTagFromContacts");
   if (contactIds.length === 0) return;
-  const { error } = await db.from("contact_tags").delete()
+  const { error } = await withAuthor(db.from("contact_tags").delete(), author)
     .eq("account_id", accountId).eq("tag_id", tagId).in("contact_id", contactIds);
   if (error) throw new Error(error.message);
 }
@@ -1642,7 +1654,8 @@ export async function setContactPhoneCountry(
     if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
   }
   {
-    const { actorId, actorType } = eventActorOf(author);
+    // F-115 Step 7: emitActorOf (see fillContactBlanksReport's own note above).
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "contact.updated", actorId,
       { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
   }
@@ -1696,7 +1709,8 @@ export async function recordLanguageSignal(
   // Review M-3 (R3-M11, as restoreContactLanguage below): the rpc has COMMITTED the language by now,
   // so an emit failure is logged, never thrown — a throw would report a failed sign that landed.
   try {
-    const { actorId, actorType } = eventActorOf(author);
+    // F-115 Step 7: emitActorOf (see fillContactBlanksReport's own note above).
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "contact.language_set", actorId,
       { contactId, language: signal.language, source: signal.source }, actorType);
   } catch (e) {
@@ -1730,7 +1744,8 @@ export async function setContactLanguage(
   const wrote = await writeLanguage(db, accountId, contactId,
     { language, language_source: "staff", language_set_at: setAt }, author);
   if (wrote) {
-    const { actorId, actorType } = eventActorOf(author);
+    // F-115 Step 7: emitActorOf (see fillContactBlanksReport's own note above).
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "contact.language_set", actorId, { contactId, language, source: "staff" }, actorType);
   }
   return { wrote, setAt };
@@ -1771,7 +1786,8 @@ export async function restoreContactLanguage(
   if (error) throw new Error(`contact language write failed: ${error.message}`);
   if (!data?.length) return "changed";
   try {
-    const { actorId, actorType } = eventActorOf(author);
+    // F-115 Step 7: emitActorOf (see fillContactBlanksReport's own note above).
+    const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "contact.language_set", actorId,
       { contactId, language: prior.language, source: prior.source, undo: true }, actorType);
   } catch (e) {

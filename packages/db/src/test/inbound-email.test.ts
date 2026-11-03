@@ -12,6 +12,8 @@ import {
   findInboundEmailByProviderId, deleteInboundMessageByProviderId,
   type NewInboundEmail,
 } from "../inbound-email";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 const ACTOR = "user_test";
 const RUN = Math.random().toString(36).slice(2, 10);
@@ -296,16 +298,16 @@ describe("matchSender", () => {
       const pat = (await createContact(db, accountId, { firstName: "Pat", email: "pat@example.com" }, ACTOR)).id;
       const gone = (await createContact(db, accountId, { firstName: "Gone", email: "gone@example.com" }, ACTOR)).id;
 
-      const g = await db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Ruiz" }).select("id").single();
+      const g = await withAuthor(db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Ruiz" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       expect(g.error).toBeNull();
       // PostgREST's bulk insert fills a key missing from one object in the batch with NULL, not the
       // column default, when another object in the same batch sets it — is_primary must be explicit
       // on both rows, or Luis's row violates client_group_members' NOT NULL (found running this test).
-      const mem = await db.from("client_group_members").insert([
+      const mem = await withAuthor(db.from("client_group_members").insert([
         { account_id: accountId, client_group_id: g.data!.id, contact_id: ana, is_primary: true },
         { account_id: accountId, client_group_id: g.data!.id, contact_id: luis, is_primary: false },
         { account_id: accountId, client_group_id: g.data!.id, contact_id: gone, is_primary: false },
-      ]).select("id");
+      ]), SEED_AUTHOR, SEED_VIA).select("id");
       expect(mem.error).toBeNull();
 
       // Pat's OWN household, which Ana is not in — proves the match is scoped to Ana's groups, not
@@ -313,13 +315,13 @@ describe("matchSender", () => {
       // scopes to client_group_members rows, and a non-member like Pat-outside-any-group has none
       // regardless; a second household that Ana is NOT a member of is what actually exercises the
       // account-wide-match risk).
-      const g2 = await db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Pat" }).select("id").single();
+      const g2 = await withAuthor(db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Pat" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       expect(g2.error).toBeNull();
-      const mem2 = await db.from("client_group_members").insert({ account_id: accountId, client_group_id: g2.data!.id, contact_id: pat, is_primary: true }).select("id");
+      const mem2 = await withAuthor(db.from("client_group_members").insert({ account_id: accountId, client_group_id: g2.data!.id, contact_id: pat, is_primary: true }), SEED_AUTHOR, SEED_VIA).select("id");
       expect(mem2.error).toBeNull();
 
       // A removed member: was in Ana's household, then the row was deleted.
-      const del = await db.from("client_group_members").delete().eq("account_id", accountId).eq("contact_id", gone);
+      const del = await withAuthor(db.from("client_group_members").delete(), SEED_AUTHOR, SEED_VIA).eq("account_id", accountId).eq("contact_id", gone);
       expect(del.error).toBeNull();
 
       expect(await matchSender(db, accountId, ana, "ana.ruiz@example.com")).toEqual({ contactId: ana, firstName: "Ana", lastName: null, viaGroup: false });
