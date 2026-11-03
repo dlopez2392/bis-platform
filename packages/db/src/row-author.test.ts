@@ -93,5 +93,47 @@ describe("row-author", () => {
     void (() => updateContact({} as never, "a", "c", { firstName: "x" }));
     expect(true).toBe(true);
   });
+
+  // F-115 fix: CSV import's interactive wizard runs applyImportBatch on dbForRequest() (a USER
+  // client — contact-import.ts's `db`), but stamps every row `{authorKind:"import", authorId:<user>}`
+  // (item 8c: an imported value must read as "Import" on the change row, never as the signed-in
+  // person's own hand-entry). eventActorOf("import") answers {actorType:"system",...} — correct for
+  // the SEED/demo import path, which always runs on serviceDb() — but emit()'s own user-client branch
+  // (0053, events.ts) refuses any actorType other than "user" on a user client (the RPC it calls,
+  // record_event, takes the actor from the JWT and never reads actorType/actorId at all; the check
+  // exists only to catch a caller claiming a client-mismatched actor). updateContact blindly forwarding
+  // eventActorOf's "system" therefore throws "a signed-in user's client cannot record a 'system' event"
+  // on every row of an interactive re-import, which contact-import/actions.ts's outer catch swallows
+  // with no log line, so the wizard never reports a result and the spec's "Added 0, updated N." wait
+  // times out. Mutation: let updateContact pass eventActorOf(author).actorType straight to emit with
+  // no isUserClient override -> FAILS (throws, since the fake db below is marked as a user client).
+  it("updateContact's events-ledger emit matches the client it runs on, even for a non-person author", async () => {
+    const USER_CLIENT = Symbol.for("@bis/db:user-client");
+    const rpcCalls: [string, unknown][] = [];
+    const chain: Record<string, unknown> = {};
+    chain.update = () => chain;
+    chain.eq = () => chain;
+    chain.setHeader = () => chain;
+    chain.then = (resolve: (v: { error: null }) => void) => resolve({ error: null });
+    const fakeDb = Object.defineProperty(
+      {
+        from: () => chain,
+        rpc: (name: string, params: unknown) => {
+          rpcCalls.push([name, params]);
+          return Promise.resolve({ error: null });
+        },
+      },
+      USER_CLIENT,
+      { value: true },
+    ) as never;
+
+    await updateContact(fakeDb, "acct_1", "contact_1", { firstName: "Imported" },
+      { authorKind: "import", authorId: "user_1" });
+
+    expect(rpcCalls).toEqual([[
+      "record_event",
+      { p_account_id: "acct_1", p_type: "contact.updated", p_payload: { contactId: "contact_1", fields: ["firstName"] } },
+    ]]);
+  });
 });
 

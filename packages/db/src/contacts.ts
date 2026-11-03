@@ -7,6 +7,7 @@ import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 import { contactAuthor, type RowAuthor } from "./provenance";
 import { requireAuthor, withAuthor, eventActorOf } from "./row-author";
+import { isUserClient } from "./user-client";
 import type { ContactFieldName } from "./proposal-rules";
 
 /**
@@ -604,8 +605,17 @@ export async function updateContact(
     .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
   const { actorId, actorType } = eventActorOf(author);
+  // F-115 fix: eventActorOf's mapping assumes a SERVICE-client caller (every authorKind but
+  // "person" implies one) — true for every OTHER updateContact caller, but the CSV import
+  // wizard runs this writer on dbForRequest() (a USER client) while still stamping authorKind
+  // "import" (item 8c: an imported value must read as "Import" on the change row, not as the
+  // signed-in person's own hand-entry). emit()'s own user-client branch (0053) refuses any
+  // actorType but "user" there — the record_event RPC it calls takes the actor from the
+  // request's own JWT and never reads actorType/actorId at all, so the check exists only to
+  // catch a client/actor mismatch, and "import" on a user client is exactly that mismatch
+  // without this override. The literal client decides here, not the author's kind.
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },
-    actorType);
+    isUserClient(db) ? "user" : actorType);
 
   // D-012: an edit that lands this contact's email or phone on another
   // contact's dedupe key used to create a silent duplicate — same key, two
