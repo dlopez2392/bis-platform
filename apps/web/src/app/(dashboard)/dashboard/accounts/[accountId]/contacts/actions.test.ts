@@ -196,6 +196,12 @@ describe("bulkDeleteContactsAction", () => {
     await bulkDeleteContactsAction("a1", ["x"]);
     expect(dbMocks.deleteContacts.mock.calls[0]![0]).toBe(REQUEST);
   });
+  it("F-115: deleteContacts is told who made the delete, the signed-in Owner (mutation: pass no author -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
+    await bulkDeleteContactsAction("a1", ["x"]);
+    expect(dbMocks.deleteContacts.mock.calls.at(-1)![4]).toEqual({ authorKind: "person", authorId: "user_1" });
+  });
   it("0103: deleteContacts gets the SERVICE client as serviceDb, for the blockers read only (contact_delete_blockers is service_role only; mutation: pass the request client as serviceDb -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });

@@ -9,6 +9,7 @@ function recordingDb(
 ) {
   const calls: { table: string; method: string; args: unknown[] }[] = [];
   const rpcs: { fn: string; args: unknown }[] = [];
+  const headers: { fn: string; name: string; value: string }[] = [];
   const chainFor = (table: string): unknown => {
     const chain: unknown = new Proxy({}, {
       get(_t, method: string) {
@@ -24,12 +25,20 @@ function recordingDb(
   const rpcAnswers: Record<string, unknown> = { ...rpc };
   const db = {
     from: (table: string) => chainFor(table),
-    rpc: async (fn: string, args: unknown) => {
+    // A builder, as supabase-js returns: withAuthor (F-115) calls setHeader on it before it is awaited.
+    rpc: (fn: string, args: unknown) => {
       rpcs.push({ fn, args });
-      return rpcErrors[fn] ? { data: null, error: { message: rpcErrors[fn] } } : { data: rpcAnswers[fn] ?? null, error: null };
+      const builder = {
+        setHeader(name: string, value: string) { headers.push({ fn, name, value }); return builder; },
+        then(res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) {
+          const out = rpcErrors[fn] ? { data: null, error: { message: rpcErrors[fn] } } : { data: rpcAnswers[fn] ?? null, error: null };
+          return Promise.resolve(out).then(res, rej);
+        },
+      };
+      return builder;
     },
   } as unknown as SupabaseClient;
-  return { db, calls, rpcs, rpcAnswers };
+  return { db, calls, rpcs, rpcAnswers, headers };
 }
 const has = (calls: { method: string; args: unknown[] }[], method: string, ...args: unknown[]) =>
   calls.some((c) => c.method === method && JSON.stringify(c.args) === JSON.stringify(args));
@@ -127,7 +136,24 @@ describe("contactDeleteBlockers", () => {
   });
 });
 
+/** F-115: the person who pressed Delete, as the contacts page passes them. */
+const PERSON = { authorKind: "person", authorId: "user_owner" } as const;
+
 describe("deleteContacts", () => {
+  it("both delete_internal_contacts calls carry the author on x-bis-author, so 0111 records who deleted on a service client too (F-115; mutation: drop withAuthor from either call -> FAILS)", async () => {
+    const request = recordingDb({ contacts: [{ id: "free" }] }, { delete_internal_contacts: ["free"] });
+    const service = recordingDb({}, { contact_delete_blockers: [] });
+    await deleteContacts(request.db, "A", ["free"], { serviceDb: service.db }, PERSON);
+    const header = { fn: "delete_internal_contacts", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_owner" }) };
+    expect(request.headers).toEqual([header, header]);
+  });
+  it("a service client with no author is refused before any query (F-115; mutation: drop requireAuthor -> the delete runs unattributed, FAILS)", async () => {
+    const request = recordingDb({ contacts: [{ id: "a" }] }, { delete_internal_contacts: ["a"] });
+    const service = recordingDb({}, { contact_delete_blockers: [] });
+    await expect(deleteContacts(request.db, "A", ["a"], { serviceDb: service.db }, undefined as never))
+      .rejects.toThrow("deleteContacts: a server write must say who made it");
+    expect([request.calls, request.rpcs, service.calls, service.rpcs]).toEqual([[], [], [], []]);
+  });
   it("only proven ids reach the blockers, only unblocked ones reach beforeDelete, and the rest come back as skippedIds (mutation: pass the raw batch to delete_internal_contacts -> FAILS)", async () => {
     const request = recordingDb({ contacts: [{ id: "free" }, { id: "kept" }] });
     const service = recordingDb({}, {
@@ -137,7 +163,7 @@ describe("deleteContacts", () => {
     const seen: string[][] = [];
     const r = await deleteContacts(request.db, "A", ["free", "kept", "stranger"], {
       serviceDb: service.db, beforeDelete: async (ids) => { seen.push(ids); return []; },
-    });
+    }, PERSON);
     expect(service.rpcs).toEqual([{ fn: "contact_delete_blockers", args: { p_account_id: "A", p_contact_ids: ["free", "kept"] } }]);
     expect(seen).toEqual([["free"]]);
     // On the REQUEST client, so the database's own Owner check runs (review I9; mutation: call it on serviceDb -> FAILS).
@@ -151,7 +177,7 @@ describe("deleteContacts", () => {
   it("an id the database kept after the purge is reported as lateKept and skipped (mutation: count every id sent as deleted -> FAILS)", async () => {
     const request = recordingDb({ contacts: [{ id: "a" }, { id: "b" }] }, { delete_internal_contacts: ["a"] });
     const service = recordingDb({}, { contact_delete_blockers: [] });
-    const r = await deleteContacts(request.db, "A", ["a", "b"], { serviceDb: service.db });
+    const r = await deleteContacts(request.db, "A", ["a", "b"], { serviceDb: service.db }, PERSON);
     expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: ["b"], lateKept: 1 });
   });
   it("the database's Owner refusal comes before the purge: a refused pre-flight throws and beforeDelete never runs (fix round; mutation: drop the pre-flight -> FAILS)", async () => {
@@ -160,14 +186,14 @@ describe("deleteContacts", () => {
     const purged: string[][] = [];
     await expect(deleteContacts(request.db, "A", ["a"], {
       serviceDb: service.db, beforeDelete: async (ids) => { purged.push(ids); return []; },
-    })).rejects.toThrow(/Owners only/);
+    }, PERSON)).rejects.toThrow(/Owners only/);
     expect(purged).toEqual([]);
     expect(service.rpcs).toEqual([]);
   });
   it("more than 500 ids is refused before any query (fix round; mutation: drop the cap in deleteContacts -> FAILS)", async () => {
     const request = recordingDb();
     const service = recordingDb();
-    await expect(deleteContacts(request.db, "A", Array.from({ length: 501 }, (_, i) => `c${i}`), { serviceDb: service.db }))
+    await expect(deleteContacts(request.db, "A", Array.from({ length: 501 }, (_, i) => `c${i}`), { serviceDb: service.db }, PERSON))
       .rejects.toThrow(/500/);
     expect([request.calls, request.rpcs, service.calls, service.rpcs]).toEqual([[], [], [], []]);
   });

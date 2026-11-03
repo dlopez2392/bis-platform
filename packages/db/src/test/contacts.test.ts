@@ -19,6 +19,8 @@ import { createDocument, reserveDocumentVersion, markDocumentVersionReady, purge
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureReplyToken, readReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN } from "../inbound-email";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -26,8 +28,8 @@ import { ensureReplyToken, readReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN 
 async function seedContact(
   db: any, accountId: string, input: { firstName?: string; lastName?: string },
 ) {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error || !data) throw new Error(`seedContact failed: ${error?.message}`);
   return { id: data.id as string };
@@ -43,7 +45,7 @@ async function seedContacts(db: any, accountId: string, count: number, at: strin
   const rows = Array.from({ length: count }, (_, i) => ({
     account_id: accountId, first_name: `Seed ${i}`, created_at: at,
   }));
-  const { data, error } = await db.from("contacts").insert(rows).select("id");
+  const { data, error } = await withAuthor(db.from("contacts").insert(rows), SEED_AUTHOR, SEED_VIA).select("id");
   if (error) throw new Error(`seedContacts failed: ${error.message}`);
   return (data ?? []).map((r: { id: string }) => r.id);
 }
@@ -53,8 +55,8 @@ async function seedContacts(db: any, accountId: string, count: number, at: strin
  *  positions in the `created_at desc, id desc` ordering `listContacts` pages
  *  by. Bypasses createContact for the same reasons as the helpers above. */
 async function seedContactAt(db: any, accountId: string, firstName: string, at: string) {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: firstName, created_at: at })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: firstName, created_at: at }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error || !data) throw new Error(`seedContactAt failed: ${error?.message}`);
   return { id: data.id as string };
@@ -826,7 +828,7 @@ describe("bulk contact ops", () => {
         account_id: accountId, contact_id: blocked.id, pipeline_id: pipe!.id,
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
-      const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [blocked.id], lateKept: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
       expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
@@ -836,7 +838,7 @@ describe("bulk contact ops", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
       await addTagToContact(db, accountId, c.id, "temp");
-      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db }, SEED_AUTHOR);
       expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
     }));
 
@@ -955,7 +957,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
       const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
       const seen: string[][] = [];
-      const r = await deleteContacts(db, accountId, [keep, go], { serviceDb: db, beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      const r = await deleteContacts(db, accountId, [keep, go], { serviceDb: db, beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } }, SEED_AUTHOR);
       expect(seen).toEqual([[keep, go].sort()]);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, keep)).not.toBeNull();
@@ -978,7 +980,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
         const res = await deleteContacts(db, accountA, [bContact], { serviceDb: db, beforeDelete: async (ids) => {
           seen.push([...ids]);
           return (await purgeContactDocuments(svc, accountA, ids, "user_owner")).keptContacts;
-        } });
+        } }, SEED_AUTHOR);
         expect(res).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(seen).toEqual([]);
         expect(removed).toEqual([]);
@@ -993,7 +995,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
       await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 1 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
@@ -1006,7 +1008,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       if (num.error) throw num.error;
       const call = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.data.id, contact_id: c }).select("id").single();
       if (call.error) throw call.error;
-      const r = await deleteContacts(db, accountId, [c, free], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c, free], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
       expect(await getContact(db, accountId, free)).toBeNull();
@@ -1033,7 +1035,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Viewed" }, "user_t")).id;
       await ensureReplyToken(db, accountId, c, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, c)).toBeNull();
       expect(await convs(db, accountId, c)).toEqual([]);
@@ -1044,7 +1046,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const c = (await createContact(db, accountId, { firstName: "Talked" }, "user_t")).id;
       const conv = await ensureConversation(db, accountId, c, "user_t");
       await createMessage(db, accountId, { conversationId: conv.id, channel: "email", direction: "outbound", body: "hi" }, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
       expect(await convs(db, accountId, c)).toHaveLength(1);
@@ -1063,7 +1065,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" }, attachmentCount: 0,
         status: "held", holdReason: "unverified", decidedBy: null, receivedAt: new Date().toISOString(),
       });
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await convs(db, accountId, c)).toHaveLength(1);
     }));
@@ -1086,7 +1088,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         account_id: accountId, contact_id: dealt, pipeline_id: pipe!.id, stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
       if (o.error) throw o.error;
-      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] });
+      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1, skippedIds: [dealt], lateKept: 0 });
       // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept).
       expect(await getContact(db, accountId, dealt)).not.toBeNull();
@@ -1107,7 +1109,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       withTestAccount(async (db, accountA) => {
         const b = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
         await ensureConversation(dbB, accountB, b, "user_t");
-        const r = await deleteContacts(db, accountA, [b], { serviceDb: db });
+        const r = await deleteContacts(db, accountA, [b], { serviceDb: db }, SEED_AUTHOR);
         expect(r).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(await getContact(dbB, accountB, b)).not.toBeNull();
         expect(await convs(dbB, accountB, b)).toHaveLength(1);
@@ -1156,7 +1158,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const r = await deleteContacts(db, accountId, [chatty, quiet], {
         serviceDb: db,
         beforeDelete: async (ids) => { beforeDeleteIds.push([...ids].sort()); return []; },
-      });
+      }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 2, skippedFiles: 0, skippedIds: [chatty, quiet], lateKept: 0 });
       expect(beforeDeleteIds).toEqual([]);
       expect(await getContact(db, accountId, chatty)).not.toBeNull();

@@ -522,7 +522,7 @@ export async function bulkDeleteContactsAction(
         purged = p.purgedDocuments;
         return p.keptContacts;
       },
-    });
+    }, { authorKind: "person", authorId: userId });
     revalidatePath(contactsPath(accountId));
     // A contact the database kept late (a text arrived between the blockers read and the lock) lost files
     // only if the purge removed any: with none removed, "the files were deleted" would be untrue.

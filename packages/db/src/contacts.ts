@@ -1451,7 +1451,13 @@ export async function deleteContacts(
      *  document vault's purge (0077). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
   },
+  /** F-115: who made the delete. Sent on both delete_internal_contacts calls (a SECURITY DEFINER whose session
+   *  role is the caller's): on a request client 0111 takes the token's sub and never reads it; on a service
+   *  client (the e2e cleanups and the live suites) it is the only author 0111 has, and enforce mode refuses the
+   *  delete without it. Required there, refused before any query (requireAuthor). */
+  author: RowAuthor,
 ): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number; skippedIds: string[]; lateKept: number }> {
+  author = requireAuthor(db, author, "deleteContacts");
   capBatch(contactIds, "deleteContacts");
   const none = { deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [] as string[], lateKept: 0 };
   if (contactIds.length === 0) return none;
@@ -1467,7 +1473,8 @@ export async function deleteContacts(
   const ours = unique.filter((id) => ourSet.has(id));
   if (ours.length === 0) return none;
   // Step 1b: the database's own Owner check, before the service client reads anything and before any purge.
-  const { error: ownerError } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: [] });
+  const { error: ownerError } = await withAuthor(
+    db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: [] }), author);
   if (ownerError) throw new Error(`deleteContacts refused: ${ownerError.message}`);
   // Step 2: every knowable blocker, before anything irreversible runs.
   const blockers = await contactDeleteBlockers(opts.serviceDb, accountId, ours);
@@ -1478,7 +1485,8 @@ export async function deleteContacts(
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { ...none, skippedBlocked: blocked.length, skippedFiles: kept.size, skippedIds: blocked };
   // Step 4: on the REQUEST client, so the database's own Owner check decides.
-  const { data, error } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go });
+  const { data, error } = await withAuthor(
+    db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go }), author);
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
   const deleted = new Set((data ?? []) as string[]);
   // Blocked between the read and the lock (a text arrived), or a file the purge left: kept by the database.
