@@ -197,6 +197,20 @@ describe("applyImportBatch", () => {
       expect(data?.length).toBe(1);
       expect(data![0]!.reason).toBe("same_phone");
     }));
+
+  // F-115, item 7: the CREATE path sent {authorKind:"import", authorId:null} — losing the importing
+  // user's own id, unlike the UPDATE path's shared `author` const two lines above it (authorId: actorId).
+  // "who ran this import" must not be lost on a row that happened to be brand new.
+  it("the create path records the importing user as author_id, the same as the update path's (mutation: authorId: null -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const index = await buildMatchIndex(db, accountId);
+      await applyImportBatch(db, accountId,
+        [{ input: { email: "newimport@example.com", firstName: "New" }, tags: [] }],
+        index, "user_test", { createTags: false });
+      const { data } = await db.from("contacts").select("author_kind, author_id")
+        .eq("account_id", accountId).eq("email", "newimport@example.com").single();
+      expect(data).toMatchObject({ author_kind: "import", author_id: "user_test" });
+    }));
 });
 
 /**

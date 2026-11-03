@@ -17,11 +17,19 @@ type Answer = { data: unknown; error: unknown };
 function fakeDb(opts: { rpc?: Record<string, Answer>; from?: Record<string, Answer> } = {}) {
   const rpcCalls: { name: string; args: unknown }[] = [];
   const fromCalls: { table: string; method: string; args: unknown[] }[] = [];
+  // F-115: a builder, as supabase-js returns — `withAuthor` (mergeRpc) calls `setHeader` on it before
+  // it is awaited. A thenable (it carries `.then`), so every EXISTING `await db.rpc(...)` call in this
+  // file (the five wrappers mergeRpc does not touch) keeps working unchanged.
+  const headers: { fn: string; name: string; value: string }[] = [];
   const db = {
     rpc: (name: string, args: unknown) => {
       rpcCalls.push({ name, args });
       const answer = (opts.rpc ?? {})[name] ?? { data: null, error: null };
-      return Promise.resolve(answer);
+      const builder = {
+        setHeader(headerName: string, value: string) { headers.push({ fn: name, name: headerName, value }); return builder; },
+        then(res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) { return Promise.resolve(answer).then(res, rej); },
+      };
+      return builder;
     },
     from: (table: string) => {
       const answer = (opts.from ?? {})[table] ?? { data: null, error: null };
@@ -37,8 +45,11 @@ function fakeDb(opts: { rpc?: Record<string, Answer>; from?: Record<string, Answ
       return chain;
     },
   } as unknown as SupabaseClient;
-  return { db, rpcCalls, fromCalls };
+  return { db, rpcCalls, fromCalls, headers };
 }
+/** F-115: who the pure tests pass as the merge/undo author — a stand-in for "whoever pressed the
+ *  button", distinct from `p_actor` (the RPC's own separate audit field, exercised elsewhere below). */
+const AUTHOR = { authorKind: "person", authorId: "user_author" } as const;
 const rpcArgs = (calls: { name: string; args: unknown }[], name: string) =>
   calls.find((c) => c.name === name)?.args as Record<string, unknown> | undefined;
 const hasFrom = (calls: { table: string; method: string; args: unknown[] }[], table: string, method: string, ...args: unknown[]) =>
@@ -178,7 +189,7 @@ describe("mergeContacts: sends p_choices, p_seen and p_actor (null when absent);
     const { db, rpcCalls } = fakeDb({
       rpc: { merge_contacts: { data: { status: "merged", mergeId: 7, moved: { messages: 2 } }, error: null } },
     });
-    const result = await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN });
+    const result = await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR);
     expect(rpcArgs(rpcCalls, "merge_contacts")).toEqual({
       p_account_id: "acct-1", p_keep: "k1", p_other: "o1", p_choices: CHOICES, p_seen: SEEN, p_actor: null,
     });
@@ -189,21 +200,21 @@ describe("mergeContacts: sends p_choices, p_seen and p_actor (null when absent);
     const { db, rpcCalls } = fakeDb({
       rpc: { merge_contacts: { data: { status: "merged", mergeId: 1, moved: {} }, error: null } },
     });
-    await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN, actor: "user_1" });
+    await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN, actor: "user_1" }, AUTHOR);
     expect(rpcArgs(rpcCalls, "merge_contacts")?.p_actor).toBe("user_1");
   });
 
   it.each(["same", "not_found", "holding", "already_merged", "stale"] as const)(
     "parses the refusal %s", async (status) => {
       const { db } = fakeDb({ rpc: { merge_contacts: { data: { status }, error: null } } });
-      const result = await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN });
+      const result = await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR);
       expect(result).toEqual({ status });
     },
   );
 
   it("throws on an unknown shape (mutation: return it as 'merged' -> FAILS)", async () => {
     const { db } = fakeDb({ rpc: { merge_contacts: { data: { status: "whatever-else" }, error: null } } });
-    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }))
+    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR))
       .rejects.toThrow();
   });
 
@@ -211,14 +222,30 @@ describe("mergeContacts: sends p_choices, p_seen and p_actor (null when absent);
     const { db } = fakeDb({
       rpc: { merge_contacts: { data: { status: "merged", mergeId: 1, moved: { messages: "2" } }, error: null } },
     });
-    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }))
+    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR))
       .rejects.toThrow();
   });
 
   it("throws on an RPC error", async () => {
     const { db } = fakeDb({ rpc: { merge_contacts: { data: null, error: { message: "boom" } } } });
-    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }))
+    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR))
       .rejects.toThrow("mergeContacts failed: boom");
+  });
+
+  // F-115: the same pattern deleteContacts got in 45a3e40c.
+  it("merge_contacts carries the author on x-bis-author, so 0111 records who merged on a service client too (F-115; mutation: drop withAuthor from mergeRpc -> FAILS)", async () => {
+    const { db, headers } = fakeDb({
+      rpc: { merge_contacts: { data: { status: "merged", mergeId: 1, moved: {} }, error: null } },
+    });
+    await mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, AUTHOR);
+    expect(headers).toEqual([{ fn: "merge_contacts", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_author" }) }]);
+  });
+
+  it("a service client with no author is refused before any query (F-115; mutation: drop requireAuthor -> the merge runs unattributed, FAILS)", async () => {
+    const { db, rpcCalls } = fakeDb();
+    await expect(mergeContacts(db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES, seen: SEEN }, undefined as never))
+      .rejects.toThrow("mergeContacts: a server write must say who made it");
+    expect(rpcCalls).toEqual([]);
   });
 });
 
@@ -227,7 +254,7 @@ describe("undoContactMerge: parses \"undone\" with keptNew/keptEdits, and the fo
     const { db, rpcCalls } = fakeDb({
       rpc: { undo_contact_merge: { data: { status: "undone", otherId: "o1", keptNew: 2, keptEdits: ["email"] }, error: null } },
     });
-    const result = await undoContactMerge(db, "acct-1", 42, "user_1");
+    const result = await undoContactMerge(db, "acct-1", 42, AUTHOR, "user_1");
     expect(rpcArgs(rpcCalls, "undo_contact_merge")).toEqual({ p_account_id: "acct-1", p_merge_id: 42, p_actor: "user_1" });
     expect(result).toEqual({ status: "undone", otherId: "o1", keptNew: 2, keptEdits: ["email"] });
   });
@@ -236,25 +263,40 @@ describe("undoContactMerge: parses \"undone\" with keptNew/keptEdits, and the fo
     const { db, rpcCalls } = fakeDb({
       rpc: { undo_contact_merge: { data: { status: "undone", otherId: "o1", keptNew: 0, keptEdits: [] }, error: null } },
     });
-    await undoContactMerge(db, "acct-1", 42);
+    await undoContactMerge(db, "acct-1", 42, AUTHOR);
     expect(rpcArgs(rpcCalls, "undo_contact_merge")?.p_actor).toBeNull();
   });
 
   it.each(["not_found", "already_undone", "expired", "later_merge"] as const)(
     "parses the refusal %s", async (status) => {
       const { db } = fakeDb({ rpc: { undo_contact_merge: { data: { status }, error: null } } });
-      expect(await undoContactMerge(db, "acct-1", 42)).toEqual({ status });
+      expect(await undoContactMerge(db, "acct-1", 42, AUTHOR)).toEqual({ status });
     },
   );
 
   it("throws on an unknown shape", async () => {
     const { db } = fakeDb({ rpc: { undo_contact_merge: { data: { status: "undone", otherId: "o1" }, error: null } } });
-    await expect(undoContactMerge(db, "acct-1", 42)).rejects.toThrow();
+    await expect(undoContactMerge(db, "acct-1", 42, AUTHOR)).rejects.toThrow();
   });
 
   it("throws on an RPC error", async () => {
     const { db } = fakeDb({ rpc: { undo_contact_merge: { data: null, error: { message: "boom" } } } });
-    await expect(undoContactMerge(db, "acct-1", 42)).rejects.toThrow("undoContactMerge failed: boom");
+    await expect(undoContactMerge(db, "acct-1", 42, AUTHOR)).rejects.toThrow("undoContactMerge failed: boom");
+  });
+
+  // F-115: the same pattern deleteContacts got in 45a3e40c.
+  it("undo_contact_merge carries the author on x-bis-author (F-115; mutation: drop withAuthor from mergeRpc -> FAILS)", async () => {
+    const { db, headers } = fakeDb({
+      rpc: { undo_contact_merge: { data: { status: "undone", otherId: "o1", keptNew: 0, keptEdits: [] }, error: null } },
+    });
+    await undoContactMerge(db, "acct-1", 42, AUTHOR);
+    expect(headers).toEqual([{ fn: "undo_contact_merge", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_author" }) }]);
+  });
+
+  it("a service client with no author is refused before any query (F-115; mutation: drop requireAuthor -> the undo runs unattributed, FAILS)", async () => {
+    const { db, rpcCalls } = fakeDb();
+    await expect(undoContactMerge(db, "acct-1", 42, undefined as never)).rejects.toThrow("undoContactMerge: a server write must say who made it");
+    expect(rpcCalls).toEqual([]);
   });
 });
 
@@ -264,10 +306,18 @@ describe("undoContactMerge: parses \"undone\" with keptNew/keptEdits, and the fo
 function scriptedRpcDb(answers: { data?: unknown; error?: { code: string; message: string } }[]) {
   let calls = 0;
   const db = {
+    // F-115: a builder with `setHeader` (withAuthor calls it on every attempt, including a retry),
+    // thenable so `await db.rpc(...)` still resolves the scripted answer.
     rpc: (_name: string, _args: unknown) => {
       const a = answers[Math.min(calls, answers.length - 1)]!;
       calls++;
-      return Promise.resolve({ data: a.data ?? null, error: a.error ?? null });
+      const builder = {
+        setHeader() { return builder; },
+        then(res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) {
+          return Promise.resolve({ data: a.data ?? null, error: a.error ?? null }).then(res, rej);
+        },
+      };
+      return builder;
     },
   } as unknown as SupabaseClient;
   return { db, calls: () => calls };
@@ -282,41 +332,41 @@ const SEEN2 = { keep: "a".repeat(32), other: "b".repeat(32) };
 describe("mergeContacts / undoContactMerge: retry a 40P01 deadlock ONCE, a second surfaces as the usual failure (fix round, carry-in 4)", () => {
   it("mergeContacts: a deadlock then success is retried once, answers the second call (mutation: drop the 40P01 retry -> FAILS)", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }, { data: MERGED_OK }]);
-    const r = await mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 });
+    const r = await mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }, AUTHOR);
     expect(r).toEqual({ status: "merged", mergeId: 7, moved: { messages: 1 } });
     expect(s.calls()).toBe(2);
   });
 
   it("mergeContacts: two deadlocks in a row give up after ONE retry (two calls total), throwing a MergeRpcError carrying the code (mutation: retry a second time -> calls() would be 3, FAILS)", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }, { error: DEADLOCK }]);
-    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }))
+    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }, AUTHOR))
       .rejects.toMatchObject({ code: "40P01" });
     expect(s.calls()).toBe(2);
   });
 
   it("mergeContacts: any other error is never retried (mutation: retry every error -> calls() would be 2, FAILS)", async () => {
     const s = scriptedRpcDb([{ error: { code: "57014", message: "statement timeout" } }, { data: MERGED_OK }]);
-    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }))
+    await expect(mergeContacts(s.db, "acct-1", { keepId: "k1", otherId: "o1", choices: CHOICES2, seen: SEEN2 }, AUTHOR))
       .rejects.toThrow(/statement timeout/);
     expect(s.calls()).toBe(1);
   });
 
   it("undoContactMerge: a deadlock then success is retried once (mutation: drop the retry -> FAILS)", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }, { data: UNDONE_OK }]);
-    const r = await undoContactMerge(s.db, "acct-1", 42);
+    const r = await undoContactMerge(s.db, "acct-1", 42, AUTHOR);
     expect(r).toEqual({ status: "undone", otherId: "o1", keptNew: 0, keptEdits: [] });
     expect(s.calls()).toBe(2);
   });
 
   it("undoContactMerge: two deadlocks give up after one retry, the thrown error still carries the code (mutation: swallow the code -> FAILS)", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }, { error: DEADLOCK }]);
-    await expect(undoContactMerge(s.db, "acct-1", 42)).rejects.toMatchObject({ code: "40P01" });
+    await expect(undoContactMerge(s.db, "acct-1", 42, AUTHOR)).rejects.toMatchObject({ code: "40P01" });
     expect(s.calls()).toBe(2);
   });
 
   it("undoContactMerge: a foreign-key violation (23503, something the merge re-inserts was deleted since) throws a MergeRpcError with that code, UNRETRIED (mutation: throw a plain Error without .code -> FAILS)", async () => {
     const s = scriptedRpcDb([{ error: FK_VIOLATION }]);
-    const err = await undoContactMerge(s.db, "acct-1", 42).catch((e: unknown) => e);
+    const err = await undoContactMerge(s.db, "acct-1", 42, AUTHOR).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(MergeRpcError);
     expect((err as InstanceType<typeof MergeRpcError>).code).toBe("23503");
     expect(s.calls()).toBe(1);

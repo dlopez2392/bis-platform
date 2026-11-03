@@ -21,7 +21,7 @@ describe("row-author", () => {
   });
 
   it("requireAuthor refuses a service client with no author, at runtime (mutation: return undefined -> FAILS)", () => {
-    const service = {} as never; // isUserClient(service) is false
+    const service = {} as never;
     expect(() => requireAuthor(service, undefined, "updateContact")).toThrow(/updateContact: a server write must say who made it/);
   });
 
@@ -31,10 +31,21 @@ describe("row-author", () => {
     expect(requireAuthor(service, author, "updateContact")).toBe(author);
   });
 
-  it("requireAuthor never refuses a user client with no author (mutation: throw unconditionally -> FAILS)", () => {
+  // Fix round: the user-client exemption was moot (withAuthor would TypeError on an undefined author
+  // just as hard on a user client) — requireAuthor now refuses every client the same way, with the
+  // writer's own named message, rather than a user client's call surfacing a bare TypeError two lines
+  // later instead. Replaces the old "never refuses a user client" case this simplification contradicts.
+  it("requireAuthor refuses a user client with no author too, same message, at runtime (mutation: special-case isUserClient back in -> FAILS)", () => {
     const USER_CLIENT = Symbol.for("@bis/db:user-client");
     const user = { [USER_CLIENT]: true } as unknown as never;
-    expect(requireAuthor(user, undefined, "updateContact")).toBeUndefined();
+    expect(() => requireAuthor(user, undefined, "updateContact")).toThrow(/updateContact: a server write must say who made it/);
+  });
+
+  it("requireAuthor returns the author unchanged on a user client too (mutation: return a different object -> FAILS)", () => {
+    const USER_CLIENT = Symbol.for("@bis/db:user-client");
+    const user = { [USER_CLIENT]: true } as unknown as never;
+    const author = { authorKind: "person", authorId: "user_1" } as const;
+    expect(requireAuthor(user, author, "updateContact")).toBe(author);
   });
 
   it("eventActorOf is the inverse of contactAuthor for every pair it produces (mutation: map customer to ai -> FAILS)", () => {
@@ -60,6 +71,26 @@ describe("row-author", () => {
   it("updateContact's final argument is an author object, not a bare actor id (mutation: loosen it back to `string` -> tsc FAILS on the unused directive)", () => {
     // @ts-expect-error a bare string is not a RowAuthor
     void (() => updateContact({} as never, "a", "c", { firstName: "x" }, "actor_1"));
+    expect(true).toBe(true);
+  });
+
+  // The plan's own prescribed check (substituted per working rule 2: the plan's literal `{ dnd: true }`
+  // is not a `ContactInput` field at all — `firstName`/`lastName`/`email`/`phone`/`source`/`custom` are
+  // the only ones — so that object produces an excess-property error of its OWN on this line regardless
+  // of whether `author` is required, which keeps the directive "used" either way and can never
+  // demonstrate the mutation below; verified empirically, not just reasoned about, by actually running
+  // this exact mutation against the unmodified `{ dnd: true }` call first, which stayed green). `{
+  // firstName: "x" }` is a real, valid field, so the ONLY possible error on this line is the arity one.
+  //
+  // Vitest's esbuild transform does not type-check — a `// @ts-expect-error` comment is purely a `tsc`
+  // directive — so this pins `pnpm --filter @bis/db typecheck`, never a vitest run on its own:
+  // `updateContact` takes 5 required arguments today, so a 4-argument call omitting `author` is TS2554
+  // ("Expected 5-6 arguments, but got 4"), which the directive suppresses. Making `author` optional (or
+  // defaulted) would make this exact call valid, leaving the directive with nothing to suppress — TS2578
+  // ("Unused '@ts-expect-error' directive") — and `tsc` fails.
+  it("updateContact's author argument is required, not optional (mutation: make author optional -> tsc FAILS on the unused directive)", () => {
+    // @ts-expect-error author is required
+    void (() => updateContact({} as never, "a", "c", { firstName: "x" }));
     expect(true).toBe(true);
   });
 });

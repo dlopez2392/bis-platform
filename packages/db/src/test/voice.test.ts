@@ -1361,7 +1361,9 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     const reached: string[] = [];
     const answer = (result: unknown) => {
       const q: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "insert"]) q[m] = () => q;
+      // F-115: ensureHoldingContact's insert now runs through withAuthor, which calls .setHeader on
+      // the builder before it is awaited.
+      for (const m of ["select", "eq", "insert", "setHeader"]) q[m] = () => q;
       q.maybeSingle = async () => ({ data: null, error: null });
       q.single = async () => result;
       return q;
