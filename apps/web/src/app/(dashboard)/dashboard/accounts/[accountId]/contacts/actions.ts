@@ -108,7 +108,7 @@ export async function assignContactsAction(
     return { ok: false, error: "assign.failed" };
   }
   try {
-    const previous = await assignContacts(await dbForRequest(), accountId, contactIds, assignee, access.userId);
+    const previous = await assignContacts(await dbForRequest(), accountId, contactIds, assignee, { authorKind: "person", authorId: access.userId });
     revalidatePath(contactsPath(accountId));
     return { ok: true, previous };
   } catch (e) {
@@ -145,7 +145,7 @@ export async function undoAssignContactsAction(
     return { ok: false, error: "assign.failed" };
   }
   try {
-    const { restored } = await undoAssignContacts(await dbForRequest(), accountId, previous, access.userId);
+    const { restored } = await undoAssignContacts(await dbForRequest(), accountId, previous, { authorKind: "person", authorId: access.userId });
     // Nothing put back: someone handed every one of them on since, and their
     // pick stands. Said as "assign.changed", like the task Undo (final re-review).
     if (restored === 0) return { ok: false, error: "assign.changed" };
@@ -299,7 +299,7 @@ export async function setContactLanguageAction(
     let wrote = false;
     let setAt: string | null = null;
     try {
-      const result = await setContactLanguage(serviceDb(), accountId, contactId, language, userId);
+      const result = await setContactLanguage(serviceDb(), accountId, contactId, language, { authorKind: "person", authorId: userId });
       wrote = result.wrote;
       setAt = result.setAt;
     } catch (e) {
@@ -343,7 +343,7 @@ export async function restoreContactLanguageAction(
   try {
     const db = await dbForRequest();
     if (!(await getContact(db, accountId, contactId))) return await languageError("contact.language.saveFailed", accountId, isAgency);
-    const outcome = await restoreContactLanguage(serviceDb(), accountId, contactId, prior, written, userId);
+    const outcome = await restoreContactLanguage(serviceDb(), accountId, contactId, prior, written, { authorKind: "person", authorId: userId });
     if (outcome === "changed") return await languageError("contact.language.changed", accountId, isAgency);
     revalidatePath(`${contactsPath(accountId)}/${contactId}`);
     return { ok: true };
@@ -426,7 +426,7 @@ export async function updateContactFieldAction(
       priorPhone = typeof before?.phone === "string" ? before.phone : null;
       priorUnconfirmed = before?.phone_country_unconfirmed === true;
     }
-    await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
+    await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, { authorKind: "person", authorId: userId });
   } catch {
     return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
   }
@@ -611,7 +611,7 @@ export async function setPhoneCountryAction(
     const phone = repickPhoneCountry(contact.phone, country);
     if (!phone) return { ok: false, error: t(m, "contact.phoneCountry.unreadable", locale) };
     const outcome = await setContactPhoneCountry(db, accountId, contactId,
-      { expectedPhone: contact.phone, phone, unconfirmed: false }, userId);
+      { expectedPhone: contact.phone, phone, unconfirmed: false }, { authorKind: "person", authorId: userId });
     if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
     revalidateContact(accountId, contactId);
     return { ok: true, phone, previous: { phone: contact.phone, unconfirmed: contact.phone_country_unconfirmed === true } };
@@ -648,7 +648,7 @@ export async function undoPhoneCountryAction(
   const unconfirmed = previous.unconfirmed || restored?.unconfirmed === true;
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
-      { expectedPhone: picked, phone, unconfirmed }, userId);
+      { expectedPhone: picked, phone, unconfirmed }, { authorKind: "person", authorId: userId });
     if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.changed", locale) };
   } catch (e) {
     console.error(`undoPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
@@ -697,7 +697,7 @@ export async function undoInlinePhoneEditAction(
   const unconfirmed = undo.priorUnconfirmed || restored?.unconfirmed === true;
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
-      { expectedPhone: undo.editedPhone, phone, unconfirmed }, userId);
+      { expectedPhone: undo.editedPhone, phone, unconfirmed }, { authorKind: "person", authorId: userId });
     if (outcome === "changed") return { ok: false, error: t(m, "contact.phoneCountry.inlineChanged", locale) };
   } catch (e) {
     console.error(`undoInlinePhoneEditAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);

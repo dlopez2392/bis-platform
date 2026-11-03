@@ -413,8 +413,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       if (pick.kind === "existing") {
         if (number === ctx.callerNumber) {
           try {
+            // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
             const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, pick.contactId,
-              { firstName: firstName || undefined, lastName, email: fields.email }, ACTOR_ID, ACTOR_TYPE);
+              { firstName: firstName || undefined, lastName, email: fields.email }, { authorKind: "ai", authorId: null });
             acts.push(...fieldFillActs(source, pick.contactId, filled));
           } catch (e) {
             console.error(`finishCall fillContactBlanks failed for ${pick.contactId}: ${String(e)}`);
@@ -459,9 +460,10 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       try {
         const existing = (await getContact(ctx.db, ctx.accountId, created.id)) as { phone?: string | null } | null;
         if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+          // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
           const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
             { firstName: firstName || undefined, lastName, email: fields.email },
-            ACTOR_ID, ACTOR_TYPE);
+            { authorKind: "ai", authorId: null });
           acts.push(...fieldFillActs(source, created.id, filled));
         }
       } catch (e) {
@@ -504,9 +506,10 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
     } else {
       try {
         // A no-op on a caller-ID match (written comes back empty), so usually no act.
+        // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
         const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
           { phone: ctx.callerNumber ?? undefined },
-          ACTOR_ID, ACTOR_TYPE);
+          { authorKind: "ai", authorId: null });
         acts.push(...fieldFillActs(source, created.id, filled));
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
@@ -634,8 +637,9 @@ export async function finishCall(
     const heard = clearCallerLanguage(state.transcript);
     if (heard) {
       try {
+        // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
         await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
-          { language: heard, source: "call", at: meta.endedAt }, ACTOR_ID, ACTOR_TYPE);
+          { language: heard, source: "call", at: meta.endedAt }, { authorKind: "ai", authorId: null });
       } catch (e) {
         console.error(`finishCall ${meta.callRowId ?? "(no row)"}: language signal failed: ${String(e)}`);
       }

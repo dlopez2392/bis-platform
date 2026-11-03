@@ -82,6 +82,10 @@ const HEAD: readonly PlanNode[] = [
   n("documentsScan", ["documentsSweep"]), n("documentsExpiry", ["documentsScan"]),
   n("weeklyClientReport", ["billingPause"]), n("weeklyAgencyReport", ["weeklyClientReport"]),
   n(JOBS_DRAIN_KEY, ["billingPause"], "settled", JOBS_DRAIN_MAX_S),
+  // F-115: an independent database health check (it reads record_changes for the last 24 hours of
+  // unattributed server writes); it touches no booking or billing state, so it has no predecessor
+  // and runs every tick regardless of whether billingPause answered.
+  n("recordChangesAudit", []),
 ];
 // The usage report follows every sender (a text sent this tick reaches Stripe
 // this tick); the alert pass follows everything, so it reads this tick's beats.

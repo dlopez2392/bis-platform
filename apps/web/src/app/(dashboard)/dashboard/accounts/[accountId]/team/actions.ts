@@ -218,7 +218,7 @@ export async function setTeamRoleAction(
       // option in this branch). Unconditional, not gated on `previous`
       // (giveBackTechnicianTasks below explains why): it is what makes a
       // second Undo click heal a give-back the first one missed.
-      await giveBackTechnicianTasks(db, accountId, userId);
+      await giveBackTechnicianTasks(db, accountId, userId, callerId);
     }
     revalidateTeam(accountId);
     return { ok: true, previous };
@@ -262,7 +262,7 @@ export async function setTeamRoleAction(
   }
   // F-085 follow-up, Task A: unconditional, same as the demotion branch's
   // (giveBackTechnicianTasks below explains why `previous` is not checked).
-  await giveBackTechnicianTasks(db, accountId, userId);
+  await giveBackTechnicianTasks(db, accountId, userId, callerId);
   revalidateTeam(accountId);
   return { ok: true, previous };
 }
@@ -286,7 +286,7 @@ export async function setTeamRoleAction(
  * click included) retries it, since giving back an already-held task is a
  * no-op.
  */
-async function giveBackTechnicianTasks(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
+async function giveBackTechnicianTasks(db: SupabaseClient, accountId: string, userId: string, callerId: string): Promise<void> {
   let release: TechnicianRelease | null;
   try {
     release = await latestTechnicianRelease(db, accountId, userId);
@@ -296,7 +296,8 @@ async function giveBackTechnicianTasks(db: SupabaseClient, accountId: string, us
   }
   if (!release || release.taskIds.length === 0 || !undoStillOpen(release.releasedAt, Date.now())) return;
   try {
-    await reassignReleased(db, accountId, userId, { contacts: [], tasks: release.taskIds });
+    await reassignReleased(db, accountId, userId, { contacts: [], tasks: release.taskIds },
+      { authorKind: "person", authorId: callerId });
   } catch (e) {
     console.error(`team: a role change took ${userId} out of Technician, but their released tasks were not given back (account ${accountId}; tasks ${release.taskIds.join(",") || "none"}): ${loggableError(e)}`);
   }
@@ -368,7 +369,7 @@ export async function removeTeamMemberAction(
   let released: ReleasedAssignments | undefined;
   for (const attempt of ["", " on the retry either"]) {
     try {
-      released = await releaseMemberAssignments(db, accountId, userId);
+      released = await releaseMemberAssignments(db, accountId, userId, { authorKind: "person", authorId: callerId });
       break;
     } catch (e) {
       console.error(`team: assignments not released${attempt} (${ids}): ${loggableError(e)}`);
@@ -398,11 +399,11 @@ export async function removeTeamMemberAction(
  * (fix round 1, review I2).
  */
 async function giveBackReleased(
-  db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments,
+  db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments, callerId: string,
 ): Promise<void> {
   if (released.contacts.length === 0 && released.tasks.length === 0) return;
   try {
-    await reassignReleased(db, accountId, userId, released);
+    await reassignReleased(db, accountId, userId, released, { authorKind: "person", authorId: callerId });
   } catch (e) {
     console.error(`team undo: the member is back but their released customers and tasks were not given back (account ${accountId}, user ${userId}; contacts ${released.contacts.join(",") || "none"}; tasks ${released.tasks.join(",") || "none"}): ${loggableError(e)}`);
   }
@@ -468,7 +469,7 @@ async function reassertRestoredRole(orgId: string, clerkUserId: string, role: Ac
  * runs it too, so a second Undo heals a give-back the first one missed.
  */
 export async function undoRemoveTeamMemberAction(accountId: string, userId: string): Promise<TeamResult> {
-  await requireAccountOwner(accountId);
+  const { userId: callerId } = await requireAccountOwner(accountId);
   if (!isTeamUserId(userId)) return { ok: false, error: "team.undo.failed" };
   const db = serviceDb();
   const removed = await latestRemoval(db, accountId, userId);
@@ -481,7 +482,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
   if (!clerk.ok) {
     if (clerk.code === "already_a_member_in_organization" && (await findMember(db, accountId, userId))?.role === removed.role) {
       await reassertRestoredRole(account.orgId, removed.clerkUserId, removed.role, ids);
-      await giveBackReleased(db, accountId, userId, removed.released);
+      await giveBackReleased(db, accountId, userId, removed.released, callerId);
       return { ok: true };
     }
     return { ok: false, error: "team.undo.failed" };
@@ -503,7 +504,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
   } catch (e) {
     console.error(`team undo: the member is back but their language was not restored (${ids}): ${loggableError(e)}`);
   }
-  await giveBackReleased(db, accountId, userId, removed.released);
+  await giveBackReleased(db, accountId, userId, removed.released, callerId);
   revalidateTeam(accountId);
   return { ok: true };
 }

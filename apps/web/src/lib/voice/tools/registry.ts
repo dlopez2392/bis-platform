@@ -565,8 +565,9 @@ export async function runTool(
         // 5.10.2: decision 19's fill, ONLY on a record picked on the caller-ID number. Never fails the booking.
         if (onCallerId) {
           try {
+            // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
             const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
-              { firstName, lastName, email: email ?? undefined }, "voice", "ai");
+              { firstName, lastName, email: email ?? undefined }, { authorKind: "ai", authorId: null });
             acts.push(...fieldFillActs(source, contactId, filled));
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
@@ -616,9 +617,10 @@ export async function runTool(
             try {
               const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
               if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+                // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
                 const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
                   { firstName, lastName, email: email ?? undefined },
-                  "voice", "ai");
+                  { authorKind: "ai", authorId: null });
                 acts.push(...fieldFillActs(source, contactId, filled));
               }
             } catch (e) {
@@ -673,8 +675,9 @@ export async function runTool(
       const heard = clearCallerLanguageNow(state);
       if (heard) {
         try {
+          // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
           await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
-            { language: heard, source: "booking", at: now }, ACTOR_ID, ACTOR_TYPE);
+            { language: heard, source: "booking", at: now }, { authorKind: "ai", authorId: null });
         } catch (e) {
           console.error(`voice booking ${bookingId}: language signal failed: ${String(e)}`);
         }

@@ -94,7 +94,7 @@ describe("updateContactFieldAction", () => {
     const r = await updateContactFieldAction("a1", "c1", "first_name", "  ");
     expect(r).toEqual({ ok: true });
     expect(dbMocks.updateContact).toHaveBeenCalledWith(
-      {}, "a1", "c1", { firstName: "" }, "user_1",
+      {}, "a1", "c1", { firstName: "" }, { authorKind: "person", authorId: "user_1" },
     );
     expect(dbMocks.getContact).not.toHaveBeenCalled();
   });
@@ -120,7 +120,7 @@ describe("updateContactFieldAction", () => {
       .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
     const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
-    expect(dbMocks.updateContact).toHaveBeenCalledWith({}, "a1", "c1", { phone: "(956) 292-1696" }, "user_1");
+    expect(dbMocks.updateContact).toHaveBeenCalledWith({}, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({
       ok: true,
       undo: { priorPhone: "+19565550100", priorUnconfirmed: true, editedPhone: "+19562921696" },
@@ -323,7 +323,7 @@ describe("setPhoneCountryAction", () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await setPhoneCountryAction("a1", "c1", "MX", "+15512345678");
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({ ok: true, phone: "+525512345678", previous: { phone: "+15512345678", unconfirmed: true } });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
   });
@@ -333,7 +333,7 @@ describe("setPhoneCountryAction", () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await setPhoneCountryAction("a1", "c1", "US", "55 1234 5678");
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "55 1234 5678", phone: "+15512345678", unconfirmed: false }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "55 1234 5678", phone: "+15512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_1" });
     expect(r).toMatchObject({ ok: true, previous: { phone: "55 1234 5678", unconfirmed: false } });
   });
 
@@ -419,7 +419,7 @@ describe("undoPhoneCountryAction", () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true });
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({ ok: true });
   });
 
@@ -445,7 +445,7 @@ describe("undoPhoneCountryAction", () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "55 1234 5678", unconfirmed: false });
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)", async () => {
@@ -474,7 +474,7 @@ describe("undoInlinePhoneEditAction", () => {
       editedPhone: "+19562921696", priorPhone: null, priorUnconfirmed: false,
     });
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+19562921696", phone: null, unconfirmed: false }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "+19562921696", phone: null, unconfirmed: false }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({ ok: true });
   });
 
@@ -484,7 +484,7 @@ describe("undoInlinePhoneEditAction", () => {
       editedPhone: "+14155551234", priorPhone: "+19565550100", priorUnconfirmed: true,
     });
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+14155551234", phone: "+19565550100", unconfirmed: true }, "user_1");
+      {}, "a1", "c1", { expectedPhone: "+14155551234", phone: "+19565550100", unconfirmed: true }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({ ok: true });
   });
 
@@ -563,7 +563,7 @@ describe("undoInlinePhoneEditAction", () => {
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
       {}, "a1", "c1",
       { expectedPhone: "+19562921696", phone: "+19565550100", unconfirmed: true },
-      "user_1",
+      { authorKind: "person", authorId: "user_1" },
     );
     expect(r).toEqual({ ok: true });
   });
@@ -591,7 +591,7 @@ describe("undoInlinePhoneEditAction", () => {
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
       {}, "a1", "c1",
       { expectedPhone: null, phone: "+15512345678", unconfirmed: true },
-      "user_1",
+      { authorKind: "person", authorId: "user_1" },
     );
     expect(r).toEqual({ ok: true });
   });
@@ -610,7 +610,7 @@ describe("undoInlinePhoneEditAction", () => {
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
       {}, "a1", "c1",
       { expectedPhone: "+14155551234", phone: "+15512345678", unconfirmed: true },
-      "user_1",
+      { authorKind: "person", authorId: "user_1" },
     );
   });
 });
@@ -781,7 +781,7 @@ describe("assignContactsAction (spec §8, A2, M4)", () => {
     const previous = [{ contactId: U(1), assignee: null, target: U(9), movedTaskIds: [U(5)] }];
     dbMocks.assignContacts.mockResolvedValueOnce(previous);
     expect(await assignContactsAction("a1", [U(1), U(2)], U(9))).toEqual({ ok: true, previous });
-    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1), U(2)], U(9), "user_1");
+    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1), U(2)], U(9), { authorKind: "person", authorId: "user_1" });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
   });
 
@@ -789,7 +789,7 @@ describe("assignContactsAction (spec §8, A2, M4)", () => {
     requireAccountAccess.mockResolvedValue(STAFF);
     dbMocks.assignContacts.mockResolvedValueOnce([]);
     expect(await assignContactsAction("a1", [U(1)], null)).toEqual({ ok: true, previous: [] });
-    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1)], null, "user_1");
+    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1)], null, { authorKind: "person", authorId: "user_1" });
   });
 
   it.each([
@@ -880,7 +880,7 @@ describe("undoAssignContactsAction (CORRECTED 2026-10-11: exact undo, never regr
     requireAccountAccess.mockResolvedValue(STAFF);
     expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: true });
     expect(dbMocks.undoAssignContacts).toHaveBeenCalledTimes(1);
-    expect(dbMocks.undoAssignContacts).toHaveBeenCalledWith(REQUEST, "a1", previous, "user_1");
+    expect(dbMocks.undoAssignContacts).toHaveBeenCalledWith(REQUEST, "a1", previous, { authorKind: "person", authorId: "user_1" });
     expect(dbMocks.assignContacts).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
   });
@@ -1044,7 +1044,7 @@ describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () 
       written: { language: "en", source: "staff", setAt: WRITTEN_T },
     });
     expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
-    expect(dbMocks.setContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", "en", "user_1");
+    expect(dbMocks.setContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", "en", { authorKind: "person", authorId: "user_1" });
     // The written setAt comes straight from the writer's own result, never a read-back (M-b): a
     // second getContact call would mean the old read-after-write path crept back in.
     expect(dbMocks.getContact).toHaveBeenCalledTimes(1);
@@ -1100,7 +1100,7 @@ describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () 
     const prior = { language: "es" as const, source: "booking" as const, setAt: "2026-10-03T15:00:00+00:00" };
     const written = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
     expect(await restoreContactLanguageAction("a1", "c1", prior, written)).toEqual({ ok: true });
-    expect(dbMocks.restoreContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", prior, written, "user_1");
+    expect(dbMocks.restoreContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", prior, written, { authorKind: "person", authorId: "user_1" });
     expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
   });
 

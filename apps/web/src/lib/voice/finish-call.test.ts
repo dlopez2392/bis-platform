@@ -1293,9 +1293,11 @@ describe("finishCall — proposal generation", () => {
             };
             return {
               select: () => builder,
-              update: () => ({
-                eq: () => ({ eq: () => Promise.resolve({ error: null }) }),
-              }),
+              update: () => {
+                // F-115: withAuthor() calls setHeader() right after .update(...), before .eq() — a no-op here.
+                const chain = { eq: () => ({ eq: () => Promise.resolve({ error: null }) }), setHeader: () => chain };
+                return chain;
+              },
             };
           }
           if (table === "events") return { insert: async () => ({ error: null }) };
@@ -1314,8 +1316,9 @@ describe("finishCall — proposal generation", () => {
     ): Promise<boolean> {
       const db = fakeContactDb(row);
       const patch = { [field]: VALUES[field] };
+      // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fakeContactDb is a hand-built stand-in, not a real SupabaseClient
-      const filled = await realFillContactBlanks(db as any, "a1", "c1", patch, "voice", "ai");
+      const filled = await realFillContactBlanks(db as any, "a1", "c1", patch, { authorKind: "ai", authorId: null });
       return filled.length > 0;
     }
 

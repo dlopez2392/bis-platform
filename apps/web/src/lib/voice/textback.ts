@@ -195,7 +195,8 @@ export async function contactForCallerId(
     // the caller's own contact and the phone fill is a no-op. Never add an
     // email or name here without checking the match's phone is the caller ID.
     try {
-      const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
+      // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
+      const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, { authorKind: "ai", authorId: null });
       acts.push(...fieldFillActs(source, created.id, filled));
     } catch (e) {
       console.error(`textback fillContactBlanks failed for ${created.id}: ${String(e)}`);

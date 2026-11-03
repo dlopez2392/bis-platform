@@ -71,7 +71,7 @@ export async function undoAiActAction(
   if (act.kind === "contact_created") {
     // Deleting a customer is an Owner's (0066). Outside the catch below: a Staff member is redirected.
     await requireAccountOwner(accountId);
-    return undoContact(accountId, act, input.typedName ?? "");
+    return undoContact(accountId, act, input.typedName ?? "", access.userId);
   }
   try {
     // 0106 (F-006, owner ruling D8): a field act may still name a now-merged-away record; resolved ONCE,
@@ -138,7 +138,7 @@ async function undoField(
 ): Promise<UndoResult> {
   // The compare-and-swap on the request client: the field must still hold exactly her value. `target` is
   // the act's contactId already resolved past a merge (0106, owner ruling D8).
-  const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.after.value, act.before.value, userId);
+  const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.after.value, act.before.value, { authorKind: "person", authorId: userId });
   if (r === "changed") return { ok: false, reason: "changed" };
   // The value is back: a stamp that fails now is logged by id, never reported as a failed Undo (review M-2).
   try {
@@ -152,12 +152,14 @@ async function undoField(
   return { ok: true, control: "field" };
 }
 
-async function undoContact(accountId: string, act: Extract<AiAct, { kind: "contact_created" }>, typedName: string): Promise<UndoResult> {
+async function undoContact(
+  accountId: string, act: Extract<AiAct, { kind: "contact_created" }>, typedName: string, userId: string,
+): Promise<UndoResult> {
   try {
     const contact = (await getContact(await dbForRequest(), accountId, act.contactId)) as Record<string, unknown> | null;
     if (!contact) return NOT_AVAILABLE;
     if (!typedNameMatches(typedName, contact)) return { ok: false, reason: "typedName" };
-    const outcome = await undoAiContactCreated(serviceDb(), accountId, act.id);
+    const outcome = await undoAiContactCreated(serviceDb(), accountId, act.id, { authorKind: "person", authorId: userId });
     if (outcome === "has_activity") return { ok: false, reason: "hasActivity" };
     if (outcome === "has_booking") return { ok: false, reason: "hasBooking" };
     if (outcome !== "deleted") return NOT_AVAILABLE;
@@ -185,7 +187,7 @@ export async function redoAiFieldFillAction(accountId: string, actId: string): P
     // 0106 (F-006, owner ruling D8): resolved ONCE, so the redo and the revalidated path land on the
     // same kept record as a later Undo would.
     const target = await followMerge(db, accountId, act.contactId);
-    const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.before.value, act.after.value, access.userId);
+    const r = await restoreContactFieldIf(db, accountId, target, act.target.field, act.before.value, act.after.value, { authorKind: "person", authorId: access.userId });
     if (r === "changed") return { ok: false, reason: "changed" };
     // Sofía's value is back: a failed clear is logged by id, never reported as a failed redo (review M-2's twin).
     try {

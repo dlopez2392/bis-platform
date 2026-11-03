@@ -128,7 +128,7 @@ export async function enrich(
       if (acctErr) throw new Error(acctErr.message);
       const sign = pageLanguageSignal(locale, (acct as { language: "en" | "es" | null } | null)?.language ?? null);
       if (sign) {
-        await recordLanguageSignal(db, accountId, contactId, { language: sign, source: "form", at: new Date() }, "form", "system");
+        await recordLanguageSignal(db, accountId, contactId, { language: sign, source: "form", at: new Date() }, { authorKind: "customer", authorId: "form" });
       }
     } catch (e) {
       console.error(`form ${form.id} submission ${submissionId}: language signal failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`);
@@ -336,7 +336,7 @@ async function fillBlanks(
 
   if (Object.keys(patch).length > 0 || customChanged) {
     await updateContact(db, accountId, contactId,
-      { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, "form", "system");
+      { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, { authorKind: "customer", authorId: "form" });
   }
   // What the write above put in each of the four columns, as `updateContact` STORES it (an email
   // trimmed, a phone through `phoneFields`), beside what the column held before: only after the

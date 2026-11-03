@@ -121,7 +121,7 @@ export async function updateContactAction(accountId: string, formData: FormData)
     firstName: val("firstName"), lastName: val("lastName"),
     email: val("email"), phone: val("phone"),
     custom,
-  }, userId);
+  }, { authorKind: "person", authorId: userId });
   revalidatePath(path);
 }
 
