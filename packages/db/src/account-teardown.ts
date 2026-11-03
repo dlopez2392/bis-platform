@@ -1,5 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { DOCUMENT_BUCKET } from "./document-rules";
+import { withAuthor } from "./row-author";
+
+/** F-115: teardown is always an automated cleanup, never a person's own edit — and the account row
+ *  still exists for every table in the loop below (it is deleted LAST), so 0111's cascade-from-a-
+ *  vanishing-account early return never covers this delete: a service DELETE through this loop
+ *  would otherwise be unattributed (observe) or refused (enforce). Sent on every table in the loop,
+ *  not only `contacts`, because that is mechanically simplest and harmless on every other table. */
+const TEARDOWN_AUTHOR = { authorKind: "automation", authorId: null } as const;
 
 /**
  * Every table owned by one account, in the order they must be deleted.
@@ -173,18 +181,18 @@ export async function deleteAccountCascade(
     if (error) throw new Error(`${caller} cleanup failed removing document objects: ${error.message}`);
   }
   for (const table of ACCOUNT_OWNED_TABLES) {
-    const { error } = await db.from(table).delete().eq("account_id", accountId);
+    const { error } = await withAuthor(db.from(table).delete(), TEARDOWN_AUTHOR).eq("account_id", accountId);
     if (error) throw new Error(`${caller} cleanup failed on ${table}: ${error.message}`);
   }
   // `blueprints` has no account_id — it is agency-scoped — so it cannot ride
   // the account-scoped loop above.
   if (!opts.keepBlueprints) {
-    const { error: blueprintsErr } = await db.from("blueprints")
-      .delete().eq("source_account_id", accountId);
+    const { error: blueprintsErr } = await withAuthor(db.from("blueprints").delete(), TEARDOWN_AUTHOR)
+      .eq("source_account_id", accountId);
     if (blueprintsErr) {
       throw new Error(`${caller} cleanup failed on blueprints: ${blueprintsErr.message}`);
     }
   }
-  const { error: acctErr } = await db.from("accounts").delete().eq("id", accountId);
+  const { error: acctErr } = await withAuthor(db.from("accounts").delete(), TEARDOWN_AUTHOR).eq("id", accountId);
   if (acctErr) throw new Error(`${caller} cleanup failed on accounts: ${acctErr.message}`);
 }

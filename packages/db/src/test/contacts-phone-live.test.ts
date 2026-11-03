@@ -76,11 +76,13 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       expect(await pairFlags()).toEqual([{ reason: "same_digits" }]);
 
       expect(await setContactPhoneCountry(db, accountId, flagged.id,
-        { expectedPhone: "+19999999999", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("changed");
+        { expectedPhone: "+19999999999", phone: "+525512345678", unconfirmed: false },
+        { authorKind: "person", authorId: "user_test" })).toBe("changed");
       expect(await readPhoneCountryFlag(db, accountId, flagged.id)).toBe(true);
 
       expect(await setContactPhoneCountry(db, accountId, flagged.id,
-        { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+        { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false },
+        { authorKind: "person", authorId: "user_test" })).toBe("updated");
       const { data } = await db.from("contacts").select("phone, phone_country_unconfirmed").eq("id", flagged.id).single();
       expect(data).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 

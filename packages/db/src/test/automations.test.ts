@@ -276,7 +276,7 @@ describe("listDueReviewRequests — the completion anchor (0026)", () => {
       await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
       await upsertAutomation(db, accountId, "review_request",
         { enabled: true, body: "Thanks.", config: { channel: "email", reviewUrl: "https://g.page/r" }, bodyEs: "Gracias.", bodyEsBasis: "Thanks." }, "user_test");
-      await setContactLanguage(db, accountId, contactId, "es", "user_test");
+      await setContactLanguage(db, accountId, contactId, "es", { authorKind: "person", authorId: "user_test" });
       const [row] = await listDueReviewRequests(db, now.toISOString());
       expect([row!.language, row!.bodyEs]).toEqual(["es", "Gracias."]);
     });

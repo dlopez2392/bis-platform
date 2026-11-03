@@ -1108,7 +1108,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
    *  the pair for the merge queue). createContact with a phone alone would dedupe onto the first by phone. */
   async function person(db: SupabaseClient, accountId: string, firstName: string, lastName: string, phone: string, email?: string) {
     const { id } = await createContact(db, accountId, { firstName, lastName, email, source: "voice" }, "user_test");
-    await updateContact(db, accountId, id, { phone }, "user_test");
+    await updateContact(db, accountId, id, { phone }, { authorKind: "person", authorId: "user_test" });
     return { id };
   }
   /** A pre-F-009 row (no writer stores this shape any more): the service client's own insert, said so here.

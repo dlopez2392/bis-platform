@@ -6,6 +6,7 @@ import type { BusinessStatusCode } from "./business-status";
 // S-47e: contacts.ts imports nothing from voice.ts, so there is no cycle.
 import { phoneDigits, phoneFields } from "./contacts";
 import { contactAuthor } from "./provenance";
+import { withAuthor } from "./row-author";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -889,10 +890,13 @@ export async function ensureHoldingContact(
   };
   const existing = await find();
   if (existing) return { id: existing, created: false };
-  const { data, error } = await db.from("contacts").insert({
+  // F-115: an INSERT always snapshots the audited columns (first_name, phone, source) under 0111,
+  // so this service-client write needs the header too — reusing the SAME `author` already computed
+  // above for this row's own creation-provenance columns.
+  const { data, error } = await withAuthor(db.from("contacts").insert({
     account_id: accountId, first_name: "Caller", ...fields, source: by.source,
     holds_shared_number: true, author_kind: author.authorKind, author_id: author.authorId,
-  }).select("id, holds_shared_number").single();
+  }), author).select("id, holds_shared_number").single();
   if (error?.code === "23505") {
     const again = await find();
     if (again) return { id: again, created: false };

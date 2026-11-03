@@ -78,7 +78,7 @@ describe("contacts service", () => {
   it("updates fields + custom, emits contact.updated", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createContact(db, accountId, { firstName: "Joe" }, "user_test");
-      await updateContact(db, accountId, id, { phone: "+19565550100", custom: { referral: "yes" } }, "user_test");
+      await updateContact(db, accountId, id, { phone: "+19565550100", custom: { referral: "yes" } }, { authorKind: "person", authorId: "user_test" });
       const row = await getContact(db, accountId, id);
       expect(row?.phone).toBe("+19565550100");
       expect((row?.custom as any).referral).toBe("yes");
@@ -87,7 +87,7 @@ describe("contacts service", () => {
   it("updateContact can no longer write company_name; only the group sync sets it (S-02 A2; mutation: restore toRow's company_name line -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createContact(db, accountId, { firstName: "Ana", email: "ana.cn@example.com" }, "user_test");
-      await updateContact(db, accountId, id, { companyName: "Acme" } as never, "user_test");
+      await updateContact(db, accountId, id, { companyName: "Acme" } as never, { authorKind: "person", authorId: "user_test" });
       expect((await getContact(db, accountId, id))!.company_name).toBeNull();
     }));
 
@@ -306,7 +306,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
       const other = await createContact(db, accountId,
         { firstName: "Other", email: "other@example.com" }, "user_test");
 
-      expect(await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, "user_test"))
+      expect(await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, { authorKind: "person", authorId: "user_test" }))
         .toEqual({ flagged: true });
 
       // The edit itself is never refused — the operator's edit is the truth
@@ -331,7 +331,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
 
       // Different punctuation, same ten digits — the dedupe key, not an
       // exact string match, is what must catch this.
-      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, "user_test"))
+      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, { authorKind: "person", authorId: "user_test" }))
         .toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
@@ -351,7 +351,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
 
       // Re-saving Other's OWN number, unchanged, must never flag it against
       // itself or anyone else.
-      await updateContact(db, accountId, other.id, { phone: "956-555-0101" }, "user_test");
+      await updateContact(db, accountId, other.id, { phone: "956-555-0101" }, { authorKind: "person", authorId: "user_test" });
 
       const { data } = await db.from("contact_duplicate_flags")
         .select("id").eq("account_id", accountId);
@@ -365,14 +365,14 @@ describe("updateContact dedupe on edit (D-012)", () => {
       const other = await createContact(db, accountId,
         { firstName: "Other", email: "other@example.com" }, "user_test");
 
-      await updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test");
+      await updateContact(db, accountId, other.id, { email: "held@example.com" }, { authorKind: "person", authorId: "user_test" });
       // The SAME colliding value, saved again — re-running the dedupe check
       // against a pair already flagged, which is the unique index's repeat
       // (23505) this test actually exercises. A re-save with an UNRELATED
       // field (the old version of this test used `{ lastName: "Touched" }`)
       // never touches row.email at all, so it never re-ran the check — that
       // version could not fail no matter how the repeat was handled.
-      await expect(updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test"))
+      await expect(updateContact(db, accountId, other.id, { email: "held@example.com" }, { authorKind: "person", authorId: "user_test" }))
         .resolves.toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
@@ -396,7 +396,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
           { firstName: "Solo", email: "solo@example.com" }, "user_test");
 
         const result = await updateContact(db, accountId, c.id,
-          { email: "nobody-else-has-this@example.com" }, "user_test");
+          { email: "nobody-else-has-this@example.com" }, { authorKind: "person", authorId: "user_test" });
 
         expect(result).toEqual({ flagged: false });
         expect(errorSpy).not.toHaveBeenCalled();
@@ -414,7 +414,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000020" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Ignored", email: "ANA@Example.com " }, "t");
+        { firstName: "Ignored", email: "ANA@Example.com " }, { authorKind: "person", authorId: "t" });
       expect(filled.sort()).toEqual(["email"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Ana");            // IRON RULE: not overwritten
@@ -425,7 +425,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Caller", phone: "+15550000021" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Dan", lastName: "Lopez" }, "t");
+        { firstName: "Dan", lastName: "Lopez" }, { authorKind: "person", authorId: "t" });
       expect(filled.sort()).toEqual(["first_name", "last_name"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Dan");
@@ -435,7 +435,7 @@ describe("fillContactBlanks", () => {
   it("does NOT treat a real first name with blank last name as a placeholder", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Madonna", phone: "+15550000022" }, "t");
-      expect(await fillContactBlanks(db, accountId, c.id, { firstName: "Dan" }, "t")).toEqual([]);
+      expect(await fillContactBlanks(db, accountId, c.id, { firstName: "Dan" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   it("no-ops cleanly when nothing is blank (no update, no event)", () =>
@@ -443,14 +443,14 @@ describe("fillContactBlanks", () => {
       const c = await createContact(db, accountId,
         { firstName: "A", lastName: "B", email: "a@b.co", phone: "+15550000023" }, "t");
       expect(await fillContactBlanks(db, accountId, c.id,
-        { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, "t")).toEqual([]);
+        { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   it("fills a blank last_name independently when the incoming first name matches", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "John", phone: "+15550000025" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "John", lastName: "Smith" }, "t");
+        { firstName: "John", lastName: "Smith" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["last_name"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("John");
@@ -461,7 +461,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000026" }, "t");
       expect(await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Maria", lastName: "Smith" }, "t")).toEqual([]);
+        { firstName: "Maria", lastName: "Smith" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   // D-012 via a second path: a proposal-approval fill (the shape
@@ -478,7 +478,7 @@ describe("fillContactBlanks", () => {
 
       // The single-field shape acceptProposal actually calls with.
       const filled = await fillContactBlanks(db, accountId, blank.id,
-        { email: "HELD@example.com" }, "t");
+        { email: "HELD@example.com" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["email"]);
 
       const [lo, hi] = [held.id, blank.id].sort();
@@ -496,7 +496,7 @@ describe("fillContactBlanks", () => {
       const blank = await createContact(db, accountId, { firstName: "Blank" }, "t");
 
       const filled = await fillContactBlanks(db, accountId, blank.id,
-        { phone: "+19562921696" }, "t");
+        { phone: "+19562921696" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
 
       const [lo, hi] = [held.id, blank.id].sort();
@@ -1324,7 +1324,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
       withTestAccount(async (db, accountId) => {
         await ensureHoldingContact(db, accountId, P, "voice");
         const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+19565550189" }, "user_test");
-        expect(await updateContact(db, accountId, ana.id, { phone: P }, "user_test")).toEqual({ flagged: false });
+        expect(await updateContact(db, accountId, ana.id, { phone: P }, { authorKind: "person", authorId: "user_test" })).toEqual({ flagged: false });
         expect((await getContact(db, accountId, ana.id))?.phone).toBe(P);
         expect(await flagsOf(db, accountId)).toEqual([]);
       }));
@@ -1335,7 +1335,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+15512345678" }, "user_test");
         expect(ana.existing).toBe(false);
         expect(await setContactPhoneCountry(db, accountId, ana.id,
-          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_test" })).toBe("updated");
         expect((await getContact(db, accountId, ana.id))?.phone).toBe("+525512345678");
         expect((await getContact(db, accountId, holding.id))?.first_name).toBe("Caller");
         expect(await flagsOf(db, accountId)).toEqual([]);
@@ -1347,7 +1347,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
           const anaB = await createContact(db, accountB, { firstName: "Ana", phone: "+15512340000" }, "user_test");
           expect(await flagsOf(db, accountB)).toEqual([]);
           expect(await setContactPhoneCountry(db, accountB, anaB.id,
-            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_test" })).toBe("updated");
           const [lo, hi] = [luz.id, anaB.id].sort();
           expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_phone" }]);
         });

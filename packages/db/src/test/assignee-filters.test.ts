@@ -195,7 +195,7 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       // for a caller that tries anyway (or a future regression that widens
       // ContactInput back), proving the RUNTIME behaviour independent of the
       // type-level guard tsc already gives every other caller.
-      await updateContact(db, accountId, created.id, { firstName: "Safe2", assignedTo: a } as any, "user_test");
+      await updateContact(db, accountId, created.id, { firstName: "Safe2", assignedTo: a } as any, { authorKind: "person", authorId: "user_test" });
       const { data, error } = await db.from("contacts")
         .select("assigned_to, first_name").eq("id", created.id).single();
       if (error) throw error;

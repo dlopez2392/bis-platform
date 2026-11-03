@@ -2275,7 +2275,7 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
         (await createContact(db, accountId, { firstName, email, phone }, "user_test")).id;
       const es = await mk("Esa", "es@example.com", "+19565550111");
       const none = await mk("Nadie", "none@example.com", "+19565550112");
-      await setContactLanguage(db, accountId, es, "es", "user_test");
+      await setContactLanguage(db, accountId, es, "es", { authorKind: "person", authorId: "user_test" });
       const now = new Date("2027-03-01T12:00:00Z");
       for (const [contactId, h] of [[es, 11], [none, 12]] as const) {
         await createBooking(db, accountId, { calendarId: cal.id, contactId,

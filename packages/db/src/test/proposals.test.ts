@@ -1103,14 +1103,14 @@ describe("fillContactBlanksReport (Undo's toast must know whether the fill raise
     await withTestAccount(async (db, accountId) => {
       await seedContact(db, accountId, { first_name: "Holder", email: "dup@example.com" });
       const filler = await seedContact(db, accountId, { first_name: "Filler" });
-      expect(await fillContactBlanksReport(db, accountId, filler, { email: "dup@example.com" }, "user_x"))
+      expect(await fillContactBlanksReport(db, accountId, filler, { email: "dup@example.com" }, { authorKind: "person", authorId: "user_x" }))
         .toEqual({ fields: ["email"], flagged: true, prior: { email: null }, written: { email: "dup@example.com" } });
       const fresh = await seedContact(db, accountId, { first_name: "Fresh" });
-      expect(await fillContactBlanksReport(db, accountId, fresh, { email: "fresh@example.com" }, "user_x"))
+      expect(await fillContactBlanksReport(db, accountId, fresh, { email: "fresh@example.com" }, { authorKind: "person", authorId: "user_x" }))
         .toEqual({ fields: ["email"], flagged: false, prior: { email: null }, written: { email: "fresh@example.com" } });
       const plain = await seedContact(db, accountId, { first_name: "Plain" });
-      expect(await fillContactBlanks(db, accountId, plain, { email: "plain@example.com" }, "user_x")).toEqual(["email"]);
-      expect(await fillContactBlanksReport(db, accountId, plain, { email: "other@example.com" }, "user_x"))
+      expect(await fillContactBlanks(db, accountId, plain, { email: "plain@example.com" }, { authorKind: "person", authorId: "user_x" })).toEqual(["email"]);
+      expect(await fillContactBlanksReport(db, accountId, plain, { email: "other@example.com" }, { authorKind: "person", authorId: "user_x" }))
         .toEqual({ fields: [], flagged: false, prior: {}, written: {} });
     });
   });
@@ -1120,7 +1120,7 @@ describe("fillContactBlanksReport (Undo's toast must know whether the fill raise
       await withTestAccount(async (dbB, b) => {
         await seedContact(dbB, b, { first_name: "Holder", email: "shared@example.com" });
         const filler = await seedContact(dbA, a, { first_name: "Filler" });
-        expect(await fillContactBlanksReport(dbA, a, filler, { email: "shared@example.com" }, "user_x"))
+        expect(await fillContactBlanksReport(dbA, a, filler, { email: "shared@example.com" }, { authorKind: "person", authorId: "user_x" }))
           .toEqual({ fields: ["email"], flagged: false, prior: { email: null }, written: { email: "shared@example.com" } });
       });
     });
