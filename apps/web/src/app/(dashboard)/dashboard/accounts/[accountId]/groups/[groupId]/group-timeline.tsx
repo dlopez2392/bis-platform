@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -229,11 +229,11 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
       return <TimelineItem {...head} icon={Merge} />;
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
-    // F-115 part 1 (S-04), plan Task 4: a placeholder only, to keep this switch exhaustive now that
-    // `TimelineEntry` carries a "change" variant. Plan Task 5 (bis-frontend, PR E) replaces this with
-    // the real row.
+    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
+    // stays OFF in group-loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships
+    // the real row. Renders NOTHING here, on purpose — not even a placeholder icon row.
     case "change":
-      return <TimelineItem {...head} icon={History} />;
+      return null;
     default:
       return unknownKind(e);
   }

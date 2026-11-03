@@ -524,4 +524,25 @@ describe("a merge/mergeUndone row's phrase (F-006 part 1, plan Task 9)", () => {
   it("WHAT names the merge source for the 'couldn't load' line (mutation: no merge key -> FAILS)", () => {
     expect(timelineFailedText(["merge"], makeTr("en"))).toBe("Couldn't load merge history.");
   });
+
+  // F-115 PR C fix (review I2, orchestrator ruling): the `changes` source stays dormant until PR E —
+  // `timelineRows` never turns a "change" entry into a row AT ALL (not even a placeholder), so the
+  // renderer never gets the chance to show one either, however it is called.
+  it("a 'change' entry produces NO row at all, even surrounded by other entries (mutation: map it to a placeholder row -> FAILS)", () => {
+    const changeEntry: TimelineEntry = {
+      kind: "change", id: "00000000-0000-0000-0000-000000000001", at: "2026-10-09T16:12:00Z", contactId: "c1",
+      group: {
+        key: "contact:c1:1", recordType: "contact", recordId: "c1", authorKind: "person", authorId: "user_1",
+        via: null, at: "2026-10-09T16:12:00Z", firstAt: "2026-10-09T16:12:00Z",
+        steps: [[{ id: 1, recordType: "contact", recordId: "c1", contactId: "c1", clientGroupId: null,
+          op: "update", field: "phone", before: "a", after: "b", xact: "1",
+          authorKind: "person", authorId: "user_1", via: null, createdAt: "2026-10-09T16:12:00Z" }]],
+        rows: [{ id: 1, recordType: "contact", recordId: "c1", contactId: "c1", clientGroupId: null,
+          op: "update", field: "phone", before: "a", after: "b", xact: "1",
+          authorKind: "person", authorId: "user_1", via: null, createdAt: "2026-10-09T16:12:00Z" }],
+      },
+    };
+    expect(rows([call(150), changeEntry, booking("booked")])).toHaveLength(2);
+    expect(rows([changeEntry])).toHaveLength(0);
+  });
 });

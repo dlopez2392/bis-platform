@@ -100,7 +100,10 @@ export async function loadTimeline(
     page = await listTimelinePage(db, accountId, [contactId, ...tombstones], before, {
       suggestions: true,
       aiActs: true,
-      changes: true,
+      // F-115 PR C fix (review I2, orchestrator ruling): OFF until PR E ships the renderer. The
+      // source and its cursor fix are already correct (record-timeline-changes.test.ts); only the
+      // SWITCH is dormant. PR E turns this on.
+      changes: false,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
     });
   } catch (e) {

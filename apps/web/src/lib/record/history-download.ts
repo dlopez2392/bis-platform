@@ -1,4 +1,4 @@
-import { listChangeRows, type ChangeRow, type SupabaseClient } from "@bis/db";
+import { listChangeRows, type ChangeRow, type ChangeRowCursor, type SupabaseClient } from "@bis/db";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
@@ -23,20 +23,26 @@ export const HISTORY_PAGE_SIZE = 2_000;
  * never re-fetched past), capped at `cap`. Past the cap this stops reading immediately rather than
  * draining the rest of a huge history just to throw its rows away. `cap`/`pageSize` are parameters
  * (not bare constants) so a test can probe the exact boundary without building 50,000 fixture rows.
+ *
+ * F-115 PR C fix (review C1): the cursor between pages is now `(createdAt, id)`, not `createdAt`
+ * alone — every row of one write shares the identical `createdAt` (0111 section 4: the capture
+ * trigger resolves `now()` once per transaction), so a page boundary landing inside one write used to
+ * drop the rest of it forever (the next page's `created_at < before` excluded the tied siblings too).
  */
 export async function fetchBoundedChangeRows(
   db: SupabaseClient, accountId: string, scope: HistoryDownloadScope,
   cap: number = HISTORY_ROW_CAP, pageSize: number = HISTORY_PAGE_SIZE,
 ): Promise<{ rows: ChangeRow[] } | { tooBig: true }> {
   const rows: ChangeRow[] = [];
-  let before: string | undefined;
+  let before: ChangeRowCursor | undefined;
   for (;;) {
     const chunk = await listChangeRows(db, accountId, scope, before, pageSize);
     if (chunk.length === 0) break;
     rows.push(...chunk);
     if (rows.length > cap) return { tooBig: true };
     if (chunk.length < pageSize) break;
-    before = chunk[chunk.length - 1]!.createdAt;
+    const last = chunk[chunk.length - 1]!;
+    before = { createdAt: last.createdAt, id: last.id };
   }
   return { rows };
 }
@@ -69,6 +75,19 @@ export function visitEndedResponse(): Response {
 export function tooBigResponse(locale: Locale): Response {
   return new Response(t(m, "history.download.tooBig", locale), {
     status: 413,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * F-115 PR C fix (review m4): a read this download cannot do without — the account row, or a merge's
+ * tombstones — failed. The file is an audit record, so this fails the WHOLE download loudly (500)
+ * rather than silently proceeding with a wrong or missing scope; the caller logs the real error
+ * before returning this. Plain text, in the reader's own locale, no-store.
+ */
+export function readFailedResponse(locale: Locale): Response {
+  return new Response(t(m, "history.download.failed", locale), {
+    status: 500,
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
   });
 }

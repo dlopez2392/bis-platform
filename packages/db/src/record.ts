@@ -22,7 +22,10 @@ import { listContactAiActs } from "./ai-acts";
 import type { AiAct } from "./ai-act-rules";
 import type { RestoreSign } from "./contacts";
 import { MERGE_COUNT_KEYS, type MergeCountKey } from "./contact-merge";
-import { listChangeRows, groupChanges, foldVia, type ChangeGroup } from "./record-changes";
+import {
+  listChangeRowsNoPartialWrite, groupChanges, foldVia, encodeChangeCursorId, decodeChangeCursorId,
+  type ChangeGroup, type ChangeRow, type ChangeRowCursor,
+} from "./record-changes";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -562,11 +565,29 @@ export async function listTimelinePage(
   // risk 6, foldVia) until the merge, suggestion and act ids already on THIS page are known — and
   // those are the results of the settle() calls below. The raw read still starts here, concurrently
   // with everything else, so it costs no extra latency; only the fold waits for `results`.
+  //
+  // F-115 PR C fix (review I2): `changeCursor` recovers the real `record_changes` row id only when
+  // the OUTER merged cursor's own id is one `encodeChangeCursorId` produced (the previous page's
+  // cutoff entry actually was a "change"); otherwise it is undefined, and `listChangeRowsNoPartialWrite`
+  // falls back to a plain `created_at` bound (`ChangeRowCursor`'s own doc comment, record-changes.ts,
+  // explains why that is still correct — that instant did not come from this table). Either way, the
+  // read itself never cuts a write ("page on the row cursor and group after").
+  const changeCursor: ChangeRowCursor | undefined = before
+    ? { createdAt: before.v, id: decodeChangeCursorId(before.id) ?? undefined }
+    : undefined;
+  // F-115 PR C fix (review m2): the `.catch` is attached HERE, where the promise is created, not at
+  // the `await changesRows` far below — every OTHER source already gets this through `settle`'s own
+  // try/catch running inside an async function invoked immediately; without it, a rejection in the gap
+  // between creation and that later `await` is an unhandledRejection.
   const changesRows = opts.changes === true
     ? Promise.all([
-      listChangeRows(db, accountId, { contactIds: [...contactIds] }, before?.v, page.limit),
-      opts.groupId ? listChangeRows(db, accountId, { groupId: opts.groupId }, before?.v, page.limit) : Promise.resolve([]),
-    ]).then(([byContact, byGroup]) => [...byContact, ...byGroup])
+      listChangeRowsNoPartialWrite(db, accountId, { contactIds: [...contactIds] }, changeCursor, page.limit, page.limit),
+      opts.groupId
+        ? listChangeRowsNoPartialWrite(db, accountId, { groupId: opts.groupId }, changeCursor, page.limit, page.limit)
+        : Promise.resolve({ rows: [] as ChangeRow[], hasMore: false }),
+    ]).then(([byContact, byGroup]) => ({
+      ok: true as const, rows: [...byContact.rows, ...byGroup.rows], hasMore: byContact.hasMore || byGroup.hasMore,
+    })).catch((error: unknown) => ({ ok: false as const, error }))
     : null;
   const results = await Promise.all([
     settle("notes", async () => (((await listNotes(db, accountId, who, page)) ?? []) as (TimelineNote & { contact_id: string })[])
@@ -644,20 +665,41 @@ export async function listTimelinePage(
   // F-115 part 1 (S-04), plan Task 4: folded here, now that the merge/suggestion/act ids this page
   // already shows are known (correction: never fold on a `via` this page cannot itself prove).
   let changesEntries: TimelineEntry[] | null = null;
+  // F-115 PR C fix (review I2): grouping can collapse many rows into ONE entry, so "fewer than
+  // page.limit rows came back" cannot stand in for "no more pages" the way it does for every other
+  // source — `listChangeRowsNoPartialWrite`'s own `hasMore` is the real signal, folded into `older`
+  // below alongside the ordinary `merged.length > limit` check every other source relies on.
+  let changesHasMore = false;
   if (changesRows) {
-    try {
-      const idsOf = (source: TimelineSource, kinds: readonly TimelineEntry["kind"][]) =>
-        new Set(results.flatMap((r) => (r.source === source ? r.entries ?? [] : []))
-          .flatMap((e) => (kinds.includes(e.kind) ? [e.id] : [])));
-      const onPage = {
-        mergeIds: idsOf("merge", ["merge", "mergeUndone"]),
-        aiActIds: idsOf("ai_acts", ["aiAct"]),
-        proposalIds: idsOf("suggestions", ["suggestion"]),
-      };
-      const groups = foldVia(groupChanges(await changesRows), onPage);
-      changesEntries = groups.map((g): TimelineEntry => ({ kind: "change", id: g.key, at: g.at, contactId: g.rows[0]?.contactId ?? "", group: g }));
-    } catch (e) {
-      opts.onError?.("changes", e);
+    const outcome = await changesRows;
+    if (!outcome.ok) {
+      opts.onError?.("changes", outcome.error);
+    } else {
+      changesHasMore = outcome.hasMore;
+      try {
+        const idsOf = (source: TimelineSource, kinds: readonly TimelineEntry["kind"][]) =>
+          new Set(results.flatMap((r) => (r.source === source ? r.entries ?? [] : []))
+            .flatMap((e) => (kinds.includes(e.kind) ? [e.id] : [])));
+        const onPage = {
+          mergeIds: idsOf("merge", ["merge", "mergeUndone"]),
+          aiActIds: idsOf("ai_acts", ["aiAct"]),
+          proposalIds: idsOf("suggestions", ["suggestion"]),
+        };
+        const groups = foldVia(groupChanges(outcome.rows), onPage);
+        // F-115 PR C fix (review I2): the entry's `id` is the group's OWN MINIMUM row id (never the
+        // newest/max) — a group spanning rows 5,4,3 at one instant must exclude ALL THREE from the
+        // next page; a cursor built from the max (5) would use "id < 5", which still ADMITS 4 and 3
+        // (already shown as part of THIS same group) back in as if unread, duplicating them
+        // (record-timeline-changes.test.ts's own page-2 assertion pins this exact case). Encoded in
+        // the one shape `parseTimelineCursor`/`timelineBeforeFilter` accept from every kind (a
+        // UUID-shaped string): see `encodeChangeCursorId`'s own doc comment.
+        changesEntries = groups.map((g): TimelineEntry => ({
+          kind: "change", id: encodeChangeCursorId(Math.min(...g.rows.map((r) => r.id))),
+          at: g.at, contactId: g.rows[0]?.contactId ?? "", group: g,
+        }));
+      } catch (e) {
+        opts.onError?.("changes", e);
+      }
     }
   }
   const sources = [...results.map((r) => r.source), ...(changesRows ? (["changes"] as const) : [])];
@@ -668,7 +710,8 @@ export async function listTimelinePage(
   const merged = [...results.flatMap((r) => r.entries ?? []), ...(changesEntries ?? [])].sort(compareTimelineEntries);
   const items = merged.slice(0, limit);
   const last = items.at(-1);
-  return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed, sources };
+  const hasMore = merged.length > limit || changesHasMore;
+  return { items, older: hasMore && last ? { v: last.at, id: last.id } : null, failed, sources };
 }
 
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */

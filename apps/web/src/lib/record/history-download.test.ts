@@ -36,14 +36,32 @@ describe("fetchBoundedChangeRows", () => {
     expect(listChangeRows).toHaveBeenCalledWith({}, "a1", { contactIds: ["c1"] }, undefined, 5);
   });
 
-  it("pages past a full page, cursoring on the last row's createdAt, until a short page ends it", async () => {
+  it("pages past a full page, cursoring on the last row's (createdAt, id), until a short page ends it (review C1: the cursor is the (createdAt, id) idiom, not createdAt alone)", async () => {
     const page1 = [row({ id: 1, createdAt: "2026-11-02T00:00:05Z" }), row({ id: 2, createdAt: "2026-11-02T00:00:03Z" })];
     const page2 = [row({ id: 3, createdAt: "2026-11-02T00:00:01Z" })];
     listChangeRows.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2);
     const result = await fetchBoundedChangeRows({} as never, "a1", { contactIds: ["c1"] }, 10, 2);
     expect(result).toEqual({ rows: [...page1, ...page2] });
     expect(listChangeRows).toHaveBeenCalledTimes(2);
-    expect(listChangeRows).toHaveBeenNthCalledWith(2, {}, "a1", { contactIds: ["c1"] }, "2026-11-02T00:00:03Z", 2);
+    expect(listChangeRows).toHaveBeenNthCalledWith(2, {}, "a1", { contactIds: ["c1"] }, { createdAt: "2026-11-02T00:00:03Z", id: 2 }, 2);
+  });
+
+  it("C1: equal createdAt across a page boundary, page size 2, 3 rows from one instant, returns all 3 exactly once (mutation: cursor on createdAt only -> FAILS)", async () => {
+    const T = "2026-11-02T00:00:00.500000Z";
+    const all = [row({ id: 3, createdAt: T }), row({ id: 2, createdAt: T }), row({ id: 1, createdAt: T })];
+    // A REAL (if minimal) listChangeRows: applies the SAME (createdAt, id) idiom the production
+    // function now uses, so this proves the cursor fetchBoundedChangeRows BUILDS is the one that
+    // actually avoids losing a tied row — a mock that ignores the cursor's shape could not catch a
+    // regression back to a createdAt-only cursor.
+    listChangeRows.mockImplementation(async (_db, _accountId, _scope, before: { createdAt: string; id: number } | undefined, limit: number) => {
+      const remaining = before
+        ? all.filter((r) => r.createdAt < before.createdAt || (r.createdAt === before.createdAt && r.id < before.id))
+        : all;
+      return remaining.slice(0, limit);
+    });
+    const result = await fetchBoundedChangeRows({} as never, "a1", { contactIds: ["c1"] }, 10, 2);
+    expect(result).toEqual({ rows: all });
+    expect((result as { rows: ChangeRow[] }).rows.map((r) => r.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
   });
 
   it("stops at the exact cap without going over (mutation: use >= cap -> FAILS at exactly cap)", async () => {

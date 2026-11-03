@@ -1,0 +1,162 @@
+import { describe, it, expect, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { listTimelinePage, type TimelineEntry } from "./record";
+import { decodeChangeCursorId } from "./record-changes";
+
+/**
+ * F-115 PR C fix (review I2): `listTimelinePage`'s `changes` source, across a real page boundary —
+ * a fake db that answers EVERY table except `record_changes` with empty results (a universal
+ * chainable proxy; every other source genuinely reads nothing), and `record_changes` with REAL
+ * `(created_at, id)` filtering identical to the production query's own shape, so a regression in how
+ * the cursor is built or consumed shows up here exactly as it would against Postgres.
+ *
+ * `opts.changes` stays dormant in the app's own loaders (I2's orchestrator ruling) — this file proves
+ * the SOURCE itself, independent of that dormancy, since PR E turns it on and must inherit it correct.
+ */
+
+type RawRow = {
+  id: number; account_id: string; record_type: string; record_id: string; contact_id: string | null;
+  client_group_id: string | null; op: string; field: string | null; before: unknown; after: unknown;
+  xact: number; author_kind: string | null; author_id: string | null; via: string | null; created_at: string;
+};
+
+/** Matches ANY chain a source might build (`.select().eq().in().not().order().limit()`, …) and
+ *  resolves to an empty, error-free result however it is finally consumed (`await`ed directly, or via
+ *  `.maybeSingle()`/`.single()`). Good enough for every source besides `record_changes`, which this
+ *  test suite reads nothing from, because every OTHER table here is genuinely empty. */
+function emptyChain(): unknown {
+  const handler: ProxyHandler<object> = {
+    get(_t, prop) {
+      if (prop === "then") return (resolve: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null, count: 0 }).then(resolve);
+      if (prop === "maybeSingle" || prop === "single") return async () => ({ data: null, error: null });
+      if (prop === "catch" || prop === "finally") return undefined; // not a real promise; never actually called this way here
+      return (..._args: unknown[]) => proxy;
+    },
+  };
+  const proxy: unknown = new Proxy({}, handler);
+  return proxy;
+}
+
+function recordChangesChain(rows: readonly RawRow[], filters: { eq: [string, unknown][]; in: [string, unknown[]][]; or: string | null }): unknown {
+  const handler: ProxyHandler<object> = {
+    get(_t, prop) {
+      if (prop === "select") return () => recordChangesChain(rows, filters);
+      if (prop === "eq") return (c: string, v: unknown) => recordChangesChain(rows, { ...filters, eq: [...filters.eq, [c, v]] });
+      if (prop === "in") return (c: string, v: unknown[]) => recordChangesChain(rows, { ...filters, in: [...filters.in, [c, v]] });
+      if (prop === "or") return (s: string) => recordChangesChain(rows, { ...filters, or: s });
+      if (prop === "order") return () => recordChangesChain(rows, filters);
+      if (prop === "limit") {
+        return (n: number) => {
+          let result = rows.filter((r) =>
+            filters.eq.every(([c, v]) => (r as unknown as Record<string, unknown>)[c] === v)
+            && filters.in.every(([c, vs]) => vs.includes((r as unknown as Record<string, unknown>)[c])));
+          if (filters.or) {
+            const m = /^created_at\.lt\."([^"]+)",and\(created_at\.eq\."([^"]+)",id\.lt\.(\d+)\)$/.exec(filters.or);
+            if (!m) throw new Error(`unrecognised .or filter: ${filters.or}`);
+            const [, ltV, eqV, idStr] = m as unknown as [string, string, string, string];
+            const idBound = Number(idStr);
+            result = result.filter((r) => r.created_at < ltV || (r.created_at === eqV && r.id < idBound));
+          } else if (filters.eq.some(([c]) => c === "created_at")) {
+            // not used by this reader; kept out on purpose (the production code only ever uses .or or nothing)
+          }
+          result = [...result].sort((a, b) => (a.created_at === b.created_at ? b.id - a.id : (a.created_at < b.created_at ? 1 : -1)));
+          return Promise.resolve({ data: result.slice(0, n), error: null });
+        };
+      }
+      return (..._a: unknown[]) => recordChangesChain(rows, filters);
+    },
+  };
+  return new Proxy({}, handler);
+}
+
+function fakeDb(rows: readonly RawRow[]): SupabaseClient {
+  return {
+    from: (table: string) => (table === "record_changes" ? recordChangesChain(rows, { eq: [], in: [], or: null }) : emptyChain()),
+  } as unknown as SupabaseClient;
+}
+
+function row(over: Partial<RawRow>): RawRow {
+  return {
+    id: 1, account_id: "a1", record_type: "contact", record_id: "c1", contact_id: "c1", client_group_id: null,
+    op: "update", field: "phone", before: "x", after: "y", xact: 1,
+    author_kind: "person", author_id: "user_1", via: null, created_at: "2026-11-02T00:00:00.500000+00:00",
+    ...over,
+  };
+}
+
+describe("listTimelinePage({ changes: true }): a write split across a page boundary (review I2)", () => {
+  const TA = "2026-11-02T00:00:00.500000+00:00"; // write A: 3 rows, one instant, one xact, one author
+  const TB = "2026-10-20T00:00:00.000000+00:00"; // write B: 1 row, an older instant, a DIFFERENT author (no collapse)
+  const rows: RawRow[] = [
+    row({ id: 5, field: "first_name", xact: 10, created_at: TA, author_id: "user_1" }),
+    row({ id: 4, field: "last_name", xact: 10, created_at: TA, author_id: "user_1" }),
+    row({ id: 3, field: "email", xact: 10, created_at: TA, author_id: "user_1" }),
+    row({ id: 1, field: "phone", xact: 20, created_at: TB, author_id: "user_2" }),
+  ];
+
+  it("page 1 shows write A COMPLETE (all 3 fields), never cut, and names an Older cursor", async () => {
+    const db = fakeDb(rows);
+    const page = await listTimelinePage(db, "a1", ["c1"], undefined, { changes: true, limit: 1 });
+    expect(page.failed).toEqual([]);
+    expect(page.items).toHaveLength(1);
+    const entry = page.items[0]!;
+    expect(entry.kind).toBe("change");
+    if (entry.kind !== "change") throw new Error("unreachable");
+    expect(entry.group.rows.map((r) => r.field).sort()).toEqual(["email", "first_name", "last_name"]);
+    expect(page.older).not.toBeNull();
+  });
+
+  it("the Older cursor's id survives decodeChangeCursorId (parseTimelineCursor's own UUID check, in spirit)", async () => {
+    const db = fakeDb(rows);
+    const page = await listTimelinePage(db, "a1", ["c1"], undefined, { changes: true, limit: 1 });
+    const cursor = page.older!;
+    expect(decodeChangeCursorId(cursor.id)).not.toBeNull();
+  });
+
+  it("page 2, from page 1's Older cursor, shows write B — never re-showing any of write A's rows (mutation: cursor the group's MAX row id instead of its MIN -> FAILS, duplicating ids 4 and 3)", async () => {
+    const db = fakeDb(rows);
+    const page1 = await listTimelinePage(db, "a1", ["c1"], undefined, { changes: true, limit: 1 });
+    const page2 = await listTimelinePage(db, "a1", ["c1"], page1.older!, { changes: true, limit: 1 });
+    expect(page2.failed).toEqual([]);
+    expect(page2.items).toHaveLength(1);
+    const entry = page2.items[0]!;
+    expect(entry.kind).toBe("change");
+    if (entry.kind !== "change") throw new Error("unreachable");
+    expect(entry.group.rows.map((r) => r.id)).toEqual([1]);
+    expect(page2.older).toBeNull(); // write B was the last of the scope
+  });
+});
+
+/**
+ * F-115 PR C fix (review m2): a rejection from the raw "changes" read resolves to `failed: ["changes"]`
+ * and `onError("changes", …)`, never an uncaught/unhandled rejection — the `.catch` is attached at
+ * promise CREATION (before the later `await`), the same guarantee every other source already gets
+ * from `settle`'s try/catch running inside an immediately-invoked async function. If it were attached
+ * only at the later `await`, Node would report an `unhandledRejection` in the gap between creation and
+ * that `await`; this test cannot observe THAT event directly, but it does prove the read's failure
+ * still reaches `onError`/`failed` through the exact same `.then().catch()` chain production uses.
+ */
+describe("listTimelinePage({ changes: true }): a failed raw read never throws, never unhandled (review m2)", () => {
+  function throwingDb(): SupabaseClient {
+    return {
+      from: (table: string) => {
+        if (table !== "record_changes") return emptyChain();
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === "limit") return () => Promise.reject(new Error("record_changes read boom"));
+            return (..._a: unknown[]) => new Proxy({}, handler);
+          },
+        };
+        return new Proxy({}, handler);
+      },
+    } as unknown as SupabaseClient;
+  }
+
+  it("a thrown/rejected changes read reports failed: ['changes'] and calls onError, resolving normally (mutation: drop the .catch at creation -> an unhandledRejection would surface instead)", async () => {
+    const onError = vi.fn();
+    const page = await listTimelinePage(throwingDb(), "a1", ["c1"], undefined, { changes: true, limit: 5, onError });
+    expect(page.failed).toEqual(["changes"]);
+    expect(onError).toHaveBeenCalledWith("changes", expect.anything());
+    expect(page.items).toEqual([]);
+  });
+});

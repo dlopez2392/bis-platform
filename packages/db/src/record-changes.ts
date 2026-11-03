@@ -159,20 +159,138 @@ const CHANGE_COLUMNS =
   "id, record_type, record_id, contact_id, client_group_id, op, field, before, after, xact, author_kind, author_id, via, created_at";
 
 /**
+ * F-115 PR C fix (review C1): a row-level cursor into `record_changes` — `created_at` ALONE is not
+ * total, because every row of one write (one transaction) shares the identical instant (0111 section
+ * 4: the capture trigger resolves `now()` once per transaction); `id` (the table's own bigint
+ * identity) breaks that tie. Never exposed to the browser directly — see `encodeChangeCursorId` below
+ * for the one place a value shaped like this DOES travel through a public, UUID-shaped cursor.
+ *
+ * `id` is OPTIONAL only on the very first external seed a caller cannot derive from a real row
+ * (review I2: `record.ts`'s "changes" source, reading the OUTER merged-timeline cursor, which names a
+ * row-level id only when the PREVIOUS page's last entry actually was a "change"). Without it,
+ * `listChangeRows` filters on `created_at` alone — correct whenever `createdAt` does not exactly match
+ * an unread row in THIS table (the overwhelmingly common case: that instant came from a different
+ * source's row). Every cursor `listChangeRowsNoPartialWrite` builds INTERNALLY, from a row it actually
+ * read, always carries both fields.
+ */
+export type ChangeRowCursor = { createdAt: string; id?: number };
+
+/**
+ * `col.lt.v OR (col.eq.v AND id.lt.n)`, quoted on the timestamp — the exact idiom
+ * `timelineBeforeFilter` (timeline-cursor.ts) uses for a UUID id, except `id` here is a plain bigint:
+ * never quoted or case-folded, just checked as a safe positive integer, so a value this module did not
+ * itself produce can never reach the PostgREST filter grammar.
+ */
+export function changeRowBeforeFilter(column: string, before: { createdAt: string; id: number }): string {
+  if (!Number.isSafeInteger(before.id) || before.id <= 0) {
+    throw new TypeError("changeRowBeforeFilter: id must be a safe positive integer");
+  }
+  const v = `"${before.createdAt}"`;
+  return `${column}.lt.${v},and(${column}.eq.${v},id.lt.${before.id})`;
+}
+
+/**
+ * F-115 PR C fix (review I2): the "change" timeline entry's own `id`, in the one shape every reader of
+ * the merged timeline already accepts — `apps/web/src/lib/cursor.ts`'s `parseTimelineCursor` and
+ * `packages/db/src/timeline-cursor.ts`'s `timelineBeforeFilter` both require a UUID-shaped string for
+ * EVERY kind's id, and `record_changes.id` is a plain bigint. Zero-padded to 32 hex digits and dashed
+ * into the 8-4-4-4-12 shape: always matches the UUID regex, AND — because every encoding is the same
+ * fixed width — sorts, as a lowercase-hex STRING (exactly how `compareTimelineEntries` and
+ * `timelineBeforeFilter` compare ids), in the identical order the underlying integer would. `id` is
+ * always positive (the table's `generated always as identity` starts at 1).
+ */
+export function encodeChangeCursorId(id: number): string {
+  const hex = id.toString(16).padStart(32, "0");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+const CURSOR_ID_SHAPE = /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i;
+
+/**
+ * The exact inverse of `encodeChangeCursorId`, recognising ONLY a cursor id this module itself could
+ * have produced — never trusted as proof anything exists by itself (the same caution `foldVia`'s own
+ * doc comment already applies to a forged `via`). `null` for anything else, including a REAL random
+ * UUID from a different source's row: interpreted as a 128-bit integer, a random UUID is virtually
+ * never below `Number.MAX_SAFE_INTEGER` (about one chance in 2^75), so `Number.isSafeInteger` already
+ * rejects it almost always; the round-trip re-encode is the exact, not probabilistic, check.
+ */
+export function decodeChangeCursorId(v: string): number | null {
+  const m = CURSOR_ID_SHAPE.exec(v);
+  if (!m) return null;
+  const n = parseInt(m.slice(1, 6).join(""), 16);
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return encodeChangeCursorId(n).toLowerCase() === v.toLowerCase() ? n : null;
+}
+
+/**
  * Plan Task 4 Step 2: on the caller's own client, so RLS (0111 section 6: Owners, Staff and the
  * agency; a Technician reads none) decides what comes back — there is no service-role path here. One
  * contact's (or a merge's tombstones') rows, or one household/business's own rows, newest first,
- * strictly before `before` when given (the page's own cursor value, never re-fetched past it).
+ * strictly before `before` when given.
+ *
+ * F-115 PR C fix (review C1): `before` is now the row-value idiom (`created_at`, `id`), not
+ * `created_at` alone — every row of one write shares the identical `created_at` (0111 section 4), so
+ * filtering on the timestamp alone would drop whichever of that write's rows did not make the
+ * PREVIOUS page, forever (the next page's `created_at < before` excludes them too, since they share
+ * that exact value). `before` is undefined for a cold start, exactly as before.
  */
 export async function listChangeRows(
   db: SupabaseClient, accountId: string, scope: { contactIds: string[] } | { groupId: string },
-  before: string | undefined, limit: number,
+  before: ChangeRowCursor | undefined, limit: number,
 ): Promise<ChangeRow[]> {
   if ("contactIds" in scope && scope.contactIds.length === 0) return [];
   let q = db.from("record_changes").select(CHANGE_COLUMNS).eq("account_id", accountId);
   q = "contactIds" in scope ? q.in("contact_id", scope.contactIds) : q.eq("client_group_id", scope.groupId);
-  if (before) q = q.lt("created_at", before);
+  if (before) {
+    q = before.id !== undefined
+      ? q.or(changeRowBeforeFilter("created_at", { createdAt: before.createdAt, id: before.id }))
+      : q.lt("created_at", before.createdAt);
+  }
   const { data, error } = await q.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
   if (error) throw new Error(`listChangeRows failed: ${error.message}`);
   return ((data ?? []) as RawChangeRow[]).map(mapRow);
+}
+
+/**
+ * F-115 PR C fix (review I2): `listChangeRows` paged so it never cuts a write — "page on the row
+ * cursor and group after." A write's rows all share one `created_at` (0111 section 4), so a batch is
+ * only safe to hand to the grouper once nothing OLDER-OR-EQUAL to its own last row's instant remains
+ * unread: phase 1 pages normally (the lossless row cursor) until `minRows` rows are in hand or the
+ * source is exhausted; phase 2 then probes, one row at a time, for any sibling still sharing the LAST
+ * kept row's exact `created_at` and absorbs it, repeating until a strictly older row (or none) turns
+ * up — which is the first row of what the NEXT page will read, left there on purpose, never consumed
+ * here. `pageSize` bounds each individual fetch (phase 1 and every phase-2 probe).
+ *
+ * `hasMore` answers "does anything OLDER than what I'm returning exist in this scope" — true exactly
+ * when phase 2's last probe found that strictly-older row (proof positive), false when a probe (or
+ * phase 1 itself) found nothing at all. The caller (record.ts) needs this because grouping can
+ * collapse many rows into ONE timeline entry, so "did I return fewer than `minRows` rows" cannot
+ * stand in for "is there a next page" the way it does for every other, non-collapsing source.
+ */
+export async function listChangeRowsNoPartialWrite(
+  db: SupabaseClient, accountId: string, scope: { contactIds: string[] } | { groupId: string },
+  before: ChangeRowCursor | undefined, minRows: number, pageSize: number,
+): Promise<{ rows: ChangeRow[]; hasMore: boolean }> {
+  const rows: ChangeRow[] = [];
+  let cursor = before;
+  let exhausted = false;
+  while (rows.length < minRows) {
+    const chunk = await listChangeRows(db, accountId, scope, cursor, pageSize);
+    if (chunk.length === 0) { exhausted = true; break; }
+    rows.push(...chunk);
+    const last = chunk[chunk.length - 1]!;
+    cursor = { createdAt: last.createdAt, id: last.id };
+    if (chunk.length < pageSize) { exhausted = true; break; }
+  }
+  let hasMore = false;
+  while (!exhausted && rows.length > 0) {
+    const last = rows[rows.length - 1]!;
+    const probe = await listChangeRows(db, accountId, scope, cursor, 1);
+    if (probe.length === 0) break; // truly exhausted: nothing older exists at all
+    const next = probe[0]!;
+    if (next.createdAt !== last.createdAt) { hasMore = true; break; } // the next page's own first row; left unread on purpose
+    rows.push(next);
+    cursor = { createdAt: next.createdAt, id: next.id };
+  }
+  return { rows, hasMore };
 }

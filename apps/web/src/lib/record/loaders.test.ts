@@ -443,17 +443,35 @@ describe("record loaders: the change history source (F-115 part 1, S-04, plan Ta
     readActFactsMock.mockReset().mockResolvedValue(FACTS);
   });
 
-  it("the record page's timeline reads the changes source; the drawer's Recent does not (mutation: pass it in loadRecent -> FAILS)", async () => {
+  // F-115 PR C fix (review I2, orchestrator ruling): the source itself (packages/db's record.ts) is
+  // correct and tested there (record-timeline-changes.test.ts); the SWITCH stays dormant here until
+  // PR E ships the renderer, so the record page's own loader asks for `changes: false`, not true, and
+  // the drawer's Recent still never names the option at all.
+  it("the record page's timeline asks for changes: false (dormant, PR E turns it on); the drawer's Recent still does not ask at all (mutation: pass changes: true -> FAILS)", async () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
-    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ changes: true });
+    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ changes: false });
     await loadRecent(db, "acct1", "ct1");
     expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("changes");
   });
 
-  it("a failed changes read is named in the ready load's failed list, same as any other source (mutation: drop the pass-through -> FAILS)", async () => {
-    listTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["changes"], sources: [...SOURCES, "changes"] });
-    const load = await loadTimeline(db, ledger, "acct1", "ct1");
-    expect(load).toMatchObject({ status: "ready" });
-    if (load.status === "ready") expect(load.page.failed).toEqual(["changes"]);
+  // The vacuous shape this replaces only asserted `load.page.failed` echoed back exactly what the
+  // MOCK was told to return — true for ANY pass-through code, bug or not. This instead pins the
+  // loader's own wiring: it hands `listTimelinePage` a REAL onError callback that reaches `log` (and
+  // so `console.error`), which `record-timeline-changes.test.ts` (packages/db) separately proves a
+  // REAL `listTimelinePage` actually calls, with its own code's own mutation guard ("drop the onError
+  // -> FAILS" lives there, against the real implementation, not this mock).
+  it("the loader wires a real onError callback into listTimelinePage's opts, which logs a failing source (mutation: drop onError from the opts object -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listTimelinePageMock.mockImplementation(async (..._args: unknown[]) => {
+      const opts = _args[4] as { onError?: (source: string, e: unknown) => void };
+      opts.onError?.("changes", new Error("changes read boom"));
+      return { items: [], older: null, failed: ["changes"], sources: [...SOURCES, "changes"] };
+    });
+    try {
+      const load = await loadTimeline(db, ledger, "acct1", "ct1");
+      expect(load).toMatchObject({ status: "ready" });
+      if (load.status === "ready") expect(load.page.failed).toEqual(["changes"]);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("changes read boom"));
+    } finally { spy.mockRestore(); }
   });
 });

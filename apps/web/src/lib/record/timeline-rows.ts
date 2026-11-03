@@ -262,7 +262,11 @@ export function timelineRows(
   // The AI mark's own rule (author-mark.ts's authorLabel): the account's persona, else Sofía.
   const persona = ctx.author.personaName?.trim() || "Sofía";
   const stages = ctx.suggestionStages ?? {};
-  return entries.map((entry) => {
+  // F-115 PR C fix (review I2, orchestrator ruling): the `changes` source stays dormant until PR E
+  // ships the real row — dropped here, before a "change" entry can become a row at all (never even a
+  // placeholder `<li>`), so no caller of `timelineRows` can show one by surprise while the loaders
+  // ask for `changes: true` (they do not, today) or if a future caller ever does before PR E lands.
+  return entries.filter((entry) => entry.kind !== "change").map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {
