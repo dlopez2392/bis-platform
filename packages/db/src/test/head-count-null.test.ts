@@ -16,7 +16,7 @@ import { countRecentBookings } from "../booking";
 import { countConciergeConversationsByIp, countConciergeConversationsForAccount } from "../concierge";
 import { countContacts } from "../contacts";
 import { countRecentSubmissions, countFormsMissingNotify } from "../forms";
-import { addPlace, addEquipment, removePlace, getPlace } from "../places";
+import { addPlace, addEquipment, removePlace, getPlace, type PlaceCtx } from "../places";
 import { countGroupMembers } from "../client-groups";
 import { countScreenedCalls, countMisconfiguredScreenedCalls } from "../screened-calls";
 import { countTrafficDays } from "../sites";
@@ -220,7 +220,7 @@ describe("HEAD count reads fail closed on a count-less answer, never read it as 
   it("removePlace keeps a place that has units when the unit count comes back empty (mutation: restore `(count ?? 0) === 0` -> the service client deletes the place and cascades its unit, FAILS)", () =>
     withTestAccount(async (sdb, accountId) => {
       const { id: ana } = await createContact(sdb, accountId, { firstName: "Ana" }, ACTOR);
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const place = await addPlace(sdb, accountId, { contactId: ana, groupId: null }, {
         label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: null, region: null, postal_code: null, country: null,
       }, ctx);
@@ -238,7 +238,7 @@ describe("HEAD count reads fail closed on a count-less answer, never read it as 
   it("removePlace keeps a place a job names when the booking count comes back empty (F-046; mutation: restore `(count ?? 0) === 0` on the booking count -> the place is deleted though a job still names it, FAILS)", () =>
     withTestAccount(async (sdb, accountId) => {
       const { id: ana } = await createContact(sdb, accountId, { firstName: "Ana" }, ACTOR);
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const place = await addPlace(sdb, accountId, { contactId: ana, groupId: null }, {
         label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: null, region: null, postal_code: null, country: null,
       }, ctx);

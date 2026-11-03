@@ -1943,7 +1943,7 @@ describe("quote follow-up — data layer", () => {
       // leave every deal in "New Lead" with today's `stage_changed_at`, and the
       // suite would report an empty due-list rather than the failed write.
       const park = (id: string, patch: Record<string, string>) =>
-        db.from("opportunities").update(patch).eq("id", id).then(({ error }) => {
+        withAuthor(db.from("opportunities").update(patch), SEED_AUTHOR, SEED_VIA).eq("id", id).then(({ error }) => {
           if (error) throw new Error(`park ${id} failed: ${error.message}`);
         });
 
@@ -1959,7 +1959,7 @@ describe("quote follow-up — data layer", () => {
         const phone = `(956) 555-${1200 + seq++}`;
         const { id: contactId } = await createContact(db, accountId,
           { firstName: name, email: `${name.toLowerCase()}@example.com`, phone }, "user_test");
-        const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
+        const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, { authorKind: "person", authorId: "user_test" });
         await park(opp.id, { stage_id: stageId, stage_changed_at: changedAt.toISOString() });
         return { oppId: opp.id, contactId };
       };
@@ -2032,9 +2032,9 @@ describe("quote follow-up — data layer", () => {
       const now = new Date("2027-10-20T12:00:00Z");
       const { id: contactId } = await createContact(db, accountId,
         { firstName: "Supp", email: "supp@example.com" }, "user_test");
-      const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Job" }, "user_test");
-      await db.from("opportunities")
-        .update({ stage_id: stageId, stage_changed_at: new Date(now.getTime() - 5 * 24 * HOUR).toISOString() })
+      const opp = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Job" }, { authorKind: "person", authorId: "user_test" });
+      await withAuthor(db.from("opportunities")
+        .update({ stage_id: stageId, stage_changed_at: new Date(now.getTime() - 5 * 24 * HOUR).toISOString() }), SEED_AUTHOR, SEED_VIA)
         .eq("id", opp.id)
         .then(({ error }) => { if (error) throw new Error(`park ${opp.id} failed: ${error.message}`); });
 
@@ -2106,7 +2106,7 @@ describe("quote follow-up — data layer", () => {
         const { pipelineId } = await ensureDefaultPipeline(db, accountB);
         const { id: contactId } = await createContact(db, accountB,
           { firstName: "Quoted", email: "quoted@example.com" }, "user_test");
-        const opp = await createOpportunity(db, accountB, { contactId, pipelineId, name: "Job" }, "user_test");
+        const opp = await createOpportunity(db, accountB, { contactId, pipelineId, name: "Job" }, { authorKind: "person", authorId: "user_test" });
         const floor = new Date(Date.now() - 60_000).toISOString();
         await stampQuoteFollowupSent(db, opp.id);
         expect(await countQuoteFollowupsSince(db, accountB, floor)).toBe(1);
@@ -2157,12 +2157,12 @@ describe("listDueQuoteFollowups: one oldest-first order across accounts", () => 
     // statement per account, and it throws: a swallowed fixture error would
     // read as an empty due-list.
     return async (deals: { ageMs: number; id?: string }[]) => {
-      const { data, error } = await db.from("opportunities").insert(deals.map((d) => ({
+      const { data, error } = await withAuthor(db.from("opportunities").insert(deals.map((d) => ({
         ...(d.id ? { id: d.id } : {}),
         account_id: accountId, contact_id: contactId, pipeline_id: pipelineId, stage_id: quoted.id,
         name: "Reroof", monetary_value: 0,
         stage_changed_at: new Date(now.getTime() - d.ageMs).toISOString(),
-      }))).select("id, stage_changed_at");
+      }))), SEED_AUTHOR, SEED_VIA).select("id, stage_changed_at");
       if (error || !data) throw new Error(`opportunity fixture failed: ${error?.message}`);
       return (data as { id: string; stage_changed_at: string }[])
         .sort((a, b) => Date.parse(a.stage_changed_at) - Date.parse(b.stage_changed_at))

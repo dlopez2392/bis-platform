@@ -36,7 +36,7 @@ describe("the bis-crm timeline sources, paged (S-03 1b, spec §7, C3)", () => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       await addTask(db, accountId, { contactId: ana, title: "Order shingles" }, ACTOR);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Deck build", value: 2400 }, ACTOR);
+      await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Deck build", value: 2400 }, { authorKind: "person", authorId: ACTOR });
       const tasks = await listContactTasks(db, accountId, ana, { limit: 31 });
       expect(tasks[0]).toMatchObject({ title: "Order shingles", created_by: null });
       const deals = (await listContactOpportunities(db, accountId, ana, { limit: 31 })) as { name: string; created_by: string | null }[];
@@ -102,8 +102,8 @@ describe("S-03 part 2b: a household's set, each row naming its own contact_id (s
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      const anaDeal = await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Ana deal", value: 100 }, ACTOR);
-      const benDeal = await createOpportunity(db, accountId, { contactId: ben, pipelineId, name: "Ben deal", value: 200 }, ACTOR);
+      const anaDeal = await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Ana deal", value: 100 }, { authorKind: "person", authorId: ACTOR });
+      const benDeal = await createOpportunity(db, accountId, { contactId: ben, pipelineId, name: "Ben deal", value: 200 }, { authorKind: "person", authorId: ACTOR });
       const older = await db.from("opportunities").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaDeal.id);
       if (older.error) throw new Error(`older update failed: ${older.error.message}`);
       const newer = await db.from("opportunities").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benDeal.id);

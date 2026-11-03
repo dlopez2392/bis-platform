@@ -427,7 +427,7 @@ export { AUTHOR_KINDS, messageAuthor, bookingAuthor, type AuthorKind, type RowAu
 // Who created a contact (item 8c, migration 0091). See ./provenance.ts.
 export { contactAuthor, SEED_ACTORS } from "./provenance";
 // F-115: who made a write to an audited table (migration 0111). See ./row-author.ts.
-export { AUTHOR_HEADER, authorHeaderValue, withAuthor, requireAuthor, eventActorOf } from "./row-author";
+export { AUTHOR_HEADER, authorHeaderValue, withAuthor, requireAuthor, eventActorOf, emitActorOf } from "./row-author";
 
 // item 8c: Sofia's live acts, visible and reversible (migration 0091). The pure model is also the
 // subpath `@bis/db/ai-act-rules`, which web code imports from (no bare vi.mock factory can blank it).

@@ -10,6 +10,8 @@ import {
   createGroupWithMember, addContactToGroup, removeMembership, listGroupMembers, countGroupMembers, listGroupPeople,
   setGroupPrimaryContact, GROUP_MEMBERS_PAGE_SIZE,
 } from "../client-groups";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * S-03 part 2 (spec §6, C10, C12, C13): the group record page's reads and its one write, over
@@ -24,11 +26,11 @@ async function household(db: SupabaseClient, accountId: string, n: number) {
   for (let i = 0; i < n; i++) {
     ids.push((await createContact(db, accountId, { firstName: `P${i}`, lastName: "Garcia", email: `gm-${RUN}-${ids.length}-${Math.random().toString(36).slice(2, 6)}@example.com` }, A)).id);
   }
-  const g = await createGroupWithMember(db, accountId, ids[0]!, "household", `Garcia ${RUN} ${Math.random().toString(36).slice(2, 6)}`, null, A);
+  const g = await createGroupWithMember(db, accountId, ids[0]!, "household", `Garcia ${RUN} ${Math.random().toString(36).slice(2, 6)}`, null, { authorKind: "person", authorId: A });
   if (g.status !== "ok") throw new Error(g.status);
   const members = [g.memberId];
   for (const id of ids.slice(1)) {
-    const r = await addContactToGroup(db, accountId, id, g.groupId, null, A);
+    const r = await addContactToGroup(db, accountId, id, g.groupId, null, { authorKind: "person", authorId: A });
     if (r.status !== "ok") throw new Error(r.status);
     members.push(r.memberId);
   }
@@ -41,7 +43,7 @@ describe("group members (S-03 part 2, spec §6)", () => {
   it("pins the call-first member and never repeats them in the rows; primary comes back on a later page too (C10; plan deviation 3; mutation: drop .eq('is_primary_contact', false) -> the holder appears twice, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const h = await household(db, accountId, 3);
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[1]!, A)).toEqual({ status: "ok", previous: null });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[1]!, { authorKind: "person", authorId: A })).toEqual({ status: "ok", previous: null });
       const page = await listGroupMembers(db, accountId, h.groupId);
       expect(page.primary?.memberId).toBe(h.memberIds[1]);
       expect(page.primary?.isPrimaryContact).toBe(true);
@@ -87,18 +89,18 @@ describe("group members (S-03 part 2, spec §6)", () => {
     withTestAccount(async (db, accountId) => {
       const h = await household(db, accountId, 2);
       const other = await household(db, accountId, 1);
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, other.memberIds[0]!, A)).toEqual({ status: "not_found" });
-      await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, A);
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[1]!, A)).toEqual({ status: "ok", previous: h.memberIds[0] });
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, null, A)).toEqual({ status: "ok", previous: h.memberIds[1] });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, other.memberIds[0]!, { authorKind: "person", authorId: A })).toEqual({ status: "not_found" });
+      await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, { authorKind: "person", authorId: A });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[1]!, { authorKind: "person", authorId: A })).toEqual({ status: "ok", previous: h.memberIds[0] });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, null, { authorKind: "person", authorId: A })).toEqual({ status: "ok", previous: h.memberIds[1] });
       expect((await listGroupMembers(db, accountId, h.groupId)).primary).toBeNull();
     }));
 
   it("removing the holder records wasPrimaryContact on its event, and the snapshot carries the flag (spec §10; mutation: drop wasPrimaryContact from the payload -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const h = await household(db, accountId, 2);
-      await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, A);
-      const r = await removeMembership(db, accountId, h.memberIds[0]!, A);
+      await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, { authorKind: "person", authorId: A });
+      const r = await removeMembership(db, accountId, h.memberIds[0]!, { authorKind: "person", authorId: A });
       if (r.status !== "ok") throw new Error(r.status);
       expect(r.removed.is_primary_contact).toBe(true);
       const { data, error } = await db.from("events").select("payload").eq("account_id", accountId)
@@ -106,7 +108,7 @@ describe("group members (S-03 part 2, spec §6)", () => {
       if (error) throw new Error(error.message);
       expect((data ?? []).map((e) => (e.payload as { wasPrimaryContact?: boolean }).wasPrimaryContact)).toEqual([true]);
       // And a member who did not hold it says so, rather than leaving the field out.
-      const r2 = await removeMembership(db, accountId, h.memberIds[1]!, A);
+      const r2 = await removeMembership(db, accountId, h.memberIds[1]!, { authorKind: "person", authorId: A });
       if (r2.status !== "ok") throw new Error(r2.status);
       const { data: d2, error: e2 } = await db.from("events").select("payload").eq("account_id", accountId)
         .eq("type", "client_group.member_removed").contains("payload", { memberId: h.memberIds[1] });
@@ -119,10 +121,10 @@ describe("group members (S-03 part 2, spec §6)", () => {
       const h = await household(db, accountId, 1);
       const shared = await addPlace(db, accountId, { contactId: null, groupId: h.groupId },
         { label: "The house", address: "1 Main St", ...noFields },
-        { subjectId: h.groupId, subjectKind: "group", actorId: A });
+        { subjectId: h.groupId, subjectKind: "group", author: { authorKind: "person", authorId: A } });
       await addPlace(db, accountId, { contactId: h.contactIds[0]!, groupId: null },
         { label: "Ana's shop", address: "2 Oak St", ...noFields },
-        { subjectId: h.contactIds[0]!, actorId: A });
+        { subjectId: h.contactIds[0]!, author: { authorKind: "person", authorId: A } });
       const read = await listGroupPlaces(db, accountId, h.groupId);
       expect(read.places.map((p) => p.id)).toEqual([shared.id]);
       expect(read.placeCount).toBe(1);
@@ -140,9 +142,9 @@ describe("group members (S-03 part 2, spec §6)", () => {
       const h = await household(db, accountId, 2);
       // Source, not the plan: ensureDefaultPipeline lives in crm-config.ts and answers { pipelineId }.
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      const a = await createOpportunity(db, accountId, { contactId: h.contactIds[0]!, pipelineId, name: "Deck", value: 100 }, A);
-      const b = await createOpportunity(db, accountId, { contactId: h.contactIds[1]!, pipelineId, name: "Roof", value: 200 }, A);
-      const { error } = await db.from("opportunities").update({ status: "won" }).eq("id", a.id);
+      const a = await createOpportunity(db, accountId, { contactId: h.contactIds[0]!, pipelineId, name: "Deck", value: 100 }, { authorKind: "person", authorId: A });
+      const b = await createOpportunity(db, accountId, { contactId: h.contactIds[1]!, pipelineId, name: "Roof", value: 200 }, { authorKind: "person", authorId: A });
+      const { error } = await withAuthor(db.from("opportunities").update({ status: "won" }), SEED_AUTHOR, SEED_VIA).eq("id", a.id);
       if (error) throw new Error(error.message);
       const r = await listOpenDealsFor(db, accountId, h.contactIds);
       expect(r.deals.map((d) => [d.id, d.contact_id])).toEqual([[b.id, h.contactIds[1]]]);

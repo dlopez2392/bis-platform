@@ -72,7 +72,7 @@ describe("contact search: accents, full names and phone shapes (F-092)", () => {
       const jose = await make(db, a, "José", "O'Brien");
       const li = await make(db, a, "李", "王");
       const juan = await make(db, a, "Juan", "Pérez");
-      const [business] = await setContactsBusiness(db, a, [{ contactId: juan, name: "Taller Núñez" }], "user_test");
+      const [business] = await setContactsBusiness(db, a, [{ contactId: juan, name: "Taller Núñez" }], { authorKind: "person", authorId: "user_test" });
       expect(business?.status).toBe("ok");
       const gloria = await make(db, a, "Gloria", "García");
       expect((await archiveContacts(db, a, [gloria])).changedIds).toEqual([gloria]);
@@ -149,7 +149,7 @@ describe("searchContacts: the small boxes show the best match first (F-092, plan
       // Sorts first of all and has a business word "Ana": every word of "ana garcia" starts a word, but the
       // whole name is not "ana garcia", so the exact tier puts Ana García ahead of him.
       const aaron = await make(db, a, "Aaron", "García");
-      const [biz] = await setContactsBusiness(db, a, [{ contactId: aaron, name: "Ana Taller" }], "user_test");
+      const [biz] = await setContactsBusiness(db, a, [{ contactId: aaron, name: "Ana Taller" }], { authorKind: "person", authorId: "user_test" });
       expect(biz?.status).toBe("ok");
       // An archived "Ana" would be the one exact match for "ana": the box must never show her.
       const archivedAna = await make(db, a, "Ana");
@@ -235,7 +235,7 @@ async function seedCorpus(db: SupabaseClient, a: string, n: number): Promise<Cor
   const jose = await make(db, a, "José", "O'Brien");
   const li = await make(db, a, "李", "王");
   const juan = await make(db, a, "Juan", "Pérez");
-  const [business] = await setContactsBusiness(db, a, [{ contactId: juan, name: "Taller Núñez" }], "user_test");
+  const [business] = await setContactsBusiness(db, a, [{ contactId: juan, name: "Taller Núñez" }], { authorKind: "person", authorId: "user_test" });
   expect(business?.status).toBe("ok");
   const gloria = await make(db, a, "Gloria", "García");
   expect((await archiveContacts(db, a, [gloria])).changedIds).toEqual([gloria]);

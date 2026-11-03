@@ -61,7 +61,7 @@ describe("listAccountDocuments / countAccountDocuments: the filters' bounds in t
   it("a household's file carries the group, a customer's the contact (the filed-on link)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana", lastName: "García" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa García", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa García", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
       const onGroup = await file(db, accountId, ana, { expiresOn: null, group: g.groupId });
       const onAna = await file(db, accountId, ana, { expiresOn: null });

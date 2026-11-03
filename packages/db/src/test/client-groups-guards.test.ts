@@ -62,16 +62,16 @@ describe("roleTooLong measures the database's own whitespace class, not JS's bro
   const atTheCap = "x".repeat(GROUP_ROLE_MAX); // 60 plain characters: not too long by either measure
 
   it("a role that is 61 characters by the database's class, but only 58 by JS's .trim(), is still refused before any query (createGroupWithMember)", async () => {
-    expect(await createGroupWithMember(throwingDb("createGroupWithMember"), "acct", "contact", "household", "Garcia", paddedWithFeff, "actor"))
+    expect(await createGroupWithMember(throwingDb("createGroupWithMember"), "acct", "contact", "household", "Garcia", paddedWithFeff, { authorKind: "person", authorId: "actor" }))
       .toEqual({ status: "too_long" });
   });
   it("same, for addContactToGroup", async () => {
-    expect(await addContactToGroup(throwingDb("addContactToGroup"), "acct", "contact", "group", paddedWithFeff, "actor"))
+    expect(await addContactToGroup(throwingDb("addContactToGroup"), "acct", "contact", "group", paddedWithFeff, { authorKind: "person", authorId: "actor" }))
       .toEqual({ status: "too_long" });
   });
   it("a role at exactly GROUP_ROLE_MAX plain characters is NOT refused: it reaches the database", async () => {
     const { db, calls } = recordingRpcDb({ status: "ok", group_id: "g1", member_id: "m1", existed: false, name: "Garcia" });
-    const r = await createGroupWithMember(db, "acct", "contact", "household", "Garcia", atTheCap, "actor");
+    const r = await createGroupWithMember(db, "acct", "contact", "household", "Garcia", atTheCap, { authorKind: "person", authorId: "actor" });
     expect(r).toEqual({ status: "ok", groupId: "g1", memberId: "m1", existed: false, name: "Garcia" });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.fn).toBe("create_group_with_member");
@@ -102,20 +102,20 @@ const OK_ROW = [{ contact_id: "c1", status: "ok", removed: null, added: "m1" }];
 describe("setContactsBusiness retries a deadlock (mutation: drop the 40P01 retry -> FAILS)", () => {
   it("a deadlock then success: retried, answers the second call's rows, and emits ONCE", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }, { data: OK_ROW }]);
-    const r = await setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor");
+    const r = await setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], { authorKind: "person", authorId: "actor" });
     expect(r).toEqual([{ contactId: "c1", status: "ok", removed: null, added: "m1" }]);
     expect(s.rpcCalls()).toBe(2);
     expect(s.inserts()).toBe(1);
   });
   it("gives up after two retries: three calls, then the deadlock is thrown, and nothing is emitted", async () => {
     const s = scriptedRpcDb([{ error: DEADLOCK }]);
-    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor")).rejects.toThrow(/deadlock detected/);
+    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], { authorKind: "person", authorId: "actor" })).rejects.toThrow(/deadlock detected/);
     expect(s.rpcCalls()).toBe(3);
     expect(s.inserts()).toBe(0);
   });
   it("any other error is not retried (mutation: retry every error -> FAILS)", async () => {
     const s = scriptedRpcDb([{ error: { code: "57014", message: "canceling statement due to statement timeout" } }, { data: OK_ROW }]);
-    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor")).rejects.toThrow(/statement timeout/);
+    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], { authorKind: "person", authorId: "actor" })).rejects.toThrow(/statement timeout/);
     expect(s.rpcCalls()).toBe(1);
   });
 });
@@ -220,7 +220,7 @@ describe("S-03 part 2: the Business-name path records each membership it deletes
     ]);
     await setContactsBusiness(s.db, "acct", [
       { contactId: "c-m1", name: "Beta" }, { contactId: "c-m2", name: "" }, { contactId: "c3", name: "Acme" }, { contactId: "c4", name: "Acme" },
-    ], "user_owner");
+    ], { authorKind: "person", authorId: "user_owner" });
     expect(s.inserts).toEqual([
       { account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_owner",
         payload: { memberId: "m1", contactId: "c-m1", groupId: "g1", wasPrimaryContact: true } },
@@ -233,14 +233,14 @@ describe("S-03 part 2: the Business-name path records each membership it deletes
   it("only a literal true is the flag, and a system writer (the forms lead) is recorded as system (mutation: read the flag by truthiness -> FAILS)", async () => {
     const odd = { ...snapshot("m1", "g1", false), is_primary_contact: "true" };
     const s = businessDb([{ contact_id: "c-m1", status: "ok", removed: odd, added: "m9" }]);
-    await setContactsBusiness(s.db, "acct", [{ contactId: "c-m1", name: "Beta" }], "form", "system");
+    await setContactsBusiness(s.db, "acct", [{ contactId: "c-m1", name: "Beta" }], { authorKind: "customer", authorId: "form" });
     expect(s.inserts[0]).toEqual({ account_id: "acct", type: "client_group.member_removed", actor_type: "system", actor_id: "form",
       payload: { memberId: "m1", contactId: "c-m1", groupId: "g1", wasPrimaryContact: false } });
   });
 
   it("undoSetBusiness reads the membership it is about to delete, then records its removal by the actor (mutation: drop the undo's member_removed emit -> FAILS)", async () => {
     const s = businessDb("ok", { data: { id: "m9", contact_id: "c1", client_group_id: "g9", is_primary_contact: true }, error: null });
-    expect(await undoSetBusiness(s.db, "acct", "c1", "m9", null, "user_tech")).toBe("ok");
+    expect(await undoSetBusiness(s.db, "acct", "c1", "m9", null, { authorKind: "person", authorId: "user_tech" })).toBe("ok");
     expect(s.read.cols).toBe("id, contact_id, client_group_id, is_primary_contact");
     expect(s.read.filters).toEqual([["account_id", "acct"], ["id", "m9"], ["contact_id", "c1"]]);
     expect(s.steps).toEqual(["read member", "rpc undo_set_business", "emit client_group.member_removed"]);
@@ -249,18 +249,18 @@ describe("S-03 part 2: the Business-name path records each membership it deletes
   });
   it("undoSetBusiness records nothing when nothing was added, when the added membership is already gone, or when the database refuses", async () => {
     const none = businessDb("ok");
-    expect(await undoSetBusiness(none.db, "acct", "c1", null, snapshot("m1", "g1", false), "user_tech")).toBe("ok");
+    expect(await undoSetBusiness(none.db, "acct", "c1", null, snapshot("m1", "g1", false), { authorKind: "person", authorId: "user_tech" })).toBe("ok");
     expect(none.steps).toEqual(["rpc undo_set_business"]);
     const gone = businessDb("ok", { data: null, error: null });
-    await undoSetBusiness(gone.db, "acct", "c1", "m9", null, "user_tech");
+    await undoSetBusiness(gone.db, "acct", "c1", "m9", null, { authorKind: "person", authorId: "user_tech" });
     expect(gone.inserts).toEqual([]);
     const refused = businessDb("not_found", { data: { id: "m9", contact_id: "c1", client_group_id: "g9", is_primary_contact: false }, error: null });
-    expect(await undoSetBusiness(refused.db, "acct", "c1", "m9", null, "user_tech")).toBe("not_found");
+    expect(await undoSetBusiness(refused.db, "acct", "c1", "m9", null, { authorKind: "person", authorId: "user_tech" })).toBe("not_found");
     expect(refused.inserts).toEqual([]);
   });
   it("a failed read of the membership throws before the undo runs, so no delete goes unrecorded (mutation: ignore the read error -> FAILS)", async () => {
     const s = businessDb("ok", { data: null, error: { message: "boom" } });
-    await expect(undoSetBusiness(s.db, "acct", "c1", "m9", null, "user_tech")).rejects.toThrow(/undoSetBusiness member read failed: boom/);
+    await expect(undoSetBusiness(s.db, "acct", "c1", "m9", null, { authorKind: "person", authorId: "user_tech" })).rejects.toThrow(/undoSetBusiness member read failed: boom/);
     expect(s.steps).toEqual(["read member"]);
   });
 });
@@ -275,7 +275,7 @@ describe("removeMembership records the stored member id, whatever case it was ca
   it("an uppercase call is recorded lowercase, as the row came back", async () => {
     const row = { ...snapshot("abcdef12-2222-4222-8222-22222222222b", "abcdef12-3333-4333-8333-33333333333a", true), contact_id: "abcdef12-1111-4111-8111-11111111111c" };
     const s = businessDb({ status: "ok", removed: row });
-    const r = await removeMembership(s.db, "acct", row.id.toUpperCase(), "user_tech");
+    const r = await removeMembership(s.db, "acct", row.id.toUpperCase(), { authorKind: "person", authorId: "user_tech" });
     expect(r.status).toBe("ok");
     expect(s.inserts).toEqual([{ account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_tech",
       payload: { memberId: row.id, contactId: row.contact_id, groupId: row.client_group_id, wasPrimaryContact: true } }]);

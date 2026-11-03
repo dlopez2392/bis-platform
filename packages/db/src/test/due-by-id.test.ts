@@ -11,6 +11,8 @@ import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDu
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
 import { createOpportunity, updateOpportunity } from "../opportunities";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Each lookup answers "is this still a thing to send" WITHOUT a time window
@@ -266,8 +268,8 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
       const stageId = stages[1]!.id;
-      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
-      await db.from("opportunities").update({ stage_id: stageId }).eq("id", oppId)
+      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, { authorKind: "person", authorId: "user_test" });
+      await withAuthor(db.from("opportunities").update({ stage_id: stageId }), SEED_AUTHOR, SEED_VIA).eq("id", oppId)
         .then(({ error }) => { if (error) throw new Error(`park ${oppId} failed: ${error.message}`); });
 
       expect(await getDueQuoteFollowupById(db, oppId)).toEqual({ due: null, why: "off" });
@@ -283,7 +285,7 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       expect(found.due?.opportunityId).toBe(oppId);
       expect(found.due?.configStageId).toBe(stageId);
 
-      await updateOpportunity(db, accountId, oppId, { status: "won" }, "user_test");
+      await updateOpportunity(db, accountId, oppId, { status: "won" }, { authorKind: "person", authorId: "user_test" });
       expect(await getDueQuoteFollowupById(db, oppId)).toEqual({ due: null, why: "gone" });
       // Mutation: drop `.eq("status", "open")` from the by-id lookup → the won
       // deal comes back due and this reds. It is the one the RELEASE path
@@ -368,8 +370,8 @@ describe("S-09 PR 2: every by-id read carries the customer's language — the re
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
       const stageId = stages[1]!.id;
-      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
-      await db.from("opportunities").update({ stage_id: stageId }).eq("id", oppId)
+      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, { authorKind: "person", authorId: "user_test" });
+      await withAuthor(db.from("opportunities").update({ stage_id: stageId }), SEED_AUTHOR, SEED_VIA).eq("id", oppId)
         .then(({ error }) => { if (error) throw new Error(`park ${oppId} failed: ${error.message}`); });
       await upsertAutomation(db, accountId, "quote_followup",
         { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "email" } }, "user_test");

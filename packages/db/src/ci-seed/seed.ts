@@ -237,9 +237,11 @@ export async function ensureCiBaseline(
   }
 
   if (!before.opportunity && salesId) {
+    // F-115 (plan Task 3 Step 7): a service-role write to opportunities (a Q1 table) needs the
+    // x-bis-author header or enforce mode refuses it; the seed is automation, named "seed".
     await createOpportunity(db, accountId, {
       contactId, pipelineId: salesId, name: CI_SEED_OPPORTUNITY.name, value: CI_SEED_OPPORTUNITY.value,
-    }, CI_SEED_ACTOR, "system");
+    }, { authorKind: "automation", authorId: null }, "seed");
     created.push("opportunity");
   }
 

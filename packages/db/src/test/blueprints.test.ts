@@ -159,8 +159,8 @@ describe("blueprint capture", () => {
       // names (tags has unique(account_id, name), and both pass it) that both
       // slug to "hot_lead" — the exact collision blueprintKey's old docstring
       // claimed was unreachable.
-      await addTagToContact(db, accountId, contactId, "Hot Lead");
-      await addTagToContact(db, accountId, contactId, "hot-lead");
+      await addTagToContact(db, accountId, contactId, "Hot Lead", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, contactId, "hot-lead", { authorKind: "person", authorId: "user_test" });
 
       const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Collision Case") }, "user_test");
       const bp = await getBlueprint(db, id);
@@ -183,9 +183,9 @@ describe("blueprint capture", () => {
       // "Hot Lead 2" itself, or by the collision pair, depending on
       // processing order) and keep incrementing past it so all three stay
       // distinct.
-      await addTagToContact(db, accountId, contactId, "Hot Lead");
-      await addTagToContact(db, accountId, contactId, "hot-lead");
-      await addTagToContact(db, accountId, contactId, "Hot Lead 2");
+      await addTagToContact(db, accountId, contactId, "Hot Lead", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, contactId, "hot-lead", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, contactId, "Hot Lead 2", { authorKind: "person", authorId: "user_test" });
 
       const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Collision Case 3-Way") }, "user_test");
       const bp = await getBlueprint(db, id);
@@ -201,8 +201,8 @@ describe("blueprint capture", () => {
       await seedConfig(db, accountId);
       const { id: contactId } = await createContact(
         db, accountId, { firstName: "Case", email: "case-determinism@example.com" }, "user_test");
-      await addTagToContact(db, accountId, contactId, "Hot Lead");
-      await addTagToContact(db, accountId, contactId, "hot-lead");
+      await addTagToContact(db, accountId, contactId, "Hot Lead", { authorKind: "person", authorId: "user_test" });
+      await addTagToContact(db, accountId, contactId, "hot-lead", { authorKind: "person", authorId: "user_test" });
 
       // Two independent captures of the same, unchanged account. Nothing is
       // created or modified in between, so buildBundle's queries re-read the

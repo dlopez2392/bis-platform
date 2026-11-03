@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit, type ActorType } from "./events";
+import { emit } from "./events";
 import { isUserClient } from "./user-client";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, emitActorOf } from "./row-author";
 import {
   RELATIONSHIP_COLUMNS, SIDE_COLUMNS, type RelationshipKey, type RelationshipRow, type RelatedPerson,
   type RelationshipSidesPatch, type SideColumn, type WordForm,
@@ -32,15 +34,15 @@ function assertUuid(v: string, what: string): void {
 }
 
 /**
- * `emit()` already refuses a non-'user' actor on a user client (0053) — but only AFTER its own
- * caller's write has landed, so the row is written, then emit() throws, and the caller is told the
- * whole call failed while the database disagrees. Refusing here, before any read or write, means a
- * disallowed actor never gets as far as a partial write.
+ * `emit()` already refuses a non-'user' actor on a user client (0053) — but `emitActorOf` (F-115)
+ * now forces `"user"` there before `emit()` ever sees the mismatch, so that old backstop would stay
+ * silent. Refusing a non-person author on a user client HERE, before any read or write, keeps the same
+ * protection it always gave: a disallowed author never gets as far as a partial write.
  */
-function assertActorAllowed(db: SupabaseClient, actorType: ActorType): void {
-  if (isUserClient(db) && actorType !== "user") {
+function assertActorAllowed(db: SupabaseClient, author: RowAuthor): void {
+  if (isUserClient(db) && author.authorKind !== "person") {
     throw new RelationshipDbError(
-      `a signed-in user's client cannot record a '${actorType}' actor on a relationship`, undefined);
+      `a signed-in user's client cannot record a '${author.authorKind}' author on a relationship`, undefined);
   }
 }
 
@@ -103,10 +105,11 @@ export async function getRelationship(db: SupabaseClient, accountId: string, rel
 }
 
 export async function addRelationship(
-  db: SupabaseClient, accountId: string, input: NewRelationship, actorId: string, actorType: ActorType = "user",
+  db: SupabaseClient, accountId: string, input: NewRelationship, author: RowAuthor,
 ): Promise<RelationshipRow> {
-  assertActorAllowed(db, actorType);
-  const { data, error } = await db.from("contact_relationships").insert({
+  author = requireAuthor(db, author, "addRelationship");
+  assertActorAllowed(db, author);
+  const { data, error } = await withAuthor(db.from("contact_relationships").insert({
     account_id: accountId,
     contact_id: input.contactId,
     related_contact_id: input.relatedContactId,
@@ -118,9 +121,10 @@ export async function addRelationship(
     contact_is_emergency: input.contactIsEmergency,
     related_can_pick_up: input.relatedCanPickUp,
     related_is_emergency: input.relatedIsEmergency,
-  }).select(RELATIONSHIP_COLUMNS).single();
+  }), author).select(RELATIONSHIP_COLUMNS).single();
   if (error) throw dbError("addRelationship failed", error);
   const row = data as unknown as RelationshipRow;
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "contact.relationship_added", actorId, payloadOf(row), actorType);
   return row;
 }
@@ -132,9 +136,10 @@ export async function addRelationship(
  */
 export async function setRelationshipSides(
   db: SupabaseClient, accountId: string, relationshipId: string, patch: RelationshipSidesPatch,
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<{ previous: RelationshipSidesPatch; row: RelationshipRow } | "not_found" | "refused"> {
-  assertActorAllowed(db, actorType);
+  author = requireAuthor(db, author, "setRelationshipSides");
+  assertActorAllowed(db, author);
   const keys = Object.keys(patch) as SideColumn[];
   if (keys.length === 0 || keys.some((k) => !(SIDE_COLUMNS as readonly string[]).includes(k))) {
     throw new RelationshipDbError("setRelationshipSides: nothing to change, or not a side column", "22023");
@@ -143,20 +148,22 @@ export async function setRelationshipSides(
   if (!current) return "not_found";
   const previous: RelationshipSidesPatch = {};
   for (const k of keys) (previous as Record<string, unknown>)[k] = current[k];
-  const { data, error } = await db.from("contact_relationships")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+  const { data, error } = await withAuthor(db.from("contact_relationships")
+    .update({ ...patch, updated_at: new Date().toISOString() }), author)
     .eq("account_id", accountId).eq("id", relationshipId).select(RELATIONSHIP_COLUMNS);
   if (error) throw dbError("setRelationshipSides failed", error);
   const row = ((data ?? []) as unknown as RelationshipRow[])[0];
   if (!row) return "refused";
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "contact.relationship_updated", actorId, { ...payloadOf(row), fields: keys }, actorType);
   return { previous, row };
 }
 
 export async function removeRelationship(
-  db: SupabaseClient, accountId: string, relationshipId: string, actorId: string, actorType: ActorType = "user",
+  db: SupabaseClient, accountId: string, relationshipId: string, author: RowAuthor,
 ): Promise<RelationshipRow | "not_found" | "refused"> {
-  assertActorAllowed(db, actorType);
+  author = requireAuthor(db, author, "removeRelationship");
+  assertActorAllowed(db, author);
   // This read exists ONLY to tell "nothing there" from "there, but refused" (a Technician who can
   // SEE a relationship because one person is theirs, but cannot DELETE it because the restrictive
   // delete policy needs BOTH, spec §5.3). The Undo snapshot itself comes from the DELETE's own
@@ -164,11 +171,12 @@ export async function removeRelationship(
   // from the undo toast.
   const current = await getRelationship(db, accountId, relationshipId);
   if (!current) return "not_found";
-  const { data, error } = await db.from("contact_relationships").delete()
+  const { data, error } = await withAuthor(db.from("contact_relationships").delete(), author)
     .eq("account_id", accountId).eq("id", relationshipId).select(RELATIONSHIP_COLUMNS);
   if (error) throw dbError("removeRelationship failed", error);
   const row = ((data ?? []) as unknown as RelationshipRow[])[0];
   if (!row) return "refused";
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "contact.relationship_removed", actorId, payloadOf(row), actorType);
   return row;
 }
@@ -183,11 +191,12 @@ export async function removeRelationship(
  * created_at); the column default stamps it here instead, and `updated_at` is now as well.
  */
 export async function restoreRelationship(
-  db: SupabaseClient, accountId: string, row: RelationshipRow, actorId: string, actorType: ActorType = "user",
+  db: SupabaseClient, accountId: string, row: RelationshipRow, author: RowAuthor,
 ): Promise<RelationshipRow> {
-  assertActorAllowed(db, actorType);
+  author = requireAuthor(db, author, "restoreRelationship");
+  assertActorAllowed(db, author);
   if (row.account_id !== accountId) throw new RelationshipDbError("restoreRelationship: another account's row", "22023");
-  const { data, error } = await db.from("contact_relationships").insert({
+  const { data, error } = await withAuthor(db.from("contact_relationships").insert({
     id: row.id,
     account_id: row.account_id,
     contact_id: row.contact_id,
@@ -201,9 +210,10 @@ export async function restoreRelationship(
     related_can_pick_up: row.related_can_pick_up,
     related_is_emergency: row.related_is_emergency,
     updated_at: new Date().toISOString(),
-  }).select(RELATIONSHIP_COLUMNS).single();
+  }), author).select(RELATIONSHIP_COLUMNS).single();
   if (error) throw dbError("restoreRelationship failed", error);
   const restored = data as unknown as RelationshipRow;
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "contact.relationship_added", actorId, { ...payloadOf(restored), restored: true }, actorType);
   return restored;
 }

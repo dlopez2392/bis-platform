@@ -24,6 +24,8 @@ import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, type TimelineEntry,
 } from "../record";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 const ACTOR = "user_test";
 const iso = (v: string) => new Date(v).toISOString();
@@ -86,9 +88,9 @@ describe("contactFacts (S-03 part 1, spec §7)", () => {
     withTestAccount(async (db, accountId) => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      for (const value of [100, 200, 300]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, ACTOR);
-      const won = await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Won", value: 999 }, ACTOR);
-      await db.from("opportunities").update({ status: "won" }).eq("id", won.id);
+      for (const value of [100, 200, 300]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, { authorKind: "person", authorId: ACTOR });
+      const won = await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Won", value: 999 }, { authorKind: "person", authorId: ACTOR });
+      await withAuthor(db.from("opportunities").update({ status: "won" }), SEED_AUTHOR, SEED_VIA).eq("id", won.id);
       expect((await contactFacts(db, accountId, ana)).openDeals).toEqual({ ok: true, value: { count: 3, amount: 600 } });
       expect((await contactFacts(db, accountId, ana, { openDealsCap: 2 })).openDeals).toEqual({ ok: true, value: { count: 3, amount: null } });
       expect((await contactFacts(db, accountId, ana, { openDealsCap: 3 })).openDeals).toEqual({ ok: true, value: { count: 3, amount: 600 } });
@@ -98,7 +100,7 @@ describe("contactFacts (S-03 part 1, spec §7)", () => {
     withTestAccount(async (db, accountId) => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      for (const value of [0.1, 0.2]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, ACTOR);
+      for (const value of [0.1, 0.2]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, { authorKind: "person", authorId: ACTOR });
       expect((await contactFacts(db, accountId, ana)).openDeals).toEqual({ ok: true, value: { count: 2, amount: 0.3 } });
     }));
 
@@ -106,7 +108,7 @@ describe("contactFacts (S-03 part 1, spec §7)", () => {
     withTestAccount(async (db, accountId) => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      for (const value of [100, 200, 300]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, ACTOR);
+      for (const value of [100, 200, 300]) await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: `Deal ${value}`, value }, { authorKind: "person", authorId: ACTOR });
       // Drop the `count` option on the opportunities read, so PostgREST answers with count = null.
       const noCount = new Proxy(db, {
         get(target, prop, receiver) {
@@ -233,7 +235,7 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       await stamp("notes", (await addNote(db, accountId, ana, "n", ACTOR)).id, 1);
       await stamp("tasks", (await addTask(db, accountId, { contactId: ana, title: "t" }, ACTOR)).id, 2);
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
-      await stamp("opportunities", (await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "d" }, ACTOR)).id, 3);
+      await stamp("opportunities", (await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "d" }, { authorKind: "person", authorId: ACTOR })).id, 3);
       const form = await createForm(db, accountId, { name: "Quote request" }, ACTOR);
       const sub = await createSubmission(db, accountId, form.id, { answers: [] });
       await linkSubmissionContact(db, accountId, sub.id, ana);
@@ -404,11 +406,11 @@ async function household(db: SupabaseClient, accountId: string, n: number) {
   const run = Math.random().toString(36).slice(2, 8);
   const ids: string[] = [];
   for (let i = 0; i < n; i++) ids.push((await createContact(db, accountId, { firstName: `P${i}`, lastName: "Garcia" }, ACTOR)).id);
-  const g = await createGroupWithMember(db, accountId, ids[0]!, "household", `Garcia ${run}`, null, ACTOR);
+  const g = await createGroupWithMember(db, accountId, ids[0]!, "household", `Garcia ${run}`, null, { authorKind: "person", authorId: ACTOR });
   if (g.status !== "ok") throw new Error(g.status);
   const memberIds = [g.memberId];
   for (const id of ids.slice(1)) {
-    const r = await addContactToGroup(db, accountId, id, g.groupId, null, ACTOR);
+    const r = await addContactToGroup(db, accountId, id, g.groupId, null, { authorKind: "person", authorId: ACTOR });
     if (r.status !== "ok") throw new Error(r.status);
     memberIds.push(r.memberId);
   }
@@ -497,7 +499,7 @@ describe("groupActivityMembers (S-03 part 2b, C5, D7)", () => {
         const { error } = await db.from("client_group_members").update({ created_at: joined[i] }).eq("id", memberId);
         if (error) throw new Error(error.message);
       }
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, { authorKind: "person", authorId: ACTOR })).toMatchObject({ status: "ok" });
       const all = await groupActivityMembers(db, accountId, h.groupId, 10);
       expect(all.people.map((p) => p.contactId)).toEqual([c0, c2, c3, c1]);
       expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia", language: null });
@@ -588,7 +590,7 @@ describe("groupActivityMembers, the review's fixes (S-03 part 2b)", () => {
         if (error) throw new Error(error.message);
       }
       // The earliest joined is the call-first member: a newest-first scan of 2 would never reach them.
-      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, { authorKind: "person", authorId: ACTOR })).toMatchObject({ status: "ok" });
       const a = await groupActivityMembers(db, accountId, h.groupId, 1, { scan: 2 });
       expect(a.people.map((p) => p.contactId)).toEqual([h.ids[0]]);
       expect(a.more).toBe(true);
@@ -624,7 +626,7 @@ describe("the documents source (S-07, plan deviation 3)", () => {
   it("a ready document is one row at its created_at, merged with the others; a group page also reads the group's own (mutation: drop the documents settle -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, "user_t");
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: "user_t" });
       if (g.status !== "ok") throw new Error(g.status);
       const add = async (record: { kind: "contact" | "group"; id: string }, title: string) => {
         const id = await createDocument(db, { accountId, record, title, category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });

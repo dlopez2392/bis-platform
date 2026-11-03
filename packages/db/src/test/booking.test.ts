@@ -2322,7 +2322,7 @@ describe("F-046 part 1: staff jobs, the agenda read and the hold (0107)", () => 
     const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana.f046@example.com" }, ACTOR);
     const place = await addPlace(db, accountId, { contactId, groupId: null },
       { label: "Home", address: "1204 Nolana Ave", landmark: null, directions: null, city: null, region: null, postal_code: null, country: null },
-      { subjectId: contactId, actorId: ACTOR });
+      { subjectId: contactId, author: { authorKind: "person", authorId: ACTOR } });
     return { calendarId: cal.id, contactId, placeId: place.id };
   };
   const job = (s: Seed, startIso: string, endIso: string, over: Partial<StaffJobInput> = {}): StaffJobInput => ({

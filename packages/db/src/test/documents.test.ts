@@ -224,7 +224,7 @@ describe("the timeline read (plan deviation 3)", () => {
   it("a contact's ready documents, trashed ones included, never one still uploading; a group page adds the group's own (mutation: drop the group read, or the current_version_id filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
       const pending = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Pending", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
       await reserveDocumentVersion(db, { accountId, documentId: pending, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
@@ -490,7 +490,7 @@ describe("the new-version timeline read (0078's view; owner ruling R2)", () => {
   it("a contact's new versions, never a file's first, newest first; a group page adds the group's own (mutations: read documents instead of the view -> FAILS; drop the group read -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
       const mine = await readyDoc(db, accountId, ana, { title: "Mine" });
       const v2 = await newVersion(db, accountId, mine.id);
@@ -746,7 +746,7 @@ describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
   it("the removed-file timeline read: a contact's rows and a group's own (mutation: read the group's own rows without .eq('client_group_id') -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
       const mine = await readyDoc(db, accountId, ana, { title: "Mine" });
       const gid = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "Ours", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });

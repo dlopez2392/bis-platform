@@ -6,7 +6,7 @@ import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import {
   listContactPlaces, addPlace, removePlace, setPlaceArchived, restorePlace, addEquipment, replaceEquipment,
   updatePlace, removeEquipment, restoreEquipment, PlaceDbError, type PlaceFields, type EquipmentFields,
-  getPlace, getEquipment, setPlaceOwner, updateEquipment, type PlacePatch, type EquipmentPatch,
+  getPlace, getEquipment, setPlaceOwner, updateEquipment, type PlacePatch, type EquipmentPatch, type PlaceCtx,
 } from "../places";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -23,12 +23,12 @@ describe("listContactPlaces (spec §6)", () => {
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const luis = (await createContact(db, accountId, { firstName: "Luis" }, ACTOR)).id;
-      const home = await createGroupWithMember(db, accountId, ana, "household", "Garcia", null, ACTOR);
+      const home = await createGroupWithMember(db, accountId, ana, "household", "Garcia", null, { authorKind: "person", authorId: ACTOR });
       if (home.status !== "ok") throw new Error("group");
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const own = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const shared = await addPlace(db, accountId, { contactId: null, groupId: home.groupId }, fields({ address: null, landmark: "past the canal" }), ctx);
-      await addPlace(db, accountId, { contactId: luis, groupId: null }, fields({ address: "9 Other St" }), { subjectId: luis, actorId: ACTOR });
+      await addPlace(db, accountId, { contactId: luis, groupId: null }, fields({ address: "9 Other St" }), { subjectId: luis, author: { authorKind: "person", authorId: ACTOR } });
       await addEquipment(db, accountId, own.id, unit(), ctx);
       await addEquipment(db, accountId, shared.id, unit({ name: "Water heater" }), ctx);
       const r = await listContactPlaces(db, accountId, ana.toUpperCase());
@@ -41,7 +41,7 @@ describe("listContactPlaces (spec §6)", () => {
   it("lists current places before removed ones, so the cap never hides a current one (mutation: drop the archived_at order -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const older = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ address: "1 Old St" }), ctx);
       await addEquipment(db, accountId, older.id, unit(), ctx);
       expect(await removePlace(db, accountId, older.id, ctx)).toMatchObject({ mode: "archived" });
@@ -56,7 +56,7 @@ describe("removing and restoring a place (C5)", () => {
   it("deletes an empty place and archives one with units (mutation: skip the unit count -> the service client's delete cascades the unit and FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const empty = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const full = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ address: "9 Full St" }), ctx);
       await addEquipment(db, accountId, full.id, unit(), ctx);
@@ -71,7 +71,7 @@ describe("removing and restoring a place (C5)", () => {
   it("restorePlace brings back the same id; setPlaceArchived(false) puts an archived place back", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ landmark: "blue house" }), ctx);
       const gone = await removePlace(db, accountId, p.id, ctx);
       if (typeof gone === "string" || gone.mode !== "deleted") throw new Error("expected a delete");
@@ -84,7 +84,7 @@ describe("removing and restoring a place (C5)", () => {
   it("a place a job names (bookings.place_id, 0107, NO ACTION) is archived, not deleted, and the job still names it (F-046; mutation: skip the bookings count -> deletes, and the job's place_id dangles, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const place = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const { data: calendar, error: calErr } = await db.from("calendars")
         .insert({ account_id: accountId, public_id: `cal_place_${Date.now()}` }).select("id").single();
@@ -102,7 +102,7 @@ describe("removing and restoring a place (C5)", () => {
     }));
   it("updatePlace answers the previous values for Undo", () => withTestAccount(async (db, accountId) => {
     const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-    const ctx = { subjectId: ana, actorId: ACTOR };
+    const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
     const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
     expect(await updatePlace(db, accountId, p.id, { landmark: "past the canal" }, ctx))
       .toMatchObject({ previous: { landmark: null }, row: { landmark: "past the canal" } });
@@ -112,7 +112,7 @@ describe("removing and restoring a place (C5)", () => {
 describe("equipment: replace, remove, restore (C3, C6)", () => {
   it("a replacement is linked to the old unit at its place; replacing it again answers 23505", () => withTestAccount(async (db, accountId) => {
     const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-    const ctx = { subjectId: ana, actorId: ACTOR };
+    const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
     const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
     const old = await addEquipment(db, accountId, p.id, unit(), ctx);
     const next = await replaceEquipment(db, accountId, old.id, unit({ make: "Carrier", installed_on: "2026-10-11" }), ctx);
@@ -123,7 +123,7 @@ describe("equipment: replace, remove, restore (C3, C6)", () => {
   it("a replaced unit cannot be removed (23503); a current one can, and restoreEquipment brings back the same id and link (mutation: restore without the id -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const old = await addEquipment(db, accountId, p.id, unit(), ctx);
       const next = await replaceEquipment(db, accountId, old.id, unit({ installed_on: "2026-10-11" }), ctx);
@@ -140,7 +140,7 @@ describe("events (spec §6)", () => {
   it("each write appends its event, with the subject and ids and never typed text (mutation: drop the emit in replaceEquipment -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const old = await addEquipment(db, accountId, p.id, unit(), ctx);
       await replaceEquipment(db, accountId, old.id, unit({ installed_on: "2026-10-11" }), ctx);
@@ -199,9 +199,9 @@ describe("events, every type (spec §6, review round 1)", () => {
         emptyAddress: "77 Empty Rd", group: "Navarro",
       };
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const home = await createGroupWithMember(db, accountId, ana, "household", TYPED.group, null, ACTOR);
+      const home = await createGroupWithMember(db, accountId, ana, "household", TYPED.group, null, { authorKind: "person", authorId: ACTOR });
       if (home.status !== "ok") throw new Error("group");
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, {
         label: TYPED.label, address: TYPED.address, landmark: TYPED.landmark, directions: TYPED.directions,
         city: TYPED.city, region: TYPED.region, postal_code: TYPED.postal_code, country: "US",
@@ -256,7 +256,7 @@ describe("tenant fences (review round 1)", () => {
   it("a wrong account id answers not_found or null for every read and write by id, and the row is untouched (mutation: drop getPlace's or getEquipment's account filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => withTestAccount(async (_db, otherId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const u = await addEquipment(db, accountId, p.id, unit(), ctx);
       expect(await getPlace(db, otherId, p.id)).toBeNull();
@@ -275,7 +275,7 @@ describe("tenant fences (review round 1)", () => {
   it("restorePlace and restoreEquipment refuse another account's snapshot with 22023 and write nothing (mutation: drop either account check -> FAILS)", () =>
     withTestAccount(async (db, accountId) => withTestAccount(async (_db, otherId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const u = await addEquipment(db, accountId, p.id, unit(), ctx);
       const unitSnap = await removeEquipment(db, accountId, u.id, ctx);
@@ -295,7 +295,7 @@ describe("refusals and order (review round 1)", () => {
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const luis = (await createContact(db, accountId, { firstName: "Luis" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       const other = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ address: "9 Other St" }), ctx);
       const u = await addEquipment(db, accountId, p.id, unit(), ctx);
@@ -312,10 +312,10 @@ describe("refusals and order (review round 1)", () => {
   it("lists the person's primary group first, whatever the names or join order (mutation: drop the primary-first sort -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const alpha = await createGroupWithMember(db, accountId, ana, "household", "Alpha", null, ACTOR);
-      const zeta = await createGroupWithMember(db, accountId, ana, "business", "Zeta Roofing", null, ACTOR);
+      const alpha = await createGroupWithMember(db, accountId, ana, "household", "Alpha", null, { authorKind: "person", authorId: ACTOR });
+      const zeta = await createGroupWithMember(db, accountId, ana, "business", "Zeta Roofing", null, { authorKind: "person", authorId: ACTOR });
       if (alpha.status !== "ok" || zeta.status !== "ok") throw new Error("groups");
-      expect(await setPrimaryMembership(db, accountId, zeta.memberId, ACTOR)).toMatchObject({ status: "ok" });
+      expect(await setPrimaryMembership(db, accountId, zeta.memberId, { authorKind: "person", authorId: ACTOR })).toMatchObject({ status: "ok" });
       const r = await listContactPlaces(db, accountId, ana);
       expect(r.groups).toEqual([
         { id: zeta.groupId, kind: "business", name: "Zeta Roofing", isPrimary: true },
@@ -328,7 +328,7 @@ describe("no-op writes append nothing (review round 1)", () => {
   it("archiving an archived place, putting back a current one or giving a place the owner it has writes nothing and appends no event (mutations: drop the already-archived, already-current or same-owner guard -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
       await addEquipment(db, accountId, p.id, unit(), ctx);
       await removePlace(db, accountId, p.id, ctx);
@@ -347,7 +347,7 @@ describe("no-op writes append nothing (review round 1)", () => {
   it("an edit whose values equal the stored ones, or are undefined, writes nothing and appends no event; a mixed patch names only what changed (mutation: write every patched key -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const ctx = { subjectId: ana, actorId: ACTOR };
+      const ctx: PlaceCtx = { subjectId: ana, author: { authorKind: "person", authorId: ACTOR } };
       const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ landmark: "blue gate" }), ctx);
       const u = await addEquipment(db, accountId, p.id, unit(), ctx);
       expect(await updatePlace(db, accountId, p.id, { landmark: "blue gate" }, ctx)).toEqual({ previous: { landmark: "blue gate" }, row: p });
