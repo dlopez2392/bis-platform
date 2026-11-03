@@ -4,6 +4,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { serviceDb, deleteContacts } from "@bis/db";
 import { MIN_PHONE_SEARCH_DIGITS } from "@bis/db/contact-search";
 import { m } from "../src/lib/messages";
+import { e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -89,20 +90,20 @@ test.beforeAll(async () => {
   accountId = fullFixture().accountId;
   const svc = serviceDb();
 
-  const { data: maria, error: mariaErr } = await svc.from("contacts")
+  const { data: maria, error: mariaErr } = await e2eAuthor(svc.from("contacts")
     .insert({
       account_id: accountId, first_name: MARIA_FIRST, last_name: MARIA_LAST,
       phone: MARIA_PHONE, email: `search-${STAMP}-maria@example.com`,
-    })
+    }))
     .select("id").single();
   if (mariaErr || !maria) throw new Error(`contacts-search e2e: seeding María failed: ${mariaErr?.message ?? "no row"}`);
   mariaId = (maria as { id: string }).id;
 
-  const { data: ines, error: inesErr } = await svc.from("contacts")
+  const { data: ines, error: inesErr } = await e2eAuthor(svc.from("contacts")
     .insert({
       account_id: accountId, first_name: INES_FIRST, last_name: INES_LAST,
       email: `search-${STAMP}-ines@example.com`,
-    })
+    }))
     .select("id").single();
   if (inesErr || !ines) throw new Error(`contacts-search e2e: seeding Inés failed: ${inesErr?.message ?? "no row"}`);
   inesId = (ines as { id: string }).id;
@@ -113,7 +114,7 @@ test.afterAll(async () => {
   const svc = serviceDb();
   const ids = [mariaId, inesId].filter((id) => id.length > 0);
   if (ids.length === 0) return;
-  const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc });
+  const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc }, E2E_AUTHOR);
   if (result.deleted !== ids.length) {
     throw new Error(
       `contacts-search e2e cleanup: deleteContacts deleted ${result.deleted} of ${ids.length} ` +

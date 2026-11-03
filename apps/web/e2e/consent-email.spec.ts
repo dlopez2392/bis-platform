@@ -4,7 +4,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
 import { sealConsentToken } from "../src/lib/consent/token";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -62,7 +62,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   const db = serviceDb();
   for (const id of made.contacts) {
-    const { error } = await db.from("contacts").delete().eq("id", id);
+    const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", id);
     if (error) console.error(`consent-email e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);
   }
 });

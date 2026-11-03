@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import { serviceDb, createContact, recordLanguageSignal } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { m } from "../src/lib/messages";
 
 /**
@@ -38,7 +38,7 @@ test.describe("a language on every contact (S-09)", () => {
       await expect(drawerRow).toHaveAttribute("data-language", "es");
       await expect(drawerRow.locator("[data-language-phrase]")).toContainText("from their booking (");
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`contact-language e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -63,7 +63,7 @@ test.describe("a language on every contact (S-09)", () => {
       await expect(recordPage(page).locator("[data-language-row]")).toBeVisible();
       await expect(recordPage(page).locator("[data-language-hint]")).toHaveCount(0);
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`contact-language e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -105,7 +105,7 @@ test.describe("a language on every contact (S-09): in Spanish", () => {
       await expect(row.locator("dt")).toHaveText(m["contact.language.label.es"]);
       await expect(row.locator("[data-language-phrase]")).toContainText("por su cita (");
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`contact-language e2e: cleanup failed: ${error.message}`);
       const reset = await db.from("users").update({ language: priorLanguage }).eq("id", ownerId).select("id");
       expect(reset.error, `resetting the Owner's language: ${reset.error?.message}`).toBeNull();

@@ -2,7 +2,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { recordPage, readClientFixture } from "./support";
+import { recordPage, readClientFixture, e2eAuthor } from "./support";
 import { clipFailure } from "./overflow-check";
 import { assertNoRedirect, waitForHeaderSettled, assertHeaderChildrenInBounds } from "./shell-geometry";
 import { m, type MessageKey } from "../src/lib/messages";
@@ -149,7 +149,7 @@ test.describe("the Spanish dashboard, signed in end to end (S-10 T9)", () => {
       const fixture = spanishFixture();
       if (!fixture || !contactId) return;
       const db = serviceDb();
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", contactId);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", contactId);
       if (error) console.error(`spanish-dashboard e2e: cleanup failed: ${error.message}`);
     });
 

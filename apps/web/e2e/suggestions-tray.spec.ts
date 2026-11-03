@@ -7,7 +7,7 @@ import {
 import { proposalExpiresAt } from "@bis/db/proposal-rules";
 import { m, type MessageKey } from "../src/lib/messages";
 import { clipFailure } from "./overflow-check";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every spec that seeds through the service client from the runner
 // process (suggestions.spec.ts, calls.spec.ts, work-queue.spec.ts).
@@ -203,7 +203,7 @@ test.afterAll(async () => {
   if (calls.length) await step("calls", () => db.from("calls").delete().eq("account_id", accountId).in("id", calls));
   if (phoneNumberId) await step("phone_numbers", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", phoneNumberId));
   await step("tasks", () => db.from("tasks").delete().eq("account_id", accountId).in("title", titles));
-  if (contacts.length) await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", contacts));
+  if (contacts.length) await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", contacts));
 
   // Re-read. A head count can come back {count: null, error: null} on failure, so null is reported, never 0.
   const count = async (table: string, q: () => PromiseLike<{ count: number | null; error: { message: string } | null }>) => {

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess } from "@bis/db";
-import { mintClientToken } from "./support";
+import { mintClientToken, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every spec that talks to Supabase and Clerk
 // from the runner process rather than through a Next request.
@@ -204,7 +204,7 @@ type Seeded = {
  */
 async function seed(db: Db, accountId: string, into: Partial<Seeded>): Promise<Seeded> {
   const one = async (table: string, row: Record<string, unknown>): Promise<string> => {
-    const { data, error } = await db.from(table).insert(row).select("id").single();
+    const { data, error } = await e2eAuthor(db.from(table).insert(row)).select("id").single();
     if (error || !data) throw new Error(`could not seed ${table}: ${error?.message ?? "no row returned"}`);
     return (data as { id: string }).id;
   };
@@ -240,7 +240,7 @@ async function cleanUp(db: Db, accountId: string, s: Partial<Seeded>): Promise<s
   const del = async (table: string, column: string, value: string | undefined) => {
     if (!value) return;
     try {
-      const { error } = await db.from(table).delete().eq("account_id", accountId).eq(column, value);
+      const { error } = await e2eAuthor(db.from(table).delete()).eq("account_id", accountId).eq(column, value);
       if (error) errors.push(`${table}: ${error.message}`);
     } catch (e) {
       errors.push(`${table}: ${String(e)}`);

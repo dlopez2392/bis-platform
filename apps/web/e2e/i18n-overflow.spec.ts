@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, createGroupWithMember, setGroupPrimaryContact } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
 import { m } from "../src/lib/messages";
 
@@ -164,7 +164,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
         expect(clipFailure(scrollW, clientW, `record page "${text}"`)).toBeNull();
       }
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -214,7 +214,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
         description: clippedLabels.length > 0 ? clippedLabels.join(", ") : "none",
       });
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -270,7 +270,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
         if (groupErr) console.error(`i18n-overflow e2e: group cleanup failed: ${groupErr.message}`);
       }
       if (contactId) {
-        const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", contactId);
+        const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", contactId);
         if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
       }
     }

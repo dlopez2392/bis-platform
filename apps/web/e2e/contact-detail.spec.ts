@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
@@ -141,6 +141,6 @@ async function deleteContactAndThread(accountId: string, contactId: string): Pro
     await db.from("messages").delete().eq("conversation_id", convo.id);
     await db.from("conversations").delete().eq("id", convo.id);
   }
-  const { error } = await db.from("contacts").delete().eq("id", contactId);
+  const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", contactId);
   if (error) console.error(`contact-detail e2e: cleanup failed: ${error.message}`);
 }

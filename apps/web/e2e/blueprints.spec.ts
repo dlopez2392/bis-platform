@@ -176,7 +176,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // .ok() check matches pipeline.spec.ts's dragTo: a resolved response that
     // carried an action error would otherwise read as "write raced the
     // reload" when it's really "write failed".
-    expect((await togglePosted).ok()).toBeTruthy();
+    const toggleRes = await togglePosted;
+    if (!toggleRes.ok()) {
+      console.log(`checklist toggle response: ${toggleRes.status()} ${await toggleRes.text()}`);
+    }
+    expect(toggleRes.ok()).toBeTruthy();
     await page.reload();
     await expect(page.getByRole("button", { name: "Buy a phone number" }))
       .toHaveAttribute("aria-pressed", "true");

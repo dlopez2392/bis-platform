@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, getOrCreateCalendar, createBooking } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { m, type MessageKey } from "../src/lib/messages";
 
 loadEnv({ path: "apps/web/.env.local" });
@@ -74,7 +74,7 @@ test.afterAll(async () => {
   };
   if (made.booking) await step("booking", () => db.from("bookings").delete().eq("account_id", accountId).eq("id", made.booking!));
   if (made.document) await step("document", () => db.from("documents").delete().eq("account_id", accountId).eq("id", made.document!));
-  if (made.contact) await step("contact", () => db.from("contacts").delete().eq("account_id", accountId).eq("id", made.contact!));
+  if (made.contact) await step("contact", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).eq("id", made.contact!));
   await cleanAi();
   for (const table of ["record_summaries", "ai_ledger", "account_ai_settings"]) {
     const { count, error } = await db.from(table).select("account_id", { count: "exact", head: true }).eq("account_id", accountId);

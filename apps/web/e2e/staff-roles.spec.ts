@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, setClientAccess, readAccountRole, addAccountMember, setAccountMemberRole } from "@bis/db";
-import { mintClientToken } from "./support";
+import { mintClientToken, e2eAuthor } from "./support";
 import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every spec that talks to Supabase and Clerk
@@ -164,9 +164,9 @@ test.describe("a direct delete through Staff's own token", () => {
   test("is refused by Postgres (200, []) — never reaches the row", async () => {
     const { accountId, staffClerkUserId } = fixture();
     const db = serviceDb();
-    const { data, error } = await db
+    const { data, error } = await e2eAuthor(db
       .from("contacts")
-      .insert({ account_id: accountId, first_name: "Staff", last_name: `Delete Probe ${Date.now()}` })
+      .insert({ account_id: accountId, first_name: "Staff", last_name: `Delete Probe ${Date.now()}` }))
       .select("id")
       .single();
     if (error || !data) {
@@ -209,7 +209,7 @@ test.describe("a direct delete through Staff's own token", () => {
       const after = await db.from("contacts").select("id").eq("id", contactId);
       expect.soft(after.data, "the contact after the refused delete").toEqual([{ id: contactId }]);
     } finally {
-      await db.from("contacts").delete().eq("id", contactId);
+      await e2eAuthor(db.from("contacts").delete()).eq("id", contactId);
     }
   });
 });

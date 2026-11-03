@@ -3,7 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, DOCUMENT_BUCKET } from "@bis/db";
 import { tokenHash } from "../src/lib/document-requests/token";
 import { m } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -84,7 +84,7 @@ test.afterAll(async () => {
     const { error: dErr } = await svc.from("documents").delete().in("id", ids);
     if (dErr) throw new Error(`cleanup: documents delete: ${dErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`cleanup: contact delete: ${cErr.message}`);
   const { data: left, error: lErr } = await svc.from("documents").select("id").eq("contact_id", contactId);
   if (lErr) throw new Error(`cleanup: re-read documents: ${lErr.message}`);

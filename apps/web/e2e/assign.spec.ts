@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { mintClientToken } from "./support";
+import { mintClientToken, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase and
 // Clerk from the Playwright runner process rather than through a Next request.
@@ -99,7 +99,7 @@ test.afterAll(async () => {
   const db = serviceDb();
   for (const id of [mineId, otherId]) {
     if (!id) continue;
-    const { error } = await db.from("contacts").delete().eq("id", id);
+    const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", id);
     expect(error, `deleting the probe contact ${id}`).toBeNull();
   }
 });

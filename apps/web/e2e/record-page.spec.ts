@@ -6,7 +6,7 @@ import {
   addNote, createForm, createSubmission, linkSubmissionContact, ensureConversation, createMessage,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -118,7 +118,7 @@ test.afterAll(async () => {
   // form_submissions.form_id is `on delete restrict`: the submission goes before its form.
   if (made.submission) await step("submission", () => db.from("form_submissions").delete().eq("account_id", accountId).eq("id", made.submission!));
   if (made.form) await step("form", () => db.from("forms").delete().eq("account_id", accountId).eq("id", made.form!));
-  await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
+  await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids));
   const { data: left } = await db.from("contacts").select("id").in("id", ids);
   expect(left ?? []).toEqual([]);
   if (cancelToken) {
