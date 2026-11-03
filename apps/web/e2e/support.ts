@@ -272,5 +272,39 @@ export function watchRouterTraffic(page: Page) {
         page.off("requestfailed", onEnd);
       }
     },
+    /**
+     * The same settle condition as `expectSearchHeld`, for a caller with no
+     * URL to hold: every router request seen since this watch started (a
+     * server action, or the RSC refresh it kicks off) has finished, none is
+     * in flight, and a further quiet period has passed. For a caller that
+     * needs a save's OWN `router.refresh()` to have actually landed before
+     * trusting what happens next — a toast fires on the server action's bare
+     * response, before the `router.refresh()` that response triggers has
+     * delivered anything, so the toast alone is not proof the refresh is
+     * done (preferences.spec.ts: ThemeCookieSync's props update only once
+     * that refresh lands, asynchronously and on no fixed schedule).
+     */
+    async waitUntilQuiet({ minMs = 2_000, quietMs = 1_000, timeoutMs = 30_000 } = {}): Promise<void> {
+      const started = Date.now();
+      try {
+        for (;;) {
+          const now = Date.now();
+          if (
+            finished > 0 && inFlight.size === 0
+            && now - lastFinishedAt >= quietMs && now - started >= minMs
+          ) return;
+          if (now - started > timeoutMs) {
+            throw new Error(
+              `router traffic never settled in ${timeoutMs}ms: ${finished} finished, ${inFlight.size} in flight`,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } finally {
+        page.off("request", onStart);
+        page.off("requestfinished", onEnd);
+        page.off("requestfailed", onEnd);
+      }
+    },
   };
 }

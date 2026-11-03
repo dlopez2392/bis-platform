@@ -201,7 +201,16 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       // LABEL_ROW, 92px) is REPORTED under the real Spanish locale, never asserted on — same
       // discipline as the sidebar's own pseudo-locale case above.
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts?locale=es&peek=${id}`);
-      await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
+      // This is the SECOND hard navigation in this test (a real browser nav,
+      // not a client-side route change): its own full chain — SSR, hydration,
+      // then the drawer's own client fetch of /summary — runs again from
+      // scratch on top of whatever the first navigation already cost this
+      // worker. CI run 41478909016 (main) timed out here at the shared 10s
+      // default with "element(s) not found" while every other wait in this
+      // file (including the identical shape after the FIRST navigation,
+      // above) passed; a generous explicit budget covers a second hard nav's
+      // real cost instead of sharing the default with everything else.
+      await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible({ timeout: 20_000 });
       const labelCells = dialog.locator('[data-drawer-section="who"] dt');
       const labelCount = await labelCells.count();
       const clippedLabels: string[] = [];

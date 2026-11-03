@@ -567,7 +567,16 @@ test("9. Take photo: hidden on a desktop; on a phone it is shown and opens the c
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(contactUrl());
   // On a phone the card is closed until tapped (DESIGN.md: what they have, closed until tapped).
-  await recordPage(page).locator('[data-record-card="documents"] h2 > button[aria-expanded]').click();
+  const toggle = recordPage(page).locator('[data-record-card="documents"] h2 > button[aria-expanded]');
+  await toggle.click();
+  // The click can race hydration on a fresh hard navigation (the button is
+  // server-rendered and clickable before React attaches its handler); confirm
+  // the disclosure actually opened — record-page.spec.ts and group-page.spec.ts
+  // use the same aria-expanded check after this exact click — before waiting
+  // on the card's own (separately-timed) data read below. A closed disclosure
+  // mounts no body at all, so without this the "N files" wait below would
+  // report "element(s) not found" for either reason and tell a reader nothing.
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
   const takePhoto = card(page).locator("[data-take-photo]");
   await expect(takePhoto).toBeVisible();
