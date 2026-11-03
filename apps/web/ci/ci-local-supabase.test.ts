@@ -79,6 +79,7 @@ for a in "$@"; do
   case "$a" in
     *server_version_num*) printf '%s\\n' "\${FAKE_PG_VERSION_NUM:-170006}" ;;
     -f) exit "\${FAKE_PSQL_FILE_EXIT:-0}" ;;
+    *record_changes_settings*) exit "\${FAKE_PSQL_ENFORCE_EXIT:-0}" ;;
   esac
 done
 exit 0
@@ -613,5 +614,27 @@ describe("ci-supabase-cli.sh: one pinned CLI, checked before it runs", () => {
     expect(r.status).not.toBe(0);
     expect(r.output).toMatch(/::error::.*sha256/);
     expect(r.githubPath).toBe("");
+  });
+});
+
+// F-115 (0111): the stacks turn record_changes enforce mode on, so a test that writes a contact through server code
+// without saying who made it fails in CI rather than shipping an unattributed path. Production stays in observe mode.
+const ENFORCE = /^psql .* -c update app\.record_changes_settings set enforce = true$/;
+describe("ci-local-supabase.sh: record_changes enforce mode (F-115)", () => {
+  it("turns enforce ON after the migrations and before PostgREST reloads, on the stack's DB_URL, stopping at the first error (mutation: drop the line -> FAILS; run it before the push -> FAILS)", () => {
+    const r = run(STACK_SCRIPT);
+    expect(r.status, r.output).toBe(0);
+    const enforce = indexOf(r.log, ENFORCE);
+    expect(enforce, "the enforce switch ran").toBeGreaterThanOrEqual(0);
+    expect(enforce, "after the push").toBeGreaterThan(indexOf(r.log, PUSH));
+    expect(indexOf(r.log, /^psql .*notify pgrst/), "the reload comes after it").toBeGreaterThan(enforce);
+    expect(r.log[enforce]).toContain(DB_URL);
+    expect(r.log[enforce]).toContain("ON_ERROR_STOP=1");
+  });
+  it("a failed enforce switch stops the job: no reload, nothing in GITHUB_ENV (mutation: append || true -> FAILS)", () => {
+    const r = run(STACK_SCRIPT, { FAKE_PSQL_ENFORCE_EXIT: "3" });
+    expect(r.status).not.toBe(0);
+    expect(indexOf(r.log, /^psql .*notify pgrst/)).toBe(-1);
+    expect(r.githubEnv).toBe("");
   });
 });
