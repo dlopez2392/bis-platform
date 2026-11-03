@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor } from "./row-author";
 
 /**
  * F-006 part 1 (migration 0106, Task 5): the typed wrappers around the merge RPCs (`merge_contacts`,
@@ -131,12 +133,14 @@ const MERGE_DEADLOCK_RETRIES = 1;
 /** The two merge RPCs' own call, retrying a deadlock once; every other error (including a second
  *  deadlock) throws a `MergeRpcError` carrying PostgREST's code. `wrapperName` names the THROWING
  *  function (`mergeContacts`/`undoContactMerge`), never the RPC's own snake_case name, matching the
- *  message shape both wrappers already carried before this helper existed. */
+ *  message shape both wrappers already carried before this helper existed. F-115: `author` rides on
+ *  EVERY attempt (including a deadlock's retry) via `withAuthor` on the rpc builder, the same pattern
+ *  `deleteContacts` got in 45a3e40c. */
 async function mergeRpc<T>(
-  db: SupabaseClient, rpcName: string, wrapperName: string, args: Record<string, unknown>,
+  db: SupabaseClient, rpcName: string, wrapperName: string, args: Record<string, unknown>, author: RowAuthor,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
-    const { data, error } = await db.rpc(rpcName, args);
+    const { data, error } = await withAuthor(db.rpc(rpcName, args), author);
     if (!error) return data as T;
     const code = (error as { code?: string }).code;
     if (code === MERGE_DEADLOCK && attempt < MERGE_DEADLOCK_RETRIES) continue;
@@ -162,12 +166,16 @@ const MERGE_REFUSALS = ["same", "not_found", "holding", "already_merged", "stale
 /** `merge_contacts`: p_other into p_keep. Fails closed — an answer that is not exactly "merged" with a
  *  numeric mergeId and a moved object, or one of the five named refusals, throws rather than being read
  *  as a success (mutation: coercing an unknown shape to "merged" would silently report a merge that the
- *  database never made). */
-export async function mergeContacts(db: SupabaseClient, accountId: string, input: MergeInput): Promise<MergeOutcome> {
+ *  database never made). F-115: `author` is required and refused before any query on a service client
+ *  with none (`requireAuthor`); harmless on a user client, where 0111 takes the token's own sub. */
+export async function mergeContacts(
+  db: SupabaseClient, accountId: string, input: MergeInput, author: RowAuthor,
+): Promise<MergeOutcome> {
+  author = requireAuthor(db, author, "mergeContacts");
   const data = await mergeRpc<unknown>(db, "merge_contacts", "mergeContacts", {
     p_account_id: accountId, p_keep: input.keepId, p_other: input.otherId,
     p_choices: input.choices, p_seen: input.seen, p_actor: input.actor ?? null,
-  });
+  }, author);
   const r = data as { status?: unknown; mergeId?: unknown; moved?: unknown } | null;
   if (
     r?.status === "merged" && typeof r.mergeId === "number" && typeof r.moved === "object" && r.moved !== null
@@ -188,12 +196,16 @@ export type UndoMergeOutcome =
 
 const UNDO_REFUSALS = ["not_found", "already_undone", "expired", "later_merge"] as const;
 
-/** `undo_contact_merge`: within 30 days, newest-merge-first. Fails closed on any shape it does not name. */
+/** `undo_contact_merge`: within 30 days, newest-merge-first. Fails closed on any shape it does not name.
+ *  F-115: `author` is required (and must precede the optional `actor`, a TS ordering constraint — a
+ *  required parameter cannot follow an optional one); refused before any query on a service client with
+ *  none (`requireAuthor`); harmless on a user client, where 0111 takes the token's own sub. */
 export async function undoContactMerge(
-  db: SupabaseClient, accountId: string, mergeId: number, actor?: string,
+  db: SupabaseClient, accountId: string, mergeId: number, author: RowAuthor, actor?: string,
 ): Promise<UndoMergeOutcome> {
+  author = requireAuthor(db, author, "undoContactMerge");
   const data = await mergeRpc<unknown>(
-    db, "undo_contact_merge", "undoContactMerge", { p_account_id: accountId, p_merge_id: mergeId, p_actor: actor ?? null },
+    db, "undo_contact_merge", "undoContactMerge", { p_account_id: accountId, p_merge_id: mergeId, p_actor: actor ?? null }, author,
   );
   const r = data as { status?: unknown; otherId?: unknown; keptNew?: unknown; keptEdits?: unknown } | null;
   if (r?.status === "undone" && typeof r.otherId === "string" && typeof r.keptNew === "number" && Array.isArray(r.keptEdits)) {

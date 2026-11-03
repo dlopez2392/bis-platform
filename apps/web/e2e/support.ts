@@ -18,10 +18,11 @@ import { seededAccountMissingMessage } from "./fixtures/seeded";
  */
 export const E2E_AUTHOR: RowAuthor = { authorKind: "automation", authorId: null };
 
-/** `withAuthor(builder, E2E_AUTHOR, "e2e")`, spelled once for every raw contacts write a spec makes
- *  for its own setup or cleanup. */
+/** `withAuthor(builder, E2E_AUTHOR, "seed")`, spelled once for every raw contacts write a spec makes
+ *  for its own setup or cleanup — "seed", not "e2e", so this stays on the plan's own `via` list
+ *  (`SEED_VIA`, `packages/db/src/test/db.ts`). */
 export function e2eAuthor<B extends { setHeader(name: string, value: string): B }>(builder: B): B {
-  return withAuthor(builder, E2E_AUTHOR, "e2e");
+  return withAuthor(builder, E2E_AUTHOR, "seed");
 }
 
 /**

@@ -185,7 +185,7 @@ export async function applyImportBatch(
       contactId = hitId;
       updated++;
     } else {
-      const result = await createContact(db, accountId, { ...row.input, author: { authorKind: "import", authorId: null } }, actorId);
+      const result = await createContact(db, accountId, { ...row.input, author }, actorId);
       contactId = result.id;
       if (result.flagged) flagged++;
       if (result.existing) {

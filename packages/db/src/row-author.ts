@@ -2,7 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ActorType } from "./events";
 import type { RowAuthor } from "./provenance";
 import { SEED_ACTORS } from "./provenance";
-import { isUserClient } from "./user-client";
 
 /**
  * F-115: the header 0111's app.record_changes_capture() reads on a service-role request (migration
@@ -40,14 +39,20 @@ export function withAuthor<B extends { setHeader(name: string, value: string): B
 
 /**
  * The runtime half of "required": a JS caller (or a `as never` cast past the compile-time pin) cannot
- * skip the author on a service client. A user client needs none — the database takes the token there
- * (0111 precedence step 1/3) — so this is a no-op (returns `undefined`) when `db` is a user client.
+ * skip the author on any client. Fix round: the user-client exemption this once carried (0111 takes the
+ * token's own sub there, so an author-less call seemed to "work") was moot — every converted writer
+ * calls `withAuthor(builder, author, via)` right after this, and `authorHeaderValue` reads
+ * `author.authorKind` unconditionally, so an `undefined` author already threw a bare TypeError on a
+ * user client too, just with no useful message. This refuses the same call with the writer's own named
+ * message instead, before any query, on every client — `db` is accepted for call-site compatibility but
+ * no longer read.
  */
 export function requireAuthor(db: SupabaseClient, author: RowAuthor | undefined, writer: string): RowAuthor {
-  if (!author && !isUserClient(db)) {
+  void db;
+  if (!author) {
     throw new Error(`${writer}: a server write must say who made it`);
   }
-  return author as RowAuthor;
+  return author;
 }
 
 /**
