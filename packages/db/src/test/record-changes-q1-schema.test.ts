@@ -7,8 +7,8 @@ import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
  * their members, places, equipment, deals, relationships and tags), merge_contacts and undo_contact_merge name their
  * author, and public.put_back_contact_custom (F-115 part 1; spec sections 2.2 to 2.4; plan Task 3).
  * RED BEFORE APPLY, legitimately: every case that reads an object or a row 0112 creates (the seven tables' triggers
- * and field lists, the merge's and the Undo's via, the put-back function, the bis.* pin's expected list): 23 of 28
- * on the replica. FIVE HOLD BEFORE 0112 and are not its red: "the contact list is 0111's", "delete_internal_contacts
+ * and field lists, the merge's and the Undo's via, the put-back function, the bis.* pin's expected list): 24 of 29
+ * on the replica (the merge's "(d)" among them: before 0112 it writes only contact rows). FIVE HOLD BEFORE 0112 and are not its red: "the contact list is 0111's", "delete_internal_contacts
  * as an Owner" (with no trigger on a child there is nothing for it to write), "restore_contact_on_sign" (0111 already
  * writes nothing for it), and the merge's "(b)" and "(c)" (before 0112 nothing sets bis.*, so nothing can leak).
  * They guard what 0112 must not break; each fails under its named mutation on 0112.
@@ -645,6 +645,40 @@ describe("0112: merge_contacts names its author (orchestrator ruling: the merge'
       expect((await mergeAsOwner(c, a, k, o)).r.status).toBe("merged");
       expect((await mergeAsOwner(c, a, k, o, { keep: "", other: "" })).r.status).toBe("already_merged");
       expect(await unset(c)).toEqual({ a: "", i: "", v: "" });
+    }));
+
+  it("(d) as an Owner passing p_actor 'user_forged': every change row the merge writes is the person's with the Owner's own sub, and no row anywhere names user_forged (mutation: coalesce(p_actor, v_actor) -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "mergeD");
+      const { k, o, om } = await mergePair(c, a);
+      const p = await place(c, a, { contact: o });
+      const t = await tag(c, a, o);
+      // Both have it, so the other's is REMOVED (a delete row); a tag only the other has moves and writes nothing.
+      await c.query("insert into public.contact_tags (account_id, contact_id, tag_id) values ($1, $2, $3)", [a.accountId, k, t]);
+      const from = await maxId(c);
+      const seen =(await c.query<{ v: object }>("select public.contact_merge_preview($1, $2, $3) -> 'seen' as v", [a.accountId, k, o])).rows[0]!.v;
+      const sub = await actAsMember(c, a.accountId, a.orgId, "owner");
+      expect(sub).not.toBe("user_forged");
+      // A signed-in caller passes a p_actor of its own choosing: 0106 trusts p_actor on a service-role JWT only.
+      const { rows: [r] } = await c.query<{ r: { status: string; mergeId: number } }>(
+        "select public.merge_contacts($1, $2, $3, $4::jsonb, $5::jsonb, $6) as r",
+        [a.accountId, k, o, JSON.stringify({ email: "other" }), JSON.stringify(seen), "user_forged"]);
+      expect(r!.r.status).toBe("merged");
+      const got = await rows(c, "id > $1", [from]);
+      // The merge wrote rows of every kind it touches, so the check below is over real rows, not an empty list.
+      expect([...new Set(got.map((x) => x.record_type))].sort()).toEqual(["client_group_member", "contact", "contact_tag", "place"]);
+      expect(got.find((x) => x.record_type === "place" && x.record_id === p)).toMatchObject({ author_kind: "person", author_id: sub });
+      expect(got.find((x) => x.record_type === "client_group_member" && x.record_id === om)).toMatchObject({ author_kind: "person", author_id: sub });
+      expect(got.find((x) => x.record_type === "contact_tag" && x.record_id === t)).toMatchObject({ author_kind: "person", author_id: sub });
+      expect(got.filter((x) => !(x.author_kind === "person" && x.author_id === sub))
+        .map((x) => ({ ...brief(x), record_type: x.record_type }))).toEqual([]);
+      // Nowhere: not in the change log (any row, not only the merge's), the merge row, or its event.
+      await actAsOwner(c);
+      const { rows: [n] } = await c.query<{ rc: number; cm: number; ev: number }>(
+        `select (select count(*) from public.record_changes where author_id = 'user_forged')::int as rc,
+                (select count(*) from public.contact_merges where merged_by = 'user_forged' or undone_by = 'user_forged')::int as cm,
+                (select count(*) from public.events where actor_id = 'user_forged')::int as ev`);
+      expect(n).toEqual({ rc: 0, cm: 0, ev: 0 });
     }));
 });
 
