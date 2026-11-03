@@ -4,13 +4,14 @@ import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
 
 /**
  * 0112_record_changes_q1.sql: the change log reaches the rest of the owner's Q1 set (households and businesses and
- * their members, places, equipment, deals, relationships and tags), undo_contact_merge names its author, and
- * public.put_back_contact_custom (F-115 part 1; spec sections 2.2 to 2.4; plan Task 3).
+ * their members, places, equipment, deals, relationships and tags), merge_contacts and undo_contact_merge name their
+ * author, and public.put_back_contact_custom (F-115 part 1; spec sections 2.2 to 2.4; plan Task 3).
  * RED BEFORE APPLY, legitimately: every case that reads an object or a row 0112 creates (the seven tables' triggers
- * and field lists, the Undo's via, the put-back function, the bis.* pin's expected list): 22 of 25 on the replica.
- * THREE HOLD BEFORE 0112 and are not its red: "the contact list is 0111's", "delete_internal_contacts as an Owner"
- * (with no trigger on a child there is nothing for it to write) and "restore_contact_on_sign" (0111 already writes
- * nothing for it). They guard what 0112 must not break; each fails under its named mutation on 0112.
+ * and field lists, the merge's and the Undo's via, the put-back function, the bis.* pin's expected list): 23 of 28
+ * on the replica. FIVE HOLD BEFORE 0112 and are not its red: "the contact list is 0111's", "delete_internal_contacts
+ * as an Owner" (with no trigger on a child there is nothing for it to write), "restore_contact_on_sign" (0111 already
+ * writes nothing for it), and the merge's "(b)" and "(c)" (before 0112 nothing sets bis.*, so nothing can leak).
+ * They guard what 0112 must not break; each fails under its named mutation on 0112.
  * Replica only (withRollback).
  */
 const RUN = Math.random().toString(36).slice(2, 10);
@@ -550,6 +551,103 @@ describe("0112: undo_contact_merge names its author", () => {
     }));
 });
 
+/** An Owner's merge of o into k keeping o's email, as the request client sends it: the answer and the Owner's sub. */
+const MERGE = "select public.merge_contacts($1, $2, $3, $4::jsonb, $5::jsonb, null) as r";
+async function mergeAsOwner(c: Client, a: Acct, k: string, o: string, seen?: object):
+    Promise<{ r: { status: string; mergeId?: number }; sub: string }> {
+  await actAsOwner(c);
+  const s = seen ?? (await c.query<{ v: object }>("select public.contact_merge_preview($1, $2, $3) -> 'seen' as v", [a.accountId, k, o])).rows[0]!.v;
+  const sub = await actAsMember(c, a.accountId, a.orgId, "owner");
+  const { rows: [r] } = await c.query<{ r: { status: string; mergeId?: number } }>(
+    MERGE, [a.accountId, k, o, JSON.stringify({ email: "other" }), JSON.stringify(s)]);
+  return { r: r!.r, sub };
+}
+/** No bis.* setting holds a value (never set, or set back to ''). */
+const unset = async (c: Client) => {
+  const g = await gucs(c);
+  return { a: g.a ?? "", i: g.i ?? "", v: g.v ?? "" };
+};
+
+describe("0112: merge_contacts names its author (orchestrator ruling: the merge's id reserved before its first write)", () => {
+  it("(a) as an Owner: every row the merge writes (fields, places, memberships, tags) is the person's with via merge:<that merge's own id>; a later plain insert does not collide (mutations: drop the set_config -> FAILS; insert the merge row without the reserved id -> via no longer matches -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "mergeA");
+      const { k, o, om } = await mergePair(c, a);
+      const p = await place(c, a, { contact: o });
+      const t = await tag(c, a, o);
+      await c.query("insert into public.contact_tags (account_id, contact_id, tag_id) values ($1, $2, $3)", [a.accountId, k, t]);   // both have it
+      const from = await maxId(c);
+      const { r, sub } = await mergeAsOwner(c, a, k, o);
+      expect(r.status).toBe("merged");
+      const via = `merge:${r.mergeId}`;
+      const got = await rows(c, "id > $1", [from]);
+      expect([...new Set(got.map((x) => x.record_type))].sort()).toEqual(["client_group_member", "contact", "contact_tag", "place"]);
+      expect(got.filter((x) => !(x.author_kind === "person" && x.author_id === sub && x.via === via))
+        .map((x) => ({ ...brief(x), record_type: x.record_type }))).toEqual([]);
+      expect(got.find((x) => x.record_type === "contact" && x.field === "email"))
+        .toMatchObject({ record_id: k, before: "keep@example.com", after: "other@example.com" });
+      expect(got.find((x) => x.record_type === "place" && x.record_id === p)).toMatchObject({ field: "contact_id", before: o, after: k });
+      expect(got.find((x) => x.record_type === "client_group_member" && x.record_id === om)).toMatchObject({ op: "delete", contact_id: o });
+      expect(got.find((x) => x.record_type === "contact_tag" && x.record_id === t)).toMatchObject({ op: "delete", contact_id: o });
+      // The via names the merge row the app shows, the one Undo reads.
+      await actAsOwner(c);
+      const { rows: [m] } = await c.query<{ id: string }>("select id::text as id from public.contact_merges where keep_id = $1 and other_id = $2", [k, o]);
+      expect(`merge:${m!.id}`).toBe(via);
+      // The identity sequence moved past the reserved id: a plain insert (the column default) lands after it.
+      const { rows: [n] } = await c.query<{ id: string }>(
+        `insert into public.contact_merges (account_id, keep_id, other_id, merged_by, merged_at, undo_until, keep_before, keep_after,
+                                            choices, moved, moved_counts, removed)
+         select account_id, other_id, keep_id, merged_by, merged_at, undo_until, keep_before, keep_after, choices, moved, moved_counts, removed
+           from public.contact_merges where id = $1 returning id::text as id`, [m!.id]);
+      expect(BigInt(n!.id)).toBeGreaterThan(BigInt(m!.id));
+    }));
+
+  it("(b) the reset holds: after the merge, a service update with no author in the same transaction is refused under enforce (mutation: drop the reset before the merged return -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "mergeB");
+      const { k, o } = await mergePair(c, a);
+      const { r } = await mergeAsOwner(c, a, k, o);
+      expect(r.status).toBe("merged");
+      expect(await unset(c)).toEqual({ a: "", i: "", v: "" });
+      await enforce(c, true);
+      await asServiceWith(c);
+      expect(await refusal(c, "update public.contacts set first_name = 'After' where id = $1", [k]))
+        .toEqual({ code: "42501", message: "record_changes: a server write must say who made it" });
+    }));
+
+  it("(c) a refused, stale or failed merge leaves no bis.* set (mutation: set the author before the refusals and drop their resets -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "mergeC");
+      const { k, o } = await mergePair(c, a);
+      const answers: [string, () => Promise<{ r: { status: string } }>][] = [
+        ["same", () => mergeAsOwner(c, a, k, k, { keep: "", other: "" })],
+        ["not_found", () => mergeAsOwner(c, a, k, "00000000-0000-4000-8000-000000000001", { keep: "", other: "" })],
+        ["stale", () => mergeAsOwner(c, a, k, o, { keep: "x", other: "y" })],
+      ];
+      for (const [status, run] of answers) {
+        expect((await run()).r.status, status).toBe(status);
+        expect(await unset(c), status).toEqual({ a: "", i: "", v: "" });
+      }
+      // Failed AFTER the author is set: the merge row's insert raises, and the rollback takes the settings with it.
+      await actAsOwner(c);
+      await c.query(`create function public.t_rcq_fail() returns trigger language plpgsql as $f$
+        begin raise exception 't_rcq_fail' using errcode = 'P0001'; end $f$`);
+      await c.query("create trigger t_rcq_fail before insert on public.contact_merges for each row execute function public.t_rcq_fail()");
+      const seen = (await c.query<{ v: object }>("select public.contact_merge_preview($1, $2, $3) -> 'seen' as v", [a.accountId, k, o])).rows[0]!.v;
+      const sub = await actAsMember(c, a.accountId, a.orgId, "owner");
+      await actAs(c, { org_id: a.orgId, sub });
+      expect(await refusal(c, MERGE, [a.accountId, k, o, JSON.stringify({ email: "other" }), JSON.stringify(seen)]))
+        .toMatchObject({ code: "P0001", message: "t_rcq_fail" });
+      expect(await unset(c)).toEqual({ a: "", i: "", v: "" });
+      // already_merged, after a real merge.
+      await actAsOwner(c);
+      await c.query("drop trigger t_rcq_fail on public.contact_merges");
+      expect((await mergeAsOwner(c, a, k, o)).r.status).toBe("merged");
+      expect((await mergeAsOwner(c, a, k, o, { keep: "", other: "" })).r.status).toBe("already_merged");
+      expect(await unset(c)).toEqual({ a: "", i: "", v: "" });
+    }));
+});
+
 describe("0112: put_back_contact_custom", () => {
   it("an invoker with its search_path pinned, EXECUTE to authenticated only (mutation: grant execute to anon -> FAILS; security definer -> FAILS)", () =>
     withRollback(async (c) => {
@@ -597,6 +695,9 @@ describe("0112: put_back_contact_custom", () => {
 
 /** Every set_config call in a public or app function body, as (function, first argument). */
 const EXPECTED_BIS_SETTERS = [
+  "public.merge_contacts(uuid,uuid,uuid,jsonb,jsonb,text) 'bis.author'",
+  "public.merge_contacts(uuid,uuid,uuid,jsonb,jsonb,text) 'bis.author_id'",
+  "public.merge_contacts(uuid,uuid,uuid,jsonb,jsonb,text) 'bis.via'",
   "public.undo_contact_merge(uuid,bigint,text) 'bis.author'",
   "public.undo_contact_merge(uuid,bigint,text) 'bis.author_id'",
   "public.undo_contact_merge(uuid,bigint,text) 'bis.via'",

@@ -1,5 +1,5 @@
 -- 0112_record_changes_q1.sql - the change log reaches households, places, equipment, deals, relationships and
--- tags; Undo of a merge names its author; Put back for one custom field; the history download's access-log kind
+-- tags; a merge and its Undo name their author; Put back for one custom field; the history download's access-log kind
 -- (F-115 part 1 / S-04; docs/superpowers/specs/2026-11-02-record-history-design.md sections 2.1 to 2.4 and 9;
 --  docs/superpowers/plans/2026-11-02-record-history.md, Task 3)
 --
@@ -50,17 +50,20 @@
 --   Two AFTER ROW triggers on each of public.client_groups, client_group_members, places, equipment,
 --     opportunities, contact_relationships and contact_tags: record_changes_client (WHEN current_user =
 --     'authenticated') and record_changes_server (WHEN current_user <> 'authenticated').
+--   public.merge_contacts: 0106's body, plus (orchestrator ruling, 2026-11-03) the merge's id RESERVED right after
+--     the stale check, before its first write: v_merge := nextval(pg_get_serial_sequence('public.contact_merges',
+--     'id')). Its step 6 overwrites the kept record's audited fields (0106:1032-1053) and steps 4 and 7 move and
+--     remove memberships, places and tags, all before the contact_merges row is inserted (0106:1207), so the id has
+--     to exist first; no write moves. bis.author 'person', bis.author_id v_actor and bis.via 'merge:<v_merge>' are set
+--     there; the merge row is inserted with that id (overriding system value: contact_merges.id is generated always,
+--     and the sequence has already advanced past it, so a later default insert never collides); all three settings
+--     are set back to '' before each of its seven returns.
 --   public.undo_contact_merge: 0106's body, plus bis.author 'person', bis.author_id v_actor and bis.via
 --     'merge:<p_merge_id>' once the actor is known, and all three set back to '' before each of its five returns
---     (plan correction 7). v_actor, not the plan's coalesce(p_actor, sub): 0106 already takes p_actor only from a
---     service-role JWT, and a signed-in caller can pass any p_actor (a coalesce would let them write another
+--     (plan correction 7). In both, v_actor, not the plan's coalesce(p_actor, sub): 0106 already takes p_actor only
+--     from a service-role JWT, and a signed-in caller can pass any p_actor (a coalesce would let them write another
 --     person's id into the log).
 --   NOT CHANGED, on purpose:
---     public.merge_contacts. Its step 6 overwrites the kept record's audited fields (0106:1032-1053), and its steps
---       4 and 7 move and remove group memberships, relationships and tags, all BEFORE the contact_merges row is
---       inserted and its id is known (0106:1207). The brief says stop and report rather than reorder; the change
---       that would let it say 'merge:<id>' waits for that ruling. Until then a merge's rows are the person's (step 3
---       of 0111's precedence: the session role is authenticated) or the header's (a service call), with no via.
 --     public.restore_contact_on_sign writes archived_at and archived_by only, both EXCLUDED for contacts, so 0111's
 --       no-change return writes nothing and never refuses it: it needs no author.
 --     public.delete_internal_contacts: a signed-in Owner's call is the person (step 3), and deleteContacts sends
@@ -79,7 +82,7 @@
 -- EXECUTE to authenticated only (a service client would bypass the RLS that keeps a Technician out). Every replaced
 -- function keeps its grants; the file restates each one's own revoke and grant lines from 0111, 0106 and 0105.
 -- No table grant moves: the client-write digest is unchanged, EXPECTED_WRITES is unchanged, and EXPECTED_DEFINERS
--- stays 39 (undo_contact_merge is replaced, not added; put_back_contact_custom is an invoker).
+-- stays 39 (merge_contacts and undo_contact_merge are replaced, not added; put_back_contact_custom is an invoker).
 --
 -- SEARCH PATHS. Every function here says set search_path = pg_catalog, pg_temp, and names every relation and
 -- function by schema (0096's rule). No function in public or app sets bis.* except the listed definers; the Q1
@@ -93,12 +96,13 @@
 -- function locks no table.
 -- MEASURED on a PostgreSQL 17.6 replica (pre = 0001-0111, post = pre + this file; T1's method: one account, a fresh
 -- database per run, the merge timed alone, as an Owner):
---   merge moving 10,000 messages (T1's seed: no Q1 rows on either record), 2026-11-03: before 378.6 ms, after
---     386.3 ms (+2%), median of 3 (342.5, 378.6, 396.6 -> 348.7, 386.3, 421.2); 2 change rows, as under 0111 alone.
+--   merge moving 10,000 messages (T1's seed: no Q1 rows on either record), 2026-11-03, with merge_contacts' reserved
+--     id: before 382.0 ms, after 415.7 ms (+9%), median of 6; the 3 interleaved pairs alone 368.1 -> 377.5 ms (+3%),
+--     the 3 run back to back 384.4 -> 444.6 ms. 2 change rows, both now with via merge:<id>.
 --   the same merge with Q1 rows on the other record (2 places, 4 units, 3 tags, a shared household, 2 relationships,
---     2 deals), before and after interleaved, median of 3: the merge 394.8 ms -> 372.7 ms (within noise), 5 change
---     rows (the 2 fields, the 2 places' new owner, the removed membership; no via, see merge_contacts above); its
---     Undo 427.4 ms -> 441.4 ms (+3%), 5 change rows, every one the person's with via merge:<id>.
+--     2 deals), before and after interleaved, median of 3: the merge 375.1 ms -> 403.8 ms (+8%), 5 change rows (the
+--     2 fields, the 2 places' new owner, the removed membership), every one with via merge:<id>; its Undo 468.0 ms ->
+--     484.8 ms (+4%), 5 change rows, every one with via merge:<id>.
 --
 -- LOAD-BEARING.
 --   1. The role test sits in each trigger's WHEN, never in the body (0111 load-bearing 1).
@@ -114,7 +118,7 @@
 --     for each of client_groups, client_group_members, places, equipment, opportunities, contact_relationships,
 --     contact_tags;
 --   re-run 0111 section 3's and section 4's function bodies as create or replace (contacts only, no child rules);
---   re-run 0106 section 17's undo_contact_merge as create or replace;
+--   re-run 0106 section 16's merge_contacts and section 17's undo_contact_merge as create or replace;
 --   drop function public.put_back_contact_custom(uuid, uuid, text, jsonb, jsonb);
 --   re-run 0105's access_log_page as create or replace; then, by OWNER DECISION ONLY (it deletes access-log rows,
 --     which nothing else may), delete the record_history_export items and restore 0105's kind CHECK.
@@ -346,7 +350,375 @@ create trigger record_changes_server after insert or update or delete on public.
   for each row when (current_user <> 'authenticated')
   execute function app.record_changes_capture('contact_tag', 'server');
 
--- 4. undo_contact_merge names its author (plan Task 3 item 3). merge_contacts is NOT changed here: see the header.
+-- 4. merge_contacts and undo_contact_merge name their author (plan Task 3 item 3; the merge's reserved id by the
+--    orchestrator's ruling of 2026-11-03).
+create or replace function public.merge_contacts(
+  p_account_id uuid, p_keep uuid, p_other uuid, p_choices jsonb, p_seen jsonb, p_actor text default null)
+returns jsonb
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+declare
+  c_moves constant text[] := array['automation_log', 'bookings', 'calls', 'document_requests', 'documents',
+    'form_submissions', 'notes', 'opportunities', 'places', 'tasks'];
+  v_actor text;
+  k public.contacts%rowtype;
+  o public.contacts%rowtype;
+  v_oc public.conversations%rowtype;
+  v_kc uuid;
+  v_moved jsonb := '{}'::jsonb;
+  v_removed jsonb := '{}'::jsonb;
+  v_choices jsonb := '{}'::jsonb;
+  v_counts jsonb;
+  v_ids text[];
+  v_t text;
+  v_key text;
+  v_side text;
+  v_s_first text; v_s_last text; v_s_email text; v_s_phone text; v_s_assigned text; v_s_lang text;
+  v_custom jsonb;
+  v_before jsonb;
+  v_after jsonb;
+  v_hand integer := 0;
+  v_token text;
+  v_pair uuid;
+  v_new uuid;
+  v_x uuid;
+  v_km public.client_group_members%rowtype;
+  v_merge bigint;
+  v_flags_before uuid[];
+  r record;
+begin
+  -- 1. Who (app.may_merge: a service_role JWT, the agency, or an Owner or Staff of this account whose token is in it).
+  if not app.may_merge(p_account_id) then
+    raise exception 'merge_contacts: Owners, Staff and the agency only' using errcode = '42501';
+  end if;
+  v_actor := case when coalesce(app.jwt() ->> 'role', '') = 'service_role' then nullif(p_actor, '')
+                  else nullif(app.jwt() ->> 'sub', '') end;
+  if v_actor is null or p_keep is null or p_other is null
+     or p_choices is null or pg_catalog.jsonb_typeof(p_choices) <> 'object'
+     or p_seen is null or pg_catalog.jsonb_typeof(p_seen) <> 'object' then
+    raise exception 'merge_contacts: an actor, two contacts, choices and seen are required' using errcode = '22023';
+  end if;
+  for v_key, v_side in select e.key, e.value #>> '{}' from pg_catalog.jsonb_each(p_choices) as e loop
+    if v_side is null or v_side not in ('keep', 'other')
+       or not (v_key in ('first_name', 'last_name', 'email', 'phone', 'assigned_to', 'language') or v_key like 'custom.%') then
+      raise exception 'merge_contacts: unknown choice %', v_key using errcode = '22023';
+    end if;
+  end loop;
+  if p_keep = p_other then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'same');
+  end if;
+
+  -- 2. Lock both contacts (FOR UPDATE, see LOCK CHOICE above), then their conversations, each in id order (0103's
+  --    order, so two merges cannot deadlock), then read them fresh.
+  perform 1 from public.contacts c where c.account_id = p_account_id and c.id in (p_keep, p_other) order by c.id for update;
+  select * into k from public.contacts c where c.account_id = p_account_id and c.id = p_keep;
+  if not found then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'not_found');
+  end if;
+  select * into o from public.contacts c where c.account_id = p_account_id and c.id = p_other;
+  if not found then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'not_found');
+  end if;
+  perform 1 from public.conversations cv
+   where cv.account_id = p_account_id and cv.contact_id in (p_keep, p_other) order by cv.id for update;
+
+  -- 3. Refusals, each a status the screen can word. stale: either row's merge fields changed since the preview the
+  --    screen showed (correction 19: a fingerprint, because several writers never stamp updated_at).
+  if k.holds_shared_number or o.holds_shared_number then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'holding');
+  end if;
+  if k.merged_into is not null or o.merged_into is not null then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'already_merged');
+  end if;
+  if pg_catalog.md5(app.merge_fields_of(k)::text) is distinct from (p_seen ->> 'keep')
+     or pg_catalog.md5(app.merge_fields_of(o)::text) is distinct from (p_seen ->> 'other') then
+    perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+            pg_catalog.set_config('bis.via', '', true);   -- 0112
+    return pg_catalog.jsonb_build_object('status', 'stale');
+  end if;
+  -- 0112 (F-115): the merge's id before its first write, so every change row it writes names it; every row is the
+  -- person's (v_actor: the token's sub, or p_actor on a service-role JWT only). Plan correction 7: all three go back
+  -- to '' before every return.
+  v_merge := pg_catalog.nextval(pg_catalog.pg_get_serial_sequence('public.contact_merges', 'id'));
+  perform pg_catalog.set_config('bis.author', 'person', true);
+  perform pg_catalog.set_config('bis.author_id', v_actor, true);
+  perform pg_catalog.set_config('bis.via', 'merge:' || v_merge::text, true);
+  v_before := app.merge_fields_of(k);
+
+  -- 4. The tombstone FIRST, then the chain flattened (one hop for every lookup), so the flag trigger, which skips a
+  --    tombstone, never pairs the kept record with the one it absorbs while the fields below are written.
+  update public.contacts set merged_into = p_keep, merged_at = pg_catalog.now()
+   where account_id = p_account_id and id = p_other;
+  with f as (update public.contacts set merged_into = p_keep
+              where account_id = p_account_id and merged_into = p_other returning id)
+  select coalesce(pg_catalog.array_agg(f.id::text), '{}') into v_ids from f;
+  v_moved := v_moved || pg_catalog.jsonb_build_object('contacts', pg_catalog.to_jsonb(v_ids));
+
+  -- 5. Flags, BEFORE the fields (plan review I1). Every other pair naming the other record is re-filed on the kept one
+  --    with its reason, its dismissal and its merge_id before the field update below can make the flag trigger file
+  --    the same pair fresh (undismissed) and leave this re-file a silent, unrecorded conflict.
+  select f.id into v_pair from public.contact_duplicate_flags f
+   where f.account_id = p_account_id and f.contact_a = least(p_keep, p_other) and f.contact_b = greatest(p_keep, p_other);
+  for r in select f.* from public.contact_duplicate_flags f
+            where f.account_id = p_account_id and (f.contact_a = p_other or f.contact_b = p_other)
+              and f.id is distinct from v_pair order by f.id loop
+    delete from public.contact_duplicate_flags where id = r.id;
+    v_removed := app.merge_push(v_removed, 'contact_duplicate_flags', pg_catalog.to_jsonb(r) - 'strength');
+    v_x := case when r.contact_a = p_other then r.contact_b else r.contact_a end;
+    v_new := null;
+    if v_x <> p_keep then
+      insert into public.contact_duplicate_flags (account_id, contact_a, contact_b, reason, dismissed_at, dismissed_by, merge_id, created_at)
+      values (p_account_id, least(p_keep, v_x), greatest(p_keep, v_x), r.reason, r.dismissed_at, r.dismissed_by, r.merge_id, r.created_at)
+      on conflict (account_id, contact_a, contact_b) do nothing
+      returning id into v_new;
+      if v_new is not null then
+        v_moved := app.merge_push(v_moved, 'contact_duplicate_flags_added', pg_catalog.to_jsonb(v_new::text));
+      end if;
+    end if;
+  end loop;
+
+  -- 6. Fields (spec 5.2). A choice names a side; every value is read from the locked rows.
+  v_s_first := app.merge_side(k.first_name, o.first_name, p_choices ->> 'first_name');
+  v_s_last := app.merge_side(k.last_name, o.last_name, p_choices ->> 'last_name');
+  v_s_email := app.merge_side(k.email, o.email, p_choices ->> 'email');
+  v_s_phone := app.merge_side(k.phone, o.phone, p_choices ->> 'phone');
+  v_s_assigned := app.merge_side(k.assigned_to::text, o.assigned_to::text, p_choices ->> 'assigned_to');
+  if k.language is null then
+    v_s_lang := 'other';
+  elsif o.language is null or o.language = k.language then
+    v_s_lang := 'keep';
+  elsif p_choices ? 'language' then
+    v_s_lang := p_choices ->> 'language';
+  elsif k.language_source = 'staff' and o.language_source <> 'staff' then
+    v_s_lang := 'keep';
+  elsif o.language_source = 'staff' and k.language_source <> 'staff' then
+    v_s_lang := 'other';
+  elsif o.language_set_at < k.language_set_at then
+    v_s_lang := 'other';
+  else
+    v_s_lang := 'keep';
+  end if;
+  v_custom := coalesce(o.custom, '{}'::jsonb) || coalesce(k.custom, '{}'::jsonb);
+  for v_key in select e.key from pg_catalog.jsonb_each(coalesce(k.custom, '{}'::jsonb)) as e
+                where coalesce(o.custom, '{}'::jsonb) ? e.key loop
+    v_side := app.merge_side(k.custom ->> v_key, o.custom ->> v_key, p_choices ->> ('custom.' || v_key));
+    if v_side = 'other' then
+      v_custom := v_custom || pg_catalog.jsonb_build_object(v_key, o.custom -> v_key);
+    end if;
+    v_choices := v_choices || pg_catalog.jsonb_build_object('custom.' || v_key, v_side);
+  end loop;
+  v_choices := v_choices || pg_catalog.jsonb_build_object('first_name', v_s_first, 'last_name', v_s_last, 'email', v_s_email,
+    'phone', v_s_phone, 'assigned_to', v_s_assigned, 'language', v_s_lang);
+
+  -- The update below fires contacts_flag_pairs for K (a key K gains from O files K's pairs). Every flag it files is
+  -- recorded, so the Undo removes it (plan review I1): the flag ids naming K, before and after.
+  select coalesce(pg_catalog.array_agg(f.id), '{}') into v_flags_before from public.contact_duplicate_flags f
+   where f.account_id = p_account_id and (f.contact_a = p_keep or f.contact_b = p_keep);
+  update public.contacts c set
+    first_name = case v_s_first when 'other' then o.first_name else k.first_name end,
+    last_name = case v_s_last when 'other' then o.last_name else k.last_name end,
+    email = case v_s_email when 'other' then o.email else k.email end,
+    phone = case v_s_phone when 'other' then o.phone else k.phone end,
+    phone_country_unconfirmed = case v_s_phone when 'other' then o.phone_country_unconfirmed else k.phone_country_unconfirmed end,
+    assigned_to = case v_s_assigned when 'other' then o.assigned_to else k.assigned_to end,
+    custom = v_custom,
+    language = case v_s_lang when 'other' then o.language else k.language end,
+    language_source = case v_s_lang when 'other' then o.language_source else k.language_source end,
+    language_set_at = case v_s_lang when 'other' then o.language_set_at else k.language_set_at end,
+    last_language_signal = case when k.last_language_signal is null then o.last_language_signal else k.last_language_signal end,
+    last_language_signal_source = case when k.last_language_signal is null then o.last_language_signal_source else k.last_language_signal_source end,
+    last_language_signal_at = case when k.last_language_signal is null then o.last_language_signal_at else k.last_language_signal_at end,
+    language_hint_kept_at = coalesce(k.language_hint_kept_at, o.language_hint_kept_at),
+    marketing_email_opted_out_at = least(k.marketing_email_opted_out_at, o.marketing_email_opted_out_at),
+    dnd = case when coalesce(k.dnd, '{}'::jsonb) = '{}'::jsonb then o.dnd else k.dnd end,
+    reactivation_sent_at = greatest(k.reactivation_sent_at, o.reactivation_sent_at),
+    archived_at = case when o.archived_at is null then null else k.archived_at end,
+    archived_by = case when o.archived_at is null then null else k.archived_by end,
+    updated_at = pg_catalog.now()
+   where c.account_id = p_account_id and c.id = p_keep;
+  for v_new in select f.id from public.contact_duplicate_flags f
+                where f.account_id = p_account_id and (f.contact_a = p_keep or f.contact_b = p_keep)
+                  and not (f.id = any (v_flags_before)) order by f.id loop
+    v_moved := app.merge_push(v_moved, 'contact_duplicate_flags_added', pg_catalog.to_jsonb(v_new::text));
+  end loop;
+  -- An archive is a person's act with a log row; inside a definer the 0103 log trigger (WHEN current_user =
+  -- 'authenticated') does not fire, so the merge writes the row itself.
+  if k.archived_at is not null and o.archived_at is null then
+    insert into public.contact_archive_log (account_id, contact_id, action, author_kind, author_id)
+    values (p_account_id, p_keep, 'restored', 'person', v_actor);
+  end if;
+  select app.merge_fields_of(c) into v_after from public.contacts c where c.id = p_keep;
+
+  -- 7. Rows that simply move (spec 5.3). The ids are uuids and the table names come from the constant above, so
+  --    format's %L and %I build the statement (no positional parameter: this file has no dollar sign outside a pair).
+  foreach v_t in array c_moves loop
+    execute pg_catalog.format(
+      'with m as (update public.%I set contact_id = %L where account_id = %L and contact_id = %L returning id) '
+      || 'select coalesce(pg_catalog.array_agg(m.id::text), %L) from m', v_t, p_keep, p_account_id, p_other, '{}')
+      into v_ids;
+    v_moved := v_moved || pg_catalog.jsonb_build_object(v_t, pg_catalog.to_jsonb(v_ids));
+  end loop;
+
+  -- Tags: one both had is removed from the other first (PK contact_id, tag_id); the rest move, keyed by tag_id.
+  for r in select g.* from public.contact_tags g
+            where g.account_id = p_account_id and g.contact_id = p_other
+              and exists (select 1 from public.contact_tags x where x.contact_id = p_keep and x.tag_id = g.tag_id) loop
+    delete from public.contact_tags where contact_id = p_other and tag_id = r.tag_id;
+    v_removed := app.merge_push(v_removed, 'contact_tags', pg_catalog.to_jsonb(r));
+  end loop;
+  with m as (update public.contact_tags set contact_id = p_keep
+              where account_id = p_account_id and contact_id = p_other returning tag_id)
+  select coalesce(pg_catalog.array_agg(m.tag_id::text), '{}') into v_ids from m;
+  v_moved := v_moved || pg_catalog.jsonb_build_object('contact_tags', pg_catalog.to_jsonb(v_ids));
+
+  -- Groups (0069:63-79, 0075): a group both are in keeps the kept membership with is_billing and is_primary_contact
+  -- OR'd (the other's row is removed first: one primary contact per group); one main group per contact.
+  for r in select m.* from public.client_group_members m
+            where m.account_id = p_account_id and m.contact_id = p_other order by m.id loop
+    select * into v_km from public.client_group_members x
+     where x.account_id = p_account_id and x.contact_id = p_keep and x.client_group_id = r.client_group_id;
+    if found then
+      delete from public.client_group_members where id = r.id;
+      v_removed := app.merge_push(v_removed, 'client_group_members', pg_catalog.to_jsonb(r));
+      if (r.is_billing and not v_km.is_billing) or (r.is_primary_contact and not v_km.is_primary_contact) then
+        v_moved := app.merge_push(v_moved, 'client_group_members_flags', pg_catalog.jsonb_build_object(
+          'id', v_km.id, 'is_billing', v_km.is_billing, 'is_primary_contact', v_km.is_primary_contact));
+        update public.client_group_members
+           set is_billing = is_billing or r.is_billing, is_primary_contact = is_primary_contact or r.is_primary_contact
+         where id = v_km.id;
+      end if;
+    elsif r.is_primary and exists (select 1 from public.client_group_members x
+                                    where x.account_id = p_account_id and x.contact_id = p_keep and x.is_primary) then
+      update public.client_group_members set contact_id = p_keep, is_primary = false where id = r.id;
+      v_moved := app.merge_push(v_moved, 'client_group_members', pg_catalog.to_jsonb(r.id::text));
+      v_moved := app.merge_push(v_moved, 'client_group_members_unprimaried', pg_catalog.to_jsonb(r.id::text));
+    else
+      update public.client_group_members set contact_id = p_keep where id = r.id;
+      v_moved := app.merge_push(v_moved, 'client_group_members', pg_catalog.to_jsonb(r.id::text));
+    end if;
+  end loop;
+
+  -- Relationships (0070): one between the two becomes a self-row and is removed; one that repeats a relationship
+  -- the kept record already has trips a unique index and is removed. Each move records which side it moved.
+  for r in select x.* from public.contact_relationships x
+            where x.account_id = p_account_id and (x.contact_id = p_other or x.related_contact_id = p_other) order by x.id loop
+    if (case when r.contact_id = p_other then p_keep else r.contact_id end)
+       = (case when r.related_contact_id = p_other then p_keep else r.related_contact_id end) then
+      delete from public.contact_relationships where id = r.id;
+      v_removed := app.merge_push(v_removed, 'contact_relationships', pg_catalog.to_jsonb(r));
+    else
+      begin
+        update public.contact_relationships
+           set contact_id = case when contact_id = p_other then p_keep else contact_id end,
+               related_contact_id = case when related_contact_id = p_other then p_keep else related_contact_id end
+         where id = r.id;
+        v_moved := app.merge_push(v_moved, 'contact_relationships', pg_catalog.jsonb_build_object(
+          'id', r.id, 'contact', r.contact_id = p_other, 'related', r.related_contact_id = p_other));
+      exception when unique_violation then
+        delete from public.contact_relationships where id = r.id;
+        v_removed := app.merge_push(v_removed, 'contact_relationships', pg_catalog.to_jsonb(r));
+      end;
+    end if;
+  end loop;
+
+  -- Skips (0081:81, one active skip per category).
+  for r in select s.* from public.document_requirement_skips s
+            where s.account_id = p_account_id and s.contact_id = p_other order by s.id loop
+    begin
+      update public.document_requirement_skips set contact_id = p_keep where id = r.id;
+      v_moved := app.merge_push(v_moved, 'document_requirement_skips', pg_catalog.to_jsonb(r.id::text));
+    exception when unique_violation then
+      delete from public.document_requirement_skips where id = r.id;
+      v_removed := app.merge_push(v_removed, 'document_requirement_skips', pg_catalog.to_jsonb(r));
+    end;
+  end loop;
+
+  -- Threads (correction 8): always into the kept record's thread, made here when it has none. messages is NO ACTION
+  -- on its thread (0005:33), calls SET NULL (0019:49) and inbound_emails CASCADE (0082:93-94): all three move BEFORE
+  -- the emptied thread is removed, so a missed one fails the merge closed or is caught by the test. The kept thread's
+  -- assigned_to and last_message_at before the merge are recorded, so the Undo can put them back while they still
+  -- hold what the merge set.
+  select * into v_oc from public.conversations cv where cv.account_id = p_account_id and cv.contact_id = p_other;
+  if found then
+    select cv.id into v_kc from public.conversations cv where cv.account_id = p_account_id and cv.contact_id = p_keep;
+    if v_kc is null then
+      insert into public.conversations (account_id, contact_id) values (p_account_id, p_keep) returning id into v_kc;
+      v_moved := v_moved || pg_catalog.jsonb_build_object('conversation_created', v_kc);
+    end if;
+    -- messages.updated_at is left as it was (plan review m8a): an Undo could not put it back.
+    with m as (update public.messages set conversation_id = v_kc
+                where account_id = p_account_id and conversation_id = v_oc.id returning id)
+    select coalesce(pg_catalog.array_agg(m.id::text), '{}') into v_ids from m;
+    v_moved := v_moved || pg_catalog.jsonb_build_object('messages', pg_catalog.to_jsonb(v_ids));
+    with m as (update public.calls set conversation_id = v_kc
+                where account_id = p_account_id and conversation_id = v_oc.id returning id)
+    select coalesce(pg_catalog.array_agg(m.id::text), '{}') into v_ids from m;
+    v_moved := v_moved || pg_catalog.jsonb_build_object('calls_thread', pg_catalog.to_jsonb(v_ids));
+    with m as (update public.inbound_emails set conversation_id = v_kc
+                where account_id = p_account_id and conversation_id = v_oc.id returning id)
+    select coalesce(pg_catalog.array_agg(m.id::text), '{}') into v_ids from m;
+    v_moved := v_moved || pg_catalog.jsonb_build_object('inbound_emails', pg_catalog.to_jsonb(v_ids));
+    v_hand := coalesce(v_oc.unread_count, 0);
+    select v_moved || pg_catalog.jsonb_build_object('conversation_assigned_before', pg_catalog.to_jsonb(cv.assigned_to),
+                                                    'conversation_last_before', pg_catalog.to_jsonb(cv.last_message_at))
+      into v_moved from public.conversations cv where cv.id = v_kc;
+    update public.conversations cv
+       set unread_count = cv.unread_count + v_hand,
+           last_message_at = greatest(cv.last_message_at, v_oc.last_message_at),
+           assigned_to = coalesce(cv.assigned_to, v_oc.assigned_to),
+           updated_at = pg_catalog.now()
+     where cv.id = v_kc;
+    v_token := case when v_oc.reply_token is not null and v_oc.reply_token_revoked_at is null then v_oc.reply_token end;
+    v_removed := v_removed || pg_catalog.jsonb_build_object('conversations', pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(v_oc)));
+    delete from public.conversations where id = v_oc.id;
+  end if;
+
+  -- A cache: regenerated, never snapshotted.
+  delete from public.record_summaries where account_id = p_account_id and contact_id in (p_keep, p_other);
+
+  -- 8. The log, the pair resolved, the event.
+  select pg_catalog.jsonb_build_object(
+           'messages', pg_catalog.jsonb_array_length(coalesce(v_moved -> 'messages', '[]'::jsonb)),
+           'calls', (select pg_catalog.count(distinct u.x) from (
+                      select pg_catalog.jsonb_array_elements_text(coalesce(v_moved -> 'calls', '[]'::jsonb)) as x
+                      union select pg_catalog.jsonb_array_elements_text(coalesce(v_moved -> 'calls_thread', '[]'::jsonb))) as u),
+           'bookings', pg_catalog.jsonb_array_length(v_moved -> 'bookings'),
+           'documents', pg_catalog.jsonb_array_length(v_moved -> 'documents'),
+           'opportunities', pg_catalog.jsonb_array_length(v_moved -> 'opportunities'),
+           'notes', pg_catalog.jsonb_array_length(v_moved -> 'notes'),
+           'tasks', pg_catalog.jsonb_array_length(v_moved -> 'tasks'),
+           'form_submissions', pg_catalog.jsonb_array_length(v_moved -> 'form_submissions'))
+    into v_counts;
+  insert into public.contact_merges (id, account_id, keep_id, other_id, merged_by, merged_at, undo_until, keep_before,
+                                     keep_after, choices, moved, moved_counts, removed, unread_handed, other_reply_token)
+  overriding system value   -- 0112: the id reserved above, which bis.via already names
+  values (v_merge, p_account_id, p_keep, p_other, v_actor, pg_catalog.now(), pg_catalog.now() + interval '30 days', v_before, v_after,
+          v_choices, v_moved, v_counts, v_removed, v_hand, v_token)
+  returning id into v_merge;
+  if v_pair is null then
+    insert into public.contact_duplicate_flags (account_id, contact_a, contact_b, reason, merge_id)
+    values (p_account_id, least(p_keep, p_other), greatest(p_keep, p_other), 'merged_by_hand', v_merge);
+  else
+    update public.contact_duplicate_flags set merge_id = v_merge where id = v_pair;
+  end if;
+  insert into public.events (account_id, type, actor_type, actor_id, payload)
+  values (p_account_id, 'contact.merged', 'user', v_actor,
+          pg_catalog.jsonb_build_object('contactId', p_keep, 'otherId', p_other, 'mergeId', v_merge));
+  perform pg_catalog.set_config('bis.author', '', true), pg_catalog.set_config('bis.author_id', '', true),
+          pg_catalog.set_config('bis.via', '', true);   -- 0112
+  return pg_catalog.jsonb_build_object('status', 'merged', 'mergeId', v_merge, 'moved', v_counts);
+end $$;
+revoke all on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, text) from public, anon;
+grant execute on function public.merge_contacts(uuid, uuid, uuid, jsonb, jsonb, text) to authenticated, service_role;
 create or replace function public.undo_contact_merge(p_account_id uuid, p_merge_id bigint, p_actor text default null)
 returns jsonb
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
