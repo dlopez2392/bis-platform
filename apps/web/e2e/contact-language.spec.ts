@@ -17,7 +17,7 @@ test.describe("a language on every contact (S-09)", () => {
     const { id, existing } = await createContact(db, fixture.accountId, { firstName: "Lengua", lastName: `Cita ${stamp}` }, "e2e-language");
     if (existing) throw new Error("contact-language e2e: matched an existing contact; refusing to use it.");
     try {
-      expect(await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "booking", at: new Date() }, "public", "system")).toBe(true);
+      expect(await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "booking", at: new Date() }, { authorKind: "customer", authorId: "public" })).toBe(true);
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}`);
       const row = recordPage(page).locator("[data-language-row]");
       await expect(row).toHaveAttribute("data-language", "es");
@@ -52,8 +52,8 @@ test.describe("a language on every contact (S-09)", () => {
     if (existing) throw new Error("contact-language e2e: matched an existing contact; refusing to use it.");
     try {
       const t0 = Date.now() - 60_000;
-      await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "form", at: new Date(t0) }, "form", "system");
-      await recordLanguageSignal(db, fixture.accountId, id, { language: "en", source: "call", at: new Date(t0 + 30_000) }, "voice", "ai");
+      await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "form", at: new Date(t0) }, { authorKind: "customer", authorId: "form" });
+      await recordLanguageSignal(db, fixture.accountId, id, { language: "en", source: "call", at: new Date(t0 + 30_000) }, { authorKind: "ai", authorId: "voice" });
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}`);
       const hint = recordPage(page).locator("[data-language-hint]");
       await expect(hint).toContainText("Spoke English on the last call. Switch to English?");
@@ -99,7 +99,7 @@ test.describe("a language on every contact (S-09): in Spanish", () => {
       const set = await db.from("users").update({ language: "es" }).eq("id", ownerId).select("id");
       expect(set.error, `switching the Owner to Spanish: ${set.error?.message}`).toBeNull();
       expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
-      await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "booking", at: new Date() }, "public", "system");
+      await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "booking", at: new Date() }, { authorKind: "customer", authorId: "public" });
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}`);
       const row = recordPage(page).locator("[data-language-row]");
       await expect(row.locator("dt")).toHaveText(m["contact.language.label.es"]);
