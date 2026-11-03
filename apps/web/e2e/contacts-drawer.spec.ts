@@ -168,7 +168,8 @@ async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string)
   if (oppErr) throw new Error(`contacts-drawer e2e: pre-clean opportunities failed: ${oppErr.message}`);
   const { error: pplErr } = await db.from("pipelines").delete().eq("account_id", accId);
   if (pplErr) throw new Error(`contacts-drawer e2e: pre-clean pipelines failed: ${pplErr.message}`);
-  const { error: tagErr } = await db.from("tags").delete().eq("account_id", accId);
+  // F-115 I3: a tags delete cascades into contact_tags (Q1-audited), so it needs the same header.
+  const { error: tagErr } = await e2eAuthor(db.from("tags").delete()).eq("account_id", accId);
   if (tagErr) throw new Error(`contacts-drawer e2e: pre-clean tags failed: ${tagErr.message}`);
   const { error: callErr } = await db.from("calls").delete().eq("account_id", accId);
   if (callErr) throw new Error(`contacts-drawer e2e: pre-clean calls failed: ${callErr.message}`);
@@ -312,11 +313,14 @@ test.afterAll(async () => {
     ["pipelines", "id", pipelineId],
   ] as const) {
     if (!value) continue;
-    const { error } = await db.from(table).delete().eq(column, value);
+    // F-115 I3: this reaches "opportunities" (Q1-audited) on that iteration, so every iteration
+    // carries the header; it is a no-op for "pipelines", which the trigger never watches.
+    const { error } = await e2eAuthor(db.from(table).delete()).eq(column, value);
     if (error) console.error(`contacts-drawer e2e cleanup: ${table} delete failed: ${error.message}`);
   }
   {
-    const { error } = await db.from("tags").delete().eq("account_id", accountId);
+    // F-115 I3: a tags delete cascades into contact_tags (Q1-audited), so it needs the same header.
+    const { error } = await e2eAuthor(db.from("tags").delete()).eq("account_id", accountId);
     if (error) console.error(`contacts-drawer e2e cleanup: tags delete failed: ${error.message}`);
   }
   // The phone number this file assigned must go back NOW, not at teardown.
