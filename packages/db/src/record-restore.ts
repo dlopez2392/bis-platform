@@ -49,15 +49,44 @@ const RECORD_TABLE: Readonly<Partial<Record<ChangeRecordType, string>>> = {
 };
 
 /**
+ * F-115 PR C fix (review I3): fields that would otherwise qualify above but can never safely run
+ * through the GENERIC compare-and-swap (`casUpdatePutBack`) — checked before anything else in
+ * `canPutBack`, so each is refused `not_allowed` no matter what `PUT_BACK_FIELDS`/the custom-field
+ * branch below would otherwise say.
+ *   - "contact.dnd": jsonb. `casUpdatePutBack`'s CAS guard is a plain `.eq(field, after)`; `.eq` with
+ *     a JS object serializes to the literal string "[object Object]" in the query, which can never
+ *     genuinely match the live value — a guard that can never pass is not a guard, it is a silent no-op
+ *     (or worse, a silent wrong match, depending on what a coincidental string happens to compare to).
+ *   - "contact.custom" (bare, no `.<key>` suffix): only `custom.<key>` has a real compare-and-swap
+ *     (`put_back_contact_custom`, keyed by ONE key). A bare `custom` row claims the WHOLE jsonb blob
+ *     changed in one write, which this file has no per-key-safe way to put back.
+ *   - "place.contact_id"/"place.client_group_id": coupled by `places_one_owner` (0069) — a place has
+ *     EXACTLY one owner. Putting either column back alone, while the other still holds its "after"
+ *     value, can leave a place with zero or two owners, which the table itself then refuses (or,
+ *     worse, silently satisfies by coincidence if the other side also happens to be null).
+ */
+const PUT_BACK_EXCLUDED: ReadonlySet<string> = new Set([
+  "contact.dnd", "contact.custom", "place.contact_id", "place.client_group_id",
+]);
+
+/** Postgres codes a put-back's own write can hit that mean "the write refused it," never a crash and
+ *  never `history.notFound`: check_violation (23514), invalid_text_representation (22P02,
+ *  e.g. a stale snapshot value that no longer casts to the column's type) and invalid_parameter_value
+ *  (22023). Read as the honest-enough twin of a stale compare-and-swap: either way, nothing changed. */
+const PG_REFUSED_WRITE: ReadonlySet<string> = new Set(["23514", "22P02", "22023"]);
+
+/**
  * Pure (plan Task 6 Step 1). True only for an `update` row whose `field` is one of the type's own
  * AUDITED columns (a fresh, hand-built `ChangeRow` naming an EXCLUDED column, or a type this file
  * does not offer "Put back" for, both answer false — this does not merely trust `row.op === "update"`).
  * `custom.<key>` is put-back-eligible ONLY for `contact` (the only `put_back_contact_custom`-style RPC
  * that exists today); `opportunity.custom.<key>` and `client_group.custom.<key>` are AUDITED (they do
  * show on the timeline) but have no compare-and-swap function of their own yet (see the report).
+ * `PUT_BACK_EXCLUDED` is checked FIRST, so it overrides every other true-producing branch below it.
  */
 export function canPutBack(row: ChangeRow): boolean {
   if (row.op !== "update" || row.field === null) return false;
+  if (PUT_BACK_EXCLUDED.has(`${row.recordType}.${row.field}`)) return false;
   if (row.field === "custom" || row.field.startsWith("custom.")) return row.recordType === "contact";
   const fields = PUT_BACK_FIELDS[row.recordType];
   return fields !== undefined && fields.includes(row.field);
@@ -133,6 +162,20 @@ async function getChangeRow(db: SupabaseClient, accountId: string, changeId: num
 const TIMESTAMP_FIELDS: ReadonlySet<string> = new Set(["marketing_email_opted_out_at", "archived_at"]);
 
 /**
+ * F-115 PR C fix (review I3): the shared ending for every put-back write below. `PG_REFUSED_WRITE`
+ * (23514/22P02/22023) reads as "the write refused it" — the honest-enough twin of a stale
+ * compare-and-swap, so it answers `"changed"` too, logged WITH its code (never silently dropped);
+ * anything else still throws, as every write here always has.
+ */
+function changedOrThrow(context: string, error: { message: string; code?: string }): "changed" {
+  if (error.code !== undefined && PG_REFUSED_WRITE.has(error.code)) {
+    console.error(`record-restore: ${context} refused (${error.code}): ${error.message}`);
+    return "changed";
+  }
+  throw new Error(`record-restore: ${context} failed: ${error.message}`);
+}
+
+/**
  * The generic compare-and-swap a plain audited column's Put back runs (Rule 2): `update {[field]:
  * before} where id = recordId and field still equals after`, `.is()` for a null `after`, `.select("id")`
  * so zero rows reads as "changed". For the two `timestamptz` columns this reads the LIVE value first
@@ -157,14 +200,14 @@ async function casUpdatePutBack(
       .eq("account_id", accountId).eq("id", recordId);
     q = liveRaw === null ? q.is(field, null) : q.eq(field, liveRaw);
     const { data, error } = await q.select("id");
-    if (error) throw new Error(`record-restore: ${table} update failed: ${error.message}`);
+    if (error) return changedOrThrow(`${table}.${field} update`, error);
     return (data ?? []).length === 0 ? "changed" : "put_back";
   }
   let q = withAuthor(db.from(table).update({ [field]: before }), author, via)
     .eq("account_id", accountId).eq("id", recordId);
   q = after === null ? q.is(field, null) : q.eq(field, after as string | number | boolean);
   const { data, error } = await q.select("id");
-  if (error) throw new Error(`record-restore: ${table} update failed: ${error.message}`);
+  if (error) return changedOrThrow(`${table}.${field} update`, error);
   return (data ?? []).length === 0 ? "changed" : "put_back";
 }
 
@@ -181,7 +224,7 @@ async function putBackCustom(
     p_account_id: accountId, p_contact_id: contactId, p_key: key,
     p_expected: expected ?? null, p_value: value ?? null,
   }), author, via);
-  if (error) throw new Error(`record-restore: put_back_contact_custom failed: ${error.message}`);
+  if (error) return changedOrThrow("put_back_contact_custom", error);
   return data === true ? "put_back" : "changed";
 }
 
@@ -222,7 +265,7 @@ async function putBackLanguage(
   q = row.language_source === null ? q.is("language_source", null) : q.eq("language_source", row.language_source);
   q = row.language_set_at === null ? q.is("language_set_at", null) : q.eq("language_set_at", row.language_set_at);
   const { data, error } = await q.select("id");
-  if (error) throw new Error(`record-restore: contact language update failed: ${error.message}`);
+  if (error) return changedOrThrow("contact language update", error);
   return (data ?? []).length === 0 ? "changed" : "put_back";
 }
 
@@ -268,49 +311,62 @@ function sqlstateOf(e: unknown): string | undefined {
   return typeof e === "object" && e !== null && "code" in e ? (e as { code?: string }).code : undefined;
 }
 
+/** F-115 PR C fix (review I3): the shared tail of every restore writer's catch block — 23505 and
+ *  23503 unchanged (already_back / parent_gone); `PG_REFUSED_WRITE` (23514/22P02/22023, the old
+ *  snapshot no longer fitting a constraint or type added since the row was deleted) now answers
+ *  "failed", logged with its code, rather than throwing (never `history.notFound` either). */
+function restoreOutcomeOf(e: unknown): "already_back" | "parent_gone" | "failed" | undefined {
+  const code = sqlstateOf(e);
+  if (code === "23505") return "already_back";
+  if (code === "23503") return "parent_gone";
+  if (code !== undefined && PG_REFUSED_WRITE.has(code)) {
+    const message = typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
+    console.error(`record-restore: restore refused (${code}): ${message}`);
+    return "failed";
+  }
+  return undefined;
+}
+
 async function restorePlaceRow(
   db: SupabaseClient, accountId: string, row: ChangeRow, author: RowAuthor, via: string,
-): Promise<"restored" | "parent_gone" | "already_back"> {
+): Promise<"restored" | "parent_gone" | "already_back" | "failed"> {
   const snapshot = row.before as PlaceRow;
   const ctx: PlaceCtx = { ...placeSubject(row), author };
   try {
     await restorePlace(db, accountId, snapshot, ctx, via);
     return "restored";
   } catch (e) {
-    const code = sqlstateOf(e);
-    if (code === "23505") return "already_back";
-    if (code === "23503") return "parent_gone";
+    const outcome = restoreOutcomeOf(e);
+    if (outcome) return outcome;
     throw e;
   }
 }
 
 async function restoreEquipmentRow(
   db: SupabaseClient, accountId: string, row: ChangeRow, author: RowAuthor, via: string,
-): Promise<"restored" | "parent_gone" | "already_back"> {
+): Promise<"restored" | "parent_gone" | "already_back" | "failed"> {
   const snapshot = row.before as EquipmentRow;
   const ctx: PlaceCtx = { ...placeSubject(row), author };
   try {
     await restoreEquipment(db, accountId, snapshot, ctx, via);
     return "restored";
   } catch (e) {
-    const code = sqlstateOf(e);
-    if (code === "23505") return "already_back";
-    if (code === "23503") return "parent_gone";
+    const outcome = restoreOutcomeOf(e);
+    if (outcome) return outcome;
     throw e;
   }
 }
 
 async function restoreRelationshipRow(
   db: SupabaseClient, accountId: string, row: ChangeRow, author: RowAuthor, via: string,
-): Promise<"restored" | "parent_gone" | "already_back"> {
+): Promise<"restored" | "parent_gone" | "already_back" | "failed"> {
   const snapshot = row.before as RelationshipRow;
   try {
     await restoreRelationship(db, accountId, snapshot, author, via);
     return "restored";
   } catch (e) {
-    const code = sqlstateOf(e);
-    if (code === "23505") return "already_back";
-    if (code === "23503") return "parent_gone";
+    const outcome = restoreOutcomeOf(e);
+    if (outcome) return outcome;
     throw e;
   }
 }
@@ -324,17 +380,30 @@ async function restoreRelationshipRow(
  * read their account's groups) before ever calling the writer, then maps the writer's own "not_found"
  * (which means ONLY "group or contact gone": the already-a-member path never reaches it) to
  * `parent_gone`.
+ *
+ * F-115 PR C fix (review m1): "already back" is the (client_group_id, contact_id) PAIR, not the
+ * ORIGINAL row's own id — a member re-added since the delete is a NEW `client_group_members` row (a
+ * different id, the SAME pair), and that must answer `already_back` too, never a second "restored".
+ * The pre-check still has a race window (two callers could both pass it before either inserts); a
+ * 23505 from that race on the writer's own insert answers the same way, logged with its code.
  */
 async function restoreMembershipRow(
   db: SupabaseClient, accountId: string, row: ChangeRow, author: RowAuthor, via: string,
-): Promise<"restored" | "parent_gone" | "already_back"> {
+): Promise<"restored" | "parent_gone" | "already_back" | "failed"> {
   const snapshot = row.before as GroupMemberSnapshot;
   const { data: existing, error: exErr } = await db.from("client_group_members").select("id")
-    .eq("account_id", accountId).eq("id", row.recordId).maybeSingle();
+    .eq("account_id", accountId).eq("client_group_id", snapshot.client_group_id).eq("contact_id", snapshot.contact_id)
+    .maybeSingle();
   if (exErr) throw new Error(`record-restore: membership existence read failed: ${exErr.message}`);
   if (existing) return "already_back";
-  const result = await restoreMembership(serviceDb(), accountId, snapshot, author, via);
-  return result === "ok" ? "restored" : "parent_gone";
+  try {
+    const result = await restoreMembership(serviceDb(), accountId, snapshot, author, via);
+    return result === "ok" ? "restored" : "parent_gone";
+  } catch (e) {
+    const outcome = restoreOutcomeOf(e);
+    if (outcome) return outcome;
+    throw e;
+  }
 }
 
 /**
@@ -348,15 +417,14 @@ async function restoreMembershipRow(
  */
 async function restoreTagRow(
   db: SupabaseClient, accountId: string, row: ChangeRow, author: RowAuthor, via: string,
-): Promise<"restored" | "parent_gone" | "already_back"> {
+): Promise<"restored" | "parent_gone" | "already_back" | "failed"> {
   if (!row.contactId) throw new Error("record-restore: contact_tag change row has no contactId");
   const { error } = await withAuthor(db.from("contact_tags").insert({
     contact_id: row.contactId, tag_id: row.recordId, account_id: accountId,
   }), author, via);
   if (!error) return "restored";
-  const code = error.code;
-  if (code === "23505") return "already_back";
-  if (code === "23503") return "parent_gone";
+  const outcome = restoreOutcomeOf(error);
+  if (outcome) return outcome;
   throw new Error(`record-restore: contact_tags insert failed: ${error.message}`);
 }
 
@@ -368,7 +436,7 @@ async function restoreTagRow(
  */
 export async function restoreRemoved(
   db: SupabaseClient, accountId: string, changeId: number, author: RowAuthor, now: Date,
-): Promise<"restored" | "expired" | "parent_gone" | "already_back" | "not_found" | "not_allowed"> {
+): Promise<"restored" | "expired" | "parent_gone" | "already_back" | "not_found" | "not_allowed" | "failed"> {
   author = requireAuthor(db, author, "restoreRemoved");
   const row = await getChangeRow(db, accountId, changeId);
   if (!row) return "not_found";
