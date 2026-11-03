@@ -7,7 +7,7 @@ import {
   addPlace, getOrCreateCalendar, createBooking,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { watchRouterTraffic, recordPage, e2eAuthor } from "./support";
+import { watchRouterTraffic, recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -164,7 +164,7 @@ let optOutId = "";
  * cascade their own stages.
  */
 async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string) {
-  const { error: oppErr } = await db.from("opportunities").delete().eq("account_id", accId);
+  const { error: oppErr } = await e2eAuthor(db.from("opportunities").delete()).eq("account_id", accId);
   if (oppErr) throw new Error(`contacts-drawer e2e: pre-clean opportunities failed: ${oppErr.message}`);
   const { error: pplErr } = await db.from("pipelines").delete().eq("account_id", accId);
   if (pplErr) throw new Error(`contacts-drawer e2e: pre-clean pipelines failed: ${pplErr.message}`);
@@ -216,7 +216,7 @@ test.beforeAll(async () => {
   const pipeline = await ensureDefaultPipeline(db, accountId);
   pipelineId = pipeline.pipelineId;
   const opp = await createOpportunity(
-    db, accountId, { contactId: blockedId, pipelineId, name: "BulkGate Deal" }, ACTOR,
+    db, accountId, { contactId: blockedId, pipelineId, name: "BulkGate Deal" }, E2E_AUTHOR,
   );
   opportunityId = opp.id;
 
@@ -284,7 +284,7 @@ test.beforeAll(async () => {
     db, accountId, { firstName: "ScrollCheck", lastName: "Target" }, ACTOR,
   )).id;
   for (let i = 1; i <= 40; i++) {
-    await addTagToContact(db, accountId, scrollCheckId, `tag-${i}`);
+    await addTagToContact(db, accountId, scrollCheckId, `tag-${i}`, E2E_AUTHOR);
   }
   for (let i = 1; i <= 5; i++) {
     await addNote(db, accountId, scrollCheckId, `Scroll check note ${i}`, ACTOR);
@@ -334,7 +334,7 @@ test.afterAll(async () => {
   // the shared fixture account until teardown, so it goes now (its membership
   // cascades with it). Logged, not thrown, like every delete above.
   {
-    const { error } = await db.from("client_groups").delete()
+    const { error } = await e2eAuthor(db.from("client_groups").delete())
       .eq("account_id", accountId).eq("kind", "business").eq("name", PAINTED_PROOF);
     if (error) console.error(`contacts-drawer e2e cleanup: client_groups delete failed: ${error.message}`);
   }
@@ -884,7 +884,7 @@ test.describe("S-03 part 3: the drawer on the record kit", () => {
     made.plain = plain.id;
     await addPlace(db, accountId, { contactId: made.quick, groupId: null }, {
       label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: "McAllen", region: "TX", postal_code: "78504", country: "US",
-    }, { subjectId: made.quick, actorId: ACTOR });
+    }, { subjectId: made.quick, author: E2E_AUTHOR });
     // Sixty-one days out: past the calendar's 30-day horizon, so booking.spec never offers this slot.
     const cal = await getOrCreateCalendar(db, accountId, ACTOR);
     const start = new Date(Date.now() + 61 * 86_400_000);

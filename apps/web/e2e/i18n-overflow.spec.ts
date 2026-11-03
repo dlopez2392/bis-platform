@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, createGroupWithMember, setGroupPrimaryContact } from "@bis/db";
-import { readClientFixture, recordPage, e2eAuthor } from "./support";
+import { readClientFixture, recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
 import { m } from "../src/lib/messages";
 
@@ -257,10 +257,10 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       }, "e2e-i18n-overflow");
       if (contact.existing) throw new Error(`i18n-overflow e2e: ${phone} matched an existing contact; refusing to use (or delete) it.`);
       contactId = contact.id;
-      const group = await createGroupWithMember(db, fixture.accountId, contactId, "household", `Overflow Group ${stamp}`, null, "e2e-i18n-overflow");
+      const group = await createGroupWithMember(db, fixture.accountId, contactId, "household", `Overflow Group ${stamp}`, null, E2E_AUTHOR);
       if (group.status !== "ok") throw new Error(`i18n-overflow e2e: createGroupWithMember ${group.status}`);
       groupId = group.groupId;
-      const primary = await setGroupPrimaryContact(db, fixture.accountId, groupId, group.memberId, "e2e-i18n-overflow");
+      const primary = await setGroupPrimaryContact(db, fixture.accountId, groupId, group.memberId, E2E_AUTHOR);
       if (primary.status !== "ok") throw new Error(`i18n-overflow e2e: setGroupPrimaryContact ${primary.status}`);
       await page.goto(`/dashboard/accounts/${fixture.accountId}/groups/${groupId}?locale=pseudo`);
       const rec = recordPage(page);
@@ -275,7 +275,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       }
     } finally {
       if (groupId) {
-        const { error: groupErr } = await db.from("client_groups").delete().eq("account_id", fixture.accountId).eq("id", groupId);
+        const { error: groupErr } = await e2eAuthor(db.from("client_groups").delete()).eq("account_id", fixture.accountId).eq("id", groupId);
         if (groupErr) console.error(`i18n-overflow e2e: group cleanup failed: ${groupErr.message}`);
       }
       if (contactId) {

@@ -4,7 +4,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, createGroupWithMember, addContactToGroup, addPlace, type PlaceFields } from "@bis/db";
 import { m } from "../src/lib/messages";
 import { formatDateUTC } from "../src/lib/format";
-import { recordPage, e2eAuthor } from "./support";
+import { recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly, not through a Next request.
@@ -153,12 +153,12 @@ test.beforeAll(async () => {
   // The Technician's household (test "6."): a shared property reachable only through group
   // membership, the harder half of places_technician_scope's reach (the schema test's own words:
   // "their customer's place AND their customer's household's place").
-  const group = await createGroupWithMember(db, accountId, techMineId, "household", TECH_HOUSEHOLD, null, ACTOR);
+  const group = await createGroupWithMember(db, accountId, techMineId, "household", TECH_HOUSEHOLD, null, E2E_AUTHOR);
   if (group.status !== "ok") throw new Error(`seeding the Technician's household failed: ${group.status}`);
   techHouseholdId = group.groupId;
-  await addPlace(db, accountId, { contactId: null, groupId: techHouseholdId }, placeFields({ address: TECH_SHARED_ADDRESS }), { subjectId: techMineId, actorId: ACTOR });
+  await addPlace(db, accountId, { contactId: null, groupId: techHouseholdId }, placeFields({ address: TECH_SHARED_ADDRESS }), { subjectId: techMineId, author: E2E_AUTHOR });
   // The other customer's OWN property: what must never leak onto TECH_MINE's page or route.
-  await addPlace(db, accountId, { contactId: techOtherId, groupId: null }, placeFields({ address: TECH_OTHER_ADDRESS }), { subjectId: techOtherId, actorId: ACTOR });
+  await addPlace(db, accountId, { contactId: techOtherId, groupId: null }, placeFields({ address: TECH_OTHER_ADDRESS }), { subjectId: techOtherId, author: E2E_AUTHOR });
 });
 
 test.afterAll(async () => {
@@ -188,7 +188,7 @@ test.afterAll(async () => {
     expect(left.data, "contacts this spec made that are still there").toEqual([]);
   }
   if (groupIds.length > 0) {
-    const { error } = await db.from("client_groups").delete().eq("account_id", accountId).in("id", groupIds);
+    const { error } = await e2eAuthor(db.from("client_groups").delete()).eq("account_id", accountId).in("id", groupIds);
     expect(error, `deleting this spec's groups: ${error?.message}`).toBeNull();
   }
   if (placeIds.length > 0) {
@@ -341,14 +341,14 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
 
     test("4. a property belonging to a household reads as 'Shared with …' on both members' records", async ({ page }) => {
       const db = serviceDb();
-      const group = await createGroupWithMember(db, accountId, recordId, "household", HOUSEHOLD, null, ACTOR);
+      const group = await createGroupWithMember(db, accountId, recordId, "household", HOUSEHOLD, null, E2E_AUTHOR);
       expect(group.status, `creating the household: ${group.status}`).toBe("ok");
       householdId = group.status === "ok" ? group.groupId : "";
 
       // The SECOND member: createGroupWithMember only adds recordId. Without this, secondId is never
       // in the household at all, and the drawer check below cannot find the shared property because
       // there is nothing making it SECOND's household to find it through.
-      const added = await addContactToGroup(db, accountId, secondId, householdId, null, ACTOR);
+      const added = await addContactToGroup(db, accountId, secondId, householdId, null, E2E_AUTHOR);
       expect(added.status, `adding the second member to the household: ${added.status}`).toBe("ok");
       // Checked before navigating anywhere: a membership row that failed to land would otherwise only
       // surface later, as a confusing "not visible on the drawer" failure far from its real cause.
