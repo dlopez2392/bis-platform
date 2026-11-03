@@ -27,6 +27,16 @@ import {
  *    prevent, just for a rarer input than a plain over-length string.
  */
 
+/**
+ * F-115 (PR B): every group writer wraps its rpc builder in `withAuthor`, which calls
+ * `builder.setHeader(...)` and awaits the builder that call returns. These fakes answer with a
+ * promise, so each answer gets a `setHeader` that hands the same promise back. The header itself is
+ * pinned in `../client-groups.test.ts`, not here.
+ */
+function headerable<T extends Promise<unknown>>(p: T): T & { setHeader(name: string, value: string): T } {
+  return Object.assign(p, { setHeader: () => p });
+}
+
 function throwingDb(what: string): SupabaseClient {
   return {
     from() { throw new Error(`${what}: must not query`); },
@@ -49,9 +59,9 @@ function recordingRpcDb(rpcAnswer: unknown) {
       // emit()'s events insert on the happy path; always succeeds, unrecorded.
       return { insert: async () => ({ error: null }) };
     },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
+    rpc: (fn: string, args: Record<string, unknown>) => {
       calls.push({ fn, args });
-      return { data: rpcAnswer, error: null };
+      return headerable(Promise.resolve({ data: rpcAnswer, error: null }));
     },
   };
   return { db: db as unknown as SupabaseClient, calls };
@@ -88,10 +98,10 @@ function scriptedRpcDb(answers: { data?: unknown; error?: { code: string; messag
   let inserts = 0;
   const db = {
     from() { return { insert: async () => { inserts++; return { error: null }; } }; },
-    rpc: async () => {
+    rpc: () => {
       const a = answers[Math.min(rpcCalls, answers.length - 1)]!;
       rpcCalls++;
-      return { data: a.data ?? null, error: a.error ?? null };
+      return headerable(Promise.resolve({ data: a.data ?? null, error: a.error ?? null }));
     },
   };
   return { db: db as unknown as SupabaseClient, rpcCalls: () => rpcCalls, inserts: () => inserts };
@@ -201,7 +211,7 @@ function businessDb(rpcAnswer: unknown, member: { data: unknown; error: { messag
       };
       return b;
     },
-    rpc: async (fn: string) => { steps.push(`rpc ${fn}`); return { data: rpcAnswer, error: null }; },
+    rpc: (fn: string) => { steps.push(`rpc ${fn}`); return headerable(Promise.resolve({ data: rpcAnswer, error: null })); },
   };
   return { db: db as unknown as SupabaseClient, inserts, steps, read };
 }

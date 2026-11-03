@@ -84,16 +84,24 @@ async function enforce(c: Client, on: boolean) {
   await actAsOwner(c);
   await c.query("update app.record_changes_settings set enforce = $1", [on]);
 }
-/** As the owner, the change rows matching a where clause, oldest first. */
-async function rows(c: Client, where: string, params: unknown[]): Promise<Row[]> {
+/**
+ * As the owner, the change rows of THIS test's account matching a where clause, oldest first. Every read of the log
+ * is scoped to the test's own account: CI runs the suites concurrently on one stack, and under READ COMMITTED another
+ * test's committed write lands past this test's `maxId` watermark (2026-11-03, PR #334: case (a) read another
+ * account's contact insert by user_docs_test).
+ */
+async function rows(c: Client, a: Acct, where: string, params: unknown[]): Promise<Row[]> {
   await actAsOwner(c);
   const { rows: r } = await c.query<Row>(
     `select id::int as id, record_type, record_id, contact_id, client_group_id, op, field, before, after, author_kind, author_id, via
-       from public.record_changes where ${where} order by id`, params);
+       from public.record_changes where account_id = $${params.length + 1} and (${where}) order by id`, [...params, a.accountId]);
   return r;
 }
-const of = (c: Client, recordId: string, op?: string) =>
-  rows(c, "record_id = $1 and ($2::text is null or op = $2)", [recordId, op ?? null]);
+/** This account's rows written after a `maxId` watermark. */
+const since = (c: Client, a: Acct, from: number) => rows(c, a, "id > $1", [from]);
+const of = (c: Client, a: Acct, recordId: string, op?: string) =>
+  rows(c, a, "record_id = $1 and ($2::text is null or op = $2)", [recordId, op ?? null]);
+/** A watermark only, over every account: what lies past it is read through `rows`, which scopes it to one account. */
 const maxId = async (c: Client) => {
   await actAsOwner(c);
   return (await c.query<{ m: number }>("select coalesce(max(id), 0)::int as m from public.record_changes")).rows[0]!.m;
@@ -238,7 +246,7 @@ describe("0112: a signed-in edit, table by table", () => {
       await c.query("update public.places set landmark = 'Blue gate' where id = $1", [pg]);
       // setPlaceOwner's write: the household's place moves to the customer, so it now shows on the customer's timeline.
       await c.query("update public.places set contact_id = $2, client_group_id = null, updated_at = now() where id = $1", [pg, k]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((r) => ({ ...brief(r), record_type: r.record_type, record_id: r.record_id, contact_id: r.contact_id, client_group_id: r.client_group_id }))).toEqual([
         { op: "update", field: "label", author_kind: "person", author_id: sub, via: null, record_type: "place", record_id: pk, contact_id: k, client_group_id: null },
         { op: "update", field: "city", author_kind: "person", author_id: sub, via: null, record_type: "place", record_id: pk, contact_id: k, client_group_id: null },
@@ -265,7 +273,7 @@ describe("0112: a signed-in edit, table by table", () => {
         "insert into public.equipment (account_id, place_id, name, make, model) values ($1, $2, 'Water heater', 'Rheem', 'X1') returning id", [a.accountId, pk]);
       await c.query("update public.equipment set model = 'X2', serial = 'S-9' where id = $1", [u!.id]);
       await c.query("insert into public.equipment (account_id, place_id, name) values ($1, $2, 'Pump')", [a.accountId, pg]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((r) => ({ ...brief(r), record_type: r.record_type, contact_id: r.contact_id, client_group_id: r.client_group_id }))).toEqual([
         { op: "insert", field: null, author_kind: "person", author_id: sub, via: null, record_type: "equipment", contact_id: k, client_group_id: null },
         { op: "update", field: "model", author_kind: "person", author_id: sub, via: null, record_type: "equipment", contact_id: k, client_group_id: null },
@@ -290,7 +298,7 @@ describe("0112: a signed-in edit, table by table", () => {
       await c.query("update public.opportunities set stage_changed_at = now() - interval '1 day' where id = $1", [d.id]);
       await c.query(`update public.opportunities set stage_id = $2, stage_changed_at = now(), monetary_value = 1200, status = 'won',
                        status_changed_at = now(), custom = '{"roof":"metal","sqft":"1800"}'::jsonb where id = $1`, [d.id, d.stage2]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.every((r) => r.record_type === "opportunity" && r.record_id === d.id && r.contact_id === k && r.client_group_id === null)).toBe(true);
       expect(got.every((r) => r.author_kind === "person" && r.author_id === sub)).toBe(true);
       expect(got.map((r) => [r.field, r.before, r.after]).sort()).toEqual([
@@ -311,7 +319,7 @@ describe("0112: a signed-in edit, table by table", () => {
         "insert into public.contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1, $2, $3, 'sibling') returning id",
         [a.accountId, k, s]);
       await c.query("update public.contact_relationships set related_can_pick_up = true, updated_at = now() where id = $1", [r!.id]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ ...brief(x), record_id: x.record_id, contact_id: x.contact_id }))).toEqual([
         { op: "insert", field: null, author_kind: "person", author_id: sub, via: null, record_id: r!.id, contact_id: k },
         { op: "update", field: "related_can_pick_up", author_kind: "person", author_id: sub, via: null, record_id: r!.id, contact_id: k },
@@ -330,7 +338,7 @@ describe("0112: a signed-in edit, table by table", () => {
       await actAs(c, { org_id: a.orgId, sub });
       await c.query("insert into public.contact_tags (account_id, contact_id, tag_id) values ($1, $2, $3)", [a.accountId, k, t]);
       await c.query("delete from public.contact_tags where contact_id = $1 and tag_id = $2", [k, t]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ ...brief(x), record_type: x.record_type, record_id: x.record_id, contact_id: x.contact_id, before: x.before, after: x.after }))).toEqual([
         { op: "insert", field: null, author_kind: "person", author_id: sub, via: null, record_type: "contact_tag", record_id: t, contact_id: k, before: null, after: null },
         { op: "delete", field: null, author_kind: "person", author_id: sub, via: null, record_type: "contact_tag", record_id: t, contact_id: k,
@@ -352,7 +360,7 @@ describe("0112: a signed-in edit, table by table", () => {
         "insert into public.client_group_members (account_id, client_group_id, contact_id) values ($1, $2, $3) returning id", [a.accountId, g!.id, k]);
       await c.query("update public.client_group_members set role = 'Owner', is_billing = true where id = $1", [m!.id]);
       await c.query("delete from public.client_group_members where id = $1", [m!.id]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ ...brief(x), record_type: x.record_type, record_id: x.record_id, contact_id: x.contact_id, client_group_id: x.client_group_id }))).toEqual([
         { op: "insert", field: null, author_kind: "person", author_id: staff.id, via: null, record_type: "client_group", record_id: g!.id, contact_id: null, client_group_id: g!.id },
         { op: "update", field: "name", author_kind: "person", author_id: staff.id, via: null, record_type: "client_group", record_id: g!.id, contact_id: null, client_group_id: g!.id },
@@ -390,14 +398,14 @@ describe("0112: removals", () => {
       await actAs(c, { org_id: a.orgId, sub });
       const { rows: [d] } = await c.query<{ d: string[] }>("select public.delete_internal_contacts($1, $2) as d", [a.accountId, [k]]);
       expect(d!.d).toEqual([k]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ ...brief(x), record_type: x.record_type, record_id: x.record_id, before: x.before, after: x.after }))).toEqual([
         { op: "delete", field: null, author_kind: "person", author_id: sub, via: null, record_type: "contact", record_id: k, before: null, after: null },
       ]);
       // And nothing of the purged contact's survives on any timeline: the survivor's relationship row, the unit.
-      expect(await of(c, back, "delete")).toEqual([]);
-      expect(await of(c, u, "delete")).toEqual([]);
-      expect((await rows(c, "contact_id = $1", [k])).map((x) => x.op)).toEqual(["delete"]);
+      expect(await of(c, a, back, "delete")).toEqual([]);
+      expect(await of(c, a, u, "delete")).toEqual([]);
+      expect((await rows(c, a, "contact_id = $1", [k])).map((x) => x.op)).toEqual(["delete"]);
     }));
 
   it("a household's removal is its own row with a before snapshot; its members, places and their equipment write nothing (mutation: drop the child early return -> FAILS)", () =>
@@ -411,7 +419,7 @@ describe("0112: removals", () => {
       const from = await maxId(c);
       await asServiceWith(c, { kind: "person", id: "user_rcq_owner" });
       await c.query("delete from public.client_groups where id = $1", [g]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ ...brief(x), record_type: x.record_type, record_id: x.record_id, client_group_id: x.client_group_id }))).toEqual([
         { op: "delete", field: null, author_kind: "person", author_id: "user_rcq_owner", via: null, record_type: "client_group", record_id: g, client_group_id: g },
       ]);
@@ -434,13 +442,13 @@ describe("0112: removals", () => {
       // through server code: the unit cascades with it.
       await asServiceWith(c, { kind: "person", id: sub });
       await c.query("delete from public.places where id = $1", [p]);
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.map((x) => ({ op: x.op, record_type: x.record_type, record_id: x.record_id, contact_id: x.contact_id, author_id: x.author_id }))).toEqual([
         { op: "delete", record_type: "equipment", record_id: u2, contact_id: k, author_id: sub },
         { op: "delete", record_type: "place", record_id: p, contact_id: k, author_id: sub },
       ]);
       expect(got[0]!.before).toMatchObject({ id: u2, place_id: p2, name: "AC", make: "Carrier" });
-      expect(await of(c, u1, "delete")).toEqual([]);
+      expect(await of(c, a, u1, "delete")).toEqual([]);
     }));
 
   it("restore_contact_on_sign changes only EXCLUDED columns: no change row, and enforce never refuses it (mutation: audit archived_at for contacts -> 42501 -> FAILS)", () =>
@@ -454,7 +462,7 @@ describe("0112: removals", () => {
       await asServiceWith(c);   // the inbound-sign paths call it on a service client
       const { rows: [r] } = await c.query<{ r: boolean }>("select public.restore_contact_on_sign($1, $2, 'text') as r", [a.accountId, k]);
       expect(r!.r).toBe(true);
-      expect(await rows(c, "id > $1", [from])).toEqual([]);
+      expect(await since(c, a, from)).toEqual([]);
       const { rows: [log] } = await c.query<{ author_kind: string }>(
         "select author_kind from public.contact_archive_log where contact_id = $1 and action = 'restored'", [k]);
       expect(log!.author_kind).toBe("customer");
@@ -494,7 +502,7 @@ describe("0112: undo_contact_merge names its author", () => {
       await actAs(c, { org_id: a.orgId, sub });
       const { rows: [u] } = await c.query<{ s: string }>(UNDO, [a.accountId, mergeId, "user_forged"]);
       expect(u!.s).toBe("undone");
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       const email = got.find((x) => x.record_type === "contact" && x.field === "email");
       expect(email && { ...brief(email), before: email.before, after: email.after }).toEqual(
         { op: "update", field: "email", author_kind: "person", author_id: sub, via: `merge:${mergeId}`, before: "other@example.com", after: "keep@example.com" });
@@ -514,7 +522,7 @@ describe("0112: undo_contact_merge names its author", () => {
       await asServiceWith(c);
       const { rows: [u] } = await c.query<{ s: string }>(UNDO, [a.accountId, mergeId, "user_rcq_svc"]);
       expect(u!.s).toBe("undone");
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect(got.length).toBeGreaterThan(0);
       expect(got.filter((x) => !(x.author_kind === "person" && x.author_id === "user_rcq_svc" && x.via === `merge:${mergeId}`)).map(brief)).toEqual([]);
     }));
@@ -580,7 +588,7 @@ describe("0112: merge_contacts names its author (orchestrator ruling: the merge'
       const { r, sub } = await mergeAsOwner(c, a, k, o);
       expect(r.status).toBe("merged");
       const via = `merge:${r.mergeId}`;
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       expect([...new Set(got.map((x) => x.record_type))].sort()).toEqual(["client_group_member", "contact", "contact_tag", "place"]);
       expect(got.filter((x) => !(x.author_kind === "person" && x.author_id === sub && x.via === via))
         .map((x) => ({ ...brief(x), record_type: x.record_type }))).toEqual([]);
@@ -647,7 +655,7 @@ describe("0112: merge_contacts names its author (orchestrator ruling: the merge'
       expect(await unset(c)).toEqual({ a: "", i: "", v: "" });
     }));
 
-  it("(d) as an Owner passing p_actor 'user_forged': every change row the merge writes is the person's with the Owner's own sub, and no row anywhere names user_forged (mutation: coalesce(p_actor, v_actor) -> FAILS)", () =>
+  it("(d) as an Owner passing p_actor 'user_forged': every change row the merge writes is the person's with the Owner's own sub, and no row of the account names user_forged (mutation: coalesce(p_actor, v_actor) -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "mergeD");
       const { k, o, om } = await mergePair(c, a);
@@ -664,7 +672,7 @@ describe("0112: merge_contacts names its author (orchestrator ruling: the merge'
         "select public.merge_contacts($1, $2, $3, $4::jsonb, $5::jsonb, $6) as r",
         [a.accountId, k, o, JSON.stringify({ email: "other" }), JSON.stringify(seen), "user_forged"]);
       expect(r!.r.status).toBe("merged");
-      const got = await rows(c, "id > $1", [from]);
+      const got = await since(c, a, from);
       // The merge wrote rows of every kind it touches, so the check below is over real rows, not an empty list.
       expect([...new Set(got.map((x) => x.record_type))].sort()).toEqual(["client_group_member", "contact", "contact_tag", "place"]);
       expect(got.find((x) => x.record_type === "place" && x.record_id === p)).toMatchObject({ author_kind: "person", author_id: sub });
@@ -672,12 +680,13 @@ describe("0112: merge_contacts names its author (orchestrator ruling: the merge'
       expect(got.find((x) => x.record_type === "contact_tag" && x.record_id === t)).toMatchObject({ author_kind: "person", author_id: sub });
       expect(got.filter((x) => !(x.author_kind === "person" && x.author_id === sub))
         .map((x) => ({ ...brief(x), record_type: x.record_type }))).toEqual([]);
-      // Nowhere: not in the change log (any row, not only the merge's), the merge row, or its event.
+      // Nowhere in the account: not in its change log (any row, not only the merge's), its merge rows, or its events.
+      // Scoped to the account like every other read here (contact-authors.test.ts writes 'user_forged' too).
       await actAsOwner(c);
       const { rows: [n] } = await c.query<{ rc: number; cm: number; ev: number }>(
-        `select (select count(*) from public.record_changes where author_id = 'user_forged')::int as rc,
-                (select count(*) from public.contact_merges where merged_by = 'user_forged' or undone_by = 'user_forged')::int as cm,
-                (select count(*) from public.events where actor_id = 'user_forged')::int as ev`);
+        `select (select count(*) from public.record_changes where account_id = $1 and author_id = 'user_forged')::int as rc,
+                (select count(*) from public.contact_merges where account_id = $1 and (merged_by = 'user_forged' or undone_by = 'user_forged'))::int as cm,
+                (select count(*) from public.events where account_id = $1 and actor_id = 'user_forged')::int as ev`, [a.accountId]);
       expect(n).toEqual({ rc: 0, cm: 0, ev: 0 });
     }));
 });
@@ -705,7 +714,7 @@ describe("0112: put_back_contact_custom", () => {
       // Stale: the key no longer holds "8", so nothing is written and the answer is null.
       await actAs(c, { org_id: a.orgId, sub });
       expect((await c.query<{ r: boolean | null }>(PUT, [a.accountId, k, "gate", '"8"', '"1234"'])).rows[0]!.r).toBeNull();
-      expect(await rows(c, "id > $1", [from])).toEqual([]);
+      expect(await since(c, a, from)).toEqual([]);
       // Current: put back, with the via a Put back sends.
       await actAs(c, { org_id: a.orgId, sub });
       await c.query("select set_config('request.headers', $1, true)", [JSON.stringify({ "x-bis-author": JSON.stringify({ kind: "person", via: "restore:7" }) })]);
@@ -714,7 +723,7 @@ describe("0112: put_back_contact_custom", () => {
       await actAs(c, { org_id: a.orgId, sub });
       await c.query("select set_config('request.headers', '', true)");
       expect((await c.query<{ r: boolean | null }>(PUT, [a.accountId, k, "dog", '"Rex"', null])).rows[0]!.r).toBe(true);
-      expect((await rows(c, "id > $1", [from])).map((x) => ({ ...brief(x), before: x.before, after: x.after }))).toEqual([
+      expect((await since(c, a, from)).map((x) => ({ ...brief(x), before: x.before, after: x.after }))).toEqual([
         { op: "update", field: "custom.gate", author_kind: "person", author_id: sub, via: "restore:7", before: "9", after: "1234" },
         { op: "update", field: "custom.dog", author_kind: "person", author_id: sub, via: null, before: "Rex", after: null },
       ]);

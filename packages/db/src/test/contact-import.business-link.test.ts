@@ -35,6 +35,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * F-115 (PR B): `setContactsBusiness` wraps its rpc builder in `withAuthor`, which calls
+ * `builder.setHeader(...)` and awaits the builder that call returns. Each fake rpc here answers with a
+ * promise, so the answer gets a `setHeader` that hands the same promise back. Without it the
+ * TypeError was swallowed by applyImportBatch's own catch and read as `businessLinkFailed: true`.
+ */
+function headerable<T extends Promise<unknown>>(p: T): T & { setHeader(name: string, value: string): T } {
+  return Object.assign(p, { setHeader: () => p });
+}
+
 function freshIndex(): MatchIndex {
   return { byEmail: new Map(), byPhone: new Map() };
 }
@@ -42,7 +52,7 @@ function freshIndex(): MatchIndex {
 describe("applyImportBatch: a transient setContactsBusiness failure never costs the created/updated counts", () => {
   it("a groupWriter whose rpc answers an error still returns created/updated, and reports businessLinkFailed: true (mutation: remove the try/catch -> FAILS)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rpc = vi.fn(async () => ({ data: null, error: { message: "boom" } }));
+    const rpc = vi.fn(() => headerable(Promise.resolve({ data: null, error: { message: "boom" } })));
     const groupWriter = { rpc } as unknown as SupabaseClient;
 
     const r = await applyImportBatch(
@@ -58,7 +68,7 @@ describe("applyImportBatch: a transient setContactsBusiness failure never costs 
 
   it("logs the failure naming the account, without throwing (mutation: swallow silently / drop the console.error -> FAILS)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rpc = vi.fn(async () => ({ data: null, error: { message: "boom" } }));
+    const rpc = vi.fn(() => headerable(Promise.resolve({ data: null, error: { message: "boom" } })));
     const groupWriter = { rpc } as unknown as SupabaseClient;
 
     await applyImportBatch(
@@ -77,7 +87,7 @@ describe("applyImportBatch: a transient setContactsBusiness failure never costs 
   // message must never put a customer's email address in a log line.
   it("redacts an email address carried in the rpc error's own message (mutation: log the raw message instead of the redacted one -> FAILS)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rpc = vi.fn(async () => ({ data: null, error: { message: "duplicate key: dan@example.com already linked" } }));
+    const rpc = vi.fn(() => headerable(Promise.resolve({ data: null, error: { message: "duplicate key: dan@example.com already linked" } })));
     const groupWriter = { rpc } as unknown as SupabaseClient;
 
     await applyImportBatch(
@@ -103,7 +113,7 @@ describe("applyImportBatch: a transient setContactsBusiness failure never costs 
   });
 
   it("a successful groupWriter never reports businessLinkFailed", async () => {
-    const rpc = vi.fn(async () => ({ data: [{ contact_id: "c1", status: "ok", removed: null, added: "Acme" }], error: null }));
+    const rpc = vi.fn(() => headerable(Promise.resolve({ data: [{ contact_id: "c1", status: "ok", removed: null, added: "Acme" }], error: null })));
     // setContactsBusiness emits client_group.business_set on a changed row —
     // isUserClient(groupWriter) is false (no USER_CLIENT symbol), so emit
     // takes the service-client branch and inserts into "events" directly.
@@ -135,13 +145,13 @@ describe("applyImportBatch: a transient setContactsBusiness failure never costs 
 describe("applyImportBatch: a too_long business-write status is counted and logged, never silently dropped", () => {
   it("counts every too_long row in the batch result without touching created/updated (mutation: stop reading the per-row status -> FAILS)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rpc = vi.fn(async () => ({
+    const rpc = vi.fn(() => headerable(Promise.resolve({
       data: [
         { contact_id: "c1", status: "too_long", removed: null, added: null },
         { contact_id: "c1", status: "too_long", removed: null, added: null },
       ],
       error: null,
-    }));
+    })));
     const groupWriter = { rpc } as unknown as SupabaseClient;
 
     const r = await applyImportBatch(
@@ -163,10 +173,10 @@ describe("applyImportBatch: a too_long business-write status is counted and logg
 
   it("logs a stable prefix naming the contact and account, never the over-length business name", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rpc = vi.fn(async () => ({
+    const rpc = vi.fn(() => headerable(Promise.resolve({
       data: [{ contact_id: "c1", status: "too_long", removed: null, added: null }],
       error: null,
-    }));
+    })));
     const groupWriter = { rpc } as unknown as SupabaseClient;
     const overLong = "Z".repeat(121);
 
@@ -186,10 +196,10 @@ describe("applyImportBatch: a too_long business-write status is counted and logg
   });
 
   it("a batch with no too_long row carries no businessTooLong field at all", async () => {
-    const rpc = vi.fn(async () => ({
+    const rpc = vi.fn(() => headerable(Promise.resolve({
       data: [{ contact_id: "c1", status: "ok", removed: null, added: "Acme" }],
       error: null,
-    }));
+    })));
     const from = vi.fn(() => ({ insert: async () => ({ error: null }) }));
     const groupWriter = { rpc, from } as unknown as SupabaseClient;
 

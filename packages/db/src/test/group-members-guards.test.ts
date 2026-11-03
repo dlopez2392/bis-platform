@@ -18,6 +18,16 @@ type Call = [string, unknown[]];
 type Query = { table: string; calls: Call[] };
 type Answer = { data?: unknown; count?: number | null; error?: { message: string; code?: string } | null };
 
+/**
+ * F-115 (PR B): the group writers wrap their rpc builder in `withAuthor`, which calls
+ * `builder.setHeader(...)` and awaits the builder that call returns. `recordingDb`'s rpc answers with a
+ * promise, so the answer gets a `setHeader` that hands the same promise back (its `from` chain is a
+ * Proxy, which already answers any method, `setHeader` included, with itself).
+ */
+function headerable<T extends Promise<unknown>>(p: T): T & { setHeader(name: string, value: string): T } {
+  return Object.assign(p, { setHeader: () => p });
+}
+
 function recordingDb(respond: (q: Query) => Answer, rpcAnswer?: unknown) {
   const queries: Query[] = [];
   const rpcs: { fn: string; args: Record<string, unknown> }[] = [];
@@ -38,9 +48,9 @@ function recordingDb(respond: (q: Query) => Answer, rpcAnswer?: unknown) {
       });
       return chain;
     },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
+    rpc: (fn: string, args: Record<string, unknown>) => {
       rpcs.push({ fn, args });
-      return { data: rpcAnswer, error: null };
+      return headerable(Promise.resolve({ data: rpcAnswer, error: null }));
     },
   };
   return { db: db as unknown as SupabaseClient, queries, rpcs };
