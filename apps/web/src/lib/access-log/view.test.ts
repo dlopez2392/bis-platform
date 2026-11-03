@@ -17,13 +17,13 @@ const ZONE = "America/Chicago";
 const BASE = "/dashboard/accounts/A1";
 
 const ZERO: AccessLogCounts = {
-  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0,
+  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0, record_history_export: 0,
 };
 
 describe("visitSummary", () => {
   it("counts customers, a call and a file, in the spec's fixed order, whatever order the object lists them (mutation: Object.keys(counts) order -> FAILS)", () => {
     // Scrambled on purpose: file and call are written before contact.
-    const counts: AccessLogCounts = { file: 1, call: 1, group: 0, conversation: 0, contact: 4, form_answers: 0, customer_list_export: 0 };
+    const counts: AccessLogCounts = { file: 1, call: 1, group: 0, conversation: 0, contact: 4, form_answers: 0, customer_list_export: 0, record_history_export: 0 };
     expect(visitSummary(counts, trEn)).toBe("Opened 4 customers, 1 call and 1 file.");
     expect(visitSummary(counts, trEs)).toBe("Abrió 4 clientes, 1 llamada y 1 archivo.");
   });
@@ -36,7 +36,7 @@ describe("visitSummary", () => {
 
   it("every counted kind, in the spec's order (customers, households or businesses, calls, conversations, files, form answers), reversed in the object literal on purpose (mutation: Object.keys(counts) order -> FAILS)", () => {
     const counts: AccessLogCounts = {
-      customer_list_export: 1, form_answers: 1, file: 1, conversation: 1, call: 1, group: 1, contact: 1,
+      customer_list_export: 1, form_answers: 1, file: 1, conversation: 1, call: 1, group: 1, contact: 1, record_history_export: 1,
     };
     expect(visitSummary(counts, trEn)).toBe(
       "Opened 1 customer, 1 household or business, 1 call, 1 conversation, 1 file and the answers to 1 form. Downloaded your customer list.",
@@ -132,7 +132,7 @@ describe("buildVisitRows: every item kind, its own text, href and label", () => 
 
   const visitA: AccessLogVisit = {
     id: "visit_a", actorName: "Dan Lopez", reason: "support", startedAt: "2026-10-29T19:10:00Z", endedAt: "2026-10-29T19:25:00Z",
-    counts: { contact: 1, group: 2, call: 1, conversation: 1, file: 3, form_answers: 1, customer_list_export: 1 },
+    counts: { contact: 1, group: 2, call: 1, conversation: 1, file: 3, form_answers: 1, customer_list_export: 1, record_history_export: 1 },
     itemTotal: 10,
     items: [
       item({ kind: "contact", recordId: "c_archived" }),

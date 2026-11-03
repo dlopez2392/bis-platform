@@ -976,7 +976,7 @@ describe("submitFormAction — the business answer becomes a group (S-02 §6 row
     expect((await submit()).status).toBe("success");
     expect(createContactMock.mock.calls[0]![2]).not.toHaveProperty("companyName");
     expect(setContactsBusinessMock).toHaveBeenCalledWith(expect.anything(), "acct_1",
-      [{ contactId: "contact_1", name: "Acme Roofing" }], "form", "system");
+      [{ contactId: "contact_1", name: "Acme Roofing" }], { authorKind: "customer", authorId: "form" });
   });
   it("a returning lead with no business gets one", async () => {
     createContactMock.mockResolvedValue({ id: "contact_1", existing: true });

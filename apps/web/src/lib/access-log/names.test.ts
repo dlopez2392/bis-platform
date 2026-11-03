@@ -50,7 +50,7 @@ const item = (over: Partial<AccessLogItem>): AccessLogItem =>
 const pageOf = (items: AccessLogItem[]): AccessLogPage => ({
   total: 1, hasOlder: false,
   visits: [{ id: "visit_1", actorName: "Dan Lopez", reason: "support", startedAt: "2026-10-29T19:00:00Z", endedAt: null,
-    counts: { contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0 },
+    counts: { contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0, record_history_export: 0 },
     itemTotal: items.length, items }],
 });
 

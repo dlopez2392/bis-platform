@@ -120,7 +120,7 @@ export async function addRelationshipAction(accountId: string, raw: unknown): Pr
     const row = await addRelationship(db, accountId, newRelationshipFor({
       subjectId, otherId, labelKey: input.labelKey, otherSide: input.side,
       customLabel: input.customLabel, otherForm: input.otherForm, subjectForm: input.subjectForm,
-    }), access.userId);
+    }), { authorKind: "person", authorId: access.userId });
     const view = await viewOf(db, accountId, row, subjectId);
     return view ? { ok: true, view } : withCreated({ ok: false, error: "relationships.error.failed" });
   } catch (e) {
@@ -145,7 +145,7 @@ export async function setRelationshipAction(
     const locked = toRelationshipView(row, subject, [])?.lockedFlag;
     if (locked && patch[locked] === false) return invalid;
     if (!seesWholeAccount(access) && !(await bothVisible(db, accountId, row))) return refused;
-    const result = await setRelationshipSides(db, accountId, relationshipId, columns, access.userId);
+    const result = await setRelationshipSides(db, accountId, relationshipId, columns, { authorKind: "person", authorId: access.userId });
     if (result === "not_found") return { ok: false, error: "relationships.error.gone" };
     if (result === "refused") return refused;
     const view = await viewOf(db, accountId, result.row, subject);
@@ -170,7 +170,7 @@ export async function undoSetRelationshipAction(
     if (!isOn(row, subject)) return invalid;
     if (clearsLockedFlag(row, previous)) return invalid;
     if (!seesWholeAccount(access) && !(await bothVisible(db, accountId, row))) return refused;
-    const result = await setRelationshipSides(db, accountId, relationshipId, previous, access.userId);
+    const result = await setRelationshipSides(db, accountId, relationshipId, previous, { authorKind: "person", authorId: access.userId });
     if (result === "not_found") return { ok: false, error: "relationships.error.gone" };
     if (result === "refused") return refused;
     const view = await viewOf(db, accountId, result.row, subject);
@@ -192,7 +192,7 @@ export async function removeRelationshipAction(
       if (!row) return { ok: false, error: "relationships.error.gone" };
       if (!(await bothVisible(db, accountId, row))) return refused;
     }
-    const result = await removeRelationship(db, accountId, relationshipId, access.userId);
+    const result = await removeRelationship(db, accountId, relationshipId, { authorKind: "person", authorId: access.userId });
     if (result === "not_found") return { ok: false, error: "relationships.error.gone" };
     if (result === "refused") return refused;
     return { ok: true, snapshot: result };
@@ -212,7 +212,7 @@ export async function undoRemoveRelationshipAction(accountId: string, subjectId:
   const db = await dbForRequest();
   try {
     if (!seesWholeAccount(access) && !(await bothVisible(db, accountId, snapshot))) return refused;
-    const row = await restoreRelationship(db, accountId, snapshot, access.userId);
+    const row = await restoreRelationship(db, accountId, snapshot, { authorKind: "person", authorId: access.userId });
     const view = await viewOf(db, accountId, row, subject);
     return view ? { ok: true, view } : { ok: false, error: "relationships.error.failed" };
   } catch (e) {

@@ -370,7 +370,7 @@ describe("addJobAction: the address", () => {
     expect(r.ok).toBe(true);
     expect(writes()).toEqual(["createContact", "addPlace", "createStaffJob"]);
     expect(db.addPlace).toHaveBeenCalledWith(h.REQ, ACCT, { contactId: C2, groupId: null },
-      expect.objectContaining({ label: "Home", address: "12 Elm St", country: "US" }), { subjectId: C2, actorId: "user_1" });
+      expect.objectContaining({ label: "Home", address: "12 Elm St", country: "US" }), { subjectId: C2, author: { authorKind: "person", authorId: "user_1" } });
     // placeId is ignored when a new address was typed.
     expect(db.createStaffJob.mock.calls[0]![2].placeId).toBe(P1);
   });

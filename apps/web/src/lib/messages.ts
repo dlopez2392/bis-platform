@@ -7779,6 +7779,8 @@ export const m = {
   "accessLog.item.fileShared.es": "Archivo · {title} · compartido",
   "accessLog.item.form": "Form answers · {name}",
   "accessLog.item.form.es": "Respuestas del formulario · {name}",
+  "accessLog.item.historyExport": "History · {name} · downloaded",
+  "accessLog.item.historyExport.es": "Historial · {name} · descargado",
   "accessLog.item.export": "Downloaded your customer list ({count} customers)",
   "accessLog.item.export.es": "Descargó su lista de clientes ({count} clientes)",
   "accessLog.item.exportOne": "Downloaded your customer list (1 customer)",

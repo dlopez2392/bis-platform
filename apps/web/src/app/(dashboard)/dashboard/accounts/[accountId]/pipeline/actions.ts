@@ -16,7 +16,7 @@ export async function createOpportunityAction(accountId: string, formData: FormD
   const pipelineId = String(formData.get("pipelineId") ?? "");
   if (!name || !contactId || !pipelineId) throw new Error("name, contact, pipeline required");
   await createOpportunity(await dbForRequest(), accountId,
-    { contactId, pipelineId, name, value: Number(formData.get("value") ?? 0) || 0 }, userId);
+    { contactId, pipelineId, name, value: Number(formData.get("value") ?? 0) || 0 }, { authorKind: "person", authorId: userId });
   revalidatePath(pathFor(accountId));
 }
 
@@ -25,7 +25,7 @@ export async function moveOppToStageAction(accountId: string, formData: FormData
   const oppId = String(formData.get("oppId") ?? "");
   const toStageId = String(formData.get("toStageId") ?? "");
   if (!oppId || !toStageId) throw new Error("oppId and toStageId required");
-  await moveOpportunityToStage(await dbForRequest(), accountId, oppId, toStageId, userId);
+  await moveOpportunityToStage(await dbForRequest(), accountId, oppId, toStageId, { authorKind: "person", authorId: userId });
   revalidatePath(pathFor(accountId));
 }
 
@@ -47,7 +47,7 @@ export async function updateOpportunityAction(accountId: string, formData: FormD
       value: rawValue === null || rawValue === "" ? undefined : Number(rawValue),
       status: (status || undefined) as "open" | "won" | "lost" | undefined,
     },
-    userId,
+    { authorKind: "person", authorId: userId },
   );
   revalidatePath(pathFor(accountId));
 }

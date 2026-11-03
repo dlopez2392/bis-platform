@@ -192,7 +192,7 @@ export async function setContactBusinessAction(
     if (!before) return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
     // S-47e (spec 5.12.3): a shared number's holding record is nobody's business (0098's CHECK refuses one too).
     if (before.holds_shared_number) return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
-    [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
+    [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], { authorKind: "person", authorId: userId });
     if (!r || r.status === "not_found") return { ok: false, error: t(m, "contacts.action.saveFailed", locale) };
     if (r.status === "too_long") return { ok: false, error: t(m, "contact.business.tooLong", locale) };
   } catch (e) {
@@ -229,7 +229,7 @@ export async function undoContactBusinessAction(
     const db = await dbForRequest();
     if (!(await getContact(db, accountId, contactId))) return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
     // userId: the Undo deletes the membership the write added, and that removal is recorded as the caller's.
-    const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed, userId);
+    const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed, { authorKind: "person", authorId: userId });
     if (r !== "ok") return { ok: false, error: t(m, "contacts.action.undoFailed", locale) };
     revalidatePath(contactsPath(accountId));
     revalidatePath(`${contactsPath(accountId)}/${contactId}`);
@@ -457,10 +457,10 @@ export async function bulkAddTagAction(
   | { ok: true; tagId: string; applied: number; addedIds: string[] }
   | { ok: false; error: string }
 > {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   if (contactIds.length === 0 || !tagName.trim()) return { ok: false, error: t(m, "contacts.action.nothingSelected", locale) };
   try {
-    const r = await addTagToContacts(await dbForRequest(), accountId, contactIds, tagName);
+    const r = await addTagToContacts(await dbForRequest(), accountId, contactIds, tagName, { authorKind: "person", authorId: userId });
     revalidatePath(contactsPath(accountId));
     return { ok: true, ...r };
   } catch {
@@ -473,9 +473,9 @@ export async function bulkRemoveTagAction(
   // S-10 T3: default "en" so a caller that predates it is unchanged.
   locale: Locale = "en",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   try {
-    await removeTagFromContacts(await dbForRequest(), accountId, contactIds, tagId);
+    await removeTagFromContacts(await dbForRequest(), accountId, contactIds, tagId, { authorKind: "person", authorId: userId });
     revalidatePath(contactsPath(accountId));
     return { ok: true };
   } catch {

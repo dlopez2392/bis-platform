@@ -49,7 +49,7 @@ vi.mock("@/lib/zone", () => ({ renderZone: fx.renderZone }));
 const { BisAccessSection } = await import("./bis-access-section");
 
 const ZERO: AccessLogCounts = {
-  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0,
+  contact: 0, group: 0, call: 0, conversation: 0, file: 0, form_answers: 0, customer_list_export: 0, record_history_export: 0,
 };
 const visit = (id: string, overrides: Partial<AccessLogVisit> = {}): AccessLogVisit => ({
   id, actorName: "Dan Lopez", reason: "support", startedAt: "2026-10-29T12:00:00Z", endedAt: null,
