@@ -7548,6 +7548,36 @@ export const m = {
   // history is past the 50,000-row cap. T6/T5 add the rest of history.* (putBack, restore, download).
   "history.download.tooBig": "This history is too long to download at once. Ask us for a copy.",
   "history.download.tooBig.es": "Este historial es demasiado largo para descargarlo de una vez. Pídanos una copia.",
+  // F-115 part 1 (S-04), plan Task 6: Put back a changed value, Restore a removed unit, member, tag,
+  // relationship or place for 30 days. "history.notFound" is this task's own addition (not in the
+  // plan's Copy table): putBackChange/restoreRemoved's own "not_found"/"not_allowed" (a stale page,
+  // or a changeId outside this account) have no dedicated wording in the plan, so this names the one
+  // case both share, worded the same "landscaper at 7 AM" way as every neighbor here.
+  "history.putBack": "Put back",
+  "history.putBack.es": "Poner como antes",
+  "history.putBack.done": "{field} is back to what it was.",
+  "history.putBack.done.es": "{field} quedó como antes.",
+  "history.putBack.changed": "It changed since, so it wasn't put back.",
+  "history.putBack.changed.es": "Cambió desde entonces; no se restauró.",
+  "history.restore": "Restore",
+  "history.restore.es": "Restaurar",
+  "history.restore.done": "{name} is back.",
+  "history.restore.done.es": "{name} quedó restaurado.",
+  "history.restore.expired": "This could be restored for 30 days. That time has passed.",
+  "history.restore.expired.es": "Esto se podía restaurar durante 30 días. Ese plazo ya pasó.",
+  "history.restore.parentGone": "It can't be restored: what it belonged to was removed.",
+  "history.restore.parentGone.es": "No se puede restaurar: lo que lo contenía ya no existe.",
+  "history.restore.alreadyBack": "It's already back.",
+  "history.restore.alreadyBack.es": "Ya está restaurado.",
+  "history.notAllowed": "Only Owners and Staff can do this.",
+  // Glossary (per this plan's own note: check it before writing "Dueños"/"Personal"): the established
+  // word for Staff is "Empleado", not "Personal" (places.moveRefused.es, 5656-5657's own "Solo el
+  // Dueño o un Empleado puede…" — mirrored here, not the plan Copy table's placeholder).
+  "history.notAllowed.es": "Solo el Dueño o un Empleado puede hacer esto.",
+  "history.notFound": "This change can no longer be found.",
+  "history.notFound.es": "Ya no se puede encontrar este cambio.",
+  "history.undo": "Undo",
+  "history.undo.es": "Deshacer",
   "aiActs.verb.booked": "booked {when}",
   "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",

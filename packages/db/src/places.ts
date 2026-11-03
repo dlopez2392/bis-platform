@@ -383,8 +383,13 @@ export async function setPlaceArchived(
  * the snapshot came back from a browser. `created_by`, `created_at` and `updated_at` are not carried
  * (spec §7: 0071's trigger re-stamps created_by for a client token, and a browser-held timestamp
  * would decide where the row sorts).
+ * F-115 Task 6: `via` is optional and forwarded to `withAuthor` unchanged (undefined for every caller
+ * before Task 6; record-restore.ts's 30-day Restore passes `restore:<changeId>` so the resulting
+ * change row names what wrote it).
  */
-export async function restorePlace(db: SupabaseClient, accountId: string, snapshot: PlaceRow, ctx: PlaceCtx): Promise<PlaceRow> {
+export async function restorePlace(
+  db: SupabaseClient, accountId: string, snapshot: PlaceRow, ctx: PlaceCtx, via?: string,
+): Promise<PlaceRow> {
   const author = requireAuthor(db, ctx.author, "restorePlace");
   assertActorAllowed(db, author);
   if (snapshot.account_id !== accountId) throw new PlaceDbError("restorePlace: another account's row", "22023");
@@ -395,7 +400,7 @@ export async function restorePlace(db: SupabaseClient, accountId: string, snapsh
     client_group_id: snapshot.client_group_id,
     ...placeFieldsOf(snapshot),
     archived_at: snapshot.archived_at,
-  }), author).select(PLACE_COLUMNS).single();
+  }), author, via).select(PLACE_COLUMNS).single();
   if (error) throw dbError("restorePlace failed", error);
   const row = data as unknown as PlaceRow;
   await event(db, accountId, "place.restored", ctx, { placeId: row.id });
@@ -475,9 +480,10 @@ export async function removeEquipment(
   return row;
 }
 
-/** The Undo of a remove: the same id and the same `replaces_id` link (rule 6), named columns only. */
+/** The Undo of a remove: the same id and the same `replaces_id` link (rule 6), named columns only.
+ *  F-115 Task 6: `via` is optional, forwarded unchanged (see restorePlace's own note). */
 export async function restoreEquipment(
-  db: SupabaseClient, accountId: string, snapshot: EquipmentRow, ctx: PlaceCtx,
+  db: SupabaseClient, accountId: string, snapshot: EquipmentRow, ctx: PlaceCtx, via?: string,
 ): Promise<EquipmentRow> {
   const author = requireAuthor(db, ctx.author, "restoreEquipment");
   assertActorAllowed(db, author);
@@ -488,7 +494,7 @@ export async function restoreEquipment(
     place_id: snapshot.place_id,
     replaces_id: snapshot.replaces_id,
     ...equipmentFieldsOf(snapshot),
-  }), author).select(EQUIPMENT_COLUMNS).single();
+  }), author, via).select(EQUIPMENT_COLUMNS).single();
   if (error) throw dbError("restoreEquipment failed", error);
   const row = data as unknown as EquipmentRow;
   await event(db, accountId, "equipment.restored", ctx, { placeId: row.place_id, equipmentId: row.id });

@@ -451,3 +451,9 @@ export {
   groupChanges, foldVia, listChangeRows, COLLAPSE_MINUTES,
   type ChangeRecordType, type ChangeRow, type ChangeGroup, type ViaOnPage,
 } from "./record-changes";
+
+// F-115 Task 6: "Put back" a changed value and "Restore" a removed unit, member, tag, relationship
+// or place for RESTORE_DAYS. See ./record-restore.ts.
+export {
+  RESTORE_DAYS, canPutBack, canRestore, parseChangeId, putBackChange, restoreRemoved,
+} from "./record-restore";
