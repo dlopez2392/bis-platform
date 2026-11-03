@@ -52,6 +52,7 @@ export function visitSummary(counts: AccessLogCounts, tr: Tr): string {
     sentences.push(tr.text("accessLog.summary.opened", { list }));
   }
   if (counts.customer_list_export > 0) sentences.push(tr.count("accessLog.summary.downloads", counts.customer_list_export));
+  if (counts.record_history_export > 0) sentences.push(tr.count("accessLog.summary.historyDownloads", counts.record_history_export));
   if (sentences.length === 0) sentences.push(tr.text("accessLog.summary.nothing"));
   return sentences.join(" ");
 }

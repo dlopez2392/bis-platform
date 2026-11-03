@@ -170,4 +170,22 @@ describe("resolveAccessLogNames", () => {
     expect(names.forms.get("form1")).toEqual({ name: "Contact us" });
     expect(names.documents.get("doc2")).toEqual({ title: "Lease", trashed: false, record: { kind: "group", id: "g1" } });
   });
+
+  it("a record_history_export id can be either a contact or a group, so it joins BOTH the contacts read and the client_groups read (F-115 I1; mutation: drop the new kind from the names read -> the contact case FAILS)", async () => {
+    const page = pageOf([
+      item({ kind: "record_history_export", recordId: "c_hist" }),
+      item({ kind: "record_history_export", recordId: "g_hist" }),
+    ]);
+    const { db, reads } = fakeDb({
+      contacts: { data: [{ id: "c_hist", first_name: "Ana", last_name: "Ruiz", archived_at: null }] },
+      client_groups: { data: [{ id: "g_hist", name: "The Smiths", kind: "household" }] },
+    });
+    const names = await resolveAccessLogNames(db, A, page);
+    expect(names.contacts.get("c_hist")).toEqual({ first: "Ana", last: "Ruiz", archived: false });
+    expect(names.groups.get("g_hist")).toEqual({ name: "The Smiths", kind: "household" });
+    const contactReads = reads.filter((r) => r.table === "contacts");
+    expect(contactReads[0]!.in).toEqual([["id", expect.arrayContaining(["c_hist", "g_hist"])]]);
+    const groupReads = reads.filter((r) => r.table === "client_groups");
+    expect(groupReads[0]!.in).toEqual([["id", expect.arrayContaining(["c_hist", "g_hist"])]]);
+  });
 });
