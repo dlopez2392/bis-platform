@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner, sendAuthor } from "./db";
+import { contactAuthor } from "../provenance";
 import { testPhoneNumber } from "./fixtures";
 
 /**
@@ -329,6 +330,8 @@ describe("0098 only server code sets or edits the mark", () => {
     withRollback(async (c) => {
       const a = await seedAccount(c, "server");
       await c.query("set local role service_role");
+      // F-115: ensureHoldingContact's author for a call Sofia took (voice.ts HOLDING_WRITERS.voice, through contactAuthor).
+      await sendAuthor(c, contactAuthor("ai", "voice"));
       const { rows: [h] } = await c.query<{ id: string }>(
         "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai') returning id",
         [a.accountId, PHONE]);

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner, sendAuthor } from "./db";
+import type { RowAuthor } from "../provenance";
+
+/** F-115: what deleteAccountCascade sends on every delete it makes (account-teardown.ts TEARDOWN_AUTHOR): the one
+ *  server path that deletes contacts, and then the account, as service_role. */
+const TEARDOWN: RowAuthor = { authorKind: "automation", authorId: null };
 
 /**
  * 0054 (consent chain PR-1). Everything here runs in a
@@ -191,6 +196,7 @@ describe("0054 consent_events: deletes, as the roles that make them", () => {
       const s = await seed(c);
       const id = (await c.query<{ id: string }>(INSERT, params({ account: s.a, contact: s.contactA }))).rows[0]!.id;
       await c.query("set local role service_role");
+      await sendAuthor(c, TEARDOWN);
       await c.query("delete from contacts where id = $1", [s.contactA]);
       await actAsOwner(c);
       const { rows } = await c.query("select account_id, contact_id from consent_events where id = $1", [id]);
@@ -202,6 +208,7 @@ describe("0054 consent_events: deletes, as the roles that make them", () => {
       const s = await seed(c);
       await c.query(INSERT, params({ account: s.b }));
       await c.query("set local role service_role");
+      await sendAuthor(c, TEARDOWN);
       await c.query("delete from contacts where account_id = $1", [s.b]);
       await c.query("delete from accounts where id = $1", [s.b]);
       await actAsOwner(c);

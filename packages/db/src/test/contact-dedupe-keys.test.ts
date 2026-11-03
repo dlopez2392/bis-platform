@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { phoneDigits, emailKey } from "../contacts";
 import { withTestAccount } from "./fixtures";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 // Real shapes this database actually holds. "(956) 292-1696" is the majority
 // operator-entered shape; "+19562921696" is what toE164 and inbound SMS
@@ -62,8 +64,8 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
   // independently in the same run.
   it.each(PHONES)("phone_key matches phoneDigits for %j", async (phone) => {
     await withTestAccount(async (db, accountId) => {
-      const { data, error } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Key", phone: phone || null })
+      const { data, error } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Key", phone: phone || null }), SEED_AUTHOR, SEED_VIA)
         .select("phone_key").single();
       expect(error, `insert failed for ${JSON.stringify(phone)}`).toBeNull();
       const expected = phone ? (phoneDigits(phone) || null) : null;
@@ -73,8 +75,8 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
 
   it.each(EMAILS)("email_key matches emailKey for %j", async (email) => {
     await withTestAccount(async (db, accountId) => {
-      const { data, error } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Key", email: email || null })
+      const { data, error } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Key", email: email || null }), SEED_AUTHOR, SEED_VIA)
         .select("email_key").single();
       expect(error, `insert failed for ${JSON.stringify(email)}`).toBeNull();
       const expected = email ? (emailKey(email) || null) : null;
@@ -85,8 +87,8 @@ describe("dedupe keys: the database and TypeScript must agree (spec §4.1)", () 
   it("the flags table refuses an unordered or duplicate pair", async () => {
     await withTestAccount(async (db, accountId) => {
       const mk = async (name: string) => {
-        const { data } = await db.from("contacts")
-          .insert({ account_id: accountId, first_name: name }).select("id").single();
+        const { data } = await withAuthor(db.from("contacts")
+          .insert({ account_id: accountId, first_name: name }), SEED_AUTHOR, SEED_VIA).select("id").single();
         return data!.id as string;
       };
       const [x, y] = [await mk("A"), await mk("B")].sort();

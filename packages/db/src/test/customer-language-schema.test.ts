@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "pg";
-import { withRollback, actAsMember } from "./db";
+import { withRollback, actAsMember, sendAuthor, SEED_AUTHOR, SEED_VIA } from "./db";
 
 /**
  * A language on every customer (S-09, migration 0076). As the table owner inside a rolled-back
@@ -187,6 +187,9 @@ describe("record_language_signal (spec §6.2, C3)", () => {
   it("service_role, its only grantee, can call it directly and it takes effect", () => withRollback(async (c) => {
     const s = await seed(c);
     await c.query("set local role service_role");
+    // F-115: recordLanguageSignal sends its caller's author; a booking sign's is the booking page's customer
+    // (apps/web b/[publicId]/actions.ts: { authorKind: "customer", authorId: "public" }).
+    await sendAuthor(c, { authorKind: "customer", authorId: "public" });
     expect(await signal(c, s.acct, s.ana, "es", "booking", T1)).toBe(true);
     await c.query("reset role");
     expect(await langOf(c, s.ana)).toMatchObject({ language: "es", language_source: "booking", language_set_at: T1 });
@@ -286,6 +289,9 @@ describe("the client role writes no language (spec §6.3, C2)", () => {
   it("the service role's INSERT keeps them (the guard is the client's only)", () => withRollback(async (c) => {
     const s = await seed(c);
     await c.query("set local role service_role");
+    // F-115: no TypeScript writer inserts these columns (createContact's toRow never carries them), so this insert
+    // is the fixture's own and names itself as a seed.
+    await sendAuthor(c, SEED_AUTHOR, SEED_VIA);
     const { rows: [row] } = await attempt(c,
       "insert into contacts (account_id, first_name, language, language_source, language_set_at) values ($1, 'Dora', 'es', 'staff', $2) returning id",
       [s.acct, T1]);

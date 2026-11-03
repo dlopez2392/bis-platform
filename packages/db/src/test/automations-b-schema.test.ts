@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
-import { withRollback } from "./db";
+import { withRollback, SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import { getOrCreateCalendar } from "../booking";
 import { createContact } from "../contacts";
 
@@ -129,8 +130,8 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
         confirm_sms_failed_at: null, referral_asked_at: null, referral_ask_sms_failed_at: null,
       });
 
-      const { data: ct } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Ada", email: "ada@example.com" })
+      const { data: ct } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Ada", email: "ada@example.com" }), SEED_AUTHOR, SEED_VIA)
         .select("id, reactivation_sent_at").single();
       expect(ct!.reactivation_sent_at).toBeNull();
 

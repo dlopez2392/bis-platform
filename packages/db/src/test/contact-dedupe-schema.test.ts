@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner, sendAuthor } from "./db";
 import { nameKey, phoneNational, phoneFamily, reasonStrength, DUPLICATE_REASON_STRENGTH } from "../dedupe-keys";
 
 /**
@@ -726,6 +726,9 @@ describe("0106: a tombstone is server code's alone, and the merge log", () => {
       const o = await person(c, a.accountId, { first: "Other" });
       await tombstone(c, a.accountId, o, k);
       await asService(c);
+      // F-115: server code names its author on every contact write (withAuthor); a name written on the service
+      // client is Sofia's (fillContactBlanksReport, author ai).
+      await sendAuthor(c, { authorKind: "ai", authorId: null });
       expect((await c.query("update public.contacts set first_name = 'Edited' where id = $1", [o])).rowCount).toBe(1);
     }));
 
