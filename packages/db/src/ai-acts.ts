@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
@@ -24,6 +25,10 @@ type Row = {
 
 function toRow(accountId: string, a: NewAiAct) {
   return {
+    // F-115 (plan Task 2 Step 7): a caller that minted the id before its write (so the write's `via` could name
+    // it) keeps it. Every other row gets one HERE rather than from the column default: supabase-js sends a key
+    // missing from one row of a bulk insert as NULL (defaultToNull), and a NULL primary key is a 23502.
+    id: a.id ?? randomUUID(),
     account_id: accountId, actor: a.actor, call_id: a.callId, chat_id: a.chatId, contact_id: a.contactId,
     kind: a.kind, target: a.target, before: a.before, after: a.after,
   };

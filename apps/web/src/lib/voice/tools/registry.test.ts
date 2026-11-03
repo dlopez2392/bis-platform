@@ -566,7 +566,7 @@ describe("book_appointment", () => {
     expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct1");
     expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct1",
       { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" },
-      "voice", "ai");
+      { authorKind: "ai", authorId: null }, undefined);
     expect(dbMocks.fillContactBlanksReport.mock.calls[0]![3]).not.toHaveProperty("phone");
   });
 
@@ -577,7 +577,7 @@ describe("book_appointment", () => {
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct1",
-      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, "voice", "ai");
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, { authorKind: "ai", authorId: null }, undefined);
   });
 
   it.each([
@@ -716,7 +716,7 @@ describe("book_appointment — the caller's language becomes the contact's (S-09
   it("a caller who clearly spoke Spanish signals booking/es as the AI, at the tool's clock, after the booking (mutation: signal before createBooking -> FAILS)", async () => {
     await runTool(spanish(), ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
     expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith(ctx.db, "a1", "ct1",
-      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, "voice", "ai");
+      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, { authorKind: "ai", authorId: null });
     expect(dbMocks.recordLanguageSignal.mock.invocationCallOrder[0]!).toBeGreaterThan(dbMocks.createBooking.mock.invocationCallOrder[0]!);
   });
 
@@ -724,7 +724,7 @@ describe("book_appointment — the caller's language becomes the contact's (S-09
     const inFlight = { ...emptyCallState(), pendingCallerTurn: { itemId: "item_9", text: "hola, necesito una cita para mañana" } };
     await runTool(inFlight, ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
     expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith(ctx.db, "a1", "ct1",
-      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, "voice", "ai");
+      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, { authorKind: "ai", authorId: null });
   });
 
   it("a caller who said too little signals nothing (mutation: fall back to the profile's language -> FAILS)", async () => {
@@ -1974,8 +1974,9 @@ describe("Sofía's acts (item 8c)", () => {
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(dbMocks.insertAiActs.mock.calls[0]![0]).toEqual({});
     expect(dbMocks.insertAiActs.mock.calls[0]![1]).toBe("a1");
+    // F-115: the first act of each write carries the id its write named (the F-115 block below pins which).
     expect(inserted()[0]).toEqual([
-      { ...VOICE, kind: "contact_created", contactId: "ct1", target: {}, before: null, after: null },
+      { ...VOICE, id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_created", contactId: "ct1", target: {}, before: null, after: null },
       { ...VOICE, kind: "booking_created", contactId: "ct1", target: { bookingId: "bk1" }, before: null,
         after: { startsAt: "2027-06-01T14:00:00.000Z", endsAt: "2027-06-01T15:00:00.000Z" } },
     ]);
@@ -1990,7 +1991,7 @@ describe("Sofía's acts (item 8c)", () => {
     await runTool(emptyCallState(), callCtx, "book_appointment", { ...BOOK_ARGS, email: "ana@example.com" });
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(inserted()[0]).toEqual([
-      { ...VOICE, kind: "contact_field_filled", contactId: "ct1", target: { field: "firstName" }, before: { value: "Caller" }, after: { value: "Ana" } },
+      { ...VOICE, id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_field_filled", contactId: "ct1", target: { field: "firstName" }, before: { value: "Caller" }, after: { value: "Ana" } },
       { ...VOICE, kind: "contact_field_filled", contactId: "ct1", target: { field: "lastName" }, before: { value: null }, after: { value: "Ruiz" } },
       { ...VOICE, kind: "contact_field_filled", contactId: "ct1", target: { field: "email" }, before: { value: null }, after: { value: "ana@example.com" } },
       { ...VOICE, kind: "booking_created", contactId: "ct1", target: { bookingId: "bk1" }, before: null,
@@ -2011,7 +2012,7 @@ describe("Sofía's acts (item 8c)", () => {
     const { state, result } = await runTool(emptyCallState(), callCtx, "book_appointment", BOOK_ARGS);
     expect(result).toEqual({ ok: false, slotTaken: true, error: "that time was just taken — offer another" });
     expect(state.contactId).toBe("ct1");
-    expect(inserted()).toEqual([[{ ...VOICE, kind: "contact_created", contactId: "ct1", target: {}, before: null, after: null }]]);
+    expect(inserted()).toEqual([[{ ...VOICE, id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_created", contactId: "ct1", target: {}, before: null, after: null }]]);
   });
 
   it("a refused booking writes nothing and records nothing", async () => {
@@ -2137,6 +2138,41 @@ describe("Sofía's acts (item 8c)", () => {
         err.mockRestore();
       }
     });
+
+  // F-115 (plan Task 2 Step 7): the write names the act it logs (`via: ai_act:<id>`), and the act is inserted under
+  // that same id, so the record's history can fold the change into the act. Each mutation: mint the act's id apart
+  // from the via (two different uuids) -> FAILS.
+  describe("F-115: each contact write names the act it logs", () => {
+    const actsOf = (kind: string) => inserted().flat().filter((a) => (a as { kind: string }).kind === kind) as { id?: string }[];
+
+    it("a new contact: createContact's via is the contact_created act's own id", async () => {
+      await runTool(emptyCallState(), callCtx, "book_appointment", BOOK_ARGS);
+      const [made] = actsOf("contact_created");
+      expect(made?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+      expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+      expect(dbMocks.createContact.mock.calls[0]![2]).toMatchObject({ via: `ai_act:${made!.id}` });
+    });
+
+    it("a fill on the caller's own contact: fillContactBlanksReport's via is the first contact_field_filled act's id, and only that act carries it", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue(CALLERS_OWN);
+      dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: ["first_name", "last_name"], flagged: false,
+        prior: { firstName: "Caller", lastName: null }, written: { firstName: "Ana", lastName: "Ruiz" } });
+      await runTool(emptyCallState(), callCtx, "book_appointment", BOOK_ARGS);
+      const fills = actsOf("contact_field_filled");
+      expect(fills).toHaveLength(2);
+      expect(fills[0]!.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+      expect(fills[1]!.id).not.toBe(fills[0]!.id);
+      expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct1",
+        { firstName: "Ana", lastName: "Ruiz", email: undefined }, { authorKind: "ai", authorId: null }, `ai_act:${fills[0]!.id}`);
+    });
+
+    it("no call row: no act can be recorded, so no write names one (mutation: plan the act without the call row -> FAILS)", async () => {
+      await runTool(emptyCallState(), ctx, "book_appointment", BOOK_ARGS);
+      expect((dbMocks.createContact.mock.calls[0]![2] as { via?: string }).via).toBeUndefined();
+      expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ─── item 8c §7: every booking change by Sofía reaches the business ───
@@ -2484,7 +2520,7 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledTimes(1);
     expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct2",
-      { firstName: "Beto", lastName: "Prueba", email: "beto@example.com" }, "voice", "ai");
+      { firstName: "Beto", lastName: "Prueba", email: "beto@example.com" }, { authorKind: "ai", authorId: null }, undefined);
   });
 
   it("a new name on a shared number makes a new contact, the email still winning (S21)", async () => {
@@ -2492,7 +2528,8 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct7", existing: false });
     await book(emptyCallState(), { name: "Carla Prueba" }, rowCtx);
     expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
-      { firstName: "Carla", lastName: "Prueba", phone: "+19562921696", email: undefined, source: "voice", matchBy: "email_only" }, "voice", "ai");
+      { firstName: "Carla", lastName: "Prueba", phone: "+19562921696", email: undefined, source: "voice", matchBy: "email_only",
+        via: expect.stringMatching(/^ai_act:[0-9a-f-]{36}$/) }, "voice", "ai");
     expect(bookedOn()).toEqual(["ct7"]);
     expect(created()).toHaveLength(1);
   });
@@ -2708,6 +2745,29 @@ describe("S-47e: the booking lands on the person named (plan Task 7)", () => {
     expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", "+19565550199");
     expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalledWith({}, "a1", "+19562921696");
     expect(r.result).toEqual(LEAD_ASK_WHOSE);
+  });
+
+  // F-115 (plan Task 2 Step 7): the record the name picked names its act too. Mutation: mint the act's id apart
+  // from the via (two different uuids) -> FAILS.
+  it("F-115: the picked record's fill names its first contact_field_filled act", async () => {
+    on(ANA, BETO);
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: ["email"], flagged: false,
+      prior: { email: null }, written: { email: "beto@example.com" } });
+    await runTool(emptyCallState(), rowCtx, "book_appointment", { startsAt: AT, name: "Beto Prueba", email: "beto@example.com" });
+    const fill = dbMocks.insertAiActs.mock.calls.flatMap((x) => x[2] as { kind: string; id?: string }[])
+      .find((x) => x.kind === "contact_field_filled");
+    expect(fill?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith({}, "a1", "ct2",
+      { firstName: "Beto", lastName: "Prueba", email: "beto@example.com" }, { authorKind: "ai", authorId: null }, `ai_act:${fill!.id}`);
+  });
+
+  it("F-115: a new person on a shared number names its contact_created act", async () => {
+    on(ANA, BETO);
+    dbMocks.createContact.mockResolvedValue({ id: "ct7", existing: false });
+    await book(emptyCallState(), { name: "Carla Prueba" }, rowCtx);
+    const [made] = created() as { id?: string }[];
+    expect(made?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(dbMocks.createContact.mock.calls[0]![2]).toMatchObject({ matchBy: "email_only", via: `ai_act:${made!.id}` });
   });
 });
 

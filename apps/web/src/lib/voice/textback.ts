@@ -38,6 +38,7 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { defaultTextbackBody } from "./textback-body";
 import { recordUsageSafely } from "@/lib/billing/usage";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import { planAct, underPlannedId, SOFIA_AUTHOR } from "./act-id";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 
 /** The service-role client every voice write goes through, named the way
@@ -185,19 +186,21 @@ export async function contactForCallerId(
   }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];
+  // F-115: each write names the act it logs (planAct, act-id.ts).
+  const madeAct = planAct(source);
   const created = await createContact(db, accountId, {
-    firstName: "Caller", phone: callerNumber, source: "voice",
+    firstName: "Caller", phone: callerNumber, source: "voice", via: madeAct?.via,
   }, ACTOR_ID, ACTOR_TYPE);
   if (!created.existing) {
-    acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+    acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null }], madeAct));
   } else {
     // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
     // the caller's own contact and the phone fill is a no-op. Never add an
     // email or name here without checking the match's phone is the caller ID.
     try {
-      // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
-      const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, { authorKind: "ai", authorId: null });
-      acts.push(...fieldFillActs(source, created.id, filled));
+      const fillAct = planAct(source);
+      const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, SOFIA_AUTHOR, fillAct?.via);
+      acts.push(...underPlannedId(fieldFillActs(source, created.id, filled), fillAct));
     } catch (e) {
       console.error(`textback fillContactBlanks failed for ${created.id}: ${String(e)}`);
     }

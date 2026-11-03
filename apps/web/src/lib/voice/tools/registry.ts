@@ -31,6 +31,7 @@ import {
 import { detectCallerLanguage, clearCallerLanguageNow } from "../language";
 import { bookingMode, type BookingMode } from "../booking-mode";
 import { recordActs, recordAct, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import { planAct, underPlannedId, SOFIA_AUTHOR } from "../act-id";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { HandoffTarget } from "../handoff";
 import { capturePhoneLead, messageBody, bookingName, stripPlaceholderSegments, withDroppedNote, type Dropped } from "./placeholders";
@@ -565,10 +566,11 @@ export async function runTool(
         // 5.10.2: decision 19's fill, ONLY on a record picked on the caller-ID number. Never fails the booking.
         if (onCallerId) {
           try {
-            // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
+            // F-115: the fill names the act it logs (planAct, act-id.ts).
+            const fillAct = planAct(source);
             const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
-              { firstName, lastName, email: email ?? undefined }, { authorKind: "ai", authorId: null });
-            acts.push(...fieldFillActs(source, contactId, filled));
+              { firstName, lastName, email: email ?? undefined }, SOFIA_AUTHOR, fillAct?.via);
+            acts.push(...underPlannedId(fieldFillActs(source, contactId, filled), fillAct));
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
           }
@@ -576,11 +578,13 @@ export async function runTool(
       } else if (pick.kind === "create") {
         // S21: a new person on the number. The email still wins (matchBy "email_only"); a record reached that way
         // was not picked by name, so nothing of this caller's is written onto it.
+        const madeAct = planAct(source);
         const created = await createContact(ctx.db, ctx.accountId,
-          { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice", matchBy: "email_only" },
+          { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice", matchBy: "email_only",
+            via: madeAct?.via },
           "voice", "ai");
         contactId = created.id;
-        if (!created.existing) acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+        if (!created.existing) acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null }], madeAct));
       } else {
         // S-47e (Task 7 review fix round): with a number, createContact's dedupe finds the record (the contact who
         // agrees, or the call's earlier record when it is the same number), never the call's earlier contact as
@@ -597,12 +601,13 @@ export async function runTool(
           }
         }
         if (!contactId) {
+          const madeAct = planAct(source);
           const created = await createContact(ctx.db, ctx.accountId,
-            { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
+            { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice", via: madeAct?.via },
             "voice", "ai");
           contactId = created.id;
           if (!created.existing) {
-            acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+            acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null }], madeAct));
           }
           // Dedupe returns the existing row untouched — backfill blanks so a
           // repeat caller stops being "Caller" with no email (the unsendable-
@@ -617,11 +622,11 @@ export async function runTool(
             try {
               const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
               if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
-                // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
+                const fillAct = planAct(source);
                 const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
                   { firstName, lastName, email: email ?? undefined },
-                  { authorKind: "ai", authorId: null });
-                acts.push(...fieldFillActs(source, contactId, filled));
+                  SOFIA_AUTHOR, fillAct?.via);
+                acts.push(...underPlannedId(fieldFillActs(source, contactId, filled), fillAct));
               }
             } catch (e) {
               console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
@@ -675,9 +680,9 @@ export async function runTool(
       const heard = clearCallerLanguageNow(state);
       if (heard) {
         try {
-          // F-115 Step 7: via ai_act -- bis-voice to pass the act's own id once it is generated before insert.
+          // F-115: Sofia's, with no via: a language sign logs no act (AI_ACT_KINDS has none for it).
           await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
-            { language: heard, source: "booking", at: now }, { authorKind: "ai", authorId: null });
+            { language: heard, source: "booking", at: now }, SOFIA_AUTHOR);
         } catch (e) {
           console.error(`voice booking ${bookingId}: language signal failed: ${String(e)}`);
         }

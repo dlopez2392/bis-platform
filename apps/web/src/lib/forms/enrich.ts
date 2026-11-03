@@ -106,6 +106,10 @@ export async function enrich(
     // only by the instant reply below, which DOES need a parsed E.164 to dial.
     const rawPhone = byKind.get("core.phone") || "";
     phoneE164 = rawPhone ? e164Of(rawPhone) : null;
+    // F-115 (plan Task 2 Step 7): a chat's new contact is logged as Sofia's contact_created act (below), so its
+    // insert names that act (`via: ai_act:<id>`) and the act is recorded under the same id. The public form logs
+    // no act and names none.
+    const madeActId = chatSource ? crypto.randomUUID() : null;
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
@@ -116,7 +120,7 @@ export async function enrich(
       phone: rawPhone || undefined,
       source: `form: ${form.name}`,
       custom,
-      ...(chatSource ? { author: { authorKind: "ai" as const, authorId: null } } : {}),
+      ...(chatSource ? { author: { authorKind: "ai" as const, authorId: null }, via: `ai_act:${madeActId}` } : {}),
     }, "form", "system");
     contactId = created.id;
 
@@ -215,7 +219,7 @@ export async function enrich(
     // names that message and this submission: the two non-AI rows its Undo may treat as hers.
     if (chatSource && !created.existing) {
       await recordActs(db, accountId, [{
-        ...chatSource, kind: "contact_created", contactId,
+        ...chatSource, ...(madeActId ? { id: madeActId } : {}), kind: "contact_created", contactId,
         target: { messageId: message.id, submissionId }, before: null, after: null,
       }]);
     }

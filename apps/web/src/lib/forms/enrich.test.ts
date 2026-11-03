@@ -85,8 +85,9 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
     expect(dbMocks.createContact.mock.calls[0]![2]).toMatchObject({ author: { authorKind: "ai", authorId: null } });
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(dbMocks.insertAiActs.mock.calls[0]![1]).toBe("acct-A");
+    // F-115: the act carries the id its insert named (the F-115 case below pins which).
     expect(inserted()).toEqual([[{
-      actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-new", kind: "contact_created",
+      actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-new", id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_created",
       target: { messageId: "msg-1", submissionId: "sub-1" }, before: null, after: null,
     }]]);
     expect(order).toEqual(["message", "record", "unread"]);
@@ -107,6 +108,22 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
         target: { field: "phone" }, before: { value: null }, after: { value: "+19562921696" } },
     ]]);
     expect(dbMocks.setContactsBusiness).toHaveBeenCalled();
+  });
+
+  // F-115 (plan Task 2 Step 7): the chat's insert names the act it logs (`via: ai_act:<id>`), and the act is
+  // inserted under that same id. Mutation: mint the act's id apart from the via (two different uuids) -> FAILS.
+  it("F-115: the chat's new contact names its contact_created act", async () => {
+    await run(chat());
+    const [made] = inserted()[0] as { id?: string }[];
+    expect(made?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(dbMocks.createContact.mock.calls[0]![2]).toMatchObject({
+      author: { authorKind: "ai", authorId: null }, via: `ai_act:${made!.id}`,
+    });
+  });
+
+  it("F-115: the public form logs no act, so its insert names none", async () => {
+    await run();
+    expect(dbMocks.createContact.mock.calls[0]![2]).not.toHaveProperty("via");
   });
 
   it("a public-form lead on an existing contact fills the same columns and records nothing", async () => {
@@ -141,23 +158,30 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
         company_name: null, custom: {} });
     }],
   ] as const)("%s: a throwing insertAiActs changes nothing else the lead goes through (mutation: remove the try in recordActs -> FAILS)", async (_label, setup) => {
-    setup();
-    await run(chat());
-    const okCalls = Object.fromEntries(Object.entries(dbMocks).filter(([k]) => k !== "insertAiActs").map(([k, f]) => [k, f.mock.calls]));
-    const withoutClock = (calls: unknown[][]) => calls.map(([input]) => ({ ...(input as object), now: "the clock" }));
-    const okReply = withoutClock(instantReply.mock.calls);
-    for (const fn of Object.values(dbMocks)) fn.mockClear();
-    instantReply.mockClear();
-    dbMocks.insertAiActs.mockReset().mockRejectedValue(Object.assign(new Error("down"), { code: "08006" }));
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(run(chat())).resolves.toBeUndefined();
-    err.mockRestore();
-    expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
-    const failedCalls = Object.fromEntries(Object.entries(dbMocks).filter(([k]) => k !== "insertAiActs").map(([k, f]) => [k, f.mock.calls]));
-    expect(failedCalls).toEqual(okCalls);
-    expect(withoutClock(instantReply.mock.calls)).toEqual(okReply);
-    expect(okReply).toHaveLength(1);
-    expect(dbMocks.setSubmissionProcessingError).not.toHaveBeenCalled();
+    // F-115: a new contact's insert names a freshly minted act id; one id for both runs, so the two runs' calls
+    // compare on what this test is about.
+    const uuid = vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    try {
+      setup();
+      await run(chat());
+      const okCalls = Object.fromEntries(Object.entries(dbMocks).filter(([k]) => k !== "insertAiActs").map(([k, f]) => [k, f.mock.calls]));
+      const withoutClock = (calls: unknown[][]) => calls.map(([input]) => ({ ...(input as object), now: "the clock" }));
+      const okReply = withoutClock(instantReply.mock.calls);
+      for (const fn of Object.values(dbMocks)) fn.mockClear();
+      instantReply.mockClear();
+      dbMocks.insertAiActs.mockReset().mockRejectedValue(Object.assign(new Error("down"), { code: "08006" }));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(run(chat())).resolves.toBeUndefined();
+      err.mockRestore();
+      expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
+      const failedCalls = Object.fromEntries(Object.entries(dbMocks).filter(([k]) => k !== "insertAiActs").map(([k, f]) => [k, f.mock.calls]));
+      expect(failedCalls).toEqual(okCalls);
+      expect(withoutClock(instantReply.mock.calls)).toEqual(okReply);
+      expect(okReply).toHaveLength(1);
+      expect(dbMocks.setSubmissionProcessingError).not.toHaveBeenCalled();
+    } finally {
+      uuid.mockRestore();
+    }
   });
 });
 

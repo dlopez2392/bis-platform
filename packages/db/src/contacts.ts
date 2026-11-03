@@ -49,6 +49,10 @@ export type CreateContactInput = ContactInput & {
    *  Sofía passes it when a name on a shared number makes a new person. Read only by createContact (as
    *  assignedTo and author are); toRow never sees it. Absent = today's dedupe. */
   matchBy?: "email_only";
+  /** F-115 (plan Task 2 Step 7): what the insert was made through, sent on the author header and never stored on
+   *  the row: `ai_act:<id>` when Sofía logs a contact_created act for this insert, under that same id. Read only
+   *  by createContact (as assignedTo, author and matchBy are); toRow never sees it. Absent = no via. */
+  via?: string;
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -515,7 +519,7 @@ export async function createContact(
       account_id: accountId, ...toRow(input),
       ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
       author_kind: author.authorKind, author_id: author.authorId,
-    }), author).select("id").single();
+    }), author, input.via).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
@@ -652,6 +656,9 @@ export async function fillContactBlanksReport(
   db: SupabaseClient, accountId: string, requestedId: string,
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
   author: RowAuthor,
+  /** F-115 (plan Task 2 Step 7): `ai_act:<id>` when the caller logs a contact_field_filled act for this fill,
+   *  under that same id; sent on the author header only. */
+  via?: string,
 ): Promise<{
   fields: string[]; flagged: boolean;
   prior: Partial<Record<ContactFieldName, string | null>>; written: Partial<Record<ContactFieldName, string>>;
@@ -721,7 +728,7 @@ export async function fillContactBlanksReport(
 
   const { error } = await withAuthor(db.from("contacts")
     .update({ ...writtenRow, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", contactId), author);
+    .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
   {
     const { actorId, actorType } = eventActorOf(author);
