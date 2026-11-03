@@ -211,6 +211,8 @@ describe("0098 the holding record", () => {
       const ana = await person(c, a.accountId, "Ana", "Prueba");
       const business = "select public.set_contacts_business($1, array[$2::uuid], array['Acme Roofing'])";
       await c.query("set local role service_role");
+      // 0112: group writes are recorded; the app's service call names its author (enforce), a staff member here.
+      await sendAuthor(c, { authorKind: "person", authorId: "user_holding_staff" });
       expect(await refusal(c, business, [a.accountId, ana])).toBeNull();
       expect(await refusal(c, business, [a.accountId, h!.id])).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
       await c.query("reset role");
