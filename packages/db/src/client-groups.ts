@@ -48,8 +48,10 @@ class RpcError extends Error {
 
 /** F-115 (0112 load-bearing 4): every group RPC is service_role only, so the header is the only
  *  author 0111/0112 can read on it; `withAuthor` on every call. */
-async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unknown>, author: RowAuthor): Promise<T> {
-  const { data, error } = await withAuthor(db.rpc(fn, args), author);
+async function rpc<T>(
+  db: SupabaseClient, fn: string, args: Record<string, unknown>, author: RowAuthor, via?: string,
+): Promise<T> {
+  const { data, error } = await withAuthor(db.rpc(fn, args), author, via);
   if (error) throw new RpcError(`${fn} failed: ${error.message}`, error.code);
   return data as T;
 }
@@ -325,6 +327,8 @@ export async function addContactToGroup(
 export async function setContactsBusiness(
   db: SupabaseClient, accountId: string, rows: readonly { contactId: string; name: string }[],
   author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<BusinessResult[]> {
   author = requireAuthor(db, author, "setContactsBusiness");
   if (rows.length === 0) return [];
@@ -337,7 +341,7 @@ export async function setContactsBusiness(
   let out: Row[];
   for (let attempt = 0; ; attempt++) {
     try {
-      out = await rpc<Row[]>(db, "set_contacts_business", args, author);
+      out = await rpc<Row[]>(db, "set_contacts_business", args, author, via);
       break;
     } catch (e) {
       if (!(e instanceof RpcError && e.code === DEADLOCK && attempt < DEADLOCK_RETRIES)) throw e;

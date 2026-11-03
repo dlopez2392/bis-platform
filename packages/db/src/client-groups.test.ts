@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createGroupWithMember, updateGroup } from "./client-groups";
+import { createGroupWithMember, updateGroup, setContactsBusiness } from "./client-groups";
 
 /**
  * F-115 (migration 0112, plan Task 3 Step 7, LOAD-BEARING 4 — group writes are service-only): the
@@ -86,5 +86,20 @@ describe("updateGroup", () => {
     await expect(updateGroup(db, "acct-1", "g1", { name: "New" }, undefined as never))
       .rejects.toThrow("updateGroup: a server write must say who made it");
     expect(fromCalls).toEqual([]);
+  });
+});
+
+// F-115 M3 (demo/seed.ts): setContactsBusiness gained the same optional `via` createOpportunity
+// already had, so the demo seed's business-name write can name itself "seed" too.
+describe("setContactsBusiness", () => {
+  it("passes an optional via through to the RPC's author header (F-115 M3; mutation: drop via from withAuthor -> FAILS)", async () => {
+    const { db, headers } = fakeDb({
+      rpc: { set_contacts_business: { data: [{ contact_id: "c1", status: "ok", removed: null, added: "m1" }], error: null } },
+      from: { events: { data: null, error: null } },
+    });
+    await setContactsBusiness(db, "acct-1", [{ contactId: "c1", name: "Acme" }], AUTHOR, "seed");
+    expect(headers).toEqual([
+      { fn: "set_contacts_business", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_owner", via: "seed" }) },
+    ]);
   });
 });

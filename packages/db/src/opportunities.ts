@@ -71,6 +71,8 @@ export async function moveOpportunityStage(
 export async function moveOpportunityToStage(
   db: SupabaseClient, accountId: string, oppId: string,
   toStageId: string, author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<void> {
   author = requireAuthor(db, author, "moveOpportunityToStage");
   const { data: opp, error } = await db.from("opportunities")
@@ -81,7 +83,7 @@ export async function moveOpportunityToStage(
   if (!stages.some(s => s.id === toStageId)) throw new Error("stage not in pipeline");
   const { error: uErr } = await withAuthor(db.from("opportunities")
     .update({ stage_id: toStageId, stage_changed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString() }), author)
+              updated_at: new Date().toISOString() }), author, via)
     .eq("account_id", accountId).eq("id", oppId);
   if (uErr) throw new Error(uErr.message);
   const { actorId, actorType } = emitActorOf(db, author);
@@ -114,11 +116,13 @@ export async function updateOpportunity(
 export async function setOpportunityStatus(
   db: SupabaseClient, accountId: string, oppId: string,
   status: "open" | "won" | "lost", author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<void> {
   author = requireAuthor(db, author, "setOpportunityStatus");
   const { error } = await withAuthor(db.from("opportunities")
     .update({ status, status_changed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString() }), author)
+              updated_at: new Date().toISOString() }), author, via)
     .eq("account_id", accountId).eq("id", oppId);
   if (error) throw new Error(error.message);
   const { actorId, actorType } = emitActorOf(db, author);

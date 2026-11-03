@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createOpportunity } from "./opportunities";
+import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "./opportunities";
 
 /**
  * F-115 (migration 0112, plan Task 3 Step 7): `createOpportunity` is the representative test for the
@@ -52,5 +52,33 @@ describe("createOpportunity", () => {
       createOpportunity(db, "acct-1", { contactId: "c1", pipelineId: "p1", name: "Deck" }, undefined as never),
     ).rejects.toThrow("createOpportunity: a server write must say who made it");
     expect(calls).toEqual([]);
+  });
+});
+
+// F-115 M3 (demo/seed.ts): moveOpportunityToStage and setOpportunityStatus gained the same optional
+// `via` createOpportunity already had, so the demo seed's writes can name themselves "seed" too.
+describe("moveOpportunityToStage", () => {
+  it("passes an optional via through to the stage update's author header (F-115 M3; mutation: drop via from withAuthor -> FAILS)", async () => {
+    const { db, headers } = recordingDb({
+      opportunities: { data: { id: "o1", pipeline_id: "p1", stage_id: "s1" }, error: null },
+      pipeline_stages: {
+        data: [{ id: "s1", name: "New Lead", position: 0 }, { id: "s2", name: "Qualified", position: 1 }],
+        error: null,
+      },
+    });
+    await moveOpportunityToStage(db, "acct-1", "o1", "s2", AUTHOR, "seed");
+    expect(headers).toEqual([
+      { table: "opportunities", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_owner", via: "seed" }) },
+    ]);
+  });
+});
+
+describe("setOpportunityStatus", () => {
+  it("passes an optional via through to the status update's author header (F-115 M3; mutation: drop via from withAuthor -> FAILS)", async () => {
+    const { db, headers } = recordingDb({});
+    await setOpportunityStatus(db, "acct-1", "o1", "won", AUTHOR, "seed");
+    expect(headers).toEqual([
+      { table: "opportunities", name: "x-bis-author", value: JSON.stringify({ kind: "person", id: "user_owner", via: "seed" }) },
+    ]);
   });
 });

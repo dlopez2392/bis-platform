@@ -445,7 +445,7 @@ async function seedContacts(
       // to record a quiet processing_error against, and a demo tenant with a
       // silently missing business is worse than one that failed to build.
       const [result] = await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }],
-        { authorKind: "automation", authorId: null });
+        { authorKind: "automation", authorId: null }, "seed");
       if (result && result.status !== "ok" && result.status !== "unchanged") {
         throw new Error(`demo seed: setContactsBusiness ${result.status} for ${person.first} ${person.last}`);
       }
@@ -843,9 +843,9 @@ async function seedPipeline(
       { authorKind: "automation", authorId: null }, "seed");
 
     if (deal.stage > 0) {
-      await moveOpportunityToStage(db, accountId, id, stages[deal.stage]!.id, { authorKind: "automation", authorId: null });
+      await moveOpportunityToStage(db, accountId, id, stages[deal.stage]!.id, { authorKind: "automation", authorId: null }, "seed");
     }
-    if (deal.won) await setOpportunityStatus(db, accountId, id, "won", { authorKind: "automation", authorId: null });
+    if (deal.won) await setOpportunityStatus(db, accountId, id, "won", { authorKind: "automation", authorId: null }, "seed");
 
     // Taken from the deal, not computed from its stage. See DEALS above.
     const createdAt = now - deal.daysAgo * DAY;
