@@ -7,6 +7,7 @@ import { insertAiActs } from "../ai-acts";
 import { assignPhoneNumber } from "../voice";
 import { mergeContacts, undoContactMerge, contactMergePreview } from "../contact-merge";
 import { listTimelinePage, listContactTimelinePage } from "../record";
+import { SEED_AUTHOR } from "./db";
 
 /**
  * F-006 part 1 (plan Task 9), live half: the `merge` source against the REAL 0106 functions, on the CI
@@ -42,7 +43,7 @@ describe("the merge source on the live timeline (plan Task 9, correction 11)", (
 
         const preview = await contactMergePreview(db, accountId, keepId, otherId);
         if (preview.status !== "ok") throw new Error(`expected ok, got ${preview.status}`);
-        const outcome = await mergeContacts(db, accountId, { keepId, otherId, choices: {}, seen: preview.seen, actor: ACTOR });
+        const outcome = await mergeContacts(db, accountId, { keepId, otherId, choices: {}, seen: preview.seen, actor: ACTOR }, SEED_AUTHOR);
         if (outcome.status !== "merged") throw new Error(`expected merged, got ${outcome.status}`);
 
         // Through [keepId, otherId] the kept page shows the merge row AND the tombstone's own act
@@ -60,7 +61,7 @@ describe("the merge source on the live timeline (plan Task 9, correction 11)", (
         expect(keepOnly.items.some((i) => i.kind === "aiAct")).toBe(false);
 
         // Undo adds a SECOND row (mergeUndone) without losing the original merge row.
-        const undone = await undoContactMerge(db, accountId, outcome.mergeId, ACTOR);
+        const undone = await undoContactMerge(db, accountId, outcome.mergeId, SEED_AUTHOR, ACTOR);
         expect(undone.status).toBe("undone");
         const afterUndo = await listTimelinePage(db, accountId, [keepId, otherId]);
         expect(afterUndo.items.map((i) => i.kind)).toEqual(expect.arrayContaining(["merge", "mergeUndone"]));

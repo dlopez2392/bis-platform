@@ -5,6 +5,8 @@ import { withTestAccount } from "./fixtures";
 import { ensureConversation, createMessage, incrementUnreadForMessage } from "../messaging";
 import { findReplyThread, matchSender } from "../inbound-email";
 import { mergeContacts, undoContactMerge, contactMergePreview } from "../contact-merge";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Task 7 (F-006), live half: threads and mail after a REAL merge — `ensureConversation`, `matchSender`,
@@ -21,8 +23,8 @@ const TOKEN_B = "cccccccccccccccccccccccc".slice(0, 24);
 async function person(
   db: SupabaseClient, accountId: string, p: { first: string; last: string; email?: string; phone: string },
 ): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, email: p.email ?? null, phone: p.phone, author_kind: "person" })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, email: p.email ?? null, phone: p.phone, author_kind: "person" }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error) throw new Error(`person insert failed: ${error.message}`);
   return (data as { id: string }).id;
@@ -63,7 +65,7 @@ describe("threads and mail after a merge (CI only: 0106 not on bis-ci; withTestA
         await setReplyToken(dbB, accountB, boThread.id, TOKEN_B);
         const bPreview = await contactMergePreview(dbB, accountB, bk, bo);
         if (bPreview.status !== "ok") throw new Error(`expected ok, got ${bPreview.status}`);
-        const bOutcome = await mergeContacts(dbB, accountB, { keepId: bk, otherId: bo, choices: {}, seen: bPreview.seen, actor: ACTOR });
+        const bOutcome = await mergeContacts(dbB, accountB, { keepId: bk, otherId: bo, choices: {}, seen: bPreview.seen, actor: ACTOR }, SEED_AUTHOR);
         if (bOutcome.status !== "merged") throw new Error(`expected merged, got ${bOutcome.status}`);
 
         // Before A's own merge: the live token's own thread answers directly, and B's token is B's own.
@@ -72,7 +74,7 @@ describe("threads and mail after a merge (CI only: 0106 not on bis-ci; withTestA
 
         const preview = await contactMergePreview(db, accountId, k, o);
         if (preview.status !== "ok") throw new Error(`expected ok, got ${preview.status}`);
-        const outcome = await mergeContacts(db, accountId, { keepId: k, otherId: o, choices: {}, seen: preview.seen, actor: ACTOR });
+        const outcome = await mergeContacts(db, accountId, { keepId: k, otherId: o, choices: {}, seen: preview.seen, actor: ACTOR }, SEED_AUTHOR);
         if (outcome.status !== "merged") throw new Error(`expected merged, got ${outcome.status}`);
 
         // A reply to the old mail now lands on the kept record's thread, through contact_merges'
@@ -94,7 +96,7 @@ describe("threads and mail after a merge (CI only: 0106 not on bis-ci; withTestA
         expect(await readUnread(db, kThread.id)).toBe(before + 1);
 
         // Undo restores O's own thread, its token included.
-        const undone = await undoContactMerge(db, accountId, outcome.mergeId, ACTOR);
+        const undone = await undoContactMerge(db, accountId, outcome.mergeId, SEED_AUTHOR, ACTOR);
         expect(undone).toMatchObject({ status: "undone", otherId: o });
         expect(await findReplyThread(db, TOKEN_A)).toMatchObject({ conversationId: oThread.id, contactId: o });
       }),

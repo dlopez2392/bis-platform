@@ -9,7 +9,7 @@ import {
 } from "@bis/db";
 import { conciergeStrings } from "../src/lib/concierge/strings";
 import { signRenderToken, RENDER_TOKEN_FIELD } from "../src/lib/forms/guards";
-import { hexOf } from "./support";
+import { e2eAuthor, hexOf } from "./support";
 import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
@@ -525,7 +525,10 @@ test("a lead's chat files on the customer's inbox thread as Web chat, every turn
   } finally {
     const del = async (table: string, column: string, value: string | undefined) => {
       if (!value) return;
-      const { error } = await db.from(table).delete().eq(column, value);
+      // F-115: a spec's own raw service-client delete needs a `via` author, same as every other
+      // suite's cleanup (e2eAuthor, e2e/support.ts) — `contacts` is enforced; the rest take a
+      // harmless, unread header.
+      const { error } = await e2eAuthor(db.from(table).delete()).eq(column, value);
       expect(error, table).toBeNull();
       const { count, error: e2 } = await db.from(table).select("id", { count: "exact", head: true }).eq(column, value);
       expect(e2, table).toBeNull();

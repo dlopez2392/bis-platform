@@ -10,6 +10,8 @@ import {
   findConversationForContact,
 } from "../messaging";
 import { ensureHoldingContact } from "../voice";
+import { withAuthor } from "../row-author";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
@@ -122,10 +124,10 @@ describe("messaging", () => {
       await createMessage(db, accountId, {
         conversationId: esConvo.id, channel: "sms", direction: "inbound", body: "Necesito ayuda",
       }, "user_test");
-      const { error: signalErr } = await db.rpc("record_language_signal", {
+      const { error: signalErr } = await withAuthor(db.rpc("record_language_signal", {
         p_account: accountId, p_contact: esContact, p_language: "es", p_source: "form",
         p_at: new Date().toISOString(),
-      });
+      }), SEED_AUTHOR, SEED_VIA);
       if (signalErr) throw new Error(`record_language_signal failed: ${signalErr.message}`);
 
       const { id: noneContact } = await createContact(db, accountId, { firstName: "Pat" }, "user_test");

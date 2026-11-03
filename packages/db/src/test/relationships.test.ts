@@ -8,6 +8,8 @@ import {
   restoreRelationship, RelationshipDbError, type NewRelationship,
 } from "../relationships";
 import type { RelationshipKey } from "../relationship-keys";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 const base = (a: string, b: string, labelKey: RelationshipKey = "parent"): NewRelationship => ({
   contactId: a, relatedContactId: b, labelKey, customLabel: null, contactForm: null, relatedForm: null,
@@ -233,7 +235,7 @@ describe("relationships (spec §6)", () => {
     const b = await person(db, accountId, "B");
     const row = await addRelationship(db, accountId, base(a, b, "caregiver"), "user_test");
     const removed = await removeRelationship(db, accountId, row.id, "user_test");
-    const { error } = await db.from("contacts").delete().eq("id", b);
+    const { error } = await withAuthor(db.from("contacts").delete(), SEED_AUTHOR, SEED_VIA).eq("id", b);
     if (error) throw new Error(error.message);
     await expect(restoreRelationship(db, accountId, removed as typeof row, "user_test")).rejects.toMatchObject({ code: "23503" });
   }));

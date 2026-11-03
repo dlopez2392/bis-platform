@@ -6,6 +6,8 @@ import { phoneNational } from "./dedupe-keys";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 import { contactAuthor, type RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, eventActorOf } from "./row-author";
+import { isUserClient } from "./user-client";
 import type { ContactFieldName } from "./proposal-rules";
 
 /**
@@ -48,6 +50,10 @@ export type CreateContactInput = ContactInput & {
    *  Sofía passes it when a name on a shared number makes a new person. Read only by createContact (as
    *  assignedTo and author are); toRow never sees it. Absent = today's dedupe. */
   matchBy?: "email_only";
+  /** F-115 (plan Task 2 Step 7): what the insert was made through, sent on the author header and never stored on
+   *  the row: `ai_act:<id>` when Sofía logs a contact_created act for this insert, under that same id. Read only
+   *  by createContact (as assignedTo, author and matchBy are); toRow never sees it. Absent = no via. */
+  via?: string;
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -506,12 +512,17 @@ export async function createContact(
   // passes. Never through toRow — updateContact must never be able to
   // rewrite who made a contact.
   const author = input.author ?? contactAuthor(actorType, actorId);
-  const { data, error } = await db.from("contacts")
+  // F-115: an INSERT always snapshots the audited columns (0111), so this write always needs an
+  // author on the header too — reusing the SAME `author` this insert already stamps onto the row's
+  // own creation-provenance columns below, so "who made this contact" answers one way, not two.
+  const { data, error } = await withAuthor(db.from("contacts")
     .insert({
       account_id: accountId, ...toRow(input),
       ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
-      author_kind: author.authorKind, author_id: author.authorId,
-    }).select("id").single();
+      // contacts_author_id_person (0091): the row's own creation stamp names an id only for a person.
+      // The header still carries an import's user id, so record_changes keeps who ran the import.
+      author_kind: author.authorKind, author_id: author.authorKind === "person" ? author.authorId : null,
+    }), author, input.via).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
@@ -571,9 +582,12 @@ export async function flagMatchesOf(db: SupabaseClient, accountId: string, conta
 
 export async function updateContact(
   db: SupabaseClient, accountId: string, contactId: string,
-  input: Partial<ContactInput>, actorId: string,
-  actorType: ActorType = "user",
+  input: Partial<ContactInput>, author: RowAuthor,
+  /** F-115 (plan Task 2 Step 7): `ai_act:<id>` when the caller logs an act for this write (the web chat's fill of a
+   *  returning lead), under that same id; sent on the author header only. */
+  via?: string,
 ): Promise<{ flagged: boolean }> {
+  author = requireAuthor(db, author, "updateContact");
   // Read the phone as it stands BEFORE this write, so toRow can tell an
   // unchanged number (keep the flag) from a genuinely different one
   // (recompute it) — review C1. Only fetched when a phone is actually being
@@ -586,12 +600,22 @@ export async function updateContact(
     currentPhone = (data as { phone: string | null } | null)?.phone ?? null;
   }
   const row = toRow(input, currentPhone);
-  const { error } = await db.from("contacts")
+  const { error } = await withAuthor(db.from("contacts")
     .update({ ...row, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", contactId);
+    .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
+  const { actorId, actorType } = eventActorOf(author);
+  // F-115 fix: eventActorOf's mapping assumes a SERVICE-client caller (every authorKind but
+  // "person" implies one) — true for every OTHER updateContact caller, but the CSV import
+  // wizard runs this writer on dbForRequest() (a USER client) while still stamping authorKind
+  // "import" (item 8c: an imported value must read as "Import" on the change row, not as the
+  // signed-in person's own hand-entry). emit()'s own user-client branch (0053) refuses any
+  // actorType but "user" there — the record_event RPC it calls takes the actor from the
+  // request's own JWT and never reads actorType/actorId at all, so the check exists only to
+  // catch a client/actor mismatch, and "import" on a user client is exactly that mismatch
+  // without this override. The literal client decides here, not the author's kind.
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },
-    actorType);
+    isUserClient(db) ? "user" : actorType);
 
   // D-012: an edit that lands this contact's email or phone on another
   // contact's dedupe key used to create a silent duplicate — same key, two
@@ -623,9 +647,9 @@ export async function updateContact(
 export async function fillContactBlanks(
   db: SupabaseClient, accountId: string, contactId: string,
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<string[]> {
-  return (await fillContactBlanksReport(db, accountId, contactId, input, actorId, actorType)).fields;
+  return (await fillContactBlanksReport(db, accountId, contactId, input, author)).fields;
 }
 
 /** `patch`'s snake_case column name, keyed to the field name an ai_acts row names (item 8c). */
@@ -646,11 +670,15 @@ const COLUMN_FIELD: Readonly<Record<string, ContactFieldName>> = {
 export async function fillContactBlanksReport(
   db: SupabaseClient, accountId: string, requestedId: string,
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
+  /** F-115 (plan Task 2 Step 7): `ai_act:<id>` when the caller logs a contact_field_filled act for this fill,
+   *  under that same id; sent on the author header only. */
+  via?: string,
 ): Promise<{
   fields: string[]; flagged: boolean;
   prior: Partial<Record<ContactFieldName, string | null>>; written: Partial<Record<ContactFieldName, string>>;
 }> {
+  author = requireAuthor(db, author, "fillContactBlanksReport");
   let contactId = requestedId;
   let row = await getContact(db, accountId, contactId);
   if (!row) throw new Error("fillContactBlanks: no such contact");
@@ -713,11 +741,14 @@ export async function fillContactBlanksReport(
     if (typeof storedValue === "string") written[field] = storedValue;
   }
 
-  const { error } = await db.from("contacts")
+  const { error } = await withAuthor(db.from("contacts")
     .update({ ...writtenRow, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", contactId);
+    .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
-  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
+  {
+    const { actorId, actorType } = eventActorOf(author);
+    await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
+  }
   // D-012 via this fill path too: a returning caller's email/phone can land
   // on a DIFFERENT contact's dedupe key exactly as a direct edit can (the
   // call proposal approval, the /b booking form, finish-call, textback and
@@ -744,8 +775,9 @@ const FIELD_COLUMN: Readonly<Record<ContactFieldName, string>> = {
  */
 export async function restoreContactFieldIf(
   db: SupabaseClient, accountId: string, contactId: string, field: ContactFieldName,
-  expected: string | null, restore: string | null, actorId: string,
+  expected: string | null, restore: string | null, author: RowAuthor,
 ): Promise<"restored" | "changed"> {
+  author = requireAuthor(db, author, "restoreContactFieldIf");
   const column = FIELD_COLUMN[field];
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (field === "phone") {
@@ -755,7 +787,7 @@ export async function restoreContactFieldIf(
   } else {
     patch[column] = restore;
   }
-  let q = db.from("contacts").update(patch).eq("account_id", accountId).eq("id", contactId);
+  let q = withAuthor(db.from("contacts").update(patch), author).eq("account_id", accountId).eq("id", contactId);
   // PostgREST's `eq.null` is not guaranteed IS NULL across every filter context the way `.is()` is
   // (`updateContact`'s own phone comparisons take the same care); a restore back to a blank value
   // compares with `.is()`.
@@ -763,7 +795,8 @@ export async function restoreContactFieldIf(
   const { data, error } = await q.select("id");
   if (error) throw new Error(`restoreContactFieldIf failed: ${error.message}`);
   if ((data ?? []).length === 0) return "changed";
-  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: [column] }, "user");
+  const { actorId, actorType } = eventActorOf(author);
+  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: [column] }, actorType);
   return "restored";
 }
 
@@ -1430,7 +1463,13 @@ export async function deleteContacts(
      *  document vault's purge (0077). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
   },
+  /** F-115: who made the delete. Sent on both delete_internal_contacts calls (a SECURITY DEFINER whose session
+   *  role is the caller's): on a request client 0111 takes the token's sub and never reads it; on a service
+   *  client (the e2e cleanups and the live suites) it is the only author 0111 has, and enforce mode refuses the
+   *  delete without it. Required there, refused before any query (requireAuthor). */
+  author: RowAuthor,
 ): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number; skippedIds: string[]; lateKept: number }> {
+  author = requireAuthor(db, author, "deleteContacts");
   capBatch(contactIds, "deleteContacts");
   const none = { deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [] as string[], lateKept: 0 };
   if (contactIds.length === 0) return none;
@@ -1446,7 +1485,8 @@ export async function deleteContacts(
   const ours = unique.filter((id) => ourSet.has(id));
   if (ours.length === 0) return none;
   // Step 1b: the database's own Owner check, before the service client reads anything and before any purge.
-  const { error: ownerError } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: [] });
+  const { error: ownerError } = await withAuthor(
+    db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: [] }), author);
   if (ownerError) throw new Error(`deleteContacts refused: ${ownerError.message}`);
   // Step 2: every knowable blocker, before anything irreversible runs.
   const blockers = await contactDeleteBlockers(opts.serviceDb, accountId, ours);
@@ -1457,7 +1497,8 @@ export async function deleteContacts(
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { ...none, skippedBlocked: blocked.length, skippedFiles: kept.size, skippedIds: blocked };
   // Step 4: on the REQUEST client, so the database's own Owner check decides.
-  const { data, error } = await db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go });
+  const { data, error } = await withAuthor(
+    db.rpc("delete_internal_contacts", { p_account_id: accountId, p_contact_ids: go }), author);
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
   const deleted = new Set((data ?? []) as string[]);
   // Blocked between the read and the lock (a text arrived), or a file the purge left: kept by the database.
@@ -1572,12 +1613,13 @@ export async function readPhoneCountryFlag(db: SupabaseClient, accountId: string
 export async function setContactPhoneCountry(
   db: SupabaseClient, accountId: string, contactId: string,
   input: { expectedPhone: string | null; phone: string | null; unconfirmed: boolean },
-  actorId: string, actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<"updated" | "changed"> {
+  author = requireAuthor(db, author, "setContactPhoneCountry");
   // `expectedPhone: null` (the inline Undo restoring a number a CLEAR wiped)
   // needs `.is(...)`: PostgREST's `eq.null` never matches a NULL column.
-  let q = db.from("contacts")
-    .update({ phone: input.phone, phone_country_unconfirmed: input.unconfirmed, updated_at: new Date().toISOString() })
+  let q = withAuthor(db.from("contacts")
+    .update({ phone: input.phone, phone_country_unconfirmed: input.unconfirmed, updated_at: new Date().toISOString() }), author)
     .eq("account_id", accountId).eq("id", contactId);
   q = input.expectedPhone === null ? q.is("phone", null) : q.eq("phone", input.expectedPhone);
   const { data, error } = await q.select("id");
@@ -1599,8 +1641,11 @@ export async function setContactPhoneCountry(
     if (twinErr) console.error(`setContactPhoneCountry: duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
     if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
   }
-  await emit(db, accountId, "contact.updated", actorId,
-    { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
+  {
+    const { actorId, actorType } = eventActorOf(author);
+    await emit(db, accountId, "contact.updated", actorId,
+      { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
+  }
   return "updated";
 }
 
@@ -1637,17 +1682,21 @@ export function isLanguageTriple(v: unknown): v is LanguageTriple {
 export async function recordLanguageSignal(
   db: SupabaseClient, accountId: string, contactId: string,
   signal: { language: ContactLanguage; source: LanguageSignalSource; at: Date | string },
-  actorId: string, actorType: ActorType,
+  author: RowAuthor,
 ): Promise<boolean> {
+  author = requireAuthor(db, author, "recordLanguageSignal");
   const at = typeof signal.at === "string" ? signal.at : signal.at.toISOString();
-  const { data, error } = await db.rpc("record_language_signal", {
+  // F-115: record_language_signal is SECURITY INVOKER (0076), granted to service_role only — the
+  // session role stays service_role throughout, so 0111's capture needs the header (precedence step 4).
+  const { data, error } = await withAuthor(db.rpc("record_language_signal", {
     p_account: accountId, p_contact: contactId, p_language: signal.language, p_source: signal.source, p_at: at,
-  });
+  }), author);
   if (error) throw new Error(`recordLanguageSignal failed: ${error.message}`);
   if (data !== true) return false;
   // Review M-3 (R3-M11, as restoreContactLanguage below): the rpc has COMMITTED the language by now,
   // so an emit failure is logged, never thrown — a throw would report a failed sign that landed.
   try {
+    const { actorId, actorType } = eventActorOf(author);
     await emit(db, accountId, "contact.language_set", actorId,
       { contactId, language: signal.language, source: signal.source }, actorType);
   } catch (e) {
@@ -1658,8 +1707,10 @@ export async function recordLanguageSignal(
 
 async function writeLanguage(
   db: SupabaseClient, accountId: string, contactId: string, patch: Record<string, string | null>,
+  author: RowAuthor,
 ): Promise<boolean> {
-  const { data, error } = await db.from("contacts").update({ ...patch, updated_at: new Date().toISOString() })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .update({ ...patch, updated_at: new Date().toISOString() }), author)
     .eq("account_id", accountId).eq("id", contactId).select("id");
   if (error) throw new Error(`contact language write failed: ${error.message}`);
   return (data ?? []).length > 0;
@@ -1672,12 +1723,16 @@ async function writeLanguage(
  * means it actually landed).
  */
 export async function setContactLanguage(
-  db: SupabaseClient, accountId: string, contactId: string, language: ContactLanguage, actorId: string,
+  db: SupabaseClient, accountId: string, contactId: string, language: ContactLanguage, author: RowAuthor,
 ): Promise<{ wrote: boolean; setAt: string }> {
+  author = requireAuthor(db, author, "setContactLanguage");
   const setAt = new Date().toISOString();
   const wrote = await writeLanguage(db, accountId, contactId,
-    { language, language_source: "staff", language_set_at: setAt });
-  if (wrote) await emit(db, accountId, "contact.language_set", actorId, { contactId, language, source: "staff" }, "user");
+    { language, language_source: "staff", language_set_at: setAt }, author);
+  if (wrote) {
+    const { actorId, actorType } = eventActorOf(author);
+    await emit(db, accountId, "contact.language_set", actorId, { contactId, language, source: "staff" }, actorType);
+  }
   return { wrote, setAt };
 }
 
@@ -1699,15 +1754,16 @@ export type LanguageRestoreOutcome = "updated" | "changed";
  */
 export async function restoreContactLanguage(
   db: SupabaseClient, accountId: string, contactId: string,
-  prior: LanguageTriple, written: LanguageTriple, actorId: string,
+  prior: LanguageTriple, written: LanguageTriple, author: RowAuthor,
 ): Promise<LanguageRestoreOutcome> {
+  author = requireAuthor(db, author, "restoreContactLanguage");
   if (!isLanguageTriple(prior) || !isLanguageTriple(written)) {
     throw new Error("restoreContactLanguage: not a language triple");
   }
-  let q = db.from("contacts").update({
+  let q = withAuthor(db.from("contacts").update({
     language: prior.language, language_source: prior.source, language_set_at: prior.setAt,
     updated_at: new Date().toISOString(),
-  }).eq("account_id", accountId).eq("id", contactId);
+  }), author).eq("account_id", accountId).eq("id", contactId);
   q = written.language === null ? q.is("language", null) : q.eq("language", written.language);
   q = written.source === null ? q.is("language_source", null) : q.eq("language_source", written.source);
   q = written.setAt === null ? q.is("language_set_at", null) : q.eq("language_set_at", written.setAt);
@@ -1715,8 +1771,9 @@ export async function restoreContactLanguage(
   if (error) throw new Error(`contact language write failed: ${error.message}`);
   if (!data?.length) return "changed";
   try {
+    const { actorId, actorType } = eventActorOf(author);
     await emit(db, accountId, "contact.language_set", actorId,
-      { contactId, language: prior.language, source: prior.source, undo: true }, "user");
+      { contactId, language: prior.language, source: prior.source, undo: true }, actorType);
   } catch (e) {
     console.error(`restoreContactLanguage: account ${accountId} contact ${contactId}: event emit failed after the write committed: ${(e as Error).message}`);
   }

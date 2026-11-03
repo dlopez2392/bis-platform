@@ -7,7 +7,7 @@ import {
 } from "@bis/db";
 import { proposalExpiresAt } from "@bis/db/proposal-rules";
 import { m, type MessageKey } from "../src/lib/messages";
-import { readClientFixture } from "./support";
+import { readClientFixture, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from the Playwright runner
 // process directly (seeding, cleanup), not through a Next request (calls.spec.ts, work-queue.spec.ts,
@@ -184,7 +184,7 @@ test.afterAll(async () => {
   if (phoneNumberId) await step("phone_numbers", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", phoneNumberId));
   await step("tasks (defensive)", () => db.from("tasks").delete().eq("account_id", accountId).eq("title", taskTitle));
   if (opportunityId) await step("opportunities", () => db.from("opportunities").delete().eq("account_id", accountId).eq("id", opportunityId));
-  if (contactId) await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).eq("id", contactId));
+  if (contactId) await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId));
 
   // Re-read to prove each is gone (record-summary.spec.ts's own cleanup discipline).
   const checks: Array<[string, () => Promise<number>]> = [

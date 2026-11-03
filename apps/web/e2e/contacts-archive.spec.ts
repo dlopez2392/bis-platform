@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { test, expect, type Page } from "./fixtures/test";
 import { serviceDb, deleteContacts } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -70,7 +71,7 @@ test.afterAll(async () => {
   const svc = serviceDb();
   const ids = [archiveOneId, archiveTwoId].filter((id) => id.length > 0);
   if (ids.length === 0) return;
-  const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc });
+  const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc }, E2E_AUTHOR);
   if (result.deleted !== ids.length) {
     throw new Error(
       `contacts-archive e2e cleanup: deleteContacts deleted ${result.deleted} of ${ids.length} ` +

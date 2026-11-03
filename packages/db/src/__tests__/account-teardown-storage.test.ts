@@ -10,7 +10,14 @@ function fakeDb(paths: string[], removeError: string | null) {
   const db = {
     from: (table: string) => ({
       select: () => ({ eq: (col: string, val: string) => { filters.push(`select ${table} ${col}=${val}`); return { order: () => ({ range: async () => ({ data: table === "document_versions" ? paths.map((p) => ({ storage_path: p })) : [], error: null }) }) }; } }),
-      delete: () => ({ eq: async (col: string, val: string) => { filters.push(`delete ${table} ${col}=${val}`); log.push(`rows:${table}`); return { error: null }; } }),
+      // F-115: withAuthor() calls setHeader() right after .delete(), before .eq() — a no-op here.
+      delete: () => {
+        const chain = {
+          eq: async (col: string, val: string) => { filters.push(`delete ${table} ${col}=${val}`); log.push(`rows:${table}`); return { error: null }; },
+          setHeader: () => chain,
+        };
+        return chain;
+      },
     }),
     storage: { from: (b: string) => ({ remove: async (ps: string[]) => { log.push(`objects:${b}:${ps.join(",")}`); return { data: [], error: removeError ? { message: removeError } : null }; } }) },
   };
@@ -50,7 +57,11 @@ describe("deleteAccountCascade reads every page of paths (the 1000-row page Post
       from: (table: string) => ({
         select: () => ({ eq: () => ({ order: () => ({ range: async (from: number, to: number) =>
           ({ data: table === "document_versions" ? all.slice(from, to + 1).map((p) => ({ storage_path: p })) : [], error: null }) }) }) }),
-        delete: () => ({ eq: async () => ({ error: null }) }),
+        // F-115: withAuthor() calls setHeader() right after .delete(), before .eq() — a no-op here.
+        delete: () => {
+          const chain = { eq: async () => ({ error: null }), setHeader: () => chain };
+          return chain;
+        },
       }),
       storage: { from: () => ({ remove: async (ps: string[]) => {
         removed.push(...ps); biggest = Math.max(biggest, ps.length); return { data: [], error: null };

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, getOrCreateCalendar, createBooking } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { SEEDED_ACCOUNT_NAME } from "./support";
+import { SEEDED_ACCOUNT_NAME, e2eAuthor } from "./support";
 
 // This file's last describe block talks to Supabase directly from the
 // Playwright runner process (creating the booking the closing assertion
@@ -225,7 +225,7 @@ test.describe("It happened closes the loop the milestone exists for", () => {
       // same-run retry of this spec should not find the previous attempt's
       // booking still sitting on this contact.
       await db.from("bookings").delete().eq("id", bookingId);
-      await db.from("contacts").delete().eq("id", contactId);
+      await e2eAuthor(db.from("contacts").delete()).eq("id", contactId);
     }
   });
 });

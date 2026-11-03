@@ -306,7 +306,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
   });
 
   it("the registry runs the billing pause FIRST (a pause stamped this tick is read by every send gate in the same tick), then the release pass, then the cancel-notice sweep (F-048), then the job-hold backstop (F-046), then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: register billingPause after releaseHeld, move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "cancelNotices", "jobHolds", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+    expect(PASSES.map((p) => p.key)).toEqual(["billingPause", "releaseHeld", "cancelNotices", "jobHolds", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "recordChangesAudit", "usageReport", "opsWatch"]);
   });
 
   /**

@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAs, sendAuthor, SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import { bookingWasMoved, setBookingStatus, undoOperatorCancel } from "../booking";
@@ -72,8 +73,17 @@ const undoBooking = (c: Client, acct: string, act: string) =>
   svc(c, async () => (await attempt(c, "select public.undo_ai_booking_act($1, $2, $3, $4) as r", [acct, act, BY, NOW.toISOString()])).rows[0]!.r as string);
 const heldBy = (c: Client, acct: string, act: string) =>
   svc(c, async () => (await attempt(c, "select public.ai_contact_held_by($1, $2) as r", [acct, act])).rows[0]!.r as string[]);
+/** F-115: as undoAiContactCreated sends it (ai-acts.ts; its one caller, apps/web lib/ai-acts/actions.ts, passes the
+ *  person who pressed Undo): the undoer, via the act it undoes. Cleared after, as the next request carries none. */
 const undoContact = (c: Client, acct: string, act: string) =>
-  svc(c, async () => (await attempt(c, "select public.undo_ai_contact_created($1, $2) as r", [acct, act])).rows[0]!.r as string);
+  svc(c, async () => {
+    await sendAuthor(c, { authorKind: "person", authorId: BY }, `ai_act:${act}`);
+    try {
+      return (await attempt(c, "select public.undo_ai_contact_created($1, $2) as r", [acct, act])).rows[0]!.r as string;
+    } finally {
+      await sendAuthor(c, null);
+    }
+  });
 
 async function seed(c: Client) {
   const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
@@ -570,7 +580,7 @@ describe("0091: undo_ai_booking_act, booking_rescheduled (plan Task 1 case 8)", 
         if (r.error || r.data === null) throw new Error(`${what}: ${r.error?.message ?? "no row"}`);
         return r.data;
       };
-      const contact = must(await db.from("contacts").insert({ account_id: accountId, first_name: "Ana" }).select("id").single(), "contact") as { id: string };
+      const contact = must(await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: "Ana" }), SEED_AUTHOR, SEED_VIA).select("id").single(), "contact") as { id: string };
       const calendar = must(await db.from("calendars").insert({ account_id: accountId, public_id: `cal_aia_pg_${RUN}` }).select("id").single(), "calendar") as { id: string };
       const phone = must(await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single(), "phone") as { id: string };
       const now = new Date();
@@ -847,7 +857,7 @@ describe("0091: ai_contact_held_by, table by table (plan Task 1 case 9)", () => 
         const { data: acct, error } = await db.from("accounts").update({ client_access_enabled: true }).eq("id", accountId).select("clerk_org_id").single();
         if (error) throw new Error(error.message);
         await must(db.from("memberships").insert({ user_id: (userRow.data as { id: string }).id, scope: "account", account_id: accountId, role: "owner" }).select("id").single(), "membership");
-        const z = await must(db.from("contacts").insert({ account_id: accountId, first_name: "Zoe" }).select("id").single(), "contact");
+        const z = await must(withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: "Zoe" }), SEED_AUTHOR, SEED_VIA).select("id").single(), "contact");
         const ph = await must(db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single(), "phone");
         const k = await must(db.from("calls").insert({ account_id: accountId, phone_number_id: ph.id, contact_id: z.id }).select("id").single(), "call");
         const v = await must(db.from("conversations").insert({ account_id: accountId, contact_id: z.id }).select("id").single(), "conversation");

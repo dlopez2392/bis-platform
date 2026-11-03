@@ -510,7 +510,7 @@ describe("groupActivityMembers (S-03 part 2b, C5, D7)", () => {
     withTestAccount(async (db, accountId) => {
       const h = await household(db, accountId, 2);
       const [c0, c1] = h.ids;
-      await recordLanguageSignal(db, accountId, c0!, { language: "es", source: "booking", at: "2026-10-03T15:00:00Z" }, "public", "system");
+      await recordLanguageSignal(db, accountId, c0!, { language: "es", source: "booking", at: "2026-10-03T15:00:00Z" }, { authorKind: "customer", authorId: "public" });
       const people = await groupActivityMembers(db, accountId, h.groupId, 10);
       const byId = new Map(people.people.map((p) => [p.contactId, p]));
       expect(byId.get(c0!)).toMatchObject({ language: "es" });

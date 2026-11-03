@@ -869,7 +869,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: "55 1234 5678" }));
     expect(updateContact).toHaveBeenCalledWith(
       expect.anything(), "acct_1", "contact_1",
-      expect.objectContaining({ phone: "55 1234 5678" }), "form", "system");
+      expect.objectContaining({ phone: "55 1234 5678" }), { authorKind: "customer", authorId: "form" }, undefined);
   });
 
   it("a returning contact's referral answer fills a blank custom.referred_by the same way any other custom field would (F-018/F-157)", async () => {
@@ -887,7 +887,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     }));
     expect(updateContact).toHaveBeenCalledWith(
       expect.anything(), "acct_1", "contact_1",
-      expect.objectContaining({ custom: { referred_by: "Jane Smith" } }), "form", "system");
+      expect.objectContaining({ custom: { referred_by: "Jane Smith" } }), { authorKind: "customer", authorId: "form" }, undefined);
   });
 
   it("a THROWING instant reply never fails the submission, but IS recorded as processing_error — a crash must be as visible as a refusal (mutation: drop the errors.push in the catch → FAILS)", async () => {
@@ -1047,12 +1047,12 @@ describe("submitFormAction — the form's language becomes the contact's (S-09 �
   const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
   const submit = (locale: string) => submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale, first_name: "María" }));
 
-  it("a Spanish submission on an English account signals form/es with the form/system pair (mutation: never signal -> FAILS)", async () => {
+  it("a Spanish submission on an English account signals form/es as the customer (mutation: never signal -> FAILS)", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(withName());
     expect((await submit("es")).status).toBe("success");
     expect(recordLanguageSignalMock).toHaveBeenCalledTimes(1);
-    const [, accountId, contactId, signal, actorId, actorType] = recordLanguageSignalMock.mock.calls[0]!;
-    expect([accountId, contactId, signal.language, signal.source, actorId, actorType]).toEqual(["acct_1", "contact_1", "es", "form", "form", "system"]);
+    const [, accountId, contactId, signal, author] = recordLanguageSignalMock.mock.calls[0]!;
+    expect([accountId, contactId, signal.language, signal.source, author]).toEqual(["acct_1", "contact_1", "es", "form", { authorKind: "customer", authorId: "form" }]);
   });
 
   it("an English submission on an English account says nothing (mutation: always signal -> FAILS)", async () => {

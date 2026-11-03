@@ -6,6 +6,7 @@ import { m } from "../src/lib/messages";
 import { dayKey, addDays } from "../src/lib/business-status/status";
 import { agendaWindow, agendaTime, wallToInstant } from "../src/lib/booking/agenda-window";
 import { UNDO_WINDOW_MS } from "../src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/undo-window";
+import { e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -201,8 +202,8 @@ test.beforeAll(async () => {
     throw new Error("calendar-agenda e2e: no weekday 2-8 days out — should be impossible in a 7-day window");
   }
 
-  const { data: contact, error: contactErr } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: CONTACT_FIRST, last_name: CONTACT_LAST, email: CONTACT_EMAIL })
+  const { data: contact, error: contactErr } = await e2eAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: CONTACT_FIRST, last_name: CONTACT_LAST, email: CONTACT_EMAIL }))
     .select("id").single();
   if (contactErr || !contact) throw new Error(`calendar-agenda e2e: seeding the contact failed: ${contactErr?.message ?? "no row"}`);
   contactId = contact.id as string;
@@ -235,7 +236,7 @@ test.afterAll(async () => {
       fail(`calendar-agenda e2e cleanup: deleting this contact's bookings failed: ${String(e)}`);
     }
     try {
-      await db.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+      await e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
     } catch (e) {
       fail(`calendar-agenda e2e cleanup: deleting the seeded contact failed: ${String(e)}`);
     }

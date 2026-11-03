@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 import { parseAiAct, type AiAct, type NewAiAct } from "./ai-act-rules";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor } from "./row-author";
 
 /**
  * One table for every act Sofia or the web chat takes live (0091, item 8c). Every read and write is
@@ -22,6 +25,10 @@ type Row = {
 
 function toRow(accountId: string, a: NewAiAct) {
   return {
+    // F-115 (plan Task 2 Step 7): a caller that minted the id before its write (so the write's `via` could name
+    // it) keeps it. Every other row gets one HERE rather than from the column default: supabase-js sends a key
+    // missing from one row of a bulk insert as NULL (defaultToNull), and a NULL primary key is a 23502.
+    id: a.id ?? randomUUID(),
     account_id: accountId, actor: a.actor, call_id: a.callId, chat_id: a.chatId, contact_id: a.contactId,
     kind: a.kind, target: a.target, before: a.before, after: a.after,
   };
@@ -123,9 +130,16 @@ export async function aiContactHeldBy(db: SupabaseClient, accountId: string, act
 export type AiContactUndoOutcome = "deleted" | "has_activity" | "has_booking" | "gone";
 
 /** Undo of a contact Sofia created (0091's `undo_ai_contact_created`, SERVICE client only). Answers
- *  what happened; the call stays in Calls, unlinked, on `"deleted"` (D4). THROWS on a database error. */
-export async function undoAiContactCreated(db: SupabaseClient, accountId: string, actId: string): Promise<AiContactUndoOutcome> {
-  const { data, error } = await db.rpc("undo_ai_contact_created", { p_account_id: accountId, p_act_id: actId });
+ *  what happened; the call stays in Calls, unlinked, on `"deleted"` (D4). THROWS on a database error.
+ *  F-115: `undo_ai_contact_created` is SECURITY INVOKER (correction 3), called on a service client,
+ *  so 0111's capture needs the header (precedence step 4) — the undoer is a person, `via` the act
+ *  this undoes. */
+export async function undoAiContactCreated(
+  db: SupabaseClient, accountId: string, actId: string, author: RowAuthor,
+): Promise<AiContactUndoOutcome> {
+  author = requireAuthor(db, author, "undoAiContactCreated");
+  const { data, error } = await withAuthor(
+    db.rpc("undo_ai_contact_created", { p_account_id: accountId, p_act_id: actId }), author, `ai_act:${actId}`);
   if (error) throw new Error(`undoAiContactCreated failed: ${error.message}`);
   return data as AiContactUndoOutcome;
 }

@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every spec that talks to Supabase from the
 // runner process rather than through a Next request.
@@ -55,7 +56,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (!contactId) return;
-  const { error } = await serviceDb().from("contacts").delete().eq("id", contactId);
+  const { error } = await e2eAuthor(serviceDb().from("contacts").delete()).eq("id", contactId);
   if (error) console.error(`consent-phone-country e2e: cleanup failed: ${error.message}`);
 });
 

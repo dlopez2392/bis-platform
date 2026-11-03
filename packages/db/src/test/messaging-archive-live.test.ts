@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import { createContact } from "../contacts";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import {
   ensureConversation, createMessage, incrementUnreadCount, clearUnreadCount,
   listConversations, searchConversations, sumUnreadCount,
@@ -103,8 +105,8 @@ describe("an archived contact's thread leaves the inbox and search while nothing
     try {
       await withTestAccount(async (db, accountId) => {
         const tech = await person(db, "tech");
-        const { data: contact, error } = await db.from("contacts")
-          .insert({ account_id: accountId, first_name: "Mine", assigned_to: tech }).select("id").single();
+        const { data: contact, error } = await withAuthor(db.from("contacts")
+          .insert({ account_id: accountId, first_name: "Mine", assigned_to: tech }), SEED_AUTHOR, SEED_VIA).select("id").single();
         if (error) throw error;
         const convo = await ensureConversation(db, accountId, contact!.id as string, "user_test");
         await createMessage(db, accountId,

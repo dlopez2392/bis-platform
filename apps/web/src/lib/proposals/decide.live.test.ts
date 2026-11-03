@@ -17,6 +17,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import {
   serviceDb, createAccount, deleteAccountCascade, createContact, getContact, getProposal, insertProposal,
   decideProposal, ensureDefaultPipeline, createOpportunity, moveOpportunityToStage, setOpportunityStatus,
+  withAuthor,
 } from "@bis/db";
 import { proposalExpiresAt, type ProposalInput } from "@bis/db/proposal-rules";
 import { makeTr } from "@/lib/record/copy";
@@ -310,7 +311,7 @@ describe("Accept", () => {
       const [c1, c2] = [await seedCall(db, a), await seedCall(db, a)];
       const k = await seedContact(db, a, { firstName: "Rosa" });
       const id = await seed(db, a, { callId: c1, contactId: k, kind: "contact_field", payload: { field: "phone", value: "956 555 0101" } });
-      const { error } = await db.from("contacts").update({ phone: "+19565550177" }).eq("id", k);
+      const { error } = await withAuthor(db.from("contacts").update({ phone: "+19565550177" }).eq("id", k), { authorKind: "automation", authorId: null }, "seed");
       expect(error).toBeNull();
       expect(await acceptSuggestion(deps(a), id)).toEqual({ ok: false, error: "Out of date: the phone was filled in since." });
       const row = await rowOf(db, a, id);
@@ -657,7 +658,8 @@ describe("Undo", () => {
       const k = await seedContact(db, a, { firstName: "Rosa" });
       const field = await seed(db, a, { callId: calls[2]!, contactId: k, kind: "contact_field", payload: { field: "phone", value: "956 555 0101" } });
       expect(await acceptSuggestion(deps(a), field)).toMatchObject({ ok: true });
-      await db.from("contacts").update({ phone: "+19565550177" }).eq("id", k);
+      const { error: fieldErr } = await withAuthor(db.from("contacts").update({ phone: "+19565550177" }).eq("id", k), { authorKind: "automation", authorId: null }, "seed");
+      expect(fieldErr).toBeNull();
       expect(await undoSuggestion(deps(a), field)).toEqual(changed);
       expect((await getContact(db, a, k))!.phone).toBe("+19565550177");
       expect((await rowOf(db, a, field)).status).toBe("accepted");

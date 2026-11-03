@@ -187,7 +187,7 @@ describe("listFeedBookings and rescheduleRoots, live", () => {
       const ids = async (tech: string | null) => (await listFeedBookings(db, a, { now: new Date(), technicianUserId: tech })).rows.map((r) => r.id);
       expect(await ids(t)).toEqual([b1]);
       expect(await ids(null)).toEqual([b1, b2, b3]);
-      await assignContacts(db, a, [c2], t, BY);
+      await assignContacts(db, a, [c2], t, { authorKind: "person", authorId: BY });
       expect(await ids(t)).toEqual([b1, b2]);
     });
   });

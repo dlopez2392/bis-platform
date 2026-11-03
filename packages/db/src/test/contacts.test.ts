@@ -19,6 +19,8 @@ import { createDocument, reserveDocumentVersion, markDocumentVersionReady, purge
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureReplyToken, readReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN } from "../inbound-email";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -26,8 +28,8 @@ import { ensureReplyToken, readReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN 
 async function seedContact(
   db: any, accountId: string, input: { firstName?: string; lastName?: string },
 ) {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: input.firstName, last_name: input.lastName }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error || !data) throw new Error(`seedContact failed: ${error?.message}`);
   return { id: data.id as string };
@@ -43,7 +45,7 @@ async function seedContacts(db: any, accountId: string, count: number, at: strin
   const rows = Array.from({ length: count }, (_, i) => ({
     account_id: accountId, first_name: `Seed ${i}`, created_at: at,
   }));
-  const { data, error } = await db.from("contacts").insert(rows).select("id");
+  const { data, error } = await withAuthor(db.from("contacts").insert(rows), SEED_AUTHOR, SEED_VIA).select("id");
   if (error) throw new Error(`seedContacts failed: ${error.message}`);
   return (data ?? []).map((r: { id: string }) => r.id);
 }
@@ -53,8 +55,8 @@ async function seedContacts(db: any, accountId: string, count: number, at: strin
  *  positions in the `created_at desc, id desc` ordering `listContacts` pages
  *  by. Bypasses createContact for the same reasons as the helpers above. */
 async function seedContactAt(db: any, accountId: string, firstName: string, at: string) {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: firstName, created_at: at })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: firstName, created_at: at }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error || !data) throw new Error(`seedContactAt failed: ${error?.message}`);
   return { id: data.id as string };
@@ -78,7 +80,7 @@ describe("contacts service", () => {
   it("updates fields + custom, emits contact.updated", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createContact(db, accountId, { firstName: "Joe" }, "user_test");
-      await updateContact(db, accountId, id, { phone: "+19565550100", custom: { referral: "yes" } }, "user_test");
+      await updateContact(db, accountId, id, { phone: "+19565550100", custom: { referral: "yes" } }, { authorKind: "person", authorId: "user_test" });
       const row = await getContact(db, accountId, id);
       expect(row?.phone).toBe("+19565550100");
       expect((row?.custom as any).referral).toBe("yes");
@@ -87,7 +89,7 @@ describe("contacts service", () => {
   it("updateContact can no longer write company_name; only the group sync sets it (S-02 A2; mutation: restore toRow's company_name line -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createContact(db, accountId, { firstName: "Ana", email: "ana.cn@example.com" }, "user_test");
-      await updateContact(db, accountId, id, { companyName: "Acme" } as never, "user_test");
+      await updateContact(db, accountId, id, { companyName: "Acme" } as never, { authorKind: "person", authorId: "user_test" });
       expect((await getContact(db, accountId, id))!.company_name).toBeNull();
     }));
 
@@ -306,7 +308,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
       const other = await createContact(db, accountId,
         { firstName: "Other", email: "other@example.com" }, "user_test");
 
-      expect(await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, "user_test"))
+      expect(await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, { authorKind: "person", authorId: "user_test" }))
         .toEqual({ flagged: true });
 
       // The edit itself is never refused — the operator's edit is the truth
@@ -331,7 +333,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
 
       // Different punctuation, same ten digits — the dedupe key, not an
       // exact string match, is what must catch this.
-      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, "user_test"))
+      expect(await updateContact(db, accountId, other.id, { phone: "+19562921696" }, { authorKind: "person", authorId: "user_test" }))
         .toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
@@ -351,7 +353,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
 
       // Re-saving Other's OWN number, unchanged, must never flag it against
       // itself or anyone else.
-      await updateContact(db, accountId, other.id, { phone: "956-555-0101" }, "user_test");
+      await updateContact(db, accountId, other.id, { phone: "956-555-0101" }, { authorKind: "person", authorId: "user_test" });
 
       const { data } = await db.from("contact_duplicate_flags")
         .select("id").eq("account_id", accountId);
@@ -365,14 +367,14 @@ describe("updateContact dedupe on edit (D-012)", () => {
       const other = await createContact(db, accountId,
         { firstName: "Other", email: "other@example.com" }, "user_test");
 
-      await updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test");
+      await updateContact(db, accountId, other.id, { email: "held@example.com" }, { authorKind: "person", authorId: "user_test" });
       // The SAME colliding value, saved again — re-running the dedupe check
       // against a pair already flagged, which is the unique index's repeat
       // (23505) this test actually exercises. A re-save with an UNRELATED
       // field (the old version of this test used `{ lastName: "Touched" }`)
       // never touches row.email at all, so it never re-ran the check — that
       // version could not fail no matter how the repeat was handled.
-      await expect(updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test"))
+      await expect(updateContact(db, accountId, other.id, { email: "held@example.com" }, { authorKind: "person", authorId: "user_test" }))
         .resolves.toEqual({ flagged: true });
 
       const [lo, hi] = [held.id, other.id].sort();
@@ -396,7 +398,7 @@ describe("updateContact dedupe on edit (D-012)", () => {
           { firstName: "Solo", email: "solo@example.com" }, "user_test");
 
         const result = await updateContact(db, accountId, c.id,
-          { email: "nobody-else-has-this@example.com" }, "user_test");
+          { email: "nobody-else-has-this@example.com" }, { authorKind: "person", authorId: "user_test" });
 
         expect(result).toEqual({ flagged: false });
         expect(errorSpy).not.toHaveBeenCalled();
@@ -414,7 +416,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000020" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Ignored", email: "ANA@Example.com " }, "t");
+        { firstName: "Ignored", email: "ANA@Example.com " }, { authorKind: "person", authorId: "t" });
       expect(filled.sort()).toEqual(["email"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Ana");            // IRON RULE: not overwritten
@@ -425,7 +427,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Caller", phone: "+15550000021" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Dan", lastName: "Lopez" }, "t");
+        { firstName: "Dan", lastName: "Lopez" }, { authorKind: "person", authorId: "t" });
       expect(filled.sort()).toEqual(["first_name", "last_name"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Dan");
@@ -435,7 +437,7 @@ describe("fillContactBlanks", () => {
   it("does NOT treat a real first name with blank last name as a placeholder", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Madonna", phone: "+15550000022" }, "t");
-      expect(await fillContactBlanks(db, accountId, c.id, { firstName: "Dan" }, "t")).toEqual([]);
+      expect(await fillContactBlanks(db, accountId, c.id, { firstName: "Dan" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   it("no-ops cleanly when nothing is blank (no update, no event)", () =>
@@ -443,14 +445,14 @@ describe("fillContactBlanks", () => {
       const c = await createContact(db, accountId,
         { firstName: "A", lastName: "B", email: "a@b.co", phone: "+15550000023" }, "t");
       expect(await fillContactBlanks(db, accountId, c.id,
-        { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, "t")).toEqual([]);
+        { firstName: "X", lastName: "Y", email: "x@y.co", phone: "+15550000024" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   it("fills a blank last_name independently when the incoming first name matches", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "John", phone: "+15550000025" }, "t");
       const filled = await fillContactBlanks(db, accountId, c.id,
-        { firstName: "John", lastName: "Smith" }, "t");
+        { firstName: "John", lastName: "Smith" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["last_name"]);
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("John");
@@ -461,7 +463,7 @@ describe("fillContactBlanks", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000026" }, "t");
       expect(await fillContactBlanks(db, accountId, c.id,
-        { firstName: "Maria", lastName: "Smith" }, "t")).toEqual([]);
+        { firstName: "Maria", lastName: "Smith" }, { authorKind: "person", authorId: "t" })).toEqual([]);
     }));
 
   // D-012 via a second path: a proposal-approval fill (the shape
@@ -478,7 +480,7 @@ describe("fillContactBlanks", () => {
 
       // The single-field shape acceptProposal actually calls with.
       const filled = await fillContactBlanks(db, accountId, blank.id,
-        { email: "HELD@example.com" }, "t");
+        { email: "HELD@example.com" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["email"]);
 
       const [lo, hi] = [held.id, blank.id].sort();
@@ -496,7 +498,7 @@ describe("fillContactBlanks", () => {
       const blank = await createContact(db, accountId, { firstName: "Blank" }, "t");
 
       const filled = await fillContactBlanks(db, accountId, blank.id,
-        { phone: "+19562921696" }, "t");
+        { phone: "+19562921696" }, { authorKind: "person", authorId: "t" });
       expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
 
       const [lo, hi] = [held.id, blank.id].sort();
@@ -826,7 +828,7 @@ describe("bulk contact ops", () => {
         account_id: accountId, contact_id: blocked.id, pipeline_id: pipe!.id,
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
-      const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [free.id, blocked.id], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [blocked.id], lateKept: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
       expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
@@ -836,7 +838,7 @@ describe("bulk contact ops", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
       await addTagToContact(db, accountId, c.id, "temp");
-      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c.id, "00000000-0000-0000-0000-000000000000"], { serviceDb: db }, SEED_AUTHOR);
       expect(r.deleted).toBe(1); // the bogus id is not counted, not an error
     }));
 
@@ -955,7 +957,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
       const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
       const seen: string[][] = [];
-      const r = await deleteContacts(db, accountId, [keep, go], { serviceDb: db, beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      const r = await deleteContacts(db, accountId, [keep, go], { serviceDb: db, beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } }, SEED_AUTHOR);
       expect(seen).toEqual([[keep, go].sort()]);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, keep)).not.toBeNull();
@@ -978,7 +980,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
         const res = await deleteContacts(db, accountA, [bContact], { serviceDb: db, beforeDelete: async (ids) => {
           seen.push([...ids]);
           return (await purgeContactDocuments(svc, accountA, ids, "user_owner")).keptContacts;
-        } });
+        } }, SEED_AUTHOR);
         expect(res).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(seen).toEqual([]);
         expect(removed).toEqual([]);
@@ -993,7 +995,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
       await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 1 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
@@ -1006,7 +1008,7 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       if (num.error) throw num.error;
       const call = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.data.id, contact_id: c }).select("id").single();
       if (call.error) throw call.error;
-      const r = await deleteContacts(db, accountId, [c, free], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c, free], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
       expect(await getContact(db, accountId, free)).toBeNull();
@@ -1033,7 +1035,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
     withTestAccount(async (db, accountId) => {
       const c = (await createContact(db, accountId, { firstName: "Viewed" }, "user_t")).id;
       await ensureReplyToken(db, accountId, c, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
       expect(await getContact(db, accountId, c)).toBeNull();
       expect(await convs(db, accountId, c)).toEqual([]);
@@ -1044,7 +1046,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const c = (await createContact(db, accountId, { firstName: "Talked" }, "user_t")).id;
       const conv = await ensureConversation(db, accountId, c, "user_t");
       await createMessage(db, accountId, { conversationId: conv.id, channel: "email", direction: "outbound", body: "hi" }, "user_t");
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await getContact(db, accountId, c)).not.toBeNull();
       expect(await convs(db, accountId, c)).toHaveLength(1);
@@ -1063,7 +1065,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" }, attachmentCount: 0,
         status: "held", holdReason: "unverified", decidedBy: null, receivedAt: new Date().toISOString(),
       });
-      const r = await deleteContacts(db, accountId, [c], { serviceDb: db });
+      const r = await deleteContacts(db, accountId, [c], { serviceDb: db }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0, skippedIds: [c], lateKept: 0 });
       expect(await convs(db, accountId, c)).toHaveLength(1);
     }));
@@ -1086,7 +1088,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         account_id: accountId, contact_id: dealt, pipeline_id: pipe!.id, stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
       if (o.error) throw o.error;
-      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] });
+      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { serviceDb: db, beforeDelete: async () => [kept] }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1, skippedIds: [dealt], lateKept: 0 });
       // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept).
       expect(await getContact(db, accountId, dealt)).not.toBeNull();
@@ -1107,7 +1109,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       withTestAccount(async (db, accountA) => {
         const b = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
         await ensureConversation(dbB, accountB, b, "user_t");
-        const r = await deleteContacts(db, accountA, [b], { serviceDb: db });
+        const r = await deleteContacts(db, accountA, [b], { serviceDb: db }, SEED_AUTHOR);
         expect(r).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0, skippedIds: [], lateKept: 0 });
         expect(await getContact(dbB, accountB, b)).not.toBeNull();
         expect(await convs(dbB, accountB, b)).toHaveLength(1);
@@ -1156,7 +1158,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       const r = await deleteContacts(db, accountId, [chatty, quiet], {
         serviceDb: db,
         beforeDelete: async (ids) => { beforeDeleteIds.push([...ids].sort()); return []; },
-      });
+      }, SEED_AUTHOR);
       expect(r).toEqual({ deleted: 0, skippedBlocked: 2, skippedFiles: 0, skippedIds: [chatty, quiet], lateKept: 0 });
       expect(beforeDeleteIds).toEqual([]);
       expect(await getContact(db, accountId, chatty)).not.toBeNull();
@@ -1324,7 +1326,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
       withTestAccount(async (db, accountId) => {
         await ensureHoldingContact(db, accountId, P, "voice");
         const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+19565550189" }, "user_test");
-        expect(await updateContact(db, accountId, ana.id, { phone: P }, "user_test")).toEqual({ flagged: false });
+        expect(await updateContact(db, accountId, ana.id, { phone: P }, { authorKind: "person", authorId: "user_test" })).toEqual({ flagged: false });
         expect((await getContact(db, accountId, ana.id))?.phone).toBe(P);
         expect(await flagsOf(db, accountId)).toEqual([]);
       }));
@@ -1335,7 +1337,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
         const ana = await createContact(db, accountId, { firstName: "Ana", phone: "+15512345678" }, "user_test");
         expect(ana.existing).toBe(false);
         expect(await setContactPhoneCountry(db, accountId, ana.id,
-          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+          { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_test" })).toBe("updated");
         expect((await getContact(db, accountId, ana.id))?.phone).toBe("+525512345678");
         expect((await getContact(db, accountId, holding.id))?.first_name).toBe("Caller");
         expect(await flagsOf(db, accountId)).toEqual([]);
@@ -1347,7 +1349,7 @@ describe("S-47e: matchBy email_only and a shared number's holding record", () =>
           const anaB = await createContact(db, accountB, { firstName: "Ana", phone: "+15512340000" }, "user_test");
           expect(await flagsOf(db, accountB)).toEqual([]);
           expect(await setContactPhoneCountry(db, accountB, anaB.id,
-            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+            { expectedPhone: "+15512340000", phone: "+525512345678", unconfirmed: false }, { authorKind: "person", authorId: "user_test" })).toBe("updated");
           const [lo, hi] = [luz.id, anaB.id].sort();
           expect(await flagsOf(db, accountB)).toEqual([{ contact_a: lo, contact_b: hi, reason: "same_phone" }]);
         });

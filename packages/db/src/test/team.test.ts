@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import { roleFromClerk, languageFromClerk, isAgencyMetadata, reconcileMembership, readAccountRole, setAccountMemberRole, addAccountMember, INVITE_ACCEPT_ALLOWANCE_MS,
          listAccountTeam, type ClerkTeamPort } from "../team";
 
@@ -144,8 +146,8 @@ describe("reconcileMembership against the real database", () => {
           .toEqual({ outcome: "created", role: "staff" });
         const { data: u, error: uErr } = await db.from("users").select("id").eq("clerk_user_id", sub).single();
         if (uErr) throw uErr;
-        const { data: c, error: cErr } = await db.from("contacts")
-          .insert({ account_id: accountId, first_name: "Held", assigned_to: u.id }).select("id").single();
+        const { data: c, error: cErr } = await withAuthor(db.from("contacts")
+          .insert({ account_id: accountId, first_name: "Held", assigned_to: u.id }), SEED_AUTHOR, SEED_VIA).select("id").single();
         if (cErr) throw cErr;
         expect(await reconcileMembership(db, fakePort({ membership: null }), { clerkUserId: sub, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
           .toEqual({ outcome: "removed" });

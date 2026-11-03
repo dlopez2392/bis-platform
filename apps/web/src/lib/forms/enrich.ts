@@ -1,12 +1,14 @@
-import type { serviceDb, FormRow } from "@bis/db";
+import type { serviceDb, FormRow, RowAuthor } from "@bis/db";
 import {
+  withAuthor,
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
   setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal, phoneFields, restoreContactOnSign,
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { ContactFieldName } from "@bis/db/proposal-rules";
-import { recordActs } from "@/lib/ai-acts/record";
+import { recordActs, type ActSource } from "@/lib/ai-acts/record";
+import { planAct, underPlannedId, SOFIA_AUTHOR, type PlannedAct } from "@/lib/voice/act-id";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -106,6 +108,10 @@ export async function enrich(
     // only by the instant reply below, which DOES need a parsed E.164 to dial.
     const rawPhone = byKind.get("core.phone") || "";
     phoneE164 = rawPhone ? e164Of(rawPhone) : null;
+    // F-115 (plan Task 2 Step 7): a chat's new contact is logged as Sofia's contact_created act (below), so its
+    // insert names that act (`via: ai_act:<id>`) and the act is recorded under the same id. The public form logs
+    // no act and names none.
+    const madeAct = chatSource ? planAct(chatSource) : null;
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
@@ -116,7 +122,7 @@ export async function enrich(
       phone: rawPhone || undefined,
       source: `form: ${form.name}`,
       custom,
-      ...(chatSource ? { author: { authorKind: "ai" as const, authorId: null } } : {}),
+      ...(chatSource ? { author: SOFIA_AUTHOR, via: madeAct?.via } : {}),
     }, "form", "system");
     contactId = created.id;
 
@@ -128,7 +134,7 @@ export async function enrich(
       if (acctErr) throw new Error(acctErr.message);
       const sign = pageLanguageSignal(locale, (acct as { language: "en" | "es" | null } | null)?.language ?? null);
       if (sign) {
-        await recordLanguageSignal(db, accountId, contactId, { language: sign, source: "form", at: new Date() }, "form", "system");
+        await recordLanguageSignal(db, accountId, contactId, { language: sign, source: "form", at: new Date() }, { authorKind: "customer", authorId: "form" });
       }
     } catch (e) {
       console.error(`form ${form.id} submission ${submissionId}: language signal failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`);
@@ -169,19 +175,20 @@ export async function enrich(
     }
 
     if (created.existing) {
-      const { businessError, filled } = await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
+      const { businessError, filled, fillAct } = await fillBlanks(db, accountId, contactId, byKind, custom, attribution, chatSource);
       if (businessError) errors.push(businessError);
       // The four columns only (ambiguity D): custom fields, the business and the attribution are
       // the form's data, not Sofía's judgement. Never at the lead's cost (recordActs never throws).
+      // F-115: the first act carries the id the fill's write named (fillBlanks planned it).
       if (chatSource && filled.length > 0) {
         const filledBy = contactId;
-        await recordActs(db, accountId, filled.map((f): NewAiAct => ({
+        await recordActs(db, accountId, underPlannedId(filled.map((f): NewAiAct => ({
           ...chatSource, kind: "contact_field_filled", contactId: filledBy,
           target: { field: f.field }, before: { value: f.before }, after: { value: f.after },
-        })));
+        })), fillAct));
       }
     } else {
-      await setAttribution(db, accountId, contactId, attribution, true);
+      await setAttribution(db, accountId, contactId, attribution, true, leadAuthor(chatSource));
     }
 
     await linkSubmissionContact(db, accountId, submissionId, contactId);
@@ -214,10 +221,10 @@ export async function enrich(
     // Item 8c: a contact the chat made is Sofía's, recorded once its thread message exists. The act
     // names that message and this submission: the two non-AI rows its Undo may treat as hers.
     if (chatSource && !created.existing) {
-      await recordActs(db, accountId, [{
+      await recordActs(db, accountId, underPlannedId([{
         ...chatSource, kind: "contact_created", contactId,
         target: { messageId: message.id, submissionId }, before: null, after: null,
-      }]);
+      }], madeAct));
     }
     await incrementUnreadCount(db, accountId, convo.id);
 
@@ -297,18 +304,33 @@ export async function enrich(
   }
 }
 
+/** The public form's writes are the customer's: the same author its fill has always carried. */
+const FORM_CUSTOMER: RowAuthor = { authorKind: "customer", authorId: "form" };
+
+/**
+ * F-115 (orchestrator ruling 2026-11-02): who a lead's writes are by. From the chat Sofía extracted them (and logs
+ * her acts), so they are hers; from the public form they are the customer's. One write, one author: a chat fill's
+ * custom fields ride the same write and are hers too.
+ */
+function leadAuthor(chatSource: ActSource | null): RowAuthor {
+  return chatSource ? SOFIA_AUTHOR : FORM_CUSTOMER;
+}
+
 /**
  * A returning lead who now supplies a phone number gets it added; a mistyped
  * name never clobbers a good record. `updateContact` takes a partial and would
  * happily overwrite, so the existing row has to be read first.
+ *
+ * `chatSource` (F-115): set for the web chat, whose fill is Sofía's and names its first contact_field_filled act
+ * (`fillAct`, returned for the caller's acts); null for the public form, the customer's with no via.
  */
 async function fillBlanks(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
   byKind: Map<string, string>, custom: Record<string, string>,
-  attribution: Record<string, string>,
-): Promise<{ businessError: string | null; filled: FilledField[] }> {
+  attribution: Record<string, string>, chatSource: ActSource | null,
+): Promise<{ businessError: string | null; filled: FilledField[]; fillAct: PlannedAct | null }> {
   const current = await getContact(db, accountId, contactId);
-  if (!current) return { businessError: null, filled: [] };
+  if (!current) return { businessError: null, filled: [], fillAct: null };
 
   // Same AS-TYPED rule the create path applies (see its comment in `enrich`)
   // — a blank existing phone getting filled from a later submission passes
@@ -334,9 +356,13 @@ async function fillBlanks(
     if (value && !mergedCustom[key]) { mergedCustom[key] = value; customChanged = true; }
   }
 
+  // F-115: a chat fill that writes any of the four columns logs contact_field_filled acts (below), so it names the
+  // first (planAct, as the phone's fills do); a chat fill of custom fields alone logs none and names none, and is
+  // still Sofía's write.
+  const fillAct = chatSource && Object.keys(patch).length > 0 ? planAct(chatSource) : null;
   if (Object.keys(patch).length > 0 || customChanged) {
     await updateContact(db, accountId, contactId,
-      { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, "form", "system");
+      { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, leadAuthor(chatSource), fillAct?.via);
   }
   // What the write above put in each of the four columns, as `updateContact` STORES it (an email
   // trimmed, a phone through `phoneFields`), beside what the column held before: only after the
@@ -375,8 +401,8 @@ async function fillBlanks(
     }
   }
 
-  await setAttribution(db, accountId, contactId, attribution, false);
-  return { businessError, filled };
+  await setAttribution(db, accountId, contactId, attribution, false, leadAuthor(chatSource));
+  return { businessError, filled, fillAct };
 }
 
 /** One of the four contact columns a returning lead's fill wrote (item 8c). */
@@ -401,6 +427,10 @@ type FilledField = { field: ContactFieldName; before: string | null; after: stri
 export async function setAttribution(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
   attribution: Record<string, string>, isNew: boolean,
+  /** F-115: the same author as the lead write it accompanies (the form's customer, the chat's Sofía), no via.
+   *  0111 audits no attribution column, so the trigger ignores this write today; it says who made it anyway.
+   *  Defaults to the customer for the booking page (`b/[publicId]/actions.ts`), whose contact is theirs. */
+  author: RowAuthor = { authorKind: "customer", authorId: null },
 ): Promise<void> {
   if (Object.keys(attribution).length === 0) return;
   const { data, error: selectError } = await db.from("contacts").select("attribution")
@@ -413,8 +443,8 @@ export async function setAttribution(
     ...(isNew || !held.first ? { first: attribution } : {}),
     last: attribution,
   };
-  const { error: updateError } = await db.from("contacts").update({ attribution: next })
-    .eq("account_id", accountId).eq("id", contactId);
+  const { error: updateError } = await withAuthor(db.from("contacts").update({ attribution: next })
+    .eq("account_id", accountId).eq("id", contactId), author);
   if (updateError) throw new Error(`setAttribution update failed: ${updateError.message}`);
 }
 

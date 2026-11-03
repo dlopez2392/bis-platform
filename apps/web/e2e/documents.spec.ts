@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, DOCUMENT_BUCKET } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -216,7 +216,7 @@ test.afterAll(async () => {
     const { error: dErr } = await svc.from("documents").delete().in("id", ids);
     if (dErr) throw new Error(`documents.spec cleanup: documents delete: ${dErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`documents.spec cleanup: contact delete: ${cErr.message}`);
 
   // Re-read: no row, no contact, and no object under any document folder this file ever made.

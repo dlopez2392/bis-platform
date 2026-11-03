@@ -6,7 +6,7 @@ import {
   getOrCreateCalendar, createBooking, assignPhoneNumber, startCallRow, finishCallRow, addNote,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -99,7 +99,7 @@ test.afterAll(async () => {
   if (cancelToken) await step("booking", () => db.from("bookings").delete().eq("account_id", accountId).eq("cancel_token", cancelToken));
   if (made.group) await step("group", () => db.from("client_groups").delete().eq("account_id", accountId).eq("id", made.group!));
   const ids = [made.ana, made.luis, made.maria].filter((x): x is string => Boolean(x));
-  await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
+  await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids));
   // A failed read must fail the check, not read as "nothing left" (final review minor 3).
   const { data: left, error: leftError } = await db.from("contacts").select("id").in("id", ids);
   expect(leftError).toBeNull();

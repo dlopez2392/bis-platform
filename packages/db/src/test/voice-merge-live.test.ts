@@ -4,6 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { listContactsOnNumber } from "../voice";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Task 6 (F-006, migration 0106), live half: `listContactsOnNumber` against a REAL tombstone (the actual
@@ -20,7 +22,7 @@ import { listContactsOnNumber } from "../voice";
  *  match would fold it into K (then makeTombstone would point K at itself and 0106's
  *  contacts_not_merged_into_self refuses). contacts-merge.spec.ts seeds its pair the same way. */
 async function insertTwin(db: SupabaseClient, accountId: string, firstName: string, phone: string): Promise<{ id: string }> {
-  const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, phone }).select("id").single();
+  const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: firstName, phone }), SEED_AUTHOR, SEED_VIA).select("id").single();
   if (error) throw new Error(`insertTwin failed: ${error.message}`);
   return { id: data!.id as string };
 }

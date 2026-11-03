@@ -6,7 +6,7 @@ import {
   startCallRow, finishCallRow, countCallsSince, type TranscriptEvent,
 } from "@bis/db";
 import { readLimitConfig, utcDayStart } from "../src/lib/voice/call-limits";
-import { recordPage } from "./support";
+import { e2eAuthor, recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -127,7 +127,8 @@ test.afterAll(async () => {
   ];
   for (const [table, column, value] of deletes) {
     if (!value) continue;
-    const { error } = await db.from(table).delete().eq(column, value);
+    // F-115: `contacts` is enforced; the other two take a harmless, unread header (e2eAuthor, e2e/support.ts).
+    const { error } = await e2eAuthor(db.from(table).delete()).eq(column, value);
     if (error) console.error(`calls e2e cleanup: ${table} delete failed: ${error.message}`);
   }
 });

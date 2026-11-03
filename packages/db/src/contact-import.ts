@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, phoneKeyOf,
          type ContactInput } from "./contacts";
 import { setContactsBusiness } from "./client-groups";
+import type { RowAuthor } from "./provenance";
 
 /** Anything shaped like an email address, so a transient RPC error's own
  *  message can never put one in a log line. Mirrors apps/web's
@@ -143,6 +144,10 @@ export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
   actorId: string, opts: { createTags: boolean; groupWriter?: SupabaseClient },
 ): Promise<{ created: number; updated: number; flagged: number; businessLinkFailed?: boolean; businessTooLong?: number }> {
+  // item 8c: every row an import creates OR UPDATES is an import, whatever actor ran this batch — a CSV
+  // re-import of an export must never read as a PERSON's own hand-entry. The importing user's own id
+  // still rides along (author_id is set with import, same as person), so "who ran this import" is not lost.
+  const author: RowAuthor = { authorKind: "import", authorId: actorId };
   let created = 0;
   let updated = 0;
   // Pairs this RUN flagged, not the table's lifetime total — every other
@@ -175,20 +180,18 @@ export async function applyImportBatch(
 
     let contactId: string;
     if (hitId) {
-      const updateResult = await updateContact(db, accountId, hitId, row.input, actorId);
+      const updateResult = await updateContact(db, accountId, hitId, row.input, author);
       if (updateResult.flagged) flagged++;
       contactId = hitId;
       updated++;
     } else {
-      // item 8c: every row an import creates is an import, whatever actor the caller signs the write
-      // as — a CSV re-import of an export must never read as a PERSON's own hand-entry.
-      const result = await createContact(db, accountId, { ...row.input, author: { authorKind: "import", authorId: null } }, actorId);
+      const result = await createContact(db, accountId, { ...row.input, author }, actorId);
       contactId = result.id;
       if (result.flagged) flagged++;
       if (result.existing) {
         // Trap 2's second half: apply the row's fields exactly as an index
         // hit would, before counting — see the function comment above.
-        const updateResult = await updateContact(db, accountId, contactId, row.input, actorId);
+        const updateResult = await updateContact(db, accountId, contactId, row.input, author);
         if (updateResult.flagged) flagged++;
         updated++;
       } else {

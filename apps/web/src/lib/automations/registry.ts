@@ -20,6 +20,7 @@ import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 import { usageReportPass } from "./passes/usage-report";
 import { opsWatchPass } from "./passes/ops-watch";
+import { recordChangesAuditPass } from "./passes/record-changes-audit";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract.
@@ -72,6 +73,11 @@ import { opsWatchPass } from "./passes/ops-watch";
  * The operational floor's alert pass (opsWatch) runs after EVERYTHING, the
  * usage report included: it reads the heartbeat each pass above just wrote, so
  * a pass failing for the second time is reported in the same tick.
+ * The record-changes audit (F-115) touches no booking or automation state — it only reads
+ * `record_changes` for the last 24 hours of unattributed server writes — so it has no dependency
+ * on anything above (fanout.ts gives it `after: []`, same as billingPause); it sits here, before
+ * the usage report and opsWatch, so a red heartbeat here is still caught by opsWatch in the SAME
+ * tick (opsWatch reads every pass above it, usageReport included).
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [billingPausePass, releaseHeldPass, cancelNoticesPass, jobHoldsPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, recordChangesAuditPass, usageReportPass, opsWatchPass];

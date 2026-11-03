@@ -6,7 +6,7 @@ import {
   markDocumentVersionReady, recordDocumentScan, DOCUMENT_BUCKET, type DocumentRequestItem,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { requestToken, tokenHash } from "../src/lib/document-requests/token";
 import { docCopy } from "../src/app/d/[token]/copy";
 
@@ -92,7 +92,7 @@ test.afterAll(async () => {
     const { error: rErr } = await svc.from("document_requests").delete().in("id", requestIds);
     if (rErr) throw new Error(`cleanup: requests delete: ${rErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`cleanup: contact delete: ${cErr.message}`);
 
   const { data: leftDocs, error: ldErr } = await svc.from("documents").select("id").eq("contact_id", contactId);

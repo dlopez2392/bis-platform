@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, createBooking, getOrCreateCalendar, readPersonId } from "@bis/db";
-import { openFixtureCalendar } from "./support";
+import { openFixtureCalendar, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly (cleanup below), not through a
@@ -155,7 +155,7 @@ test.describe("F-048 part 2: the calendar feed, on the fixture account", () => {
         if (error) console.error(`calendar-feed e2e cleanup: booking delete failed: ${error.message}`);
       }
       if (contactId) {
-        const { error } = await db.from("contacts").delete().eq("id", contactId);
+        const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", contactId);
         if (error) console.error(`calendar-feed e2e cleanup: contact delete failed: ${error.message}`);
       }
     }

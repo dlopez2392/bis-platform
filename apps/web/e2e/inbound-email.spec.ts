@@ -2,7 +2,7 @@ import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, ensureReplyToken } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { readClientFixture } from "./support";
+import { readClientFixture, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -53,7 +53,7 @@ test.afterAll(async () => {
     const { error: e1 } = await svc.from("messages").delete().eq("account_id", accountId).eq("conversation_id", conversationId); expect(e1).toBeNull();
     const { error: e2 } = await svc.from("conversations").delete().eq("account_id", accountId).eq("id", conversationId); expect(e2).toBeNull();
   }
-  if (contactId) { const { error } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId); expect(error).toBeNull(); }
+  if (contactId) { const { error } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId); expect(error).toBeNull(); }
 
   const { count, error } = await svc.from("inbound_emails").select("id", { count: "exact", head: true }).eq("provider_email_id", `e2e_${STAMP}`);
   expect(error).toBeNull(); expect(count).toBe(0);

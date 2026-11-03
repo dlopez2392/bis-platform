@@ -155,6 +155,10 @@ const offenders = (rows: Live[]) =>
     return calls.length ? [`${r.p}: ${calls.join(", ")}`] : [];
   }).sort();
 
+/** Policies later migrations add, left out of the "untouched 72" digest below so it keeps saying what 0109 left alone.
+ *  0111 (F-115): record_changes_read and record_changes_technician_none (record-changes-rls.test.ts pins them). */
+const LATER = ["record_changes_read", "record_changes_technician_none"];
+
 describe("0109: the 64 policies are wrapped and otherwise unchanged", () => {
   it("PRE holds 64 distinct policies on 59 tables (the spec's inventory, 2.2)", () => {
     expect(PRE).toHaveLength(64);
@@ -183,14 +187,16 @@ describe("0109: the 64 policies are wrapped and otherwise unchanged", () => {
         `select count(*) || '|' || md5(string_agg(tablename || '|' || policyname || '|' || permissive || '|' ||
             array_to_string(roles, ',') || '|' || cmd || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''),
             E'\\n' order by tablename, policyname)) as d
-           from pg_policies where schemaname = 'public' and policyname <> all ($1::text[])`, [PRE.map((r) => r[1])]);
+           from pg_policies where schemaname = 'public' and policyname <> all ($1::text[])`, [[...PRE.map((r) => r[1]), ...LATER]]);
       expect(rows[0]!.d).toBe("72|c2a5a17e0ef4f6e27247f8df517ddb4f");
     }));
 
-  it("public still holds 136 policies on 64 tables: none added, none dropped (green before and after)", () =>
+  it("public holds 138 policies on 65 tables: 0109's 136 on 64, plus 0111's two on record_changes; none dropped (red before 0111: 136, 64)", () =>
     withRollback(async (c) => {
       const rows = await livePolicies(c);
-      expect([rows.length, new Set(rows.map((r) => r.t)).size]).toEqual([136, 64]);
+      expect([rows.length, new Set(rows.map((r) => r.t)).size]).toEqual([138, 65]);
+      expect(rows.filter((r) => LATER.includes(r.p)).map((r) => `${r.t}.${r.p}`)).toEqual(
+        ["record_changes.record_changes_read", "record_changes.record_changes_technician_none"]);
     }));
 });
 

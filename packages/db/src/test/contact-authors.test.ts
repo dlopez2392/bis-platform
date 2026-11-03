@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAsMember } from "./db";
+import { withRollback, actAsMember, sendAuthor } from "./db";
 
 /**
  * 0091 (item 8c, plan Task 1 case 12; spec 5.3): who created each contact. contacts.author_kind is one of the
@@ -95,7 +95,10 @@ describe("0091: contacts_author_guard (plan Task 1 case 12)", () => {
     withRollback(async (c) => {
       const s = await seed(c);
       await c.query("set local role service_role");
+      // F-115: createContact sends the SAME author it stamps on the row (contacts.ts, withAuthor(insert, author)).
+      await sendAuthor(c, { authorKind: "ai", authorId: null });
       const ai = await one(c, "insert into contacts (account_id, first_name, author_kind) values ($1,'Fer','ai') returning id", [s.acct]);
+      await sendAuthor(c, { authorKind: "person", authorId: "user_y" });
       const person = await one(c, "insert into contacts (account_id, first_name, author_kind, author_id) values ($1,'Gil','person','user_y') returning id", [s.acct]);
       expect((await c.query("update contacts set author_kind = 'customer' where id = $1", [ai])).rowCount).toBe(1);
       await c.query("reset role");

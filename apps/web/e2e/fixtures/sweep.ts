@@ -40,7 +40,7 @@
  * at every entry point that a human can invoke.
  */
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, ACCOUNT_OWNED_TABLES, DOCUMENT_BUCKET } from "@bis/db";
+import { serviceDb, ACCOUNT_OWNED_TABLES, DOCUMENT_BUCKET, withAuthor } from "@bis/db";
 import {
   FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_EMAIL_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
   isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
@@ -122,11 +122,16 @@ export async function deleteAccountCascade(
   // Errors are still REPORTED per table rather than thrown (packages/db's
   // own deleteAccountCascade throws on the first one): a sweep that cleared
   // most of an account did more good than one that stopped at the first.
+  // F-115: a sweep is always an automated cleanup, never a person's own edit — and this loop runs
+  // while the account row still exists (it is deleted LAST, just below), so 0111's cascade-from-a-
+  // vanishing-account early return never covers this delete. Sent on every table, not only
+  // `contacts`, same reasoning as packages/db's own deleteAccountCascade (account-teardown.ts).
+  const SWEEP_AUTHOR = { authorKind: "automation" as const, authorId: null };
   for (const table of ACCOUNT_OWNED_TABLES) {
-    const { error } = await db.from(table).delete().eq("account_id", accountId);
+    const { error } = await withAuthor(db.from(table).delete(), SWEEP_AUTHOR).eq("account_id", accountId);
     if (error) report.errors.push(`${table} delete for ${accountId}: ${error.message}`);
   }
-  const { error } = await db.from("accounts").delete().eq("id", accountId);
+  const { error } = await withAuthor(db.from("accounts").delete(), SWEEP_AUTHOR).eq("id", accountId);
   if (error) report.errors.push(`accounts delete for ${accountId}: ${error.message}`);
 }
 

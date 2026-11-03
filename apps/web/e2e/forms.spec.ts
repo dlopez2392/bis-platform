@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -39,7 +39,7 @@ async function purge(formName: string, leadEmail: string): Promise<void> {
       await db.from("messages").delete().eq("conversation_id", convo.id);
       await db.from("conversations").delete().eq("id", convo.id);
     }
-    await db.from("contacts").delete().eq("id", contact.id);
+    await e2eAuthor(db.from("contacts").delete()).eq("id", contact.id);
   }
 }
 

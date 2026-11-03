@@ -1,7 +1,29 @@
 import { type Page, type Request, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
+import { withAuthor, type RowAuthor } from "@bis/db";
 import { contrastRatio } from "../src/lib/branding/color";
 import { seededAccountMissingMessage } from "./fixtures/seeded";
+
+/**
+ * F-115: who a spec's own RAW service-client write to `contacts` says it was. No person is at the
+ * keyboard for a spec's setup or cleanup, so `automation` (an e2e run, named by `via`) is the only
+ * honest answer — the same reasoning sweep.ts's `SWEEP_AUTHOR` already uses for its account-cascade
+ * deletes. CI's enforce-mode `record_changes` trigger (migration 0111) refuses a service-role
+ * INSERT, DELETE, or an UPDATE of an audited column, on `contacts` with no `x-bis-author` header;
+ * app writers such as `createContact`/`deleteContacts` already send their own and need no change
+ * here. Not a client-level default: `withAuthor` sets the header on ONE query, never on a client, so
+ * a spec that passes its service client into an app writer (which sends its OWN explicit header)
+ * is unaffected, and nothing here ever reaches the app server under test, which builds its own
+ * unheadered service client.
+ */
+export const E2E_AUTHOR: RowAuthor = { authorKind: "automation", authorId: null };
+
+/** `withAuthor(builder, E2E_AUTHOR, "seed")`, spelled once for every raw contacts write a spec makes
+ *  for its own setup or cleanup — "seed", not "e2e", so this stays on the plan's own `via` list
+ *  (`SEED_VIA`, `packages/db/src/test/db.ts`). */
+export function e2eAuthor<B extends { setHeader(name: string, value: string): B }>(builder: B): B {
+  return withAuthor(builder, E2E_AUTHOR, "seed");
+}
 
 /**
  * `rgb(30, 58, 138)` — what getComputedStyle reports — back to `#1e3a8a`, so

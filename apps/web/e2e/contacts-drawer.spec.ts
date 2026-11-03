@@ -7,7 +7,7 @@ import {
   addPlace, getOrCreateCalendar, createBooking,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { watchRouterTraffic, recordPage } from "./support";
+import { watchRouterTraffic, recordPage, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -174,7 +174,7 @@ async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string)
   if (callErr) throw new Error(`contacts-drawer e2e: pre-clean calls failed: ${callErr.message}`);
   const { error: numErr } = await db.from("phone_numbers").delete().eq("account_id", accId);
   if (numErr) throw new Error(`contacts-drawer e2e: pre-clean phone_numbers failed: ${numErr.message}`);
-  const { error: contactErr } = await db.from("contacts").delete()
+  const { error: contactErr } = await e2eAuthor(db.from("contacts").delete())
     .eq("account_id", accId)
     .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck", "OptOut"]);
   if (contactErr) throw new Error(`contacts-drawer e2e: pre-clean contacts failed: ${contactErr.message}`);
@@ -236,8 +236,8 @@ test.beforeAll(async () => {
   const pagingRows = Array.from({ length: 55 }, (_, i) => ({
     account_id: accountId, first_name: "Paging", last_name: `Item ${i + 1}`,
   }));
-  const { data: pagingData, error: pagingErr } = await db.from("contacts")
-    .insert(pagingRows).select("id");
+  const { data: pagingData, error: pagingErr } = await e2eAuthor(db.from("contacts")
+    .insert(pagingRows)).select("id");
   if (pagingErr) throw new Error(`contacts-drawer e2e: seed paging rows failed: ${pagingErr.message}`);
   pagingIds.push(...(pagingData ?? []).map((r: { id: string }) => r.id));
 
@@ -902,7 +902,7 @@ test.describe("S-03 part 3: the drawer on the record kit", () => {
       if (error) console.error(`contacts-drawer e2e: booking cleanup failed (the fixture sweep takes it): ${error.message}`);
     }
     const ids = [made.quick, made.plain].filter((x): x is string => Boolean(x));
-    const { error } = await db.from("contacts").delete().eq("account_id", accountId).in("id", ids);
+    const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids);
     if (error) console.error(`contacts-drawer e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);
     const { data: left } = await db.from("contacts").select("id").in("id", ids);
     expect(left ?? []).toEqual([]);

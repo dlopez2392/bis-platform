@@ -594,20 +594,20 @@ describe("setTeamRoleAction: leaving Technician gives back what the move into it
     expect(await setTeamRoleAction(ACCT, TECH_D.userId, "staff")).toEqual({ ok: true, previous: "technician" });
     expect(techlog.latestTechnicianRelease).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId);
     expect(db.reassignReleased).toHaveBeenCalledWith(
-      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] });
+      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] }, { authorKind: "person", authorId: "user_A" });
   });
   it("...and when a Technician is promoted to Owner, the promotion's own branch (mutation: skip it on the promotion path -> FAILS)", async () => {
     db.listAccountTeam.mockResolvedValueOnce([OWNER_A, TECH_D]).mockResolvedValue([OWNER_A, { ...TECH_D, role: "owner" }]);
     techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
     expect(await setTeamRoleAction(ACCT, TECH_D.userId, "owner")).toEqual({ ok: true, previous: "technician" });
     expect(db.reassignReleased).toHaveBeenCalledWith(
-      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] });
+      expect.anything(), ACCT, TECH_D.userId, { contacts: [], tasks: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] }, { authorKind: "person", authorId: "user_A" });
   });
   it("never carries a contact id: only the recorded task ids move, never the member's own customers (mutation: pass the member's contacts too -> FAILS)", async () => {
     db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
     techlog.latestTechnicianRelease.mockResolvedValue(techRelease(TECH_D.userId, ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]));
     await setTeamRoleAction(ACCT, TECH_D.userId, "staff");
-    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), { contacts: [], tasks: expect.any(Array) });
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), { contacts: [], tasks: expect.any(Array) }, expect.anything());
   });
   it("a record older than UNDO_WINDOW_MS gives back nothing (mutation: drop the window check -> FAILS)", async () => {
     db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
@@ -715,7 +715,7 @@ describe("undoRemoveTeamMemberAction gives back what the removal released", () =
   it("re-assigns the recorded ids AFTER the membership and language are back (mutations: skip the reassign, or run it before the membership -> FAILS)", async () => {
     log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
     expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
-    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED);
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED, { authorKind: "person", authorId: "user_A" });
     expect(order(db.addAccountMember)).toBeLessThan(order(db.reassignReleased));
     expect(order(db.setMemberLanguage)).toBeLessThan(order(db.reassignReleased));
     expect(clerk.restoreToOrganization).toHaveBeenCalledWith("org_1", "user_D", "technician");
@@ -739,7 +739,7 @@ describe("undoRemoveTeamMemberAction gives back what the removal released", () =
     clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "already_a_member_in_organization" });
     db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
     expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
-    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED);
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED, { authorKind: "person", authorId: "user_A" });
     expect(db.addAccountMember).not.toHaveBeenCalled();
   });
   it("first Undo's give-back fails, second Undo runs it again and it lands", async () => {

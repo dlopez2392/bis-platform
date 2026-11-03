@@ -4,7 +4,7 @@ import {
   serviceDb, createContact, DOCUMENT_BUCKET, getRequiredDocumentCategories, setRequiredDocumentCategories,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -79,7 +79,7 @@ test.afterAll(async () => {
     const { error: dErr } = await svc.from("documents").delete().in("id", ids);
     if (dErr) throw new Error(`cleanup: documents delete: ${dErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`cleanup: contact delete: ${cErr.message}`);
 
   const { data: leftSkips, error: lsErr } = await svc.from("document_requirement_skips").select("id").eq("contact_id", contactId);

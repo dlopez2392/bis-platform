@@ -481,7 +481,7 @@ describe("submitBookingAction — D-031: a returning booker's new details fill t
     expect(fillContactBlanksMock).toHaveBeenCalledWith(
       expect.anything(), ACCOUNT_ID, "contact_existing",
       { firstName: "Maria", lastName: "Lopez", email: "maria@example.com", phone: "(956) 555-0199" },
-      "public", "system",
+      { authorKind: "customer", authorId: "public" },
     );
     // Filled only AFTER the booking insert succeeded (review minor): a booker
     // who loses the slot race must not have written onto someone's contact.
@@ -1379,8 +1379,8 @@ describe("submitBookingAction — the booker's language becomes the contact's (S
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
     expect(result.ok).toBe(true);
     expect(recordLanguageSignalMock).toHaveBeenCalledTimes(1);
-    const [, accountId, contactId, signal, actorId, actorType] = recordLanguageSignalMock.mock.calls[0]!;
-    expect([accountId, contactId, signal.language, signal.source, actorId, actorType]).toEqual([ACCOUNT_ID, "contact_1", "es", "booking", "public", "system"]);
+    const [, accountId, contactId, signal, author] = recordLanguageSignalMock.mock.calls[0]!;
+    expect([accountId, contactId, signal.language, signal.source, author]).toEqual([ACCOUNT_ID, "contact_1", "es", "booking", { authorKind: "customer", authorId: "public" }]);
     expect(signal.at).toBeInstanceOf(Date);
     expect(recordLanguageSignalMock.mock.invocationCallOrder[0]!).toBeGreaterThan(createBookingMock.mock.invocationCallOrder[0]!);
   });

@@ -156,7 +156,7 @@ describe("undoAiActAction: a field", () => {
   it("restores on the request client's compare-and-swap, then stamps on the service client", async () => {
     state.act = filled;
     expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
-    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", "ana@example.com", null, "user_me");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", "ana@example.com", null, { authorKind: "person", authorId: "user_me" });
     expect(order).toEqual(["requireAccountAccess", "getAiAct(request)", "followMerge(request)", "restoreContactFieldIf(request)", "stampAiActUndone(service)"]);
   });
   it("0106 (owner ruling D8): an act on a now-merged-away record restores and revalidates the KEPT record, not the tombstone (mutation: pass act.contactId straight through -> FAILS)", async () => {
@@ -164,7 +164,7 @@ describe("undoAiActAction: a field", () => {
     state.followTo = "K";
     expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
     expect(bis.followMerge).toHaveBeenCalledWith(REQUEST, "A", "c1");
-    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", "ana@example.com", null, "user_me");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", "ana@example.com", null, { authorKind: "person", authorId: "user_me" });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/A/contacts/K");
   });
   it("a booking undo never calls followMerge (mutation: resolve unconditionally -> FAILS)", async () => {
@@ -217,7 +217,7 @@ describe("redoAiFieldFillAction", () => {
   it("puts Sofía's value back over the old one, then clears this undoer's own stamp at its exact instant", async () => {
     state.act = undone;
     expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
-    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", null, "ana@example.com", "user_me");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", null, "ana@example.com", { authorKind: "person", authorId: "user_me" });
     expect(bis.clearAiActUndone).toHaveBeenCalledWith(SERVICE, "A", "act1", "user_me", new Date("2026-10-20T08:00:00.123Z"));
   });
   it("the stamp clear throwing AFTER the redo's restore answers ok: Sofía's value is back (review M-2's twin)", async () => {
@@ -233,7 +233,7 @@ describe("redoAiFieldFillAction", () => {
     state.followTo = "K";
     expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
     expect(bis.followMerge).toHaveBeenCalledWith(REQUEST, "A", "c1");
-    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", null, "ana@example.com", "user_me");
+    expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "K", "email", null, "ana@example.com", { authorKind: "person", authorId: "user_me" });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/A/contacts/K");
   });
   it("an act not undone answers changed; one undone by someone else answers notAvailable; neither writes", async () => {

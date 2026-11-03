@@ -6,6 +6,8 @@ import { listContacts, countContacts, createContact, updateContact, flagMatchesO
 import { listConversations, createMessage } from "../messaging";
 import { listAccountWork } from "../work-queue";
 import { addTask } from "../activities";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Mine / Unassigned list filters (F-085 part 1, spec §8) — Task 3's own db
@@ -44,8 +46,8 @@ async function withAssigneeAccount(fn: (db: SupabaseClient, accountId: string) =
 async function rawContact(
   db: SupabaseClient, accountId: string, name: string, assignedTo: string | null,
 ): Promise<{ id: string; created_at: string }> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: name, assigned_to: assignedTo })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: name, assigned_to: assignedTo }), SEED_AUTHOR, SEED_VIA)
     .select("id, created_at").single();
   if (error) throw error;
   return data as { id: string; created_at: string };
@@ -195,7 +197,7 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       // for a caller that tries anyway (or a future regression that widens
       // ContactInput back), proving the RUNTIME behaviour independent of the
       // type-level guard tsc already gives every other caller.
-      await updateContact(db, accountId, created.id, { firstName: "Safe2", assignedTo: a } as any, "user_test");
+      await updateContact(db, accountId, created.id, { firstName: "Safe2", assignedTo: a } as any, { authorKind: "person", authorId: "user_test" });
       const { data, error } = await db.from("contacts")
         .select("assigned_to, first_name").eq("id", created.id).single();
       if (error) throw error;
@@ -207,11 +209,11 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
 
   it("a shared phone is filed by the database at insert; flagMatchesOf finds it filed and writes nothing (0106: the trigger beats flagMatchesOf to the pair, reason same_phone, so both calls return 0)", () =>
     withAssigneeAccount(async (db, accountId) => {
-      const { data: c1, error: e1 } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "One", phone: "+19565550133" }).select("id").single();
+      const { data: c1, error: e1 } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "One", phone: "+19565550133" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       if (e1) throw e1;
-      const { data: c2, error: e2 } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Two", phone: "+19565550133" }).select("id").single();
+      const { data: c2, error: e2 } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Two", phone: "+19565550133" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       if (e2) throw e2;
 
       expect(await flagMatchesOf(db, accountId, c2!.id)).toBe(0);

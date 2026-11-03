@@ -117,7 +117,7 @@ describe("flagDuplicatesAfterWrite (through updateContact), setContactPhoneCount
         { data: [], error: null },   // flagDuplicatesAfterWrite's email-twin read
       ],
     });
-    await updateContact(db, "A", "c1", { email: "a@example.com" }, "user_test");
+    await updateContact(db, "A", "c1", { email: "a@example.com" }, { authorKind: "person", authorId: "user_test" });
     expect(has(calls, "is", "merged_into", null)).toBe(true);
   });
 
@@ -129,7 +129,7 @@ describe("flagDuplicatesAfterWrite (through updateContact), setContactPhoneCount
         { data: [], error: null },                           // flagDuplicatesAfterWrite's phone-twin read
       ],
     });
-    await updateContact(db, "A", "c1", { phone: "+19565550111" }, "user_test");
+    await updateContact(db, "A", "c1", { phone: "+19565550111" }, { authorKind: "person", authorId: "user_test" });
     expect(has(calls, "is", "merged_into", null)).toBe(true);
   });
 
@@ -141,7 +141,8 @@ describe("flagDuplicatesAfterWrite (through updateContact), setContactPhoneCount
       ],
     });
     const outcome = await setContactPhoneCountry(
-      db, "A", "c1", { expectedPhone: "+15550000000", phone: "+525550000000", unconfirmed: false }, "user_test",
+      db, "A", "c1", { expectedPhone: "+15550000000", phone: "+525550000000", unconfirmed: false },
+      { authorKind: "person", authorId: "user_test" },
     );
     expect(outcome).toBe("updated");
     expect(has(calls, "is", "merged_into", null)).toBe(true);
@@ -168,7 +169,7 @@ describe("fillContactBlanksReport on a merged-away record fills the record it po
         { data: [], error: null },   // the update itself, now aimed at K
       ],
     });
-    const result = await fillContactBlanksReport(db, "A", "T", { email: "new@example.com" }, "user_test");
+    const result = await fillContactBlanksReport(db, "A", "T", { email: "new@example.com" }, { authorKind: "person", authorId: "user_test" });
     expect(result.fields).toEqual(["email"]);
 
     const updateCall = calls.find((c) => c.method === "update")?.call;

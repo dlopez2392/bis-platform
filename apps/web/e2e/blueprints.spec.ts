@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { clerkClient } from "@clerk/nextjs/server";
 import { CHECKLIST_CATALOGUE } from "../src/lib/checklist-catalogue";
+import { e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -176,7 +177,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // .ok() check matches pipeline.spec.ts's dragTo: a resolved response that
     // carried an action error would otherwise read as "write raced the
     // reload" when it's really "write failed".
-    expect((await togglePosted).ok()).toBeTruthy();
+    const toggleRes = await togglePosted;
+    if (!toggleRes.ok()) {
+      console.log(`checklist toggle response: ${toggleRes.status()} ${await toggleRes.text()}`);
+    }
+    expect(toggleRes.ok()).toBeTruthy();
     await page.reload();
     await expect(page.getByRole("button", { name: "Buy a phone number" }))
       .toHaveAttribute("aria-pressed", "true");
@@ -373,7 +378,8 @@ test("a blueprint captured from one company applies to a new one", async ({ page
       for (const t of ["checklist_items", "events", "form_submissions", "forms",
                        "pipeline_stages", "pipelines", "custom_fields", "custom_values",
                        "tags", "contacts"]) {
-        await db.from(t).delete().eq("account_id", acct.id);
+        // F-115: `contacts` is enforced; the rest take a harmless, unread header (e2eAuthor, e2e/support.ts).
+        await e2eAuthor(db.from(t).delete()).eq("account_id", acct.id);
       }
       await db.from("accounts").delete().eq("id", acct.id);
     }

@@ -60,7 +60,7 @@ export async function mergeContactsAction(
     const db = await dbForRequest();
     const r = await mergeContacts(db, accountId, {
       keepId: input.keepId, otherId: input.otherId, choices: input.choices, seen: input.seen,
-    });
+    }, { authorKind: "person", authorId: access.userId });
     if (r.status === "merged") {
       revalidatePath(contactsPath(accountId));
       revalidatePath(contactPath(accountId, input.keepId));
@@ -103,7 +103,7 @@ export async function undoMergeAction(accountId: string, mergeId: number): Promi
   }
   try {
     const db = await dbForRequest();
-    const r = await undoContactMerge(db, accountId, mergeId);
+    const r = await undoContactMerge(db, accountId, mergeId, { authorKind: "person", authorId: access.userId });
     if (r.status === "undone") {
       revalidatePath(contactsPath(accountId));
       revalidatePath(contactPath(accountId, r.otherId));

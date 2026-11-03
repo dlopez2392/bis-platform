@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { test, expect, type Page } from "./fixtures/test";
 import { serviceDb } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -77,13 +78,13 @@ test.beforeAll(async () => {
 
   // Two separate inserts, not one batched array: Uno must be the OLDER row by `created_at` (owner ruling
   // D4, the compare screen's own tiebreak) so step 3 below can assert it is the one marked "Keep this one".
-  const { data: uno, error: unoErr } = await svc.from("contacts")
-    .insert({ account_id: accountId, first_name: unoName, phone }).select("id").single();
+  const { data: uno, error: unoErr } = await e2eAuthor(svc.from("contacts")
+    .insert({ account_id: accountId, first_name: unoName, phone })).select("id").single();
   if (unoErr) throw new Error(`contacts-merge e2e: inserting Uno failed: ${unoErr.message}`);
   unoId = (uno as { id: string }).id;
 
-  const { data: dos, error: dosErr } = await svc.from("contacts")
-    .insert({ account_id: accountId, first_name: dosName, phone }).select("id").single();
+  const { data: dos, error: dosErr } = await e2eAuthor(svc.from("contacts")
+    .insert({ account_id: accountId, first_name: dosName, phone })).select("id").single();
   if (dosErr) throw new Error(`contacts-merge e2e: inserting Dos failed: ${dosErr.message}`);
   dosId = (dos as { id: string }).id;
 });

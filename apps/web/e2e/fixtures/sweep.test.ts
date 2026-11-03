@@ -172,9 +172,15 @@ describe("sweepStaleAccounts — the Clerk org behind each stale fixture account
     const db = {
       from: (table: string) => ({
         select: () => ({ like: async () => ({ data: rows, error: null }) }),
-        delete: () => ({
-          eq: async (_col: string, val: string) => { deletes.push(`${table}:${val}`); return { error: null }; },
-        }),
+        // `withAuthor` (F-115) calls `setHeader` on whatever `.delete()` returns, before `.eq(...)` —
+        // it must return the same chain object, which still carries `.eq`.
+        delete: () => {
+          const builder = {
+            eq: async (_col: string, val: string) => { deletes.push(`${table}:${val}`); return { error: null }; },
+            setHeader: () => builder,
+          };
+          return builder;
+        },
       }),
       storage: { from: () => ({ list: async () => ({ data: [], error: null }), remove: async () => ({ error: null }) }) },
     };
@@ -319,7 +325,11 @@ describe("removeDocumentObjects: the documents bucket is two folders deep (accou
     const db = {
       from: () => ({
         select: () => ({ like: async () => ({ data: [stale], error: null }) }),
-        delete: () => ({ eq: async () => ({ error: null }) }),
+        // Same `setHeader` shape as `fakeDb` above, for `withAuthor`.
+        delete: () => {
+          const builder = { eq: async () => ({ error: null }), setHeader: () => builder };
+          return builder;
+        },
       }),
       storage: { from: (b: string) => ({
         list: async (prefix: string) => ({
