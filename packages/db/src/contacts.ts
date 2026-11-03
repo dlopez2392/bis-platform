@@ -580,6 +580,9 @@ export async function flagMatchesOf(db: SupabaseClient, accountId: string, conta
 export async function updateContact(
   db: SupabaseClient, accountId: string, contactId: string,
   input: Partial<ContactInput>, author: RowAuthor,
+  /** F-115 (plan Task 2 Step 7): `ai_act:<id>` when the caller logs an act for this write (the web chat's fill of a
+   *  returning lead), under that same id; sent on the author header only. */
+  via?: string,
 ): Promise<{ flagged: boolean }> {
   author = requireAuthor(db, author, "updateContact");
   // Read the phone as it stands BEFORE this write, so toRow can tell an
@@ -596,7 +599,7 @@ export async function updateContact(
   const row = toRow(input, currentPhone);
   const { error } = await withAuthor(db.from("contacts")
     .update({ ...row, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", contactId), author);
+    .eq("account_id", accountId).eq("id", contactId), author, via);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
   const { actorId, actorType } = eventActorOf(author);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },

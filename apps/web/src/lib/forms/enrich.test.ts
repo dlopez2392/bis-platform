@@ -18,7 +18,7 @@ const instantReply = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/automations/instant-reply", () => ({ sendInstantReply: (...a: unknown[]) => instantReply(...a) }));
 
 import type { FormRow, serviceDb } from "@bis/db";
-import { enrich } from "./enrich";
+import { enrich, setAttribution } from "./enrich";
 
 /** The one raw read `enrich` makes on this path: the account's language (no attribution, no
  *  notify addresses, no receipt address, so nothing else reaches `db.from`). */
@@ -99,9 +99,10 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
       company_name: null, custom: {} });
     await run(chat());
     expect(dbMocks.updateContact).toHaveBeenCalledTimes(1);
+    // F-115: the first act carries the id the fill's write named (the F-115 block below pins which).
     expect(inserted()).toEqual([[
-      { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", kind: "contact_field_filled",
-        target: { field: "lastName" }, before: { value: null }, after: { value: "Ruiz" } },
+      { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        kind: "contact_field_filled", target: { field: "lastName" }, before: { value: null }, after: { value: "Ruiz" } },
       { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", kind: "contact_field_filled",
         target: { field: "email" }, before: { value: "" }, after: { value: "ana@example.com" } },
       { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", kind: "contact_field_filled",
@@ -182,6 +183,92 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
     } finally {
       uuid.mockRestore();
     }
+  });
+});
+
+// F-115 (plan Task 2 Step 7; orchestrator ruling 2026-11-02): a returning lead's fill is ONE write with ONE author.
+// From the chat, Sofía extracted it and logs contact_field_filled acts, so the write is hers and names the first
+// act; its custom fields ride the same write. From the public form it stays the customer's, with no via.
+describe("F-115: a returning lead's fill names who made it", () => {
+  const RETURNING = { id: "ct-old", first_name: "Ana", last_name: null, email: null, phone: null, company_name: null, custom: {} };
+  const SOFIA = { authorKind: "ai", authorId: null };
+  const CUSTOMER = { authorKind: "customer", authorId: "form" };
+  beforeEach(() => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct-old", existing: true, flagged: false });
+    dbMocks.getContact.mockResolvedValue(RETURNING);
+  });
+
+  it("(a) a chat fill is Sofía's, and its via is the first contact_field_filled act's id (mutation: the chat path uses the customer author -> FAILS)", async () => {
+    await run(chat());
+    const acts = inserted()[0] as { id?: string }[];
+    expect(acts[0]!.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(acts.slice(1).every((a) => a.id !== acts[0]!.id)).toBe(true);
+    expect(dbMocks.updateContact).toHaveBeenCalledTimes(1);
+    expect(dbMocks.updateContact).toHaveBeenCalledWith(DB, "acct-A", "ct-old", expect.any(Object), SOFIA, `ai_act:${acts[0]!.id}`);
+  });
+
+  it("(b) a form fill stays the customer's, with no via", async () => {
+    await run();
+    expect(dbMocks.updateContact).toHaveBeenCalledTimes(1);
+    const call = dbMocks.updateContact.mock.calls[0]!;
+    expect(call[4]).toEqual(CUSTOMER);
+    expect(call[5]).toBeUndefined();
+  });
+
+  it("a chat fill of custom fields alone logs no act, so it names none (still Sofía's write)", async () => {
+    dbMocks.getContact.mockResolvedValue({ ...RETURNING, last_name: "Ruiz", email: "a@x.example", phone: "+19560000000" });
+    const form = { ...FORM, fields: [...FORM.fields, { key: "z", kind: "custom.zone", label: "Zone" }] } as unknown as FormRow;
+    await enrich(DB, form, "sub-1", [...ANSWERS, { key: "z", label: "Zone", value: "North" }], {}, null, "en", true, chat());
+    expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
+    const call = dbMocks.updateContact.mock.calls[0]!;
+    expect(call[3]).toEqual({ custom: { zone: "North" } });
+    expect(call[4]).toEqual(SOFIA);
+    expect(call[5]).toBeUndefined();
+  });
+
+  /** A client that answers the attribution read and records each write's x-bis-author header. */
+  function attributionDb() {
+    const headers: string[] = [];
+    const db = {
+      from: (table: string) => {
+        if (table === "accounts") {
+          return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: "en" }, error: null }) }) }) };
+        }
+        if (table !== "contacts") throw new Error(`unexpected table ${table}`);
+        const read = { eq: () => read, maybeSingle: async () => ({ data: { attribution: {} }, error: null }) };
+        return {
+          select: () => read,
+          update: () => {
+            const b = {
+              eq: () => b,
+              setHeader: (n: string, v: string) => { if (n === "x-bis-author") headers.push(v); return b; },
+              then: (res: (v: { error: null }) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve({ error: null }).then(res, rej),
+            };
+            return b;
+          },
+        };
+      },
+    } as unknown as ReturnType<typeof serviceDb>;
+    return { db, headers };
+  }
+
+  it("setAttribution sends the author it is given, with no via (mutation: drop withAuthor -> FAILS)", async () => {
+    const { db, headers } = attributionDb();
+    await setAttribution(db, "acct-A", "ct-1", { utm_source: "g" }, true, { authorKind: "customer", authorId: "form" });
+    await setAttribution(db, "acct-A", "ct-1", { utm_source: "g" }, true, { authorKind: "ai", authorId: null });
+    expect(headers.map((h) => JSON.parse(h))).toEqual([{ kind: "customer", id: "form" }, { kind: "ai" }]);
+  });
+
+  it.each([
+    ["the chat's new contact", true, false, { kind: "ai" }],
+    ["the form's new contact", false, false, { kind: "customer", id: "form" }],
+    ["the chat's returning contact", true, true, { kind: "ai" }],
+    ["the form's returning contact", false, true, { kind: "customer", id: "form" }],
+  ] as const)("%s: the attribution write carries the same author as its lead (mutation: always the customer -> FAILS for the chat)", async (_l, fromChat, returning, header) => {
+    if (!returning) dbMocks.createContact.mockResolvedValue({ id: "ct-new", existing: false, flagged: false });
+    const { db, headers } = attributionDb();
+    await enrich(db, FORM, "sub-1", ANSWERS, { utm_source: "g" }, null, "en", true, fromChat ? chat() : undefined);
+    expect(headers.map((h) => JSON.parse(h))).toEqual([header]);
   });
 });
 
