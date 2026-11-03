@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, readPhoneCountryFlag, setContactPhoneCountry } from "../contacts";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * F-009's write path against the live table, on the CI project only
@@ -63,8 +65,8 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       // (account_id, contact_a, contact_b), so the pick's flag would then be
       // the designed 23505 no-op and this test could never see the pick write
       // anything (the first CI run on #151 received 'phone_country_twin').
-      const { data: twinRow, error: twinErr } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Twin", phone: "+525512345678" }).select("id").single();
+      const { data: twinRow, error: twinErr } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Twin", phone: "+525512345678" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       if (twinErr || !twinRow) throw new Error(`twin fixture insert failed: ${twinErr?.message}`);
       const twin = { id: twinRow.id as string };
       const [a, b] = [flagged.id, twin.id].sort();

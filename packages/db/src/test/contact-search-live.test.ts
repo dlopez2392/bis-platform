@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
-import { withRollback } from "./db";
+import { withRollback, SEED_AUTHOR, SEED_VIA } from "./db";
 import {
   createContact, listContacts, countContacts, searchContacts, archiveContacts, phoneDigits, contactSearchFilter,
   type ArchivedFilter,
@@ -13,6 +13,7 @@ import { userDb } from "../user-client";
 import { sanitizeSearchTerm } from "../search-term";
 import { setContactsBusiness } from "../client-groups";
 import { ensureHoldingContact } from "../voice";
+import { withAuthor } from "../row-author";
 
 /**
  * F-092 part 1 (plan Task 4, spec 4.4): the contact list's search against the real PostgREST and 0108's
@@ -115,8 +116,8 @@ describe("contact search: accents, full names and phone shapes (F-092)", () => {
   it("keeps today's own phone_key clause where the new key would not reach: a pre-F-009 +521 number and a key that merely holds 1956 are still found (mutation: emit only the new key -> FAILS)", () =>
     withTestAccount(async (db, a) => {
       // Stored before F-009 dropped Mexico's retired mobile 1: a direct insert, as createContact would normalise it.
-      const { data, error } = await db.from("contacts")
-        .insert({ account_id: a, first_name: "Legacy", phone: "+5218991234567", author_kind: "person" }).select("id").single();
+      const { data, error } = await withAuthor(db.from("contacts")
+        .insert({ account_id: a, first_name: "Legacy", phone: "+5218991234567", author_kind: "person" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       expect(error).toBeNull();
       const legacy = data!.id as string;
       const coincidence = await make(db, a, "Coincidence", undefined, "+19562195612");
@@ -243,16 +244,16 @@ async function seedCorpus(db: SupabaseClient, a: string, n: number): Promise<Cor
     .update({ merged_into: mariaG, merged_at: new Date().toISOString() }).eq("account_id", a).eq("id", merged);
   expect(mErr).toBeNull();
   // Stored before F-009 dropped Mexico's retired mobile 1: only the kept phone key finds it by "+521 899 12".
-  const { data: lg, error: lErr } = await db.from("contacts")
-    .insert({ account_id: a, first_name: "Legacy", phone: "+5218991234567", author_kind: "person" }).select("id").single();
+  const { data: lg, error: lErr } = await withAuthor(db.from("contacts")
+    .insert({ account_id: a, first_name: "Legacy", phone: "+5218991234567", author_kind: "person" }), SEED_AUTHOR, SEED_VIA).select("id").single();
   expect(lErr).toBeNull();
   const legacy = lg!.id as string;
   const ana = await make(db, a, "Ana", "Ruiz", `+1956555${String(1100 + n)}`);
   const mariana = await make(db, a, "Mariana", "Santana");
   const john = await make(db, a, "john", "doe");
-  const { error: jErr } = await db.from("contacts").update({ email: `john_doe${n}@example.com` }).eq("id", john);
+  const { error: jErr } = await withAuthor(db.from("contacts").update({ email: `john_doe${n}@example.com` }), SEED_AUTHOR, SEED_VIA).eq("id", john);
   expect(jErr).toBeNull();
-  const { error: eErr } = await db.from("contacts").update({ email: "maria.garcia@example.com" }).eq("id", mariaGL);
+  const { error: eErr } = await withAuthor(db.from("contacts").update({ email: "maria.garcia@example.com" }), SEED_AUTHOR, SEED_VIA).eq("id", mariaGL);
   expect(eErr).toBeNull();
   const nul = await make(db, a, "Nullington", "Reyes");
   const brace = await make(db, a, "Curly{x}", "Braces");
@@ -342,7 +343,7 @@ describe("as an Owner, a Technician and the agency (signed tokens; local replica
           const agency = userDb(signJwt(
             { role: "authenticated", org_id: "org_agency", app_role: "agency_admin", sub: `u_t6_agency_${Date.now()}`, exp }, SECRET!));
           const techIds = sorted(A.mariaGL, A.ana, A.cyrUpper, A.gloria);
-          const { error: tErr } = await db.from("contacts").update({ assigned_to: tech.id }).in("id", techIds);
+          const { error: tErr } = await withAuthor(db.from("contacts").update({ assigned_to: tech.id }), SEED_AUTHOR, SEED_VIA).in("id", techIds);
           if (tErr) throw new Error(tErr.message);
 
           for (const [label, user] of [["owner", owner.db], ["technician", tech.db], ["agency", agency]] as const) {
@@ -379,7 +380,7 @@ describe("as an Owner, a Technician and the agency (signed tokens; local replica
             const { data: u } = await svc.from("users").select("id").eq("clerk_user_id", sub).maybeSingle();
             if (u) {
               const uid = (u as { id: string }).id;
-              const { error: cErr } = await svc.from("contacts").update({ assigned_to: null }).eq("assigned_to", uid);
+              const { error: cErr } = await withAuthor(svc.from("contacts").update({ assigned_to: null }), SEED_AUTHOR, SEED_VIA).eq("assigned_to", uid);
               if (cErr) throw new Error(`assignment cleanup failed: ${cErr.message}`);
               const { error: mErr } = await svc.from("memberships").delete().eq("user_id", uid);
               if (mErr) throw new Error(`memberships cleanup failed: ${mErr.message}`);

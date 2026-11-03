@@ -6,6 +6,8 @@ import {
   releaseTasksOffCustomers,
 } from "../assignment";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 const RUN = Math.random().toString(36).slice(2, 10);
 async function person(db: SupabaseClient, accountId: string, tag: string, role: "owner" | "staff" | "technician") {
@@ -17,7 +19,7 @@ async function person(db: SupabaseClient, accountId: string, tag: string, role: 
   return { id: u!.id as string, clerk };
 }
 async function contact(db: SupabaseClient, accountId: string, assignee: string | null): Promise<string> {
-  const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: "C", assigned_to: assignee }).select("id").single();
+  const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: "C", assigned_to: assignee }), SEED_AUTHOR, SEED_VIA).select("id").single();
   if (error) throw error;
   return data.id as string;
 }
@@ -315,7 +317,7 @@ describe("assignment core (spec §8)", () => {
     const released = await releaseMemberAssignments(db, accountId, a.id, { authorKind: "person", authorId: other.id });
     expect(released.contacts.sort()).toEqual([c1, c2].sort());
     expect(released.tasks).toEqual([t]);
-    const { error: uErr } = await db.from("contacts").update({ assigned_to: other.id }).eq("id", c2);   // picked up meanwhile
+    const { error: uErr } = await withAuthor(db.from("contacts").update({ assigned_to: other.id }), SEED_AUTHOR, SEED_VIA).eq("id", c2);   // picked up meanwhile
     if (uErr) throw uErr;
     await reassignReleased(db, accountId, a.id, released, { authorKind: "person", authorId: other.id });
     expect(await holder(db, "contacts", c1)).toBe(a.id);

@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
-import { withRollback, actAsMember } from "./db";
+import { withRollback, actAsMember, SEED_AUTHOR, SEED_VIA } from "./db";
 import {
   insertProposal, listProposalsForCall, listPendingProposals, getProposal, listPendingProposalsForAgency,
   listPendingProposalsForContact,
@@ -19,6 +19,7 @@ import { effectiveStatus, type EvidenceRef } from "../proposal-rules";
 import { listAccountWork, listAgencyWork } from "../work-queue";
 import { addTask, deleteTaskForUndo } from "../activities";
 import { fillContactBlanks, fillContactBlanksReport } from "../contacts";
+import { withAuthor } from "../row-author";
 
 /** Far enough ahead that no read in this file sees it as aged; typed out, never computed. */
 const FUTURE = "2031-03-04T05:06:07.000Z";
@@ -44,8 +45,8 @@ async function seedCall(db: SupabaseClient, accountId: string): Promise<string> 
 }
 
 async function seedContact(db: SupabaseClient, accountId: string, over: Record<string, unknown> = {}): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: "Sam", last_name: "Rivera", ...over }).select("id").single();
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: "Sam", last_name: "Rivera", ...over }), SEED_AUTHOR, SEED_VIA).select("id").single();
   expect(error, `contacts insert failed: ${error?.message}`).toBeNull();
   return data!.id as string;
 }

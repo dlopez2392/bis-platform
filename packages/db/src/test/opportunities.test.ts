@@ -6,6 +6,8 @@ import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
 import { ensureHoldingContact } from "../voice";
 import { ensureDefaultPipeline } from "../crm-config";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
@@ -173,7 +175,7 @@ describe("opportunities", () => {
         // first leaves it dangling instead of erroring, since the JS client
         // doesn't throw on a failed delete unless the error is checked.
         await db.from("events").delete().eq("account_id", otherAccountId);
-        await db.from("contacts").delete().eq("account_id", otherAccountId);
+        await withAuthor(db.from("contacts").delete(), SEED_AUTHOR, SEED_VIA).eq("account_id", otherAccountId);
         const { error: delErr } = await db.from("accounts").delete().eq("id", otherAccountId);
         if (delErr) throw new Error(`cleanup failed: ${delErr.message}`);
       }

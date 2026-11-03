@@ -38,6 +38,8 @@ import {
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
 import { createOpportunity } from "../opportunities";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /** Stops a contact's EMAIL in the ledger the way staff's "Stop emails" does, and lifts it with a noted Resume. */
 async function stopEmail(db: Parameters<typeof appendConsentEvent>[0], accountId: string, contactId: string): Promise<string> {
@@ -1628,8 +1630,8 @@ describe("reactivation — data layer", () => {
     await withTestAccount(async (db, accountId) => {
       const contactId = await quietCustomer(db, accountId);
       await setBranding(db, accountId, SEND_READY, "user_test");
-      const { error } = await db.from("contacts")
-        .update({ marketing_email_opted_out_at: new Date("2026-09-01T00:00:00Z").toISOString() })
+      const { error } = await withAuthor(db.from("contacts")
+        .update({ marketing_email_opted_out_at: new Date("2026-09-01T00:00:00Z").toISOString() }), SEED_AUTHOR, SEED_VIA)
         .eq("id", contactId).eq("account_id", accountId);
       expect(error).toBeNull();
       const ids = (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);

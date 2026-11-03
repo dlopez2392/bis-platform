@@ -8,6 +8,8 @@ import {
 } from "../contacts";
 import { buildMatchIndex, applyImportBatch } from "../contact-import";
 import { listContactTimelinePage, type TimelineEntry } from "../record";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Contact archive (0103), the contact queries against the real PostgREST. CI only (withTestAccount, which the
@@ -20,8 +22,8 @@ import { listContactTimelinePage, type TimelineEntry } from "../record";
  */
 
 async function mk(db: SupabaseClient, accountId: string, first: string, extra: Record<string, unknown> = {}): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: first, author_kind: "person", ...extra }).select("id").single();
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: first, author_kind: "person", ...extra }), SEED_AUTHOR, SEED_VIA).select("id").single();
   if (error) throw new Error(error.message);
   return data.id as string;
 }

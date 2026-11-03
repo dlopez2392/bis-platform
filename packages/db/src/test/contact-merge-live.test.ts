@@ -3,6 +3,8 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { archiveContacts } from "../contacts";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import {
   listDuplicatePairs, countDuplicatePairs, dismissDuplicatePair, undismissDuplicatePair,
   mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf,
@@ -22,8 +24,8 @@ import {
 async function person(
   db: SupabaseClient, accountId: string, p: { first: string; last: string; phone: string },
 ): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, phone: p.phone, author_kind: "person" })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, phone: p.phone, author_kind: "person" }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error) throw new Error(`person insert failed: ${error.message}`);
   return (data as { id: string }).id;

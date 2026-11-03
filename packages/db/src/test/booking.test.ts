@@ -21,6 +21,8 @@ import {
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 import { addPlace } from "../places";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 describe("booking accessors", () => {
   it("creates the calendar lazily, once, disabled, with a public id", async () => {
@@ -1249,7 +1251,7 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
         const { id: withEmail } = await createContact(db, accountId, { firstName: "Em", email: "em@example.com" }, "user_test");
         // Stored with surrounding whitespace, the way an import or an old row
         // can hold it, so the trim is what the assertion below proves (M6).
-        const { error: rawErr } = await db.from("contacts").update({ email: "  em@example.com \n" }).eq("id", withEmail);
+        const { error: rawErr } = await withAuthor(db.from("contacts").update({ email: "  em@example.com \n" }), SEED_AUTHOR, SEED_VIA).eq("id", withEmail);
         if (rawErr) throw new Error(rawErr.message);
         const { id: noEmail } = await createContact(db, accountId, { firstName: "None" }, "user_test");
         const a = await createBooking(db, accountId, range(cal, withEmail, "15"), "user_test");

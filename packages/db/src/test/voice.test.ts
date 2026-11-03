@@ -29,6 +29,8 @@ import { emailKey as barrelEmailKey } from "../index";
 import { ensureKnowledgeSnapshot } from "../voice-knowledge";
 import { userDb } from "../user-client";
 import { serviceDb } from "../service";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Every `e164` in this file comes from `testPhoneNumber()`, never from a
@@ -1115,8 +1117,8 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
    *  `createdAt` back-dates it, as a row that old really is: the only way to make the OLDER row the one
    *  inserted SECOND, so "oldest first" is not just insertion order. */
   async function legacy(db: SupabaseClient, accountId: string, firstName: string, phone: string, createdAt?: string): Promise<string> {
-    const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone,
-      ...(createdAt === undefined ? {} : { created_at: createdAt }) })
+    const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone,
+      ...(createdAt === undefined ? {} : { created_at: createdAt }) }), SEED_AUTHOR, SEED_VIA)
       .select("id").single();
     if (error || !data) throw new Error(error?.message);
     return (data as { id: string }).id;

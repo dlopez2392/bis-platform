@@ -5,6 +5,8 @@ import { withTestAccount } from "./fixtures";
 import { ensureConversation, createMessage, incrementUnreadForMessage } from "../messaging";
 import { findReplyThread, matchSender } from "../inbound-email";
 import { mergeContacts, undoContactMerge, contactMergePreview } from "../contact-merge";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Task 7 (F-006), live half: threads and mail after a REAL merge — `ensureConversation`, `matchSender`,
@@ -21,8 +23,8 @@ const TOKEN_B = "cccccccccccccccccccccccc".slice(0, 24);
 async function person(
   db: SupabaseClient, accountId: string, p: { first: string; last: string; email?: string; phone: string },
 ): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, email: p.email ?? null, phone: p.phone, author_kind: "person" })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, email: p.email ?? null, phone: p.phone, author_kind: "person" }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error) throw new Error(`person insert failed: ${error.message}`);
   return (data as { id: string }).id;
