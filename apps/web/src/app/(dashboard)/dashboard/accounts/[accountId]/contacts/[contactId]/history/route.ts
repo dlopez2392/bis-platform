@@ -12,8 +12,11 @@ import { contactDisplayName } from "@/lib/format";
 import { dayKeyInZone } from "@/lib/booking/availability";
 import { makeTr } from "@/lib/record/copy";
 import { authorLabel } from "@/lib/record/author-mark";
+import { loggableError } from "@/lib/loggable-error";
 import { toHistoryCsv, toHistoryCsvRow, historyFilenameSlug } from "@/lib/record/history-csv";
-import { fetchBoundedChangeRows, prefetchGuard, visitEndedResponse, tooBigResponse } from "@/lib/record/history-download";
+import {
+  fetchBoundedChangeRows, prefetchGuard, visitEndedResponse, tooBigResponse, readFailedResponse,
+} from "@/lib/record/history-download";
 
 export const dynamic = "force-dynamic";
 
@@ -49,16 +52,30 @@ export async function GET(
   // every record page already use; computed before the row read so the 413 message, when it fires,
   // is in the reader's own language too.
   const prefs = await getPersonPrefs();
-  const { data: accountRow } = await db.from("accounts").select("language, timezone")
+  const { data: accountRow, error: accountErr } = await db.from("accounts").select("language, timezone")
     .eq("id", accountId).maybeSingle();
   const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  // F-115 PR C fix (review m4): this file is an audit record; an unread account row must not be
+  // silently treated as "no account language" — fail the whole download loudly instead.
+  if (accountErr) {
+    console.error(`contact history route (account ${accountId}, contact ${contactId}): account read failed: ${loggableError(accountErr)}`);
+    return readFailedResponse(locale);
+  }
 
   // F-006 part 1's own id set (loaders.ts's loadTimeline): a merge's tombstones carry their own
   // change rows (their own writes before the merge moved them), which belong on the KEPT record's
-  // download exactly as they belong on its timeline. A failed read best-effort falls back to the
-  // contact alone, rather than failing the whole download over a soft read.
-  const tombstones = await mergedIdsOf(db, accountId, contactId).catch(() => [] as string[]);
+  // download exactly as they belong on its timeline.
+  // F-115 PR C fix (review m4): a failed read used to fall back to the contact alone, silently
+  // dropping a tombstone's rows from an audit record — this fails the whole download loudly instead
+  // (logged), rather than proceed and under-report.
+  let tombstones: string[];
+  try {
+    tombstones = await mergedIdsOf(db, accountId, contactId);
+  } catch (e) {
+    console.error(`contact history route (account ${accountId}, contact ${contactId}): mergedIdsOf failed: ${loggableError(e)}`);
+    return readFailedResponse(locale);
+  }
   const ids = [contactId, ...tombstones];
 
   const fetched = await fetchBoundedChangeRows(db, accountId, { contactIds: ids });

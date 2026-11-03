@@ -29,12 +29,13 @@ const OTHER1 = "22222222-2222-4222-8222-222222222222";
 const OTHER2 = "33333333-3333-4333-8333-333333333333";
 const CONTACT_ROW = { id: C1, account_id: "a1", first_name: "Maria", last_name: "Garcia" };
 let accountRow: { language: "en" | "es" | null; timezone: string | null } = { language: null, timezone: null };
+let accountError: { message: string } | null = null;
 let nameRows: unknown[] = [CONTACT_ROW];
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {
       if (table === "accounts") {
-        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: accountRow, error: null }) }) }) };
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: accountRow, error: accountError }) }) }) };
       }
       if (table === "contacts") {
         return { select: () => ({ in: async () => ({ data: nameRows, error: null }) }) };
@@ -59,11 +60,13 @@ const fetchBoundedChangeRows = vi.fn();
 const prefetchGuard = vi.fn((_req: Request) => null as Response | null);
 const visitEndedResponse = vi.fn(() => new Response("ended", { status: 409 }));
 const tooBigResponse = vi.fn((_locale: string) => new Response("too-big", { status: 413 }));
+const readFailedResponse = vi.fn((_locale: string) => new Response("read-failed", { status: 500 }));
 vi.mock("@/lib/record/history-download", () => ({
   fetchBoundedChangeRows: (...a: unknown[]) => fetchBoundedChangeRows(...a),
   prefetchGuard: (...a: Parameters<typeof prefetchGuard>) => prefetchGuard(...a),
   visitEndedResponse: () => visitEndedResponse(),
   tooBigResponse: (...a: Parameters<typeof tooBigResponse>) => tooBigResponse(...a),
+  readFailedResponse: (...a: Parameters<typeof readFailedResponse>) => readFailedResponse(...a),
 }));
 
 const { GET } = await import("./route");
@@ -88,8 +91,10 @@ beforeEach(() => {
   prefetchGuard.mockReset().mockReturnValue(null);
   visitEndedResponse.mockClear();
   tooBigResponse.mockClear();
+  readFailedResponse.mockClear();
   personLanguage = null;
   accountRow = { language: null, timezone: null };
+  accountError = null;
   nameRows = [CONTACT_ROW];
 });
 
@@ -183,5 +188,23 @@ describe("contact history route (GET)", () => {
 
   it("the English fallback copy mentions the limit", () => {
     expect(m["history.download.tooBig"]).toContain("too long");
+  });
+
+  // F-115 PR C fix (review m4).
+  it("an error reading the account row fails loudly, never silently proceeding with an undefined account (mutation: drop the accounts error check -> FAILS)", async () => {
+    accountError = { message: "connection reset" };
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(500);
+    expect(fetchBoundedChangeRows).not.toHaveBeenCalled();
+  });
+
+  it("a failed mergedIdsOf read fails the download loudly (500), logged, rather than silently dropping merged rows (mutation: .catch(() => []) swallows it -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mergedIdsOf.mockRejectedValueOnce(new Error("merge lookup boom"));
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(500);
+    expect(fetchBoundedChangeRows).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

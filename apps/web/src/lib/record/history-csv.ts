@@ -23,11 +23,14 @@ const HEADER_KEY: Readonly<Record<Column, MessageKey>> = {
   field: "history.csv.field", before: "history.csv.before", after: "history.csv.after", cause: "history.csv.cause",
 };
 
-/** Copied from `contacts/export/route.ts`'s own (unexported) `guard`/`cell`: a cell starting with
- *  `= + - @` is a formula to Excel and Sheets, so prefixing a single quote defuses it; a cell
- *  carrying a comma, a quote or a newline is wrapped in quotes, doubling any quote inside. */
+/** Copied from `contacts/export/route.ts`'s own (unexported) `guard`/`cell`, PLUS a TAB or a CR lead
+ *  (F-115 PR C fix, review m5): Excel and Sheets still read a formula past a leading TAB or CR, the
+ *  same way they do past a leading `= + - @` — a cell starting with any of those six is a formula,
+ *  so prefixing a single quote defuses it; a cell carrying a comma, a quote or a newline is wrapped
+ *  in quotes, doubling any quote inside. The contacts export route has the same gap (not fixed here;
+ *  see the report). */
 function guard(v: string): string {
-  return /^[=+\-@]/.test(v) ? `'${v}` : v;
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
 }
 function cell(v: string): string {
   const s = guard(v);

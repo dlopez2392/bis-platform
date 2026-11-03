@@ -97,6 +97,18 @@ describe("putBackAction: outcomes", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
   });
 
+  it("the undo lookup (latestViaRowId) matches on via, record_id, author_id and field — not via alone (m3; mutation: filter on via only -> FAILS)", async () => {
+    queueAnswer({ id: 7, contact_id: "c1", client_group_id: null, record_id: "rec-1", field: "first_name" }); // readRecordRef
+    dbMocks.putBackChange.mockResolvedValue("put_back");
+    queueAnswer({ id: 99 }); // latestViaRowId
+    await putBackAction("a1", EN, 7);
+    const lookup = calls[calls.length - 1]!;
+    expect(lookup.table).toBe("record_changes");
+    expect(lookup.filters).toEqual(expect.arrayContaining([
+      ["via", "restore:7"], ["record_id", "rec-1"], ["author_id", "user_1"], ["field", "first_name"],
+    ]));
+  });
+
   it("put_back on a group row revalidates the group's page too", async () => {
     queueAnswer({ id: 7, contact_id: null, client_group_id: "g1" });
     dbMocks.putBackChange.mockResolvedValue("put_back");
@@ -144,6 +156,28 @@ describe("restoreAction: outcomes", () => {
     expect(r).toEqual({ ok: true, undo: { changeId: 100 } });
     expect(dbMocks.restoreRemoved).toHaveBeenCalledWith(REQUEST, "a1", 7, { authorKind: "person", authorId: "user_1" }, expect.any(Date));
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
+  });
+
+  it("the undo lookup matches on via, record_id and author_id; field is skipped when null (m3; a restore row's own field is always null)", async () => {
+    queueAnswer({ id: 7, contact_id: "c1", client_group_id: null, record_id: "rec-2", field: null }); // readRecordRef
+    dbMocks.restoreRemoved.mockResolvedValue("restored");
+    queueAnswer({ id: 100 }); // latestViaRowId
+    await restoreAction("a1", EN, 7);
+    const lookup = calls[calls.length - 1]!;
+    expect(lookup.table).toBe("record_changes");
+    expect(lookup.filters).toEqual(expect.arrayContaining([
+      ["via", "restore:7"], ["record_id", "rec-2"], ["author_id", "user_1"],
+    ]));
+    expect(lookup.filters.some(([c]) => c === "field")).toBe(false);
+  });
+
+  it("failed: EN and ES", async () => {
+    queueAnswer({ id: 7, contact_id: "c1", client_group_id: null });
+    dbMocks.restoreRemoved.mockResolvedValue("failed");
+    expect(await restoreAction("a1", EN, 7)).toEqual({ ok: false, message: "This couldn't be restored." });
+    queueAnswer({ id: 7, contact_id: "c1", client_group_id: null });
+    expect(await restoreAction("a1", ES, 7)).toEqual({ ok: false, message: "Esto no se pudo restaurar." });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("expired, parent_gone, already_back: EN and ES", async () => {

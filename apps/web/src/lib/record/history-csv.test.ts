@@ -42,6 +42,15 @@ describe("toHistoryCsv", () => {
     expect(dataLine).toContain(",'@x,");
   });
 
+  it("guards a cell starting with a TAB or a CR too, not just = + - @ (mutation: drop the TAB/CR guard -> FAILS)", () => {
+    const TAB = String.fromCharCode(9);
+    const CR = String.fromCharCode(13);
+    const csv = toHistoryCsv("en", [row({ before: TAB + "=HYPERLINK(evil.example)", after: CR + "+1" })]);
+    const dataLine = csv.split(String.fromCharCode(10))[1]!;
+    expect(dataLine).toContain("'" + TAB + "=HYPERLINK(evil.example)");
+    expect(dataLine).toContain("'" + CR + "+1");
+  });
+
   it("quotes a cell carrying a comma, a quote or a newline, doubling an inner quote", () => {
     const csv = toHistoryCsv("en", [row({ who: 'Ana "Ani" Cruz, Jr.' })]);
     const dataLine = csv.split("\n")[1]!;
