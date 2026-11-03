@@ -518,7 +518,9 @@ export async function createContact(
     .insert({
       account_id: accountId, ...toRow(input),
       ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
-      author_kind: author.authorKind, author_id: author.authorId,
+      // contacts_author_id_person (0091): the row's own creation stamp names an id only for a person.
+      // The header still carries an import's user id, so record_changes keeps who ran the import.
+      author_kind: author.authorKind, author_id: author.authorKind === "person" ? author.authorId : null,
     }), author, input.via).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
