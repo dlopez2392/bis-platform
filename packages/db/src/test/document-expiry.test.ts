@@ -6,6 +6,8 @@ import { createGroupWithMember } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, deleteExpiryTasksOfHiddenDocuments } from "../document-expiry";
 import { shiftDay, DOCUMENT_EXPIRY_WINDOW_DAYS } from "../document-rules";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /** The pass's reads and its one write (spec 3.2), on the service client, behind PostgREST on the replica. */
 const ACTOR = "user_dex_test";
@@ -63,9 +65,10 @@ describe("listExpiringDocuments (spec 3.2: who qualifies)", () => {
       const { error: langErr } = await db.from("accounts").update({ language: "es" }).eq("id", accountId);
       if (langErr) throw new Error(langErr.message);
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
-      const { data: place, error: placeErr } = await db.from("places").insert({ account_id: accountId, contact_id: ana, address: "1 Main St" }).select("id").single();
+      const { data: place, error: placeErr } = await withAuthor(db.from("places")
+        .insert({ account_id: accountId, contact_id: ana, address: "1 Main St" }), SEED_AUTHOR, SEED_VIA).select("id").single();
       if (placeErr) throw new Error(placeErr.message);
       const onGroup = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 15), on: { kind: "group", id: g.groupId } });
       await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 15), on: { kind: "place", id: (place as { id: string }).id } });

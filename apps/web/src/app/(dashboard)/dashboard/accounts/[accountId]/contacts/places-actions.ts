@@ -81,8 +81,8 @@ function subjectOf(raw: unknown): PlaceSubject | null {
 /** A contact's ctx is the shape it has been since 0071 (places.ts defaults a missing kind to contact). */
 const ctxFor = (subject: PlaceSubject, access: { userId: string }): PlaceCtx =>
   subject.kind === "group"
-    ? { subjectId: subject.id, subjectKind: "group", actorId: access.userId }
-    : { subjectId: subject.id, actorId: access.userId };
+    ? { subjectId: subject.id, subjectKind: "group", author: { authorKind: "person", authorId: access.userId } }
+    : { subjectId: subject.id, author: { authorKind: "person", authorId: access.userId } };
 const lowerOwner = (o: PlaceOwner): PlaceOwner =>
   o.contactId !== null ? { contactId: o.contactId.toLowerCase(), groupId: null } : { contactId: null, groupId: o.groupId.toLowerCase() };
 

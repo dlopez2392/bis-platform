@@ -3,6 +3,8 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { archiveContacts } from "../contacts";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import {
   listDuplicatePairs, countDuplicatePairs, dismissDuplicatePair, undismissDuplicatePair,
   mergeContacts, undoContactMerge, contactMergePreview, followMerge, mergedIdsOf,
@@ -22,8 +24,8 @@ import {
 async function person(
   db: SupabaseClient, accountId: string, p: { first: string; last: string; phone: string },
 ): Promise<string> {
-  const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, phone: p.phone, author_kind: "person" })
+  const { data, error } = await withAuthor(db.from("contacts")
+    .insert({ account_id: accountId, first_name: p.first, last_name: p.last, phone: p.phone, author_kind: "person" }), SEED_AUTHOR, SEED_VIA)
     .select("id").single();
   if (error) throw new Error(`person insert failed: ${error.message}`);
   return (data as { id: string }).id;
@@ -65,7 +67,7 @@ describe("contact-merge.ts's wrappers end to end (CI only: withTestAccount + ser
         await archiveContacts(db, accountId, [a1]);
         const staleOutcome = await mergeContacts(db, accountId, {
           keepId: a1, otherId: a2, choices: {}, seen: stalePreview.seen, actor: "user_test",
-        });
+        }, SEED_AUTHOR);
         expect(staleOutcome).toEqual({ status: "stale" });
 
         // A fresh preview's seen merges cleanly.
@@ -73,7 +75,7 @@ describe("contact-merge.ts's wrappers end to end (CI only: withTestAccount + ser
         if (freshPreview.status !== "ok") throw new Error(`expected ok, got ${freshPreview.status}`);
         const outcome = await mergeContacts(db, accountId, {
           keepId: a1, otherId: a2, choices: {}, seen: freshPreview.seen, actor: "user_test",
-        });
+        }, SEED_AUTHOR);
         if (outcome.status !== "merged") throw new Error(`expected merged, got ${outcome.status}`);
 
         // Every lookup by id follows the pointer.
@@ -89,13 +91,13 @@ describe("contact-merge.ts's wrappers end to end (CI only: withTestAccount + ser
         expect(await mergedIdsOf(dbB, accountB, a1)).toEqual([]);
 
         // Undo, within the window, puts the pointer back.
-        const undone = await undoContactMerge(db, accountId, outcome.mergeId, "user_test");
+        const undone = await undoContactMerge(db, accountId, outcome.mergeId, SEED_AUTHOR, "user_test");
         expect(undone).toMatchObject({ status: "undone", otherId: a2 });
         expect(await followMerge(db, accountId, a2)).toBe(a2);
         expect(await mergedIdsOf(db, accountId, a1)).toEqual([]);
 
         // A second Undo of the same merge is refused, not silently re-applied.
-        expect(await undoContactMerge(db, accountId, outcome.mergeId, "user_test")).toEqual({ status: "already_undone" });
+        expect(await undoContactMerge(db, accountId, outcome.mergeId, SEED_AUTHOR, "user_test")).toEqual({ status: "already_undone" });
       }),
     ));
 
@@ -104,19 +106,19 @@ describe("contact-merge.ts's wrappers end to end (CI only: withTestAccount + ser
       const a = await person(db, accountId, { first: "Solo", last: "Person", phone: "+19565550403" });
       const same = await mergeContacts(db, accountId, {
         keepId: a, otherId: a, choices: {}, seen: { keep: "0".repeat(32), other: "0".repeat(32) }, actor: "user_test",
-      });
+      }, SEED_AUTHOR);
       expect(same).toEqual({ status: "same" });
 
       const notFound = await mergeContacts(db, accountId, {
         keepId: a, otherId: "00000000-0000-0000-0000-000000000000", choices: {},
         seen: { keep: "0".repeat(32), other: "0".repeat(32) }, actor: "user_test",
-      });
+      }, SEED_AUTHOR);
       expect(notFound).toEqual({ status: "not_found" });
     }));
 
   it("undoContactMerge refuses an unknown merge id (\"not_found\")", () =>
     withTestAccount(async (db, accountId) => {
-      expect(await undoContactMerge(db, accountId, 999999999, "user_test")).toEqual({ status: "not_found" });
+      expect(await undoContactMerge(db, accountId, 999999999, SEED_AUTHOR, "user_test")).toEqual({ status: "not_found" });
     }));
 
   it("contactMergePreview answers \"not_found\" for an unknown contact", () =>

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, DOCUMENT_BUCKET } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -216,7 +216,7 @@ test.afterAll(async () => {
     const { error: dErr } = await svc.from("documents").delete().in("id", ids);
     if (dErr) throw new Error(`documents.spec cleanup: documents delete: ${dErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`documents.spec cleanup: contact delete: ${cErr.message}`);
 
   // Re-read: no row, no contact, and no object under any document folder this file ever made.
@@ -567,7 +567,16 @@ test("9. Take photo: hidden on a desktop; on a phone it is shown and opens the c
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(contactUrl());
   // On a phone the card is closed until tapped (DESIGN.md: what they have, closed until tapped).
-  await recordPage(page).locator('[data-record-card="documents"] h2 > button[aria-expanded]').click();
+  const toggle = recordPage(page).locator('[data-record-card="documents"] h2 > button[aria-expanded]');
+  await toggle.click();
+  // The click can race hydration on a fresh hard navigation (the button is
+  // server-rendered and clickable before React attaches its handler); confirm
+  // the disclosure actually opened — record-page.spec.ts and group-page.spec.ts
+  // use the same aria-expanded check after this exact click — before waiting
+  // on the card's own (separately-timed) data read below. A closed disclosure
+  // mounts no body at all, so without this the "N files" wait below would
+  // report "element(s) not found" for either reason and tell a reader nothing.
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
   const takePhoto = card(page).locator("[data-take-photo]");
   await expect(takePhoto).toBeVisible();

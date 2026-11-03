@@ -67,7 +67,7 @@ export const opportunityStageKind: KindDef<"opportunity_stage", OpportunityStage
   },
 
   async apply({ db, accountId, userId }, p) {
-    await moveOpportunityToStage(db, accountId, p.opportunityId, p.toStageId, userId);
+    await moveOpportunityToStage(db, accountId, p.opportunityId, p.toStageId, { authorKind: "person", authorId: userId });
     return { ref: { opportunityId: p.opportunityId, fromStageId: p.fromStageId, toStageId: p.toStageId } };
   },
 
@@ -77,7 +77,7 @@ export const opportunityStageKind: KindDef<"opportunity_stage", OpportunityStage
       if (!r) return "changed";
       const deal = await readDeal(db, accountId, r.opportunityId);
       if (!deal || deal.status !== "open" || deal.stage_id !== r.toStageId) return "changed";
-      await moveOpportunityToStage(db, accountId, r.opportunityId, r.fromStageId, userId);
+      await moveOpportunityToStage(db, accountId, r.opportunityId, r.fromStageId, { authorKind: "person", authorId: userId });
       return "undone";
     },
   },

@@ -50,7 +50,8 @@ describe("mergeContactsAction", () => {
     dbMocks.mergeContacts.mockResolvedValue({ status: "merged", mergeId: 42, moved: { messages: 3 } });
     const r = await mergeContactsAction("a1", input);
     expect(r).toEqual({ ok: true, mergeId: 42, keptId: KEEP });
-    expect(dbMocks.mergeContacts).toHaveBeenCalledWith(REQUEST, "a1", { keepId: KEEP, otherId: OTHER, choices: input.choices, seen: input.seen });
+    expect(dbMocks.mergeContacts).toHaveBeenCalledWith(REQUEST, "a1", { keepId: KEEP, otherId: OTHER, choices: input.choices, seen: input.seen },
+      { authorKind: "person", authorId: STAFF.userId });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${KEEP}`);
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${OTHER}`);
@@ -107,7 +108,7 @@ describe("undoMergeAction", () => {
     dbMocks.undoContactMerge.mockResolvedValue({ status: "undone", otherId: OTHER, keptNew: 2, keptEdits: ["email"] });
     dbMocks.mergeKeptIdOf.mockResolvedValueOnce(KEEP);
     expect(await undoMergeAction("a1", 42)).toEqual({ ok: true, otherId: OTHER, keptNew: 2, keptEdits: ["email"] });
-    expect(dbMocks.undoContactMerge).toHaveBeenCalledWith(REQUEST, "a1", 42);
+    expect(dbMocks.undoContactMerge).toHaveBeenCalledWith(REQUEST, "a1", 42, { authorKind: "person", authorId: STAFF.userId });
     expect(dbMocks.mergeKeptIdOf).toHaveBeenCalledWith(REQUEST, "a1", 42);
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${OTHER}`);

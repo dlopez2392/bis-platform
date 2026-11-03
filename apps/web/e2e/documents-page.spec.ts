@@ -8,7 +8,7 @@ import { openExpiryTasks } from "../src/lib/automations/passes/documents-expiry"
 import { expiryTaskTitle } from "../src/lib/documents/expiry-task";
 import { m } from "../src/lib/messages";
 import type { Locale } from "../src/lib/i18n/locale";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -140,7 +140,7 @@ test.afterAll(async () => {
     const { error: delErr } = await svc.from("documents").delete().in("id", ids);
     if (delErr) throw new Error(`cleanup: documents delete: ${delErr.message}`);
   }
-  const { error: cErr } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId);
+  const { error: cErr } = await e2eAuthor(svc.from("contacts").delete()).eq("account_id", accountId).eq("id", contactId);
   if (cErr) throw new Error(`cleanup: contact delete: ${cErr.message}`);
 
   const { data: leftTasks, error: ltErr } = await svc.from("tasks").select("id")

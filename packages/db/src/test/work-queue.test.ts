@@ -7,6 +7,8 @@ import { createDocument } from "../documents";
 import { createGroupWithMember } from "../client-groups";
 import { ensureDocumentExpiryTask } from "../document-expiry";
 import { createContact } from "../contacts";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 describe("listAccountWork", () => {
   it("returns an open task and omits a completed one", async () => {
@@ -25,8 +27,8 @@ describe("listAccountWork", () => {
 
   it("includes a conversation with unread messages", async () => {
     await withTestAccount(async (db, accountId) => {
-      const { data: c } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Sam", last_name: "Rivera" })
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Sam", last_name: "Rivera" }), SEED_AUTHOR, SEED_VIA)
         .select("id").single();
       const { data: convo } = await db.from("conversations").insert({
         account_id: accountId, contact_id: c!.id, unread_count: 2,
@@ -41,8 +43,8 @@ describe("listAccountWork", () => {
   it("includes a stale booking nobody marked completed or no_show", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
-      const { data: c } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Jo", last_name: "Kim" })
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Jo", last_name: "Kim" }), SEED_AUTHOR, SEED_VIA)
         .select("id").single();
       const booking = await createBooking(db, accountId, {
         calendarId: cal.id, contactId: c!.id,
@@ -57,8 +59,8 @@ describe("listAccountWork", () => {
 
   it("an open task on a contact suppresses that contact's derived rows", async () => {
     await withTestAccount(async (db, accountId) => {
-      const { data: c } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Ann", last_name: "Lee" })
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Ann", last_name: "Lee" }), SEED_AUTHOR, SEED_VIA)
         .select("id").single();
       await db.from("conversations").insert({
         account_id: accountId, contact_id: c!.id, unread_count: 2,
@@ -76,8 +78,8 @@ describe("listAccountWork", () => {
 
   it("carries the call's summary as the conversation row's title", async () => {
     await withTestAccount(async (db, accountId) => {
-      const { data: c } = await db.from("contacts")
-        .insert({ account_id: accountId, first_name: "Nora", last_name: "Diaz" })
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Nora", last_name: "Diaz" }), SEED_AUTHOR, SEED_VIA)
         .select("id").single();
       const { data: convo } = await db.from("conversations").insert({
         account_id: accountId, contact_id: c!.id, unread_count: 1,
@@ -158,7 +160,7 @@ describe("listAccountWork", () => {
   it("an expiry To-do carries its file, its category and its household; a plain To-do carries no such key (S-07 3a; mutations: always set documentFocus -> the plain row FAILS; drop the embed -> category null -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_wq")).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa Ana", null, "user_wq");
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa Ana", null, { authorKind: "person", authorId: "user_wq" });
       if (g.status !== "ok") throw new Error(g.status);
       const onAna = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "S", category: "insurance", expiresOn: "2030-03-10", ownersOnly: false, source: "upload", createdBy: "user_wq" });
       const onCasa = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "P", category: "permit", expiresOn: "2030-03-12", ownersOnly: false, source: "upload", createdBy: "user_wq" });

@@ -110,7 +110,7 @@ export async function createGroupAction(
     const contact = await getContact(await dbForRequest(), accountId, contactId);
     if (!contact) return refuse(L, accountId, "contact not visible", { contact: contactId });
     if (contact.holds_shared_number) return refuse(L, accountId, HOLDING, { contact: contactId });
-    const r = await createGroupWithMember(serviceDb(), accountId, contactId, kind, name, null, userId);
+    const r = await createGroupWithMember(serviceDb(), accountId, contactId, kind, name, null, { authorKind: "person", authorId: userId });
     if (r.status !== "ok") return r.status === "invalid_name" ? failed : refuse(L, accountId, r.status, { contact: contactId });
     revalidateContacts(accountId, contactId);
     return { ok: true, memberId: r.memberId, name: r.name, existed: r.existed };
@@ -134,7 +134,7 @@ export async function addToGroupAction(
       return refuse(L, accountId, "contact or group not visible", ids);
     }
     if (contact.holds_shared_number) return refuse(L, accountId, HOLDING, ids);
-    const r = await addContactToGroup(serviceDb(), accountId, contactId, groupId, null, userId);
+    const r = await addContactToGroup(serviceDb(), accountId, contactId, groupId, null, { authorKind: "person", authorId: userId });
     if (r.status !== "ok") return refuse(L, accountId, r.status, ids);
     // Joining a business rewrites contacts.company_name (0069's trigger), which the list and the page show.
     revalidateContacts(accountId, contactId);
@@ -153,7 +153,7 @@ export async function setRoleAction(
   const L = "setRoleAction";
   return guarded<{ previous: string | null }>(L, accountId, async () => {
     if (!(await provenMembership(accountId, memberId))) return refuse(L, accountId, "membership not visible", { member: memberId });
-    const r = await updateMembership(serviceDb(), accountId, memberId, { role }, userId);
+    const r = await updateMembership(serviceDb(), accountId, memberId, { role }, { authorKind: "person", authorId: userId });
     return r.status === "ok" ? { ok: true, previous: r.previous.role } : refuse(L, accountId, r.status, { member: memberId });
   });
 }
@@ -167,7 +167,7 @@ export async function setBillingAction(
   const L = "setBillingAction";
   return guarded<{ previous: boolean }>(L, accountId, async () => {
     if (!(await provenMembership(accountId, memberId))) return refuse(L, accountId, "membership not visible", { member: memberId });
-    const r = await updateMembership(serviceDb(), accountId, memberId, { isBilling }, userId);
+    const r = await updateMembership(serviceDb(), accountId, memberId, { isBilling }, { authorKind: "person", authorId: userId });
     return r.status === "ok" ? { ok: true, previous: r.previous.isBilling } : refuse(L, accountId, r.status, { member: memberId });
   });
 }
@@ -181,7 +181,7 @@ export async function makePrimaryAction(
   return guarded<{ previous: string | null }>(L, accountId, async () => {
     const proven = await provenMembership(accountId, memberId);
     if (!proven) return refuse(L, accountId, "membership not visible", { member: memberId });
-    const r = await setPrimaryMembership(serviceDb(), accountId, memberId, userId);
+    const r = await setPrimaryMembership(serviceDb(), accountId, memberId, { authorKind: "person", authorId: userId });
     if (r.status !== "ok") return refuse(L, accountId, r.status, { member: memberId });
     revalidateContacts(accountId, proven.contactId);
     return { ok: true, previous: r.previous };
@@ -197,7 +197,7 @@ export async function removeMembershipAction(
   return guarded<{ removed: GroupMemberSnapshot }>(L, accountId, async () => {
     const proven = await provenMembership(accountId, memberId);
     if (!proven) return refuse(L, accountId, "membership not visible", { member: memberId });
-    const r = await removeMembership(serviceDb(), accountId, memberId, userId);
+    const r = await removeMembership(serviceDb(), accountId, memberId, { authorKind: "person", authorId: userId });
     if (r.status !== "ok") return refuse(L, accountId, r.status, { member: memberId });
     revalidateContacts(accountId, proven.contactId);
     revalidatePath(groupPath(accountId, proven.groupId));
@@ -277,7 +277,7 @@ export async function restoreMembershipAction(accountId: string, raw: GroupMembe
       // caller may not choose who the group's Call reaches, so an Undo cannot be a way to choose it.
       toRestore = { ...snapshot, is_primary_contact: removal.wasPrimaryContact };
     }
-    const r = await restoreMembership(serviceDb(), accountId, toRestore, userId);
+    const r = await restoreMembership(serviceDb(), accountId, toRestore, { authorKind: "person", authorId: userId });
     if (r !== "ok") return refuse(L, accountId, r, ids);
     revalidateContacts(accountId, snapshot.contact_id);
     revalidatePath(groupPath(accountId, snapshot.client_group_id));
@@ -301,7 +301,7 @@ export async function renameGroupAction(
   const L = "renameGroupAction";
   return guarded<{ previous: string }>(L, accountId, async () => {
     if (!(await provenGroupForManager(access, accountId, groupId))) return refuse(L, accountId, "not a manager, or group not visible", { group: groupId });
-    const r = await updateGroup(serviceDb(), accountId, groupId, { name }, access.userId);
+    const r = await updateGroup(serviceDb(), accountId, groupId, { name }, { authorKind: "person", authorId: access.userId });
     if (r.status === "name_taken") return { ok: false, error: "groups.nameTaken" };
     if (r.status !== "ok") return refuse(L, accountId, r.status, { group: groupId });
     // Every member's Business name can change (a business group). The list is revalidated here; the
@@ -325,7 +325,7 @@ export async function setBillingAddressAction(
   const L = "setBillingAddressAction";
   return guarded<{ previous: string | null }>(L, accountId, async () => {
     if (!(await provenGroupForManager(access, accountId, groupId))) return refuse(L, accountId, "not a manager, or group not visible", { group: groupId });
-    const r = await updateGroup(serviceDb(), accountId, groupId, { billingAddress: address }, access.userId);
+    const r = await updateGroup(serviceDb(), accountId, groupId, { billingAddress: address }, { authorKind: "person", authorId: access.userId });
     return r.status === "ok" ? { ok: true, previous: r.previous.billingAddress } : refuse(L, accountId, r.status, { group: groupId });
   });
 }
@@ -362,7 +362,7 @@ export async function setGroupPrimaryContactAction(
       }
       if (proven.groupId.toLowerCase() !== groupId) return refuse(L, accountId, "membership of another group", ids);
     }
-    const r = await setGroupPrimaryContact(serviceDb(), accountId, groupId, memberId, access.userId);
+    const r = await setGroupPrimaryContact(serviceDb(), accountId, groupId, memberId, { authorKind: "person", authorId: access.userId });
     if (r.status !== "ok") {
       // Spec §10: a failure is logged, ids only. The group or member went between the proof and the write.
       console.warn(`${L}: account ${accountId}: groups.failed (not_found): group ${groupId}, member ${memberId ?? "none"}`);

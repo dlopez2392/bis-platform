@@ -24,7 +24,12 @@ export type AiActData =
   | { kind: "contact_created"; target: { messageId?: string; submissionId?: string }; before: null; after: null }
   | { kind: "contact_field_filled"; target: { field: ContactFieldName }; before: { value: string | null }; after: { value: string } };
 
-export type NewAiAct = AiActData & { actor: AiActActor; callId: string | null; chatId: string | null; contactId: string };
+export type NewAiAct = AiActData & {
+  actor: AiActActor; callId: string | null; chatId: string | null; contactId: string;
+  /** F-115 (plan Task 2 Step 7): set when the act's write already named it (`via: ai_act:<id>`); absent, insertAiActs
+   *  mints one. */
+  id?: string;
+};
 export type AiAct = NewAiAct & {
   id: string; accountId: string; createdAt: string; undoneAt: string | null; undoneBy: string | null; undoNotified: boolean;
 };

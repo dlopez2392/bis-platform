@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAs, actAsOwner, sendAuthor } from "./db";
 
 /**
  * Mine, Unassigned and the Technician (spec §5). Every customer-data table is
@@ -399,9 +399,11 @@ describe("roles and release (spec §5.1, §8)", () => {
       .rejects.toMatchObject({ code: "23514" });
     expect((await c.query("select public.set_account_member_role($1,$2,'technician') as r", [s.acct, s.users.staff])).rows[0]).toEqual({ r: "ok" });
   }));
-  /** The release as the server calls it: as service_role, never as the superuser this suite connects as. */
+  /** The release as the server calls it: as service_role, never as the superuser this suite connects as, with the
+   *  author releaseMemberAssignments sends for the team page's removal: the Owner who removed them (F-115). */
   const release = async (c: Client, acct: string, user: string) => {
     await c.query("set local role service_role");
+    await sendAuthor(c, { authorKind: "person", authorId: SUB.owner });
     const { rows: [r] } = await c.query<{ j: { contacts: string[]; tasks: string[] } }>(
       "select public.release_member_assignments($1,$2) as j", [acct, user]);
     await actAsOwner(c);

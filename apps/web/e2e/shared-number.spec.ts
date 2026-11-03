@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, ensureHoldingContact, ensureConversation, createMessage, deleteContacts } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from the Playwright runner
 // process directly (seeding, cleanup), not through a Next request.
@@ -133,7 +134,7 @@ test.afterAll(async () => {
       fail(`shared-number e2e cleanup: reading/deleting conversations failed: ${String(e)}`);
     }
     try {
-      const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc });
+      const result = await deleteContacts(svc, accountId, ids, { serviceDb: svc }, E2E_AUTHOR);
       if (result.deleted !== ids.length) {
         fail(`shared-number e2e cleanup: deleteContacts deleted ${result.deleted} of ${ids.length} `
           + `(skippedBlocked ${result.skippedBlocked}, skippedFiles ${result.skippedFiles})`);

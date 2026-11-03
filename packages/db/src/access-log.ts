@@ -21,6 +21,8 @@ export function isAgencyVisitReason(v: unknown): v is AgencyVisitReason {
 export const ACCESS_LOG_KINDS = [
   "contact", "group", "call", "conversation", "document_view", "document_download", "document_share",
   "form_answers", "customer_list_export",
+  // F-115 (0112): an agency download of one record's history; recordId is the contact's or the group's id.
+  "record_history_export",
 ] as const;
 export type AccessLogKind = (typeof ACCESS_LOG_KINDS)[number];
 function isAccessLogKind(v: unknown): v is AccessLogKind {
@@ -109,7 +111,7 @@ export async function readAgencyActorName(
 
 export type AccessLogCounts = {
   contact: number; group: number; call: number; conversation: number; file: number; form_answers: number;
-  customer_list_export: number;
+  customer_list_export: number; record_history_export: number;
 };
 export type AccessLogItem = { kind: AccessLogKind; recordId: string | null; itemCount: number | null; firstOpenedAt: string };
 export type AccessLogVisit = {
@@ -130,7 +132,8 @@ export async function readAccessLogPage(
   return parseAccessLogPage(data, limit);
 }
 
-const COUNT_KEYS = ["contact", "group", "call", "conversation", "file", "form_answers", "customer_list_export"] as const;
+const COUNT_KEYS = ["contact", "group", "call", "conversation", "file", "form_answers", "customer_list_export",
+  "record_history_export"] as const;
 
 function bad(what: string): never {
   throw new Error(`parseAccessLogPage: unexpected ${what}`);

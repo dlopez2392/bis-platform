@@ -101,19 +101,19 @@ describe("every write proves its target through the request client first (mutati
     expect(await A.addToGroupAction("a1", C, G)).toEqual({ ok: true, memberId: M });
     expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", C);
     expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", G);
-    expect(db.addContactToGroup).toHaveBeenCalledWith(SERVICE, "a1", C, G, null, "user_1");
+    expect(db.addContactToGroup).toHaveBeenCalledWith(SERVICE, "a1", C, G, null, { authorKind: "person", authorId: "user_1" });
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
   });
 
   const membershipCases = [
     { name: "role", run: () => A.setRoleAction("a1", M, "Madre"), write: db.updateMembership,
-      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", M, { role: "Madre" }, "user_1"] },
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", M, { role: "Madre" }, { authorKind: "person", authorId: "user_1" }] },
     { name: "pays", run: () => A.setBillingAction("a1", M, true), write: db.updateMembership,
-      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", M, { isBilling: true }, "user_1"] },
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", M, { isBilling: true }, { authorKind: "person", authorId: "user_1" }] },
     { name: "main", run: () => A.makePrimaryAction("a1", M), write: db.setPrimaryMembership,
-      ok: { status: "ok", previous: null }, args: [SERVICE, "a1", M, "user_1"] },
+      ok: { status: "ok", previous: null }, args: [SERVICE, "a1", M, { authorKind: "person", authorId: "user_1" }] },
     { name: "remove", run: () => A.removeMembershipAction("a1", M), write: db.removeMembership,
-      ok: { status: "ok", removed: snap() }, args: [SERVICE, "a1", M, "user_1"] },
+      ok: { status: "ok", removed: snap() }, args: [SERVICE, "a1", M, { authorKind: "person", authorId: "user_1" }] },
   ];
   it.each(membershipCases)("$name: an unseen membership never reaches the service write", async ({ run, write }) => {
     db.readMembership.mockResolvedValue(null);
@@ -207,7 +207,7 @@ describe("I1: a narrow caller restores only a membership THEY removed (no Undo i
     expect(chain.contains).toHaveBeenCalledWith("payload", { memberId: M, contactId: C, groupId: G });
     expect(query.orders).toEqual([["created_at", false], ["id", false]]);
     expect(chain.limit).toHaveBeenCalledWith(1);
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", snap(), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", snap(), { authorKind: "person", authorId: "user_1" });
   });
   it("the removal must be within the last 24 hours: the lookup is bounded by created_at (final review minor 7; mutation: drop the .gte(created_at) bound -> FAILS)", async () => {
     vi.useFakeTimers();
@@ -262,7 +262,7 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
     expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: true, previous: MB });
     expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", G);
     expect(db.readMembership).toHaveBeenCalledWith(REQUEST, "a1", M);
-    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, M, "user_1");
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, M, { authorKind: "person", authorId: "user_1" });
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${G}`);
   });
   it("a group the request client cannot see is refused and never written (mutation: skip the readGroup proof -> FAILS)", async () => {
@@ -314,7 +314,7 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
     db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: M });
     expect(await A.setGroupPrimaryContactAction("a1", G, null)).toEqual({ ok: true, previous: M });
     expect(db.readMembership).not.toHaveBeenCalled();
-    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, null, "user_1");
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, null, { authorKind: "person", authorId: "user_1" });
   });
   it("uppercase ids are the same group and member: proven, written and revalidated lowercase (review minor 2; mutation: drop the lowercasing -> FAILS)", async () => {
     access.role = "owner";
@@ -327,7 +327,7 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
     expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", LG);
     expect(db.readMembership).toHaveBeenCalledWith(REQUEST, "a1", LM);
     // setGroupPrimaryContact skips its event when previous === memberId: that compare needs the stored (lowercase) form.
-    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", LG, LM, "user_1");
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", LG, LM, { authorKind: "person", authorId: "user_1" });
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${LG}`);
   });
   it("a bad id is refused before any read (mutation: drop the isUuid checks -> readGroup runs, FAILS)", async () => {
@@ -346,17 +346,17 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
   it("a snapshot claiming the flag, whose removal event lacks wasPrimaryContact, is restored WITHOUT it (mutation: pass the snapshot through -> FAILS)", async () => {
     events.data = [removal()];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), { authorKind: "person", authorId: "user_1" });
   });
   it("only a literal true counts: the text 'true' in a payload is not the flag (mutation: read it by truthiness -> FAILS)", async () => {
     events.data = [removal({ was: "true" })];
     await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never);
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), { authorKind: "person", authorId: "user_1" });
   });
   it("the removal event saying wasPrimaryContact restores the flag (mutation: always false -> FAILS)", async () => {
     events.data = [removal({ was: true })];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: false } as never)).toEqual({ ok: true });
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), { authorKind: "person", authorId: "user_1" });
   });
   it("the lookup selects the actor and the payload it judges by (mutation: select id only -> FAILS)", async () => {
     events.data = [removal()];
@@ -387,7 +387,7 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
     // Without that event the caller's older removal is the newest, and it vouches: the hole review fix 2 closed.
     events.data = [removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true })];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), { authorKind: "person", authorId: "user_1" });
   });
   it("cleared, then removed again by the caller: the newest removal's flag (false) decides, not the older true (mutation: read the removals unordered -> FAILS)", async () => {
     events.data = [
@@ -395,7 +395,7 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
       removal({ id: 9, at: "2026-10-12T11:00:00.000Z", was: false }),
     ];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), { authorKind: "person", authorId: "user_1" });
   });
   it("two removals in the same instant: the later-written one (higher id) decides (mutation: drop the id tiebreak -> FAILS)", async () => {
     // Stored caller-first, so a sort on created_at alone (stable) would leave the caller's row on top.
@@ -410,7 +410,7 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
   it("Staff's snapshot passes through as it came (they may choose the call-first member anyway)", async () => {
     access.role = "staff";
     await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never);
-    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), { authorKind: "person", authorId: "user_1" });
   });
   it("restore and remove revalidate the group's own page too (mutation: drop either groupPath revalidate -> FAILS)", async () => {
     access.role = "staff";
@@ -458,19 +458,19 @@ describe("S-03 2a final review: ids from the browser are lowercased before any r
     expect(await A.restoreMembershipAction("a1", UP as never)).toEqual({ ok: true });
     expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", LC);
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1",
-      expect.objectContaining({ id: LM, contact_id: LC, client_group_id: LG }), "user_1");
+      expect.objectContaining({ id: LM, contact_id: LC, client_group_id: LG }), { authorKind: "person", authorId: "user_1" });
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${LG}`);
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${LC}`);
   });
   it.each([
     { name: "remove", run: () => A.removeMembershipAction("a1", LM.toUpperCase()), write: db.removeMembership,
-      ok: { status: "ok", removed: { ...UP, id: LM } }, args: [SERVICE, "a1", LM, "user_1"] },
+      ok: { status: "ok", removed: { ...UP, id: LM } }, args: [SERVICE, "a1", LM, { authorKind: "person", authorId: "user_1" }] },
     { name: "role", run: () => A.setRoleAction("a1", LM.toUpperCase(), "Madre"), write: db.updateMembership,
-      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { role: "Madre" }, "user_1"] },
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { role: "Madre" }, { authorKind: "person", authorId: "user_1" }] },
     { name: "pays", run: () => A.setBillingAction("a1", LM.toUpperCase(), true), write: db.updateMembership,
-      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { isBilling: true }, "user_1"] },
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { isBilling: true }, { authorKind: "person", authorId: "user_1" }] },
     { name: "main", run: () => A.makePrimaryAction("a1", LM.toUpperCase()), write: db.setPrimaryMembership,
-      ok: { status: "ok", previous: null }, args: [SERVICE, "a1", LM, "user_1"] },
+      ok: { status: "ok", previous: null }, args: [SERVICE, "a1", LM, { authorKind: "person", authorId: "user_1" }] },
   ])("$name: an uppercase member id is proven and written lowercase (mutation: drop the member id's lowercasing -> FAILS)", async ({ run, write, ok, args }) => {
     db.readMembership.mockResolvedValue({ contactId: LC, groupId: LG });
     write.mockResolvedValue(ok);
@@ -485,9 +485,9 @@ describe("S-03 2a final review: ids from the browser are lowercased before any r
     db.addContactToGroup.mockResolvedValue({ status: "ok", memberId: LM });
     db.updateGroup.mockResolvedValue({ status: "ok", previous: { name: "Acme", billingAddress: null } });
     expect((await A.createGroupAction("a1", LC.toUpperCase(), "business", "Acme")).ok).toBe(true);
-    expect(db.createGroupWithMember).toHaveBeenCalledWith(SERVICE, "a1", LC, "business", "Acme", null, "user_1");
+    expect(db.createGroupWithMember).toHaveBeenCalledWith(SERVICE, "a1", LC, "business", "Acme", null, { authorKind: "person", authorId: "user_1" });
     expect((await A.addToGroupAction("a1", LC.toUpperCase(), LG.toUpperCase())).ok).toBe(true);
-    expect(db.addContactToGroup).toHaveBeenCalledWith(SERVICE, "a1", LC, LG, null, "user_1");
+    expect(db.addContactToGroup).toHaveBeenCalledWith(SERVICE, "a1", LC, LG, null, { authorKind: "person", authorId: "user_1" });
     expect((await A.renameGroupAction("a1", LG.toUpperCase(), "Acme Roofing")).ok).toBe(true);
     expect((await A.setBillingAddressAction("a1", LG.toUpperCase(), "1 Main St")).ok).toBe(true);
     expect(db.updateGroup.mock.calls.map((c) => c[2])).toEqual([LG, LG]);
@@ -509,7 +509,7 @@ describe("A6: rename and billing address are Owner, Staff and agency only", () =
     db.updateGroup.mockResolvedValue({ status: "name_taken" });
     expect(await A.renameGroupAction("a1", G, "Beta")).toEqual({ ok: false, error: "groups.nameTaken" });
     expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", G);
-    expect(db.updateGroup).toHaveBeenCalledWith(SERVICE, "a1", G, { name: "Beta" }, "user_1");
+    expect(db.updateGroup).toHaveBeenCalledWith(SERVICE, "a1", G, { name: "Beta" }, { authorKind: "person", authorId: "user_1" });
   });
   it("Staff's billing address is proven on the REQUEST client, and null clears it (the Undo of a first address)", async () => {
     access.role = "staff";
@@ -517,7 +517,7 @@ describe("A6: rename and billing address are Owner, Staff and agency only", () =
     db.updateGroup.mockResolvedValue({ status: "ok", previous: { name: "Acme", billingAddress: "1 Main St" } });
     expect(await A.setBillingAddressAction("a1", G, null)).toEqual({ ok: true, previous: "1 Main St" });
     expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", G);
-    expect(db.updateGroup).toHaveBeenCalledWith(SERVICE, "a1", G, { billingAddress: null }, "user_1");
+    expect(db.updateGroup).toHaveBeenCalledWith(SERVICE, "a1", G, { billingAddress: null }, { authorKind: "person", authorId: "user_1" });
   });
 });
 
@@ -542,7 +542,7 @@ describe("input shape", () => {
     db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
     db.updateMembership.mockResolvedValue({ status: "ok", previous: { role: "Madre", isBilling: false } });
     expect(await A.setRoleAction("a1", M, null)).toEqual({ ok: true, previous: "Madre" });
-    expect(db.updateMembership).toHaveBeenCalledWith(SERVICE, "a1", M, { role: null }, "user_1");
+    expect(db.updateMembership).toHaveBeenCalledWith(SERVICE, "a1", M, { role: null }, { authorKind: "person", authorId: "user_1" });
   });
 });
 

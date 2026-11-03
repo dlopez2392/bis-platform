@@ -301,6 +301,31 @@ describe("0105: note_agency_open", () => {
     }));
 });
 
+describe("0112: an agency download of a record's history (F-115, owner ruling Q5)", () => {
+  it("record_history_export needs the record's id and takes no count; one note per record per visit, like an open (mutations: leave it out of the kind CHECK -> FAILS; treat it as a count-bearing export in record_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "hist");
+      await start(c, a.accountId);
+      const x = await uuid(c);
+      expect(await note(c, a.accountId, "record_history_export", x)).toBe("ok");
+      expect(await note(c, a.accountId, "record_history_export", x)).toBe("ok");
+      await actAsOwner(c);
+      const { rows } = await c.query("select kind, record_id, item_count from public.agency_visit_items where account_id = $1", [a.accountId]);
+      expect(rows).toEqual([{ kind: "record_history_export", record_id: x, item_count: null }]);
+      await c.query("set local role service_role");
+      const call = "select public.note_agency_open($1, $2, $3, $4, $5, $6)";
+      // No record: refused by agency_visit_items_record_check.
+      expect(await refusal(c, call, [a.accountId, ACTOR, SESSION, "record_history_export", null, null]))
+        .toMatchObject({ code: "23514", message: expect.stringContaining("agency_visit_items_record_check") });
+      await c.query("reset role");
+      // A count with it: refused by agency_visit_items_export_count_check (note_agency_open never sends one).
+      const v = (await c.query<{ id: string }>("select id from public.agency_visits where account_id = $1", [a.accountId])).rows[0]!.id;
+      expect(await refusal(c,
+        "insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count) values ($1, $2, 'record_history_export', $3, 3)",
+        [v, a.accountId, await uuid(c)])).toMatchObject({ code: "23514", message: expect.stringContaining("agency_visit_items_export_count_check") });
+    }));
+});
+
 describe("0105: who may call what", () => {
   it("EXECUTE: service_role the three writers and the window, authenticated the reader only, anon nothing; every function an invoker ending its search_path in pg_temp (mutation: drop `public` from a revoke line -> FAILS)", () =>
     withRollback(async (c) => {
@@ -340,6 +365,7 @@ describe("0105: access_log_page", () => {
       await itemAt(c, newest, a.accountId, "document_share", d3, "47 minutes 30 seconds");   // d3 only shared: still a file opened
       await itemAt(c, newest, a.accountId, "contact", x, "47 minutes");
       await itemAt(c, newest, a.accountId, "customer_list_export", null, "46 minutes", 12);
+      await itemAt(c, newest, a.accountId, "record_history_export", x, "46 minutes 30 seconds");   // 0112
       await actAsOwner(c);
       await c.query(
         `insert into public.agency_visit_items (visit_id, account_id, kind, record_id, first_opened_at)
@@ -351,7 +377,9 @@ describe("0105: access_log_page", () => {
       const p1 = await page(null, 2);
       expect(p1.total).toBe(3);
       expect(p1.visits.map((v: { id: string }) => v.id)).toEqual([newest, middle, oldest]);
-      expect(p1.visits[0].counts).toEqual({ contact: 1, group: 0, call: 0, conversation: 0, file: 3, form_answers: 0, customer_list_export: 1 });
+      // 0112 adds record_history_export to the counts (mutation: drop its line from access_log_page -> FAILS).
+      expect(p1.visits[0].counts).toEqual({ contact: 1, group: 0, call: 0, conversation: 0, file: 3, form_answers: 0, customer_list_export: 1,
+        record_history_export: 1 });
       expect(p1.visits[0].items[0]).toMatchObject({ kind: "customer_list_export", record_id: null, item_count: 12 });
       expect(p1.visits[0].ended_at).not.toBeNull();
       expect(p1.visits[1].items).toHaveLength(100);

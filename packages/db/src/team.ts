@@ -224,7 +224,8 @@ export async function reconcileMembership(
       await deleteAccountMembership(db, account.id, u.id);
       // Owner ruling A3: what they held goes back to Unassigned. The Team removal records the ids
       // for its Undo; a removal made in Clerk's own screens has no Undo, so nothing is recorded here.
-      await releaseMemberAssignments(db, account.id, u.id);
+      // F-115: this reconciliation runs from Clerk's own webhook/state, with no person at the keyboard.
+      await releaseMemberAssignments(db, account.id, u.id, { authorKind: "automation", authorId: null });
     }
     return { outcome: "removed" };
   }

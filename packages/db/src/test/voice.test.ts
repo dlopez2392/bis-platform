@@ -29,6 +29,8 @@ import { emailKey as barrelEmailKey } from "../index";
 import { ensureKnowledgeSnapshot } from "../voice-knowledge";
 import { userDb } from "../user-client";
 import { serviceDb } from "../service";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * Every `e164` in this file comes from `testPhoneNumber()`, never from a
@@ -1108,15 +1110,15 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
    *  the pair for the merge queue). createContact with a phone alone would dedupe onto the first by phone. */
   async function person(db: SupabaseClient, accountId: string, firstName: string, lastName: string, phone: string, email?: string) {
     const { id } = await createContact(db, accountId, { firstName, lastName, email, source: "voice" }, "user_test");
-    await updateContact(db, accountId, id, { phone }, "user_test");
+    await updateContact(db, accountId, id, { phone }, { authorKind: "person", authorId: "user_test" });
     return { id };
   }
   /** A pre-F-009 row (no writer stores this shape any more): the service client's own insert, said so here.
    *  `createdAt` back-dates it, as a row that old really is: the only way to make the OLDER row the one
    *  inserted SECOND, so "oldest first" is not just insertion order. */
   async function legacy(db: SupabaseClient, accountId: string, firstName: string, phone: string, createdAt?: string): Promise<string> {
-    const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone,
-      ...(createdAt === undefined ? {} : { created_at: createdAt }) })
+    const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone,
+      ...(createdAt === undefined ? {} : { created_at: createdAt }) }), SEED_AUTHOR, SEED_VIA)
       .select("id").single();
     if (error || !data) throw new Error(error?.message);
     return (data as { id: string }).id;
@@ -1359,7 +1361,9 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     const reached: string[] = [];
     const answer = (result: unknown) => {
       const q: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "insert"]) q[m] = () => q;
+      // F-115: ensureHoldingContact's insert now runs through withAuthor, which calls .setHeader on
+      // the builder before it is awaited.
+      for (const m of ["select", "eq", "insert", "setHeader"]) q[m] = () => q;
       q.maybeSingle = async () => ({ data: null, error: null });
       q.single = async () => result;
       return q;

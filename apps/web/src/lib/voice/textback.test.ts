@@ -498,13 +498,13 @@ describe("contactForCallerId: Sofía's acts (item 8c)", () => {
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(dbMocks.insertAiActs.mock.calls[0]![0]).toBe(DB);
     expect(dbMocks.insertAiActs.mock.calls[0]![1]).toBe("a1");
-    expect(inserted()).toEqual([[{ ...VOICE, kind: "contact_created", contactId: "ct_new", target: {}, before: null, after: null }]]);
+    expect(inserted()).toEqual([[{ ...VOICE, id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_created", contactId: "ct_new", target: {}, before: null, after: null }]]);
   });
 
   it("the caller's own contact found again: the phone fill is a no-op and nothing is recorded (mutation: record on created.existing -> FAILS)", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct_old", existing: true });
     await prepareTextback(DB, "a1", request({ contactId: null }));
-    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith(DB, "a1", "ct_old", { phone: "+19562921696" }, "voice", "ai");
+    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith(DB, "a1", "ct_old", { phone: "+19562921696" }, { authorKind: "ai", authorId: null }, expect.stringMatching(/^ai_act:[0-9a-f-]{36}$/));
     expect(dbMocks.insertAiActs).not.toHaveBeenCalled();
   });
 
@@ -513,7 +513,7 @@ describe("contactForCallerId: Sofía's acts (item 8c)", () => {
     dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: ["phone"], flagged: false,
       prior: { phone: null }, written: { phone: "+19562921696" } });
     await prepareTextback(DB, "a1", request({ contactId: null }));
-    expect(inserted()).toEqual([[{ ...VOICE, kind: "contact_field_filled", contactId: "ct_old",
+    expect(inserted()).toEqual([[{ ...VOICE, id: expect.stringMatching(/^[0-9a-f-]{36}$/), kind: "contact_field_filled", contactId: "ct_old",
       target: { field: "phone" }, before: { value: null }, after: { value: "+19562921696" } }]]);
   });
 
@@ -541,6 +541,37 @@ describe("contactForCallerId: Sofía's acts (item 8c)", () => {
     expect(dbMocks.insertAiActs).toHaveBeenCalledTimes(1);
     expect(failed).toEqual(ok);
     expect(dbMocks.createMessage.mock.calls.at(-1)).toEqual(okMessage);
+  });
+
+  // F-115 (plan Task 2 Step 7): the write names the act it logs (`via: ai_act:<id>`), and the act is inserted under
+  // that same id. Each mutation: mint the act's id apart from the via (two different uuids) -> FAILS.
+  it("F-115: the Caller contact's insert names its contact_created act", async () => {
+    await prepareTextback(DB, "a1", request({ contactId: null }));
+    const [made] = inserted()[0] as { id?: string }[];
+    expect(made?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(dbMocks.createContact).toHaveBeenCalledWith(DB, "a1",
+      { firstName: "Caller", phone: "+19562921696", source: "voice", via: `ai_act:${made!.id}` }, "voice", "ai");
+  });
+
+  it("F-115: a phone fill that wrote names its contact_field_filled act", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct_old", existing: true });
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: ["phone"], flagged: false,
+      prior: { phone: null }, written: { phone: "+19562921696" } });
+    await prepareTextback(DB, "a1", request({ contactId: null }));
+    const [fill] = inserted()[0] as { id?: string }[];
+    expect(fill?.id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    expect(dbMocks.fillContactBlanksReport).toHaveBeenCalledWith(DB, "a1", "ct_old", { phone: "+19562921696" },
+      { authorKind: "ai", authorId: null }, `ai_act:${fill!.id}`);
+  });
+
+  it("F-115: a call with no row records no act, so its writes name none (mutation: plan the act without the call row -> FAILS)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await prepareTextback(DB, "a1", request({ contactId: null, callId: null }));
+    } finally {
+      warn.mockRestore();
+    }
+    expect((dbMocks.createContact.mock.calls[0]![2] as { via?: string }).via).toBeUndefined();
   });
 });
 
@@ -573,7 +604,8 @@ describe("S-47e: a shared number's text-back (plan Task 8)", () => {
   it("one customer on the number: today's Caller contact, not the holding record", async () => {
     onCallerId(person("ct1", "Ana", "Prueba"));
     const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
-    expect(dbMocks.createContact).toHaveBeenCalledWith(DB, "a1", { firstName: "Caller", phone: "+19562921696", source: "voice" }, "voice", "ai");
+    expect(dbMocks.createContact).toHaveBeenCalledWith(DB, "a1",
+      { firstName: "Caller", phone: "+19562921696", source: "voice", via: expect.stringMatching(/^ai_act:[0-9a-f-]{36}$/) }, "voice", "ai");
     expect(dbMocks.ensureHoldingContact).not.toHaveBeenCalled();
     expect(outcome.holding).toBe(false);
     expect(outcome.contactId).toBe("ct_new");

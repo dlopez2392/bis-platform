@@ -69,7 +69,7 @@ const PLACE: PlaceRow = {
   city: null, region: null, postal_code: null, country: null,
   archived_at: null, created_by: "user_test", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 };
-const CTX: PlaceCtx = { subjectId: "ana", actorId: "user_test" };
+const CTX: PlaceCtx = { subjectId: "ana", author: { authorKind: "person", authorId: "user_test" } };
 
 describe("removePlace counts bookings too (F-046 part 1)", () => {
   it("no units but a job still books it: archives, and never calls delete (mutation: skip the bookings count -> the delete call is recorded, FAILS)", async () => {

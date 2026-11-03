@@ -17,6 +17,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import {
   serviceDb, createAccount, deleteAccountCascade, createContact, getContact, getProposal, insertProposal,
   decideProposal, ensureDefaultPipeline, createOpportunity, moveOpportunityToStage, setOpportunityStatus,
+  withAuthor,
 } from "@bis/db";
 import { proposalExpiresAt, type ProposalInput } from "@bis/db/proposal-rules";
 import { makeTr } from "@/lib/record/copy";
@@ -310,7 +311,7 @@ describe("Accept", () => {
       const [c1, c2] = [await seedCall(db, a), await seedCall(db, a)];
       const k = await seedContact(db, a, { firstName: "Rosa" });
       const id = await seed(db, a, { callId: c1, contactId: k, kind: "contact_field", payload: { field: "phone", value: "956 555 0101" } });
-      const { error } = await db.from("contacts").update({ phone: "+19565550177" }).eq("id", k);
+      const { error } = await withAuthor(db.from("contacts").update({ phone: "+19565550177" }).eq("id", k), { authorKind: "automation", authorId: null }, "seed");
       expect(error).toBeNull();
       expect(await acceptSuggestion(deps(a), id)).toEqual({ ok: false, error: "Out of date: the phone was filled in since." });
       const row = await rowOf(db, a, id);
@@ -381,13 +382,13 @@ describe("Accept", () => {
       const k = await seedContact(db, a, { firstName: "Rosa" });
       const { pipelineId, ids } = await stagesOf(db, a);
       const cases = [
-        ["deal_moved", "Out of date: this deal has moved since.", async (o: string) => moveOpportunityToStage(db, a, o, ids[2]!, "user_test")],
-        ["deal_closed", "Out of date: this deal has been closed.", async (o: string) => setOpportunityStatus(db, a, o, "won", "user_test")],
-        ["deal_gone", "Out of date: this deal was deleted.", async (o: string) => { const { error } = await db.from("opportunities").delete().eq("id", o); if (error) throw error; }],
+        ["deal_moved", "Out of date: this deal has moved since.", async (o: string) => moveOpportunityToStage(db, a, o, ids[2]!, { authorKind: "person", authorId: "user_test" })],
+        ["deal_closed", "Out of date: this deal has been closed.", async (o: string) => setOpportunityStatus(db, a, o, "won", { authorKind: "person", authorId: "user_test" })],
+        ["deal_gone", "Out of date: this deal was deleted.", async (o: string) => { const { error } = await withAuthor(db.from("opportunities").delete(), { authorKind: "automation", authorId: null }, "seed").eq("id", o); if (error) throw error; }],
       ] as const;
       for (const [reason, sentence, change] of cases) {
         const callId = await seedCall(db, a);
-        const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: `Deal ${reason}` }, "user_test");
+        const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: `Deal ${reason}` }, { authorKind: "person", authorId: "user_test" });
         const id = await seed(db, a, { callId, contactId: k, kind: "opportunity_stage", payload: { opportunityId: opp, fromStageId: ids[0]!, toStageId: ids[1]! } });
         await change(opp);
         expect(await acceptSuggestion(deps(a), id)).toEqual({ ok: false, error: sentence });
@@ -596,7 +597,7 @@ describe("Undo", () => {
       expect((await getContact(db, a, caller))!.first_name).toBe("Caller");
 
       const { pipelineId, ids } = await stagesOf(db, a);
-      const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: "Deal" }, "user_test");
+      const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: "Deal" }, { authorKind: "person", authorId: "user_test" });
       const stage = await seed(db, a, { callId: c3, contactId: k, kind: "opportunity_stage", payload: { opportunityId: opp, fromStageId: ids[0]!, toStageId: ids[1]! } });
       expect(await acceptSuggestion(deps(a), stage)).toMatchObject({ ok: true, toast: "Moved to Contacted" });
       expect(await undoSuggestion(deps(a), stage)).toMatchObject({ ok: true, message: "Undone." });
@@ -657,16 +658,17 @@ describe("Undo", () => {
       const k = await seedContact(db, a, { firstName: "Rosa" });
       const field = await seed(db, a, { callId: calls[2]!, contactId: k, kind: "contact_field", payload: { field: "phone", value: "956 555 0101" } });
       expect(await acceptSuggestion(deps(a), field)).toMatchObject({ ok: true });
-      await db.from("contacts").update({ phone: "+19565550177" }).eq("id", k);
+      const { error: fieldErr } = await withAuthor(db.from("contacts").update({ phone: "+19565550177" }).eq("id", k), { authorKind: "automation", authorId: null }, "seed");
+      expect(fieldErr).toBeNull();
       expect(await undoSuggestion(deps(a), field)).toEqual(changed);
       expect((await getContact(db, a, k))!.phone).toBe("+19565550177");
       expect((await rowOf(db, a, field)).status).toBe("accepted");
 
       const { pipelineId, ids } = await stagesOf(db, a);
-      const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: "Deal" }, "user_test");
+      const { id: opp } = await createOpportunity(db, a, { contactId: k, pipelineId, name: "Deal" }, { authorKind: "person", authorId: "user_test" });
       const stage = await seed(db, a, { callId: calls[3]!, contactId: k, kind: "opportunity_stage", payload: { opportunityId: opp, fromStageId: ids[0]!, toStageId: ids[1]! } });
       expect(await acceptSuggestion(deps(a), stage)).toMatchObject({ ok: true });
-      await moveOpportunityToStage(db, a, opp, ids[2]!, "user_test");
+      await moveOpportunityToStage(db, a, opp, ids[2]!, { authorKind: "person", authorId: "user_test" });
       expect(await undoSuggestion(deps(a), stage)).toEqual(changed);
       const { data } = await db.from("opportunities").select("stage_id").eq("id", opp).single();
       expect(data!.stage_id).toBe(ids[2]);

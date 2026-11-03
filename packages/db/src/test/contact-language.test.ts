@@ -7,6 +7,7 @@ import {
 } from "../contacts";
 
 const ACTOR = "user_test";
+const AUTHOR = { authorKind: "person" as const, authorId: ACTOR };
 const T1 = "2026-10-03T15:00:00.000Z";
 const T2 = "2026-10-05T15:00:00.000Z";
 const iso = (v: unknown) => (v === null ? null : new Date(v as string).toISOString());
@@ -25,8 +26,8 @@ describe("recordLanguageSignal (S-09 §7.1, C3)", () => {
   it("the first sign sets the language and emits once with the CALLER's actor; a later one only moves the last sign and emits nothing (mutation: emit when the rpc said false -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
-      expect(await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, "public", "system")).toBe(true);
-      expect(await recordLanguageSignal(db, accountId, id, { language: "en", source: "call", at: new Date(T2) }, "voice", "ai")).toBe(false);
+      expect(await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, { authorKind: "customer", authorId: "public" })).toBe(true);
+      expect(await recordLanguageSignal(db, accountId, id, { language: "en", source: "call", at: new Date(T2) }, { authorKind: "ai", authorId: "voice" })).toBe(false);
       const c = (await getContact(db, accountId, id))!;
       expect({ ...c, language_set_at: iso(c.language_set_at), last_language_signal_at: iso(c.last_language_signal_at) }).toMatchObject({
         language: "es", language_source: "booking", language_set_at: T1,
@@ -38,7 +39,7 @@ describe("recordLanguageSignal (S-09 §7.1, C3)", () => {
     }));
 
   it("an rpc error throws, naming the writer (mutation: swallow it -> FAILS)", () => withTestAccount(async (db, accountId) => {
-    await expect(recordLanguageSignal(db, accountId, "not-a-uuid", { language: "es", source: "form", at: T1 }, "form", "system"))
+    await expect(recordLanguageSignal(db, accountId, "not-a-uuid", { language: "es", source: "form", at: T1 }, { authorKind: "customer", authorId: "form" }))
       .rejects.toThrow(/recordLanguageSignal failed/);
   }));
 });
@@ -47,9 +48,9 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
   it("setContactLanguage writes a staff choice now, over any sign, and emits as the user (mutation: source 'booking' -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
-      await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, "public", "system");
+      await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, { authorKind: "customer", authorId: "public" });
       const before = Date.now();
-      const result = await setContactLanguage(db, accountId, id, "en", ACTOR);
+      const result = await setContactLanguage(db, accountId, id, "en", AUTHOR);
       expect(result.wrote).toBe(true);
       const c = (await getContact(db, accountId, id))!;
       expect([c.language, c.language_source]).toEqual(["en", "staff"]);
@@ -62,15 +63,15 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
   it("restoreContactLanguage puts back the prior triple EXACTLY, its source and time included, only while the row still holds `written` (fix round I3; mutation: restore through setContactLanguage -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
-      await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, "public", "system");
-      await setContactLanguage(db, accountId, id, "en", ACTOR);
+      await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, { authorKind: "customer", authorId: "public" });
+      await setContactLanguage(db, accountId, id, "en", AUTHOR);
       const afterSet = (await getContact(db, accountId, id))!;
       const written1: LanguageTriple = { language: "en", source: "staff", setAt: iso(afterSet.language_set_at) };
-      expect(await restoreContactLanguage(db, accountId, id, { language: "es", source: "booking", setAt: T1 }, written1, ACTOR)).toBe("updated");
+      expect(await restoreContactLanguage(db, accountId, id, { language: "es", source: "booking", setAt: T1 }, written1, AUTHOR)).toBe("updated");
       const c = (await getContact(db, accountId, id))!;
       expect([c.language, c.language_source, iso(c.language_set_at)]).toEqual(["es", "booking", T1]);
       const written2: LanguageTriple = { language: "es", source: "booking", setAt: T1 };
-      expect(await restoreContactLanguage(db, accountId, id, { language: null, source: null, setAt: null }, written2, ACTOR)).toBe("updated");
+      expect(await restoreContactLanguage(db, accountId, id, { language: null, source: null, setAt: null }, written2, AUTHOR)).toBe("updated");
       const cleared = (await getContact(db, accountId, id))!;
       expect([cleared.language, cleared.language_source, cleared.language_set_at]).toEqual([null, null, null]);
     }));
@@ -78,21 +79,21 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
   it("restore refuses once the row no longer holds what it claims to undo — a stale Undo, or a forged `written` claiming a source the row never had (fix round I3; mutation: drop the compare-and-set guard -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
-      await setContactLanguage(db, accountId, id, "en", ACTOR);
+      await setContactLanguage(db, accountId, id, "en", AUTHOR);
       const afterFirstSet = (await getContact(db, accountId, id))!;
       const realWritten: LanguageTriple = { language: "en", source: "staff", setAt: iso(afterFirstSet.language_set_at) };
       const prior: LanguageTriple = { language: null, source: null, setAt: null };
 
       // Stale: someone else changed the language since this Undo was issued — the row no longer holds realWritten.
-      await setContactLanguage(db, accountId, id, "es", ACTOR);
-      expect(await restoreContactLanguage(db, accountId, id, prior, realWritten, ACTOR)).toBe("changed");
+      await setContactLanguage(db, accountId, id, "es", AUTHOR);
+      expect(await restoreContactLanguage(db, accountId, id, prior, realWritten, AUTHOR)).toBe("changed");
       expect((await getContact(db, accountId, id))!.language).toBe("es");
 
       // Forged: written.source claims "booking", but the row's real language_source is "staff" —
       // the compare-and-set is against written.source directly, so this can never match.
       const afterSecondSet = (await getContact(db, accountId, id))!;
       const forged: LanguageTriple = { language: afterSecondSet.language as "es", source: "booking", setAt: iso(afterSecondSet.language_set_at) };
-      expect(await restoreContactLanguage(db, accountId, id, prior, forged, ACTOR)).toBe("changed");
+      expect(await restoreContactLanguage(db, accountId, id, prior, forged, AUTHOR)).toBe("changed");
       expect((await getContact(db, accountId, id))!.language).toBe("es");
     }));
 
@@ -100,20 +101,20 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
       const validWritten: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
-      await expect(restoreContactLanguage(db, accountId, id, { language: "es", source: null, setAt: null }, validWritten, ACTOR))
+      await expect(restoreContactLanguage(db, accountId, id, { language: "es", source: null, setAt: null }, validWritten, AUTHOR))
         .rejects.toThrow(/not a language triple/);
-      await expect(restoreContactLanguage(db, accountId, id, { language: "es", source: "import" as never, setAt: T1 }, validWritten, ACTOR))
+      await expect(restoreContactLanguage(db, accountId, id, { language: "es", source: "import" as never, setAt: T1 }, validWritten, AUTHOR))
         .rejects.toThrow(/not a language triple/);
       const validPrior: LanguageTriple = { language: "es", source: "booking", setAt: T1 };
-      await expect(restoreContactLanguage(db, accountId, id, validPrior, { language: "es", source: null, setAt: null }, ACTOR))
+      await expect(restoreContactLanguage(db, accountId, id, validPrior, { language: "es", source: null, setAt: null }, AUTHOR))
         .rejects.toThrow(/not a language triple/);
     }));
 
   it("keepContactLanguageHint stamps only language_hint_kept_at (mutation: also clear the last sign -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const id = await ana(db, accountId);
-      await recordLanguageSignal(db, accountId, id, { language: "es", source: "form", at: T1 }, "form", "system");
-      await recordLanguageSignal(db, accountId, id, { language: "en", source: "call", at: T2 }, "voice", "ai");
+      await recordLanguageSignal(db, accountId, id, { language: "es", source: "form", at: T1 }, { authorKind: "customer", authorId: "form" });
+      await recordLanguageSignal(db, accountId, id, { language: "en", source: "call", at: T2 }, { authorKind: "ai", authorId: "voice" });
       expect(await keepContactLanguageHint(db, accountId, id, ACTOR)).toBe(true);
       const c = (await getContact(db, accountId, id))!;
       expect([c.language, c.last_language_signal]).toEqual(["es", "en"]);
@@ -124,10 +125,10 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
     withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db, otherAccountId) => {
         const theirs = await ana(db, otherAccountId);
-        expect((await setContactLanguage(db, accountId, theirs, "es", ACTOR)).wrote).toBe(false);
+        expect((await setContactLanguage(db, accountId, theirs, "es", AUTHOR)).wrote).toBe(false);
         expect(await keepContactLanguageHint(db, accountId, theirs, ACTOR)).toBe(false);
         const written: LanguageTriple = { language: null, source: null, setAt: null };
-        expect(await restoreContactLanguage(db, accountId, theirs, { language: "es", source: "staff", setAt: T1 }, written, ACTOR)).toBe("changed");
+        expect(await restoreContactLanguage(db, accountId, theirs, { language: "es", source: "staff", setAt: T1 }, written, AUTHOR)).toBe("changed");
         expect((await getContact(db, otherAccountId, theirs))!.language).toBeNull();
       });
     }));
@@ -159,6 +160,10 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
             if (col in row && (row as Record<string, unknown>)[col] !== val) matched = false;
             return chain;
           },
+          // F-115: withAuthor() calls setHeader() right after .update(...) — a no-op here.
+          setHeader() {
+            return chain;
+          },
           async select() {
             if (!matched) return { data: [], error: null };
             Object.assign(row, patch);
@@ -181,7 +186,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const row: Row = { language: "en", language_source: "staff", language_set_at: T1 };
     const written: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
     const prior: LanguageTriple = { language: "es", source: "booking", setAt: T2 };
-    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, written, ACTOR)).toBe("updated");
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, written, AUTHOR)).toBe("updated");
     expect(row).toMatchObject({ language: "es", language_source: "booking", language_set_at: T2 });
   });
 
@@ -189,7 +194,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const row: Row = { language: "es", language_source: "staff", language_set_at: T2 };
     const written: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
-    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, written, ACTOR)).toBe("changed");
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, written, AUTHOR)).toBe("changed");
     expect(row).toMatchObject({ language: "es", language_source: "staff", language_set_at: T2 });
   });
 
@@ -197,7 +202,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const row: Row = { language: "en", language_source: "staff", language_set_at: T1 };
     const forgedWritten: LanguageTriple = { language: "en", source: "booking", setAt: T1 };
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
-    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, forgedWritten, ACTOR)).toBe("changed");
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, forgedWritten, AUTHOR)).toBe("changed");
     expect(row.language).toBe("en");
   });
 
@@ -207,7 +212,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const row: Row = { language: "en", language_source: "staff", language_set_at: T1 };
     const wrongLanguage: LanguageTriple = { language: "es", source: "staff", setAt: T1 };
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
-    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongLanguage, ACTOR)).toBe("changed");
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongLanguage, AUTHOR)).toBe("changed");
     expect(row.language).toBe("en");
   });
 
@@ -217,7 +222,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const row: Row = { language: "en", language_source: "staff", language_set_at: T2 };
     const wrongSetAt: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
-    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongSetAt, ACTOR)).toBe("changed");
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongSetAt, AUTHOR)).toBe("changed");
     expect(row.language_set_at).toBe(T2);
   });
 
@@ -226,7 +231,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const written: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
     const prior: LanguageTriple = { language: "es", source: "booking", setAt: T2 };
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await restoreContactLanguage(fakeDb(row, { emitError: "events insert failed" }), "a1", "c1", prior, written, ACTOR)).toBe("updated");
+    expect(await restoreContactLanguage(fakeDb(row, { emitError: "events insert failed" }), "a1", "c1", prior, written, AUTHOR)).toBe("updated");
     expect(row).toMatchObject({ language: "es", language_source: "booking", language_set_at: T2 });
     expect(spy.mock.calls.flat().join(" ")).toContain("events insert failed");
     spy.mockRestore();
@@ -235,7 +240,7 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
   it("an incoherent `written` is refused before any read (mutation: drop the written isLanguageTriple check -> FAILS)", async () => {
     const row: Row = { language: "en", language_source: "staff", language_set_at: T1 };
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
-    await expect(restoreContactLanguage(fakeDb(row), "a1", "c1", prior, { language: "es", source: null, setAt: null } as never, ACTOR))
+    await expect(restoreContactLanguage(fakeDb(row), "a1", "c1", prior, { language: "es", source: null, setAt: null } as never, AUTHOR))
       .rejects.toThrow(/not a language triple/);
   });
 });
@@ -249,9 +254,14 @@ describe("recordLanguageSignal: an emit failure after the rpc committed (mocked,
   function rpcDb(answer: boolean, emitError: string | null) {
     const events = { async insert() { return emitError ? { error: { message: emitError } } : { error: null }; } };
     return {
-      rpc: async (fn: string) => {
+      rpc: (fn: string) => {
         if (fn !== "record_language_signal") throw new Error(`rpcDb: unexpected rpc ${fn}`);
-        return { data: answer, error: null };
+        // F-115: withAuthor() calls setHeader() on the rpc() builder before it is awaited — a real
+        // postgrest-js builder is both thenable and chainable; this mock needs to be too.
+        const result: Promise<{ data: boolean; error: null }> & { setHeader?: () => typeof result } =
+          Promise.resolve({ data: answer, error: null });
+        result.setHeader = () => result;
+        return result;
       },
       from: (table: string) => {
         if (table !== "events") throw new Error(`rpcDb: unexpected table ${table}`);
@@ -264,7 +274,7 @@ describe("recordLanguageSignal: an emit failure after the rpc committed (mocked,
   it("is logged, never thrown, and the rpc's true is still returned (mutation: let the emit error propagate -> rejects, FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(recordLanguageSignal(rpcDb(true, "events insert failed"), "a1", "c1", SIGNAL, "public", "system")).resolves.toBe(true);
+      await expect(recordLanguageSignal(rpcDb(true, "events insert failed"), "a1", "c1", SIGNAL, { authorKind: "customer", authorId: "public" })).resolves.toBe(true);
       expect(spy.mock.calls.flat().join(" ")).toContain("events insert failed");
     } finally {
       spy.mockRestore();
@@ -274,7 +284,7 @@ describe("recordLanguageSignal: an emit failure after the rpc committed (mocked,
   it("a sign that set nothing emits nothing and returns false (mutation: emit when the rpc said false -> the emit error is logged, FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(recordLanguageSignal(rpcDb(false, "events insert failed"), "a1", "c1", SIGNAL, "public", "system")).resolves.toBe(false);
+      await expect(recordLanguageSignal(rpcDb(false, "events insert failed"), "a1", "c1", SIGNAL, { authorKind: "customer", authorId: "public" })).resolves.toBe(false);
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();

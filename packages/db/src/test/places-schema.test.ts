@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { randomUUID } from "node:crypto";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAs, sendAuthor } from "./db";
 
 /**
  * Properties and equipment (spec §5, migration 0071). As the table owner inside a rolled-back
@@ -229,6 +229,8 @@ describe("grants, triggers and policies (spec §5.2, §5.3)", () => {
     withRollback(async (c) => {
       const s = await seed(c);
       await c.query("set local role service_role");
+      // 0112: a place write is recorded, and a service write names its author (enforce), as addPlace's will.
+      await sendAuthor(c, { authorKind: "person", authorId: STAFF_SUB });
       const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR, created_by: STAFF_SUB });
       expect(p.created_by).toBeNull();
       expect((await insert(c, "equipment", { account_id: s.acct, place_id: p.id, name: "AC", created_by: STAFF_SUB })).created_by).toBeNull();

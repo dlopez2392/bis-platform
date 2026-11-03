@@ -1,7 +1,29 @@
 import { type Page, type Request, expect, test } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
+import { withAuthor, type RowAuthor } from "@bis/db";
 import { contrastRatio } from "../src/lib/branding/color";
 import { seededAccountMissingMessage } from "./fixtures/seeded";
+
+/**
+ * F-115: who a spec's own RAW service-client write to `contacts` says it was. No person is at the
+ * keyboard for a spec's setup or cleanup, so `automation` (an e2e run, named by `via`) is the only
+ * honest answer — the same reasoning sweep.ts's `SWEEP_AUTHOR` already uses for its account-cascade
+ * deletes. CI's enforce-mode `record_changes` trigger (migration 0111) refuses a service-role
+ * INSERT, DELETE, or an UPDATE of an audited column, on `contacts` with no `x-bis-author` header;
+ * app writers such as `createContact`/`deleteContacts` already send their own and need no change
+ * here. Not a client-level default: `withAuthor` sets the header on ONE query, never on a client, so
+ * a spec that passes its service client into an app writer (which sends its OWN explicit header)
+ * is unaffected, and nothing here ever reaches the app server under test, which builds its own
+ * unheadered service client.
+ */
+export const E2E_AUTHOR: RowAuthor = { authorKind: "automation", authorId: null };
+
+/** `withAuthor(builder, E2E_AUTHOR, "seed")`, spelled once for every raw contacts write a spec makes
+ *  for its own setup or cleanup — "seed", not "e2e", so this stays on the plan's own `via` list
+ *  (`SEED_VIA`, `packages/db/src/test/db.ts`). */
+export function e2eAuthor<B extends { setHeader(name: string, value: string): B }>(builder: B): B {
+  return withAuthor(builder, E2E_AUTHOR, "seed");
+}
 
 /**
  * `rgb(30, 58, 138)` — what getComputedStyle reports — back to `#1e3a8a`, so
@@ -233,6 +255,40 @@ export function watchRouterTraffic(page: Page) {
         for (;;) {
           const search = await page.evaluate(() => window.location.search);
           expect(search, `the URL lost ${pattern} while the router settled`).toMatch(pattern);
+          const now = Date.now();
+          if (
+            finished > 0 && inFlight.size === 0
+            && now - lastFinishedAt >= quietMs && now - started >= minMs
+          ) return;
+          if (now - started > timeoutMs) {
+            throw new Error(
+              `router traffic never settled in ${timeoutMs}ms: ${finished} finished, ${inFlight.size} in flight`,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } finally {
+        page.off("request", onStart);
+        page.off("requestfinished", onEnd);
+        page.off("requestfailed", onEnd);
+      }
+    },
+    /**
+     * The same settle condition as `expectSearchHeld`, for a caller with no
+     * URL to hold: every router request seen since this watch started (a
+     * server action, or the RSC refresh it kicks off) has finished, none is
+     * in flight, and a further quiet period has passed. For a caller that
+     * needs a save's OWN `router.refresh()` to have actually landed before
+     * trusting what happens next — a toast fires on the server action's bare
+     * response, before the `router.refresh()` that response triggers has
+     * delivered anything, so the toast alone is not proof the refresh is
+     * done (preferences.spec.ts: ThemeCookieSync's props update only once
+     * that refresh lands, asynchronously and on no fixed schedule).
+     */
+    async waitUntilQuiet({ minMs = 2_000, quietMs = 1_000, timeoutMs = 30_000 } = {}): Promise<void> {
+      const started = Date.now();
+      try {
+        for (;;) {
           const now = Date.now();
           if (
             finished > 0 && inFlight.size === 0

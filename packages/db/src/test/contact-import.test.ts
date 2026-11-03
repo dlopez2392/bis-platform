@@ -95,7 +95,7 @@ describe("applyImportBatch", () => {
   it("an empty tags cell leaves an existing contact's tags untouched", () =>
     withTestAccount(async (db, accountId) => {
       const existing = await createContact(db, accountId, { email: "tagged@example.com" }, "user_test");
-      await addTagToContact(db, accountId, existing.id, "vip");
+      await addTagToContact(db, accountId, existing.id, "vip", { authorKind: "person", authorId: "user_test" });
       const index = await buildMatchIndex(db, accountId);
       await applyImportBatch(db, accountId,
         [{ input: { email: "tagged@example.com", firstName: "Updated" }, tags: [] }],
@@ -144,7 +144,7 @@ describe("applyImportBatch", () => {
       // it to a contact, so an unrelated contact seeds "vip" into the
       // account's vocabulary without ever touching the target.
       const seed = await createContact(db, accountId, { email: "seed@example.com" }, "user_test");
-      await addTagToContact(db, accountId, seed.id, "vip");
+      await addTagToContact(db, accountId, seed.id, "vip", { authorKind: "person", authorId: "user_test" });
 
       const target = await createContact(db, accountId, { email: "target@example.com" }, "user_test");
       const index = await buildMatchIndex(db, accountId);
@@ -196,6 +196,23 @@ describe("applyImportBatch", () => {
         .eq("contact_a", lo).eq("contact_b", hi);
       expect(data?.length).toBe(1);
       expect(data![0]!.reason).toBe("same_phone");
+    }));
+
+  // F-115: the CREATE path sends the importing user's id on the header, as the UPDATE path does, so the
+  // change log keeps who ran the import. The contact row's own creation stamp stays import with no id
+  // (contacts_author_id_person, 0091).
+  it("the create path's change row names the importing user; the contact row stays import with no id (mutation: header authorId: null -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const index = await buildMatchIndex(db, accountId);
+      await applyImportBatch(db, accountId,
+        [{ input: { email: "newimport@example.com", firstName: "New" }, tags: [] }],
+        index, "user_test", { createTags: false });
+      const { data } = await db.from("contacts").select("id, author_kind, author_id")
+        .eq("account_id", accountId).eq("email", "newimport@example.com").single();
+      expect(data).toMatchObject({ author_kind: "import", author_id: null });
+      const { data: rows } = await db.from("record_changes").select("op, author_kind, author_id")
+        .eq("account_id", accountId).eq("record_id", data!.id).eq("op", "insert");
+      expect(rows).toEqual([{ op: "insert", author_kind: "import", author_id: "user_test" }]);
     }));
 });
 

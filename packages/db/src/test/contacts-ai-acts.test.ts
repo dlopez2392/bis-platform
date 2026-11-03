@@ -56,7 +56,7 @@ describe("fillContactBlanksReport: prior/written (item 8c)", () => {
   it("on a 'Caller' placeholder contact, reports prior.firstName = 'Caller' and written.firstName = 'Ana'", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Caller", phone: "+15559990006" }, "t");
-      const report = await fillContactBlanksReport(db, accountId, c.id, { firstName: "Ana" }, "t");
+      const report = await fillContactBlanksReport(db, accountId, c.id, { firstName: "Ana" }, { authorKind: "person", authorId: "t" });
       expect(report.fields).toEqual(["first_name"]);
       expect(report.prior.firstName).toBe("Caller");
       expect(report.written.firstName).toBe("Ana");
@@ -65,7 +65,7 @@ describe("fillContactBlanksReport: prior/written (item 8c)", () => {
   it("reports a phone fill's written form as the STORED (E.164) value, not the raw input", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Fay" }, "t");
-      const report = await fillContactBlanksReport(db, accountId, c.id, { phone: "(956) 555-0188" }, "t");
+      const report = await fillContactBlanksReport(db, accountId, c.id, { phone: "(956) 555-0188" }, { authorKind: "person", authorId: "t" });
       expect(report.fields).toContain("phone");
       expect(report.prior.phone ?? null).toBeNull();
       expect(report.written.phone).toBe("+19565550188");
@@ -76,8 +76,8 @@ describe("restoreContactFieldIf (item 8c)", () => {
   it("restores when the column still holds the expected value, and emits contact.updated as the actor", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Caller" }, "t");
-      await fillContactBlanksReport(db, accountId, c.id, { firstName: "Ana" }, "t");
-      const outcome = await restoreContactFieldIf(db, accountId, c.id, "firstName", "Ana", "Caller", "undoer_1");
+      await fillContactBlanksReport(db, accountId, c.id, { firstName: "Ana" }, { authorKind: "person", authorId: "t" });
+      const outcome = await restoreContactFieldIf(db, accountId, c.id, "firstName", "Ana", "Caller", { authorKind: "person", authorId: "undoer_1" });
       expect(outcome).toBe("restored");
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Caller");
@@ -90,7 +90,7 @@ describe("restoreContactFieldIf (item 8c)", () => {
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Gus" }, "t");
       // The field no longer holds "Ana" (it was never set to it at all): the compare-and-swap must miss.
-      const outcome = await restoreContactFieldIf(db, accountId, c.id, "firstName", "Ana", "Caller", "undoer_1");
+      const outcome = await restoreContactFieldIf(db, accountId, c.id, "firstName", "Ana", "Caller", { authorKind: "person", authorId: "undoer_1" });
       expect(outcome).toBe("changed");
       const row = await getContact(db, accountId, c.id);
       expect(row!.first_name).toBe("Gus");
@@ -99,8 +99,8 @@ describe("restoreContactFieldIf (item 8c)", () => {
   it("a phone restore writes the stored (phoneFields) form", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Hal" }, "t");
-      await fillContactBlanksReport(db, accountId, c.id, { phone: "(956) 555-0199" }, "t");
-      const outcome = await restoreContactFieldIf(db, accountId, c.id, "phone", "+19565550199", null, "undoer_1");
+      await fillContactBlanksReport(db, accountId, c.id, { phone: "(956) 555-0199" }, { authorKind: "person", authorId: "t" });
+      const outcome = await restoreContactFieldIf(db, accountId, c.id, "phone", "+19565550199", null, { authorKind: "person", authorId: "undoer_1" });
       expect(outcome).toBe("restored");
       const row = await getContact(db, accountId, c.id);
       expect(row!.phone).toBeNull();
@@ -114,7 +114,7 @@ describe("lastFieldEditor (item 8c)", () => {
       const since = new Date().toISOString();
       await new Promise((r) => setTimeout(r, 5));
       const { updateContact } = await import("../contacts");
-      await updateContact(db, accountId, c.id, { firstName: "Ivan" }, "user_person1", "user");
+      await updateContact(db, accountId, c.id, { firstName: "Ivan" }, { authorKind: "person", authorId: "user_person1" });
       const who = await lastFieldEditor(db, accountId, c.id, "firstName", since);
       expect(who).toBe("user_person1");
     }));
@@ -131,10 +131,10 @@ describe("lastFieldEditor (item 8c)", () => {
   it("a person's restore (which names the column, first_name) names the editor (mutation: match the camel name only -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const c = await createContact(db, accountId, { firstName: "Caller" }, "sofia", "ai");
-      await fillContactBlanksReport(db, accountId, c.id, { firstName: "Kim" }, "sofia", "ai");
+      await fillContactBlanksReport(db, accountId, c.id, { firstName: "Kim" }, { authorKind: "ai", authorId: "sofia" });
       const since = new Date().toISOString();
       await new Promise((r) => setTimeout(r, 5));
-      expect(await restoreContactFieldIf(db, accountId, c.id, "firstName", "Kim", "Caller", "user_restorer")).toBe("restored");
+      expect(await restoreContactFieldIf(db, accountId, c.id, "firstName", "Kim", "Caller", { authorKind: "person", authorId: "user_restorer" })).toBe("restored");
       expect(await lastFieldEditor(db, accountId, c.id, "firstName", since)).toBe("user_restorer");
     }));
 
@@ -144,7 +144,7 @@ describe("lastFieldEditor (item 8c)", () => {
       const since = new Date().toISOString();
       await new Promise((r) => setTimeout(r, 5));
       // The first name rides along (matching), as `fillContactBlanksReport` requires before it fills a surname.
-      const r = await fillContactBlanksReport(db, accountId, c.id, { firstName: "Lia", lastName: "Ruiz" }, "user_filler", "user");
+      const r = await fillContactBlanksReport(db, accountId, c.id, { firstName: "Lia", lastName: "Ruiz" }, { authorKind: "person", authorId: "user_filler" });
       expect(r.fields).toEqual(["last_name"]);
       expect(await lastFieldEditor(db, accountId, c.id, "lastName", since)).toBe("user_filler");
     }));
@@ -157,11 +157,11 @@ describe("second account (item 8c, review M-d)", () => {
     withTestAccount(async (db, accountA) => {
       await withTestAccount(async (dbB, accountB) => {
         const b = await createContact(dbB, accountB, { firstName: "Caller" }, "t");
-        await fillContactBlanksReport(dbB, accountB, b.id, { firstName: "Mia" }, "t");
-        expect(await restoreContactFieldIf(db, accountA, b.id, "firstName", "Mia", "Caller", "user_a")).toBe("changed");
+        await fillContactBlanksReport(dbB, accountB, b.id, { firstName: "Mia" }, { authorKind: "person", authorId: "t" });
+        expect(await restoreContactFieldIf(db, accountA, b.id, "firstName", "Mia", "Caller", { authorKind: "person", authorId: "user_a" })).toBe("changed");
         expect((await getContact(dbB, accountB, b.id))!.first_name).toBe("Mia");
         // The positive control: in its own account the same call restores.
-        expect(await restoreContactFieldIf(dbB, accountB, b.id, "firstName", "Mia", "Caller", "user_b")).toBe("restored");
+        expect(await restoreContactFieldIf(dbB, accountB, b.id, "firstName", "Mia", "Caller", { authorKind: "person", authorId: "user_b" })).toBe("restored");
       });
     }));
 
@@ -172,7 +172,7 @@ describe("second account (item 8c, review M-d)", () => {
         const since = new Date().toISOString();
         await new Promise((r) => setTimeout(r, 5));
         const { updateContact } = await import("../contacts");
-        await updateContact(dbB, accountB, b.id, { firstName: "Noah" }, "user_b_editor", "user");
+        await updateContact(dbB, accountB, b.id, { firstName: "Noah" }, { authorKind: "person", authorId: "user_b_editor" });
         expect(await lastFieldEditor(db, accountA, b.id, "firstName", since)).toBeNull();
         expect(await lastFieldEditor(dbB, accountB, b.id, "firstName", since)).toBe("user_b_editor");
       });

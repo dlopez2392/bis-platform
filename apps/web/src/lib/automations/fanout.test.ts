@@ -43,7 +43,7 @@ describe("PLAN — the registry as a dependency graph", () => {
     expected.splice(expected.indexOf("weeklyAgencyReport") + 1, 0, JOBS_DRAIN_KEY);
     expect(keys(PLAN)).toEqual(expected);
     expect(new Set(keys(PLAN)).size).toBe(PLAN.length);
-    expect(PLAN).toHaveLength(22);
+    expect(PLAN).toHaveLength(23);
   });
 
   it("2. every edge between two registered passes runs earlier -> later in PASSES, and jobsDrain's only dependants are usageReport and opsWatch (mutation: add \"reminders\" to releaseHeld's after -> FAILS)", () => {
@@ -165,7 +165,9 @@ describe("runFanout — what starts, and when", () => {
   it("6. siteTraffic starts as soon as billingPause answers, while releaseHeld is still in flight; once releaseHeld answers, reminders and followups are both in flight before either answers (mutation: await each invoke before starting the next -> FAILS)", async () => {
     const h = harness({ hold: ["billingPause", "releaseHeld", "reminders", "followups"] });
     await flush();
-    expect(h.events).toEqual(["invoke:billingPause"]);
+    // F-115: recordChangesAudit has no predecessor (same as billingPause itself) and is not held here,
+    // so it starts and answers immediately — unrelated to this test's own release-chain timing.
+    expect(h.events).toEqual(["invoke:billingPause", "invoke:recordChangesAudit", "answer:recordChangesAudit"]);
 
     h.answer("billingPause");
     await flush();
@@ -275,13 +277,15 @@ describe("runFanout — what starts, and when", () => {
     }
   });
 
-  it("9d. billingPause gives no answer -> only billingPause, usageReport and opsWatch run, 19 nodes never start, each released recipe's beat names the billing pause as the cause, then cron.tick (mutation: drop the root cause from the blocked wording -> FAILS)", async () => {
+  it("9d. billingPause gives no answer -> only billingPause, recordChangesAudit, usageReport and opsWatch run, 19 nodes never start, each released recipe's beat names the billing pause as the cause, then cron.tick (mutation: drop the root cause from the blocked wording -> FAILS)", async () => {
     const h = harness({ answers: { billingPause: "reject" } });
     const results = await h.run;
-    expect(h.events.filter((e) => e.startsWith("invoke:"))).toEqual(["invoke:billingPause", "invoke:usageReport", "invoke:opsWatch"]);
+    // F-115: recordChangesAudit has no predecessor, same as billingPause, so it runs whether or not
+    // billingPause answers.
+    expect(h.events.filter((e) => e.startsWith("invoke:"))).toEqual(["invoke:billingPause", "invoke:recordChangesAudit", "invoke:usageReport", "invoke:opsWatch"]);
     expect(results.billingPause).toEqual({ errored: 1, noAnswer: 1 });
     const notStarted = keys(PLAN).filter((k) => results[k]?.notStarted === 1);
-    expect(notStarted).toEqual(keys(PLAN).filter((k) => !["billingPause", "usageReport", "opsWatch"].includes(k)));
+    expect(notStarted).toEqual(keys(PLAN).filter((k) => !["billingPause", "recordChangesAudit", "usageReport", "opsWatch"].includes(k)));
     expect(notStarted).toHaveLength(19);
     expect(h.beats).toEqual([
       ["cron.pass.billingPause", { ok: false, error: "the pass's function did not answer: Error: socket hang up" }],

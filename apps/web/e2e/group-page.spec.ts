@@ -6,7 +6,7 @@ import {
   getOrCreateCalendar, createBooking, assignPhoneNumber, startCallRow, finishCallRow, addNote,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -56,11 +56,11 @@ test.beforeAll(async () => {
     if (c.existing) throw new Error(`group-page e2e: ${first} matched an existing contact; refusing to use (or delete) it.`);
     made[first.toLowerCase() as "ana" | "luis" | "maria"] = c.id;
   }
-  const g = await createGroupWithMember(db, accountId, made.ana!, "household", `Familia ${LAST}`, null, ACTOR);
+  const g = await createGroupWithMember(db, accountId, made.ana!, "household", `Familia ${LAST}`, null, E2E_AUTHOR);
   if (g.status !== "ok") throw new Error(`group-page e2e: ${g.status}`);
   made.group = g.groupId;
   for (const id of [made.luis!, made.maria!]) {
-    const r = await addContactToGroup(db, accountId, id, g.groupId, null, ACTOR);
+    const r = await addContactToGroup(db, accountId, id, g.groupId, null, E2E_AUTHOR);
     if (r.status !== "ok") throw new Error(`group-page e2e: ${r.status}`);
   }
   // One timeline row per member, each through the app's own writer so it carries the author that
@@ -97,9 +97,9 @@ test.afterAll(async () => {
   if (made.phoneNumber) await step("phone number", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", made.phoneNumber!));
   // bookings.contact_id is `on delete restrict`: the booking goes before its contact.
   if (cancelToken) await step("booking", () => db.from("bookings").delete().eq("account_id", accountId).eq("cancel_token", cancelToken));
-  if (made.group) await step("group", () => db.from("client_groups").delete().eq("account_id", accountId).eq("id", made.group!));
+  if (made.group) await step("group", () => e2eAuthor(db.from("client_groups").delete()).eq("account_id", accountId).eq("id", made.group!));
   const ids = [made.ana, made.luis, made.maria].filter((x): x is string => Boolean(x));
-  await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
+  await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids));
   // A failed read must fail the check, not read as "nothing left" (final review minor 3).
   const { data: left, error: leftError } = await db.from("contacts").select("id").in("id", ids);
   expect(leftError).toBeNull();

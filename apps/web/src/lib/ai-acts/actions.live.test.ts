@@ -36,7 +36,7 @@ vi.mock("@/lib/email", async (io) => ({
 
 import {
   serviceDb, createAccount, deleteAccountCascade, createContact, getOrCreateCalendar, createBooking, insertAiActs, getAiAct,
-  recordAutomationLog, ensureCallbackTask,
+  recordAutomationLog, ensureCallbackTask, withAuthor,
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import { redoAiFieldFillAction, undoAiActAction } from "./actions";
@@ -156,7 +156,7 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
 
   it("ticked, for a Spanish customer on an English account: the notice is Spanish, end to end, and the act is marked told", async () => {
     const cid = await contact(A, { firstName: "Lucía", email: "lucia-live@example.invalid", phone: "+19565550112" });
-    await must(svc().from("contacts").update({ language: "es", language_source: "staff", language_set_at: new Date().toISOString() }).eq("id", cid).select("id"), "language");
+    await must(withAuthor(svc().from("contacts").update({ language: "es", language_source: "staff", language_set_at: new Date().toISOString() }).eq("id", cid).select("id"), { authorKind: "automation", authorId: null }, "seed"), "language");
     const k = await call(A, cid);
     const { actId } = await bookedAct(A, cid, k, 4);
     as(A, "owner");
@@ -186,7 +186,7 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
     as(A, "tech");
     expect(await undoAiActAction(A.id, actId, { notify: false })).toEqual({ ok: false, reason: "notAvailable" });
     expect(await status(bookingId)).toBe("booked");
-    await must(svc().from("contacts").update({ assigned_to: A.people.tech.id }).eq("id", cid).select("id"), "assign");
+    await must(withAuthor(svc().from("contacts").update({ assigned_to: A.people.tech.id }).eq("id", cid).select("id"), { authorKind: "automation", authorId: null }, "seed"), "assign");
     expect(await undoAiActAction(A.id, actId, { notify: false })).toEqual({ ok: true, control: "booking", told: "notAsked" });
     expect(await status(bookingId)).toBe("cancelled");
   });
@@ -195,7 +195,7 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
     const cid = await contact(A, { firstName: "Mia", email: "mia-sofia@example.invalid", phone: "+19565550116" });
     const actId = await act(A, { kind: "contact_field_filled", actor: "voice", callId: await call(A, cid), chatId: null, contactId: cid,
       target: { field: "email" }, before: { value: null }, after: { value: "mia-sofia@example.invalid" } });
-    await must(svc().from("contacts").update({ email: "mia-own@example.invalid" }).eq("id", cid).select("id"), "edit");
+    await must(withAuthor(svc().from("contacts").update({ email: "mia-own@example.invalid" }).eq("id", cid).select("id"), { authorKind: "automation", authorId: null }, "seed"), "edit");
     as(A, "staff");
     expect(await undoAiActAction(A.id, actId, {})).toEqual({ ok: false, reason: "changed" });
     expect((await must<{ email: string }>(svc().from("contacts").select("email").eq("id", cid).single(), "c")).email).toBe("mia-own@example.invalid");
@@ -204,7 +204,7 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
 
   it("a field undo puts the old value back and stamps; the redo puts Sofía's value back and clears it; a second redo answers changed", async () => {
     const cid = await contact(A, { firstName: "Caller", phone: "+19565550117" });
-    await must(svc().from("contacts").update({ first_name: "Noé" }).eq("id", cid).select("id"), "fill");
+    await must(withAuthor(svc().from("contacts").update({ first_name: "Noé" }).eq("id", cid).select("id"), { authorKind: "automation", authorId: null }, "seed"), "fill");
     const actId = await act(A, { kind: "contact_field_filled", actor: "voice", callId: await call(A, cid), chatId: null, contactId: cid,
       target: { field: "firstName" }, before: { value: "Caller" }, after: { value: "Noé" } });
     const first = async () => (await must<{ first_name: string }>(svc().from("contacts").select("first_name").eq("id", cid).single(), "c")).first_name;

@@ -11,6 +11,8 @@ import {
   listRequestsMissingReceivedTask, claimDocumentRequestSend, clearDocumentRequestSend,
 } from "../document-requests";
 import { cleanRequestItems, documentRequestState, isCustomerAuthor, DOCUMENT_SOURCES } from "../document-rules";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 /**
  * The request module (spec 4.1-4.5) on the service client (the routes and the actions hold one AFTER
@@ -165,7 +167,7 @@ describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5
   it("the timeline read pages on created_at and covers a group's own requests (mutation: drop the group read -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
       const mine = await made(db, accountId, ana);
       const casa = await createDocumentRequest(db, { id: crypto.randomUUID(), accountId, record: { kind: "group", id: g.groupId }, items: [{ key: "id", category: "id", note: null }], language: "en", tokenHash: HEX(n++), channel: "email", createdBy: ACTOR, now: new Date() });
@@ -178,9 +180,10 @@ describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana", lastName: "García", email: "ana@example.com" }, ACTOR)).id;
       const bo = (await createContact(db, accountId, { firstName: "Bo" }, ACTOR)).id;
-      const g = await createGroupWithMember(db, accountId, bo, "household", "Casa García", null, ACTOR);
+      const g = await createGroupWithMember(db, accountId, bo, "household", "Casa García", null, { authorKind: "person", authorId: ACTOR });
       if (g.status !== "ok") throw new Error(g.status);
-      await db.from("client_group_members").insert({ account_id: accountId, client_group_id: g.groupId, contact_id: ana, is_primary_contact: true });
+      await withAuthor(db.from("client_group_members")
+        .insert({ account_id: accountId, client_group_id: g.groupId, contact_id: ana, is_primary_contact: true }), SEED_AUTHOR, SEED_VIA);
       expect(await documentRequestTarget(db, accountId, { contact_id: ana, client_group_id: null }))
         .toMatchObject({ name: "Ana García", contactId: ana, email: "ana@example.com" });
       expect(await documentRequestTarget(db, accountId, { contact_id: null, client_group_id: g.groupId }))

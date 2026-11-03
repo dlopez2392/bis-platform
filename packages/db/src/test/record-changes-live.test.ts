@@ -8,9 +8,14 @@ import { createContact } from "../contacts";
 describe("record_changes through the API", () => {
   it("a service update with an x-bis-author header is recorded as that author (mutation: drop the step-4 branch -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
-      // createContact(db, accountId, input, actorId, actorType) as read at 0e424259; T2 replaces the actor pair
-      // with a required author.
-      const c = await createContact(db, accountId, { firstName: "Rc", phone: "+19565550111" }, "user_test", "system");
+      // createContact keeps its (actorId, actorType) pair (plan Task 2 Step 5: a writer that already
+      // takes an explicit RowAuthor for creation keeps it and gains withAuthor on the insert) — the
+      // explicit `author` below is what withAuthor actually sends on this INSERT; this test's own
+      // concern is the UPDATE below, which is why its author is spelled out rather than left to the
+      // actorType "system" -> contactAuthor fallback.
+      const c = await createContact(db, accountId,
+        { firstName: "Rc", phone: "+19565550111", author: { authorKind: "automation", authorId: null } },
+        "user_test", "system");
       const r = await db.from("contacts").update({ dnd: { sms: true } }).eq("id", c.id).eq("account_id", accountId)
         .setHeader("x-bis-author", JSON.stringify({ kind: "ai", via: "ai_act:00000000-0000-0000-0000-000000000111" }));
       expect(r.error).toBeNull();

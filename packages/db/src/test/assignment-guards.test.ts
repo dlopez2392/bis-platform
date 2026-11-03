@@ -51,7 +51,7 @@ describe("undoAssignContacts puts a customer back only while the call's target s
       if (c.table === "memberships") return { id: "m" };
       return [];
     });
-    await undoAssignContacts(db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], "actor");
+    await undoAssignContacts(db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], { authorKind: "person", authorId: "actor" });
     const [u] = updates(calls, "contacts");
     expect(u).toBeDefined();
     expect(arg(u!, "eq", "assigned_to")).toBe(B);
@@ -62,7 +62,7 @@ describe("undoAssignContacts puts a customer back only while the call's target s
       if (c.table === "memberships") return { id: "m" };
       return [];
     });
-    await undoAssignContacts(db, "acct", [{ contactId: "c1", assignee: A, target: null, movedTaskIds: [] }], "actor");
+    await undoAssignContacts(db, "acct", [{ contactId: "c1", assignee: A, target: null, movedTaskIds: [] }], { authorKind: "person", authorId: "actor" });
     const [u] = updates(calls, "contacts");
     expect(arg(u!, "is", "assigned_to")).toBeNull();
     expect(u!.steps.some(([k, a]) => k === "eq" && a[0] === "assigned_to")).toBe(false);
@@ -76,7 +76,7 @@ describe("undoAssignContacts puts a customer back only while the call's target s
     await undoAssignContacts(db, "acct", [
       { contactId: "c1", assignee: A, target: B, movedTaskIds: [] },
       { contactId: "c2", assignee: A, target: C, movedTaskIds: [] },
-    ], "actor");
+    ], { authorKind: "person", authorId: "actor" });
     const guarded = updates(calls, "contacts").map((u) => [arg(u, "eq", "assigned_to"), inList(u, "id")]);
     expect(guarded).toEqual(expect.arrayContaining([[B, ["c1"]], [C, ["c2"]]]));
     expect(guarded).toHaveLength(2);
@@ -91,7 +91,7 @@ describe("undoAssignContacts puts a customer back only while the call's target s
     await undoAssignContacts(db, "acct", [
       { contactId: "c1", assignee: A, target: B, movedTaskIds: [] },
       { contactId: "c2", assignee: A, target: B, movedTaskIds: [] },
-    ], "actor");
+    ], { authorKind: "person", authorId: "actor" });
     const events = calls.filter((c) => c.table === "events").map((c) => (c.steps.find(([k]) => k === "insert")?.[1][0] as { payload: { contactId: string } }).payload.contactId);
     expect(events).toEqual(["c1"]);
   });
@@ -107,21 +107,21 @@ describe("undoAssignContacts puts a customer back only while the call's target s
     expect(await undoAssignContacts(db, "acct", [
       { contactId: "c1", assignee: A, target: B, movedTaskIds: [] },
       { contactId: "c2", assignee: A, target: B, movedTaskIds: [] },
-    ], "actor")).toEqual({ restored: 1 });
+    ], { authorKind: "person", authorId: "actor" })).toEqual({ restored: 1 });
   });
   it("returns 0 when every customer was handed on since, whether the read saw it or the write did (mutation: answer the entry count -> FAILS)", async () => {
     const pickedSince = recordingDb((c) => {
       if (c.table === "contacts" && !has(c, "update")) return [{ id: "c1", assigned_to: C }];
       return [];
     });
-    expect(await undoAssignContacts(pickedSince.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], "actor"))
+    expect(await undoAssignContacts(pickedSince.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], { authorKind: "person", authorId: "actor" }))
       .toEqual({ restored: 0 });
     const lostAtWrite = recordingDb((c) => {
       if (c.table === "contacts" && !has(c, "update")) return [{ id: "c1", assigned_to: B }];
       if (c.table === "memberships") return { id: "m" };
       return [];
     });
-    expect(await undoAssignContacts(lostAtWrite.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], "actor"))
+    expect(await undoAssignContacts(lostAtWrite.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], { authorKind: "person", authorId: "actor" }))
       .toEqual({ restored: 0 });
   });
 });
@@ -138,7 +138,7 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
       if (c.table === "memberships") return { id: "m" };
       return [];
     });
-    const changed = await assignContacts(db, "acct", all, A, "actor");
+    const changed = await assignContacts(db, "acct", all, A, { authorKind: "person", authorId: "actor" });
     expect(changed).toHaveLength(201);
     for (const [label, group, column] of [
       ["read", reads(calls, "contacts"), "id"], ["contacts write", updates(calls, "contacts"), "id"], ["task move", updates(calls, "tasks"), "contact_id"],
@@ -154,7 +154,7 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
       if (c.table === "memberships") return { id: "m" };
       return [];
     });
-    await assignContacts(db, "acct", ids(200), A, "actor");
+    await assignContacts(db, "acct", ids(200), A, { authorKind: "person", authorId: "actor" });
     expect(reads(calls, "contacts")).toHaveLength(1);
     expect(updates(calls, "contacts")).toHaveLength(1);
   });
@@ -167,7 +167,7 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
       return [];
     });
     await undoAssignContacts(db, "acct",
-      all.map((contactId, i) => ({ contactId, assignee: A, target: B, movedTaskIds: i === 0 ? tasks : [] })), "actor");
+      all.map((contactId, i) => ({ contactId, assignee: A, target: B, movedTaskIds: i === 0 ? tasks : [] })), { authorKind: "person", authorId: "actor" });
     for (const [label, group, column] of [
       ["read", reads(calls, "contacts"), "id"], ["contacts write", updates(calls, "contacts"), "id"], ["task move-back", updates(calls, "tasks"), "id"],
     ] as const) {
@@ -178,7 +178,7 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
   });
   it("reassignReleased batches a departed person's customers and tasks too (mutation: one .in() for all -> FAILS)", async () => {
     const { db, calls } = recordingDb();
-    await reassignReleased(db, "acct", A, { contacts: ids(401), tasks: ids(201, 10_000) });
+    await reassignReleased(db, "acct", A, { contacts: ids(401), tasks: ids(201, 10_000) }, { authorKind: "person", authorId: "actor" });
     expect(updates(calls, "contacts").map((c) => inList(c, "id").length)).toEqual([200, 200, 1]);
     expect(updates(calls, "tasks").map((c) => inList(c, "id").length)).toEqual([200, 1]);
   });
@@ -196,7 +196,7 @@ describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (f
 describe("reassignReleased never writes outside the account it is given, contacts or tasks (mutation: drop .eq('account_id', accountId) -> FAILS)", () => {
   it("every write is scoped by account_id, so an id from another account could never match", async () => {
     const { db, calls } = recordingDb();
-    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] });
+    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] }, { authorKind: "person", authorId: "actor" });
     for (const c of [...updates(calls, "contacts"), ...updates(calls, "tasks")]) {
       expect(arg(c, "eq", "account_id")).toBe("acct");
     }
@@ -206,7 +206,7 @@ describe("reassignReleased never writes outside the account it is given, contact
 describe("reassignReleased only ever writes a row still Unassigned (mutation: drop .is('assigned_to', null) -> FAILS)", () => {
   it("every write guards on IS NULL assigned_to, contacts and tasks alike", async () => {
     const { db, calls } = recordingDb();
-    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] });
+    await reassignReleased(db, "acct", A, { contacts: [uuid(1)], tasks: [uuid(2)] }, { authorKind: "person", authorId: "actor" });
     for (const c of [...updates(calls, "contacts"), ...updates(calls, "tasks")]) {
       expect(arg(c, "is", "assigned_to")).toBeNull();
     }

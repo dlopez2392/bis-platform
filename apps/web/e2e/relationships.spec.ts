@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, addRelationship, setClientAccess, type NewRelationship } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly, not through a Next request.
@@ -116,14 +116,14 @@ test.beforeAll(async () => {
   techHiddenId = (await createContact(db, accountId, { firstName: "E2E", lastName: TECH_HIDDEN_LAST, assignedTo: null }, ACTOR)).id;
   // On TechMine's record: "Mother: someone not on your list" (the hidden one, side a, "f") and
   // "Sister: E2E TechToo …" (theirs, side a, "f").
-  await addRelationship(db, accountId, relationship(techHiddenId, techMineId, { labelKey: "parent", contactForm: "f" }), ACTOR, "system");
-  await addRelationship(db, accountId, relationship(techTooId, techMineId, { labelKey: "sibling", contactForm: "f" }), ACTOR, "system");
+  await addRelationship(db, accountId, relationship(techHiddenId, techMineId, { labelKey: "parent", contactForm: "f" }), E2E_AUTHOR);
+  await addRelationship(db, accountId, relationship(techTooId, techMineId, { labelKey: "sibling", contactForm: "f" }), E2E_AUTHOR);
 });
 
 test.afterAll(async () => {
   if (!accountId) return;
   const db = serviceDb();
-  const { error } = await db.from("contacts").delete().eq("account_id", accountId).in("last_name", ALL_LASTS);
+  const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("last_name", ALL_LASTS);
   expect(error, `deleting this spec's own contacts: ${error?.message}`).toBeNull();
   const left = await db.from("contacts").select("id").eq("account_id", accountId).in("last_name", ALL_LASTS);
   expect(left.error, `re-reading this spec's contacts: ${left.error?.message}`).toBeNull();

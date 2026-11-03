@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner, sendAuthor } from "./db";
+import { contactAuthor } from "../provenance";
 import { testPhoneNumber } from "./fixtures";
 
 /**
@@ -210,6 +211,8 @@ describe("0098 the holding record", () => {
       const ana = await person(c, a.accountId, "Ana", "Prueba");
       const business = "select public.set_contacts_business($1, array[$2::uuid], array['Acme Roofing'])";
       await c.query("set local role service_role");
+      // 0112: group writes are recorded; the app's service call names its author (enforce), a staff member here.
+      await sendAuthor(c, { authorKind: "person", authorId: "user_holding_staff" });
       expect(await refusal(c, business, [a.accountId, ana])).toBeNull();
       expect(await refusal(c, business, [a.accountId, h!.id])).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
       await c.query("reset role");
@@ -329,6 +332,8 @@ describe("0098 only server code sets or edits the mark", () => {
     withRollback(async (c) => {
       const a = await seedAccount(c, "server");
       await c.query("set local role service_role");
+      // F-115: ensureHoldingContact's author for a call Sofia took (voice.ts HOLDING_WRITERS.voice, through contactAuthor).
+      await sendAuthor(c, contactAuthor("ai", "voice"));
       const { rows: [h] } = await c.query<{ id: string }>(
         "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai') returning id",
         [a.accountId, PHONE]);

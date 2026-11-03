@@ -1,7 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, updateCalendarSettings } from "@bis/db";
-import { openFixtureCalendar, paintedContrast } from "./support";
+import { openFixtureCalendar, paintedContrast, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly (cleanup below), not through a
@@ -129,7 +129,7 @@ async function purgeBooking(bookerEmail: string): Promise<void> {
       }
     }
 
-    const { error: contactErr } = await db.from("contacts").delete().eq("id", contact.id);
+    const { error: contactErr } = await e2eAuthor(db.from("contacts").delete()).eq("id", contact.id);
     if (contactErr) {
       console.error(`booking e2e cleanup: contacts delete for ${contact.id} failed: ${contactErr.message}`);
     }

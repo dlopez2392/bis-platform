@@ -16,6 +16,7 @@ import { pickRecordOnNumber, sameNameAsRecord, namesAgree } from "./identity/rec
 import { identityTodoTitle } from "./identity/todo";
 import type { ResolvedTextbackContact } from "./textback";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import { planAct, underPlannedId, SOFIA_AUTHOR } from "./act-id";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
@@ -413,9 +414,11 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       if (pick.kind === "existing") {
         if (number === ctx.callerNumber) {
           try {
+            // F-115: the fill names the act it logs (planAct, act-id.ts).
+            const fillAct = planAct(source);
             const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, pick.contactId,
-              { firstName: firstName || undefined, lastName, email: fields.email }, ACTOR_ID, ACTOR_TYPE);
-            acts.push(...fieldFillActs(source, pick.contactId, filled));
+              { firstName: firstName || undefined, lastName, email: fields.email }, SOFIA_AUTHOR, fillAct?.via);
+            acts.push(...underPlannedId(fieldFillActs(source, pick.contactId, filled), fillAct));
           } catch (e) {
             console.error(`finishCall fillContactBlanks failed for ${pick.contactId}: ${String(e)}`);
           }
@@ -424,11 +427,13 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
         return pick.contactId;
       }
       if (pick.kind === "create") {
+        const madeAct = planAct(source);
         const created = await createContact(ctx.db, ctx.accountId, {
           firstName: firstName || "Caller", lastName, phone, email: fields.email, source: "voice", matchBy: "email_only",
+          via: madeAct?.via,
         }, ACTOR_ID, ACTOR_TYPE);
         if (!created.existing) {
-          acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+          acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null }], madeAct));
         }
         await recordActs(ctx.db, ctx.accountId, acts);
         return created.id;
@@ -436,6 +441,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
     }
     // `today`: zero or one contact on the number, or no number at all. Today's code, moved unchanged
     // (finish-call.ts:316-349 at df8882ce); `fields`, `firstName` and `lastName` are declared above.
+    const madeAct = planAct(source);
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: firstName || "Caller",
       lastName,
@@ -444,9 +450,10 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined,
       email: fields.email,
       source: "voice",
+      via: madeAct?.via,
     }, ACTOR_ID, ACTOR_TYPE);
     if (!created.existing) {
-      acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+      acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null }], madeAct));
     }
     // Backfill ONLY the caller's own contact. The lead's email or callback
     // number is what the caller said, and the dedupe (email first, then
@@ -459,10 +466,11 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       try {
         const existing = (await getContact(ctx.db, ctx.accountId, created.id)) as { phone?: string | null } | null;
         if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+          const fillAct = planAct(source);
           const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
             { firstName: firstName || undefined, lastName, email: fields.email },
-            ACTOR_ID, ACTOR_TYPE);
-          acts.push(...fieldFillActs(source, created.id, filled));
+            SOFIA_AUTHOR, fillAct?.via);
+          acts.push(...underPlannedId(fieldFillActs(source, created.id, filled), fillAct));
         }
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
@@ -482,10 +490,12 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       if (pick.kind === "existing") return pick.contactId;
       if (pick.kind !== "create") return null;
       const { firstName, lastName } = splitFullName(spokenName(name!));
+      const madeAct = planAct(source);
       const created = await createContact(ctx.db, ctx.accountId,
-        { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only" }, ACTOR_ID, ACTOR_TYPE);
+        { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only", via: madeAct?.via },
+        ACTOR_ID, ACTOR_TYPE);
       if (!created.existing) {
-        acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+        acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null }], madeAct));
       }
       await recordActs(ctx.db, ctx.accountId, acts);
       return created.id;
@@ -494,20 +504,23 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
     // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
     // the caller's own contact and the phone fill is a no-op. Do not add the
     // lead path's email/name here without its caller-ID check.
+    const madeAct = planAct(source);
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: "Caller",
       phone: ctx.callerNumber,
       source: "voice",
+      via: madeAct?.via,
     }, ACTOR_ID, ACTOR_TYPE);
     if (!created.existing) {
-      acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+      acts.push(...underPlannedId([{ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null }], madeAct));
     } else {
       try {
         // A no-op on a caller-ID match (written comes back empty), so usually no act.
+        const fillAct = planAct(source);
         const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
           { phone: ctx.callerNumber ?? undefined },
-          ACTOR_ID, ACTOR_TYPE);
-        acts.push(...fieldFillActs(source, created.id, filled));
+          SOFIA_AUTHOR, fillAct?.via);
+        acts.push(...underPlannedId(fieldFillActs(source, created.id, filled), fillAct));
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
       }
@@ -634,8 +647,9 @@ export async function finishCall(
     const heard = clearCallerLanguage(state.transcript);
     if (heard) {
       try {
+        // F-115: Sofia's, with no via: a language sign logs no act (AI_ACT_KINDS has none for it).
         await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
-          { language: heard, source: "call", at: meta.endedAt }, ACTOR_ID, ACTOR_TYPE);
+          { language: heard, source: "call", at: meta.endedAt }, SOFIA_AUTHOR);
       } catch (e) {
         console.error(`finishCall ${meta.callRowId ?? "(no row)"}: language signal failed: ${String(e)}`);
       }

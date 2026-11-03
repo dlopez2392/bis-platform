@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner, sendAuthor, SEED_AUTHOR, SEED_VIA } from "./db";
 import { contactSearchName, nameFold } from "../dedupe-keys";
 
 /**
@@ -135,6 +135,7 @@ describe("0108: the stored names match their TypeScript twins", () => {
       // public.create_group_with_member(uuid, uuid, text, text, text default null) is EXECUTE service_role only
       // (0069 section 9), hence asService.
       await asService(c);
+      await sendAuthor(c, SEED_AUTHOR, SEED_VIA);   // 0112: group writes are recorded; a seed names itself (enforce)
       await c.query("select public.create_group_with_member($1, $2, 'business', 'Taller Núñez', null)", [a.accountId, id]);
       await actAsOwner(c);
       const { rows: [r] } = await c.query("select company_name, search_name from public.contacts where id = $1", [id]);
@@ -148,6 +149,7 @@ describe("0108: the stored names match their TypeScript twins", () => {
         const a = await seedAccount(c, "grp");
         const id = await person(c, a.accountId, { first: "Ana" });
         await asService(c);
+        await sendAuthor(c, SEED_AUTHOR, SEED_VIA);   // 0112: group writes are recorded; a seed names itself (enforce)
         await c.query("select public.create_group_with_member($1, $2, 'household', $3, null)", [a.accountId, id, name]);
         await actAsOwner(c);
         const { rows: [r] } = await c.query(

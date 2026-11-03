@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { e2eAuthor } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -122,7 +123,7 @@ test.afterAll(async () => {
     }
   }
   for (const id of made.contacts) {
-    const { error } = await db.from("contacts").delete().eq("id", id);
+    const { error } = await e2eAuthor(db.from("contacts").delete()).eq("id", id);
     if (error) console.error(`consent-texts e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);
   }
   if (made.numberId) {

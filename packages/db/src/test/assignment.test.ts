@@ -6,6 +6,8 @@ import {
   releaseTasksOffCustomers,
 } from "../assignment";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 
 const RUN = Math.random().toString(36).slice(2, 10);
 async function person(db: SupabaseClient, accountId: string, tag: string, role: "owner" | "staff" | "technician") {
@@ -17,7 +19,7 @@ async function person(db: SupabaseClient, accountId: string, tag: string, role: 
   return { id: u!.id as string, clerk };
 }
 async function contact(db: SupabaseClient, accountId: string, assignee: string | null): Promise<string> {
-  const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: "C", assigned_to: assignee }).select("id").single();
+  const { data, error } = await withAuthor(db.from("contacts").insert({ account_id: accountId, first_name: "C", assigned_to: assignee }), SEED_AUTHOR, SEED_VIA).select("id").single();
   if (error) throw error;
   return data.id as string;
 }
@@ -129,7 +131,7 @@ describe("assignment core (spec §8)", () => {
       const c1 = await contact(db, accountId, a.id);
       const t1 = await task(db, accountId, c1, a.id, "x");
       const tOwner = await task(db, accountId, c1, owner.id, "y");
-      const previous = await assignContacts(db, accountId, [c1], b.id, owner.clerk);
+      const previous = await assignContacts(db, accountId, [c1], b.id, { authorKind: "person", authorId: owner.clerk });
       expect(previous).toEqual([{ contactId: c1, assignee: a.id, target: b.id, movedTaskIds: [t1] }]);
       expect(await holder(db, "contacts", c1)).toBe(b.id);
       expect(await holder(db, "tasks", t1)).toBe(b.id);
@@ -140,10 +142,10 @@ describe("assignment core (spec §8)", () => {
       const b = await person(db, accountId, "u", "staff");
       const c = await contact(db, accountId, null);
       const tu = await task(db, accountId, c, null, "nobody's");
-      expect(await assignContacts(db, accountId, [c], b.id, b.clerk)).toEqual([{ contactId: c, assignee: null, target: b.id, movedTaskIds: [tu] }]);
+      expect(await assignContacts(db, accountId, [c], b.id, { authorKind: "person", authorId: b.clerk })).toEqual([{ contactId: c, assignee: null, target: b.id, movedTaskIds: [tu] }]);
       expect(await holder(db, "contacts", c)).toBe(b.id);
       expect(await holder(db, "tasks", tu)).toBe(b.id);
-      expect(await assignContacts(db, accountId, [c], null, b.clerk)).toEqual([{ contactId: c, assignee: b.id, target: null, movedTaskIds: [tu] }]);
+      expect(await assignContacts(db, accountId, [c], null, { authorKind: "person", authorId: b.clerk })).toEqual([{ contactId: c, assignee: b.id, target: null, movedTaskIds: [tu] }]);
       expect(await holder(db, "contacts", c)).toBeNull();
       expect(await holder(db, "tasks", tu)).toBeNull();
     }));
@@ -153,10 +155,10 @@ describe("assignment core (spec §8)", () => {
       const b = await person(db, accountId, "h2", "technician");
       const c1 = await contact(db, accountId, a.id);
       const t1 = await task(db, accountId, c1, a.id);
-      await expect(assignContacts(failFirstUpdate(db, "tasks"), accountId, [c1], b.id, b.clerk)).rejects.toThrow(/injected tasks update failure/);
+      await expect(assignContacts(failFirstUpdate(db, "tasks"), accountId, [c1], b.id, { authorKind: "person", authorId: b.clerk })).rejects.toThrow(/injected tasks update failure/);
       expect(await holder(db, "contacts", c1)).toBe(a.id);
       expect(await holder(db, "tasks", t1)).toBe(a.id);
-      await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      await assignContacts(db, accountId, [c1], b.id, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", c1)).toBe(b.id);
       expect(await holder(db, "tasks", t1)).toBe(b.id);
     }));
@@ -167,9 +169,9 @@ describe("assignment core (spec §8)", () => {
       const c1 = await contact(db, accountId, a.id);
       const tA = await task(db, accountId, c1, a.id, "A's");
       const tB = await task(db, accountId, c1, b.id, "B's own, from before");
-      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      const previous = await assignContacts(db, accountId, [c1], b.id, { authorKind: "person", authorId: b.clerk });
       expect(previous).toEqual([{ contactId: c1, assignee: a.id, target: b.id, movedTaskIds: [tA] }]);
-      await undoAssignContacts(db, accountId, previous, b.clerk);
+      await undoAssignContacts(db, accountId, previous, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", c1)).toBe(a.id);
       expect(await holder(db, "tasks", tA)).toBe(a.id);
       expect(await holder(db, "tasks", tB)).toBe(b.id);
@@ -180,10 +182,10 @@ describe("assignment core (spec §8)", () => {
       const b = await person(db, accountId, "lb", "technician");
       const c1 = await contact(db, accountId, a.id);
       const tA = await task(db, accountId, c1, a.id, "A's");
-      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      const previous = await assignContacts(db, accountId, [c1], b.id, { authorKind: "person", authorId: b.clerk });
       const { error } = await db.from("memberships").delete().eq("account_id", accountId).eq("user_id", a.id);
       if (error) throw error;
-      await expect(undoAssignContacts(db, accountId, previous, b.clerk)).rejects.toThrow(/not a member/);
+      await expect(undoAssignContacts(db, accountId, previous, { authorKind: "person", authorId: b.clerk })).rejects.toThrow(/not a member/);
       expect(await holder(db, "contacts", c1)).toBe(b.id);
       expect(await holder(db, "tasks", tA)).toBe(b.id);
     }));
@@ -194,9 +196,9 @@ describe("assignment core (spec §8)", () => {
       const c = await person(db, accountId, "gc", "staff");
       const c1 = await contact(db, accountId, a.id);
       const tA = await task(db, accountId, c1, a.id, "A's");
-      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      const previous = await assignContacts(db, accountId, [c1], b.id, { authorKind: "person", authorId: b.clerk });
       expect(await setTaskAssignee(db, accountId, tA, c.id, b.clerk)).toEqual({ previous: b.id });
-      await undoAssignContacts(db, accountId, previous, b.clerk);
+      await undoAssignContacts(db, accountId, previous, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", c1)).toBe(a.id);
       expect(await holder(db, "tasks", tA)).toBe(c.id);
     }));
@@ -207,10 +209,10 @@ describe("assignment core (spec §8)", () => {
       const c = await person(db, accountId, "bc", "staff");
       const x = await contact(db, accountId, a.id);
       const y = await contact(db, accountId, b.id);
-      const previous = await assignContacts(db, accountId, [x, y], b.id, b.clerk);
+      const previous = await assignContacts(db, accountId, [x, y], b.id, { authorKind: "person", authorId: b.clerk });
       expect(previous).toEqual([{ contactId: x, assignee: a.id, target: b.id, movedTaskIds: [] }]);
-      await assignContacts(db, accountId, [y], c.id, c.clerk);
-      await undoAssignContacts(db, accountId, previous, b.clerk);
+      await assignContacts(db, accountId, [y], c.id, { authorKind: "person", authorId: c.clerk });
+      await undoAssignContacts(db, accountId, previous, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", x)).toBe(a.id);
       expect(await holder(db, "contacts", y)).toBe(c.id);
     }));
@@ -225,9 +227,9 @@ describe("assignment core (spec §8)", () => {
       const x = await contact(db, accountId, a.id);
       const other = await contact(db, accountId, b.id);
       const tOther = await task(db, accountId, other, b.id, "B's, on another customer");
-      const previous = await assignContacts(db, accountId, [x], b.id, b.clerk);
+      const previous = await assignContacts(db, accountId, [x], b.id, { authorKind: "person", authorId: b.clerk });
       const forged = previous.map((p) => ({ ...p, movedTaskIds: [...p.movedTaskIds, tOther] }));
-      await undoAssignContacts(db, accountId, forged, b.clerk);
+      await undoAssignContacts(db, accountId, forged, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", x)).toBe(a.id);
       expect(await holder(db, "tasks", tOther)).toBe(b.id);
     }));
@@ -238,9 +240,9 @@ describe("assignment core (spec §8)", () => {
       const c = await person(db, accountId, "tc", "staff");
       const x = await contact(db, accountId, a.id);
       const tX = await task(db, accountId, x, a.id, "A's");
-      const previous = await assignContacts(db, accountId, [x], b.id, b.clerk);
-      await assignContacts(db, accountId, [x], c.id, c.clerk);
-      await undoAssignContacts(db, accountId, previous, b.clerk);
+      const previous = await assignContacts(db, accountId, [x], b.id, { authorKind: "person", authorId: b.clerk });
+      await assignContacts(db, accountId, [x], c.id, { authorKind: "person", authorId: c.clerk });
+      await undoAssignContacts(db, accountId, previous, { authorKind: "person", authorId: b.clerk });
       expect(await holder(db, "contacts", x)).toBe(c.id);
       expect(await holder(db, "tasks", tX)).toBe(c.id);
     }));
@@ -249,7 +251,7 @@ describe("assignment core (spec §8)", () => {
       const c1 = await contact(db, accountId, null);
       await withTestAccount(async (_db, otherAccountId) => {
         const stranger = await person(db, otherAccountId, "x", "staff");
-        await expect(assignContacts(db, accountId, [c1], stranger.id, "user_test")).rejects.toThrow(/not a member/);
+        await expect(assignContacts(db, accountId, [c1], stranger.id, { authorKind: "person", authorId: "user_test" })).rejects.toThrow(/not a member/);
       });
       expect(await holder(db, "contacts", c1)).toBeNull();
     }));
@@ -312,12 +314,12 @@ describe("assignment core (spec §8)", () => {
     const t = await task(db, accountId, null, a.id, "open, no customer");
     const { error: dErr } = await db.from("memberships").delete().eq("user_id", a.id);
     if (dErr) throw dErr;
-    const released = await releaseMemberAssignments(db, accountId, a.id);
+    const released = await releaseMemberAssignments(db, accountId, a.id, { authorKind: "person", authorId: other.id });
     expect(released.contacts.sort()).toEqual([c1, c2].sort());
     expect(released.tasks).toEqual([t]);
-    const { error: uErr } = await db.from("contacts").update({ assigned_to: other.id }).eq("id", c2);   // picked up meanwhile
+    const { error: uErr } = await withAuthor(db.from("contacts").update({ assigned_to: other.id }), SEED_AUTHOR, SEED_VIA).eq("id", c2);   // picked up meanwhile
     if (uErr) throw uErr;
-    await reassignReleased(db, accountId, a.id, released);
+    await reassignReleased(db, accountId, a.id, released, { authorKind: "person", authorId: other.id });
     expect(await holder(db, "contacts", c1)).toBe(a.id);
     expect(await holder(db, "contacts", c2)).toBe(other.id);   // mutation: drop the .is("assigned_to", null) guard -> FAILS
     expect(await holder(db, "tasks", t)).toBe(a.id);           // mutation: drop reassignReleased's tasks branch -> FAILS
@@ -333,15 +335,24 @@ describe("assignment core (spec §8)", () => {
       const mine = await task(db, accountId, null, null, "mine, open and Unassigned");
       await withTestAccount(async (_db, otherAccountId) => {
         const stranger = await task(db, otherAccountId, null, null, "someone else's, open and Unassigned");
-        await reassignReleased(db, accountId, a.id, { contacts: [], tasks: [mine, stranger] });
+        await reassignReleased(db, accountId, a.id, { contacts: [], tasks: [mine, stranger] }, { authorKind: "automation", authorId: null });
         expect(await holder(db, "tasks", mine)).toBe(a.id);
         expect(await holder(db, "tasks", stranger)).toBeNull();
       });
     }));
 });
 
-/** Only `.rpc()`, answering what the database never should: enough to pin the parse without a database. */
-const rpcAnswering = (data: unknown) => ({ rpc: async () => ({ data, error: null }) }) as unknown as SupabaseClient;
+/** Only `.rpc()`, answering what the database never should: enough to pin the parse without a database.
+ *  F-115: withAuthor() calls setHeader() on the rpc() builder before it is awaited — thenable AND
+ *  chainable, as a real postgrest-js builder is. */
+const rpcAnswering = (data: unknown) => ({
+  rpc: () => {
+    const result: Promise<{ data: unknown; error: null }> & { setHeader?: () => typeof result } =
+      Promise.resolve({ data, error: null });
+    result.setHeader = () => result;
+    return result;
+  },
+}) as unknown as SupabaseClient;
 
 describe("releaseMemberAssignments refuses a result it does not recognise (review m7, fake client)", () => {
   it.each([
@@ -351,10 +362,10 @@ describe("releaseMemberAssignments refuses a result it does not recognise (revie
     ["tasks missing", { contacts: [] }],
     ["a non-string id", { contacts: [1], tasks: [] }],
   ])("%s throws instead of reading as nothing released (mutation: fall back to [] -> FAILS)", async (_label, data) => {
-    await expect(releaseMemberAssignments(rpcAnswering(data), "acct", "user")).rejects.toThrow(/unexpected result/);
+    await expect(releaseMemberAssignments(rpcAnswering(data), "acct", "user", { authorKind: "person", authorId: "user" })).rejects.toThrow(/unexpected result/);
   });
   it("the shape 0068 returns parses", async () => {
-    expect(await releaseMemberAssignments(rpcAnswering({ contacts: ["c1"], tasks: [] }), "acct", "user"))
+    expect(await releaseMemberAssignments(rpcAnswering({ contacts: ["c1"], tasks: [] }), "acct", "user", { authorKind: "person", authorId: "user" }))
       .toEqual({ contacts: ["c1"], tasks: [] });
   });
 });
@@ -387,14 +398,14 @@ describe("the assignment writers keep the database's error code (fix round 1, m1
   });
   it("assignContacts: an RLS refusal on the task move keeps 42501", async () => {
     const db = refusingWrites({ contacts: [{ id: "c1", assigned_to: "u1" }] }, { code: "42501", message: "new row violates row-level security policy" });
-    await expect(assignContacts(db, "acct", ["c1"], null, "user")).rejects.toMatchObject({ code: "42501" });
+    await expect(assignContacts(db, "acct", ["c1"], null, { authorKind: "person", authorId: "user" })).rejects.toMatchObject({ code: "42501" });
   });
   it("undoAssignContacts: a refusal on the move-back keeps 42501", async () => {
     // c1 is still with the call's target (Unassigned), and u-prev is a member
     // (the membership read answers a row), so the move-back write runs.
     const db = refusingWrites({ contacts: [{ id: "c1", assigned_to: null }], memberships: { id: "m1" } }, refusal);
     const work = [{ contactId: "c1", assignee: "u-prev", target: null, movedTaskIds: ["t1"] }];
-    await expect(undoAssignContacts(db, "acct", work, "user")).rejects.toMatchObject({ code: "42501" });
+    await expect(undoAssignContacts(db, "acct", work, { authorKind: "person", authorId: "user" })).rejects.toMatchObject({ code: "42501" });
   });
   it("an error with no code stays without one (not a refusal)", async () => {
     const db = refusingWrites({ tasks: { assigned_to: null } }, { code: "", message: "boom" } as never);

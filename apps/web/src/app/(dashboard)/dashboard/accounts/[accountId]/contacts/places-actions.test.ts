@@ -189,7 +189,7 @@ describe("places-actions: the proofs before any write", () => {
 describe("S-03 part 2: a group subject (the group's own page)", () => {
   const GS = { kind: "group" as const, id: G };
   const GUNIT: EquipmentRow = { ...UNIT, place_id: P2 };
-  const GROUP_CTX = { subjectId: G, subjectKind: "group", actorId: "user_1" };
+  const GROUP_CTX = { subjectId: G, subjectKind: "group", author: { authorKind: "person", authorId: "user_1" } };
   const ALL_GROUP: [name: string, run: () => Promise<{ ok: boolean }>][] = [
     ["addPlaceAction", () => addPlaceAction(A, GS, { address: "1204 Nolana Ave" })],
     ["updatePlaceFieldAction", () => updatePlaceFieldAction(A, GS, P2, "label", "Casa")],
@@ -293,7 +293,7 @@ describe("S-03 part 2: a group subject (the group's own page)", () => {
     reads.readGroup.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? { id } : null));
     reads.getPlace.mockResolvedValue(mine);
     expect(await updatePlaceFieldAction(A, { kind: "group", id: LETTERED.toUpperCase() }, P2, "label", "Casa")).toEqual({ ok: true });
-    expect(writers.updatePlace).toHaveBeenCalledWith(REQUEST, A, P2, { label: "Casa" }, { subjectId: LETTERED, subjectKind: "group", actorId: "user_1" });
+    expect(writers.updatePlace).toHaveBeenCalledWith(REQUEST, A, P2, { label: "Casa" }, { subjectId: LETTERED, subjectKind: "group", author: { authorKind: "person", authorId: "user_1" } });
   });
 });
 
@@ -306,10 +306,10 @@ describe("addPlaceAction", () => {
     const own = await addPlaceAction(A, S, { address: "1204 Nolana Ave" });
     expect(own.ok).toBe(true);
     expect(writers.addPlace).toHaveBeenLastCalledWith(REQUEST, A, { contactId: S, groupId: null },
-      expect.objectContaining({ address: "1204 Nolana Ave", label: null }), { subjectId: S, actorId: "user_1" });
+      expect.objectContaining({ address: "1204 Nolana Ave", label: null }), { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
     await addPlaceAction(A, S, { owner: `group:${G}`, landmark: "the blue house past the canal" });
     expect(writers.addPlace).toHaveBeenLastCalledWith(REQUEST, A, { contactId: null, groupId: G },
-      expect.objectContaining({ landmark: "the blue house past the canal" }), { subjectId: S, actorId: "user_1" });
+      expect.objectContaining({ landmark: "the blue house past the canal" }), { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
   });
 
   it("an owner value that is not one is invalid, and a place with no way to find it is places.needOne, neither written", async () => {
@@ -340,7 +340,7 @@ describe("setPlaceOwnerAction", () => {
 
   it("an Owner moves a property to one of the record's groups; a group the record is not in is refused", async () => {
     expect(await setPlaceOwnerAction(A, S, P, `group:${G}`)).toEqual({ ok: true });
-    expect(writers.setPlaceOwner).toHaveBeenCalledWith(REQUEST, A, P, { contactId: null, groupId: G }, { subjectId: S, actorId: "user_1" });
+    expect(writers.setPlaceOwner).toHaveBeenCalledWith(REQUEST, A, P, { contactId: null, groupId: G }, { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
     writers.setPlaceOwner.mockClear();
     expect(await setPlaceOwnerAction(A, S, P, `group:${G2}`)).toEqual({ ok: false, error: "places.refused" });
     expect(await setPlaceOwnerAction(A, S, P, "group:nope")).toEqual({ ok: false, error: "places.error.invalid" });
@@ -363,9 +363,9 @@ describe("removing and putting back a property", () => {
     // The deleted snapshot round-trips through the browser and back.
     const undo = JSON.parse(JSON.stringify((deleted as { undo: unknown }).undo));
     expect(await undoRemovePlaceAction(A, S, undo)).toEqual({ ok: true });
-    expect(writers.restorePlace).toHaveBeenCalledWith(REQUEST, A, { ...PLACE, created_by: null }, { subjectId: S, actorId: "user_1" });
+    expect(writers.restorePlace).toHaveBeenCalledWith(REQUEST, A, { ...PLACE, created_by: null }, { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
     expect(await undoRemovePlaceAction(A, S, { mode: "archived", placeId: P })).toEqual({ ok: true });
-    expect(writers.setPlaceArchived).toHaveBeenCalledWith(REQUEST, A, P, false, { subjectId: S, actorId: "user_1" });
+    expect(writers.setPlaceArchived).toHaveBeenCalledWith(REQUEST, A, P, false, { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
   });
 
   it("undoRemovePlaceAction refuses another account's snapshot before any write (mutation: skip parsePlaceSnapshot's account check -> FAILS)", async () => {
@@ -390,7 +390,7 @@ describe("removing and putting back a property", () => {
 
   it("put back and archive pass the flag straight through", async () => {
     expect(await setPlaceArchivedAction(A, S, P, true)).toEqual({ ok: true });
-    expect(writers.setPlaceArchived).toHaveBeenLastCalledWith(REQUEST, A, P, true, { subjectId: S, actorId: "user_1" });
+    expect(writers.setPlaceArchived).toHaveBeenLastCalledWith(REQUEST, A, P, true, { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
     expect(await setPlaceArchivedAction(A, S, P, "yes" as unknown as boolean)).toEqual({ ok: false, error: "places.error.invalid" });
   });
 });
@@ -427,7 +427,7 @@ describe("equipment", () => {
     expect(await replaceEquipmentAction(A, S, U, { name: "New AC" })).toEqual({ ok: false, error: "inline.rule.required" });
     expect(writers.replaceEquipment).not.toHaveBeenCalled();
     expect(await replaceEquipmentAction(A, S, U, { name: "New AC", installed_on: "2026-10-01" })).toEqual({ ok: true, unit: { ...NEW_UNIT, created_by: null } });
-    expect(writers.replaceEquipment).toHaveBeenCalledWith(REQUEST, A, U, expect.objectContaining({ name: "New AC", installed_on: "2026-10-01" }), { subjectId: S, actorId: "user_1" });
+    expect(writers.replaceEquipment).toHaveBeenCalledWith(REQUEST, A, U, expect.objectContaining({ name: "New AC", installed_on: "2026-10-01" }), { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
   });
 
   it("a warranty ending before the install date is refused on an edit", async () => {
@@ -440,7 +440,7 @@ describe("equipment", () => {
     expect(r).toEqual({ ok: true, snapshot: { ...UNIT, created_by: null } });
     const snapshot = JSON.parse(JSON.stringify((r as { snapshot: unknown }).snapshot));
     expect(await undoRemoveEquipmentAction(A, S, snapshot)).toEqual({ ok: true });
-    expect(writers.restoreEquipment).toHaveBeenCalledWith(REQUEST, A, { ...UNIT, created_by: null }, { subjectId: S, actorId: "user_1" });
+    expect(writers.restoreEquipment).toHaveBeenCalledWith(REQUEST, A, { ...UNIT, created_by: null }, { subjectId: S, author: { authorKind: "person", authorId: "user_1" } });
     writers.restoreEquipment.mockClear();
     expect(await undoRemoveEquipmentAction(A, S, { ...UNIT, account_id: OTHER_ACCOUNT })).toEqual({ ok: false, error: "places.error.invalid" });
     expect(await undoRemoveEquipmentAction(A, S, { ...UNIT, place_id: P2, extra: true })).toEqual({ ok: false, error: "places.error.invalid" });
@@ -505,7 +505,7 @@ describe("errors, the service client and the actor", () => {
     for (const [name, run] of runs) expect([name, (await run()).ok]).toEqual([name, true]);
     const ctxs = Object.entries(writers).flatMap(([name, w]) => w.mock.calls.map((c) => [name, c[c.length - 1]]));
     expect(ctxs).toHaveLength(12);
-    for (const [name, ctx] of ctxs) expect([name, ctx]).toEqual([name, { subjectId: LETTERED, actorId: "user_1" }]);
+    for (const [name, ctx] of ctxs) expect([name, ctx]).toEqual([name, { subjectId: LETTERED, author: { authorKind: "person", authorId: "user_1" } }]);
   });
 
   it("a database refusal, a duplicate replacement and a vanished target become their copy keys (mutation: map every code to places.error.failed -> FAILS)", async () => {
@@ -547,17 +547,17 @@ describe("errors, the service client and the actor", () => {
     for (const [name, run] of ALL.filter(([n]) => n !== "setPlaceOwnerAction")) expect([name, (await run()).ok]).toEqual([name, true]);
     const calls = Object.entries(writers).flatMap(([name, w]) => w.mock.calls.map((c) => [name, c[0], c[c.length - 1]]));
     expect(calls.length).toBeGreaterThanOrEqual(10);
-    for (const [name, db, ctx] of calls) expect([name, db, ctx]).toEqual([name, REQUEST, { subjectId: S, actorId: "user_t" }]);
+    for (const [name, db, ctx] of calls) expect([name, db, ctx]).toEqual([name, REQUEST, { subjectId: S, author: { authorKind: "person", authorId: "user_t" } }]);
   });
 
   it("an uppercase record id is the same record: proven, matched and written lowercase (mutation: drop the subjectId .toLowerCase() -> FAILS)", async () => {
     reads.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? { id } : null));
     reads.getPlace.mockResolvedValue({ ...PLACE, contact_id: LETTERED });
     expect(await updatePlaceFieldAction(A, LETTERED.toUpperCase(), P, "label", "Casa")).toEqual({ ok: true });
-    expect(writers.updatePlace).toHaveBeenCalledWith(REQUEST, A, P, { label: "Casa" }, { subjectId: LETTERED, actorId: "user_1" });
+    expect(writers.updatePlace).toHaveBeenCalledWith(REQUEST, A, P, { label: "Casa" }, { subjectId: LETTERED, author: { authorKind: "person", authorId: "user_1" } });
     // The add's default owner is the record itself, written lowercase as PostgREST will echo it.
     expect((await addPlaceAction(A, LETTERED.toUpperCase(), { address: "1204 Nolana Ave" })).ok).toBe(true);
     expect(writers.addPlace).toHaveBeenCalledWith(REQUEST, A, { contactId: LETTERED, groupId: null },
-      expect.anything(), { subjectId: LETTERED, actorId: "user_1" });
+      expect.anything(), { subjectId: LETTERED, author: { authorKind: "person", authorId: "user_1" } });
   });
 });

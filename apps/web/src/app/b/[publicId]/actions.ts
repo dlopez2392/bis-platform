@@ -351,7 +351,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       try {
         await fillContactBlanks(db, calendar.account_id, contactId, {
           firstName, lastName: lastName || undefined, email, phone: phone || undefined,
-        }, ACTOR_ID, ACTOR_TYPE);
+        }, { authorKind: "customer", authorId: ACTOR_ID });
       } catch (e) {
         console.error(`booking ${publicId}: fillContactBlanks failed for contact ${contactId}: ${String(e)}`);
       }
@@ -369,7 +369,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     if (pageSign) {
       try {
         await recordLanguageSignal(db, calendar.account_id, contactId,
-          { language: pageSign, source: "booking", at: new Date() }, ACTOR_ID, ACTOR_TYPE);
+          { language: pageSign, source: "booking", at: new Date() }, { authorKind: "customer", authorId: ACTOR_ID });
       } catch (e) {
         console.error(`booking ${publicId}: language signal failed for contact ${contactId}: ${String(e)}`);
       }

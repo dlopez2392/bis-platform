@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, sendAuthor, SEED_AUTHOR, SEED_VIA, actAs, actAsOwner } from "./db";
 import { contactSearchFilter } from "../contacts";
 import { contactSearchPlan } from "../contact-search";
 import { sanitizeSearchTerm, searchTermLength } from "../search-term";
@@ -116,6 +116,7 @@ async function seedCorpus(c: Client): Promise<Corpus> {
   const juan = await add(a, { first: "Juan", last: "Pérez" });
   // public.create_group_with_member is EXECUTE service_role only (0069 section 9); it writes company_name.
   await asService(c);
+  await sendAuthor(c, SEED_AUTHOR, SEED_VIA);   // 0112: group writes are recorded; a seed names itself (enforce)
   await c.query("select public.create_group_with_member($1, $2, 'business', 'Taller Núñez', null)", [a.accountId, juan]);
   await actAsOwner(c);
   return { a, b, owner, tech, techIds, aAll };

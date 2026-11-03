@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, e2eAuthor } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process directly rather than through a Next request.
@@ -71,7 +71,7 @@ test.beforeAll(async () => {
     last_name: "Import",
     email: seedEmail(i),
   }));
-  const { error } = await serviceDb().from("contacts").insert(rows);
+  const { error } = await e2eAuthor(serviceDb().from("contacts").insert(rows));
   if (error) throw new Error(`seeding failed: ${error.message}`);
 });
 
@@ -79,7 +79,7 @@ test.afterAll(async () => {
   if (!accountId) return;
   // The fixture account is torn down after the run, but leaving 60+ rows for
   // that teardown to trip over is not something to rely on.
-  await serviceDb().from("contacts").delete()
+  await e2eAuthor(serviceDb().from("contacts").delete())
     .eq("account_id", accountId).like("email", `${EMAIL_PREFIX}%`);
 });
 

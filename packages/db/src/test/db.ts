@@ -1,5 +1,29 @@
 import { Client } from "pg";
 import "dotenv/config";
+import type { RowAuthor } from "../provenance";
+import { AUTHOR_HEADER, authorHeaderValue } from "../row-author";
+
+/**
+ * F-115 (0111): who a fixture's own SEED write says it is, on a service-role request. CI's stacks run with
+ * record_changes enforce ON (.github/scripts/ci-local-supabase.sh), where a service-role contact write with no
+ * author is refused 42501. A seed is not an app path, so it names itself: {"kind":"automation","via":"seed"}.
+ * A case that EXERCISES an app path sends what that path's TypeScript caller sends instead, never this.
+ * Supabase-js seeds: `withAuthor(builder, SEED_AUTHOR, SEED_VIA)`. pg seeds as service_role: `sendAuthor(c, SEED_AUTHOR, SEED_VIA)`.
+ * (A pg seed as the connecting owner needs nothing: a direct session is automation/'sql', never refused.)
+ */
+export const SEED_AUTHOR: RowAuthor = { authorKind: "automation", authorId: null };
+export const SEED_VIA = "seed";
+
+/**
+ * Model what PostgREST hands the database for a request that carried `withAuthor(builder, author, via)`:
+ * `request.headers` holding the x-bis-author key, built by the app's own `authorHeaderValue` (JSON.stringify),
+ * so the value is byte-for-byte the app's. Local to the transaction; 0111 reads it only while the session role is
+ * service_role. `sendAuthor(c, null)` clears it, as a later request without the header would.
+ */
+export async function sendAuthor(c: Client, author: RowAuthor | null, via?: string): Promise<void> {
+  const headers = author ? JSON.stringify({ [AUTHOR_HEADER]: authorHeaderValue(author, via) }) : "";
+  await c.query("select set_config('request.headers', $1, true)", [headers]);
+}
 
 export async function withRollback(fn: (c: Client) => Promise<void>) {
   // Ten seconds, not pg's default of "forever": an unreachable host (the

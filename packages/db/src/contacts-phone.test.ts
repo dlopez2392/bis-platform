@@ -153,7 +153,9 @@ function memoryDb(contacts: Row[]) {
           }
           tables[table]!.push(stored);
           const done = Promise.resolve({ data: null, error: null });
-          return Object.assign(done, { select: () => ({ single: () => Promise.resolve({ data: { id: stored.id }, error: null }) }) });
+          const withSelect = Object.assign(done, { select: () => ({ single: () => Promise.resolve({ data: { id: stored.id }, error: null }) }) });
+          // F-115: withAuthor() calls setHeader() on whatever `.insert(...)` returns, before `.select()`.
+          return Object.assign(withSelect, { setHeader: () => withSelect });
         },
         // A thenable: `await` alone (no `.select()`) resolves it directly —
         // both `updateContact` and `fillContactBlanks` do this — while
@@ -173,6 +175,9 @@ function memoryDb(contacts: Row[]) {
             neq: (k: string, v: unknown) => typeof chain;
             select: (cols: string) => Promise<{ data: { id: unknown }[]; error: null }>;
             then: (resolve: (v: { data: null; error: null }) => void, reject?: (e: unknown) => void) => Promise<void>;
+            // F-115: withAuthor() calls setHeader() on whatever `.update(...)` returns, before or after
+            // `.eq()` — a no-op here (this mock has no PostgREST request to attach a header to).
+            setHeader: (name: string, value: string) => typeof chain;
           } = {
             eq: (k, v) => { uFilters.push([k, v]); return chain; },
             neq: (k, v) => { uFilters.push([`!${k}`, v]); return chain; },
@@ -180,6 +185,7 @@ function memoryDb(contacts: Row[]) {
             then: (resolve, reject) => Promise.resolve({ data: null, error: null } as const)
               .then(() => { apply(); return { data: null, error: null } as const; })
               .then(resolve, reject),
+            setHeader: () => chain,
           };
           return chain;
         },
@@ -396,7 +402,7 @@ describe("findDuplicate's fallback: spec clarification (bare-stored is the SAME 
 describe("updateContact: an unchanged number keeps its flag (review C1)", () => {
   it("re-writing the SAME E.164 leaves phone_country_unconfirmed untouched (mutation: drop the currentPhone comparison in toRow → the flag is cleared, FAILS)", async () => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
-    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, { authorKind: "person", authorId: "user_test" });
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
   });
 
@@ -407,13 +413,13 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
     // "recomputed from scratch" is to seed a value fresh computation would
     // never itself produce.
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: false }]);
-    await updateContact(m.db, "a1", "c1", { phone: "(551) 234-5678" }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: "(551) 234-5678" }, { authorKind: "person", authorId: "user_test" });
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: false });
   });
 
   it("a GENUINELY different number recomputes the flag from its own reading (mutation: always keep the old flag → FAILS)", async () => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
-    await updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_test" });
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+19562921696", phone_country_unconfirmed: false });
   });
 
@@ -422,7 +428,7 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
     ["1 (551) 234-5678"],
   ])("re-writing the same number back keeps the flag even when the STORED text is formatted, not pure E.164: %s (re-review C1; mutation: compare against the raw stored text instead of normalisePhone(currentPhone)?.e164 → the flag is cleared, FAILS)", async (stored) => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: stored, phone_key: "5512345678", phone_country_unconfirmed: true }]);
-    await updateContact(m.db, "a1", "c1", { phone: stored }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: stored }, { authorKind: "person", authorId: "user_test" });
     // Unchanged writes NEITHER column (round-3 fix) — the stored TEXT stays
     // exactly as it was (never rewritten to pure E.164), and so does the flag.
     expect(m.tables.contacts[0]).toMatchObject({ phone: stored, phone_country_unconfirmed: true });
@@ -437,7 +443,7 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
     // confirmed and would be texted. So an unchanged number must leave the
     // stored bare text — and the stale false flag — exactly alone.
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "55 1234 5678", phone_key: "5512345678", phone_country_unconfirmed: false }]);
-    await updateContact(m.db, "a1", "c1", { phone: incoming }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: incoming }, { authorKind: "person", authorId: "user_test" });
     expect(m.tables.contacts[0]).toMatchObject({ phone: "55 1234 5678", phone_country_unconfirmed: false });
   });
 });
@@ -445,7 +451,7 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
 describe("updateContact: its own current-phone read fails closed and stays account-scoped (re-review N2, N3)", () => {
   it("the current-phone read is account-scoped (mutation: drop the account_id filter on that read → FAILS)", async () => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
-    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, "user_test");
+    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, { authorKind: "person", authorId: "user_test" });
     expect(m.reads.length).toBeGreaterThan(0);
     for (const read of m.reads) {
       expect(read).toEqual(expect.arrayContaining([["account_id", "a1"]]));
@@ -467,7 +473,7 @@ describe("updateContact: its own current-phone read fails closed and stays accou
       }
       return realFrom(table);
     };
-    await expect(updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, "user_test")).rejects.toThrow();
+    await expect(updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_test" })).rejects.toThrow();
     // Unchanged — the failed check must have aborted the write, not just
     // failed to compare correctly.
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
@@ -511,7 +517,7 @@ describe("applyImportBatch: a CSV re-import of a flagged contact's own exported 
 describe("fillContactBlanks: the phone fill carries its own flag, reported and emitted (review I3, m7)", () => {
   it("fills a blank phone with its normalised reading AND sets the flag, and reports/emits phone_country_unconfirmed alongside phone (mutation: const written = patch; → FAILS)", async () => {
     const m = memoryDb([{ id: "c1", account_id: "a1", first_name: "Amb", last_name: null, email: null, phone: null }]);
-    const filled = await fillContactBlanks(m.db, "a1", "c1", { phone: "55 1234 5678" }, "user_test");
+    const filled = await fillContactBlanks(m.db, "a1", "c1", { phone: "55 1234 5678" }, { authorKind: "person", authorId: "user_test" });
     expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
     expect(m.tables.events[0]).toMatchObject({ type: "contact.updated", payload: { fields: ["phone", "phone_country_unconfirmed"] } });
@@ -541,7 +547,8 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await setContactPhoneCountry(m.db, "a1", "c1",
-      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false },
+      { authorKind: "person", authorId: "user_test" });
     expect(result).toBe("updated");
     expect(errSpy).toHaveBeenCalledTimes(1);
     errSpy.mockRestore();
@@ -566,7 +573,8 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await setContactPhoneCountry(m.db, "a1", "c1",
-      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false },
+      { authorKind: "person", authorId: "user_test" });
     const [line] = errSpy.mock.calls[0]!;
     expect(String(line)).toContain("42P01");
     expect(String(line)).not.toContain("a customer's private detail");
@@ -589,7 +597,8 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
     };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await setContactPhoneCountry(m.db, "a1", "c1",
-      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false },
+      { authorKind: "person", authorId: "user_test" });
     expect(result).toBe("updated");
     expect(call).toBe(1); // the flag insert really was attempted
     expect(errSpy).not.toHaveBeenCalled();

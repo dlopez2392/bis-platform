@@ -8,7 +8,7 @@ import {
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import { m, type MessageKey } from "../src/lib/messages";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor } from "./support";
 import { clipFailure } from "./overflow-check";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from the Playwright runner
@@ -195,7 +195,7 @@ test.beforeAll(async () => {
 
   // Directly, not through `fillContactBlanksReport` (Task 3's own path, exercised by its own unit tests):
   // the act's `after.value` must equal exactly what the column holds, so the display reads "available".
-  const { error: emailErr } = await db.from("contacts").update({ email: emailC }).eq("account_id", accountId).eq("id", contactCId);
+  const { error: emailErr } = await e2eAuthor(db.from("contacts").update({ email: emailC })).eq("account_id", accountId).eq("id", contactCId);
   if (emailErr) throw new Error(`ai-acts e2e: writing C's email failed: ${emailErr.message}`);
 
   actB1Id = await seedAct(db, {
@@ -242,7 +242,7 @@ test.afterAll(async () => {
   if (call2Id) await step("calls (K2)", () => db.from("calls").delete().eq("account_id", accountId).eq("id", call2Id));
   if (phoneNumberId) await step("phone_numbers", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", phoneNumberId));
   if (contactCId || contactDId) {
-    await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", [contactCId, contactDId].filter(Boolean)));
+    await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", [contactCId, contactDId].filter(Boolean)));
   }
 
   const checks: Array<[string, () => Promise<number>]> = [

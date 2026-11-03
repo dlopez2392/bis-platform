@@ -6,6 +6,8 @@ import { createAccount } from "../accounts";
 import { createContact } from "../contacts";
 import { ensureHoldingContact } from "../voice";
 import { ensureDefaultPipeline } from "../crm-config";
+import { SEED_AUTHOR, SEED_VIA } from "./db";
+import { withAuthor } from "../row-author";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
@@ -17,17 +19,17 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Opp" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Deck build", value: 4500 }, "user_test");
+        { contactId, pipelineId, name: "Deck build", value: 4500 }, { authorKind: "person", authorId: "user_test" });
       let board = await listBoard(db, accountId, pipelineId);
       expect(board[0]!.stage.name).toBe("New Lead");
       expect(board[0]!.opportunities).toHaveLength(1);
       expect(board[0]!.totalValue).toBe(4500);
-      await moveOpportunityStage(db, accountId, id, "right", "user_test");
+      await moveOpportunityStage(db, accountId, id, "right", { authorKind: "person", authorId: "user_test" });
       board = await listBoard(db, accountId, pipelineId);
       expect(board[0]!.opportunities).toHaveLength(0);
       expect(board[1]!.opportunities).toHaveLength(1);
-      await moveOpportunityStage(db, accountId, id, "left", "user_test");
-      await moveOpportunityStage(db, accountId, id, "left", "user_test"); // no-op at left end
+      await moveOpportunityStage(db, accountId, id, "left", { authorKind: "person", authorId: "user_test" });
+      await moveOpportunityStage(db, accountId, id, "left", { authorKind: "person", authorId: "user_test" }); // no-op at left end
       board = await listBoard(db, accountId, pipelineId);
       expect(board[0]!.opportunities).toHaveLength(1);
     }));
@@ -37,8 +39,8 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "W" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Fence", value: 1200 }, "user_test");
-      await setOpportunityStatus(db, accountId, id, "won", "user_test");
+        { contactId, pipelineId, name: "Fence", value: 1200 }, { authorKind: "person", authorId: "user_test" });
+      await setOpportunityStatus(db, accountId, id, "won", { authorKind: "person", authorId: "user_test" });
       const opps = await listContactOpportunities(db, accountId, contactId);
       expect(opps[0]!.status).toBe("won");
       const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
@@ -51,11 +53,11 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Move" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Deal", value: 100 }, "user_test");
+        { contactId, pipelineId, name: "Deal", value: 100 }, { authorKind: "person", authorId: "user_test" });
       const board = await listBoard(db, accountId, pipelineId);
       const targetStageId = board[2]!.stage.id;
 
-      await moveOpportunityToStage(db, accountId, id, targetStageId, "user_test");
+      await moveOpportunityToStage(db, accountId, id, targetStageId, { authorKind: "person", authorId: "user_test" });
 
       const after = await listBoard(db, accountId, pipelineId);
       expect(after[2]!.opportunities).toHaveLength(1);
@@ -68,10 +70,10 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Update" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Old", value: 100 }, "user_test");
+        { contactId, pipelineId, name: "Old", value: 100 }, { authorKind: "person", authorId: "user_test" });
 
       await updateOpportunity(
-        db, accountId, id, { name: "New", value: 250, status: "won" }, "user_test",
+        db, accountId, id, { name: "New", value: 250, status: "won" }, { authorKind: "person", authorId: "user_test" },
       );
 
       const { data } = await db.from("opportunities")
@@ -86,7 +88,7 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Guard" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Protected", value: 300 }, "user_test");
+        { contactId, pipelineId, name: "Protected", value: 300 }, { authorKind: "person", authorId: "user_test" });
 
       const { data: before } = await db.from("opportunities")
         .select("stage_id").eq("id", id).single();
@@ -102,7 +104,7 @@ describe("opportunities", () => {
       if (sErr || !foreignStage) throw new Error(`foreign stage create failed: ${sErr?.message}`);
 
       await expect(
-        moveOpportunityToStage(db, accountId, id, foreignStage.id, "user_test"),
+        moveOpportunityToStage(db, accountId, id, foreignStage.id, { authorKind: "person", authorId: "user_test" }),
       ).rejects.toThrow("stage not in pipeline");
 
       const { data: after } = await db.from("opportunities")
@@ -118,7 +120,7 @@ describe("opportunities", () => {
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const holding = await ensureHoldingContact(db, accountId, "+19565550188", "voice");
       await expect(createOpportunity(db, accountId,
-        { contactId: holding.id, pipelineId, name: "Shared", value: 100 }, "user_test"),
+        { contactId: holding.id, pipelineId, name: "Shared", value: 100 }, { authorKind: "person", authorId: "user_test" }),
       ).rejects.toThrow("contact not in account");
       const { data: none } = await db.from("opportunities").select("id").eq("account_id", accountId);
       expect(none).toEqual([]);
@@ -127,7 +129,7 @@ describe("opportunities", () => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana", phone: "+19565550188" }, "user_test");
       expect(ana).not.toBe(holding.id);
       const { id: oppId } = await createOpportunity(db, accountId,
-        { contactId: ana, pipelineId, name: "Deck", value: 100 }, "user_test");
+        { contactId: ana, pipelineId, name: "Deck", value: 100 }, { authorKind: "person", authorId: "user_test" });
       const { data: rows } = await db.from("opportunities").select("id, contact_id").eq("account_id", accountId);
       expect(rows).toEqual([{ id: oppId, contact_id: ana }]);
 
@@ -135,7 +137,7 @@ describe("opportunities", () => {
       await withTestAccount(async (_db2, accountB) => {
         const { id: bea } = await createContact(db, accountB, { firstName: "Bea" }, "user_test");
         await expect(createOpportunity(db, accountId,
-          { contactId: bea, pipelineId, name: "Cross", value: 100 }, "user_test"),
+          { contactId: bea, pipelineId, name: "Cross", value: 100 }, { authorKind: "person", authorId: "user_test" }),
         ).rejects.toThrow("contact not in account");
         const { data: bRows } = await db.from("opportunities").select("id").eq("contact_id", bea);
         expect(bRows).toEqual([]);
@@ -161,7 +163,7 @@ describe("opportunities", () => {
         await expect(
           createOpportunity(db, accountId,
             { contactId: foreignContactId, pipelineId, name: "Cross-account", value: 100 },
-            "user_test"),
+            { authorKind: "person", authorId: "user_test" }),
         ).rejects.toThrow("contact not in account");
 
         const { data: opps } = await db.from("opportunities")
@@ -173,7 +175,7 @@ describe("opportunities", () => {
         // first leaves it dangling instead of erroring, since the JS client
         // doesn't throw on a failed delete unless the error is checked.
         await db.from("events").delete().eq("account_id", otherAccountId);
-        await db.from("contacts").delete().eq("account_id", otherAccountId);
+        await withAuthor(db.from("contacts").delete(), SEED_AUTHOR, SEED_VIA).eq("account_id", otherAccountId);
         const { error: delErr } = await db.from("accounts").delete().eq("id", otherAccountId);
         if (delErr) throw new Error(`cleanup failed: ${delErr.message}`);
       }
@@ -184,9 +186,9 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "NoOp" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "Untouched", value: 50 }, "user_test");
+        { contactId, pipelineId, name: "Untouched", value: 50 }, { authorKind: "person", authorId: "user_test" });
 
-      await updateOpportunity(db, accountId, id, {}, "user_test");
+      await updateOpportunity(db, accountId, id, {}, { authorKind: "person", authorId: "user_test" });
 
       const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
         .eq("type", "opportunity.updated");
@@ -198,14 +200,14 @@ describe("opportunities", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Sum" }, "user_test");
       const { pipelineId } = await ensureDefaultPipeline(db, accountId);
       const { id: a } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "A", value: 100 }, "user_test");
+        { contactId, pipelineId, name: "A", value: 100 }, { authorKind: "person", authorId: "user_test" });
       const { id: b } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "B", value: 200 }, "user_test");
+        { contactId, pipelineId, name: "B", value: 200 }, { authorKind: "person", authorId: "user_test" });
       const { id: c } = await createOpportunity(db, accountId,
-        { contactId, pipelineId, name: "C", value: 300 }, "user_test");
+        { contactId, pipelineId, name: "C", value: 300 }, { authorKind: "person", authorId: "user_test" });
       // Won — must not be counted or summed; proves the filter is on
       // status, not just account.
-      await setOpportunityStatus(db, accountId, c, "won", "user_test");
+      await setOpportunityStatus(db, accountId, c, "won", { authorKind: "person", authorId: "user_test" });
       void a; void b;
 
       // pageSize=1 forces three separate keyset pages (`.gt("id", lastId)`
@@ -244,7 +246,7 @@ describe("listOpportunityValuesCreatedBetween", () => {
           value: number, createdIso: string,
         ) {
           const { id } = await createOpportunity(dbc, acct,
-            { contactId, pipelineId, name: `opp-${value}`, value }, "user_test");
+            { contactId, pipelineId, name: `opp-${value}`, value }, { authorKind: "person", authorId: "user_test" });
           const { error } = await dbc.from("opportunities").update({ created_at: createdIso }).eq("id", id);
           if (error) throw new Error(error.message);
           return id;
@@ -259,7 +261,7 @@ describe("listOpportunityValuesCreatedBetween", () => {
         // surviving value, so a status change must not erase the capture.
         await oppAt(db, accountA, pipeA, contactA, 500, from);
         const won = await oppAt(db, accountA, pipeA, contactA, 750, "2027-06-10T12:00:00.000Z");
-        await setOpportunityStatus(db, accountA, won, "won", "user_test");
+        await setOpportunityStatus(db, accountA, won, "won", { authorKind: "person", authorId: "user_test" });
         await oppAt(db, accountA, pipeA, contactA, 900, "2027-06-14T23:59:59.999Z");
 
         // Same window, other tenant — must not leak into accountA's result.

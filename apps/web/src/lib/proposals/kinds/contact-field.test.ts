@@ -131,7 +131,7 @@ describe("contact_field: apply", () => {
     const said = { field: "phone" as const, value: "899 000 0000" };
     expect(await contactFieldKind.apply(actx, said))
       .toEqual({ ref: { field: "phone", before: null, value: "+528990000000" }, flagged: true });
-    expect(db.fillContactBlanksReport).toHaveBeenCalledWith(fakeDb, "a1", "c1", { phone: "899 000 0000" }, "user_1");
+    expect(db.fillContactBlanksReport).toHaveBeenCalledWith(fakeDb, "a1", "c1", { phone: "899 000 0000" }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("a first name filled over 'Caller' records 'Caller' as before", async () => {
@@ -173,20 +173,20 @@ describe("contact_field: inverse", () => {
     // Mutation: restore "" instead of before -> FAILS.
     db.getContact.mockResolvedValue(contact({ first_name: "Ana" }));
     expect(await undo({ field: "firstName", before: "Caller", value: "Ana" })).toBe("undone");
-    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { firstName: "Caller" }, "user_1");
+    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { firstName: "Caller" }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("restores null, not an empty string, to a name that was null (plan fix M16)", async () => {
     // Mutation: before ?? "" -> FAILS.
     db.getContact.mockResolvedValue(contact({ last_name: "Smith" }));
     expect(await undo({ field: "lastName", before: null, value: "Smith" })).toBe("undone");
-    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { lastName: null }, "user_1");
+    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { lastName: null }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("a phone re-saved in another shape but the same number is still as Accept left it", async () => {
     db.getContact.mockResolvedValue(contact({ phone: "(899) 000-0000" }));
     expect(await undo({ field: "phone", before: null, value: "+528990000000" })).toBe("undone");
-    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { phone: "" }, "user_1");
+    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "c1", { phone: "" }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("a field edited since is left alone", async () => {
@@ -219,7 +219,7 @@ describe("contact_field: a suggestion naming a now-merged-away record (0106, own
     const applied = await contactFieldKind.apply({ ...actx, contactId: "T" }, { field: "phone", value: "899 000 0000" });
     expect(applied.ref).toEqual({ field: "phone", before: null, value: "+528990000000" });
     expect(db.getContact).toHaveBeenCalledWith(fakeDb, "a1", "K");
-    expect(db.fillContactBlanksReport).toHaveBeenCalledWith(fakeDb, "a1", "K", { phone: "899 000 0000" }, "user_1");
+    expect(db.fillContactBlanksReport).toHaveBeenCalledWith(fakeDb, "a1", "K", { phone: "899 000 0000" }, { authorKind: "person", authorId: "user_1" });
   });
 
   it("inverse.undo reads and writes the kept record too (mutation: updateContact called with the tombstone's id -> FAILS)", async () => {
@@ -227,7 +227,7 @@ describe("contact_field: a suggestion naming a now-merged-away record (0106, own
     db.getContact.mockResolvedValue(contact({ last_name: "Smith" }));
     expect(await undo({ field: "lastName", before: null, value: "Smith" }, { ...actx, contactId: "T" })).toBe("undone");
     expect(db.getContact).toHaveBeenCalledWith(fakeDb, "a1", "K");
-    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "K", { lastName: null }, "user_1");
+    expect(db.updateContact).toHaveBeenCalledWith(fakeDb, "a1", "K", { lastName: null }, { authorKind: "person", authorId: "user_1" });
   });
 });
 

@@ -134,7 +134,7 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
     const raw = contact[COLUMN[p.field]];
     const before = typeof raw === "string" ? raw : null;
     const ref = { field: p.field, before, value: storedForm(p.field, p.value) };
-    const report = await fillContactBlanksReport(db, accountId, target, { [p.field]: p.value }, userId);
+    const report = await fillContactBlanksReport(db, accountId, target, { [p.field]: p.value }, { authorKind: "person", authorId: userId });
     if (report.fields.length === 0) {
       // The fill writes nothing for two reasons, and they are told apart (the old action's split): the
       // field was filled already, or a last name would graft onto a different first name on file. Only
@@ -159,7 +159,7 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
       const patch = r.field === "firstName" || r.field === "lastName"
         ? { [r.field]: r.before }
         : { [r.field]: r.before ?? "" };
-      await updateContact(db, accountId, target, patch, userId);
+      await updateContact(db, accountId, target, patch, { authorKind: "person", authorId: userId });
       return "undone";
     },
   },

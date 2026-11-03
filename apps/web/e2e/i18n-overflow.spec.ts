@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, createGroupWithMember, setGroupPrimaryContact } from "@bis/db";
-import { readClientFixture, recordPage } from "./support";
+import { readClientFixture, recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
 import { m } from "../src/lib/messages";
 
@@ -164,7 +164,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
         expect(clipFailure(scrollW, clientW, `record page "${text}"`)).toBeNull();
       }
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -201,7 +201,16 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       // LABEL_ROW, 92px) is REPORTED under the real Spanish locale, never asserted on — same
       // discipline as the sidebar's own pseudo-locale case above.
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts?locale=es&peek=${id}`);
-      await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
+      // This is the SECOND hard navigation in this test (a real browser nav,
+      // not a client-side route change): its own full chain — SSR, hydration,
+      // then the drawer's own client fetch of /summary — runs again from
+      // scratch on top of whatever the first navigation already cost this
+      // worker. CI run 41478909016 (main) timed out here at the shared 10s
+      // default with "element(s) not found" while every other wait in this
+      // file (including the identical shape after the FIRST navigation,
+      // above) passed; a generous explicit budget covers a second hard nav's
+      // real cost instead of sharing the default with everything else.
+      await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible({ timeout: 20_000 });
       const labelCells = dialog.locator('[data-drawer-section="who"] dt');
       const labelCount = await labelCells.count();
       const clippedLabels: string[] = [];
@@ -214,7 +223,7 @@ test.describe("pseudo-locale overflow (F-014)", () => {
         description: clippedLabels.length > 0 ? clippedLabels.join(", ") : "none",
       });
     } finally {
-      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
     }
   });
@@ -248,10 +257,10 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       }, "e2e-i18n-overflow");
       if (contact.existing) throw new Error(`i18n-overflow e2e: ${phone} matched an existing contact; refusing to use (or delete) it.`);
       contactId = contact.id;
-      const group = await createGroupWithMember(db, fixture.accountId, contactId, "household", `Overflow Group ${stamp}`, null, "e2e-i18n-overflow");
+      const group = await createGroupWithMember(db, fixture.accountId, contactId, "household", `Overflow Group ${stamp}`, null, E2E_AUTHOR);
       if (group.status !== "ok") throw new Error(`i18n-overflow e2e: createGroupWithMember ${group.status}`);
       groupId = group.groupId;
-      const primary = await setGroupPrimaryContact(db, fixture.accountId, groupId, group.memberId, "e2e-i18n-overflow");
+      const primary = await setGroupPrimaryContact(db, fixture.accountId, groupId, group.memberId, E2E_AUTHOR);
       if (primary.status !== "ok") throw new Error(`i18n-overflow e2e: setGroupPrimaryContact ${primary.status}`);
       await page.goto(`/dashboard/accounts/${fixture.accountId}/groups/${groupId}?locale=pseudo`);
       const rec = recordPage(page);
@@ -266,11 +275,11 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       }
     } finally {
       if (groupId) {
-        const { error: groupErr } = await db.from("client_groups").delete().eq("account_id", fixture.accountId).eq("id", groupId);
+        const { error: groupErr } = await e2eAuthor(db.from("client_groups").delete()).eq("account_id", fixture.accountId).eq("id", groupId);
         if (groupErr) console.error(`i18n-overflow e2e: group cleanup failed: ${groupErr.message}`);
       }
       if (contactId) {
-        const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", contactId);
+        const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", fixture.accountId).eq("id", contactId);
         if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
       }
     }

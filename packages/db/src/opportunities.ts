@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit, type ActorType } from "./events";
+import { emit } from "./events";
 import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, emitActorOf } from "./row-author";
 
 async function stagesOf(db: SupabaseClient, accountId: string, pipelineId: string) {
   const { data, error } = await db.from("pipeline_stages")
@@ -13,9 +15,12 @@ async function stagesOf(db: SupabaseClient, accountId: string, pipelineId: strin
 export async function createOpportunity(
   db: SupabaseClient, accountId: string,
   input: { contactId: string; pipelineId: string; name: string; value?: number },
-  actorId: string,
-  actorType: ActorType = "user",
+  author: RowAuthor,
+  /** F-115 (plan Task 3 Step 7): `ai_act:<id>` when the caller logs an act for this write, or `"seed"` for
+   *  the CI baseline; sent on the author header only, never stored on the row. */
+  via?: string,
 ): Promise<{ id: string }> {
+  author = requireAuthor(db, author, "createOpportunity");
   const stages = await stagesOf(db, accountId, input.pipelineId);
   // S-47e (spec 5.12.3; Task 4 review M3): a shared number's holding record (0098) never carries a deal, so
   // the quote follow-up can never text a shared number from one. It reads as no such contact.
@@ -30,11 +35,12 @@ export async function createOpportunity(
   const row = contact as { archived_at?: string | null; merged_into?: string | null };
   if (row.archived_at) throw new Error("createOpportunity: the contact is archived");
   if (row.merged_into) throw new Error("createOpportunity: the contact was merged into another");
-  const { data, error } = await db.from("opportunities")
+  const { data, error } = await withAuthor(db.from("opportunities")
     .insert({ account_id: accountId, contact_id: input.contactId, pipeline_id: input.pipelineId,
-              stage_id: stages[0]!.id, name: input.name, monetary_value: input.value ?? 0 })
+              stage_id: stages[0]!.id, name: input.name, monetary_value: input.value ?? 0 }), author, via)
     .select("id").single();
   if (error || !data) throw new Error(`createOpportunity failed: ${error?.message}`);
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "opportunity.created", actorId,
     { opportunityId: data.id, contactId: input.contactId, value: input.value ?? 0 }, actorType);
   return { id: data.id };
@@ -42,9 +48,9 @@ export async function createOpportunity(
 
 export async function moveOpportunityStage(
   db: SupabaseClient, accountId: string, oppId: string,
-  direction: "left" | "right", actorId: string,
-  actorType: ActorType = "user",
+  direction: "left" | "right", author: RowAuthor,
 ): Promise<void> {
+  author = requireAuthor(db, author, "moveOpportunityStage");
   const { data: opp, error } = await db.from("opportunities")
     .select("id, pipeline_id, stage_id").eq("account_id", accountId).eq("id", oppId).single();
   if (error || !opp) throw new Error(`opportunity not found: ${error?.message}`);
@@ -52,31 +58,35 @@ export async function moveOpportunityStage(
   const idx = stages.findIndex(s => s.id === opp.stage_id);
   const next = direction === "right" ? stages[idx + 1] : stages[idx - 1];
   if (!next) return; // at the end — no-op
-  const { error: uErr } = await db.from("opportunities")
+  const { error: uErr } = await withAuthor(db.from("opportunities")
     .update({ stage_id: next.id, stage_changed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString() })
+              updated_at: new Date().toISOString() }), author)
     .eq("account_id", accountId).eq("id", oppId);
   if (uErr) throw new Error(uErr.message);
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "opportunity.stage_changed", actorId,
     { opportunityId: oppId, from: opp.stage_id, to: next.id }, actorType);
 }
 
 export async function moveOpportunityToStage(
   db: SupabaseClient, accountId: string, oppId: string,
-  toStageId: string, actorId: string,
-  actorType: ActorType = "user",
+  toStageId: string, author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<void> {
+  author = requireAuthor(db, author, "moveOpportunityToStage");
   const { data: opp, error } = await db.from("opportunities")
     .select("id, pipeline_id, stage_id").eq("account_id", accountId).eq("id", oppId).single();
   if (error || !opp) throw new Error(`opportunity not found: ${error?.message}`);
   if (opp.stage_id === toStageId) return;
   const stages = await stagesOf(db, accountId, opp.pipeline_id);
   if (!stages.some(s => s.id === toStageId)) throw new Error("stage not in pipeline");
-  const { error: uErr } = await db.from("opportunities")
+  const { error: uErr } = await withAuthor(db.from("opportunities")
     .update({ stage_id: toStageId, stage_changed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString() })
+              updated_at: new Date().toISOString() }), author, via)
     .eq("account_id", accountId).eq("id", oppId);
   if (uErr) throw new Error(uErr.message);
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "opportunity.stage_changed", actorId,
     { opportunityId: oppId, from: opp.stage_id, to: toStageId }, actorType);
 }
@@ -84,9 +94,9 @@ export async function moveOpportunityToStage(
 export async function updateOpportunity(
   db: SupabaseClient, accountId: string, oppId: string,
   input: { name?: string; value?: number; status?: "open" | "won" | "lost" },
-  actorId: string,
-  actorType: ActorType = "user",
+  author: RowAuthor,
 ): Promise<void> {
+  author = requireAuthor(db, author, "updateOpportunity");
   if (input.name === undefined && input.value === undefined && input.status === undefined) return;
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.name !== undefined) row.name = input.name;
@@ -95,23 +105,27 @@ export async function updateOpportunity(
     row.status = input.status;
     row.status_changed_at = new Date().toISOString();
   }
-  const { error } = await db.from("opportunities")
-    .update(row).eq("account_id", accountId).eq("id", oppId);
+  const { error } = await withAuthor(db.from("opportunities")
+    .update(row), author).eq("account_id", accountId).eq("id", oppId);
   if (error) throw new Error(error.message);
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "opportunity.updated", actorId,
     { opportunityId: oppId, fields: Object.keys(input) }, actorType);
 }
 
 export async function setOpportunityStatus(
   db: SupabaseClient, accountId: string, oppId: string,
-  status: "open" | "won" | "lost", actorId: string,
-  actorType: ActorType = "user",
+  status: "open" | "won" | "lost", author: RowAuthor,
+  /** F-115 M3: `"seed"` for the demo/CI baseline, same reasoning as createOpportunity's `via`. */
+  via?: string,
 ): Promise<void> {
-  const { error } = await db.from("opportunities")
+  author = requireAuthor(db, author, "setOpportunityStatus");
+  const { error } = await withAuthor(db.from("opportunities")
     .update({ status, status_changed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString() })
+              updated_at: new Date().toISOString() }), author, via)
     .eq("account_id", accountId).eq("id", oppId);
   if (error) throw new Error(error.message);
+  const { actorId, actorType } = emitActorOf(db, author);
   await emit(db, accountId, "opportunity.status_changed", actorId,
     { opportunityId: oppId, status }, actorType);
 }

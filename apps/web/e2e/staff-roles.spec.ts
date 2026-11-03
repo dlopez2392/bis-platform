@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, setClientAccess, readAccountRole, addAccountMember, setAccountMemberRole } from "@bis/db";
-import { mintClientToken } from "./support";
+import { mintClientToken, e2eAuthor } from "./support";
 import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every spec that talks to Supabase and Clerk
@@ -164,9 +164,9 @@ test.describe("a direct delete through Staff's own token", () => {
   test("is refused by Postgres (200, []) — never reaches the row", async () => {
     const { accountId, staffClerkUserId } = fixture();
     const db = serviceDb();
-    const { data, error } = await db
+    const { data, error } = await e2eAuthor(db
       .from("contacts")
-      .insert({ account_id: accountId, first_name: "Staff", last_name: `Delete Probe ${Date.now()}` })
+      .insert({ account_id: accountId, first_name: "Staff", last_name: `Delete Probe ${Date.now()}` }))
       .select("id")
       .single();
     if (error || !data) {
@@ -209,7 +209,7 @@ test.describe("a direct delete through Staff's own token", () => {
       const after = await db.from("contacts").select("id").eq("id", contactId);
       expect.soft(after.data, "the contact after the refused delete").toEqual([{ id: contactId }]);
     } finally {
-      await db.from("contacts").delete().eq("id", contactId);
+      await e2eAuthor(db.from("contacts").delete()).eq("id", contactId);
     }
   });
 });
@@ -292,7 +292,13 @@ test.describe("the Owner runs the team", () => {
       // none at all) leaves the combobox reading "Owner" here, and the
       // read-back below would answer "owner" instead of "staff".
       await expect(staffRoleBox).toContainText(m["team.role.staff"]);
-      expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+      // A single read races the write: the combobox above reflects the
+      // client's own optimistic/revalidated state, which can resolve a beat
+      // before setAccountMemberRole's DB write actually commits. Poll the
+      // service-role read instead of taking it once (same class as the
+      // :239 fix elsewhere in this file: a plain assertion where the real
+      // state settles asynchronously flakes on a one-shot read).
+      await expect.poll(() => readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
 
       // --- revoke the invitation, then Undo --------------------------------
       // Not matched by m["team.revoke"] ("Cancel invitation"): the row's own

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
+import type { RowAuthor } from "./provenance";
+import { requireAuthor, withAuthor, eventActorOf } from "./row-author";
 
 /**
  * Mine, Unassigned and the Technician (spec §8). Who a customer or a task
@@ -142,8 +144,9 @@ async function readHolders(db: SupabaseClient, accountId: string, ids: readonly 
  * of one customer can still split its tasks from it (the review's logged race).
  */
 export async function assignContacts(
-  db: SupabaseClient, accountId: string, contactIds: readonly string[], assignee: string | null, actorId: string,
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], assignee: string | null, author: RowAuthor,
 ): Promise<PreviousAssignee[]> {
+  author = requireAuthor(db, author, "assignContacts");
   if (contactIds.length === 0) return [];
   if (assignee !== null) await assertMember(db, accountId, assignee);
   const changing: PreviousAssignee[] = (await readHolders(db, accountId, contactIds, "assignContacts"))
@@ -166,13 +169,14 @@ export async function assignContacts(
 
   // 2. Then the contacts, one statement per batch.
   for (const batch of batches(changing)) {
-    const { error: upErr } = await db.from("contacts")
-      .update({ assigned_to: assignee, updated_at: new Date().toISOString() })
+    const { error: upErr } = await withAuthor(db.from("contacts")
+      .update({ assigned_to: assignee, updated_at: new Date().toISOString() }), author)
       .eq("account_id", accountId).in("id", batch.map((p) => p.contactId));
     if (upErr) throw dbError("assignContacts failed", upErr);
   }
 
   // 3. Then the ledger.
+  const { actorId } = eventActorOf(author);
   for (const p of changing) {
     await emit(db, accountId, "contact.assigned", actorId, { contactId: p.contactId, from: p.assignee, to: assignee });
   }
@@ -201,8 +205,9 @@ export async function assignContacts(
  * of them since" (0), the way the task Undo answers "changed".
  */
 export async function undoAssignContacts(
-  db: SupabaseClient, accountId: string, previous: readonly PreviousAssignee[], actorId: string,
+  db: SupabaseClient, accountId: string, previous: readonly PreviousAssignee[], author: RowAuthor,
 ): Promise<{ restored: number }> {
+  author = requireAuthor(db, author, "undoAssignContacts");
   if (previous.length === 0) return { restored: 0 };
   const rows = await readHolders(db, accountId, previous.map((p) => p.contactId), "undoAssignContacts");
   const current = new Map(rows.map((r) => [r.id, r.assigned_to]));
@@ -232,8 +237,8 @@ export async function undoAssignContacts(
   for (const group of pairs.values()) {
     const { assignee: who, holder } = group[0]!;
     for (const batch of batches(group)) {
-      const q = heldBy(db.from("contacts")
-        .update({ assigned_to: who, updated_at: new Date().toISOString() })
+      const q = heldBy(withAuthor(db.from("contacts")
+        .update({ assigned_to: who, updated_at: new Date().toISOString() }), author)
         .eq("account_id", accountId).in("id", batch.map((w) => w.contactId)), holder);
       const { data: back, error: upErr } = await q.select("id");
       if (upErr) throw dbError("undoAssignContacts failed", upErr);
@@ -241,6 +246,7 @@ export async function undoAssignContacts(
     }
   }
   // 3. Then the ledger: only the customers the guarded write actually put back.
+  const { actorId } = eventActorOf(author);
   for (const w of work) {
     if (!written.has(w.contactId)) continue;
     await emit(db, accountId, "contact.assigned", actorId, { contactId: w.contactId, from: w.holder, to: w.assignee });
@@ -322,8 +328,14 @@ const isIdList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) 
  * released", it would give the removal's Undo nothing to restore while the
  * customers had in fact gone back to Unassigned.
  */
-export async function releaseMemberAssignments(db: SupabaseClient, accountId: string, userId: string): Promise<ReleasedAssignments> {
-  const { data, error } = await db.rpc("release_member_assignments", { p_account_id: accountId, p_user_id: userId });
+export async function releaseMemberAssignments(
+  db: SupabaseClient, accountId: string, userId: string, author: RowAuthor,
+): Promise<ReleasedAssignments> {
+  author = requireAuthor(db, author, "releaseMemberAssignments");
+  // F-115: release_member_assignments is SECURITY INVOKER (0068), granted to service_role only — the
+  // session role stays service_role throughout, so 0111's capture needs the header (precedence step 4).
+  const { data, error } = await withAuthor(
+    db.rpc("release_member_assignments", { p_account_id: accountId, p_user_id: userId }), author);
   if (error) throw dbError("releaseMemberAssignments failed", error);
   const j = (typeof data === "object" && data !== null && !Array.isArray(data) ? data : {}) as { contacts?: unknown; tasks?: unknown };
   if (!isIdList(j.contacts) || !isIdList(j.tasks)) {
@@ -333,10 +345,13 @@ export async function releaseMemberAssignments(db: SupabaseClient, accountId: st
 }
 
 /** The removal's Undo: gives back only what nobody has picked up since. Pass serviceDb(). */
-export async function reassignReleased(db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments): Promise<void> {
+export async function reassignReleased(
+  db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments, author: RowAuthor,
+): Promise<void> {
+  author = requireAuthor(db, author, "reassignReleased");
   // Split at ASSIGN_IN_BATCH_SIZE (final review m4): a removal releases every customer the person held.
   for (const batch of batches(released.contacts)) {
-    const { error } = await db.from("contacts").update({ assigned_to: userId })
+    const { error } = await withAuthor(db.from("contacts").update({ assigned_to: userId }), author)
       .eq("account_id", accountId).in("id", batch).is("assigned_to", null);
     if (error) throw dbError("reassignReleased contacts failed", error);
   }

@@ -7,7 +7,7 @@ import {
   addPlace, getOrCreateCalendar, createBooking,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { watchRouterTraffic, recordPage } from "./support";
+import { watchRouterTraffic, recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -164,17 +164,18 @@ let optOutId = "";
  * cascade their own stages.
  */
 async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string) {
-  const { error: oppErr } = await db.from("opportunities").delete().eq("account_id", accId);
+  const { error: oppErr } = await e2eAuthor(db.from("opportunities").delete()).eq("account_id", accId);
   if (oppErr) throw new Error(`contacts-drawer e2e: pre-clean opportunities failed: ${oppErr.message}`);
   const { error: pplErr } = await db.from("pipelines").delete().eq("account_id", accId);
   if (pplErr) throw new Error(`contacts-drawer e2e: pre-clean pipelines failed: ${pplErr.message}`);
-  const { error: tagErr } = await db.from("tags").delete().eq("account_id", accId);
+  // F-115 I3: a tags delete cascades into contact_tags (Q1-audited), so it needs the same header.
+  const { error: tagErr } = await e2eAuthor(db.from("tags").delete()).eq("account_id", accId);
   if (tagErr) throw new Error(`contacts-drawer e2e: pre-clean tags failed: ${tagErr.message}`);
   const { error: callErr } = await db.from("calls").delete().eq("account_id", accId);
   if (callErr) throw new Error(`contacts-drawer e2e: pre-clean calls failed: ${callErr.message}`);
   const { error: numErr } = await db.from("phone_numbers").delete().eq("account_id", accId);
   if (numErr) throw new Error(`contacts-drawer e2e: pre-clean phone_numbers failed: ${numErr.message}`);
-  const { error: contactErr } = await db.from("contacts").delete()
+  const { error: contactErr } = await e2eAuthor(db.from("contacts").delete())
     .eq("account_id", accId)
     .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck", "OptOut"]);
   if (contactErr) throw new Error(`contacts-drawer e2e: pre-clean contacts failed: ${contactErr.message}`);
@@ -216,7 +217,7 @@ test.beforeAll(async () => {
   const pipeline = await ensureDefaultPipeline(db, accountId);
   pipelineId = pipeline.pipelineId;
   const opp = await createOpportunity(
-    db, accountId, { contactId: blockedId, pipelineId, name: "BulkGate Deal" }, ACTOR,
+    db, accountId, { contactId: blockedId, pipelineId, name: "BulkGate Deal" }, E2E_AUTHOR,
   );
   opportunityId = opp.id;
 
@@ -236,8 +237,8 @@ test.beforeAll(async () => {
   const pagingRows = Array.from({ length: 55 }, (_, i) => ({
     account_id: accountId, first_name: "Paging", last_name: `Item ${i + 1}`,
   }));
-  const { data: pagingData, error: pagingErr } = await db.from("contacts")
-    .insert(pagingRows).select("id");
+  const { data: pagingData, error: pagingErr } = await e2eAuthor(db.from("contacts")
+    .insert(pagingRows)).select("id");
   if (pagingErr) throw new Error(`contacts-drawer e2e: seed paging rows failed: ${pagingErr.message}`);
   pagingIds.push(...(pagingData ?? []).map((r: { id: string }) => r.id));
 
@@ -284,7 +285,7 @@ test.beforeAll(async () => {
     db, accountId, { firstName: "ScrollCheck", lastName: "Target" }, ACTOR,
   )).id;
   for (let i = 1; i <= 40; i++) {
-    await addTagToContact(db, accountId, scrollCheckId, `tag-${i}`);
+    await addTagToContact(db, accountId, scrollCheckId, `tag-${i}`, E2E_AUTHOR);
   }
   for (let i = 1; i <= 5; i++) {
     await addNote(db, accountId, scrollCheckId, `Scroll check note ${i}`, ACTOR);
@@ -312,11 +313,14 @@ test.afterAll(async () => {
     ["pipelines", "id", pipelineId],
   ] as const) {
     if (!value) continue;
-    const { error } = await db.from(table).delete().eq(column, value);
+    // F-115 I3: this reaches "opportunities" (Q1-audited) on that iteration, so every iteration
+    // carries the header; it is a no-op for "pipelines", which the trigger never watches.
+    const { error } = await e2eAuthor(db.from(table).delete()).eq(column, value);
     if (error) console.error(`contacts-drawer e2e cleanup: ${table} delete failed: ${error.message}`);
   }
   {
-    const { error } = await db.from("tags").delete().eq("account_id", accountId);
+    // F-115 I3: a tags delete cascades into contact_tags (Q1-audited), so it needs the same header.
+    const { error } = await e2eAuthor(db.from("tags").delete()).eq("account_id", accountId);
     if (error) console.error(`contacts-drawer e2e cleanup: tags delete failed: ${error.message}`);
   }
   // The phone number this file assigned must go back NOW, not at teardown.
@@ -334,7 +338,7 @@ test.afterAll(async () => {
   // the shared fixture account until teardown, so it goes now (its membership
   // cascades with it). Logged, not thrown, like every delete above.
   {
-    const { error } = await db.from("client_groups").delete()
+    const { error } = await e2eAuthor(db.from("client_groups").delete())
       .eq("account_id", accountId).eq("kind", "business").eq("name", PAINTED_PROOF);
     if (error) console.error(`contacts-drawer e2e cleanup: client_groups delete failed: ${error.message}`);
   }
@@ -884,7 +888,7 @@ test.describe("S-03 part 3: the drawer on the record kit", () => {
     made.plain = plain.id;
     await addPlace(db, accountId, { contactId: made.quick, groupId: null }, {
       label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: "McAllen", region: "TX", postal_code: "78504", country: "US",
-    }, { subjectId: made.quick, actorId: ACTOR });
+    }, { subjectId: made.quick, author: E2E_AUTHOR });
     // Sixty-one days out: past the calendar's 30-day horizon, so booking.spec never offers this slot.
     const cal = await getOrCreateCalendar(db, accountId, ACTOR);
     const start = new Date(Date.now() + 61 * 86_400_000);
@@ -902,7 +906,7 @@ test.describe("S-03 part 3: the drawer on the record kit", () => {
       if (error) console.error(`contacts-drawer e2e: booking cleanup failed (the fixture sweep takes it): ${error.message}`);
     }
     const ids = [made.quick, made.plain].filter((x): x is string => Boolean(x));
-    const { error } = await db.from("contacts").delete().eq("account_id", accountId).in("id", ids);
+    const { error } = await e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids);
     if (error) console.error(`contacts-drawer e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);
     const { data: left } = await db.from("contacts").select("id").in("id", ids);
     expect(left ?? []).toEqual([]);

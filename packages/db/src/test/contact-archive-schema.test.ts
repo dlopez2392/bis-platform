@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner, sendAuthor, SEED_AUTHOR } from "./db";
 import { testPhoneNumber } from "./fixtures";
 
 /**
@@ -408,6 +408,9 @@ describe("0103: delete_internal_contacts keeps the database's Owner check (revie
       await actAsOwner(c);
       await c.query("set local role service_role");
       await c.query(`select set_config('request.jwt.claims', '{"role":"service_role"}', true)`);
+      // F-115: deleteContacts sends its author on this call (withAuthor; refused in TypeScript without one on a
+      // service client, contacts-archive.test.ts). The live suites pass SEED_AUTHOR.
+      await sendAuthor(c, SEED_AUTHOR);
       const { rows: [r] } = await c.query("select public.delete_internal_contacts($1, array[$2]::uuid[]) as d", [a.accountId, id]);
       await c.query("reset role");
       expect(r.d).toEqual([id]);

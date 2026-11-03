@@ -6,7 +6,7 @@ import {
   addNote, createForm, createSubmission, linkSubmissionContact, ensureConversation, createMessage,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { recordPage } from "./support";
+import { recordPage, e2eAuthor, E2E_AUTHOR } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -66,7 +66,7 @@ test.beforeAll(async () => {
   made.bare = bare.id;
   await addPlace(db, accountId, { contactId: made.full, groupId: null }, {
     label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: "McAllen", region: "TX", postal_code: "78504", country: "US",
-  }, { subjectId: made.full, actorId: ACTOR });
+  }, { subjectId: made.full, author: E2E_AUTHOR });
   // Sixty days out: past the calendar's 30-day booking horizon, so booking.spec never offers this slot.
   const cal = await getOrCreateCalendar(db, accountId, ACTOR);
   const start = new Date(Date.now() + 60 * 86_400_000);
@@ -118,7 +118,7 @@ test.afterAll(async () => {
   // form_submissions.form_id is `on delete restrict`: the submission goes before its form.
   if (made.submission) await step("submission", () => db.from("form_submissions").delete().eq("account_id", accountId).eq("id", made.submission!));
   if (made.form) await step("form", () => db.from("forms").delete().eq("account_id", accountId).eq("id", made.form!));
-  await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
+  await step("contacts", () => e2eAuthor(db.from("contacts").delete()).eq("account_id", accountId).in("id", ids));
   const { data: left } = await db.from("contacts").select("id").in("id", ids);
   expect(left ?? []).toEqual([]);
   if (cancelToken) {
