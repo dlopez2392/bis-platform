@@ -7544,6 +7544,10 @@ export const m = {
   "history.csv.after.es": "Después",
   "history.csv.cause": "Cause",
   "history.csv.cause.es": "Causa",
+  // F-115 part 1 (S-04), plan Task 8 Step 2: the history download route's own 413, when the record's
+  // history is past the 50,000-row cap. T6/T5 add the rest of history.* (putBack, restore, download).
+  "history.download.tooBig": "This history is too long to download at once. Ask us for a copy.",
+  "history.download.tooBig.es": "Este historial es demasiado largo para descargarlo de una vez. Pídanos una copia.",
   "aiActs.verb.booked": "booked {when}",
   "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",
