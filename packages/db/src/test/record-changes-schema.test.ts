@@ -110,7 +110,7 @@ const EXCLUDED: Record<string, string> = {
 };
 
 describe("0111: the record_changes table", () => {
-  it("0111: columns, CHECKs and the three indexes (mutation: drop record_changes_author_id -> an ai row with an id inserts -> FAILS)", () =>
+  it("0111: columns, CHECKs and the four indexes (mutation: drop the unattributed index's where -> FAILS; mutation: drop record_changes_author_id -> an ai row with an id inserts -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "shape");
       const { rows: cols } = await c.query(
@@ -149,10 +149,14 @@ describe("0111: the record_changes table", () => {
       expect(await ins("contact", "update", "phone", null, null)).toBeNull();
       const { rows: idx } = await c.query<{ indexname: string; indexdef: string }>(
         "select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'record_changes' order by indexname");
-      expect(idx.map((r) => r.indexname)).toEqual(["record_changes_contact_idx", "record_changes_group_idx", "record_changes_pkey", "record_changes_record_idx"]);
+      expect(idx.map((r) => r.indexname)).toEqual(["record_changes_contact_idx", "record_changes_group_idx", "record_changes_pkey",
+        "record_changes_record_idx", "record_changes_unattributed_idx"]);
       expect(idx.find((r) => r.indexname === "record_changes_contact_idx")!.indexdef).toContain("(account_id, contact_id, created_at DESC, id DESC)");
       expect(idx.find((r) => r.indexname === "record_changes_group_idx")!.indexdef).toContain("(account_id, client_group_id, created_at DESC, id DESC) WHERE (client_group_id IS NOT NULL)");
       expect(idx.find((r) => r.indexname === "record_changes_record_idx")!.indexdef).toContain("(account_id, record_type, record_id, created_at DESC)");
+      // The daily audit's count (record-changes-audit.ts): unattributed rows of the last 24 hours, across accounts.
+      // The predicate is the point: without it the index would hold every row. 0113 drops it with the NOT NULL.
+      expect(idx.find((r) => r.indexname === "record_changes_unattributed_idx")?.indexdef).toContain("(created_at) WHERE (author_kind IS NULL)");
     }));
 
   it("grants: anon none; authenticated and service_role SELECT only; nobody UPDATE/DELETE/TRUNCATE; nothing on the sequence (mutation: grant insert to service_role -> FAILS; grant usage on the sequence to service_role -> FAILS)", () =>

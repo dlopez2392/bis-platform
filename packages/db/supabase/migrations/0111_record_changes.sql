@@ -16,7 +16,8 @@
 --     NULLABLE in observe mode only; 0113 sets NOT NULL. author_id only with person or import.
 --     Indexes: (account_id, contact_id, created_at desc, id desc) for a record's timeline;
 --     (account_id, client_group_id, created_at desc, id desc) where client_group_id is not null, for a group;
---     (account_id, record_type, record_id, created_at desc) for one record's history.
+--     (account_id, record_type, record_id, created_at desc) for one record's history;
+--     (created_at) where author_kind is null, for the daily audit's count of unattributed rows (0113 drops it).
 --   app.record_changes_settings: exactly one row (id boolean primary key, check (id)); enforce false here.
 --     0113 turns it on; CI's throwaway stacks turn it on after migrating (plan Task 2, Step 9).
 --   app.record_change_fields(record_type) -> text[]: the AUDITED columns per type, contacts only in this file
@@ -73,7 +74,8 @@
 -- lock. contacts: the two create trigger statements take SHARE ROW EXCLUSIVE until the file commits (no scan,
 -- no rewrite). accounts: creating the account_id foreign key takes SHARE ROW EXCLUSIVE on public.accounts until
 -- the file commits (no scan: record_changes is new and empty), so an account insert, update or delete waits for the
--- file. Every other object is new. MEASURED on a PostgreSQL 17.6 replica (pre = 0001-0110, post = pre +
+-- file. Every other object is new. record_changes_unattributed_idx is built on the new, empty table: no lock on
+-- any existing table and no scan, so its cost is nil. MEASURED on a PostgreSQL 17.6 replica (pre = 0001-0110, post = pre +
 -- this file, one account, laptop SSD, a fresh database per run, the update or the merge timed alone):
 --   500-contact bulk assign (as an Owner, one update statement): before 211.6 ms, after 348.3 ms (+65%), median of
 --     6 runs (two sets of 3: 142.7 -> 373.5 ms, then interleaved 215.6 -> 342.6 ms); 500 change rows. EXPLAIN
@@ -106,6 +108,7 @@
 --   drop trigger record_changes_client on public.contacts; drop trigger record_changes_server on public.contacts;
 --   drop function app.record_changes_capture(); drop function app.record_change_fields(text);
 --   drop table app.record_changes_settings;
+--   drop index public.record_changes_unattributed_idx;
 --   then, by OWNER DECISION ONLY and after an export: drop table public.record_changes; (it DESTROYS history).
 --
 -- ASCII only, no backslash anywhere, and every dollar sign in this file is part of a dollar-quote pair.
@@ -144,6 +147,11 @@ create index record_changes_contact_idx on public.record_changes (account_id, co
 create index record_changes_group_idx on public.record_changes (account_id, client_group_id, created_at desc, id desc)
   where client_group_id is not null;
 create index record_changes_record_idx on public.record_changes (account_id, record_type, record_id, created_at desc);
+-- The daily audit (record-changes-audit.ts, every 15 minutes, service client) counts the unattributed rows of the
+-- last 24 hours across every account; the three above lead with account_id, so without this that count scans a
+-- table that is never swept. Partial: it holds only the NULL-author rows. 0113 sets author_kind NOT NULL, and
+-- drops this index then.
+create index record_changes_unattributed_idx on public.record_changes (created_at) where author_kind is null;
 
 -- 2. Observe or enforce. One row; 0113 turns enforce on.
 create table app.record_changes_settings (
