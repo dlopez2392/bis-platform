@@ -7522,6 +7522,75 @@ export const m = {
   // rather than duplicating them — see messages.test.ts's Task 2 describe.
   "timeline.what.aiActs": "the assistant's actions",
   "timeline.what.aiActs.es": "las acciones de la asistente",
+  // F-115 part 1 (S-04), plan Task 4: the record timeline's own change-history source
+  // (migration 0111). T5 (PR E) adds the rest of the history.* keys.
+  "timeline.what.changes": "changes",
+  "timeline.what.changes.es": "cambios",
+  // F-115 part 1 (S-04), plan Task 8 Step 1: the history download's CSV header, in the reader's
+  // locale (spec Copy, history.csv.*). T5 (PR E) adds the rest of history.*.
+  "history.csv.when": "When",
+  "history.csv.when.es": "Cuándo",
+  "history.csv.who": "Who",
+  "history.csv.who.es": "Quién",
+  "history.csv.kind": "Kind",
+  "history.csv.kind.es": "Tipo",
+  "history.csv.record": "Record",
+  "history.csv.record.es": "Registro",
+  "history.csv.field": "Field",
+  "history.csv.field.es": "Campo",
+  "history.csv.before": "Before",
+  "history.csv.before.es": "Antes",
+  "history.csv.after": "After",
+  "history.csv.after.es": "Después",
+  "history.csv.cause": "Cause",
+  "history.csv.cause.es": "Causa",
+  // F-115 part 1 (S-04), plan Task 8 Step 2: the history download route's own 413, when the record's
+  // history is past the 50,000-row cap. T6/T5 add the rest of history.* (putBack, restore, download).
+  "history.download.tooBig": "This history is too long to download at once. Ask us for a copy.",
+  "history.download.tooBig.es": "Este historial es demasiado largo para descargarlo de una vez. Pídanos una copia.",
+  // F-115 PR C fix (review m4): a read this download cannot do without (the account row, or a
+  // merge's own tombstones) failed — the download stops rather than leaving out rows silently.
+  "history.download.failed": "This history couldn't be downloaded right now. Try again.",
+  "history.download.failed.es": "No se pudo descargar este historial. Intente de nuevo.",
+  // F-115 part 1 (S-04), plan Task 6: Put back a changed value, Restore a removed unit, member, tag,
+  // relationship or place for 30 days. "history.notFound" is this task's own addition (not in the
+  // plan's Copy table): putBackChange/restoreRemoved's own "not_found"/"not_allowed" (a stale page,
+  // or a changeId outside this account) have no dedicated wording in the plan, so this names the one
+  // case both share, worded the same "landscaper at 7 AM" way as every neighbor here.
+  "history.putBack": "Put back",
+  "history.putBack.es": "Poner como antes",
+  "history.putBack.done": "{field} is back to what it was.",
+  "history.putBack.done.es": "{field} quedó como antes.",
+  "history.putBack.changed": "It changed since, so it wasn't put back.",
+  "history.putBack.changed.es": "Cambió desde entonces; no se restauró.",
+  "history.restore": "Restore",
+  "history.restore.es": "Restaurar",
+  "history.restore.done": "{name} is back.",
+  // F-115 PR C fix (review m6): "{name} quedó restaurado." agreed the participle with a MASCULINE
+  // {name} always, which is wrong whenever the restored thing's own noun is feminine (a relationship,
+  // a tag…). Rephrased gender-neutrally with an impersonal "se" construction, which needs no agreement.
+  "history.restore.done.es": "Se restauró {name}.",
+  "history.restore.expired": "This could be restored for 30 days. That time has passed.",
+  "history.restore.expired.es": "Esto se podía restaurar durante 30 días. Ese plazo ya pasó.",
+  "history.restore.parentGone": "It can't be restored: what it belonged to was removed.",
+  "history.restore.parentGone.es": "No se puede restaurar: lo que lo contenía ya no existe.",
+  "history.restore.alreadyBack": "It's already back.",
+  "history.restore.alreadyBack.es": "Ya está restaurado.",
+  // F-115 PR C fix (review I3): a restore whose write Postgres itself refuses (23514/22P02/22023 — the
+  // old snapshot no longer fits a constraint or type added since the row was deleted) — honest about
+  // the outcome (nothing happened) without naming a wrong specific reason the way "parentGone" would.
+  "history.restore.failed": "This couldn't be restored.",
+  "history.restore.failed.es": "Esto no se pudo restaurar.",
+  // Glossary (per this plan's own note: check it before writing "Dueños"/"Personal"): the established
+  // word for Staff is "Empleado", not "Personal" (places.moveRefused.es, 5656-5657's own "Solo el
+  // Dueño o un Empleado puede…" — mirrored here, not the plan Copy table's placeholder). F-115 PR C fix
+  // (review m6): this comment moved ABOVE history.notAllowed so the key and its .es twin sit adjacent.
+  "history.notAllowed": "Only Owners and Staff can do this.",
+  "history.notAllowed.es": "Solo el Dueño o un Empleado puede hacer esto.",
+  "history.notFound": "This change can no longer be found.",
+  "history.notFound.es": "Ya no se puede encontrar este cambio.",
+  "history.undo": "Undo",
+  "history.undo.es": "Deshacer",
   "aiActs.verb.booked": "booked {when}",
   "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",

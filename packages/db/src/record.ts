@@ -22,6 +22,10 @@ import { listContactAiActs } from "./ai-acts";
 import type { AiAct } from "./ai-act-rules";
 import type { RestoreSign } from "./contacts";
 import { MERGE_COUNT_KEYS, type MergeCountKey } from "./contact-merge";
+import {
+  listChangeRowsNoPartialWrite, groupChanges, foldVia, encodeChangeCursorId, decodeChangeCursorId,
+  type ChangeGroup, type ChangeRow, type ChangeRowCursor,
+} from "./record-changes";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -275,11 +279,12 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "merge" | "suggestions" | "ai_acts";
-/** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`)
- *  and `ai_acts` only when asked (`opts.aiActs`, item 8c), so what a page read is its own `sources`,
- *  never this list. `merge` (F-006 part 1, plan Task 9) is unconditional, like every source before it. */
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts"];
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "archive" | "merge" | "suggestions" | "ai_acts" | "changes";
+/** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`),
+ *  `ai_acts` only when asked (`opts.aiActs`, item 8c) and `changes` only when asked (`opts.changes`,
+ *  F-115 part 1 Task 4), so what a page read is its own `sources`, never this list. `merge` (F-006
+ *  part 1, plan Task 9) is unconditional, like every source before it. */
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "archive", "merge", "suggestions", "ai_acts", "changes"];
 
 /** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
  *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
@@ -376,7 +381,12 @@ export type TimelineEntry =
   | { kind: "merge"; id: string; at: string; contactId: string; merge: TimelineMerge }
   /** F-006 part 1: a SECOND row for a merge since undone, at `undone_at`, from the same table. The kind
    *  keeps its key apart from the merge row's. */
-  | { kind: "mergeUndone"; id: string; at: string; contactId: string; merge: TimelineMerge };
+  | { kind: "mergeUndone"; id: string; at: string; contactId: string; merge: TimelineMerge }
+  /** F-115 part 1 (S-04), plan Task 4: one row per folded group of record_changes writes, at the
+   *  group's newest write, read only when asked (`opts.changes`). `id` is the group's own key;
+   *  `contactId` is the group's own contact when it has one (a group's own record, with no single
+   *  member, carries ""), the SAME rule `document` already uses above. */
+  | { kind: "change"; id: string; at: string; contactId: string; group: ChangeGroup };
 /** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
  *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
  *  reads nothing, so both are empty and that is an empty timeline, not an error. */
@@ -534,7 +544,7 @@ async function listContactMergeLog(
  */
 export async function listTimelinePage(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean; aiActs?: boolean } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean; aiActs?: boolean; changes?: boolean } = {},
 ): Promise<TimelinePage> {
   // A set with no one in it (a group none of whose members this reader can see) has nothing to
   // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
@@ -551,6 +561,34 @@ export async function listTimelinePage(
       return { source, entries: null };
     }
   };
+  // F-115 part 1 (S-04), plan Task 4: unlike every other source, "changes" cannot be folded (spec
+  // risk 6, foldVia) until the merge, suggestion and act ids already on THIS page are known — and
+  // those are the results of the settle() calls below. The raw read still starts here, concurrently
+  // with everything else, so it costs no extra latency; only the fold waits for `results`.
+  //
+  // F-115 PR C fix (review I2): `changeCursor` recovers the real `record_changes` row id only when
+  // the OUTER merged cursor's own id is one `encodeChangeCursorId` produced (the previous page's
+  // cutoff entry actually was a "change"); otherwise it is undefined, and `listChangeRowsNoPartialWrite`
+  // falls back to a plain `created_at` bound (`ChangeRowCursor`'s own doc comment, record-changes.ts,
+  // explains why that is still correct — that instant did not come from this table). Either way, the
+  // read itself never cuts a write ("page on the row cursor and group after").
+  const changeCursor: ChangeRowCursor | undefined = before
+    ? { createdAt: before.v, id: decodeChangeCursorId(before.id) ?? undefined }
+    : undefined;
+  // F-115 PR C fix (review m2): the `.catch` is attached HERE, where the promise is created, not at
+  // the `await changesRows` far below — every OTHER source already gets this through `settle`'s own
+  // try/catch running inside an async function invoked immediately; without it, a rejection in the gap
+  // between creation and that later `await` is an unhandledRejection.
+  const changesRows = opts.changes === true
+    ? Promise.all([
+      listChangeRowsNoPartialWrite(db, accountId, { contactIds: [...contactIds] }, changeCursor, page.limit, page.limit),
+      opts.groupId
+        ? listChangeRowsNoPartialWrite(db, accountId, { groupId: opts.groupId }, changeCursor, page.limit, page.limit)
+        : Promise.resolve({ rows: [] as ChangeRow[], hasMore: false }),
+    ]).then(([byContact, byGroup]) => ({
+      ok: true as const, rows: [...byContact.rows, ...byGroup.rows], hasMore: byContact.hasMore || byGroup.hasMore,
+    })).catch((error: unknown) => ({ ok: false as const, error }))
+    : null;
   const results = await Promise.all([
     settle("notes", async () => (((await listNotes(db, accountId, who, page)) ?? []) as (TimelineNote & { contact_id: string })[])
       .map((note): TimelineEntry => ({ kind: "note", id: note.id, at: note.created_at, contactId: note.contact_id, note }))),
@@ -624,12 +662,56 @@ export async function listTimelinePage(
         .map((a): TimelineEntry => ({ kind: "aiAct", id: a.id, at: a.createdAt, contactId: a.contactId, act: a })))]
       : []),
   ]);
-  const sources = results.map((r) => r.source);
-  const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
-  const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);
+  // F-115 part 1 (S-04), plan Task 4: folded here, now that the merge/suggestion/act ids this page
+  // already shows are known (correction: never fold on a `via` this page cannot itself prove).
+  let changesEntries: TimelineEntry[] | null = null;
+  // F-115 PR C fix (review I2): grouping can collapse many rows into ONE entry, so "fewer than
+  // page.limit rows came back" cannot stand in for "no more pages" the way it does for every other
+  // source — `listChangeRowsNoPartialWrite`'s own `hasMore` is the real signal, folded into `older`
+  // below alongside the ordinary `merged.length > limit` check every other source relies on.
+  let changesHasMore = false;
+  if (changesRows) {
+    const outcome = await changesRows;
+    if (!outcome.ok) {
+      opts.onError?.("changes", outcome.error);
+    } else {
+      changesHasMore = outcome.hasMore;
+      try {
+        const idsOf = (source: TimelineSource, kinds: readonly TimelineEntry["kind"][]) =>
+          new Set(results.flatMap((r) => (r.source === source ? r.entries ?? [] : []))
+            .flatMap((e) => (kinds.includes(e.kind) ? [e.id] : [])));
+        const onPage = {
+          mergeIds: idsOf("merge", ["merge", "mergeUndone"]),
+          aiActIds: idsOf("ai_acts", ["aiAct"]),
+          proposalIds: idsOf("suggestions", ["suggestion"]),
+        };
+        const groups = foldVia(groupChanges(outcome.rows), onPage);
+        // F-115 PR C fix (review I2): the entry's `id` is the group's OWN MINIMUM row id (never the
+        // newest/max) — a group spanning rows 5,4,3 at one instant must exclude ALL THREE from the
+        // next page; a cursor built from the max (5) would use "id < 5", which still ADMITS 4 and 3
+        // (already shown as part of THIS same group) back in as if unread, duplicating them
+        // (record-timeline-changes.test.ts's own page-2 assertion pins this exact case). Encoded in
+        // the one shape `parseTimelineCursor`/`timelineBeforeFilter` accept from every kind (a
+        // UUID-shaped string): see `encodeChangeCursorId`'s own doc comment.
+        changesEntries = groups.map((g): TimelineEntry => ({
+          kind: "change", id: encodeChangeCursorId(Math.min(...g.rows.map((r) => r.id))),
+          at: g.at, contactId: g.rows[0]?.contactId ?? "", group: g,
+        }));
+      } catch (e) {
+        opts.onError?.("changes", e);
+      }
+    }
+  }
+  const sources = [...results.map((r) => r.source), ...(changesRows ? (["changes"] as const) : [])];
+  const failed = [
+    ...results.flatMap((r) => (r.entries === null ? [r.source] : [])),
+    ...(changesRows && changesEntries === null ? (["changes"] as const) : []),
+  ];
+  const merged = [...results.flatMap((r) => r.entries ?? []), ...(changesEntries ?? [])].sort(compareTimelineEntries);
   const items = merged.slice(0, limit);
   const last = items.at(-1);
-  return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed, sources };
+  const hasMore = merged.length > limit || changesHasMore;
+  return { items, older: hasMore && last ? { v: last.at, id: last.id } : null, failed, sources };
 }
 
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */

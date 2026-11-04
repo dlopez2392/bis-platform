@@ -326,6 +326,14 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
+    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
+    // stays OFF in loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships the
+    // real row: field list, the "Was"/"Now" disclosure, and Put back. Renders NOTHING here, on
+    // purpose — not even a placeholder icon row — so this switch stays exhaustive without implying a
+    // row the design has not reviewed; a loader that ever asked for `changes` before PR E lands would
+    // otherwise show an unfinished row to a real reader.
+    case "change":
+      return null;
     default:
       return unknownKind(e);
   }

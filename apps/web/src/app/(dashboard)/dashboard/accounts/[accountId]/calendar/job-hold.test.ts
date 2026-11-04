@@ -424,7 +424,7 @@ describe("settleAfterWindow — the after() job", () => {
   it("sleeps exactly UNDO_WINDOW_MS + NOTICE_GRACE_MS, THEN claims, on the client it is given", async () => {
     const sleep = vi.fn(async (ms: number) => { store.order.push(`sleep ${ms}`); });
     db.isAccountOutboundSuppressed.mockResolvedValue(true);   // the real gate refuses: no provider
-    expect(await settleAfterWindow("acct_1", "bk_new", ORIGIN, { db: fakeDb as never, sleep })).toBe("quiet");
+    expect(await settleAfterWindow("acct_1", "bk_new", ORIGIN, { db: fakeDb as never, sleep, now })).toBe("quiet");
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(store.order.slice(0, 2)).toEqual([`sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`, "claim"]);
   });

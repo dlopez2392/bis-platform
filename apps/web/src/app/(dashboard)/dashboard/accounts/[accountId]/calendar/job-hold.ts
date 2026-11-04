@@ -125,12 +125,15 @@ export async function settleJobHold(accountId: string, bookingId: string, deps: 
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The after() job: waits out the Undo window and its grace, then settles. Never throws. */
+/** The after() job: waits out the Undo window and its grace, then settles. Never throws.
+ *  `now`: forwarded to `settleJobHold` unchanged (a test's own fixed clock); every real caller omits
+ *  it, so production still settles against the wall clock at the moment the wait ends, exactly as
+ *  before this parameter existed. */
 export async function settleAfterWindow(accountId: string, bookingId: string, origin: string | null,
-  deps: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void>; waitMs?: number } = {}): Promise<JobHoldOutcome> {
+  deps: { db?: SupabaseClient; sleep?: (ms: number) => Promise<void>; waitMs?: number; now?: () => Date } = {}): Promise<JobHoldOutcome> {
   // waitMs: the Undo of a move re-arms its restored row with the time left on that row's own hold (T10).
   await (deps.sleep ?? realSleep)(deps.waitMs ?? UNDO_WINDOW_MS + NOTICE_GRACE_MS);
-  return settleJobHold(accountId, bookingId, { db: deps.db ?? serviceDb(), origin });
+  return settleJobHold(accountId, bookingId, { db: deps.db ?? serviceDb(), origin, now: deps.now });
 }
 
 /** Spec 5.4: whether a confirmation can go to this customer at all (cancelNoticeAvailability's checks, by

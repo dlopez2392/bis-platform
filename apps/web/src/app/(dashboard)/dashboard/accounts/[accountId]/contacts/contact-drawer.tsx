@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, Undo2, X,
+  Archive, Bot, CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, History, Link2, ListChecks, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, Undo2, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -80,6 +80,9 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   // as the record page's own timeline (activity-timeline.tsx); unlike archive, the drawer's Recent CAN
   // show one (read unconditionally, and now through the tombstone id set too, loaders.ts's loadRecent).
   merge: Merge, mergeUndone: Undo2,
+  // F-115 part 1 (S-04), plan Task 4: the type's exhaustive case only. The drawer's Recent never
+  // reads the changes source either (loaders.ts's loadRecent passes no `changes`).
+  change: History,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";

@@ -3090,3 +3090,15 @@ describe("the BIS access copy (F-118 part 1)", () => {
     expect(m["accessLog.note.lists.es"]).toBe("Las listas dentro de su cuenta, como sus clientes, la bandeja de entrada y las llamadas, forman parte de la visita y no aparecen una por una.");
   });
 });
+
+describe("F-115 PR C fix (review m6): history.restore.done.es is gender-neutral", () => {
+  it("never agrees a participle with {name}'s gender (mutation: restore '{name} quedó restaurado.' -> FAILS)", () => {
+    expect(m["history.restore.done.es"]).toBe("Se restauró {name}.");
+    expect(m["history.restore.done.es"]).not.toMatch(/restaurad[oa]\b/);
+  });
+
+  it("history.restore.failed exists in both languages, naming no wrong specific reason (review I3)", () => {
+    expect(m["history.restore.failed"]).toBe("This couldn't be restored.");
+    expect(m["history.restore.failed.es"]).toBe("Esto no se pudo restaurar.");
+  });
+});

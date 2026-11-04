@@ -229,6 +229,11 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
       return <TimelineItem {...head} icon={Merge} />;
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
+    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
+    // stays OFF in group-loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships
+    // the real row. Renders NOTHING here, on purpose — not even a placeholder icon row.
+    case "change":
+      return null;
     default:
       return unknownKind(e);
   }

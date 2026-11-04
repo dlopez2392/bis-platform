@@ -425,9 +425,14 @@ export async function removeMembership(db: SupabaseClient, accountId: string, me
   return { status: "ok" as const, removed: r.removed };
 }
 
-export async function restoreMembership(db: SupabaseClient, accountId: string, snapshot: GroupMemberSnapshot, author: RowAuthor) {
+/** F-115 Task 6: `via` is optional, forwarded unchanged to the rpc call's header (undefined for every
+ *  caller before Task 6; record-restore.ts's 30-day Restore passes `restore:<changeId>`, and this RPC
+ *  is service_role only, so that header is the ONLY way 0111/0112 ever learn it, plan correction 9). */
+export async function restoreMembership(
+  db: SupabaseClient, accountId: string, snapshot: GroupMemberSnapshot, author: RowAuthor, via?: string,
+) {
   author = requireAuthor(db, author, "restoreMembership");
-  const r = await rpc<"ok" | "not_found">(db, "restore_group_membership", { p_account_id: accountId, p_snapshot: snapshot }, author);
+  const r = await rpc<"ok" | "not_found">(db, "restore_group_membership", { p_account_id: accountId, p_snapshot: snapshot }, author, via);
   if (r === "ok") {
     const { actorId, actorType } = emitActorOf(db, author);
     await emit(db, accountId, "client_group.member_added", actorId,

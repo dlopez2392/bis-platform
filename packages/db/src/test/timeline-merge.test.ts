@@ -148,8 +148,9 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     // part 1 (plan Task 9): the `merge` source is a SECOND paged read of `contact_merges` too (one on
     // merged_at, one on undone_at), one more than there are sources; its ONE extra names read is skipped
     // here (no merge row, so no other id to look up).
-    // 8b-2 / 8c: `sources`, not TIMELINE_SOURCES, is what this page read (the suggestions and ai_acts sources are read only when asked).
-    expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions" && s !== "ai_acts"));
+    // 8b-2 / 8c / F-115 Task 4: `sources`, not TIMELINE_SOURCES, is what this page read (suggestions,
+    // ai_acts and changes are read only when asked).
+    expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions" && s !== "ai_acts" && s !== "changes"));
     expect(paged.map((r) => r.limit)).toEqual(Array(p.sources.length + 8).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_requirement_skips").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);

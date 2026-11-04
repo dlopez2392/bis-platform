@@ -190,8 +190,10 @@ export async function removeRelationship(
  * in it is the browser's to forge, and it would decide where the row sorts (the list orders by
  * created_at); the column default stamps it here instead, and `updated_at` is now as well.
  */
+/** F-115 Task 6: `via` is optional, forwarded unchanged to `withAuthor` (undefined for every caller
+ *  before Task 6; record-restore.ts's 30-day Restore passes `restore:<changeId>`). */
 export async function restoreRelationship(
-  db: SupabaseClient, accountId: string, row: RelationshipRow, author: RowAuthor,
+  db: SupabaseClient, accountId: string, row: RelationshipRow, author: RowAuthor, via?: string,
 ): Promise<RelationshipRow> {
   author = requireAuthor(db, author, "restoreRelationship");
   assertActorAllowed(db, author);
@@ -210,7 +212,7 @@ export async function restoreRelationship(
     related_can_pick_up: row.related_can_pick_up,
     related_is_emergency: row.related_is_emergency,
     updated_at: new Date().toISOString(),
-  }), author).select(RELATIONSHIP_COLUMNS).single();
+  }), author, via).select(RELATIONSHIP_COLUMNS).single();
   if (error) throw dbError("restoreRelationship failed", error);
   const restored = data as unknown as RelationshipRow;
   const { actorId, actorType } = emitActorOf(db, author);

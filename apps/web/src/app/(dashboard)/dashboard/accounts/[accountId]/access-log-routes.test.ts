@@ -46,6 +46,10 @@ const RECORD: Record<string, "noteOpened" | "noteOpenedApi"> = {
   // and address, so the page notes that customer, after the job is read on the caller's own client.
   [`${A}/calendar/page.tsx`]: "noteOpened",
   [`${A}/contacts/export/route.ts`]: "noteOpenedApi",   // review m5: a 409, never a redirect, on a download
+  // F-115 PR C fix (plan Task 8 Step 2): the Owner-only history download, one contact's or one
+  // group's own — mirrors contacts/export/route.ts's own guard sequence and noteOpenedApi call.
+  [`${A}/contacts/[contactId]/history/route.ts`]: "noteOpenedApi",
+  [`${A}/groups/[groupId]/history/route.ts`]: "noteOpenedApi",
   ...Object.fromEntries(["ai-summary", "document-requests", "document-requirements", "documents", "email", "groups", "places",
     "relationships", "summary", "texts"].map((r) => [`${API}/contacts/[contactId]/${r}/route.ts`, "noteOpenedApi" as const])),
   ...Object.fromEntries(["document-requests", "documents", "places"].map((r) => [`${API}/groups/[groupId]/${r}/route.ts`, "noteOpenedApi" as const])),
@@ -112,6 +116,10 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
   ...each(`${A}/contacts/document-requirements-actions.ts`, ["skipDocumentRequirementAction", "undoSkipDocumentRequirementAction",
     "unskipDocumentRequirementAction", "undoUnskipDocumentRequirementAction"], W),
   ...each(`${A}/contacts/document-shares-actions.ts`, ["stopSharingAction", "undoStopSharingAction"], W),
+  // F-115 PR C fix (plan Task 6): Put back a changed value / Restore a removed unit, member, tag,
+  // relationship or place. Each reads the change row only to know which page(s) to revalidate and an
+  // undo id; neither returns any record content a logged page has not already shown.
+  ...each(`${A}/contacts/history-actions.ts`, ["putBackAction", "restoreAction"], W),
   ...each(`${A}/contacts/documents-actions.ts`, ["startDocumentUploadAction", "startDocumentVersionUploadAction", "finishDocumentUploadAction",
     "abandonDocumentUploadAction", "updateDocumentFieldAction", "undoDocumentFieldAction", "setOwnersOnlyAction", "undoOwnersOnlyAction",
     "trashDocumentAction", "restoreDocumentAction", "purgeDocumentAction"], W),

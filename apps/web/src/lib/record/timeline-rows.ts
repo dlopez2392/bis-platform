@@ -57,6 +57,8 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
   documents: "timeline.what.documents", chats: "timeline.what.chats", archive: "timeline.what.archive",
   merge: "timeline.what.merge", suggestions: "timeline.what.suggestions", ai_acts: "timeline.what.aiActs",
+  // F-115 part 1 (S-04), plan Task 4.
+  changes: "timeline.what.changes",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -234,6 +236,10 @@ function phrase(
         : tr.text("timeline.mergeOtherHidden");
       return { verb: tr.text("timeline.mergeUndone", { name }), status: null, detail: null };
     }
+    // F-115 part 1 (S-04), plan Task 4: a placeholder only, to keep this switch exhaustive now that
+    // `TimelineEntry` carries a "change" variant. Plan Task 5 (bis-frontend, PR E) replaces this with
+    // the real verb (field list), status-free, and the Was/Now disclosure, built from `entry.group`.
+    case "change": return { verb: tr.text("timeline.what.changes"), status: null, detail: null };
   }
 }
 
@@ -256,7 +262,11 @@ export function timelineRows(
   // The AI mark's own rule (author-mark.ts's authorLabel): the account's persona, else Sofía.
   const persona = ctx.author.personaName?.trim() || "Sofía";
   const stages = ctx.suggestionStages ?? {};
-  return entries.map((entry) => {
+  // F-115 PR C fix (review I2, orchestrator ruling): the `changes` source stays dormant until PR E
+  // ships the real row — dropped here, before a "change" entry can become a row at all (never even a
+  // placeholder `<li>`), so no caller of `timelineRows` can show one by surprise while the loaders
+  // ask for `changes: true` (they do not, today) or if a future caller ever does before PR E lands.
+  return entries.filter((entry) => entry.kind !== "change").map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {

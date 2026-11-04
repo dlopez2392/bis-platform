@@ -444,3 +444,19 @@ export {
   JOB_ERROR_MAX_CHARS, boundJobError, JobPayloadTooLarge, DEAD_JOB_COUNT_CAP,
   type JobState, type JobRow, type NewJob, type JobFence, type DeadJobCounts,
 } from "./jobs";
+
+// F-115 part 1 (S-04), plan Task 4: the record timeline's own change-history source (migration 0111).
+// See ./record-changes.ts.
+// F-115 PR C fix (review C1/I2): the lossless row cursor, its own OR-filter builder, the
+// never-cuts-a-write pager, and the bigint<->UUID-cursor-id codec. See ./record-changes.ts.
+export {
+  groupChanges, foldVia, listChangeRows, listChangeRowsNoPartialWrite, changeRowBeforeFilter,
+  encodeChangeCursorId, decodeChangeCursorId, COLLAPSE_MINUTES,
+  type ChangeRecordType, type ChangeRow, type ChangeGroup, type ViaOnPage, type ChangeRowCursor,
+} from "./record-changes";
+
+// F-115 Task 6: "Put back" a changed value and "Restore" a removed unit, member, tag, relationship
+// or place for RESTORE_DAYS. See ./record-restore.ts.
+export {
+  RESTORE_DAYS, canPutBack, canRestore, parseChangeId, putBackChange, restoreRemoved,
+} from "./record-restore";

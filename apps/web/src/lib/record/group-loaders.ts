@@ -141,6 +141,8 @@ export async function loadGroupTimeline(
   try {
     page = await listTimelinePage(db, accountId, contactIds, before, {
       onError: (source, e) => log(`activity (${source})`, accountId, e), groupId,
+      // F-115 PR C fix (review I2, orchestrator ruling): OFF until PR E ships the renderer. PR E turns this on.
+      changes: false,
     });
   } catch (e) {
     log("activity", accountId, e);
