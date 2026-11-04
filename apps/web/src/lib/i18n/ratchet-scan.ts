@@ -511,6 +511,10 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     reason: "exportEnded()'s 409 is reached only when agencyVisitMissing(accountId) is true, which that function's own doc comment limits to an agency_admin session with no live visit — a client Owner's export never sees it; the route's OTHER read (the downloaded filename, a few lines down) already resolves a real locale for every caller, Owner included",
   },
   {
+    file: "src/lib/record/history-download.ts",
+    reason: "visitEndedResponse()'s 409 is the record-history download's own exportEnded() twin, reached the same two ways as that function: agencyVisitMissing(accountId) true (its own doc comment limits that to an agency_admin session with no live visit) before a locale is even resolvable, or the caller's explicit `if (access.isAgency)` branch after noteOpenedApi refuses — a client Owner's download never sees it either way; the route's OTHER reads (readFailedResponse, tooBigResponse) already take a real resolved locale",
+  },
+  {
     file: "src/components/inline-field.tsx",
     reason: "normalizeRequired's English m[\"setup.rename.empty\"] is reached only through the `required` prop arm, whose only caller (its own doc comment) is setup/steps/account.tsx's account rename — an agency-only file under the settings|setup|checklist|voice|automations route regex; every other InlineField caller takes the `field`/`options`/`rule` arm instead, all already locale-aware",
   },

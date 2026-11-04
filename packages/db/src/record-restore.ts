@@ -28,8 +28,14 @@ const RESTORE_MS = RESTORE_DAYS * 24 * 60 * 60 * 1000;
  * generate update rows. `custom.<key>` is handled separately (only `contact` has a put-back RPC
  * today, `put_back_contact_custom`; see `canPutBack` below).
  */
+// F-115 PR C fix (verify's scan 5, consent spec §4.3): 0049's retired opt-out column is deliberately
+// absent from this list (and from TIMESTAMP_FIELDS below) — the consent-chain source scan asserts NO
+// source file in apps/web/src or packages/db/src still names that column, so this file cannot carry
+// its identifier even to exclude it by name. Omitting it from PUT_BACK_FIELDS already makes
+// `canPutBack` answer false for it (the `fields.includes(row.field)` check below), the same outcome
+// PUT_BACK_EXCLUDED gives the other three entries — without writing the retired literal anywhere.
 const PUT_BACK_FIELDS: Readonly<Partial<Record<ChangeRecordType, readonly string[]>>> = {
-  contact: ["first_name", "last_name", "email", "phone", "assigned_to", "dnd", "source", "marketing_email_opted_out_at", "language"],
+  contact: ["first_name", "last_name", "email", "phone", "assigned_to", "dnd", "source", "language"],
   client_group: ["name", "kind", "billing_address"],
   place: ["label", "address", "landmark", "directions", "city", "region", "postal_code", "country", "archived_at", "contact_id", "client_group_id"],
   equipment: ["name", "make", "model", "serial", "notes", "installed_on", "warranty_until", "replaces_id"],
@@ -156,10 +162,11 @@ async function getChangeRow(db: SupabaseClient, accountId: string, changeId: num
 
 /** A field whose column is `timestamptz`: `to_jsonb`'s text rendering uses the WRITING session's own
  *  time zone (0111/0112's header comment), so two renderings of the SAME instant can differ by their
- *  numeric offset ("+00" vs "-05", plan Task 6's own test case). These two are the only `timestamptz`
- *  columns in `PUT_BACK_FIELDS` (every DATE column — `installed_on`, `warranty_until` — has no offset
- *  to disagree about, and every other audited field is a plain scalar or uuid). */
-const TIMESTAMP_FIELDS: ReadonlySet<string> = new Set(["marketing_email_opted_out_at", "archived_at"]);
+ *  numeric offset ("+00" vs "-05", plan Task 6's own test case). This is the only `timestamptz`
+ *  column left in `PUT_BACK_FIELDS` (every DATE column — `installed_on`, `warranty_until` — has no
+ *  offset to disagree about, every other audited field is a plain scalar or uuid, and 0049's retired
+ *  opt-out column — the branch this check used to also cover — was removed above, F-115 PR C fix). */
+const TIMESTAMP_FIELDS: ReadonlySet<string> = new Set(["archived_at"]);
 
 /**
  * F-115 PR C fix (review I3): the shared ending for every put-back write below. `PG_REFUSED_WRITE`

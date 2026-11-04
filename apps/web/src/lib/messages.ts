@@ -7551,7 +7551,7 @@ export const m = {
   // F-115 PR C fix (review m4): a read this download cannot do without (the account row, or a
   // merge's own tombstones) failed — the download stops rather than leaving out rows silently.
   "history.download.failed": "This history couldn't be downloaded right now. Try again.",
-  "history.download.failed.es": "No se pudo descargar este historial. Vuelva a intentarlo.",
+  "history.download.failed.es": "No se pudo descargar este historial. Intente de nuevo.",
   // F-115 part 1 (S-04), plan Task 6: Put back a changed value, Restore a removed unit, member, tag,
   // relationship or place for 30 days. "history.notFound" is this task's own addition (not in the
   // plan's Copy table): putBackChange/restoreRemoved's own "not_found"/"not_allowed" (a stale page,

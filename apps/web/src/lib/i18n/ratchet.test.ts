@@ -415,7 +415,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the twenty-six English-only readers (mutation: add a twenty-seventh without a test row → FAILS)", () => {
+  it("names exactly the twenty-seven English-only readers (mutation: add a twenty-eighth without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -485,6 +485,11 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       // the route's other read (the filename) already resolves a real
       // locale for every caller.
       "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/export/route.ts",
+      // F-115 PR C fix: visitEndedResponse()'s 409 is exportEnded()'s own
+      // twin for the record-history download — reached only by the same
+      // agencyVisitMissing check, or the caller's explicit isAgency branch;
+      // never by a client Owner.
+      "src/lib/record/history-download.ts",
       // S-10 T9b: normalizeRequired's only caller is the agency-only
       // account rename (setup/steps/account.tsx); every other InlineField
       // caller is already locale-aware.
