@@ -7543,11 +7543,18 @@ export const m = {
   "history.verb.removedMemberBusiness.es": "quitó a {name} del negocio",
   "history.verb.removedTag": "removed the tag {name}",
   "history.verb.removedTag.es": "quitó la etiqueta {name}",
-  // F-115 PR E fix round 2 (review I7/D1): a tag deleted outright can never be resolved by
-  // readChangeNames (its own row is gone) — a plain word, never the raw id, in EITHER verb and in
-  // Restore's own toast (change-rows.ts's deleteVerb shares `name` with `removalName`).
-  "history.tagUnknown": "a tag",
-  "history.tagUnknown.es": "una etiqueta",
+  // F-115 PR E final review m2/m4: a tag, stage or sales process deleted from the account has no name
+  // left to read; these say so in their own words instead of "the tag a tag" or "another record".
+  "history.verb.removedTagUnknown": "removed a tag",
+  "history.verb.removedTagUnknown.es": "quitó una etiqueta",
+  "history.verb.addedTagUnknown": "added a tag",
+  "history.verb.addedTagUnknown.es": "agregó una etiqueta",
+  "history.value.stageGone": "a stage that was deleted",
+  "history.value.stageGone.es": "una etapa que se borró",
+  "history.value.pipelineGone": "a sales process that was deleted",
+  "history.value.pipelineGone.es": "un proceso de ventas que se borró",
+  "history.restore.doneUnnamed": "It's back.",
+  "history.restore.doneUnnamed.es": "Se restauró.",
   "history.verb.removedRelationship": "removed the link to {name}",
   "history.verb.removedRelationship.es": "quitó la relación con {name}",
   "history.verb.removedPlace": "removed the place {name}",

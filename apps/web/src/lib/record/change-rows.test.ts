@@ -85,9 +85,10 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
 
     const tagRow = baseRow({ recordType: "contact_tag", recordId: "tag-7", op: "insert", field: null, before: null, after: { contact_id: "c1", tag_id: "tag-7" } });
     expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx({ names: { "tag-7": "VIP" } })).verb).toBe("added the tag VIP");
-    // F-115 PR E fix round 2 (review I7/D1): unresolved (a tag this read could not name) is a WORD,
-    // never the raw id.
-    expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx()).verb).toBe("added the tag a tag");
+    // F-115 PR E fix round 2 (review I7/D1) + final review m2: unresolved (a tag this read could not
+    // name) is its own sentence, never the raw id and never "the tag a tag".
+    expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx()).verb).toBe("added a tag");
+    expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx({}, "es")).verb).toBe("agregó una etiqueta");
 
     const relRow = baseRow({ recordType: "contact_relationship", op: "insert", field: null, before: null, after: { related_contact_id: "c9" } });
     expect(changeRowView(group([relRow], { recordType: "contact_relationship" }), ctx({ names: { c9: "Luis García" } })).verb)
@@ -149,8 +150,9 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
     const row = baseRow({ recordType: "contact_tag", recordId: "tag-9", op: "delete", field: null, before: { contact_id: "c1", tag_id: "tag-9" }, after: null });
     const g = group([row], { recordType: "contact_tag" });
     expect(changeRowView(g, ctx({ names: { "tag-9": "VIP" } })).verb).toBe("removed the tag VIP");
-    expect(changeRowView(g, ctx()).verb).toBe("removed the tag a tag");
-    expect(changeRowView(g, ctx()).removalName).toBe("a tag"); // Restore's own toast shares this name
+    expect(changeRowView(g, ctx()).verb).toBe("removed a tag"); // final review m2: never "the tag a tag"
+    expect(changeRowView(g, ctx({}, "es")).verb).toBe("quitó una etiqueta");
+    expect(changeRowView(g, ctx()).removalName).toBeNull(); // Restore's toast then reads its unnamed form
   });
 
   it("a removed relationship names the other side, or 'another record' when unresolved — never 'Someone on the team' (a customer is not staff) (mutation: drop the fallback -> undefined in the sentence, FAILS)", () => {
@@ -262,6 +264,10 @@ describe("formatChangeValue (plan Task 5 Values)", () => {
     expect(formatChangeValue("stage_id", "stage-a", withNames)).toBe("Quoted");
     expect(formatChangeValue("pipeline_id", "pipe-a", withNames)).toBe("Install jobs");
     expect(formatChangeValue("related_contact_id", "unknown-id", c)).toBe("another record");
+    // Final review m4: a deleted stage or sales process says what it was, never "another record".
+    expect(formatChangeValue("stage_id", "gone-stage", c)).toBe("a stage that was deleted");
+    expect(formatChangeValue("pipeline_id", "gone-pipe", c)).toBe("a sales process that was deleted");
+    expect(formatChangeValue("stage_id", "gone-stage", ctx({}, "es"))).toBe("una etapa que se borró");
   });
 
   it("a language value reads as a word, never the raw code (mutation: return the raw code -> FAILS)", () => {

@@ -113,6 +113,12 @@ describe("restoreOne (rule 6: runs at once; NO Undo — record-restore.ts has no
     expect(optsOf(toasts.success.mock.calls[0])).toBeUndefined();
   });
 
+  it("an unnamed removal (a tag deleted from the account) toasts its own sentence, never \" is back.\" (final review m2; mutation: always use history.restore.done -> FAILS)", async () => {
+    const restore = vi.fn().mockResolvedValue({ ok: true, undo: { changeId: 9 } });
+    await restoreOne(restore, 5, null, { tr: EN, onDone: vi.fn() });
+    expect(toasts.success).toHaveBeenCalledWith("It's back.");
+  });
+
   it("expired/parentGone/alreadyBack toast the server's own worded refusal (mutation: use a generic error -> FAILS)", async () => {
     const restore = vi.fn().mockResolvedValue({ ok: false, message: "This could be restored for 30 days. That time has passed." });
     await restoreOne(restore, 5, "Carrier AC", { tr: EN, onDone: () => {} });

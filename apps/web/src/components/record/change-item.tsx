@@ -134,7 +134,7 @@ export async function restoreOne(
   }
   if (!r.ok) { toast.error(r.message); return; }
   ctx.onDone();
-  toast.success(tr.text("history.restore.done", { name: name ?? "" }));
+  toast.success(name ? tr.text("history.restore.done", { name }) : tr.text("history.restore.doneUnnamed"));
 }
 
 export type ChangeItemProps = {

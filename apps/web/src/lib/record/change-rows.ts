@@ -231,6 +231,9 @@ export function formatChangeValue(field: string, value: unknown, ctx: ChangeView
   // the contact drawer's own Source hint uses); an operator's own typed note (anything else) is
   // honest free text, shown exactly as typed — there is nothing machine-made to translate.
   if (field === "source" && typeof value === "string") return machineSourceCaption(value, ctx.tr.locale) ?? value;
+  // Final review m4: a deleted stage or sales process is not "another record" — it says what it was.
+  if (field === "stage_id" && typeof value === "string") return ctx.names[value] ?? ctx.tr.text("history.value.stageGone");
+  if (field === "pipeline_id" && typeof value === "string") return ctx.names[value] ?? ctx.tr.text("history.value.pipelineGone");
   if (CUSTOMER_ID_FIELDS.has(field) && typeof value === "string") return customerName(value, ctx);
   if (typeof value === "string" && ISO_DATETIME.test(value)) {
     try { return formatDateTimeInZone(value, ctx.zone, ctx.tr.locale); } catch { /* fall through to the raw string */ }
@@ -279,7 +282,10 @@ function deleteVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): { v
     case "contact_tag": {
       // F-115 PR E fix round 2 (review I7/D1): a tag deleted outright has no row of its own left to
       // read a name from — a WORD, never the raw id; Restore's own toast shares this `name`.
-      const name = ctx.names[row.recordId] ?? tr.text("history.tagUnknown");
+      // Final review m2: the unnamed form is its own sentence ("removed a tag"), never "the tag a tag",
+      // and names nothing for Restore's toast (which then reads its own unnamed "It's back.").
+      const name = ctx.names[row.recordId];
+      if (!name) return { verb: tr.text("history.verb.removedTagUnknown"), name: null };
       return { verb: tr.text("history.verb.removedTag", { name }), name };
     }
     // `related_contact_id`/`contactId` here name a CUSTOMER, never a staff member — "Someone on the
@@ -321,8 +327,8 @@ function insertVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): str
     }
     case "contact_tag": {
       // F-115 PR E fix round 2 (review I7/D1): same fallback word as the removal verb — never the raw id.
-      const name = ctx.names[row.recordId] ?? tr.text("history.tagUnknown");
-      return tr.text("history.verb.addedTag", { name });
+      const name = ctx.names[row.recordId];
+      return name ? tr.text("history.verb.addedTag", { name }) : tr.text("history.verb.addedTagUnknown");
     }
     case "contact_relationship": {
       const name = customerName(stringField(row.after, "related_contact_id"), ctx);
