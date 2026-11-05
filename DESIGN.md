@@ -324,6 +324,14 @@ Deleting moves a file to the trash **at once, with an undo** (rule 6);
 only a typed name confirms a PERMANENT purge — the move is reversible,
 the purge is not, and the two must not share one confirmation.
 
+**History.** A change to a customer's facts is a timeline row with its
+author mark, what changed, and Was/Now for each field; "Put back" runs at
+once with an undo (rule 6). A removed unit, member, tag, link or place
+carries "Restore" for 30 days. Restore's toast has NO Undo (decided
+2026-11-05): a restore is itself the undo of a removal, and removing the
+item again goes through its own Remove control, which carries its own
+undo. This is the one sanctioned exception to rule 6's undo toast.
+
 **Provenance.** Every timeline row states who did what and when, with an
 author mark from one closed set: a named person, "Sofía · AI", an
 automation, the customer, or an import. A row with no mark is a defect:
