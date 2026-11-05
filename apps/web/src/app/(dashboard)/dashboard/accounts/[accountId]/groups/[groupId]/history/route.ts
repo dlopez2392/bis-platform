@@ -11,8 +11,11 @@ import { isUuid } from "@/lib/assign/action-guards";
 import { dayKeyInZone } from "@/lib/booking/availability";
 import { makeTr } from "@/lib/record/copy";
 import { authorLabel } from "@/lib/record/author-mark";
+import { loggableError } from "@/lib/loggable-error";
 import { toHistoryCsv, toHistoryCsvRow, historyFilenameSlug } from "@/lib/record/history-csv";
-import { fetchBoundedChangeRows, prefetchGuard, visitEndedResponse, tooBigResponse } from "@/lib/record/history-download";
+import {
+  fetchBoundedChangeRows, prefetchGuard, visitEndedResponse, tooBigResponse, readFailedResponse,
+} from "@/lib/record/history-download";
 
 export const dynamic = "force-dynamic";
 
@@ -41,10 +44,17 @@ export async function GET(
   if (!group) return new Response(null, { status: 404 });
 
   const prefs = await getPersonPrefs();
-  const { data: accountRow } = await db.from("accounts").select("language, timezone")
+  const { data: accountRow, error: accountErr } = await db.from("accounts").select("language, timezone")
     .eq("id", accountId).maybeSingle();
   const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  // F-115 PR C fix (review m4), mirrored from the contact history route: this file is an audit
+  // record; an unread account row must not be silently treated as "no account language" — fail the
+  // whole download loudly instead.
+  if (accountErr) {
+    console.error(`group history route (account ${accountId}, group ${groupId}): account read failed: ${loggableError(accountErr)}`);
+    return readFailedResponse(locale);
+  }
 
   const fetched = await fetchBoundedChangeRows(db, accountId, { groupId });
   if ("tooBig" in fetched) return tooBigResponse(locale);
