@@ -21,6 +21,16 @@ describe("contacts CSV", () => {
     expect(csv).not.toMatch(/(^|,)"?=cmd/);
   });
 
+  it("guards a cell starting with a TAB or a CR too, not just = + - @ (mutation: drop the TAB/CR guard -> FAILS)", () => {
+    const TAB = String.fromCharCode(9);
+    const CR = String.fromCharCode(13);
+    const csv = toCsv([{ first_name: TAB + "=HYPERLINK(evil.example)", last_name: CR + "+1cmd",
+      email: "", phone: "", company_name: "", source: "", tags: "" }]);
+    const dataLine = csv.split("\n")[1]!;
+    expect(dataLine).toContain("'" + TAB + "=HYPERLINK(evil.example)");
+    expect(dataLine).toContain("'" + CR + "+1cmd");
+  });
+
   it("joins tags with a comma inside one quoted cell", () => {
     expect(toCsv([{ first_name: "A", last_name: "", email: "", phone: "",
       company_name: "", source: "", tags: "vip,lead" }])).toContain('"vip,lead"');
