@@ -443,13 +443,12 @@ describe("record loaders: the change history source (F-115 part 1, S-04, plan Ta
     readActFactsMock.mockReset().mockResolvedValue(FACTS);
   });
 
-  // F-115 PR C fix (review I2, orchestrator ruling): the source itself (packages/db's record.ts) is
-  // correct and tested there (record-timeline-changes.test.ts); the SWITCH stays dormant here until
-  // PR E ships the renderer, so the record page's own loader asks for `changes: false`, not true, and
-  // the drawer's Recent still never names the option at all.
-  it("the record page's timeline asks for changes: false (dormant, PR E turns it on); the drawer's Recent still does not ask at all (mutation: pass changes: true -> FAILS)", async () => {
+  // F-115 part 1 (S-04), plan Task 5: the switch is ON — the record page's own loader now asks for
+  // `changes: true`; the drawer's Recent still never names the option at all (spec §3: the drawer
+  // never shows a "change" row — recent-rows.ts's own `case "change": return null` stays).
+  it("the record page's timeline asks for changes: true; the drawer's Recent still does not ask at all (mutation: pass changes: false -> FAILS)", async () => {
     await loadTimeline(db, ledger, "acct1", "ct1");
-    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ changes: false });
+    expect(listTimelinePageMock.mock.calls[0]![4]).toMatchObject({ changes: true });
     await loadRecent(db, "acct1", "ct1");
     expect(listTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("changes");
   });

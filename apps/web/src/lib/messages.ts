@@ -7526,6 +7526,128 @@ export const m = {
   // (migration 0111). T5 (PR E) adds the rest of the history.* keys.
   "timeline.what.changes": "changes",
   "timeline.what.changes.es": "cambios",
+  // F-115 part 1 (S-04), plan Task 5: the change row's own verb, field labels and values
+  // (change-rows.ts). G6's "delete" rule bans "elimin*" opposite an English "delet*" (never: /elimin/i,
+  // use "borrar" — established already at contacts.delete.* throughout this file), so
+  // "history.verb.deleted" reads "borró", not the plan's own placeholder "eliminó" (source wins: the
+  // glossary is an enforced gate, spanish-style.test.ts, the plan text is not).
+  "history.verb.changed": "changed {fields}",
+  "history.verb.changed.es": "cambió {fields}",
+  "history.verb.added": "added this record",
+  "history.verb.added.es": "agregó este registro",
+  "history.verb.removedEquipment": "removed the unit {name}",
+  "history.verb.removedEquipment.es": "quitó el equipo {name}",
+  "history.verb.removedMember": "removed {name} from the household",
+  "history.verb.removedMember.es": "quitó a {name} del hogar",
+  "history.verb.removedMemberBusiness": "removed {name} from the business",
+  "history.verb.removedMemberBusiness.es": "quitó a {name} del negocio",
+  "history.verb.removedTag": "removed the tag {name}",
+  "history.verb.removedTag.es": "quitó la etiqueta {name}",
+  "history.verb.removedRelationship": "removed the link to {name}",
+  "history.verb.removedRelationship.es": "quitó la relación con {name}",
+  "history.verb.removedPlace": "removed the place {name}",
+  "history.verb.removedPlace.es": "quitó el lugar {name}",
+  "history.verb.deleted": "deleted this customer",
+  "history.verb.deleted.es": "borró a este cliente",
+  // Field labels, two forms: history.field.* (short, inside the verb's list) and history.label.*
+  // (sentence case, the detail line). Every Q1 column the plan's own Copy table did not name reads
+  // history.field.other / history.label.other (see the report's Deviations: many place/equipment/
+  // client_group/opportunity/contact_relationship/client_group_member columns have no dedicated row
+  // here and fall back to this generic word).
+  "history.field.first_name": "first name",
+  "history.field.first_name.es": "el nombre",
+  "history.label.first_name": "First name",
+  "history.label.first_name.es": "Nombre",
+  "history.field.last_name": "last name",
+  "history.field.last_name.es": "el apellido",
+  "history.label.last_name": "Last name",
+  "history.label.last_name.es": "Apellido",
+  "history.field.email": "email",
+  "history.field.email.es": "el correo",
+  "history.label.email": "Email",
+  "history.label.email.es": "Correo",
+  "history.field.phone": "phone",
+  "history.field.phone.es": "el teléfono",
+  "history.label.phone": "Phone",
+  "history.label.phone.es": "Teléfono",
+  "history.field.assigned_to": "who it is assigned to",
+  "history.field.assigned_to.es": "a quién está asignado",
+  "history.label.assigned_to": "Assigned to",
+  "history.label.assigned_to.es": "Asignado a",
+  "history.field.dnd": "do not disturb",
+  "history.field.dnd.es": "no molestar",
+  "history.label.dnd": "Do not disturb",
+  "history.label.dnd.es": "No molestar",
+  "history.field.source": "where they came from",
+  "history.field.source.es": "de dónde llegó",
+  "history.label.source": "Source",
+  "history.label.source.es": "Origen",
+  // F-115 PR E fix (consent scan 5, spec §4.3): the plan's own Copy table named a
+  // "history.field.marketing_email_opted_out_at" pair, but that literal is 0049's RETIRED opt-out
+  // column (consent PR-3) — `record-restore.ts`'s own `PUT_BACK_FIELDS` and `TIMESTAMP_FIELDS`
+  // already omit it for the SAME reason (its own comments there). Omitted here too, never written:
+  // a changed row for this column falls through to `history.field.other`/`history.label.other`
+  // ("a detail"/"Detail") in change-rows.ts, same as every other un-named Q1 column.
+  "history.field.language": "language",
+  "history.field.language.es": "el idioma",
+  "history.label.language": "Language",
+  "history.label.language.es": "Idioma",
+  "history.field.custom": "{label}",
+  "history.field.custom.es": "{label}",
+  "history.label.custom": "{label}",
+  "history.label.custom.es": "{label}",
+  "history.field.name": "name",
+  "history.field.name.es": "el nombre",
+  "history.label.name": "Name",
+  "history.label.name.es": "Nombre",
+  "history.field.stage": "stage",
+  "history.field.stage.es": "la etapa",
+  "history.label.stage": "Stage",
+  "history.label.stage.es": "Etapa",
+  "history.field.value": "value",
+  "history.field.value.es": "el valor",
+  "history.label.value": "Value",
+  "history.label.value.es": "Valor",
+  "history.field.other": "a detail",
+  "history.field.other.es": "un dato",
+  "history.label.other": "Detail",
+  "history.label.other.es": "Dato",
+  "history.was": "Was",
+  "history.was.es": "Antes",
+  "history.now": "Now",
+  "history.now.es": "Ahora",
+  "history.blank": "(blank)",
+  "history.blank.es": "(vacío)",
+  "history.yes": "Yes",
+  "history.yes.es": "Sí",
+  "history.no": "No",
+  "history.no.es": "No",
+  "history.steps": "{count} changes",
+  "history.steps.es": "{count} cambios",
+  "history.stepsOne": "1 change",
+  "history.stepsOne.es": "1 cambio",
+  "history.showSteps": "Show every step",
+  "history.showSteps.es": "Ver cada paso",
+  "history.hideSteps": "Hide the steps",
+  "history.hideSteps.es": "Ocultar los pasos",
+  // The Owner-only link to T8's download route (history.download.tooBig/failed, above, are already
+  // the route's own refusal copy).
+  "history.download": "Download history",
+  "history.download.es": "Descargar historial",
+  // The CSV's own "Cause" column, one word per `via` shape listChangeRows/history-csv.ts reads
+  // (foldVia's own VIA regex: merge:, ai_act:, proposal:, restore:, plus the capture trigger's own
+  // "sql"/"seed"). An unmatched via (observe-mode NULL, or "seed") reads no cause word at all —
+  // history-csv.ts's own column, not reused here — so this set only needs the five named shapes.
+  "history.cause.merge": "merged with another record",
+  "history.cause.merge.es": "unión con otro registro",
+  "history.cause.aiAct": "Sofía did it",
+  "history.cause.aiAct.es": "lo hizo Sofía",
+  "history.cause.proposal": "accepted suggestion",
+  "history.cause.proposal.es": "sugerencia aceptada",
+  "history.cause.restore": "put back",
+  "history.cause.restore.es": "restaurado",
+  "history.cause.sql": "BIS system",
+  "history.cause.sql.es": "sistema de BIS",
   // F-115 part 1 (S-04), plan Task 8 Step 1: the history download's CSV header, in the reader's
   // locale (spec Copy, history.csv.*). T5 (PR E) adds the rest of history.*.
   "history.csv.when": "When",

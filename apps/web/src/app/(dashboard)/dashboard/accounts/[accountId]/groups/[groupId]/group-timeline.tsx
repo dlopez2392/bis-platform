@@ -1,15 +1,18 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
+import { ChangeItem, type ChangeAction } from "@/components/record/change-item";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { formatDateInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { splitSummaryBlocks } from "@/lib/voice/summary-blocks";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import type { Tr } from "@/lib/record/copy";
 import type { TimelineRow } from "@/lib/record/timeline-rows";
@@ -28,6 +31,15 @@ export type GroupTimelineProps = {
   tr: Tr;
   /** S-09 §9: each member's language, by contact id; a member without one is absent. */
   customerLangs: Record<string, "en" | "es">;
+  /** F-115 part 1 (S-04), plan Task 5: the page's own clock, for a change row's 30-day Restore
+   *  window (`activity-timeline.tsx`'s own `nowMs`, never `Date.now()` here). */
+  nowMs?: number;
+  /** May this caller Put back/Restore (`seesWholeAccount`: Owners, Staff, the agency). */
+  canWriteHistory?: boolean;
+  putBackHistory?: ChangeAction;
+  restoreHistory?: ChangeAction;
+  /** The Owner-only (`access.canManage`) link to T8's CSV download route; null hides it. */
+  historyDownloadHref?: string | null;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -76,14 +88,21 @@ export function GroupTimeline(p: GroupTimelineProps) {
                   <Separator className="flex-1" />
                 </div>
               ) : null}
-              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} customerLangs={p.customerLangs} />
+              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} customerLangs={p.customerLangs}
+                nowMs={p.nowMs} canWriteHistory={p.canWriteHistory ?? false}
+                putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
           ))}
         </ol>
       ) : null}
 
-      {p.pager.olderHref || p.pager.newerHref ? (
+      {p.pager.olderHref || p.pager.newerHref || p.historyDownloadHref ? (
         <nav aria-label={tr.text("timeline.pages")} data-timeline-pager className="flex items-center justify-end gap-2">
+          {p.historyDownloadHref ? (
+            <Link href={p.historyDownloadHref} data-history-download className={cn(pagerLink, "mr-auto")}>
+              {t(m, "history.download", tr.locale)}
+            </Link>
+          ) : null}
           {p.pager.newerHref ? <Link href={p.pager.newerHref} className={pagerLink}>{tr.text("timeline.newer")}</Link> : null}
           {p.pager.olderHref ? <Link href={p.pager.olderHref} className={pagerLink}>{tr.text("timeline.older")}</Link> : null}
         </nav>
@@ -92,8 +111,10 @@ export function GroupTimeline(p: GroupTimelineProps) {
   );
 }
 
-function Row({ row, timezone, accountId, tr, customerLangs }: {
+function Row({ row, timezone, accountId, tr, customerLangs, nowMs, canWriteHistory, putBackHistory, restoreHistory }: {
   row: TimelineRow; timezone: string; accountId: string; tr: Tr; customerLangs: Record<string, "en" | "es">;
+  nowMs: number | undefined; canWriteHistory: boolean;
+  putBackHistory: ChangeAction | undefined; restoreHistory: ChangeAction | undefined;
 }) {
   const e = row.entry;
   const customerLang = customerLangs[e.contactId] ?? "";
@@ -229,11 +250,15 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
       return <TimelineItem {...head} icon={Merge} />;
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
-    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
-    // stays OFF in group-loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships
-    // the real row. Renders NOTHING here, on purpose — not even a placeholder icon row.
-    case "change":
-      return null;
+    // F-115 part 1 (S-04), plan Task 5: the real row — a removed member reads "quitó a {name} del
+    // hogar/negocio" here exactly as it does on the member's own page (the same `ChangeGroup`).
+    case "change": {
+      const noAction: ChangeAction = async () => ({ ok: false, message: t(m, "history.notAllowed", tr.locale) });
+      return row.change && nowMs !== undefined ? (
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} canWrite={canWriteHistory}
+          nowMs={nowMs} putBack={putBackHistory ?? noAction} restore={restoreHistory ?? noAction} />
+      ) : <TimelineItem {...head} icon={History} />;
+    }
     default:
       return unknownKind(e);
   }

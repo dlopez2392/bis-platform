@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -8,6 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
 import { ActRow } from "@/components/ai-acts/act-row";
+import { ChangeItem, type ChangeAction } from "@/components/record/change-item";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
@@ -15,6 +16,8 @@ import { formatDateInZone, contactDisplayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { splitSummaryBlocks } from "@/lib/voice/summary-blocks";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import type { AssignMember } from "@/lib/assign/view";
 import type { Locale } from "@/lib/i18n/locale";
 import type { Tr } from "@/lib/record/copy";
@@ -66,8 +69,21 @@ export type ActivityTimelineProps = {
    *  adding arrivals to, never a second read. */
   contactName: string;
   /** The page's own clock (epoch ms), so a merge row's Undo window is judged without an impure call
-   *  during render; with none, no merge row offers Undo (the action re-checks the window anyway). */
+   *  during render; with none, no merge row offers Undo (the action re-checks the window anyway).
+   *  F-115 part 1 (S-04), plan Task 5: the SAME clock judges whether a change row's removal is still
+   *  within its 30-day Restore window; with none, a change row offers no Restore either. */
   nowMs?: number;
+  /** F-115 part 1 (S-04), plan Task 5: may this caller Put back a value or Restore a removed unit
+   *  (`seesWholeAccount`: Owners, Staff, the agency; never a Technician). False by default — a change
+   *  row's own actions never show without it, exactly as `canMerge` gates "Undo merge". */
+  canWriteHistory?: boolean;
+  /** `putBackAction`/`restoreAction` (`contacts/history-actions.ts`), `.bind(null, accountId, locale)`-ed
+   *  by the page. Absent only when `canWriteHistory` is false (a Technician's page never binds them). */
+  putBackHistory?: ChangeAction;
+  restoreHistory?: ChangeAction;
+  /** The Owner-only (`access.canManage`) link to T8's CSV download route; null hides it (Staff, a
+   *  Technician, or the agency reading as neither — Q5: Owners only). */
+  historyDownloadHref?: string | null;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -137,14 +153,20 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
                 holdOpen={p.holdOpenTaskIds} accountId={p.accountId} contactId={p.contactId} contactName={p.contactName}
-                tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs} />
+                tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs}
+                canWriteHistory={p.canWriteHistory ?? false} putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
           ))}
         </ol>
       ) : null}
 
-      {p.pager.olderHref || p.pager.newerHref ? (
+      {p.pager.olderHref || p.pager.newerHref || p.historyDownloadHref ? (
         <nav aria-label={tr.text("timeline.pages")} data-timeline-pager className="flex items-center justify-end gap-2">
+          {p.historyDownloadHref ? (
+            <Link href={p.historyDownloadHref} data-history-download className={cn(pagerLink, "mr-auto")}>
+              {t(m, "history.download", tr.locale)}
+            </Link>
+          ) : null}
           {p.pager.newerHref ? <Link href={p.pager.newerHref} className={pagerLink}>{tr.text("timeline.newer")}</Link> : null}
           {p.pager.olderHref ? <Link href={p.pager.olderHref} className={pagerLink}>{tr.text("timeline.older")}</Link> : null}
         </nav>
@@ -153,10 +175,14 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, customerLang, canMerge, nowMs }: {
+function Row({
+  row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, customerLang,
+  canMerge, nowMs, canWriteHistory, putBackHistory, restoreHistory,
+}: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; contactId: string;
   contactName: string; tr: Tr; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
+  canWriteHistory: boolean; putBackHistory: ChangeAction | undefined; restoreHistory: ChangeAction | undefined;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -326,14 +352,19 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
-    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
-    // stays OFF in loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships the
-    // real row: field list, the "Was"/"Now" disclosure, and Put back. Renders NOTHING here, on
-    // purpose — not even a placeholder icon row — so this switch stays exhaustive without implying a
-    // row the design has not reviewed; a loader that ever asked for `changes` before PR E lands would
-    // otherwise show an unfinished row to a real reader.
-    case "change":
-      return null;
+    // F-115 part 1 (S-04), plan Task 5: the real row. `nowMs` undefined (a caller that never supplies
+    // the page's clock) falls back to a plain row with no Restore, the SAME defensive shape the merge
+    // row's own Undo already uses (`canUndo = canMerge && nowMs !== undefined && …`).
+    case "change": {
+      // canWriteHistory gates every BUTTON `ChangeItem` draws; these two stand in only for a caller
+      // that passed true without binding an action (should never happen — belt and suspenders, never
+      // a thrown row).
+      const noAction: ChangeAction = async () => ({ ok: false, message: t(m, "history.notAllowed", tr.locale) });
+      return row.change && nowMs !== undefined ? (
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} canWrite={canWriteHistory}
+          nowMs={nowMs} putBack={putBackHistory ?? noAction} restore={restoreHistory ?? noAction} />
+      ) : <TimelineItem {...head} icon={History} />;
+    }
     default:
       return unknownKind(e);
   }

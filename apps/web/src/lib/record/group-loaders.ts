@@ -141,8 +141,9 @@ export async function loadGroupTimeline(
   try {
     page = await listTimelinePage(db, accountId, contactIds, before, {
       onError: (source, e) => log(`activity (${source})`, accountId, e), groupId,
-      // F-115 PR C fix (review I2, orchestrator ruling): OFF until PR E ships the renderer. PR E turns this on.
-      changes: false,
+      // F-115 part 1 (S-04), plan Task 5: ON — the household's/business's own timeline now shows its
+      // "change" rows too (a removed member, a place's own edits), same source as the contact page.
+      changes: true,
     });
   } catch (e) {
     log("activity", accountId, e);

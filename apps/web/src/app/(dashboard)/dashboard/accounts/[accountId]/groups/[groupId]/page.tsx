@@ -31,6 +31,7 @@ import { renderZone } from "@/lib/zone";
 import { noteOpened } from "@/lib/access-log/note";
 import { PlacesCard } from "../../contacts/places-card";
 import { DocumentsCard } from "../../contacts/documents-card";
+import { putBackAction, restoreAction } from "../../contacts/history-actions";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { DealsBody } from "../../contacts/[contactId]/deals-card";
 import { SummaryBody } from "../../contacts/[contactId]/summary-card";
@@ -192,7 +193,14 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
       zone: zone.zone, tr, subjects,
-      author: { viewerId: access.userId, names: timeline.names, personaName: timeline.personaName, tr },
+      // F-115 part 1 (S-04), plan Task 5: a removed member's/relationship's own name is a CONTACT id,
+      // not the author-id space `timeline.names` covers — merged in here (never collides: a clerk
+      // id's own "user_…" shape and a plain contact uuid are never the same string), so a removed
+      // member reads by name exactly when any OTHER row on this page already would have had to know
+      // it anyway. The group's own kind is always exactly known here (`group.kind`), unlike the
+      // contact page's best-effort map (see the report's Deviations).
+      author: { viewerId: access.userId, names: { ...timeline.names, ...Object.fromEntries(names) }, personaName: timeline.personaName, tr },
+      changeFields: { customFieldLabels: {}, groupKinds: { [group.id]: group.kind } },
     }))
     : null;
   // D7, plan deviation 12: ONE line, only past the cap, at the top of the middle column, outside
@@ -213,6 +221,13 @@ export default async function GroupRecordPage({ params, searchParams }: {
         node: (
           <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr}
             customerLangs={Object.fromEntries((set?.people ?? []).flatMap((p) => (p.language ? [[p.contactId, p.language]] : [])))}
+            nowMs={now.getTime()}
+            // F-115 part 1 (S-04), plan Task 5: Put back/Restore (Owners, Staff, the agency); the
+            // Owner-only download link (Q5: narrower — never Staff).
+            canWriteHistory={manager}
+            putBackHistory={putBackAction.bind(null, accountId, locale)}
+            restoreHistory={restoreAction.bind(null, accountId, locale)}
+            historyDownloadHref={access.canManage ? `/dashboard/accounts/${accountId}/groups/${group.id}/history` : null}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("groupPage.timeline.empty") : null}

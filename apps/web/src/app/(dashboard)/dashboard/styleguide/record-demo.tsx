@@ -1,13 +1,17 @@
 "use client";
 
 import { CalendarCheck, ExternalLink } from "lucide-react";
+import type { ChangeGroup, ChangeRow } from "@bis/db";
 import { AuthorMark } from "@/components/record/author-mark";
 import { TimelineItem, TimelineItemSkeleton } from "@/components/record/timeline-item";
+import { ChangeItem, type ChangeAction } from "@/components/record/change-item";
 import { RecordCardView } from "@/components/record/record-card";
 import { RecordHeader } from "@/components/record/record-header";
 import { RecordLayout } from "@/components/record/record-layout";
 import { RecordSection } from "@/components/record/record-section";
 import { AiSummaryView } from "../accounts/[accountId]/contacts/[contactId]/ai-summary";
+import { changeRowView } from "@/lib/record/change-rows";
+import { makeTr } from "@/lib/record/copy";
 import { m, type MessageKey } from "@/lib/messages";
 
 /**
@@ -77,6 +81,34 @@ const MARKS = [
   { kind: "customer", label: m["provenance.customer"] },
   { kind: "import", label: m["provenance.import"] },
 ] as const;
+
+/** F-115 part 1 (S-04), plan Task 5: "who changed what", Put back and Restore. INERT (design M-9):
+ *  neither specimen's action reaches a server (`ActUndo`'s own precedent). */
+const CHANGE_INERT: ChangeAction = async () => ({ ok: false, message: "" });
+const CHANGE_ROW = (over: Partial<ChangeRow> = {}): ChangeRow => ({
+  id: 1, recordType: "contact", recordId: "ct_demo", contactId: "ct_demo", clientGroupId: null,
+  op: "update", field: "phone", before: "+19565550111", after: "+19565550112", xact: "1",
+  authorKind: "person", authorId: "user_dan", via: null, createdAt: "2026-10-18T14:42:00.000Z",
+  ...over,
+});
+const CHANGE_GROUP = (rows: ChangeRow[], over: Partial<ChangeGroup> = {}): ChangeGroup => ({
+  key: "sg:change", recordType: "contact", recordId: "ct_demo", authorKind: "person", authorId: "user_dan",
+  via: null, at: "2026-10-18T14:42:00.000Z", firstAt: "2026-10-18T14:42:00.000Z", steps: [rows], rows,
+  ...over,
+});
+const CHANGE_TR = makeTr("en");
+const CHANGE_CTX = { tr: CHANGE_TR, zone: "America/Chicago", names: { user_dan: PERSON }, customFieldLabels: {} };
+const CHANGED_GROUP = CHANGE_GROUP([CHANGE_ROW()]);
+const CHANGED_VIEW = changeRowView(CHANGED_GROUP, CHANGE_CTX);
+const REMOVED_GROUP = CHANGE_GROUP(
+  [CHANGE_ROW({ recordType: "equipment", op: "delete", field: null, before: { name: "Carrier AC" }, after: null })],
+  { recordType: "equipment" },
+);
+const REMOVED_VIEW = changeRowView(REMOVED_GROUP, CHANGE_CTX);
+const changeHead = (verb: string, detail: string | null) => ({
+  kind: "change", mark: { kind: "person" as const, label: PERSON }, verb, status: null, detail,
+  time: "Oct 18, 2026, 9:42 AM", dateTime: "2026-10-18T14:42:00.000Z",
+});
 
 export function RecordDemo() {
   return (
@@ -148,6 +180,15 @@ export function RecordDemo() {
           time="Oct 9, 2026, 4:12 PM" dateTime="2026-10-09T21:12:00Z" />
         <TimelineItemSkeleton rows={2} />
       </div>
+      {/* F-115 part 1 (S-04), plan Task 5: the change row — a changed field's Was/Now disclosure
+          and Put back, and a removal's Restore. */}
+      <div data-sg-change-item className="w-[420px] max-w-full rounded-xl border border-border bg-card glass px-4 py-2">
+        <ChangeItem head={changeHead(CHANGED_VIEW.verb, CHANGED_VIEW.stepsText)} group={CHANGED_GROUP} view={CHANGED_VIEW}
+          locale="en" canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
+        <ChangeItem head={changeHead(REMOVED_VIEW.verb, REMOVED_VIEW.stepsText)} group={REMOVED_GROUP} view={REMOVED_VIEW}
+          locale="en" canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
+      </div>
+      <span data-sg-change-item-end hidden />
     </div>
   );
 }

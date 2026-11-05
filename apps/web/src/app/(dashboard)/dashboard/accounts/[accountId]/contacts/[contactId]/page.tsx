@@ -34,6 +34,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { ContactDetailsBody, ContactTagsBody } from "./contact-fields-panel";
 import { RelationshipsCard } from "../relationships-card";
 import { ActivityTimeline } from "./activity-timeline";
+import { putBackAction, restoreAction } from "../history-actions";
 import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
@@ -235,6 +236,21 @@ export default async function ContactDetailPage({
   const subtitle = mainGroup
     ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
     : null;
+  // F-115 part 1 (S-04), plan Task 5: what a "change" row's verb/fields need beyond the names above
+  // (already shared) — the account's own custom field labels (fieldDefs, read below) and a BEST-EFFORT
+  // map for a removed tag's name and a removed member's group's own kind, both from data this page
+  // already loads for something else (never a new read): `tags.tags` only ever holds the contact's
+  // CURRENTLY attached tags, so a tag removed earlier than this page's own read usually falls back to
+  // its raw id; `places.groups` only ever holds groups the contact is CURRENTLY in, so a membership
+  // removed from a group this page has no other reason to know falls back to "household" (see the
+  // report's Deviations — a full fix threads the group's own kind onto `ChangeGroup` at the source).
+  const changeFields = {
+    customFieldLabels: Object.fromEntries(
+      (fieldDefs.status === "ready" ? fieldDefs.fieldDefs : []).map((d) => [d.field_key, d.name]),
+    ),
+    tagNames: Object.fromEntries((tags.status === "ready" ? tags.tags : []).map((t2) => [t2.id, t2.name])),
+    groupKinds: Object.fromEntries((places?.groups ?? []).map((g) => [g.id, g.kind])),
+  };
   // 1b: the rows are built here, in their own guard (C5), so a malformed row costs the timeline card.
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
@@ -244,6 +260,7 @@ export default async function ContactDetailPage({
       suggestionStages: timeline.suggestionStages,
       // item 8c (plan Task 6): the page's acts' facts, so each act's row knows whether its Undo is still safe.
       actFacts: timeline.actFacts,
+      changeFields,
     }))
     : null;
   // Text and Email link to the composer inside the timeline card; when that card failed there is no
@@ -365,6 +382,13 @@ export default async function ContactDetailPage({
             canMerge={seesWholeAccount(access)}
             contactName={name}
             nowMs={now.getTime()}
+            // F-115 part 1 (S-04), plan Task 5: Put back/Restore (Owners, Staff, the agency; never a
+            // Technician — the SAME role `canMerge` already reads). The Owner-only download link
+            // (Q5: Owners only, which is narrower than `canWriteHistory` — never Staff).
+            canWriteHistory={seesWholeAccount(access)}
+            putBackHistory={putBackAction.bind(null, accountId, locale)}
+            restoreHistory={restoreAction.bind(null, accountId, locale)}
+            historyDownloadHref={access.canManage ? `/dashboard/accounts/${accountId}/contacts/${contactId}/history` : null}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}

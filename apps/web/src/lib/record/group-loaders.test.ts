@@ -269,4 +269,14 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
       expect(opts.suggestions).not.toBe(true);
     }
   });
+
+  // F-115 part 1 (S-04), plan Task 5: the dormant switch is ON — the household's/business's own
+  // timeline asks for its "change" rows too (a removed member, a place's own edits).
+  it("the group timeline asks listTimelinePage for changes: true (mutation: pass changes: false -> FAILS)", async () => {
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: SOURCES });
+    listPeopleNamesMock.mockResolvedValueOnce({});
+    getVoiceProfileMock.mockResolvedValueOnce(null);
+    await loadGroupTimeline(db, "acct1", IDS);
+    expect(listTimelinePageMock.mock.lastCall![4]).toMatchObject({ changes: true });
+  });
 });
