@@ -108,6 +108,24 @@ describe("changeRowView: the disclosure's field lines and step count", () => {
     expect(view.fields[0]!.label).toBe("Phone");
   });
 
+  // Load-bearing for Put back's own correctness: a folded group that changed the SAME field twice
+  // (two writes, same author, within the collapse window) must show BOTH occurrences, each bound to
+  // its OWN row — deduping to one line would let "Put back" compare-and-swap against the WRONG
+  // before/after pair (the earlier write's), silently refusing or restoring the wrong value.
+  it("the same field changed twice in one folded group shows TWO lines, each its own row (mutation: dedupe fields by name -> FAILS, length 1)", () => {
+    const first = baseRow({ id: 1, field: "phone", before: "+19565550111", after: "+19565550112", xact: "1" });
+    const second = baseRow({ id: 2, field: "phone", before: "+19565550112", after: "+19565550113", xact: "2" });
+    const g = group([first, second], { steps: [[first], [second]] });
+    const view = changeRowView(g, ctx());
+    expect(view.fields).toHaveLength(2);
+    expect(view.fields[0]!.row).toBe(first);
+    expect(view.fields[1]!.row).toBe(second);
+    expect(view.fields[0]!.now).toBe("(956) 555-0112");
+    expect(view.fields[1]!.now).toBe("(956) 555-0113");
+    // The verb still names "phone" once (deduped there, since one field-label suffices for the sentence).
+    expect(view.verb).toBe("changed phone");
+  });
+
   it("no step count for a single write; a real count once the group folds more than one (mutation: show the count at steps.length > 0 -> FAILS)", () => {
     const one = group([baseRow({ field: "phone" })]);
     expect(changeRowView(one, ctx()).stepsText).toBeNull();
