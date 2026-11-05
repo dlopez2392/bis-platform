@@ -20,23 +20,28 @@ export type ChangeViewCtx = {
   /** The account's own zone, for a timestamp-shaped value (DESIGN.md: the record page's own date
    *  formatter, never the server's). */
   zone: string;
-  /** TWO id spaces, one map (a staff clerk id and a contact id never collide in practice — a clerk
-   *  id's own "user_…" shape vs. a plain uuid): `assigned_to`'s value is a STAFF id (the SAME map the
-   *  row's own author mark already uses, `author-mark.ts`'s `AuthorCtx.names`), missing "Someone on
-   *  the team" (`assign.someone`); a removed member's own name and a removed relationship's other
-   *  party are a CUSTOMER's contact id, missing "another record" (`timeline.mergeOtherHidden`) —
-   *  never the staff fallback, which would call a customer a team member. */
+  /** F-115 PR E fix (review I4): ONE shared id -> name map, built by `@bis/db`'s `readChangeNames`
+   *  (a bounded, account-scoped read for every id this page's own change rows reference) MERGED with
+   *  the SAME staff-name map the row's own author mark already uses (`author-mark.ts`'s
+   *  `AuthorCtx.names`) — a staff clerk id, a contact id, a tag id, an equipment id, a stage id and a
+   *  pipeline id never collide in practice (real ids, vanishingly unlikely to coincide). `assigned_to`
+   *  falls back to "Someone on the team" (`assign.someone`) when missing; every CUSTOMER-facing id
+   *  (a removed member, a related contact, a removed tag, a replaced unit, a deal's stage/pipeline)
+   *  falls back to "another record" (`timeline.mergeOtherHidden`) — never the staff fallback, which
+   *  would call a customer, a tag or a unit a team member. */
   names: Readonly<Record<string, string>>;
   /** The account's custom field definitions, `field_key` -> its own label; missing: the raw key. */
   customFieldLabels: Readonly<Record<string, string>>;
-  /** A removed tag's own name, by `tag_id` (`ChangeRow.recordId` on a `contact_tag` row); missing:
-   *  the raw id — the account's tag VOCABULARY is not re-read here (see the report). */
-  tagNames?: Readonly<Record<string, string>>;
-  /** A `client_group`'s own kind, by id, for "removed from the household" vs "…business"; missing
-   *  (most often: a membership removed from a group this page has no other reason to have read)
-   *  defaults to "household" — flagged in the report, not guessed silently past this comment. */
+  /** A `client_group`'s own kind, by id, for "removed from the household" vs "…business" (also read
+   *  by `readChangeNames`); missing defaults to "household", flagged in the report. */
   groupKinds?: Readonly<Record<string, "household" | "business">>;
 };
+
+/** A customer-facing id (never a staff one): `ctx.names[id]`, else the kit's own "a contact this
+ *  reader can't currently name" word (never `assign.someone`, which is for STAFF). */
+function customerName(id: string | null | undefined, ctx: ChangeViewCtx): string {
+  return (id && ctx.names[id]) || ctx.tr.text("timeline.mergeOtherHidden");
+}
 
 /** One field a "changed" row's disclosure shows: its own row (so `canPutBack`/Put back act on THIS
  *  write, never a value merged across several), its sentence-case label, and the formatted Was/Now. */
@@ -73,11 +78,55 @@ const FIELD_KEYS: Readonly<Record<string, { verbKey: MessageKey; labelKey: Messa
   name: { verbKey: "history.field.name", labelKey: "history.label.name" },
   stage_id: { verbKey: "history.field.stage", labelKey: "history.label.stage" },
   monetary_value: { verbKey: "history.field.value", labelKey: "history.label.value" },
+  // Owner ruling R2 (2026-11-05): a label for EVERY remaining audited Q1 column.
+  kind: { verbKey: "history.field.kind", labelKey: "history.label.kind" },
+  billing_address: { verbKey: "history.field.billing_address", labelKey: "history.label.billing_address" },
+  role: { verbKey: "history.field.role", labelKey: "history.label.role" },
+  is_primary: { verbKey: "history.field.is_primary", labelKey: "history.label.is_primary" },
+  is_billing: { verbKey: "history.field.is_billing", labelKey: "history.label.is_billing" },
+  is_primary_contact: { verbKey: "history.field.is_primary_contact", labelKey: "history.label.is_primary_contact" },
+  address: { verbKey: "history.field.address", labelKey: "history.label.address" },
+  landmark: { verbKey: "history.field.landmark", labelKey: "history.label.landmark" },
+  directions: { verbKey: "history.field.directions", labelKey: "history.label.directions" },
+  city: { verbKey: "history.field.city", labelKey: "history.label.city" },
+  region: { verbKey: "history.field.region", labelKey: "history.label.region" },
+  postal_code: { verbKey: "history.field.postal_code", labelKey: "history.label.postal_code" },
+  country: { verbKey: "history.field.country", labelKey: "history.label.country" },
+  archived_at: { verbKey: "history.field.archived", labelKey: "history.label.archived" },
+  // place's own owner columns: ONE shared concept, "who has it" (a contact's id or a group's id).
+  contact_id: { verbKey: "history.field.whoHasIt", labelKey: "history.label.whoHasIt" },
+  client_group_id: { verbKey: "history.field.whoHasIt", labelKey: "history.label.whoHasIt" },
+  make: { verbKey: "history.field.make", labelKey: "history.label.make" },
+  model: { verbKey: "history.field.model", labelKey: "history.label.model" },
+  serial: { verbKey: "history.field.serial", labelKey: "history.label.serial" },
+  notes: { verbKey: "history.field.notes", labelKey: "history.label.notes" },
+  installed_on: { verbKey: "history.field.installed_on", labelKey: "history.label.installed_on" },
+  warranty_until: { verbKey: "history.field.warranty_until", labelKey: "history.label.warranty_until" },
+  replaces_id: { verbKey: "history.field.replacesUnit", labelKey: "history.label.replacesUnit" },
+  pipeline_id: { verbKey: "history.field.pipeline", labelKey: "history.label.pipeline" },
+  status: { verbKey: "history.field.status", labelKey: "history.label.status" },
+  label_key: { verbKey: "history.field.relationship", labelKey: "history.label.relationship" },
+  custom_label: { verbKey: "history.field.relationshipLabel", labelKey: "history.label.relationshipLabel" },
+  contact_form: { verbKey: "history.field.wording", labelKey: "history.label.wording" },
+  related_form: { verbKey: "history.field.wording", labelKey: "history.label.wording" },
+  contact_can_pick_up: { verbKey: "history.field.canPickUp", labelKey: "history.label.canPickUp" },
+  related_can_pick_up: { verbKey: "history.field.canPickUp", labelKey: "history.label.canPickUp" },
+  contact_is_emergency: { verbKey: "history.field.isEmergency", labelKey: "history.label.isEmergency" },
+  related_is_emergency: { verbKey: "history.field.isEmergency", labelKey: "history.label.isEmergency" },
+  // `place.label` IS the place's own name — shares the generic "name" key (same concept as
+  // client_group.name/opportunity.name), not a new one.
+  label: { verbKey: "history.field.name", labelKey: "history.label.name" },
+  // `related_contact_id` reads via `fieldKeys`'s own default below when it needs ONE: an update to
+  // WHO a relationship points at is still "the relationship", so it shares `label_key`'s own key —
+  // see `fieldKeys`'s special-case just below, which routes it there explicitly.
 };
 const OTHER_KEYS = { verbKey: "history.field.other", labelKey: "history.label.other" } as const;
 
 function fieldKeys(field: string): { verbKey: MessageKey; labelKey: MessageKey } {
   if (field.startsWith("custom.")) return { verbKey: "history.field.custom", labelKey: "history.label.custom" };
+  // Who a relationship points at is still "the relationship" changing, the same concept as its own
+  // label_key — shares that key rather than a fourth one.
+  if (field === "related_contact_id") return FIELD_KEYS.label_key!;
   return FIELD_KEYS[field] ?? OTHER_KEYS;
 }
 
@@ -103,11 +152,25 @@ function fieldDetailLabel(field: string, ctx: ChangeViewCtx): string {
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T/;
 const ISO_DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+/** F-115 PR E fix (review I6): fields whose VALUE is a customer-facing id — resolved via the SAME
+ *  `readChangeNames` map `ctx.names` already carries, falling back to "another record"
+ *  (`timeline.mergeOtherHidden`), never the staff fallback. */
+const CUSTOMER_ID_FIELDS: ReadonlySet<string> = new Set([
+  "related_contact_id", "contact_id", "client_group_id", "replaces_id", "stage_id", "pipeline_id",
+]);
+
+/** F-115 PR E fix (review I6/R2): a language VALUE reads as a word, never the raw "en"/"es" code —
+ *  reusing the calendar cancel dialog's own existing "English"/"Spanish" words rather than a new key. */
+const LANGUAGE_WORDS: Readonly<Record<string, MessageKey>> = {
+  en: "calendar.cancelDialog.languageEnglish", es: "calendar.cancelDialog.languageSpanish",
+};
+
 /**
- * One value, blank/boolean/phone/assigned-person/timestamp/plain, per plan Task 5's own Values list.
- * A DATE column (`installed_on`, `warranty_until`) has no zone of its own — Postgres's `to_jsonb`
- * renders it "YYYY-MM-DD" with no time — so it reads in UTC, never the account's zone, which would
- * roll it back a calendar day west of Greenwich for no reason the value itself carries.
+ * One value, blank/boolean/phone/assigned-person/customer-id/language/timestamp/plain, per plan
+ * Task 5's own Values list (extended by review I6). A DATE column (`installed_on`, `warranty_until`)
+ * has no zone of its own — Postgres's `to_jsonb` renders it "YYYY-MM-DD" with no time — so it reads
+ * in UTC, never the account's zone, which would roll it back a calendar day west of Greenwich for no
+ * reason the value itself carries.
  */
 export function formatChangeValue(field: string, value: unknown, ctx: ChangeViewCtx): string {
   if (value === null || value === undefined || value === "") return ctx.tr.text("history.blank");
@@ -117,6 +180,8 @@ export function formatChangeValue(field: string, value: unknown, ctx: ChangeView
     const id = String(value);
     return ctx.names[id] ?? ctx.tr.text("assign.someone");
   }
+  if (field === "language" && typeof value === "string" && LANGUAGE_WORDS[value]) return ctx.tr.text(LANGUAGE_WORDS[value]);
+  if (CUSTOMER_ID_FIELDS.has(field) && typeof value === "string") return customerName(value, ctx);
   if (typeof value === "string" && ISO_DATETIME.test(value)) {
     try { return formatDateTimeInZone(value, ctx.zone, ctx.tr.locale); } catch { /* fall through to the raw string */ }
   }
@@ -162,7 +227,7 @@ function deleteVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): { v
       return { verb: tr.text("history.verb.removedPlace", { name }), name };
     }
     case "contact_tag": {
-      const name = ctx.tagNames?.[row.recordId] ?? row.recordId;
+      const name = ctx.names[row.recordId] ?? row.recordId;
       return { verb: tr.text("history.verb.removedTag", { name }), name };
     }
     // `related_contact_id`/`contactId` here name a CUSTOMER, never a staff member — "Someone on the
@@ -171,12 +236,11 @@ function deleteVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): { v
     // cannot currently name", already used for a merge's own hidden other side; reused rather than a
     // new key, per the brief's "add ONLY the Copy table's keys."
     case "contact_relationship": {
-      const relatedId = stringField(row.before, "related_contact_id");
-      const name = (relatedId && ctx.names[relatedId]) || tr.text("timeline.mergeOtherHidden");
+      const name = customerName(stringField(row.before, "related_contact_id"), ctx);
       return { verb: tr.text("history.verb.removedRelationship", { name }), name };
     }
     case "client_group_member": {
-      const name = (row.contactId && ctx.names[row.contactId]) || tr.text("timeline.mergeOtherHidden");
+      const name = customerName(row.contactId, ctx);
       const kind = (row.clientGroupId && ctx.groupKinds?.[row.clientGroupId]) ?? "household";
       const key = kind === "business" ? "history.verb.removedMemberBusiness" : "history.verb.removedMember";
       return { verb: tr.text(key, { name }), name };
@@ -184,6 +248,53 @@ function deleteVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): { v
     default:
       return { verb: tr.text("history.verb.changed", { fields: "" }), name: null };
   }
+}
+
+/**
+ * F-115 PR E fix (review I7): a per-type "added" verb, naming the new thing exactly as its own
+ * removal verb does — never the generic "added this record" except for `contact`/`client_group`
+ * (there is nothing else to call "this record" on its own page) and `opportunity` (dropped from the
+ * timeline entirely before this is ever reached — see `isDuplicateOpportunityInsert` below).
+ */
+function insertVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): string {
+  const { tr } = ctx;
+  switch (group.recordType) {
+    case "equipment": {
+      const name = stringField(row.after, "name") ?? tr.text("history.field.other");
+      return tr.text("history.verb.addedEquipment", { name });
+    }
+    case "place": {
+      const name = stringField(row.after, "label") ?? tr.text("history.field.other");
+      return tr.text("history.verb.addedPlace", { name });
+    }
+    case "contact_tag": {
+      const name = ctx.names[row.recordId] ?? row.recordId;
+      return tr.text("history.verb.addedTag", { name });
+    }
+    case "contact_relationship": {
+      const name = customerName(stringField(row.after, "related_contact_id"), ctx);
+      return tr.text("history.verb.addedRelationship", { name });
+    }
+    case "client_group_member": {
+      const name = customerName(row.contactId, ctx);
+      const kind = (row.clientGroupId && ctx.groupKinds?.[row.clientGroupId]) ?? "household";
+      return tr.text(kind === "business" ? "history.verb.addedMemberBusiness" : "history.verb.addedMember", { name });
+    }
+    default:
+      return tr.text("history.verb.added");
+  }
+}
+
+/**
+ * F-115 PR E fix (review I7): the "deals" timeline source (`record.ts`'s own unconditional,
+ * always-read listing) already shows EVERY opportunity, by name, at its own `created_at` — a fresh
+ * deal's own "changes" entry (a pure insert, nothing folded into it) would say the SAME creation a
+ * second time. An opportunity later EDITED within the fold window (insert + update together) is kept:
+ * the edit itself is not shown anywhere else. Exported so `timeline-rows.ts` can drop the entry
+ * before it is ever built into a row.
+ */
+export function isDuplicateOpportunityInsert(group: ChangeGroup): boolean {
+  return group.recordType === "opportunity" && group.rows.every((r) => r.op === "insert");
 }
 
 /**
@@ -203,7 +314,8 @@ export function changeRowView(group: ChangeGroup, ctx: ChangeViewCtx): ChangeRow
   }
   const updateRows = rows.filter((r) => r.op === "update");
   if (updateRows.length === 0) {
-    return { verb: ctx.tr.text("history.verb.added"), fields: [], stepsText: null, removalName: null };
+    const insertRow = rows.find((r) => r.op === "insert") ?? rows[0]!;
+    return { verb: insertVerb(group, insertRow, ctx), fields: [], stepsText: null, removalName: null };
   }
   const fields = updateRows.map((row) => fieldLine(row, ctx));
   const seen = new Set<string>();

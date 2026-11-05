@@ -16,6 +16,11 @@ const groupNextUpMock = vi.fn();
 const listTimelinePageMock = vi.fn();
 const listPeopleNamesMock = vi.fn();
 const getVoiceProfileMock = vi.fn();
+// F-115 PR E fix (review I4): the group loader's own ONE bounded names read (the contact page's
+// twin); default: nothing to resolve, same {} every pre-existing test here already expected.
+const readChangeNamesMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ names: {}, groupKinds: {} }));
+const EMPTY_REFS = { contactIds: new Set(), groupIds: new Set(), tagIds: new Set(), equipmentIds: new Set(), stageIds: new Set(), pipelineIds: new Set() };
+const changeNameRefsMock = vi.fn<(...a: unknown[]) => unknown>(() => EMPTY_REFS);
 vi.mock("@bis/db", () => ({
   groupActivityMembers: (...a: unknown[]) => groupActivityMembersMock(...a),
   groupFacts: (...a: unknown[]) => groupFactsMock(...a),
@@ -28,6 +33,8 @@ vi.mock("@bis/db", () => ({
   listOpenDealsFor: (...a: unknown[]) => listOpenDealsForMock(...a),
   listGroupPlaces: (...a: unknown[]) => listGroupPlacesMock(...a),
   getContact: (...a: unknown[]) => getContactMock(...a),
+  changeNameRefs: (...a: unknown[]) => changeNameRefsMock(...a),
+  readChangeNames: (...a: unknown[]) => readChangeNamesMock(...a),
 }));
 const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
 const ledgerDbMock = vi.hoisted(() => vi.fn(() => LEDGER));
@@ -226,7 +233,7 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     listTimelinePageMock.mockResolvedValueOnce(page);
     listPeopleNamesMock.mockResolvedValueOnce({ user_dan: "Dan López" });
     getVoiceProfileMock.mockResolvedValueOnce({ persona_name: "Sofía" });
-    expect(await loadGroupTimeline(db, "acct1", IDS, before)).toEqual({ status: "ready", page, names: { user_dan: "Dan López" }, personaName: "Sofía" });
+    expect(await loadGroupTimeline(db, "acct1", IDS, before)).toEqual({ status: "ready", page, names: { user_dan: "Dan López" }, personaName: "Sofía", changeGroupKinds: {} });
     expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, before, expect.objectContaining({ onError: expect.any(Function) }));
     expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
 
@@ -245,7 +252,7 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     listPeopleNamesMock.mockResolvedValueOnce({});
     getVoiceProfileMock.mockResolvedValueOnce(null);
     expect(await loadGroupTimeline(db, "acct1", [])).toEqual({
-      status: "ready", page: { items: [], older: null, failed: [], sources: [] }, names: {}, personaName: null,
+      status: "ready", page: { items: [], older: null, failed: [], sources: [] }, names: {}, personaName: null, changeGroupKinds: {},
     });
   });
 
@@ -278,5 +285,39 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     getVoiceProfileMock.mockResolvedValueOnce(null);
     await loadGroupTimeline(db, "acct1", IDS);
     expect(listTimelinePageMock.mock.lastCall![4]).toMatchObject({ changes: true });
+  });
+
+  // F-115 PR E fix (review I4): the group loader's own ONE bounded read, wired to the page's own
+  // "change" groups, merged into `names` (never a second, separate map) and surfaced as its own
+  // `changeGroupKinds` (distinct from the page's `group.kind`, which the PAGE merges in itself).
+  it("reads change names for exactly the page's own \"change\" groups, and merges the result into `names` (mutation: pass [] instead of the real groups -> FAILS)", async () => {
+    const entry = {
+      kind: "change", id: "ch1", at: "2026-10-01T00:00:00Z", contactId: "c-ana",
+      group: {
+        key: "client_group_member:c-ana:1", recordType: "client_group_member", recordId: "m1", authorKind: "person",
+        authorId: "user_dan", via: null, at: "2026-10-01T00:00:00Z", firstAt: "2026-10-01T00:00:00Z",
+        steps: [[{ id: 1, recordType: "client_group_member", recordId: "m1", contactId: "c-removed", clientGroupId: "g9",
+          op: "delete", field: null, before: {}, after: null, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: "2026-10-01T00:00:00Z" }]],
+        rows: [{ id: 1, recordType: "client_group_member", recordId: "m1", contactId: "c-removed", clientGroupId: "g9",
+          op: "delete", field: null, before: {}, after: null, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: "2026-10-01T00:00:00Z" }],
+      },
+    };
+    listTimelinePageMock.mockResolvedValueOnce({ items: [entry], older: null, failed: [], sources: SOURCES });
+    listPeopleNamesMock.mockResolvedValueOnce({ user_dan: "Dan López" });
+    getVoiceProfileMock.mockResolvedValueOnce(null);
+    readChangeNamesMock.mockResolvedValueOnce({ names: { "c-removed": "Rosa Díaz" }, groupKinds: { g9: "business" } });
+    const load = await loadGroupTimeline(db, "acct1", IDS);
+    expect(changeNameRefsMock).toHaveBeenCalledWith([entry.group]);
+    expect(load).toMatchObject({ status: "ready", names: { user_dan: "Dan López", "c-removed": "Rosa Díaz" }, changeGroupKinds: { g9: "business" } });
+  });
+
+  it("a failed change-names read costs only those names, never the card (mutation: rethrow -> FAILS, status becomes error)", async () => {
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: SOURCES });
+    listPeopleNamesMock.mockResolvedValueOnce({});
+    getVoiceProfileMock.mockResolvedValueOnce(null);
+    readChangeNamesMock.mockRejectedValueOnce(new Error("names down"));
+    const load = await loadGroupTimeline(db, "acct1", IDS);
+    expect(load).toMatchObject({ status: "ready", changeGroupKinds: {} });
+    expect(logged()).toEqual(expect.arrayContaining([expect.stringMatching(/^record page: activity change names read failed for account acct1: /)]));
   });
 });

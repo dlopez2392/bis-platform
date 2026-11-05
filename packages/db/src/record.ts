@@ -585,9 +585,21 @@ export async function listTimelinePage(
       opts.groupId
         ? listChangeRowsNoPartialWrite(db, accountId, { groupId: opts.groupId }, changeCursor, page.limit, page.limit)
         : Promise.resolve({ rows: [] as ChangeRow[], hasMore: false }),
-    ]).then(([byContact, byGroup]) => ({
-      ok: true as const, rows: [...byContact.rows, ...byGroup.rows], hasMore: byContact.hasMore || byGroup.hasMore,
-    })).catch((error: unknown) => ({ ok: false as const, error }))
+    ]).then(([byContact, byGroup]) => {
+      // F-115 PR E fix (review I3): a `client_group_member` row's own `contact_id` AND
+      // `client_group_id` are both set (0112's capture), so the GROUP page's byContact read (every
+      // member's own contact id) and its byGroup read (the group's own id) both return the SAME row
+      // — deduped here by its own `id` (never by reference: the two reads are two separate
+      // PostgREST responses, never the same object) before `groupChanges` ever sees it, or every
+      // membership edit shows twice (two identical Was/Now lines, Put back bound twice).
+      const seen = new Set<number>();
+      const rows = [...byContact.rows, ...byGroup.rows].filter((r) => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
+      });
+      return { ok: true as const, rows, hasMore: byContact.hasMore || byGroup.hasMore };
+    }).catch((error: unknown) => ({ ok: false as const, error }))
     : null;
   const results = await Promise.all([
     settle("notes", async () => (((await listNotes(db, accountId, who, page)) ?? []) as (TimelineNote & { contact_id: string })[])

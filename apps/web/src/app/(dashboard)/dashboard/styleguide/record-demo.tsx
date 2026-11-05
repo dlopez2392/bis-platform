@@ -184,9 +184,9 @@ export function RecordDemo() {
           and Put back, and a removal's Restore. */}
       <div data-sg-change-item className="w-[420px] max-w-full rounded-xl border border-border bg-card glass px-4 py-2">
         <ChangeItem head={changeHead(CHANGED_VIEW.verb, CHANGED_VIEW.stepsText)} group={CHANGED_GROUP} view={CHANGED_VIEW}
-          locale="en" canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
+          tr={CHANGE_TR} canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
         <ChangeItem head={changeHead(REMOVED_VIEW.verb, REMOVED_VIEW.stepsText)} group={REMOVED_GROUP} view={REMOVED_VIEW}
-          locale="en" canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
+          tr={CHANGE_TR} canWrite nowMs={Date.parse("2026-10-18T14:42:00.000Z")} putBack={CHANGE_INERT} restore={CHANGE_INERT} />
       </div>
       <span data-sg-change-item-end hidden />
     </div>

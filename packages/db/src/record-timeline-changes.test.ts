@@ -37,13 +37,20 @@ function emptyChain(): unknown {
   return proxy;
 }
 
-function recordChangesChain(rows: readonly RawRow[], filters: { eq: [string, unknown][]; in: [string, unknown[]][]; or: string | null }): unknown {
+type RecordChangesFilters = { eq: [string, unknown][]; in: [string, unknown[]][]; or: string | null; lt: [string, unknown] | null };
+
+function recordChangesChain(rows: readonly RawRow[], filters: RecordChangesFilters): unknown {
   const handler: ProxyHandler<object> = {
     get(_t, prop) {
       if (prop === "select") return () => recordChangesChain(rows, filters);
       if (prop === "eq") return (c: string, v: unknown) => recordChangesChain(rows, { ...filters, eq: [...filters.eq, [c, v]] });
       if (prop === "in") return (c: string, v: unknown[]) => recordChangesChain(rows, { ...filters, in: [...filters.in, [c, v]] });
       if (prop === "or") return (s: string) => recordChangesChain(rows, { ...filters, or: s });
+      // F-115 PR E fix (review I1): `listChangeRows` now calls plain `.lt("id", n)` (never paired with
+      // created_at) once it has a real row's id to bound by — `record-changes.ts`'s own doc comment on
+      // `listChangeRows` explains why. This fake must apply it, numerically (never the old string-cast
+      // the `.or` branch's regex used): a lexical "9" < "10" compare would silently pass the wrong rows.
+      if (prop === "lt") return (c: string, v: unknown) => recordChangesChain(rows, { ...filters, lt: [c, v] });
       if (prop === "order") return () => recordChangesChain(rows, filters);
       if (prop === "limit") {
         return (n: number) => {
@@ -56,8 +63,15 @@ function recordChangesChain(rows: readonly RawRow[], filters: { eq: [string, unk
             const [, ltV, eqV, idStr] = m as unknown as [string, string, string, string];
             const idBound = Number(idStr);
             result = result.filter((r) => r.created_at < ltV || (r.created_at === eqV && r.id < idBound));
-          } else if (filters.eq.some(([c]) => c === "created_at")) {
-            // not used by this reader; kept out on purpose (the production code only ever uses .or or nothing)
+          }
+          if (filters.lt) {
+            const [c, v] = filters.lt;
+            result = result.filter((r) => {
+              const field = (r as unknown as Record<string, unknown>)[c];
+              return typeof field === "number" && typeof v === "number" ? field < v
+                : typeof field === "string" && typeof v === "string" ? field < v
+                : false;
+            });
           }
           result = [...result].sort((a, b) => (a.created_at === b.created_at ? b.id - a.id : (a.created_at < b.created_at ? 1 : -1)));
           return Promise.resolve({ data: result.slice(0, n), error: null });
@@ -71,7 +85,7 @@ function recordChangesChain(rows: readonly RawRow[], filters: { eq: [string, unk
 
 function fakeDb(rows: readonly RawRow[]): SupabaseClient {
   return {
-    from: (table: string) => (table === "record_changes" ? recordChangesChain(rows, { eq: [], in: [], or: null }) : emptyChain()),
+    from: (table: string) => (table === "record_changes" ? recordChangesChain(rows, { eq: [], in: [], or: null, lt: null }) : emptyChain()),
   } as unknown as SupabaseClient;
 }
 
@@ -124,6 +138,110 @@ describe("listTimelinePage({ changes: true }): a write split across a page bound
     if (entry.kind !== "change") throw new Error("unreachable");
     expect(entry.group.rows.map((r) => r.id)).toEqual([1]);
     expect(page2.older).toBeNull(); // write B was the last of the scope
+  });
+});
+
+/**
+ * F-115 PR E fix (review I1): a FOLDED group (several WRITES, not one) that is the LAST item shown on
+ * a page builds its cursor from the group's `at` (its NEWEST step) paired with the group's MINIMUM row
+ * id (its OLDEST step) — two different rows once a group spans more than one write. The bug: the next
+ * page's `created_at < at` half of the old filter re-admitted the group's own OLDER step on its own,
+ * because that step's `created_at` genuinely IS less than the group's newest instant. `id < minId`
+ * (review I1's fix) has no such mismatch, because every row of the already-shown group has `id >=
+ * minId` by construction.
+ */
+describe("listTimelinePage({ changes: true }): a folded group as the last item never repeats on the next page (review I1)", () => {
+  const T1 = "2026-11-02T00:00:00.000000+00:00"; // GroupW: oldest, standalone, unread until page 2
+  const T2 = "2026-11-02T00:05:00.000000+00:00"; // GroupY step 1 (5 min before T3: folds with it)
+  const T3 = "2026-11-02T00:10:00.000000+00:00"; // GroupY step 2 (its newest -> the group's own `at`)
+  const T5 = "2026-11-02T00:20:00.000000+00:00"; // GroupX: newest overall, standalone
+  const rows: RawRow[] = [
+    row({ id: 5, record_id: "cx", contact_id: "cx", author_id: "user_x", created_at: T5, xact: 50, field: "source" }),
+    row({ id: 3, record_id: "cy", contact_id: "cy", author_id: "user_y", created_at: T3, xact: 30, field: "last_name" }),
+    row({ id: 2, record_id: "cy", contact_id: "cy", author_id: "user_y", created_at: T2, xact: 20, field: "first_name" }),
+    row({ id: 1, record_id: "cw", contact_id: "cw", author_id: "user_w", created_at: T1, xact: 10, field: "email" }),
+  ];
+  const CONTACTS = ["cx", "cy", "cw"];
+
+  it("page 1 shows GroupX then the folded GroupY (both its steps); page 2 shows ONLY GroupW, never GroupY's rows again (mutation: pair the cursor's id with the group's own `at` instead of its oldest row's own time -> FAILS, id 2 or 3 reappear)", async () => {
+    const db = fakeDb(rows);
+    const page1 = await listTimelinePage(db, "a1", CONTACTS, undefined, { changes: true, limit: 2 });
+    expect(page1.failed).toEqual([]);
+    expect(page1.items).toHaveLength(2);
+    const [first, second] = page1.items;
+    if (first!.kind !== "change" || second!.kind !== "change") throw new Error("unreachable");
+    expect(first!.group.rows.map((r) => r.id)).toEqual([5]);
+    expect(second!.group.rows.map((r) => r.id).sort((a, b) => a - b)).toEqual([2, 3]); // GroupY, both steps
+    expect(second!.group.steps).toHaveLength(2);
+    expect(page1.older).not.toBeNull();
+
+    const page2 = await listTimelinePage(db, "a1", CONTACTS, page1.older!, { changes: true, limit: 2 });
+    expect(page2.failed).toEqual([]);
+    const allPage2Ids = page2.items.flatMap((e) => (e.kind === "change" ? e.group.rows.map((r) => r.id) : []));
+    expect(allPage2Ids).toEqual([1]); // GroupW only — ids 2 and 3 never reappear
+    expect(page2.older).toBeNull();
+  });
+});
+
+/**
+ * F-115 PR E fix (review I1): the inverse risk — a page's own row-level read quota can land BETWEEN
+ * two steps that groupChanges would otherwise fold together (one step read, kept off `items` by the
+ * overall limit; its partner not read at all yet). The fix must not LOSE the unread step either: every
+ * row appears in the combined output of every page, exactly once, whether or not the two steps end up
+ * folded into one row together.
+ */
+describe("listTimelinePage({ changes: true }): a page boundary landing between a group's own two steps loses nothing (review I1)", () => {
+  const T1 = "2026-11-02T00:00:00.000000+00:00"; // GroupY step 1 (9 min before T2: folds with it)
+  const T2 = "2026-11-02T00:09:00.000000+00:00"; // GroupY step 2
+  const T3 = "2026-11-02T00:20:00.000000+00:00"; // GroupZ: newest, standalone — the only thing limit:1 shows on page 1
+  const rows: RawRow[] = [
+    row({ id: 3, record_id: "cz", contact_id: "cz", author_id: "user_z", created_at: T3, xact: 30, field: "source" }),
+    row({ id: 2, record_id: "cy", contact_id: "cy", author_id: "user_y", created_at: T2, xact: 20, field: "email" }),
+    row({ id: 1, record_id: "cy", contact_id: "cy", author_id: "user_y", created_at: T1, xact: 10, field: "phone" }),
+  ];
+  const CONTACTS = ["cz", "cy"];
+
+  it("neither step is lost nor duplicated across the two pages (mutation: drop the id<n read extension that recovers id 2 -> FAILS, id 2 never appears anywhere)", async () => {
+    const db = fakeDb(rows);
+    const page1 = await listTimelinePage(db, "a1", CONTACTS, undefined, { changes: true, limit: 1 });
+    expect(page1.items).toHaveLength(1);
+    const first = page1.items[0]!;
+    if (first.kind !== "change") throw new Error("unreachable");
+    expect(first.group.rows.map((r) => r.id)).toEqual([3]); // GroupZ only; GroupY's lone-read step is cut by the limit
+    expect(page1.older).not.toBeNull();
+
+    const page2 = await listTimelinePage(db, "a1", CONTACTS, page1.older!, { changes: true, limit: 1 });
+    expect(page2.failed).toEqual([]);
+    const page2Ids = page2.items.flatMap((e) => (e.kind === "change" ? e.group.rows.map((r) => r.id) : []));
+    expect(page2Ids.sort((a, b) => a - b)).toEqual([1, 2]); // both of GroupY's own steps, each exactly once
+    expect(page2.older).toBeNull();
+  });
+});
+
+/**
+ * F-115 PR E fix (review I3): the group page reads `record_changes` twice — once scoped to every
+ * member's own `contact_id` (`loadGroupTimeline`'s own id set), once scoped to the group's own
+ * `client_group_id` — and a `client_group_member` row carries BOTH columns (0112's capture), so a
+ * membership edit comes back in BOTH reads and reached `groupChanges` twice, doubling its Was/Now
+ * line and binding "Put back" to the same row from two different buttons.
+ */
+describe("listTimelinePage({ changes: true, groupId }): a client_group_member row is never read twice (review I3)", () => {
+  it("one row scoped to BOTH the member's contact id and the group's own id appears exactly once (mutation: drop the dedup before groupChanges -> FAILS, group.rows has it twice)", async () => {
+    const T = "2026-11-02T00:00:00.000000+00:00";
+    const rows: RawRow[] = [
+      row({
+        id: 9, record_type: "client_group_member", record_id: "m1", contact_id: "member-1", client_group_id: "group-1",
+        author_id: "user_1", created_at: T, xact: 90, field: "role",
+      }),
+    ];
+    const db = fakeDb(rows);
+    const page = await listTimelinePage(db, "a1", ["member-1"], undefined, { changes: true, limit: 5, groupId: "group-1" });
+    expect(page.failed).toEqual([]);
+    expect(page.items).toHaveLength(1);
+    const entry = page.items[0]!;
+    if (entry.kind !== "change") throw new Error("unreachable");
+    expect(entry.group.rows).toHaveLength(1);
+    expect(entry.group.rows[0]!.id).toBe(9);
   });
 });
 

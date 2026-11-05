@@ -46,9 +46,56 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
     expect(changeRowView(g, ctx()).verb).toBe("changed gate");
   });
 
-  it("an insert reads 'added this record' (mutation: read the first row's field instead -> FAILS)", () => {
+  it("an insert reads 'added this record' for a contact (mutation: read the first row's field instead -> FAILS)", () => {
     const row = baseRow({ op: "insert", field: null, before: null, after: { first_name: "Ana" } });
     expect(changeRowView(group([row]), ctx()).verb).toBe("added this record");
+  });
+
+  // F-115 PR E fix (review I7): a per-type "added" verb, naming the new thing — never the generic
+  // "added this record" for a type that has its own name to give.
+  it("a per-type added verb for equipment, place, a tag, a relationship and a household/business member (mutation: always use history.verb.added -> FAILS)", () => {
+    const equipmentRow = baseRow({ recordType: "equipment", op: "insert", field: null, before: null, after: { name: "Carrier AC" } });
+    expect(changeRowView(group([equipmentRow], { recordType: "equipment" }), ctx()).verb).toBe("added the unit Carrier AC");
+
+    const placeRow = baseRow({ recordType: "place", op: "insert", field: null, before: null, after: { label: "Back yard" } });
+    expect(changeRowView(group([placeRow], { recordType: "place" }), ctx()).verb).toBe("added the place Back yard");
+
+    const tagRow = baseRow({ recordType: "contact_tag", recordId: "tag-7", op: "insert", field: null, before: null, after: { contact_id: "c1", tag_id: "tag-7" } });
+    expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx({ names: { "tag-7": "VIP" } })).verb).toBe("added the tag VIP");
+
+    const relRow = baseRow({ recordType: "contact_relationship", op: "insert", field: null, before: null, after: { related_contact_id: "c9" } });
+    expect(changeRowView(group([relRow], { recordType: "contact_relationship" }), ctx({ names: { c9: "Luis García" } })).verb)
+      .toBe("added the link to Luis García");
+
+    const memberRow = baseRow({
+      recordType: "client_group_member", contactId: "c2", clientGroupId: "g1",
+      op: "insert", field: null, before: null, after: { contact_id: "c2", client_group_id: "g1" },
+    });
+    expect(changeRowView(group([memberRow], { recordType: "client_group_member" }), ctx({ names: { c2: "Ana García" } })).verb)
+      .toBe("added Ana García to the household");
+    expect(changeRowView(group([memberRow], { recordType: "client_group_member" }), ctx({ names: { c2: "Ana García" }, groupKinds: { g1: "business" } })).verb)
+      .toBe("added Ana García to the business");
+  });
+
+  // F-115 PR E fix (review I7): the "deals" source already shows a fresh deal's own creation, by
+  // name — a pure-insert "changes" entry for the SAME event would say it twice.
+  it("isDuplicateOpportunityInsert: true for a pure insert, false once an update folds in (mutation: always return false -> the dedupe in timeline-rows.ts never fires, FAILS there)", async () => {
+    const { isDuplicateOpportunityInsert } = await import("./change-rows");
+    const insertOnly = group(
+      [baseRow({ recordType: "opportunity", op: "insert", field: null, before: null, after: { name: "Deck build" } })],
+      { recordType: "opportunity" },
+    );
+    expect(isDuplicateOpportunityInsert(insertOnly)).toBe(true);
+    const insertThenEdit = group(
+      [
+        baseRow({ id: 1, recordType: "opportunity", op: "insert", field: null, before: null, after: { name: "Deck build" }, xact: "1" }),
+        baseRow({ id: 2, recordType: "opportunity", op: "update", field: "stage_id", before: "a", after: "b", xact: "2" }),
+      ],
+      { recordType: "opportunity" },
+    );
+    expect(isDuplicateOpportunityInsert(insertThenEdit)).toBe(false);
+    const otherType = group([baseRow({ recordType: "equipment", op: "insert", field: null, before: null, after: {} })], { recordType: "equipment" });
+    expect(isDuplicateOpportunityInsert(otherType)).toBe(false);
   });
 
   it("a whole-contact delete reads 'deleted this customer', using 'borró' not 'eliminó' (G6 glossary: never 'elimin*' opposite English 'delet*') (mutation: use 'eliminó' -> FAILS the glossary gate)", () => {
@@ -73,7 +120,7 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
   it("a removed tag resolves its name from the supplied map, or falls back to the raw id (mutation: always use the raw id -> FAILS)", () => {
     const row = baseRow({ recordType: "contact_tag", recordId: "tag-9", op: "delete", field: null, before: { contact_id: "c1", tag_id: "tag-9" }, after: null });
     const g = group([row], { recordType: "contact_tag" });
-    expect(changeRowView(g, ctx({ tagNames: { "tag-9": "VIP" } })).verb).toBe("removed the tag VIP");
+    expect(changeRowView(g, ctx({ names: { "tag-9": "VIP" } })).verb).toBe("removed the tag VIP");
     expect(changeRowView(g, ctx()).verb).toBe("removed the tag tag-9");
   });
 
@@ -174,6 +221,25 @@ describe("formatChangeValue (plan Task 5 Values)", () => {
   });
   it("a plain value is its own string (mutation: JSON.stringify every value -> FAILS, quoted)", () => {
     expect(formatChangeValue("name", "Deck build", c)).toBe("Deck build");
+  });
+
+  // F-115 PR E fix (review I6): a customer-facing id (never Someone on the team, which is for staff).
+  it("customer-id fields (related_contact_id, place's contact_id/client_group_id, replaces_id, stage_id, pipeline_id) resolve a name, or fall back to 'another record' (mutation: fall back to assign.someone -> FAILS)", () => {
+    const withNames = ctx({ names: { "c-9": "Luis García", "unit-1": "Carrier AC", "stage-a": "Quoted", "pipe-a": "Install jobs" } });
+    expect(formatChangeValue("related_contact_id", "c-9", withNames)).toBe("Luis García");
+    expect(formatChangeValue("contact_id", "c-9", withNames)).toBe("Luis García");
+    expect(formatChangeValue("client_group_id", "c-9", withNames)).toBe("Luis García");
+    expect(formatChangeValue("replaces_id", "unit-1", withNames)).toBe("Carrier AC");
+    expect(formatChangeValue("stage_id", "stage-a", withNames)).toBe("Quoted");
+    expect(formatChangeValue("pipeline_id", "pipe-a", withNames)).toBe("Install jobs");
+    expect(formatChangeValue("related_contact_id", "unknown-id", c)).toBe("another record");
+  });
+
+  it("a language value reads as a word, never the raw code (mutation: return the raw code -> FAILS)", () => {
+    expect(formatChangeValue("language", "en", c)).toBe("English");
+    expect(formatChangeValue("language", "es", c)).toBe("Spanish");
+    expect(formatChangeValue("language", "en", ctx({}, "es"))).toBe("Inglés");
+    expect(formatChangeValue("language", "es", ctx({}, "es"))).toBe("Español");
   });
 });
 

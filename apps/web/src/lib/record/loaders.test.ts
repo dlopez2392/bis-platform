@@ -20,6 +20,12 @@ const mergedIdsOfMock = vi.fn();
 const listPeopleNamesMock = vi.fn();
 const getVoiceProfileMock = vi.fn();
 const listPendingProposalsForContactMock = vi.fn();
+// F-115 PR E fix (review I4): the ONE bounded, account-scoped read for a "change" row's own
+// removal/value names (a tag, a member, a related contact, a group's kind…). Default: nothing to
+// resolve, so a test that never sets a "change" row keeps the same {} it always had.
+const readChangeNamesMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ names: {}, groupKinds: {} }));
+const EMPTY_REFS = { contactIds: new Set(), groupIds: new Set(), tagIds: new Set(), equipmentIds: new Set(), stageIds: new Set(), pipelineIds: new Set() };
+const changeNameRefsMock = vi.fn<(...a: unknown[]) => unknown>(() => EMPTY_REFS);
 const FACTS = { now: new Date("2026-10-16T00:00:00Z"), bookings: {}, contact: null, heldBy: {}, editors: {}, canDelete: false, futureBooked: [] };
 // The acts' facts (item 8c): mocked at their own module, answering an empty page's facts unless a case says otherwise.
 const readActFactsMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => FACTS);
@@ -43,6 +49,12 @@ vi.mock("@bis/db", () => ({
   listContactPlaces: async () => { throw new Error("places down"); },
   listContactTags: async () => [],
   listCustomFields: async () => [],
+  // F-115 PR E fix (review I4): changeNameRefs is pure (record-change-names.test.ts proves it on
+  // its own); this loader only threads its result into readChangeNames, so a trivial empty-set
+  // stub is enough here — the loader's own wiring test below asserts the ARGUMENT it is called
+  // with, never this stub's return shape.
+  changeNameRefs: (...a: unknown[]) => changeNameRefsMock(...a),
+  readChangeNames: (...a: unknown[]) => readChangeNamesMock(...a),
 }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => { throw new Error("gate down"); } }));
 
@@ -441,6 +453,50 @@ describe("record loaders: the change history source (F-115 part 1, S-04, plan Ta
     getVoiceProfileMock.mockReset().mockResolvedValue(null);
     holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
     readActFactsMock.mockReset().mockResolvedValue(FACTS);
+    changeNameRefsMock.mockReset().mockReturnValue(EMPTY_REFS);
+    readChangeNamesMock.mockReset().mockResolvedValue({ names: {}, groupKinds: {} });
+  });
+
+  const changeEntry = () => ({
+    kind: "change", id: "ch1", at: "2026-10-01T00:00:00Z", contactId: "ct1",
+    group: {
+      key: "client_group_member:ct1:1", recordType: "client_group_member", recordId: "m1", authorKind: "person",
+      authorId: "user_dan", via: null, at: "2026-10-01T00:00:00Z", firstAt: "2026-10-01T00:00:00Z",
+      steps: [[{ id: 1, recordType: "client_group_member", recordId: "m1", contactId: "c9", clientGroupId: "g1",
+        op: "delete", field: null, before: {}, after: null, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: "2026-10-01T00:00:00Z" }]],
+      rows: [{ id: 1, recordType: "client_group_member", recordId: "m1", contactId: "c9", clientGroupId: "g1",
+        op: "delete", field: null, before: {}, after: null, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: "2026-10-01T00:00:00Z" }],
+    },
+  });
+
+  // F-115 PR E fix (review I4): the loader's own ONE bounded read, wired to the "change" groups
+  // actually on the page — never every item (a note's own group field is undefined, so a naive
+  // `.map` would crash on it first; a vacuous "always empty" stub could not tell the difference,
+  // this one can, by what it was CALLED with).
+  it("reads change names for exactly the page's own \"change\" groups, and merges the result into `names` (mutation: pass [] instead of the real groups -> FAILS)", async () => {
+    const entry = changeEntry();
+    listTimelinePageMock.mockResolvedValue({
+      items: [{ kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: null, created_at: "2026-10-01T00:00:00Z" } }, entry],
+      older: null, failed: [], sources: [...SOURCES, "changes"],
+    });
+    listPeopleNamesMock.mockResolvedValue({ user_dan: "Dan López" });
+    readChangeNamesMock.mockResolvedValue({ names: { c9: "Ana Ramos" }, groupKinds: { g1: "household" } });
+    const load = await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(changeNameRefsMock).toHaveBeenCalledWith([entry.group]);
+    expect(load).toMatchObject({ status: "ready", names: { user_dan: "Dan López", c9: "Ana Ramos" }, changeGroupKinds: { g1: "household" } });
+  });
+
+  it("a failed change-names read costs only those names, never the card (mutation: rethrow -> FAILS, status becomes error)", async () => {
+    const entry = changeEntry();
+    listTimelinePageMock.mockResolvedValue({ items: [entry], older: null, failed: [], sources: [...SOURCES, "changes"] });
+    readChangeNamesMock.mockRejectedValue(new Error("names down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const load = await loadTimeline(db, ledger, "acct1", "ct1");
+      expect(load).toMatchObject({ status: "ready", changeGroupKinds: {} });
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("record page: activity change names read failed for account acct1");
+    } finally { errors.mockRestore(); }
   });
 
   // F-115 part 1 (S-04), plan Task 5: the switch is ON — the record page's own loader now asks for

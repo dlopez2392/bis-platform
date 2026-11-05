@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { TimelineDocument, TimelineDocumentVersion, TimelineDocumentScan, TimelineEntry } from "@bis/db";
+import type { TimelineDocument, TimelineDocumentVersion, TimelineDocumentScan, TimelineEntry, ChangeGroup, ChangeRow } from "@bis/db";
 import { m } from "@/lib/messages";
 import { timelineRows, timelineFailedText } from "./timeline-rows";
 import { makeTr, type Tr } from "./copy";
@@ -48,6 +48,39 @@ describe("timelineRows: each kind's words (spec §6, §10.2)", () => {
     // 05:30Z is Oct 9, 00:30 in Chicago; 03:00Z is still Oct 8 there. One UTC day, two Chicago days.
     expect(rows([at("2026-10-09T05:30:00Z"), at("2026-10-09T03:00:00Z")]).map((r) => r.showDay)).toEqual([true, true]);
     expect(rows([at("2026-10-09T05:30:00Z"), at("2026-10-09T03:00:00Z")], "en", "UTC").map((r) => r.showDay)).toEqual([true, false]);
+  });
+});
+
+describe("timelineRows: a pure-insert opportunity \"change\" row never doubles the \"deals\" source's own entry (review I7)", () => {
+  const dealEntry = (id: string, at: string): TimelineEntry => ({
+    kind: "deal", id, at, contactId: "c1",
+    deal: { id, name: "Roof replacement", status: "open", monetary_value: 0, created_at: at, created_by: "user_1" },
+  });
+  const insertRow = (id: number): ChangeRow => ({
+    id, recordType: "opportunity", recordId: "deal-1", contactId: "c1", clientGroupId: null,
+    op: "insert", field: null, before: null, after: { name: "Roof replacement" }, xact: "1",
+    authorKind: "person", authorId: "user_1", via: null, createdAt: "2026-10-09T16:00:00Z",
+  });
+  const changeEntry = (rows: ChangeRow[]): TimelineEntry => {
+    const group: ChangeGroup = {
+      key: "opportunity:deal-1:1", recordType: "opportunity", recordId: "deal-1", authorKind: "person",
+      authorId: "user_1", via: null, at: rows[rows.length - 1]!.createdAt, firstAt: rows[0]!.createdAt,
+      steps: [rows], rows,
+    };
+    return { kind: "change", id: "ch1", at: group.at, contactId: "c1", group };
+  };
+
+  it("drops a pure-insert opportunity \"change\" entry entirely (mutation: remove the `visible` filter -> two rows for one creation, FAILS)", () => {
+    const entries = [dealEntry("deal-1", "2026-10-09T16:00:00Z"), changeEntry([insertRow(1)])];
+    const kinds = rows(entries).map((r) => r.entry.kind);
+    expect(kinds).toEqual(["deal"]);
+  });
+
+  it("keeps a \"change\" entry that also folds in an update (insert + edit together) (mutation: drop `op: \"insert\"` check -> every opportunity edit vanishes too, FAILS)", () => {
+    const editedRow: ChangeRow = { ...insertRow(2), op: "update", field: "name", before: "Roof", after: "Roof replacement" };
+    const entries = [dealEntry("deal-1", "2026-10-09T16:00:00Z"), changeEntry([insertRow(1), editedRow])];
+    const kinds = rows(entries).map((r) => r.entry.kind);
+    expect(kinds).toEqual(["deal", "change"]);
   });
 });
 

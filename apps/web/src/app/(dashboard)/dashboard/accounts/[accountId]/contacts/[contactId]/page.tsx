@@ -236,20 +236,20 @@ export default async function ContactDetailPage({
   const subtitle = mainGroup
     ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
     : null;
-  // F-115 part 1 (S-04), plan Task 5: what a "change" row's verb/fields need beyond the names above
-  // (already shared) — the account's own custom field labels (fieldDefs, read below) and a BEST-EFFORT
-  // map for a removed tag's name and a removed member's group's own kind, both from data this page
-  // already loads for something else (never a new read): `tags.tags` only ever holds the contact's
-  // CURRENTLY attached tags, so a tag removed earlier than this page's own read usually falls back to
-  // its raw id; `places.groups` only ever holds groups the contact is CURRENTLY in, so a membership
-  // removed from a group this page has no other reason to know falls back to "household" (see the
-  // report's Deviations — a full fix threads the group's own kind onto `ChangeGroup` at the source).
+  // F-115 PR E fix (review I4/I6): what a "change" row's verb/fields need beyond `timeline.names`
+  // (already merged with `readChangeNames`'s own bounded read, loaders.ts) — the account's own
+  // custom field labels (fieldDefs, read below), and every group's own kind the page's "change"
+  // rows reference (`timeline.changeGroupKinds`), supplemented by `places.groups` (the groups the
+  // contact is CURRENTLY in, always exactly known) for the common case a removed membership's own
+  // group is still one of them.
   const changeFields = {
     customFieldLabels: Object.fromEntries(
       (fieldDefs.status === "ready" ? fieldDefs.fieldDefs : []).map((d) => [d.field_key, d.name]),
     ),
-    tagNames: Object.fromEntries((tags.status === "ready" ? tags.tags : []).map((t2) => [t2.id, t2.name])),
-    groupKinds: Object.fromEntries((places?.groups ?? []).map((g) => [g.id, g.kind])),
+    groupKinds: {
+      ...(timeline.status === "ready" ? timeline.changeGroupKinds : {}),
+      ...Object.fromEntries((places?.groups ?? []).map((g) => [g.id, g.kind])),
+    },
   };
   // 1b: the rows are built here, in their own guard (C5), so a malformed row costs the timeline card.
   const timelineView = timeline.status === "ready"

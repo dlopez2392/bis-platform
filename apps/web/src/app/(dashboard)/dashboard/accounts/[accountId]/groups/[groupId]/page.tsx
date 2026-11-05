@@ -12,7 +12,7 @@ import { RecordHeader } from "@/components/record/record-header";
 import { RecordCard, type RecordCardState } from "@/components/record/record-card";
 import { GROUP_RECORD_CARDS, columnRuns, type GroupRecordCardId } from "@/lib/record/record-cards";
 import { makeTr } from "@/lib/record/copy";
-import { softSmsGate, loadHeaderPlaces } from "@/lib/record/loaders";
+import { softSmsGate, loadHeaderPlaces, loadFieldDefs } from "@/lib/record/loaders";
 import { groupHeaderActions, firstGroupMapUrl, memberName, memberFirstName, peoplePagerHrefs } from "@/lib/record/group-header";
 import {
   loadGroupPeople, loadGroupDeals, loadGroupHeaderPlaces, loadPrimaryText,
@@ -103,7 +103,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const ids = set ? set.people.map((p) => p.contactId) : null;
   const now = new Date();
   const noSet = { status: "error" } as const;
-  const [prefs, account, smsGate, people, places, deals, summary, nextUp, timeline] = await Promise.all([
+  const [prefs, account, smsGate, people, places, deals, summary, nextUp, timeline, fieldDefs] = await Promise.all([
     getPersonPrefs(),
     // The account's zone (dates; the composer's consent line) and language (a client's default locale).
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
@@ -117,6 +117,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
     ids ? loadGroupSummary(db, accountId, ids) : noSet,
     ids ? loadGroupNextUp(db, accountId, ids, now) : noSet,
     ids ? loadGroupTimeline(db, accountId, ids, before, group.id) : noSet,
+    // F-115 PR E fix (review m6): the account's own custom field labels, the contact page's own
+    // read (loaders.ts's loadFieldDefs) — a member's custom field change named by its label, never
+    // its raw key.
+    loadFieldDefs(db, accountId),
   ]);
   // Not a throw: a cosmetic zone and a default language must not 500 the page.
   if (account.error) console.error(`group page: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -193,14 +197,21 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
       zone: zone.zone, tr, subjects,
-      // F-115 part 1 (S-04), plan Task 5: a removed member's/relationship's own name is a CONTACT id,
-      // not the author-id space `timeline.names` covers — merged in here (never collides: a clerk
-      // id's own "user_…" shape and a plain contact uuid are never the same string), so a removed
-      // member reads by name exactly when any OTHER row on this page already would have had to know
-      // it anyway. The group's own kind is always exactly known here (`group.kind`), unlike the
-      // contact page's best-effort map (see the report's Deviations).
+      // F-115 PR E fix (review I4): a removed member's/relationship's own name is a CONTACT id, not
+      // the author-id space `timeline.names` covers — merged in here (never collides: a clerk id's
+      // own "user_…" shape and a plain contact uuid are never the same string), so a removed member
+      // reads by name exactly when any OTHER row on this page already would have had to know it
+      // anyway, OR when `timeline.names` already resolved it itself (`readChangeNames`,
+      // group-loaders.ts's own twin of the contact page's read).
       author: { viewerId: access.userId, names: { ...timeline.names, ...Object.fromEntries(names) }, personaName: timeline.personaName, tr },
-      changeFields: { customFieldLabels: {}, groupKinds: { [group.id]: group.kind } },
+      // F-115 PR E fix (review m6): the account's own custom field labels, never `{}` — a member's
+      // custom field change now reads its label, as the contact page's own change rows already do.
+      // The group's own kind is always exactly known here (`group.kind`); `timeline.changeGroupKinds`
+      // adds any OTHER group a membership or a place row might reference.
+      changeFields: {
+        customFieldLabels: Object.fromEntries((fieldDefs.status === "ready" ? fieldDefs.fieldDefs : []).map((d) => [d.field_key, d.name])),
+        groupKinds: { ...timeline.changeGroupKinds, [group.id]: group.kind },
+      },
     }))
     : null;
   // D7, plan deviation 12: ONE line, only past the cap, at the top of the middle column, outside

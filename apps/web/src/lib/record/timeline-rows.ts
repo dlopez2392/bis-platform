@@ -12,7 +12,7 @@ import { describeAct } from "@/lib/ai-acts/kinds";
 import type { ActFacts } from "@/lib/ai-acts/kinds/types";
 import { buildActView, type AiActView } from "@/lib/ai-acts/view";
 import { authorMark, type AuthorCtx, type AuthorMarkView } from "./author-mark";
-import { changeRowView, type ChangeRowView, type ChangeViewCtx } from "./change-rows";
+import { changeRowView, isDuplicateOpportunityInsert, type ChangeRowView, type ChangeViewCtx } from "./change-rows";
 import type { Tr } from "./copy";
 
 export type TimelineStatus = { tone: TimelineTone; word: string };
@@ -252,7 +252,7 @@ function phrase(
       const view = changeRowView(entry.group, {
         tr, zone,
         names: changeCtx?.names ?? {}, customFieldLabels: changeCtx?.customFieldLabels ?? {},
-        tagNames: changeCtx?.tagNames, groupKinds: changeCtx?.groupKinds,
+        groupKinds: changeCtx?.groupKinds,
       });
       return { verb: view.verb, status: null, detail: view.stepsText, change: view };
     }
@@ -289,9 +289,14 @@ export function timelineRows(
   const changeCtx: Omit<ChangeViewCtx, "tr" | "zone"> = {
     names: ctx.author.names,
     customFieldLabels: ctx.changeFields?.customFieldLabels ?? {},
-    tagNames: ctx.changeFields?.tagNames, groupKinds: ctx.changeFields?.groupKinds,
+    groupKinds: ctx.changeFields?.groupKinds,
   };
-  return entries.map((entry) => {
+  // F-115 PR E fix (review I7, second half): a pure-insert "changes" row for an opportunity would
+  // say the SAME creation the "deals" source's own entry already says, by name, at the same
+  // instant (change-rows.ts's own `isDuplicateOpportunityInsert` doc comment); dropped here,
+  // before any row is built for it, never shown twice.
+  const visible = entries.filter((entry) => !(entry.kind === "change" && isDuplicateOpportunityInsert(entry.group)));
+  return visible.map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {

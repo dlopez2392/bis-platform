@@ -16,8 +16,6 @@ import { formatDateInZone, contactDisplayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { splitSummaryBlocks } from "@/lib/voice/summary-blocks";
-import { m } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
 import type { AssignMember } from "@/lib/assign/view";
 import type { Locale } from "@/lib/i18n/locale";
 import type { Tr } from "@/lib/record/copy";
@@ -74,13 +72,19 @@ export type ActivityTimelineProps = {
    *  within its 30-day Restore window; with none, a change row offers no Restore either. */
   nowMs?: number;
   /** F-115 part 1 (S-04), plan Task 5: may this caller Put back a value or Restore a removed unit
-   *  (`seesWholeAccount`: Owners, Staff, the agency; never a Technician). False by default — a change
-   *  row's own actions never show without it, exactly as `canMerge` gates "Undo merge". */
+   *  (`seesWholeAccount`: Owners, Staff, the agency; never a Technician). False by default — `ChangeItem`'s
+   *  own `canWrite` gate is what actually hides the buttons; this is the SCREEN's fence over the SERVER's
+   *  (`history-actions.ts`'s own role refusal). */
   canWriteHistory?: boolean;
-  /** `putBackAction`/`restoreAction` (`contacts/history-actions.ts`), `.bind(null, accountId, locale)`-ed
-   *  by the page. Absent only when `canWriteHistory` is false (a Technician's page never binds them). */
-  putBackHistory?: ChangeAction;
-  restoreHistory?: ChangeAction;
+  /** F-115 PR E fix (review m2): REQUIRED, never optional — the page ALWAYS binds
+   *  `putBackAction`/`restoreAction` (`contacts/history-actions.ts`, `.bind(null, accountId, locale)`-ed),
+   *  for every role, since binding costs nothing and `canWriteHistory`/`ChangeItem`'s own `canWrite` are
+   *  what actually gate the buttons. The earlier optional shape let a caller fall back to a locally-built
+   *  closure standing in for "no action" — a plain closure (not a bound Server Action reference) can
+   *  never cross the Server-to-Client-Component boundary `ChangeItem` sits on, so that fallback would
+   *  have thrown the moment it was ever actually used. Required makes that path impossible to reach. */
+  putBackHistory: ChangeAction;
+  restoreHistory: ChangeAction;
   /** The Owner-only (`access.canManage`) link to T8's CSV download route; null hides it (Staff, a
    *  Technician, or the agency reading as neither — Q5: Owners only). */
   historyDownloadHref?: string | null;
@@ -136,6 +140,19 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
         </div>
       ) : null}
 
+      {p.historyDownloadHref ? (
+        // F-115 PR E fix (review m1): a plain anchor with `download`, never a Next <Link> — a Link
+        // prefetches and its RSC fetch would run the download ROUTE itself (the F-118 export link's
+        // own precedent, contacts/page.tsx), which here would also wrongly log an agency "opened"
+        // note on a mere hover/prefetch, never an actual click. Its own line, OUTSIDE the "Pages" nav
+        // below: downloading history is not a page of this timeline.
+        <div className="flex justify-end">
+          <a href={p.historyDownloadHref} download data-history-download className={pagerLink}>
+            {tr.text("history.download")}
+          </a>
+        </div>
+      ) : null}
+
       {p.emptyText ? <p data-timeline-empty className="text-sm text-muted-foreground">{p.emptyText}</p> : null}
 
       {p.rows.length > 0 ? (
@@ -160,13 +177,8 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
         </ol>
       ) : null}
 
-      {p.pager.olderHref || p.pager.newerHref || p.historyDownloadHref ? (
+      {p.pager.olderHref || p.pager.newerHref ? (
         <nav aria-label={tr.text("timeline.pages")} data-timeline-pager className="flex items-center justify-end gap-2">
-          {p.historyDownloadHref ? (
-            <Link href={p.historyDownloadHref} data-history-download className={cn(pagerLink, "mr-auto")}>
-              {t(m, "history.download", tr.locale)}
-            </Link>
-          ) : null}
           {p.pager.newerHref ? <Link href={p.pager.newerHref} className={pagerLink}>{tr.text("timeline.newer")}</Link> : null}
           {p.pager.olderHref ? <Link href={p.pager.olderHref} className={pagerLink}>{tr.text("timeline.older")}</Link> : null}
         </nav>
@@ -182,7 +194,7 @@ function Row({
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; contactId: string;
   contactName: string; tr: Tr; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
-  canWriteHistory: boolean; putBackHistory: ChangeAction | undefined; restoreHistory: ChangeAction | undefined;
+  canWriteHistory: boolean; putBackHistory: ChangeAction; restoreHistory: ChangeAction;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -355,16 +367,14 @@ function Row({
     // F-115 part 1 (S-04), plan Task 5: the real row. `nowMs` undefined (a caller that never supplies
     // the page's clock) falls back to a plain row with no Restore, the SAME defensive shape the merge
     // row's own Undo already uses (`canUndo = canMerge && nowMs !== undefined && …`).
-    case "change": {
-      // canWriteHistory gates every BUTTON `ChangeItem` draws; these two stand in only for a caller
-      // that passed true without binding an action (should never happen — belt and suspenders, never
-      // a thrown row).
-      const noAction: ChangeAction = async () => ({ ok: false, message: t(m, "history.notAllowed", tr.locale) });
+    case "change":
+      // Review m2: `putBackHistory`/`restoreHistory` are now REQUIRED props (the page always binds
+      // them), so there is no "no action" fallback left to construct here, and nothing that could
+      // ever fail to cross the Server-to-Client boundary `ChangeItem` sits on.
       return row.change && nowMs !== undefined ? (
-        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} canWrite={canWriteHistory}
-          nowMs={nowMs} putBack={putBackHistory ?? noAction} restore={restoreHistory ?? noAction} />
+        <ChangeItem head={head} group={e.group} view={row.change} tr={tr} canWrite={canWriteHistory}
+          nowMs={nowMs} putBack={putBackHistory} restore={restoreHistory} />
       ) : <TimelineItem {...head} icon={History} />;
-    }
     default:
       return unknownKind(e);
   }

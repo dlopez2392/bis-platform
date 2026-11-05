@@ -57,8 +57,13 @@ function toWrites(rows: readonly ChangeRow[]): Write[] {
   return [...byKey.values()];
 }
 
+/** F-115 PR E fix (review I2): same author is not enough — a person's own manual edit immediately
+ *  before or after their own merge/restore/accepted-suggestion write must never fold with it (the
+ *  fold would otherwise either hide the manual edit under `foldVia`'s drop of the merge's own `via`,
+ *  or blend the manual edit's `via: null` onto rows that belong to the merge). `via` compares by
+ *  `===`, so `null === null` still folds two plain edits together exactly as before. */
 function sameAuthor(a: Write, b: Write): boolean {
-  return a.authorKind === b.authorKind && a.authorId === b.authorId;
+  return a.authorKind === b.authorKind && a.authorId === b.authorId && a.via === b.via;
 }
 
 function toGroup(steps: readonly Write[]): ChangeGroup {
@@ -180,6 +185,11 @@ export type ChangeRowCursor = { createdAt: string; id?: number };
  * `timelineBeforeFilter` (timeline-cursor.ts) uses for a UUID id, except `id` here is a plain bigint:
  * never quoted or case-folded, just checked as a safe positive integer, so a value this module did not
  * itself produce can never reach the PostgREST filter grammar.
+ *
+ * F-115 PR E fix (review I1): `listChangeRows` no longer calls this — see its own doc comment for
+ * why `id` alone, not this pair, is the correct bound once a cursor can come from a folded group.
+ * Kept (exported, still tested on its own terms) as the idiom a future caller with a REAL row's own
+ * matching `(created_at, id)` pair may still legitimately want.
  */
 export function changeRowBeforeFilter(column: string, before: { createdAt: string; id: number }): string {
   if (!Number.isSafeInteger(before.id) || before.id <= 0) {
@@ -233,6 +243,21 @@ export function decodeChangeCursorId(v: string): number | null {
  * filtering on the timestamp alone would drop whichever of that write's rows did not make the
  * PREVIOUS page, forever (the next page's `created_at < before` excludes them too, since they share
  * that exact value). `before` is undefined for a cold start, exactly as before.
+ *
+ * F-115 PR E fix (review I1): with `id` given, the bound is `id < before.id` ALONE now, never paired
+ * with `created_at` — `record_changes.id` is `generated always as identity`, a single monotonic
+ * sequence that already totally orders this table in write order (the capture trigger inserts in
+ * that order), so comparing it alone is both sufficient and, for a FOLDED group, the only correct
+ * choice: `record.ts` builds this cursor's `id` from a group's own OLDEST row but its `createdAt`
+ * from the group's NEWEST step (`g.at`, kept for the group's own display/sort position) — those two
+ * values describe two DIFFERENT rows once a group spans more than one write, and the old `(created_at
+ * < v) OR (created_at = v AND id < n)` form re-admitted the group's own OLDER step on the next page
+ * (its `created_at` is strictly less than the newest step's `v`, so the first half of the OR already
+ * matched it — the `id` tie-break never even ran). `id < n` has no such mismatch: every row of a
+ * fully-shown group has `id >= n` (n is its own minimum) by construction, so all of them are excluded
+ * together, and anything with a smaller id is genuinely unread. `changeRowBeforeFilter` keeps its own
+ * tests (the `(created_at,id)` idiom is still correct on its own terms); it is simply no longer this
+ * function's own comparison.
  */
 export async function listChangeRows(
   db: SupabaseClient, accountId: string, scope: { contactIds: string[] } | { groupId: string },
@@ -242,9 +267,7 @@ export async function listChangeRows(
   let q = db.from("record_changes").select(CHANGE_COLUMNS).eq("account_id", accountId);
   q = "contactIds" in scope ? q.in("contact_id", scope.contactIds) : q.eq("client_group_id", scope.groupId);
   if (before) {
-    q = before.id !== undefined
-      ? q.or(changeRowBeforeFilter("created_at", { createdAt: before.createdAt, id: before.id }))
-      : q.lt("created_at", before.createdAt);
+    q = before.id !== undefined ? q.lt("id", before.id) : q.lt("created_at", before.createdAt);
   }
   const { data, error } = await q.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
   if (error) throw new Error(`listChangeRows failed: ${error.message}`);

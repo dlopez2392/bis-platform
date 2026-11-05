@@ -1,9 +1,9 @@
 import {
   contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
   listCustomFields, listTimelinePage, mergedIdsOf, listPeopleNames, getVoiceProfile,
-  listPendingProposalsForContact,
+  listPendingProposalsForContact, changeNameRefs, readChangeNames,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
-  type TimelinePage, type TimelineCursor,
+  type TimelinePage, type TimelineCursor, type ChangeNames,
 } from "@bis/db";
 import type { Proposal } from "@bis/db/proposal-rules";
 import type { AiAct } from "@bis/db/ai-act-rules";
@@ -13,7 +13,7 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { loggableError } from "@/lib/loggable-error";
 import type { DescribeCtx } from "@/lib/proposals/kinds/types";
 import { readSuggestionStages, type StageContext } from "@/lib/proposals/view-reads";
-import { personIdsOf } from "./author-mark";
+import { personIdsOf, changeGroupsOf } from "./author-mark";
 
 /**
  * One loader per record card (S-03 part 1, spec C5): each returns a load and NEVER throws, so one
@@ -53,6 +53,10 @@ export type TimelineLoad =
     namesOk: boolean;
     /** The stage names the page's accepted stage suggestions need (item 8b-2); `{}` when none, or unreadable. */
     suggestionStages: DescribeCtx["stages"];
+    /** F-115 PR E fix (review I4): a `client_group`'s own kind, by id, for every group a page's own
+     *  "change" rows reference (a removed member's or place's group) — `readChangeNames`'s own read,
+     *  soft; `{}` on a failed read, same fallback `change-rows.ts` already has for a missing entry. */
+    changeGroupKinds: Readonly<Record<string, "household" | "business">>;
     /** What the page's acts' Undo depends on (item 8c, `readActFacts`); null when that read failed, and then
      *  every act on the page reads without an Undo. */
     actFacts: ActFacts | null;
@@ -134,7 +138,15 @@ export async function loadTimeline(
       });
       return { actFacts, names, namesOk };
     });
-  const [holdOpen, { actFacts, names, namesOk }, personaName, suggestionStages] = await Promise.all([
+  // F-115 PR E fix (review I4): ONE bounded, account-scoped read for the contact ids, tag ids and
+  // group ids the page's own "change" rows reference but cannot name from their own columns (a
+  // removed tag, member, relationship or place's owner). Soft: a failed read costs those names
+  // only, never the card, same as every other read here.
+  const changeNames = readChangeNames(db, accountId, changeNameRefs(changeGroupsOf(page.items))).catch((e: unknown) => {
+    log("activity change names", accountId, e);
+    return { names: {}, groupKinds: {} } as ChangeNames;
+  });
+  const [holdOpen, { actFacts, names, namesOk }, personaName, suggestionStages, { names: changeOwnNames, groupKinds: changeGroupKinds }] = await Promise.all([
     // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
     // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
     holdOpenTaskIds(db, accountId, tasks, ledger).catch((e: unknown) => {
@@ -151,8 +163,17 @@ export async function loadTimeline(
       log("activity stage names", accountId, e);
       return {} as DescribeCtx["stages"];
     }),
+    changeNames,
   ]);
-  return { status: "ready", page, holdOpen, names, namesOk, personaName, suggestionStages, actFacts };
+  // F-115 PR E fix (review I4): the SAME one map a "change" row's own verb and Was/Now already
+  // resolve staff ids from (`ctx.names`, change-rows.ts) also carries every customer/tag/equipment/
+  // stage/pipeline name `readChangeNames` found — a staff clerk id and a contact/tag/equipment uuid
+  // never collide in practice, so one merged map serves both (see the report's Deviations for what a
+  // real collision would mean).
+  return {
+    status: "ready", page, holdOpen, names: { ...names, ...changeOwnNames }, namesOk, personaName,
+    suggestionStages, changeGroupKinds, actFacts,
+  };
 }
 
 export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext; personaName: string | null } | { status: "error" };

@@ -87,6 +87,32 @@ describe("groupChanges", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.authorKind).toBeNull();
   });
+
+  // F-115 PR E fix (review I2): a person's own manual edit next to their own merge/restore write,
+  // same author, within the collapse window, must stay TWO groups either way — folding them would
+  // either hide the manual edit under foldVia's drop of the merge's via, or carry the merge's own
+  // fields under a via that does not name it. Both orders.
+  it("never folds two writes whose via differ, even same author within the window, in EITHER order (mutation: drop the via check from sameAuthor -> FAILS, collapses to one group both times)", () => {
+    const manualThenMerge = [
+      row({ id: 1, xact: "1", via: null, createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 2, xact: "2", via: "merge:5", createdAt: "2026-01-01T00:05:00.000Z" }), // 5 min later
+    ];
+    expect(groupChanges(manualThenMerge)).toHaveLength(2);
+
+    const mergeThenManual = [
+      row({ id: 3, xact: "3", via: "merge:5", createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 4, xact: "4", via: null, createdAt: "2026-01-01T00:05:00.000Z" }), // 5 min later
+    ];
+    expect(groupChanges(mergeThenManual)).toHaveLength(2);
+  });
+
+  it("still folds two plain edits (via null on both) within the window, same as before (mutation: compare via with !== so null!==null is wrongly true -> FAILS)", () => {
+    const rows = [
+      row({ id: 1, xact: "1", via: null, createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 2, xact: "2", via: null, createdAt: "2026-01-01T00:05:00.000Z" }),
+    ];
+    expect(groupChanges(rows)).toHaveLength(1);
+  });
 });
 
 describe("foldVia", () => {
@@ -170,8 +196,9 @@ describe("encodeChangeCursorId / decodeChangeCursorId: a bigint id in UUID-curso
 });
 
 /**
- * F-115 PR C fix (review I2): `listChangeRows` branches on whether its cursor's own `id` is present —
- * the `(created_at, id)` OR idiom when it is (a row this module itself produced earlier), a plain
+ * F-115 PR C fix (review I2), amended PR E (review I1): `listChangeRows` branches on whether its
+ * cursor's own `id` is present — plain `id < n` when it is (never paired with `created_at`: review
+ * I1's own doc comment on this function explains why the pairing broke for a folded group), a plain
  * `created_at <` bound when it is not (`record.ts`'s only external seed without one: the outer
  * merged-timeline cursor, when the previous page's cutoff was not itself a "change" entry).
  */
@@ -186,11 +213,11 @@ describe("listChangeRows: the cursor's own branch (with id vs. without)", () => 
     return { db, calls };
   }
 
-  it("with id: calls .or with the (created_at, id) filter, never .lt (mutation: always call .lt -> FAILS)", async () => {
+  it("with id: calls .lt('id', n) alone, never .or (mutation: call .or(changeRowBeforeFilter(...)) again -> FAILS)", async () => {
     const { db, calls } = recordingDb();
     await listChangeRows(db, "a1", { contactIds: ["c1"] }, { createdAt: "2026-11-02T00:00:00Z", id: 5 }, 10);
-    expect(calls.some((c) => c.method === "or" && c.args[0] === changeRowBeforeFilter("created_at", { createdAt: "2026-11-02T00:00:00Z", id: 5 }))).toBe(true);
-    expect(calls.some((c) => c.method === "lt")).toBe(false);
+    expect(calls.some((c) => c.method === "lt" && c.args[0] === "id" && c.args[1] === 5)).toBe(true);
+    expect(calls.some((c) => c.method === "or")).toBe(false);
   });
 
   it("without id: calls .lt on created_at alone, never .or (mutation: always call .or -> FAILS, since changeRowBeforeFilter would throw with no id)", async () => {

@@ -104,6 +104,7 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     const html = renderToStaticMarkup(createElement(GroupTimeline, {
       accountId: "a1", timezone: "UTC", rows: [], failedText: null, emptyText: tr.text("groupPage.timeline.empty"),
       pager: { olderHref: null, newerHref: null }, tr, customerLangs: {},
+      putBackHistory: async () => ({ ok: false as const, message: "" }), restoreHistory: async () => ({ ok: false as const, message: "" }),
     }));
     expect(html).toMatch(/<p data-timeline-empty[^>]*>Texts, calls, bookings, notes and To-dos with these people show up here\. Open a person to start one\.<\/p>/);
     expect(html).not.toContain("<ol");
