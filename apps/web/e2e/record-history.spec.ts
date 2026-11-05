@@ -29,13 +29,15 @@ loadEnv({ path: ".env.local" });
  * user), so the capture trigger's CLIENT path fires and that row is authored "person" by the SAME
  * viewer running this test — the author mark then reads "You" (`provenance.you`).
  *
- * TIMING NOTE. `change-item.tsx`'s own Put back toast sets no `duration`, so it lives for Sonner's
- * default 4 seconds (`TOAST_LIFETIME`, `sonner/dist/index.mjs`) — unlike a few other Undo-bearing
- * toasts in this app (`holding-move-handlers.ts`, `suggestion-handlers.ts`) that explicitly ask for
- * 10. Between the toast becoming visible and clicking its own "Undo", this file does exactly one
- * fast, non-polling database read and nothing else, so the 4-second default is never at risk; every
- * heavier check (the folded group's three Was/Now lines) runs AFTER Undo, with no toast left to
- * race.
+ * TIMING NOTE. `change-item.tsx`'s own Put back toast asks for a 10-second `duration`
+ * (`UNDO_TOAST_MS`) rather than Sonner's 4-second default, so this file reads the toast and clicks
+ * its "Undo" with an ordinary `expect.poll` in between — no need to race it.
+ *
+ * FOLDING NOTE (review I2). `groupChanges` now folds adjacent writes by the same author only when
+ * their `via` also matches, so a plain edit (`via` null), a Put back (`via restore:<editId>`) and
+ * Undo's own Put back (`via restore:<putBackId>`) never fold into one row, however close in time:
+ * each is its OWN `[data-timeline-item="change"]` entry, newest first, each carrying exactly one
+ * `[data-change-field="phone"]` line (never several folded into one row's disclosure).
  */
 test.describe.configure({ timeout: 60_000 });
 
@@ -120,48 +122,60 @@ test("a changed phone shows Was/Now on the timeline, Put back reverts it, and Un
   await page.reload();
 
   // Step 3: the timeline row carries the author mark and "changed phone"; its disclosure shows
-  // Was/Now for the edit. DESIGN.md Provenance: a row with no mark is a defect.
+  // Was/Now for the edit. DESIGN.md Provenance: a row with no mark is a defect. `phoneRows` filters
+  // to "change" entries that carry a phone line, so the contact's OWN creation (an "added this
+  // record" change row with no field lines) is never mistaken for one (Folding note, above).
   const tl = timelineCard(page);
-  const changeRow = tl.locator('[data-timeline-item="change"]').first();
-  await expect(changeRow.locator('[data-author-mark="person"]')).toHaveText(m["provenance.you"]);
-  await expect(changeRow).toContainText(m["history.verb.changed"].replace("{fields}", m["history.field.phone"]));
-  const phoneLines = changeRow.locator('[data-change-field="phone"]');
-  await expect(phoneLines).toHaveCount(1);
-  await changeRow.locator("[data-change-detail] summary").click();
-  await expect(phoneLines.first()).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
-  await expect(phoneLines.first()).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
+  const phoneRows = tl.locator('[data-timeline-item="change"]:has([data-change-field="phone"])');
+  await expect(phoneRows).toHaveCount(1);
+  const editRow = phoneRows.first();
+  await expect(editRow.locator('[data-author-mark="person"]')).toHaveText(m["provenance.you"]);
+  await expect(editRow).toContainText(m["history.verb.changed"].replace("{fields}", m["history.field.phone"]));
+  const editField = editRow.locator('[data-change-field="phone"]');
+  await expect(editField).toHaveCount(1);
+  await editRow.locator("[data-change-detail] summary").click();
+  await expect(editField).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
+  await expect(editField).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
 
-  // Step 4: Put back. A fast, single (non-polling) read proves the field itself moved back before
-  // the toast's own 4-second default has any chance to lapse (see the file header's Timing note).
-  await phoneLines.first().getByRole("button", { name: m["history.putBack"], exact: true }).click();
+  // Step 4: Put back, on the edit row's own (only) field line.
+  await editField.getByRole("button", { name: m["history.putBack"], exact: true }).click();
   const putBackToast = toastWith(page, m["history.putBack.done"].replace("{field}", m["history.label.phone"]));
   await expect(putBackToast).toBeVisible();
-  expect(await readPhone()).toBe(PHONE_BEFORE);
+  await expect.poll(readPhone).toBe(PHONE_BEFORE);
 
-  // Step 5: Undo, from the SAME toast, before anything else could dismiss it. This is the toast's
-  // own action — itself another Put back, on the row Put back just wrote (`putBackOne`,
-  // change-item.tsx) — never a second "Put back" click standing in for it.
+  // Step 5: Undo, from the SAME toast (a 10-second window, UNDO_TOAST_MS — no need to race it).
+  // This is the toast's own action, itself another Put back on the row Put back just wrote
+  // (`putBackOne`, change-item.tsx), so its own done toast reads the neutral "Undone." (review
+  // m3) rather than reusing "{field} is back to what it was.", which is not true of an undo.
   await putBackToast.getByRole("button", { name: m["history.undo"], exact: true }).click();
+  await expect(toastWith(page, m["history.undo.done"])).toBeVisible();
   await expect.poll(readPhone).toBe(PHONE_AFTER);
 
-  // Now that nothing is racing a toast, the heavier UI proof: the group folded (same author,
-  // well under the 10-minute window) into one row carrying all three writes — the edit, the Put
-  // back, and Undo's own Put back of THAT — each its own Was/Now line, oldest first.
-  await expect(phoneLines).toHaveCount(3);
-  await expect(phoneLines.nth(0)).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
-  await expect(phoneLines.nth(0)).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
-  await expect(phoneLines.nth(1)).toContainText(`${m["history.was"]} ${PHONE_AFTER_DISPLAY}`);
-  await expect(phoneLines.nth(1)).toContainText(`${m["history.now"]} ${PHONE_BEFORE_DISPLAY}`);
-  await expect(phoneLines.nth(2)).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
-  await expect(phoneLines.nth(2)).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
+  // Now that nothing is racing a toast: three SEPARATE change entries carry the phone field — the
+  // edit, the Put back, and Undo's own Put back of THAT — newest first, each its own single
+  // Was/Now line (Folding note, above: none of the three folds, since each carries its own `via`).
+  await expect(phoneRows).toHaveCount(3);
+  const lineOf = (i: number) => phoneRows.nth(i).locator('[data-change-field="phone"]');
+  await expect(lineOf(0)).toHaveCount(1); // Undo's own Put back: back to the edited value.
+  await expect(lineOf(0)).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
+  await expect(lineOf(0)).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
+  await expect(lineOf(1)).toHaveCount(1); // Put back: back to the ORIGINAL value.
+  await expect(lineOf(1)).toContainText(`${m["history.was"]} ${PHONE_AFTER_DISPLAY}`);
+  await expect(lineOf(1)).toContainText(`${m["history.now"]} ${PHONE_BEFORE_DISPLAY}`);
+  await expect(lineOf(2)).toHaveCount(1); // The original edit (oldest of the three).
+  await expect(lineOf(2)).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
+  await expect(lineOf(2)).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
+  // DESIGN.md Provenance, re-checked across every row now on the page, not just the one from Step 3.
+  await expect(tl.locator('[data-timeline-item]:not(:has([data-author-mark]))')).toHaveCount(0);
 
   // Step 6: the Spanish reader preference (`?locale=es`, the suite's own QA override —
   // request-locale.ts, BIS_I18N_QA set in playwright.config.ts's webServer env) reads the SAME
-  // group's mark and verb in Spanish. `change-rows.test.ts`/`change-item.test.ts` already prove
-  // every other string on this card with no DOM; this one live check stands in for the rest.
+  // (newest) phone row's mark and verb in Spanish. `change-rows.test.ts`/`change-item.test.ts`
+  // already prove every other string on this card with no DOM; this one live check stands in for
+  // the rest.
   await page.goto(url("?locale=es"));
   await expect(rec).toHaveAttribute("lang", "es");
-  const esChangeRow = timelineCard(page).locator('[data-timeline-item="change"]').first();
-  await expect(esChangeRow.locator('[data-author-mark="person"]')).toHaveText(m["provenance.you.es"]);
-  await expect(esChangeRow).toContainText(m["history.verb.changed.es"].replace("{fields}", m["history.field.phone.es"]));
+  const esRow = timelineCard(page).locator('[data-timeline-item="change"]:has([data-change-field="phone"])').first();
+  await expect(esRow.locator('[data-author-mark="person"]')).toHaveText(m["provenance.you.es"]);
+  await expect(esRow).toContainText(m["history.verb.changed.es"].replace("{fields}", m["history.field.phone.es"]));
 });
