@@ -189,7 +189,10 @@ export default async function ContactDetailPage({
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // F-115 PR E fix round 2 (review C1): named so the SAME value reaches both `makeTr` here and the
+  // `pseudo` prop `ActivityTimeline` must pass to `ChangeItem` ("use client") in place of `tr` itself.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // The Texts and Email rows (consent PR-2/PR-3), on the ledger client. An unreadable ledger is the
   // row's error state, never a thrown page and never a guessed "Allowed".
@@ -398,6 +401,7 @@ export default async function ContactDetailPage({
               older: timeline.page.older, paged: Boolean(before), failed: timeline.page.failed, locale: localeParam,
             })}
             tr={tr}
+            pseudo={pseudo}
           />
         ),
       }

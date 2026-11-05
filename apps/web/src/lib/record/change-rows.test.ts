@@ -40,10 +40,33 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
     expect(changeRowView(g, ctx({}, "es")).verb).toBe("cambió el teléfono");
   });
 
+  // F-115 PR E fix round 2 (review n4): three fields whose EN/ES field-list wording failed the
+  // "landscaper at 7 AM" read — a bare "archived"/"wording"/"emergency contact flag" reads as
+  // developer jargon inside "changed {fields}".
+  it("archived_at, contact_form and contact_is_emergency read as plain sentences, in both languages (mutation: keep the old bare nouns -> FAILS)", () => {
+    expect(changeRowView(group([baseRow({ field: "archived_at" })]), ctx()).verb).toBe("changed whether it's archived");
+    expect(changeRowView(group([baseRow({ field: "archived_at" })]), ctx({}, "es")).verb).toBe("cambió si está archivado");
+    expect(changeRowView(group([baseRow({ field: "contact_form" })]), ctx()).verb).toBe("changed the wording");
+    expect(changeRowView(group([baseRow({ field: "contact_form" })]), ctx({}, "es")).verb).toBe("cambió la palabra que se usa");
+    expect(changeRowView(group([baseRow({ field: "contact_is_emergency" })]), ctx()).verb).toBe("changed whether they're an emergency contact");
+    expect(changeRowView(group([baseRow({ field: "contact_is_emergency" })]), ctx({}, "es")).verb).toBe("cambió si es un contacto de emergencia");
+  });
+
   it("a custom field reads its own account label, falling back to the raw key (mutation: always use the raw key -> FAILS)", () => {
     const g = group([baseRow({ field: "custom.gate" })]);
     expect(changeRowView(g, ctx({ customFieldLabels: { gate: "Gate code" } })).verb).toBe("changed Gate code");
     expect(changeRowView(g, ctx()).verb).toBe("changed gate");
+  });
+
+  // F-115 PR E fix round 2 (review n5): `customFieldLabels` is read from the account's CONTACT-model
+  // field defs only (loaders.ts's own loadFieldDefs) — a `client_group` row's own `custom.<key>` must
+  // never consult it, even when the key NAME happens to collide with a real contact field, because
+  // that label describes a DIFFERENT field on a DIFFERENT entity. The honest fallback (the raw key) is
+  // what shows until the product has a group-model field defs source of its own.
+  it("a client_group row's own custom field never reads the CONTACT-model label map, even on a key collision (mutation: ignore row.recordType, always consult customFieldLabels -> FAILS, shows the contact's own label)", () => {
+    const g = group([baseRow({ recordType: "client_group", field: "custom.gate" })], { recordType: "client_group" });
+    // "gate" happens to also be a real CONTACT custom field's key — must not leak across record types.
+    expect(changeRowView(g, ctx({ customFieldLabels: { gate: "Gate code" } })).verb).toBe("changed gate");
   });
 
   it("an insert reads 'added this record' for a contact (mutation: read the first row's field instead -> FAILS)", () => {
@@ -62,6 +85,9 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
 
     const tagRow = baseRow({ recordType: "contact_tag", recordId: "tag-7", op: "insert", field: null, before: null, after: { contact_id: "c1", tag_id: "tag-7" } });
     expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx({ names: { "tag-7": "VIP" } })).verb).toBe("added the tag VIP");
+    // F-115 PR E fix round 2 (review I7/D1): unresolved (a tag this read could not name) is a WORD,
+    // never the raw id.
+    expect(changeRowView(group([tagRow], { recordType: "contact_tag" }), ctx()).verb).toBe("added the tag a tag");
 
     const relRow = baseRow({ recordType: "contact_relationship", op: "insert", field: null, before: null, after: { related_contact_id: "c9" } });
     expect(changeRowView(group([relRow], { recordType: "contact_relationship" }), ctx({ names: { c9: "Luis García" } })).verb)
@@ -117,11 +143,14 @@ describe("changeRowView: the verb (plan Task 5 Step 1)", () => {
     expect(changeRowView(group([row], { recordType: "place" }), ctx()).verb).toBe("removed the place Back yard");
   });
 
-  it("a removed tag resolves its name from the supplied map, or falls back to the raw id (mutation: always use the raw id -> FAILS)", () => {
+  // F-115 PR E fix round 2 (review I7/D1): an unresolved tag (deleted outright, its own row gone) is
+  // a WORD, never the raw id — Restore's own toast shares this same `name` (ChangeRowView.removalName).
+  it("a removed tag resolves its name from the supplied map, or falls back to the word 'a tag' — never the raw id (mutation: fall back to row.recordId -> FAILS, the raw uuid shows)", () => {
     const row = baseRow({ recordType: "contact_tag", recordId: "tag-9", op: "delete", field: null, before: { contact_id: "c1", tag_id: "tag-9" }, after: null });
     const g = group([row], { recordType: "contact_tag" });
     expect(changeRowView(g, ctx({ names: { "tag-9": "VIP" } })).verb).toBe("removed the tag VIP");
-    expect(changeRowView(g, ctx()).verb).toBe("removed the tag tag-9");
+    expect(changeRowView(g, ctx()).verb).toBe("removed the tag a tag");
+    expect(changeRowView(g, ctx()).removalName).toBe("a tag"); // Restore's own toast shares this name
   });
 
   it("a removed relationship names the other side, or 'another record' when unresolved — never 'Someone on the team' (a customer is not staff) (mutation: drop the fallback -> undefined in the sentence, FAILS)", () => {
@@ -240,6 +269,37 @@ describe("formatChangeValue (plan Task 5 Values)", () => {
     expect(formatChangeValue("language", "es", c)).toBe("Spanish");
     expect(formatChangeValue("language", "en", ctx({}, "es"))).toBe("Inglés");
     expect(formatChangeValue("language", "es", ctx({}, "es"))).toBe("Español");
+  });
+
+  // F-115 PR E fix round 2 (review n3): every other enum-shaped VALUE this feature's own audited
+  // fields carry, each a plain word in both languages, never the raw code — reusing the SAME keys
+  // the deal card, the group page and the relationships card already show these words with.
+  it("a deal's own status reads pipeline.status.* (mutation: return the raw code -> FAILS)", () => {
+    expect(formatChangeValue("status", "won", c)).toBe("Won");
+    expect(formatChangeValue("status", "open", ctx({}, "es"))).toBe("Abierta");
+  });
+
+  it("a household/business's own kind reads groups.kind.* (mutation: return the raw code -> FAILS)", () => {
+    expect(formatChangeValue("kind", "business", c)).toBe("Business customer");
+    expect(formatChangeValue("kind", "household", ctx({}, "es"))).toBe("Familia");
+  });
+
+  it("a relationship's own label_key reads its neutral word, never the raw code (mutation: return the raw code -> FAILS)", () => {
+    expect(formatChangeValue("label_key", "spouse", c)).toBe("Spouse");
+    expect(formatChangeValue("label_key", "godparent", ctx({}, "es"))).toBe("Padrino o madrina");
+    expect(formatChangeValue("label_key", "other", c)).toBe("Other");
+  });
+
+  it("contact_form/related_form ('f'/'m') read as a grammatical word-form, never the raw letter (mutation: return the raw code -> FAILS)", () => {
+    expect(formatChangeValue("contact_form", "f", c)).toBe("feminine");
+    expect(formatChangeValue("related_form", "m", ctx({}, "es"))).toBe("masculino");
+  });
+
+  it("a machine-made contact source reads its own caption (voice/booking/form:), an operator's own typed note shows as typed (mutation: always show the raw value, even for a machine source -> FAILS)", () => {
+    expect(formatChangeValue("source", "voice", c)).toBe("They called in");
+    expect(formatChangeValue("source", "booking", ctx({}, "es"))).toBe("Agendaron en línea");
+    expect(formatChangeValue("source", "form: Contact us", c)).toBe('Saved to your “Contact us” form');
+    expect(formatChangeValue("source", "Met at the fair", c)).toBe("Met at the fair");
   });
 });
 

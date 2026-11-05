@@ -7,7 +7,8 @@ import { History } from "lucide-react";
 import { canPutBack, canRestore, type ChangeGroup } from "@bis/db";
 import { Button } from "@/components/ui/button";
 import type { ChangeRowView } from "@/lib/record/change-rows";
-import type { Tr } from "@/lib/record/copy";
+import { makeTr, type Tr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
 import type { HistoryActionResult } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/history-actions";
 import { TimelineItem, type TimelineItemProps } from "./timeline-item";
 
@@ -17,11 +18,19 @@ import { TimelineItem, type TimelineItemProps } from "./timeline-item";
  * (keyboard-reachable for free; feed-card.tsx's own precedent for the kit), its own summary text
  * swapping Show/Hide (plan: `history.showSteps`/`history.hideSteps`) via `onToggle`, never CSS alone.
  *
- * F-115 PR E fix (review I9): every string here goes through the page's own `tr: Tr` (never a bare
- * `t(m, key, locale)`), so the pseudo-locale's +35% padding and bracket-wrapping — turned on by
- * `makeTr(locale, pseudo)` — covers Put back, Restore, Was/Now, the disclosure's own Show/Hide and
- * the download link, exactly as it already covers everything else on the page. `putBackOne`/
- * `restoreOne` take `tr` for the SAME reason: their toasts fire from a button this file draws.
+ * F-115 PR E fix (review I9): every string here goes through a `tr: Tr` (never a bare
+ * `t(m, key, locale)`), so the pseudo-locale's +35% padding and bracket-wrapping covers Put back,
+ * Restore, Was/Now, the disclosure's own Show/Hide and the download link, exactly as it already
+ * covers everything else on the page. `putBackOne`/`restoreOne` take `tr` for the SAME reason: their
+ * toasts fire from a button this file draws.
+ *
+ * F-115 PR E fix round 2 (review C1): that `tr` is built HERE, from `locale`+`pseudo`
+ * (`makeTr(locale, pseudo)`), never received as a prop — the page's own `Tr` object carries
+ * FUNCTIONS (`text`/`count`), which React's RSC flight serializer refuses to send across the
+ * Server-to-Client boundary this "use client" component sits on ("Functions cannot be passed
+ * directly to Client Components…", thrown only in a real browser — `renderToStaticMarkup` cannot
+ * see it). `act-row.tsx`/`act-undo.tsx` already split `locale` this way for `ActUndo`; this one also
+ * carries `pseudo` through, which that precedent does not, so I9's coverage survives the split.
  */
 
 /** `putBackAction`/`restoreAction` (`contacts/history-actions.ts`), `.bind(null, accountId, locale)`-ed
@@ -132,7 +141,15 @@ export type ChangeItemProps = {
   head: Pick<TimelineItemProps, "kind" | "mark" | "subject" | "verb" | "status" | "detail" | "time" | "dateTime">;
   group: ChangeGroup;
   view: ChangeRowView;
-  tr: Tr;
+  /** F-115 PR E fix round 2 (review C1): plain, JSON-serializable values, never the server's own
+   *  `Tr` object (`text`/`count` are FUNCTIONS — React's RSC flight serializer refuses to cross a
+   *  Server-to-Client boundary with one, "Functions cannot be passed directly to Client Components…",
+   *  thrown only in the real browser, never caught by `renderToStaticMarkup`). Built back into a
+   *  `Tr` INSIDE this client component (`makeTr`), the same split `act-row.tsx`/`act-undo.tsx` already
+   *  use for `ActUndo` (locale in, `tr` built inside) — this one also threads `pseudo`, which that
+   *  precedent does not, so I9's pseudo-locale coverage survives the split. */
+  locale: Locale;
+  pseudo: boolean;
   /** Owner/Staff/agency (`seesWholeAccount`); false for a Technician, who sees neither button (plan
    *  Task 5 Actions) — `history-actions.ts`'s own role refusal is the SERVER's fence; this is the
    *  SCREEN's, so a Technician is never shown a control that would only answer "not allowed". */
@@ -149,7 +166,8 @@ export type ChangeItemProps = {
  *  Review m3: each button disables itself while ITS OWN call is in flight (`pending`), so a double
  *  click cannot fire a second call that lands on an already-moved value and reports "changed since"
  *  right under a toast that just said the first one worked. */
-export function ChangeItem({ head, group, view, tr, canWrite, nowMs, putBack, restore }: ChangeItemProps) {
+export function ChangeItem({ head, group, view, locale, pseudo, canWrite, nowMs, putBack, restore }: ChangeItemProps) {
+  const tr = makeTr(locale, pseudo);
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<number | "restore" | null>(null);
@@ -193,7 +211,8 @@ export function ChangeItem({ head, group, view, tr, canWrite, nowMs, putBack, re
                     <span className="text-card-foreground"><span className="text-muted-foreground">{tr.text("history.now")}</span> {f.now}</span>
                     {canWrite && putBackId !== null ? (
                       <Button type="button" variant="ghost" size="xs" className={CTL} data-change-put-back="" data-change-put-back-id={putBackId}
-                        disabled={pending === putBackId} onClick={() => void runPutBack(putBackId, f.label)}>
+                        disabled={pending === putBackId} onClick={() => void runPutBack(putBackId, f.label)}
+                        aria-label={tr.text("history.putBack.aria", { field: f.label })}>
                         {tr.text("history.putBack")}
                       </Button>
                     ) : null}

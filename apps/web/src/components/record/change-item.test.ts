@@ -6,6 +6,7 @@ import { RESTORE_DAYS } from "@bis/db";
 import { m } from "@/lib/messages";
 import { changeRowView, type ChangeViewCtx } from "@/lib/record/change-rows";
 import { makeTr } from "@/lib/record/copy";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 
 /**
  * F-115 part 1 (S-04), plan Task 5: no DOM renderer in apps/web (archive-controls.test.ts's own
@@ -132,7 +133,7 @@ describe("ChangeItem: every row has a mark, Put back per field, Restore on a rem
   });
   const render = (props: Partial<Parameters<typeof ChangeItem>[0]> & { group: ChangeGroup; view: ReturnType<typeof changeRowView> }) =>
     renderToStaticMarkup(createElement(ChangeItem, {
-      head: head(props.view), tr: EN, canWrite: true, nowMs: Date.parse(AT),
+      head: head(props.view), locale: "en", pseudo: false, canWrite: true, nowMs: Date.parse(AT),
       putBack: vi.fn(), restore: vi.fn(),
       ...props,
     }));
@@ -217,6 +218,18 @@ describe("ChangeItem: every row has a mark, Put back per field, Restore on a rem
     expect(html).toContain('data-change-put-back-id="9"');
   });
 
+  // Design round 2 (D2): several "Put back" buttons on one row need per-field accessible names, or a
+  // screen reader announces "Put back" twice with no way to tell them apart.
+  it("each Put back button's accessible name names its OWN field (mutation: a bare aria-label=\"Put back\" with no field -> FAILS, both buttons would share one name)", () => {
+    const first = baseRow({ id: 5, field: "phone" });
+    const second = baseRow({ id: 9, field: "email", before: "a@x.com", after: "b@x.com" });
+    const g = group([first, second], { steps: [[first], [second]] });
+    const view = changeRowView(g, ctx());
+    const html = render({ group: g, view });
+    expect(html).toContain(`aria-label="${m["history.putBack.aria"].replace("{field}", "Phone")}"`);
+    expect(html).toContain(`aria-label="${m["history.putBack.aria"].replace("{field}", "Email")}"`);
+  });
+
   // Review m4: a folded group that changed the SAME field twice shows two lines (change-rows.test.ts
   // already proves that), but only the NEWER line's compare-and-swap can ever succeed — the earlier
   // line's own `after` is already stale the instant the later write landed.
@@ -228,6 +241,26 @@ describe("ChangeItem: every row has a mark, Put back per field, Restore on a rem
     const html = render({ group: g, view });
     expect(html.match(/data-change-put-back=""/g)).toHaveLength(1);
     expect(html).toContain('data-change-put-back-id="2"');
+  });
+});
+
+// Review round 2 (C1): ChangeItem rebuilds its own `tr` from `locale`+`pseudo` (never receives one),
+// the same split `act-row.tsx`/`act-undo.tsx` use for `locale` alone — this proves the rebuild itself
+// actually threads `pseudo` through (makeTr(locale, pseudo)), not just `locale`.
+describe("ChangeItem rebuilds its OWN tr from locale+pseudo (review C1): pseudo still wraps every string", () => {
+  const head = (view: ReturnType<typeof changeRowView>) => ({
+    kind: "change" as const, mark: { kind: "person" as const, label: "Ana García" },
+    verb: view.verb, status: null, detail: view.stepsText, time: "Nov 2, 2026, 10:12 AM", dateTime: AT,
+  });
+  it("pseudo=true wraps Put back/Show every step exactly as a page-built tr would (mutation: makeTr(locale) with pseudo dropped -> FAILS, no brackets)", () => {
+    const g = group([baseRow({ field: "phone" })]);
+    const view = changeRowView(g, ctx());
+    const html = renderToStaticMarkup(createElement(ChangeItem, {
+      head: head(view), group: g, view, locale: "en", pseudo: true, canWrite: true, nowMs: Date.parse(AT),
+      putBack: vi.fn(), restore: vi.fn(),
+    }));
+    expect(html).toContain(pseudoLocale(m["history.putBack"]));
+    expect(html).toContain(pseudoLocale(m["history.showSteps"]));
   });
 });
 

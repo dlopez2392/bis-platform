@@ -37,15 +37,29 @@ export function changeNameRefs(groups: readonly ChangeGroup[]): ChangeNameRefs {
     for (const row of g.rows) {
       // A membership's own group, so a removal's verb can read "household" or "business" correctly —
       // collected for every op, not only delete: cheap, and an update (a moved membership) wants it too.
-      if (row.recordType === "client_group_member" && row.clientGroupId) groupIds.add(row.clientGroupId);
+      if (row.recordType === "client_group_member") {
+        if (row.clientGroupId) groupIds.add(row.clientGroupId);
+        // F-115 PR E fix round 2 (review I4, partial): the member's own CONTACT id, same reasoning,
+        // every op — a REMOVED member is no longer in the group's own activity set, so the "removed
+        // Ana" verb has nowhere else to read her name from but this read.
+        addStringId(contactIds, row.contactId);
+      }
+      // F-115 PR E fix round 2 (review I7, partial): a tag's own id, on BOTH ops — an added tag's name
+      // ("added the tag {name}") needs it exactly as a removed one's does.
+      if (row.recordType === "contact_tag" && (row.op === "delete" || row.op === "insert")) tagIds.add(row.recordId);
       if (row.op === "delete") {
-        if (row.recordType === "contact_tag") tagIds.add(row.recordId);
         const before = row.before as Record<string, unknown> | null;
         if (row.recordType === "contact_relationship") addStringId(contactIds, before?.related_contact_id);
         if (row.recordType === "place") {
           addStringId(contactIds, before?.contact_id);
           addStringId(groupIds, before?.client_group_id);
         }
+      }
+      // F-115 PR E fix round 2 (review I4, partial): an INSERTED relationship's own `after` is the
+      // only place `related_contact_id` lives (there is no `before` on an insert) — `insertVerb`'s own
+      // "added the link to {name}" needs it, same as the removal verb needs `before`'s copy.
+      if (row.op === "insert" && row.recordType === "contact_relationship") {
+        addStringId(contactIds, (row.after as Record<string, unknown> | null)?.related_contact_id);
       }
       if (row.op === "update" && row.field) {
         if (row.field === "related_contact_id") { addStringId(contactIds, row.before); addStringId(contactIds, row.after); }
@@ -80,24 +94,27 @@ export async function readChangeNames(db: SupabaseClient, accountId: string, ref
   if (refs.contactIds.size === 0 && refs.groupIds.size === 0 && refs.tagIds.size === 0
     && refs.equipmentIds.size === 0 && refs.stageIds.size === 0 && refs.pipelineIds.size === 0) return EMPTY;
   const none = { data: [] as unknown[], error: null };
+  // F-115 PR E fix round 2 (review n6): an explicit `.limit()` on every read, bounded by the id SET
+  // it was asked for — belt-and-suspenders over the `.in()` filter itself: a read can never return
+  // more rows than ids it was given, however many duplicate account rows might otherwise exist.
   const [contacts, groups, tags, equipment, stages, pipelines] = await Promise.all([
     refs.contactIds.size > 0
-      ? db.from("contacts").select("id, first_name, last_name").eq("account_id", accountId).in("id", [...refs.contactIds])
+      ? db.from("contacts").select("id, first_name, last_name").eq("account_id", accountId).in("id", [...refs.contactIds]).limit(refs.contactIds.size)
       : Promise.resolve(none),
     refs.groupIds.size > 0
-      ? db.from("client_groups").select("id, kind").eq("account_id", accountId).in("id", [...refs.groupIds])
+      ? db.from("client_groups").select("id, kind").eq("account_id", accountId).in("id", [...refs.groupIds]).limit(refs.groupIds.size)
       : Promise.resolve(none),
     refs.tagIds.size > 0
-      ? db.from("tags").select("id, name").eq("account_id", accountId).in("id", [...refs.tagIds])
+      ? db.from("tags").select("id, name").eq("account_id", accountId).in("id", [...refs.tagIds]).limit(refs.tagIds.size)
       : Promise.resolve(none),
     refs.equipmentIds.size > 0
-      ? db.from("equipment").select("id, name").eq("account_id", accountId).in("id", [...refs.equipmentIds])
+      ? db.from("equipment").select("id, name").eq("account_id", accountId).in("id", [...refs.equipmentIds]).limit(refs.equipmentIds.size)
       : Promise.resolve(none),
     refs.stageIds.size > 0
-      ? db.from("pipeline_stages").select("id, name").eq("account_id", accountId).in("id", [...refs.stageIds])
+      ? db.from("pipeline_stages").select("id, name").eq("account_id", accountId).in("id", [...refs.stageIds]).limit(refs.stageIds.size)
       : Promise.resolve(none),
     refs.pipelineIds.size > 0
-      ? db.from("pipelines").select("id, name").eq("account_id", accountId).in("id", [...refs.pipelineIds])
+      ? db.from("pipelines").select("id, name").eq("account_id", accountId).in("id", [...refs.pipelineIds]).limit(refs.pipelineIds.size)
       : Promise.resolve(none),
   ]);
   for (const [label, r] of [

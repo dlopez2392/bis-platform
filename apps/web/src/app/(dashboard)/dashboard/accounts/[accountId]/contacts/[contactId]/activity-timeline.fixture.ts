@@ -43,7 +43,7 @@ export function legacyTimeline(p: Record<string, unknown>): ActivityTimelineProp
     timezone, canAssign: Boolean(p.canAssign), members: (p.members ?? []) as AssignMember[],
     rows, holdOpenTaskIds: (p.holdOpenTaskIds ?? []) as string[],
     failedText: null, emptyText: rows.length === 0 ? tr.text("timeline.empty") : null,
-    pager: { olderHref: null, newerHref: null }, tr, customerLang: "",
+    pager: { olderHref: null, newerHref: null }, tr, pseudo: Boolean(p.pseudo), customerLang: "",
     // F-006 part 1 (plan Task 11): defaults to true so the nine pre-existing *.test.ts files (which
     // never pass it) keep seeing whatever a merge row already shows; the merge test file is the one
     // that exercises false.

@@ -129,7 +129,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // F-115 PR E fix round 2 (review C1): named so the SAME value reaches both `makeTr` here and the
+  // `pseudo` prop `GroupTimeline` must pass to `ChangeItem` ("use client") in place of `tr` itself.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // The header (spec §8.1): Call, Text and Email go to the call-first member; with none visible
   // (none chosen, someone else's customer for a Technician, or People's read failed) they hide (D4).
@@ -230,7 +233,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
     timeline: timeline.status === "ready" && timelineView
       ? {
         node: (
-          <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr}
+          <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr} pseudo={pseudo}
             customerLangs={Object.fromEntries((set?.people ?? []).flatMap((p) => (p.language ? [[p.contactId, p.language]] : [])))}
             nowMs={now.getTime()}
             // F-115 part 1 (S-04), plan Task 5: Put back/Restore (Owners, Staff, the agency); the

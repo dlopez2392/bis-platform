@@ -56,6 +56,11 @@ export type ActivityTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** F-115 PR E fix round 2 (review C1): the SAME pseudo-locale flag the page built `tr` with
+   *  (`requestPseudoMode`) — carried separately because `tr` itself can never cross into
+   *  `ChangeItem` ("use client"); this plain boolean can, and `ChangeItem` rebuilds its own `tr`
+   *  from `tr.locale` + this. */
+  pseudo: boolean;
   /** S-09 §9: the contact's language for what the CUSTOMER typed; "" when not set (C10). */
   customerLang: "" | "en" | "es";
   /** F-006 part 1 (plan Task 11): may this caller undo a merge (seesWholeAccount: Owners, Staff, the
@@ -170,7 +175,7 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
                 holdOpen={p.holdOpenTaskIds} accountId={p.accountId} contactId={p.contactId} contactName={p.contactName}
-                tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs}
+                tr={tr} pseudo={p.pseudo} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs}
                 canWriteHistory={p.canWriteHistory ?? false} putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
           ))}
@@ -188,12 +193,12 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
 }
 
 function Row({
-  row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, customerLang,
+  row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, pseudo, customerLang,
   canMerge, nowMs, canWriteHistory, putBackHistory, restoreHistory,
 }: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; contactId: string;
-  contactName: string; tr: Tr; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
+  contactName: string; tr: Tr; pseudo: boolean; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
   canWriteHistory: boolean; putBackHistory: ChangeAction; restoreHistory: ChangeAction;
 }) {
   const e = row.entry;
@@ -369,10 +374,11 @@ function Row({
     // row's own Undo already uses (`canUndo = canMerge && nowMs !== undefined && …`).
     case "change":
       // Review m2: `putBackHistory`/`restoreHistory` are now REQUIRED props (the page always binds
-      // them), so there is no "no action" fallback left to construct here, and nothing that could
-      // ever fail to cross the Server-to-Client boundary `ChangeItem` sits on.
+      // them), so there is no "no action" fallback left to construct here. Review round 2 (C1):
+      // `tr` itself (`text`/`count` are FUNCTIONS) must never be the prop that crosses to `ChangeItem`
+      // ("use client") — only `locale`/`pseudo`, plain values `ChangeItem` rebuilds its own `tr` from.
       return row.change && nowMs !== undefined ? (
-        <ChangeItem head={head} group={e.group} view={row.change} tr={tr} canWrite={canWriteHistory}
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} pseudo={pseudo} canWrite={canWriteHistory}
           nowMs={nowMs} putBack={putBackHistory} restore={restoreHistory} />
       ) : <TimelineItem {...head} icon={History} />;
     default:

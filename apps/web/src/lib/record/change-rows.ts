@@ -1,7 +1,10 @@
-import type { ChangeGroup, ChangeRow } from "@bis/db";
+import type { ChangeGroup, ChangeRow, ChangeRecordType } from "@bis/db";
+import { RELATIONSHIP_KEYS, type RelationshipKey } from "@bis/db/relationship-keys";
 import type { MessageKey } from "@/lib/messages";
 import { formatPhone } from "@/lib/document-requests/customer-state";
 import { formatDateInZone, formatDateTimeInZone } from "@/lib/format";
+import { machineSourceCaption } from "@/lib/contacts/lead-source";
+import { RELATIONSHIP_LABELS } from "@/lib/contacts/relationship-labels";
 import type { Tr } from "./copy";
 
 /**
@@ -130,21 +133,33 @@ function fieldKeys(field: string): { verbKey: MessageKey; labelKey: MessageKey }
   return FIELD_KEYS[field] ?? OTHER_KEYS;
 }
 
+/** F-115 PR E fix round 2 (review n5): `ctx.customFieldLabels` is read from the account's
+ *  CONTACT-model field defs only (`loaders.ts`'s own `loadFieldDefs`; `group-loaders.ts`'s twin reads
+ *  the SAME model for a member's own custom fields) — there is no `client_group`-model field-defs
+ *  source in the product yet (`custom_fields.model` only allows `contact`/`opportunity`). A
+ *  `client_group` row's own `custom.<key>` must therefore NEVER consult that map, even when the key
+ *  NAME happens to collide with a real contact field's own key: that label describes a DIFFERENT
+ *  field on a DIFFERENT entity, and showing it would be a wrong fact, not a missing one. The honest
+ *  fallback (the raw key) is what both already use for "we have no definition for this". */
+function customLabelOf(recordType: ChangeRecordType, key: string, ctx: ChangeViewCtx): string {
+  return recordType === "contact" ? (ctx.customFieldLabels[key] ?? key) : key;
+}
+
 /** `history.field.*`, the short form inside the verb's list — a custom key reads its OWN label via
  *  `history.field.custom`'s `{label}` template, never the raw dotted field name. */
-function fieldVerbLabel(field: string, ctx: ChangeViewCtx): string {
+function fieldVerbLabel(recordType: ChangeRecordType, field: string, ctx: ChangeViewCtx): string {
   if (field.startsWith("custom.")) {
     const key = field.slice("custom.".length);
-    return ctx.tr.text("history.field.custom", { label: ctx.customFieldLabels[key] ?? key });
+    return ctx.tr.text("history.field.custom", { label: customLabelOf(recordType, key, ctx) });
   }
   return ctx.tr.text(fieldKeys(field).verbKey);
 }
 
 /** `history.label.*`, sentence case, the detail line's own label. */
-function fieldDetailLabel(field: string, ctx: ChangeViewCtx): string {
+function fieldDetailLabel(recordType: ChangeRecordType, field: string, ctx: ChangeViewCtx): string {
   if (field.startsWith("custom.")) {
     const key = field.slice("custom.".length);
-    return ctx.tr.text("history.label.custom", { label: ctx.customFieldLabels[key] ?? key });
+    return ctx.tr.text("history.label.custom", { label: customLabelOf(recordType, key, ctx) });
   }
   return ctx.tr.text(fieldKeys(field).labelKey);
 }
@@ -159,11 +174,32 @@ const CUSTOMER_ID_FIELDS: ReadonlySet<string> = new Set([
   "related_contact_id", "contact_id", "client_group_id", "replaces_id", "stage_id", "pipeline_id",
 ]);
 
-/** F-115 PR E fix (review I6/R2): a language VALUE reads as a word, never the raw "en"/"es" code —
- *  reusing the calendar cancel dialog's own existing "English"/"Spanish" words rather than a new key. */
+/** F-115 PR E fix (review I6/R2), dedicated keys in round 2 (review n4): a language VALUE reads as a
+ *  word, never the raw "en"/"es" code. `history.value.language.*`, this feature's OWN copy — never
+ *  `calendar.cancelDialog.language*` (the original choice): that key is the calendar's own, and could
+ *  drift for the calendar's own reasons, unrelated to history's. */
 const LANGUAGE_WORDS: Readonly<Record<string, MessageKey>> = {
-  en: "calendar.cancelDialog.languageEnglish", es: "calendar.cancelDialog.languageSpanish",
+  en: "history.value.language.en", es: "history.value.language.es",
 };
+
+/** F-115 PR E fix round 2 (review n3): a deal's own status, and a household/business's own kind —
+ *  reusing the SAME words the deal card and the group page already show them with, never a new key
+ *  for an identical concept. */
+const DEAL_STATUS_WORDS: Readonly<Record<string, MessageKey>> = {
+  open: "pipeline.status.open", won: "pipeline.status.won", lost: "pipeline.status.lost",
+};
+const GROUP_KIND_WORDS: Readonly<Record<string, MessageKey>> = {
+  household: "groups.kind.household", business: "groups.kind.business",
+};
+/** F-115 PR E fix round 2 (review n3): the grammatical word-form a relationship's own wording takes
+ *  ('f'/'m', `contact_relationships_forms`'s own CHECK) — a fact about the SENTENCE, not the person's
+ *  own gender question. */
+const WORD_FORM_WORDS: Readonly<Record<string, MessageKey>> = {
+  f: "history.value.wordForm.f", m: "history.value.wordForm.m",
+};
+function isRelationshipKey(v: string): v is RelationshipKey {
+  return (RELATIONSHIP_KEYS as readonly string[]).includes(v);
+}
 
 /**
  * One value, blank/boolean/phone/assigned-person/customer-id/language/timestamp/plain, per plan
@@ -181,6 +217,20 @@ export function formatChangeValue(field: string, value: unknown, ctx: ChangeView
     return ctx.names[id] ?? ctx.tr.text("assign.someone");
   }
   if (field === "language" && typeof value === "string" && LANGUAGE_WORDS[value]) return ctx.tr.text(LANGUAGE_WORDS[value]);
+  // F-115 PR E fix round 2 (review n3): every other enum VALUE this feature's own audited fields
+  // carry — reused label sources throughout, never a raw code.
+  if (field === "status" && typeof value === "string" && DEAL_STATUS_WORDS[value]) return ctx.tr.text(DEAL_STATUS_WORDS[value]);
+  if (field === "kind" && typeof value === "string" && GROUP_KIND_WORDS[value]) return ctx.tr.text(GROUP_KIND_WORDS[value]);
+  if ((field === "contact_form" || field === "related_form") && typeof value === "string" && WORD_FORM_WORDS[value]) {
+    return ctx.tr.text(WORD_FORM_WORDS[value]);
+  }
+  if (field === "label_key" && typeof value === "string" && isRelationshipKey(value)) {
+    return RELATIONSHIP_LABELS[value].a.pick?.[ctx.tr.locale] ?? value;
+  }
+  // A machine-made source ("voice", "booking", "form: {name}") reads its own caption (the SAME words
+  // the contact drawer's own Source hint uses); an operator's own typed note (anything else) is
+  // honest free text, shown exactly as typed — there is nothing machine-made to translate.
+  if (field === "source" && typeof value === "string") return machineSourceCaption(value, ctx.tr.locale) ?? value;
   if (CUSTOMER_ID_FIELDS.has(field) && typeof value === "string") return customerName(value, ctx);
   if (typeof value === "string" && ISO_DATETIME.test(value)) {
     try { return formatDateTimeInZone(value, ctx.zone, ctx.tr.locale); } catch { /* fall through to the raw string */ }
@@ -195,7 +245,7 @@ export function formatChangeValue(field: string, value: unknown, ctx: ChangeView
 function fieldLine(row: ChangeRow, ctx: ChangeViewCtx): ChangeFieldLine {
   const field = row.field!;
   return {
-    field, label: fieldDetailLabel(field, ctx),
+    field, label: fieldDetailLabel(row.recordType, field, ctx),
     was: formatChangeValue(field, row.before, ctx), now: formatChangeValue(field, row.after, ctx),
     row,
   };
@@ -227,7 +277,9 @@ function deleteVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): { v
       return { verb: tr.text("history.verb.removedPlace", { name }), name };
     }
     case "contact_tag": {
-      const name = ctx.names[row.recordId] ?? row.recordId;
+      // F-115 PR E fix round 2 (review I7/D1): a tag deleted outright has no row of its own left to
+      // read a name from — a WORD, never the raw id; Restore's own toast shares this `name`.
+      const name = ctx.names[row.recordId] ?? tr.text("history.tagUnknown");
       return { verb: tr.text("history.verb.removedTag", { name }), name };
     }
     // `related_contact_id`/`contactId` here name a CUSTOMER, never a staff member — "Someone on the
@@ -268,7 +320,8 @@ function insertVerb(group: ChangeGroup, row: ChangeRow, ctx: ChangeViewCtx): str
       return tr.text("history.verb.addedPlace", { name });
     }
     case "contact_tag": {
-      const name = ctx.names[row.recordId] ?? row.recordId;
+      // F-115 PR E fix round 2 (review I7/D1): same fallback word as the removal verb — never the raw id.
+      const name = ctx.names[row.recordId] ?? tr.text("history.tagUnknown");
       return tr.text("history.verb.addedTag", { name });
     }
     case "contact_relationship": {
@@ -323,7 +376,7 @@ export function changeRowView(group: ChangeGroup, ctx: ChangeViewCtx): ChangeRow
   for (const row of updateRows) {
     if (seen.has(row.field!)) continue;
     seen.add(row.field!);
-    labels.push(fieldVerbLabel(row.field!, ctx));
+    labels.push(fieldVerbLabel(row.recordType, row.field!, ctx));
   }
   const list = new Intl.ListFormat(ctx.tr.locale === "es" ? "es-US" : "en-US", { type: "conjunction" }).format(labels);
   const verb = ctx.tr.text("history.verb.changed", { fields: list });

@@ -27,6 +27,10 @@ export type GroupTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** F-115 PR E fix round 2 (review C1): the SAME pseudo-locale flag the page built `tr` with —
+   *  carried separately because `tr` itself can never cross into `ChangeItem` ("use client"); this
+   *  plain boolean can, and `ChangeItem` rebuilds its own `tr` from `tr.locale` + this. */
+  pseudo: boolean;
   /** S-09 §9: each member's language, by contact id; a member without one is absent. */
   customerLangs: Record<string, "en" | "es">;
   /** F-115 part 1 (S-04), plan Task 5: the page's own clock, for a change row's 30-day Restore
@@ -100,7 +104,7 @@ export function GroupTimeline(p: GroupTimelineProps) {
                   <Separator className="flex-1" />
                 </div>
               ) : null}
-              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} customerLangs={p.customerLangs}
+              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} pseudo={p.pseudo} customerLangs={p.customerLangs}
                 nowMs={p.nowMs} canWriteHistory={p.canWriteHistory ?? false}
                 putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
@@ -118,8 +122,8 @@ export function GroupTimeline(p: GroupTimelineProps) {
   );
 }
 
-function Row({ row, timezone, accountId, tr, customerLangs, nowMs, canWriteHistory, putBackHistory, restoreHistory }: {
-  row: TimelineRow; timezone: string; accountId: string; tr: Tr; customerLangs: Record<string, "en" | "es">;
+function Row({ row, timezone, accountId, tr, pseudo, customerLangs, nowMs, canWriteHistory, putBackHistory, restoreHistory }: {
+  row: TimelineRow; timezone: string; accountId: string; tr: Tr; pseudo: boolean; customerLangs: Record<string, "en" | "es">;
   nowMs: number | undefined; canWriteHistory: boolean;
   putBackHistory: ChangeAction; restoreHistory: ChangeAction;
 }) {
@@ -260,8 +264,10 @@ function Row({ row, timezone, accountId, tr, customerLangs, nowMs, canWriteHisto
     // F-115 part 1 (S-04), plan Task 5: the real row — a removed member reads "quitó a {name} del
     // hogar/negocio" here exactly as it does on the member's own page (the same `ChangeGroup`).
     case "change":
+      // Review round 2 (C1): `tr` itself must never cross into `ChangeItem` ("use client") — only
+      // `locale`/`pseudo`, which it rebuilds its own `tr` from (see activity-timeline.tsx's own comment).
       return row.change && nowMs !== undefined ? (
-        <ChangeItem head={head} group={e.group} view={row.change} tr={tr} canWrite={canWriteHistory}
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} pseudo={pseudo} canWrite={canWriteHistory}
           nowMs={nowMs} putBack={putBackHistory} restore={restoreHistory} />
       ) : <TimelineItem {...head} icon={History} />;
     default:

@@ -7543,6 +7543,11 @@ export const m = {
   "history.verb.removedMemberBusiness.es": "quitó a {name} del negocio",
   "history.verb.removedTag": "removed the tag {name}",
   "history.verb.removedTag.es": "quitó la etiqueta {name}",
+  // F-115 PR E fix round 2 (review I7/D1): a tag deleted outright can never be resolved by
+  // readChangeNames (its own row is gone) — a plain word, never the raw id, in EITHER verb and in
+  // Restore's own toast (change-rows.ts's deleteVerb shares `name` with `removalName`).
+  "history.tagUnknown": "a tag",
+  "history.tagUnknown.es": "una etiqueta",
   "history.verb.removedRelationship": "removed the link to {name}",
   "history.verb.removedRelationship.es": "quitó la relación con {name}",
   "history.verb.removedPlace": "removed the place {name}",
@@ -7678,8 +7683,10 @@ export const m = {
   "history.field.country.es": "el país",
   "history.label.country": "Country",
   "history.label.country.es": "País",
-  "history.field.archived": "archived",
-  "history.field.archived.es": "archivado",
+  // F-115 PR E fix round 2 (review n4): "changed archived" read as developer jargon — a plain
+  // sentence, same shape as every other boolean field's own verb-list word.
+  "history.field.archived": "whether it's archived",
+  "history.field.archived.es": "si está archivado",
   "history.label.archived": "Archived",
   "history.label.archived.es": "Archivado",
   "history.field.whoHasIt": "who has it",
@@ -7730,16 +7737,20 @@ export const m = {
   "history.field.relationshipLabel.es": "la etiqueta de la relación",
   "history.label.relationshipLabel": "Relationship label",
   "history.label.relationshipLabel.es": "Etiqueta de la relación",
-  "history.field.wording": "wording",
-  "history.field.wording.es": "la forma de la palabra",
+  // F-115 PR E fix round 2 (review n4): "changed wording"/"cambió la forma de la palabra" both read
+  // as developer jargon — a plain phrase naming what actually changes (which word is used).
+  "history.field.wording": "the wording",
+  "history.field.wording.es": "la palabra que se usa",
   "history.label.wording": "Wording",
   "history.label.wording.es": "Forma de la palabra",
   "history.field.canPickUp": "pick-up permission",
   "history.field.canPickUp.es": "el permiso para recoger",
   "history.label.canPickUp": "Can pick up",
   "history.label.canPickUp.es": "Puede recoger",
-  "history.field.isEmergency": "emergency contact flag",
-  "history.field.isEmergency.es": "la marca de contacto de emergencia",
+  // F-115 PR E fix round 2 (review n4): "emergency contact flag" is a developer term ("flag") — a
+  // plain sentence, same "whether…" shape as the archived field above.
+  "history.field.isEmergency": "whether they're an emergency contact",
+  "history.field.isEmergency.es": "si es un contacto de emergencia",
   "history.label.isEmergency": "Emergency contact",
   "history.label.isEmergency.es": "Contacto de emergencia",
   "history.field.other": "a detail",
@@ -7815,6 +7826,11 @@ export const m = {
   // case both share, worded the same "landscaper at 7 AM" way as every neighbor here.
   "history.putBack": "Put back",
   "history.putBack.es": "Poner como antes",
+  // F-115 PR E fix round 2 (design D2): a folded group can show several "Put back" buttons, one per
+  // field — each needs its OWN accessible name (contact-fields-panel.tsx's own "remove tag {name}"
+  // precedent), or a screen reader announces "Put back" three times with no way to tell them apart.
+  "history.putBack.aria": "Put back {field}",
+  "history.putBack.aria.es": "Poner {field} como antes",
   "history.putBack.done": "{field} is back to what it was.",
   "history.putBack.done.es": "{field} quedó como antes.",
   "history.putBack.changed": "It changed since, so it wasn't put back.",
@@ -7859,6 +7875,24 @@ export const m = {
   "history.notFound.es": "Ya no se puede encontrar este cambio.",
   "history.undo": "Undo",
   "history.undo.es": "Deshacer",
+  // F-115 PR E fix round 2 (review n3/n4): enum VALUES this feature's own fields carry, each mapped
+  // to a plain word, never the raw code. Dedicated keys, never a reuse of another feature's own copy
+  // (review n4: `calendar.cancelDialog.language*` was the wrong reuse for exactly this reason —
+  // calendar's own words can drift for calendar's own reasons, unrelated to history's).
+  "history.value.language.en": "English",
+  "history.value.language.en.es": "Inglés",
+  "history.value.language.es": "Spanish",
+  "history.value.language.es.es": "Español",
+  // A deal's own status — reuses pipeline.status.* (the SAME word the deal's own card already shows),
+  // never a new key for the identical concept.
+  // A household/business's own kind — reuses groups.kind.* (the group page's own words).
+  // `contact_relationship.contact_form`/`related_form` ('f'/'m', DB check `contact_relationships_forms`):
+  // which gendered word-form a relationship's own wording takes — a grammatical fact, not the
+  // person's own gender question; "feminine"/"masculine" names that honestly.
+  "history.value.wordForm.f": "feminine",
+  "history.value.wordForm.f.es": "femenino",
+  "history.value.wordForm.m": "masculine",
+  "history.value.wordForm.m.es": "masculino",
   "aiActs.verb.booked": "booked {when}",
   "aiActs.verb.booked.es": "agendó {when}",
   "aiActs.verb.rescheduled": "moved a booking to {when}",
