@@ -126,6 +126,20 @@ describe("mapRows", () => {
     expect(mapped[0]!.input.firstName).toBe("'Tis");
   });
 
+  // The export also guards a leading TAB or CR (contacts/export/route.ts), so the import must strip
+  // that same prefix back off, or a round trip leaves a stray apostrophe (mutation: drop TAB and CR from
+  // unguard -> FAILS).
+  it("strips the export's quote from a value that starts with a TAB or a CR, too", () => {
+    const TAB = String.fromCharCode(9);
+    const CR = String.fromCharCode(13);
+    const { mapped } = mapRows([
+      { line: 2, values: { First: "'" + TAB + "=HYPERLINK(x)", Email: "a@b.co" } },
+      { line: 3, values: { First: "'" + CR + "+1cmd", Email: "c@d.co" } },
+    ], m);
+    expect(mapped[0]!.input.firstName?.startsWith("'")).toBe(false);
+    expect(mapped[1]!.input.firstName?.startsWith("'")).toBe(false);
+  });
+
   it("keeps a blank cell OUT of the patch entirely, so it cannot overwrite", () => {
     const { mapped } = mapRows(
       [{ line: 2, values: { Email: "a@b.co", First: "" } }], m);

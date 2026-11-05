@@ -68,13 +68,13 @@ function normalizeHeader(header: string): string {
 }
 
 /**
- * The export prefixes a quote onto a cell starting with = + - or @, so a
- * spreadsheet shows it instead of executing it. Strip it back in exactly that
+ * The export prefixes a quote onto a cell starting with = + - @, a TAB or a CR,
+ * so a spreadsheet shows it instead of executing it. Strip it back in exactly that
  * shape and no other — an unconditional strip would eat the apostrophe in a
  * value like "'Tis" on every round trip.
  */
 function unguard(value: string): string {
-  return /^'[=+\-@]/.test(value) ? value.slice(1) : value;
+  return /^'[=+\-@\t\r]/.test(value) ? value.slice(1) : value;
 }
 
 function splitTags(value: string): string[] {

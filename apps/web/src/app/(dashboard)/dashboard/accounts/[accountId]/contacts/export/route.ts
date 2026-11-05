@@ -20,9 +20,11 @@ export const CSV_COLUMNS = ["first_name", "last_name", "email", "phone",
 /** A cell starting with = + - or @ is a formula to Excel and Sheets, so a
  *  contact named "=HYPERLINK(...)" becomes code on the client's machine when
  *  they open our export. Prefixing a single quote is the standard defence and
- *  is stripped again on import. */
+ *  is stripped again on import. A leading TAB or CR is guarded too (mirrors
+ *  `lib/record/history-csv.ts`'s own fix, F-115 PR C review m5): Excel and
+ *  Sheets still read a formula past either of those before the `=`. */
 function guard(v: string): string {
-  return /^[=+\-@]/.test(v) ? `'${v}` : v;
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
 }
 
 function cell(v: unknown): string {
