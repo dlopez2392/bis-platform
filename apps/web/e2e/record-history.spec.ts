@@ -137,8 +137,10 @@ test("a changed phone shows Was/Now on the timeline, Put back reverts it, and Un
   await expect(editField).toContainText(`${m["history.was"]} ${PHONE_BEFORE_DISPLAY}`);
   await expect(editField).toContainText(`${m["history.now"]} ${PHONE_AFTER_DISPLAY}`);
 
-  // Step 4: Put back, on the edit row's own (only) field line.
-  await editField.getByRole("button", { name: m["history.putBack"], exact: true }).click();
+  // Step 4: Put back, on the edit row's own (only) field line. The button's accessible name is
+  // "Put back {field}" (`history.putBack.aria`, design D2 — a folded group can show several "Put
+  // back" buttons, so each needs its OWN name), not the visible "Put back" text alone.
+  await editField.getByRole("button", { name: m["history.putBack.aria"].replace("{field}", m["history.label.phone"]), exact: true }).click();
   const putBackToast = toastWith(page, m["history.putBack.done"].replace("{field}", m["history.label.phone"]));
   await expect(putBackToast).toBeVisible();
   await expect.poll(readPhone).toBe(PHONE_BEFORE);
