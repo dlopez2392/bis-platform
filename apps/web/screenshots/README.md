@@ -2,7 +2,11 @@
 
 The captures `/platform` on bis-rgv.com renders. Six images of the seeded demo
 tenant (Resaca Air), produced here and committed to the website repo under
-`public/screenshots/`.
+`public/screenshots/`, then the same six in Spanish under `es/` (since
+2026-11, when the dashboard became Spanish for whoever chooses it): the
+capture user picks Español on Mis preferencias, the booking page is asked for
+with `?locale=es`, and the Monday report is composed in Spanish. The website's
+Spanish pages show those.
 
 ## Running it
 
