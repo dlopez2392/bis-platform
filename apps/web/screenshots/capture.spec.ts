@@ -251,8 +251,10 @@ async function chooseSpanish(browser: Browser) {
   const page = await ctx.newPage();
   await page.goto("/dashboard/preferences");
   await page.getByRole("radio", { name: "Español", exact: true }).check();
-  // The panel saves, then refreshes; its own wrapper carries the locale.
-  await expect(page.locator('div[lang="es"]').filter({ has: page.locator('[data-prefs-card="language"]') }))
+  // The panel saves, then refreshes; its own wrapper (the innermost element
+  // carrying a lang around the card) turns Spanish. The shell's does too,
+  // hence .last(): the 2026-11-05 run matched both and failed on strictness.
+  await expect(page.locator('div[lang="es"]').filter({ has: page.locator('[data-prefs-card="language"]') }).last())
     .toBeVisible();
   await ctx.close();
 }
