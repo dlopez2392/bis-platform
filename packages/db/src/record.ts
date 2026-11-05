@@ -9,7 +9,10 @@ import { listContactOpportunities } from "./opportunities";
 import { listContactSubmissions } from "./forms";
 import { listContactMessages } from "./messaging";
 import { countGroupMembers, GROUP_ACTIVITY_CAP, type GroupPerson } from "./client-groups";
-import { forContacts, instantKey, withTimelinePage, TIMELINE_PAGE_SIZE, type TimelineCursor, type TimelinePageOpts } from "./timeline-cursor";
+import {
+  forContacts, instantKey, withTimelinePage, withBigintTimelinePage, encodeBigintCursorId, TIMELINE_PAGE_SIZE,
+  type TimelineCursor, type TimelinePageOpts,
+} from "./timeline-cursor";
 import { WEBCHAT_MAX_ROWS_PER_CHAT } from "./webchat-plan";
 import type { AuthorKind } from "./provenance";
 import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTimeline, type TimelineDocument, type TimelineDocumentVersion, type TimelineDocumentScan } from "./documents";
@@ -459,9 +462,13 @@ async function listContactChats(
 
 /**
  * Contact archive (0103, spec §4.2, §6.2): the `archive` source, one row per archive or restore from
- * `contact_archive_log`, paged like every other source (`withTimelinePage`, the `notes` source's own
- * clause). On the caller's client: RLS decides (`contact_archive_log_read`, 0103). THROWS on a read
- * error (listTimelinePage's settle).
+ * `contact_archive_log`, paged like every other source — except `contact_archive_log.id` is a
+ * BIGINT, not a uuid, so this source pages with `withBigintTimelinePage` (timeline-cursor.ts), not
+ * `withTimelinePage`: a page whose cursor came from a uuid-id source (a note, a call, …) can never
+ * send that uuid into a `bigint` column filter, and the entry's own `id` is the real bigint
+ * embedded in a uuid shape (`encodeBigintCursorId`), so a page ending on an archive row still
+ * yields a cursor the next page accepts. On the caller's client: RLS decides
+ * (`contact_archive_log_read`, 0103). THROWS on a read error (listTimelinePage's settle).
  */
 async function listContactArchiveLog(
   db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
@@ -470,14 +477,14 @@ async function listContactArchiveLog(
     db.from("contact_archive_log").select("id, contact_id, action, author_kind, author_id, sign, created_at").eq("account_id", accountId),
     "contact_id", who,
   );
-  const { data, error } = await withTimelinePage(q, "created_at", page);
+  const { data, error } = await withBigintTimelinePage(q, "created_at", "archive", page);
   if (error) throw new Error(`listContactArchiveLog failed: ${error.message}`);
   type Row = {
     id: number | string; contact_id: string; action: "archived" | "restored";
     author_kind: "person" | "customer"; author_id: string | null; sign: RestoreSign | null; created_at: string;
   };
   return ((data ?? []) as Row[]).map((r): TimelineEntry => ({
-    kind: "archive", id: String(r.id), at: r.created_at, contactId: r.contact_id,
+    kind: "archive", id: encodeBigintCursorId("archive", Number(r.id)), at: r.created_at, contactId: r.contact_id,
     archive: { action: r.action, author_kind: r.author_kind, author_id: r.author_id, sign: r.sign },
   }));
 }
@@ -487,10 +494,16 @@ async function listContactArchiveLog(
  * record(s) only (`contact_merges_read`, 0106: a tombstone carries no merge row of its own — its merge
  * is told from the record that kept it), each paged like every other source: one on `merged_at` (every
  * merge), one on `undone_at` (only the ones since undone), NEVER selecting `moved` (it can hold
- * thousands of ids, correction 15). The other contact's name is read in ONE extra query of the distinct
- * other ids, on the caller's client, so RLS (0068's Technician fence included) decides whether the kept
- * record's timeline may say who the other one was (`otherVisible`); hidden by it, the row still shows
- * what moved. THROWS on a read error (listTimelinePage's settle).
+ * thousands of ids, correction 15). `contact_merges.id` is a BIGINT, not a uuid, so both reads page
+ * with `withBigintTimelinePage` (timeline-cursor.ts), not `withTimelinePage`: a page whose cursor came
+ * from a uuid-id source can never send that uuid into a `bigint` column filter, and each entry's own
+ * `id` is the real bigint embedded in a uuid shape (`encodeBigintCursorId`), so a page ending on a
+ * `merge` OR a `mergeUndone` row still yields a cursor the next page accepts — the merge's own
+ * `mergeId` (the Undo button's real decimal id) is a SEPARATE field, untouched. The other contact's
+ * name is read in ONE extra query of the distinct other ids, on the caller's client, so RLS (0068's
+ * Technician fence included) decides whether the kept record's timeline may say who the other one was
+ * (`otherVisible`); hidden by it, the row still shows what moved. THROWS on a read error
+ * (listTimelinePage's settle).
  */
 async function listContactMergeLog(
   db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
@@ -500,11 +513,11 @@ async function listContactMergeLog(
     id: number | string; keep_id: string; other_id: string; merged_by: string; merged_at: string;
     undo_until: string; undone_at: string | null; undone_by: string | null; moved_counts: Record<string, unknown> | null;
   };
-  const mergedQ = withTimelinePage(
-    forContacts(db.from("contact_merges").select(COLS).eq("account_id", accountId), "keep_id", who), "merged_at", page);
-  const undoneQ = withTimelinePage(
+  const mergedQ = withBigintTimelinePage(
+    forContacts(db.from("contact_merges").select(COLS).eq("account_id", accountId), "keep_id", who), "merged_at", "merge", page);
+  const undoneQ = withBigintTimelinePage(
     forContacts(db.from("contact_merges").select(COLS).eq("account_id", accountId).not("undone_at", "is", null), "keep_id", who),
-    "undone_at", page);
+    "undone_at", "merge", page);
   const [merged, undone] = await Promise.all([mergedQ, undoneQ]);
   if (merged.error) throw new Error(`listContactMergeLog failed: ${merged.error.message}`);
   if (undone.error) throw new Error(`listContactMergeLog undone failed: ${undone.error.message}`);
@@ -531,8 +544,8 @@ async function listContactMergeLog(
     };
   };
   return [
-    ...mergedRows.map((r): TimelineEntry => ({ kind: "merge", id: String(r.id), at: r.merged_at, contactId: r.keep_id, merge: toMerge(r) })),
-    ...undoneRows.map((r): TimelineEntry => ({ kind: "mergeUndone", id: String(r.id), at: r.undone_at!, contactId: r.keep_id, merge: toMerge(r) })),
+    ...mergedRows.map((r): TimelineEntry => ({ kind: "merge", id: encodeBigintCursorId("merge", Number(r.id)), at: r.merged_at, contactId: r.keep_id, merge: toMerge(r) })),
+    ...undoneRows.map((r): TimelineEntry => ({ kind: "mergeUndone", id: encodeBigintCursorId("merge", Number(r.id)), at: r.undone_at!, contactId: r.keep_id, merge: toMerge(r) })),
   ];
 }
 

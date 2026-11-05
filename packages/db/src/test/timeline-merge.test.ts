@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   compareTimelineEntries, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES, type TimelineEntry,
 } from "../record";
-import { instantKey, TIMELINE_PAGE_SIZE } from "../timeline-cursor";
+import { instantKey, TIMELINE_PAGE_SIZE, decodeBigintCursorId } from "../timeline-cursor";
 
 const note = (id: string, at: string): TimelineEntry =>
   ({ kind: "note", id, at, contactId: "c", note: { id, body: "x", author_id: null, created_at: at } });
@@ -32,6 +32,9 @@ type Row = Record<string, unknown>;
 type Read = { table: string; limit?: number; or?: string; in?: [string, unknown[]] };
 const u = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 const CURSOR = /^(\w+)\.lt\."([^"]+)",and\(\w+\.eq\."[^"]+",id\.lt\.([0-9a-f-]+)\)$/;
+// The bigint-id sources' foreign-cursor fallback (timeline-cursor.ts's withBigintTimelinePage):
+// `col.lt."V",col.eq."V"` — inclusive on time alone, no id at all (never a uuid sent to a bigint column).
+const INCLUSIVE = /^(\w+)\.lt\."([^"]+)",\1\.eq\."([^"]+)"$/;
 
 function fakeDb(tables: Record<string, Row[]>, fail: { throwOn?: string[]; errorOn?: string[] } = {}) {
   const reads: Read[] = [];
@@ -42,19 +45,33 @@ function fakeDb(tables: Record<string, Row[]>, fail: { throwOn?: string[]; error
     let rows = [...(tables[table] ?? [])];
     let column: string | null = null;
     const b = {
-      select: () => b, eq: () => b, neq: () => b, not: () => b,
+      select: () => b, eq: () => b, neq: () => b,
+      // Only the one shape production code actually sends through this fake: `.not(col, "is", null)`
+      // (listContactMergeLog's undone_at read). Anything else stays a no-op, as before.
+      not: (c: string, op: string, v: unknown) => {
+        if (op === "is" && v === null) rows = rows.filter((r) => r[c] !== null && r[c] !== undefined);
+        return b;
+      },
       in: (c: string, vs: unknown[]) => { read.in = [c, vs]; rows = rows.filter((r) => vs.includes(r[c])); return b; },
       order: (c: string) => { if (c !== "id") column = c; return b; },
       or: (f: string) => {
         read.or = f;
         const m = CURSOR.exec(f);
-        if (!m) throw new Error(`fake: unexpected filter ${f}`);
-        const [, col, v, id] = m as unknown as [string, string, string, string];
-        rows = rows.filter((r) => {
-          const k = instantKey(r[col] as string);
-          return k < instantKey(v) || (k === instantKey(v) && (r.id as string) < id);
-        });
-        return b;
+        if (m) {
+          const [, col, v, id] = m as unknown as [string, string, string, string];
+          rows = rows.filter((r) => {
+            const k = instantKey(r[col] as string);
+            return k < instantKey(v) || (k === instantKey(v) && (r.id as string) < id);
+          });
+          return b;
+        }
+        const im = INCLUSIVE.exec(f);
+        if (im) {
+          const [, col, v] = im as unknown as [string, string, string];
+          rows = rows.filter((r) => instantKey(r[col] as string) <= instantKey(v));
+          return b;
+        }
+        throw new Error(`fake: unexpected filter ${f}`);
       },
       limit: (n: number) => { read.limit = n; return b; },
       maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
@@ -84,6 +101,14 @@ const callRow = (id: string, at: string): Row =>
 const msgRow = (id: string, at: string, channel: string): Row => ({
   id, conversation_id: CONV, channel, direction: "outbound", status: "delivered", provider_message_id: null,
   subject: null, body: "x", error: null, created_at: at, author_kind: "person", author_id: "user_a",
+});
+// Bigint-id sources (0103, 0106): `id` is a plain small integer, like the real tables' own
+// `generated always as identity`, never a uuid — exactly the shape that broke `timelineBeforeFilter`.
+const archiveRow = (id: number, at: string): Row =>
+  ({ id, contact_id: u(99), action: "archived", author_kind: "person", author_id: "user_a", sign: null, created_at: at });
+const mergeRow = (id: number, mergedAt: string, undoneAt: string | null = null): Row => ({
+  id, keep_id: u(99), other_id: u(199), merged_by: "user_a", merged_at: mergedAt,
+  undo_until: "2099-01-01T00:00:00+00:00", undone_at: undoneAt, undone_by: undoneAt ? "user_a" : null, moved_counts: {},
 });
 const sevenSources = (): Record<string, Row[]> => ({
   notes: [noteRow(u(1), day(1))],
@@ -265,6 +290,96 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
     expect(page.failed).toEqual(["documents"]);
     expect(errors).toEqual(["documents"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Timeline paging bug fix: contact_archive_log (0103) and contact_merges (0106) use a BIGINT id.
+// Before the fix, ANY page whose cursor came from a uuid-id source (a note, here) sent
+// `id.lt.<uuid>` to these two bigint tables, which PostgREST refuses — and `listTimelinePage`'s
+// `settle` swallows that error, so the archive/merge rows silently vanished from the page. These
+// tests exercise the real merge (`listContactTimelinePage`), not just the filter-string unit tests
+// in timeline-cursor.test.ts.
+// ---------------------------------------------------------------------------------------------
+describe("the archive and merge sources: bigint ids page past a cursor from ANY source (0103, 0106; regression)", () => {
+  it("a note-cursor page still returns an archive row at the SAME instant the note was shown at — never skipped — and the filter sent to contact_archive_log carries no uuid (mutation: revert to the raw `id: String(r.id)` + timelineBeforeFilter -> the next assertion's exact filter string no longer matches, FAILS)", async () => {
+    const T = day(5);
+    // The note's id is lexically the largest possible id, so it wins the same-instant tie and is
+    // the ONLY row on a limit-1 page 1 — leaving the archive row, at the identical instant, unshown.
+    const dominantNoteId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const { db } = fakeDb({ notes: [{ ...noteRow(dominantNoteId, T) }], contact_archive_log: [archiveRow(1, T)] });
+    const p1 = await listContactTimelinePage(db, u(100), u(99), undefined, { limit: 1 });
+    expect(p1.items.map((i) => i.kind)).toEqual(["note"]);
+    expect(p1.older).toEqual({ v: T, id: dominantNoteId });
+
+    const { db: db2, reads } = fakeDb({ contact_archive_log: [archiveRow(1, T)] });
+    const p2 = await listContactTimelinePage(db2, u(100), u(99), p1.older!, { limit: 1 });
+    expect(p2.items.map((i) => i.kind)).toEqual(["archive"]);
+    expect(decodeBigintCursorId("archive", p2.items[0]!.id)).toBe(1);
+    const archiveRead = reads.find((r) => r.table === "contact_archive_log");
+    expect(archiveRead?.or).toBe(`created_at.lt."${T}",created_at.eq."${T}"`);
+    expect(archiveRead?.or).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  });
+
+  it("a note-cursor page returns merge rows strictly older than the cursor, with no uuid sent to contact_merges either (mutation: same as above, for the merge source -> FAILS)", async () => {
+    const T2 = day(6);
+    const T1 = day(3);
+    const { db } = fakeDb({ notes: [noteRow(u(1), T2)], contact_merges: [mergeRow(1, T1)] });
+    const p1 = await listContactTimelinePage(db, u(100), u(99), undefined, { limit: 1 });
+    expect(p1.items.map((i) => i.kind)).toEqual(["note"]);
+
+    const { db: db2, reads } = fakeDb({ contact_merges: [mergeRow(1, T1)] });
+    const p2 = await listContactTimelinePage(db2, u(100), u(99), p1.older!, { limit: 1 });
+    expect(p2.items.map((i) => i.kind)).toEqual(["merge"]);
+    expect(decodeBigintCursorId("merge", p2.items[0]!.id)).toBe(1);
+    const mergedAtRead = reads.filter((r) => r.table === "contact_merges")[0];
+    expect(mergedAtRead?.or).toBe(`merged_at.lt."${T2}",merged_at.eq."${T2}"`);
+    expect(mergedAtRead?.or).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  });
+
+  it("a page ending on an archive row produces a cursor the very next, archive-only page accepts and continues correctly (mutation: encode without the per-source tag -> decodeBigintCursorId would still work for THIS test alone; the real catch is timeline-cursor.test.ts's cross-source test — this one pins the exact (col, id) tie-break filter instead, mutation: widen id.lt to id.lte -> row 1 repeats, FAILS)", async () => {
+    const T2 = day(6);
+    const T1 = day(3);
+    const { db } = fakeDb({ contact_archive_log: [archiveRow(1, T1), archiveRow(2, T2)] });
+    const p1 = await listContactTimelinePage(db, u(100), u(99), undefined, { limit: 1 });
+    expect(p1.items.map((i) => i.kind)).toEqual(["archive"]);
+    expect(decodeBigintCursorId("archive", p1.items[0]!.id)).toBe(2);
+    expect(p1.older).not.toBeNull();
+
+    const { db: db2, reads } = fakeDb({ contact_archive_log: [archiveRow(1, T1), archiveRow(2, T2)] });
+    const p2 = await listContactTimelinePage(db2, u(100), u(99), p1.older!, { limit: 1 });
+    expect(p2.items.map((i) => i.kind)).toEqual(["archive"]);
+    expect(decodeBigintCursorId("archive", p2.items[0]!.id)).toBe(1);
+    expect(p2.older).toBeNull();
+    const archiveRead = reads.find((r) => r.table === "contact_archive_log");
+    expect(archiveRead?.or).toBe(`created_at.lt."${T2}",and(created_at.eq."${T2}",id.lt.2)`);
+  });
+
+  it("a page ending on a mergeUndone row produces a cursor the next page accepts, and continues on to that SAME underlying merge's own `merge` (merged_at) row — neither duplicated nor skipped (mutation: drop the per-source tag so `merge`'s decode also matches a change id with the same number -> the exact tie-break would still apply here by coincidence; this test's real catch is the id.lt boundary itself, mutation: use id.lte on the undone_at leg -> the mergeUndone row repeats on page 2, FAILS)", async () => {
+    // One merge, undone much later: the SAME row contributes a "merge" entry at merged_at (old)
+    // and a "mergeUndone" entry at undone_at (new) — the newest thing on the whole timeline.
+    const mergedAt = day(2);
+    const undoneAt = day(9);
+    const { db } = fakeDb({ contact_merges: [mergeRow(5, mergedAt, undoneAt)] });
+    const p1 = await listContactTimelinePage(db, u(100), u(99), undefined, { limit: 1 });
+    expect(p1.items.map((i) => i.kind)).toEqual(["mergeUndone"]);
+    expect(decodeBigintCursorId("merge", p1.items[0]!.id)).toBe(5);
+    expect(p1.older).not.toBeNull();
+
+    const { db: db2 } = fakeDb({ contact_merges: [mergeRow(5, mergedAt, undoneAt)] });
+    const p2 = await listContactTimelinePage(db2, u(100), u(99), p1.older!, { limit: 1 });
+    expect(p2.items.map((i) => i.kind)).toEqual(["merge"]);
+    expect(decodeBigintCursorId("merge", p2.items[0]!.id)).toBe(5);
+    expect(p2.older).toBeNull();
+  });
+
+  it("the merge row's OWN mergeId (the real decimal id, for the Undo button) is untouched by the entry's own encoded cursor id — they are separate fields (mutation: encode mergeId too -> Number(mergeId) would NaN, FAILS)", async () => {
+    const { db } = fakeDb({ contact_merges: [mergeRow(7, day(2))] });
+    const page = await listContactTimelinePage(db, u(100), u(99));
+    const entry = page.items.find((i) => i.kind === "merge");
+    expect(entry).toBeDefined();
+    expect((entry as { merge: { mergeId: string } }).merge.mergeId).toBe("7");
+    expect(Number((entry as { merge: { mergeId: string } }).merge.mergeId)).toBe(7);
   });
 });
 
