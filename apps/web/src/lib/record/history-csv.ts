@@ -27,8 +27,8 @@ const HEADER_KEY: Readonly<Record<Column, MessageKey>> = {
  *  (F-115 PR C fix, review m5): Excel and Sheets still read a formula past a leading TAB or CR, the
  *  same way they do past a leading `= + - @` — a cell starting with any of those six is a formula,
  *  so prefixing a single quote defuses it; a cell carrying a comma, a quote or a newline is wrapped
- *  in quotes, doubling any quote inside. The contacts export route has the same gap (not fixed here;
- *  see the report). */
+ *  in quotes, doubling any quote inside. The contacts export route guards the same six
+ *  (`contacts/export/route.ts`). */
 function guard(v: string): string {
   return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
 }
