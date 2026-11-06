@@ -200,8 +200,10 @@ export function WorkRowActions({
   }
 
   if (source === "failed_transfer") {
+    // m3 (fix round): its own selector, distinct from the task's `data-work-row-done` — a test (or a
+    // future caller) addressing one must never silently hit the other.
     return (
-      <Button data-work-row-done type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runFailedTransferDone}>
+      <Button data-work-row-callback-done type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runFailedTransferDone}>
         {t(m, "work.failedTransfer.done", locale)}
       </Button>
     );

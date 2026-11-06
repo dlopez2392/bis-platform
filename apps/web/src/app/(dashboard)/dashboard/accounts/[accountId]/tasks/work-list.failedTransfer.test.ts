@@ -43,6 +43,17 @@ describe("a failed-transfer row (F-077 part 1)", () => {
     expect(es).toContain(`>${m["work.failedTransfer.done.es"]}<`);
   });
 
+  // m3 (fix round): "Called back" gets its own selector, distinct from the task's generic Done, so a
+  // test (or a future caller) can address the two buttons without reading their label text.
+  it("\"Called back\" carries its own selector, data-work-row-callback-done, not the task's data-work-row-done (mutation: revert to data-work-row-done -> FAILS)", () => {
+    const en = renderToStaticMarkup(createElement(WorkList, {
+      buckets: { overdue: [], today: [], waiting: [transfer("c1", "ct1", "9565551212")] },
+      accountId: "a1", contactNames: { ct1: "Rio Flores" }, timezone: "America/Chicago", tr: makeTr("en"),
+    }));
+    expect(en).toMatch(/<button[^>]*data-work-row-callback-done[^>]*>/);
+    expect(en).not.toMatch(/<button[^>]*data-work-row-done[^>]*>/);
+  });
+
   it("falls back to the bare sentence with no number (mutation: swap the .bare branch's condition -> a numbered row renders bare or vice versa -> FAILS)", () => {
     const out = renderToStaticMarkup(createElement(WorkList, {
       buckets: { overdue: [], today: [], waiting: [transfer("c1", null, null)] },
