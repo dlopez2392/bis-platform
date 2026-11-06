@@ -304,6 +304,15 @@ describe("completeFailedTransfer / reopenFailedTransfer (F-077 part 1)", () => {
       serviceDbMock, "acct_1", "call_1", "user_1", new Date("2026-11-06T15:00:00.000Z"));
   });
 
+  // R2 (fix round): the Undo side needs the SAME refusal `completeFailedTransfer` already has --
+  // nothing was pinning it (mutation: delete the callerCanSee line in reopenFailedTransfer -> FAILS).
+  it("reopenFailedTransfer refuses when callerCanSee says no, without writing anything (R2; mutation: delete the callerCanSee line -> FAILS)", async () => {
+    callerCanSeeMock.mockResolvedValueOnce(false);
+    const r = await reopenFailedTransfer("acct_1", "call_1", "2026-11-06T15:00:00.000Z");
+    expect(r.ok).toBe(false);
+    expect(vi.mocked(clearTransferFollowup)).not.toHaveBeenCalled();
+  });
+
   // Round 2 (coordinator fix, spec §10): setTransferFollowedUp now returns false instead of throwing
   // when no row matched (already followed up, or the call was never shown as a failed transfer) --
   // an ORDINARY double-click/race, not a bug, so it must not be logged the way a thrown DB error is.
@@ -338,6 +347,15 @@ describe("acceptBookingAct / unacceptBookingAct (F-077 part 1)", () => {
     await unacceptBookingAct("acct_1", "act_1", "2026-11-06T15:00:00.000Z");
     expect(vi.mocked(unstampAiActAccepted)).toHaveBeenCalledWith(
       serviceDbMock, "acct_1", "act_1", "user_1", new Date("2026-11-06T15:00:00.000Z"));
+  });
+
+  // R2 (fix round): same refusal proof as acceptBookingAct's own, for the Undo side (mutation: delete
+  // the callerCanSee line in unacceptBookingAct -> FAILS).
+  it("unacceptBookingAct refuses when callerCanSee says no, without writing anything (R2; mutation: delete the callerCanSee line -> FAILS)", async () => {
+    callerCanSeeMock.mockResolvedValueOnce(false);
+    const r = await unacceptBookingAct("acct_1", "act_1", "2026-11-06T15:00:00.000Z");
+    expect(r.ok).toBe(false);
+    expect(vi.mocked(unstampAiActAccepted)).not.toHaveBeenCalled();
   });
 });
 
