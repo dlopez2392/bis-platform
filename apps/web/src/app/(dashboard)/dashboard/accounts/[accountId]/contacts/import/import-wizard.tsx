@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { autoMap, mapRows, IMPORT_FIELDS, importFieldLabel, type ParsedRow } from "@/lib/contacts/csv";
+import { looksLikeVCard, parseVCardText, vCardContactsToRows, vCardFileTooLarge } from "@/lib/contacts/vcard";
 import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, doneLine, flaggedLine, type ImportTotals } from "@/lib/contacts/import-summary";
 import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
 import { t, plural } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
+import { shownSize } from "@/lib/documents/rules";
 
 /**
  * Rows per server call. The action enforces its own, larger ceiling — this is
@@ -46,8 +48,9 @@ export function ImportWizard(
 
   const contactsHref = `/dashboard/accounts/${accountId}/contacts`;
 
-  function onFile(file: File) {
-    setFileError(null);
+  // F-150 part 1: the same CSV path as before, moved into its own function
+  // so a vCard sniff (below) can run first without touching this body.
+  function parseCsvFile(file: File) {
     // Parsed HERE, in the browser. The file itself is never uploaded — only
     // the rows that survive mapping travel to the server.
     Papa.parse<Record<string, string>>(file, {
@@ -69,6 +72,61 @@ export function ImportWizard(
       },
       error: () => setFileError(t(m, "contacts.import.empty", locale)),
     });
+  }
+
+  // A phone's share sheet hands the browser odd or missing MIME types for a
+  // .vcf far more often than a desktop export does, so this never reads
+  // file.type — looksLikeVCard checks the extension, then (for anything
+  // else) the file's own opening bytes.
+  async function parseVCardFile(file: File) {
+    if (vCardFileTooLarge(file.size)) {
+      setFileError(t(m, "contacts.import.tooLarge", locale, { size: shownSize(file.size) }));
+      return;
+    }
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      setFileError(t(m, "contacts.import.empty", locale));
+      return;
+    }
+    const contacts = parseVCardText(text);
+    if (contacts.length === 0) {
+      setFileError(t(m, "contacts.import.empty", locale));
+      return;
+    }
+    // PRE-MAPPED: every header here is one of the fields vCard.ts understands,
+    // mapped to itself, so the match step below (and the confirm step after
+    // it) run exactly as they do for a CSV — the owner can still review or
+    // re-point any column, nothing is hidden from them.
+    const { headers: vHeaders, rows: vRows, mapping: vMapping } = vCardContactsToRows(contacts, locale);
+    setHeaders(vHeaders);
+    setRows(vRows);
+    setMapping(vMapping);
+    setPhase({ name: "map" });
+  }
+
+  async function onFile(file: File) {
+    setFileError(null);
+    if (/\.vcf$/i.test(file.name)) {
+      await parseVCardFile(file);
+      return;
+    }
+    // Sniff a short opening slice rather than the whole file — enough to
+    // decide, never a reason to hold the whole file in memory before we even
+    // know which parser it needs.
+    let head = "";
+    try {
+      head = await file.slice(0, 256).text();
+    } catch {
+      // Fall through to the CSV path; Papa.parse's own error callback is
+      // what reports an unreadable file.
+    }
+    if (looksLikeVCard(file.name, head)) {
+      await parseVCardFile(file);
+      return;
+    }
+    parseCsvFile(file);
   }
 
   // The same mapRows the server re-runs. This copy drives the preview only;
@@ -170,17 +228,20 @@ export function ImportWizard(
         <p className="mt-3 text-text-2">
           {t(m, "contacts.import.intro", locale)}
         </p>
+        <p className="mt-2 text-sm text-text-3">
+          {t(m, "contacts.import.vcardHint", locale)}
+        </p>
         <label className="mt-5 inline-block cursor-pointer">
           <span className="sr-only">{t(m, "contacts.import.drop", locale)}</span>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,text/csv,.vcf,text/vcard,text/x-vcard"
             className="block w-full text-sm text-text-2 file:mr-3 file:cursor-pointer
                        file:rounded-[var(--radius-ctl)] file:border-0 file:bg-accent
                        file:px-4 file:py-2 file:text-sm file:text-accent-foreground"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) onFile(file);
+              if (file) void onFile(file);
             }}
           />
         </label>

@@ -699,10 +699,17 @@ export const m = {
   // legitimately be 1.
   "contacts.import.title": "Import contacts",
   "contacts.import.title.es": "Importar contactos",
-  "contacts.import.intro": "Bring your contacts over from a spreadsheet. Export from anywhere, match the columns, and we will add what is new and update what is not.",
-  "contacts.import.intro.es": "Traiga sus contactos desde una hoja de cálculo. Expórtelos de donde sea, haga coincidir las columnas, y agregaremos lo nuevo y actualizaremos lo que ya existe.",
-  "contacts.import.drop": "Choose a CSV file",
-  "contacts.import.drop.es": "Elija un archivo CSV",
+  // F-150 part 1: broadened from "a spreadsheet" alone — a phone shares its
+  // contacts as a .vcf file, not a CSV, and this screen now takes either.
+  "contacts.import.intro": "Bring your contacts over from a spreadsheet or your phone. Match the columns, and we will add what is new and update what is not.",
+  "contacts.import.intro.es": "Traiga sus contactos desde una hoja de cálculo o su teléfono. Haga coincidir las columnas, y agregaremos lo nuevo y actualizaremos lo que ya existe.",
+  "contacts.import.drop": "Choose a file",
+  "contacts.import.drop.es": "Elija un archivo",
+  // F-150 part 1: the file step's own line about a phone's contacts —
+  // ".vcf" is the one piece of jargon a business owner needs to find the
+  // file their phone's share sheet just made.
+  "contacts.import.vcardHint": "Export or share your phone's contacts as a .vcf file, then choose it here.",
+  "contacts.import.vcardHint.es": "Exporte o comparta los contactos de su teléfono como un archivo .vcf y luego elíjalo aquí.",
   "contacts.import.mapTitle": "Match your columns",
   "contacts.import.mapTitle.es": "Haga coincidir sus columnas",
   "contacts.import.ignore": "Don't import this column",
@@ -770,6 +777,11 @@ export const m = {
   "contacts.import.tooMany.es": "Son demasiadas filas a la vez. Intente con un archivo más pequeño.",
   "contacts.import.empty": "That file has no rows we can read.",
   "contacts.import.empty.es": "Ese archivo no tiene filas que podamos leer.",
+  // F-150 part 1: a .vcf's browser-side parse holds the whole file in memory
+  // at once (unlike the CSV path's streamed Papa.parse), so it carries its
+  // own size ceiling (MAX_VCARD_FILE_BYTES, vcard.ts).
+  "contacts.import.tooLarge": "That file is too big to import at once ({size}). Try a smaller export.",
+  "contacts.import.tooLarge.es": "Ese archivo es demasiado grande para importarlo de una vez ({size}). Intente con una exportación más pequeña.",
   // S-10 leftovers (#317 follow-up, item 4): the per-row reasons mapRows attaches to a skipped
   // row. Review fix round (M-5): the wizard's own screen shows only a COUNT of skipped rows
   // ("N rows have problems and will be skipped", contacts.import.errors below) — these two
