@@ -36,9 +36,23 @@ const dbMocks = vi.hoisted(() => ({
   // F-085 fix round 1 (I1): "Not now" task's assignee.
   readPersonId: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me"),
   taskAssigneeFor: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-holder"),
+  // F-077 part 1: the failed-transfer and booking-act queue actions. Default resolved values are
+  // the success shape (true/undefined) so a test that never touches these mocks still exercises the
+  // action's own success path, the same convention taskAssigneeFor/readPersonId follow above.
+  setTransferFollowedUp: vi.fn(async () => undefined),
+  clearTransferFollowup: vi.fn(async () => true),
+  stampAiActAccepted: vi.fn(async () => true),
+  unstampAiActAccepted: vi.fn(async () => true),
 }));
+// F-077 part 1: `calls`/`ai_acts` grant `authenticated` no write (Correction 1) — the four new
+// actions write through serviceDb() behind a callerCanSee proof, the same shape setBookingStatusAction
+// uses for bookings. serviceDbMock is a stable sentinel so a mutation that wrote through
+// dbForRequest() instead is caught by identity, not just by the write happening at all.
+const callerCanSeeMock = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("@/lib/auth/visible", () => ({ callerCanSee: callerCanSeeMock }));
+const serviceDbMock = vi.hoisted(() => ({ tag: "service-db" }));
 vi.mock("@bis/db", async (importOriginal) => ({
-  ...(await importOriginal<object>()), ...dbMocks,
+  ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => serviceDbMock,
 }));
 
 /** F-085 (spec §7.3): the client completeTask's hold check reads the ledger
@@ -54,9 +68,13 @@ vi.mock("@/lib/consent/texts-context", () => ({ textsContextFor: texts.textsCont
 vi.mock("@/lib/consent/staff-actions", () => ({ confirmStop: texts.confirmStop, notAStop: texts.notAStop, undoHoldDecision: texts.undoHoldDecision }));
 
 import { revalidatePath } from "next/cache";
-import { readConsentHistory, completeTask, completeTasksForConsentEvents, HoldUndecidedError } from "@bis/db";
+import { readConsentHistory, completeTask, completeTasksForConsentEvents, HoldUndecidedError, setTransferFollowedUp, clearTransferFollowup, stampAiActAccepted, unstampAiActAccepted } from "@bis/db";
 import { m } from "@/lib/messages";
-import { completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking, confirmStopFromTask, notAStopFromTask, undoHoldDecisionFromTask, setTaskAssigneeAction } from "./actions";
+import {
+  completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking, confirmStopFromTask, notAStopFromTask,
+  undoHoldDecisionFromTask, setTaskAssigneeAction, completeFailedTransfer, reopenFailedTransfer,
+  acceptBookingAct, unacceptBookingAct,
+} from "./actions";
 
 /** A minimal fake Supabase client satisfying only the one chain
  *  `dismissToTask` reads directly (`accounts.timezone`) — everything else it
@@ -261,6 +279,44 @@ describe("closeOutBooking", () => {
       const r = await closeOutBooking("acct_1", "booking_1", "completed");
       expect(r).toEqual({ ok: false, error: m[key], errorKey: key });
     });
+});
+
+describe("completeFailedTransfer / reopenFailedTransfer (F-077 part 1)", () => {
+  it("proves the call through the request client, then writes through serviceDb (mutation: write through dbForRequest instead -> the write hits a table authenticated has no grant on, in real use -> this test would still pass, which is exactly why Step 1's db-level test matters too; HERE the mutation is: call setTransferFollowedUp with dbForRequest's own return value -> FAILS the identity assertion below)", async () => {
+    const r = await completeFailedTransfer("acct_1", "call_1");
+    expect(callerCanSeeMock).toHaveBeenCalledWith("calls", "acct_1", "call_1");
+    expect(vi.mocked(setTransferFollowedUp)).toHaveBeenCalledWith(serviceDbMock, "acct_1", "call_1", "user_1", expect.any(Date));
+    expect(r).toEqual({ ok: true, at: expect.any(String) });
+  });
+
+  it("refuses when callerCanSee says no, without writing anything (mutation: skip the check -> FAILS)", async () => {
+    callerCanSeeMock.mockResolvedValueOnce(false);
+    const r = await completeFailedTransfer("acct_1", "call_1");
+    expect(r.ok).toBe(false);
+    expect(vi.mocked(setTransferFollowedUp)).not.toHaveBeenCalled();
+  });
+
+  it("reopenFailedTransfer passes the exact `at` it was given", async () => {
+    vi.mocked(unstampAiActAccepted); // keep both mocks referenced for lint
+    await reopenFailedTransfer("acct_1", "call_1", "2026-11-06T15:00:00.000Z");
+    expect(vi.mocked(clearTransferFollowup)).toHaveBeenCalledWith(
+      serviceDbMock, "acct_1", "call_1", new Date("2026-11-06T15:00:00.000Z"));
+  });
+});
+
+describe("acceptBookingAct / unacceptBookingAct (F-077 part 1)", () => {
+  it("proves the act through the request client, then writes through serviceDb", async () => {
+    const r = await acceptBookingAct("acct_1", "act_1");
+    expect(callerCanSeeMock).toHaveBeenCalledWith("ai_acts", "acct_1", "act_1");
+    expect(vi.mocked(stampAiActAccepted)).toHaveBeenCalledWith(serviceDbMock, "acct_1", "act_1", "user_1", expect.any(Date));
+    expect(r).toEqual({ ok: true, at: expect.any(String) });
+  });
+
+  it("unacceptBookingAct passes the exact `at` it was given", async () => {
+    await unacceptBookingAct("acct_1", "act_1", "2026-11-06T15:00:00.000Z");
+    expect(vi.mocked(unstampAiActAccepted)).toHaveBeenCalledWith(
+      serviceDbMock, "acct_1", "act_1", "user_1", new Date("2026-11-06T15:00:00.000Z"));
+  });
 });
 
 describe("the consent To-do's buttons (consent chain PR-2)", () => {
