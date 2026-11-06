@@ -570,6 +570,12 @@ export type TransferFailedReason = "no_answer" | "refused";
  * outcome of two routes that may legitimately race or retry themselves, not a bug to raise loudly
  * about. Account-scoped. No emit(): no write on `calls` emits an event anywhere in this codebase
  * today.
+ *
+ * R4 (fix round, voice r2): `.neq("outcome", "transferred")` -- belt-and-braces against a race
+ * between the two handoff routes (one route's `refused`/`no_answer` stamp landing just after the
+ * OTHER leg's own `transferred` write): a call the queue would show as a real transfer must never
+ * also pick up a failed-transfer stamp, however that race resolves. `failedTransfers` (work-queue.ts)
+ * carries the same exclusion on its own read, as a second, independent layer.
  */
 export async function markTransferFailed(
   db: SupabaseClient, accountId: string, callId: string, reason: TransferFailedReason, at: Date,
@@ -577,6 +583,7 @@ export async function markTransferFailed(
   const { data, error } = await db.from("calls")
     .update({ transfer_failed_at: at.toISOString(), transfer_failed_reason: reason })
     .eq("id", callId).eq("account_id", accountId).is("transfer_failed_at", null)
+    .neq("outcome", "transferred")
     .select("id");
   if (error) throw new Error(`markTransferFailed failed: ${error.message}`);
   return (data ?? []).length > 0;

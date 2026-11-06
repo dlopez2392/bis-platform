@@ -403,6 +403,58 @@ describe("failedTransfers (F-077 part 1, round 2)", () => {
       });
     });
   });
+
+  // R4 (fix round): belt-and-braces, independent of markTransferFailed's own guard (voice.ts) -- even
+  // a row that somehow carries both transfer_failed_at AND outcome='transferred' (a race between the
+  // two stamps) must never surface as a failed transfer.
+  it("a candidate row whose own outcome is already 'transferred' never appears, even though transfer_failed_at is set (R4; mutation: drop .neq('outcome', 'transferred') -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: row } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "transferred",
+        transfer_failed_at: new Date(Date.now() - 3_600_000).toISOString(), transfer_failed_reason: "no_answer",
+      }).select("id").single();
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`failed_transfer:${row!.id}`);
+    });
+  });
+
+  // R6 (fix round): the served-later read's own lower bound must be the OLDEST candidate's
+  // started_at, not any other candidate's -- a bound taken from the wrong (e.g. the newest)
+  // candidate would exclude a served call that is genuinely later than an OLDER candidate merely
+  // because it is not later than a NEWER one, losing a real clear. Two failed-transfer candidates
+  // from the SAME caller, oldest (A, 3h ago) then newest (B, 2h ago), and one served call strictly
+  // BETWEEN them (2.5h ago, so after A but before B): the correct bound is `.gt(A's started_at)`,
+  // which includes this served call, so A clears (a later call from this caller reached a person)
+  // while B does not (nothing served THIS caller after B's own started_at yet). A bound taken from
+  // B's started_at instead would exclude the served call entirely, and A would wrongly still show.
+  it("the served-call read's lower bound is the OLDEST candidate's started_at (R6; mutation: bound by the newest candidate's started_at instead -> A wrongly still shows -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const caller = "+19565550499";
+      const { data: earlyFailedA } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 10_800_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 10_800_000).toISOString(), // 3h ago
+      }).select("id").single();
+      const { data: newerFailedB } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 7_200_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 7_200_000).toISOString(), // 2h ago
+      }).select("id").single();
+      // Strictly between the two: after A's started_at, before B's.
+      await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller, outcome: "transferred",
+        started_at: new Date(Date.now() - 9_000_000).toISOString(), // 2.5h ago
+      });
+
+      const rows = await listAccountWork(db, accountId);
+      const ids = rows.map((r) => r.id);
+      expect(ids).not.toContain(`failed_transfer:${earlyFailedA!.id}`); // A clears
+      expect(ids).toContain(`failed_transfer:${newerFailedB!.id}`); // B still shows
+    });
+  });
 });
 
 describe("booking acts reach listAccountWork, unsuppressed (F-077 part 1, review I2)", () => {

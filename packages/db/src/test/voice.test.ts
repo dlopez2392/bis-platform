@@ -1460,6 +1460,19 @@ describe("markTransferFailed (F-077 part 1, round 2)", () => {
       });
     });
   });
+
+  // R4 (fix round): belt-and-braces against a race between the two handoff routes -- a call the
+  // queue would show as a REAL transfer must never also pick up a failed-transfer stamp.
+  it("never marks a transfer failed once the outcome is already 'transferred' (R4; mutation: drop .neq('outcome', 'transferred') -> succeeds anyway -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      const { error } = await db.from("calls").update({ outcome: "transferred" }).eq("id", callId);
+      expect(error).toBeNull();
+      expect(await markTransferFailed(db, accountId, callId, "no_answer", new Date())).toBe(false);
+      const { data: row } = await db.from("calls").select("transfer_failed_at").eq("id", callId).single();
+      expect(row!.transfer_failed_at).toBeNull();
+    });
+  });
 });
 
 /**

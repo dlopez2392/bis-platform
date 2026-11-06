@@ -200,10 +200,16 @@ const TRANSFER_SUCCESS_OUTCOMES = ["transferred", "booked", "lead", "message"] a
  */
 async function failedTransfers(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
   const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  // R4 (fix round, voice r2): `.neq("outcome", "transferred")` is belt-and-braces beside
+  // `markTransferFailed`'s own exclusion (voice.ts) -- a call the queue would show as a REAL
+  // transfer must never surface here as a failed one, however a race between the two stamps
+  // resolves. `outcome` is `not null default 'abandoned'` (0019), so `.neq` excludes no legitimate
+  // candidate on a NULL technicality.
   let q = db.from("calls")
     .select(`id, contact_id, callback_number, caller_e164, started_at${embed}`)
     .eq("account_id", accountId)
-    .not("transfer_failed_at", "is", null).is("transfer_followup_at", null);
+    .not("transfer_failed_at", "is", null).is("transfer_followup_at", null)
+    .neq("outcome", "transferred");
   q = withAssigneeOn(q, assignee, "contacts.assigned_to");
   const { data, error } = await q.order("started_at", { ascending: true }).limit(200);
   if (error) throw new Error(`failedTransfers failed: ${error.message}`);
@@ -217,9 +223,22 @@ async function failedTransfers(db: SupabaseClient, accountId: string, assignee?:
   const numbers = Array.from(new Set(candidates.map((c) => c.caller_e164).filter((n): n is string => n !== null)));
   const latestServedByCaller = new Map<string, string>();
   if (numbers.length > 0) {
+    // R6 (fix round): bounded, ordered and explicitly capped, the same instinct `openTasks` already
+    // states at the top of this file -- an unbounded, unordered read over every served call for
+    // these numbers would grow with the account's own call history forever. `.gt("started_at",
+    // oldest candidate's started_at)` loses no match: `candidates` is ordered ascending, so its
+    // first row IS the earliest one, and a served call at or before that instant can never be LATER
+    // than any candidate (every candidate's own `started_at` is >= the earliest one's), which is the
+    // exact comparison the loop below performs. `.order(desc) + .limit(1000)` then keeps the 1000
+    // MOST RECENT matches within that bound rather than an arbitrary (and possibly stale) slice --
+    // fail-safe in the direction that matters: missing a genuine later-served call only means a
+    // resolved row keeps showing a little longer, never the reverse.
     const { data: served, error: sErr } = await db.from("calls")
       .select("caller_e164, started_at")
-      .eq("account_id", accountId).in("caller_e164", numbers).in("outcome", TRANSFER_SUCCESS_OUTCOMES);
+      .eq("account_id", accountId).in("caller_e164", numbers).in("outcome", TRANSFER_SUCCESS_OUTCOMES)
+      .gt("started_at", candidates[0]!.started_at)
+      .order("started_at", { ascending: false })
+      .limit(1000);
     if (sErr) throw new Error(`failedTransfers served-call read failed: ${sErr.message}`);
     for (const s of (served ?? []) as { caller_e164: string | null; started_at: string }[]) {
       if (!s.caller_e164) continue;
