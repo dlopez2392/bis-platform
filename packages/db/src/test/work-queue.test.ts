@@ -7,6 +7,7 @@ import { createDocument } from "../documents";
 import { createGroupWithMember } from "../client-groups";
 import { ensureDocumentExpiryTask } from "../document-expiry";
 import { createContact } from "../contacts";
+import { insertAiActs } from "../ai-acts";
 import { SEED_AUTHOR, SEED_VIA } from "./db";
 import { withAuthor } from "../row-author";
 
@@ -275,5 +276,206 @@ describe("mapBounded", () => {
     expect(maxInFlight).toBeGreaterThan(1);
     // Proves the bound: an unbounded fan-out over 20 items would reach 20.
     expect(maxInFlight).toBeLessThanOrEqual(AGENCY_READ_CONCURRENCY);
+  });
+});
+
+describe("failedTransfers (F-077 part 1, round 2)", () => {
+  it("a transfer still being handled (handoff requested, no recorded failure) never appears (spec section 10; mutation: revert the predicate to outcome='abandoned' and handoff_requested_at set -> a transfer still in progress appears -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: stillHandling } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned", handoff_requested_at: new Date().toISOString(),
+      }).select("id").single();
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`failed_transfer:${stillHandling!.id}`);
+    });
+  });
+
+  it("appears once a failure is recorded, carrying its callback number, and disappears again once followed up", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: failed } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id,
+        transfer_failed_at: new Date(Date.now() - 3_600_000).toISOString(), transfer_failed_reason: "no_answer",
+        callback_number: "9565551212",
+      }).select("id").single();
+
+      const rows = await listAccountWork(db, accountId);
+      const row = rows.find((r) => r.id === `failed_transfer:${failed!.id}`);
+      expect(row).toBeDefined();
+      expect(row!.callbackNumber).toBe("9565551212");
+      expect(row!.source).toBe("failed_transfer");
+
+      await db.from("calls").update({ transfer_followup_at: new Date().toISOString(), transfer_followup_by: "user_test" }).eq("id", failed!.id);
+      const after = await listAccountWork(db, accountId);
+      expect(after.map((r) => r.id)).not.toContain(`failed_transfer:${failed!.id}`);
+    });
+  });
+
+  it("a later call from the SAME caller that reached a person hides the row (spec section 10; mutation: drop the TRANSFER_SUCCESS_OUTCOMES filter or the started_at comparison -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const caller = "+19565550401";
+      const { data: failed } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 7_200_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 7_200_000).toISOString(),
+      }).select("id").single();
+      await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller, outcome: "transferred",
+        started_at: new Date(Date.now() - 3_600_000).toISOString(),
+      });
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`failed_transfer:${failed!.id}`);
+    });
+  });
+
+  it("a later call from the same caller that was spam or abandoned does NOT hide the row", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const caller = "+19565550402";
+      const { data: failed } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 7_200_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 7_200_000).toISOString(),
+      }).select("id").single();
+      await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller, outcome: "abandoned",
+        started_at: new Date(Date.now() - 3_600_000).toISOString(),
+      });
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).toContain(`failed_transfer:${failed!.id}`);
+    });
+  });
+
+  it("the same caller number served LATER on ANOTHER account does not hide this account's row (mutation: drop .eq('account_id', accountId) from the served-call read -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const caller = "+19565550403";
+        const { data: pnA } = await dbA.from("phone_numbers").insert({ account_id: accountA, e164: testPhoneNumber() }).select("id").single();
+        const { data: failed } = await dbA.from("calls").insert({
+          account_id: accountA, phone_number_id: pnA!.id, caller_e164: caller,
+          transfer_failed_at: new Date(Date.now() - 7_200_000).toISOString(), transfer_failed_reason: "no_answer",
+          started_at: new Date(Date.now() - 7_200_000).toISOString(),
+        }).select("id").single();
+
+        const { data: pnB } = await dbB.from("phone_numbers").insert({ account_id: accountB, e164: testPhoneNumber() }).select("id").single();
+        await dbB.from("calls").insert({
+          account_id: accountB, phone_number_id: pnB!.id, caller_e164: caller, outcome: "transferred",
+          started_at: new Date(Date.now() - 3_600_000).toISOString(),
+        });
+
+        const rowsA = await listAccountWork(dbA, accountA);
+        expect(rowsA.map((r) => r.id)).toContain(`failed_transfer:${failed!.id}`);
+      });
+    });
+  });
+
+  it("suppression is NOT reused: an open task on the same contact does not hide a failed-transfer row (mutation: add failed_transfer to listAccountWork's suppressed filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Lee", last_name: "Park" }), SEED_AUTHOR, SEED_VIA).select("id").single();
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: call } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, contact_id: c!.id,
+        transfer_failed_at: new Date().toISOString(), transfer_failed_reason: "refused",
+      }).select("id").single();
+      await addTask(db, accountId, { contactId: c!.id, title: "Call Lee back" }, "user_test");
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).toContain(`failed_transfer:${call!.id}`);
+    });
+  });
+
+  it("is account-scoped: account A does not see account B's failed transfer", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const { data: pn } = await dbB.from("phone_numbers").insert({ account_id: accountB, e164: testPhoneNumber() }).select("id").single();
+        const { data: call } = await dbB.from("calls").insert({
+          account_id: accountB, phone_number_id: pn!.id,
+          transfer_failed_at: new Date().toISOString(), transfer_failed_reason: "no_answer",
+        }).select("id").single();
+        const rowsA = await listAccountWork(dbA, accountA);
+        expect(rowsA.map((r) => r.id)).not.toContain(`failed_transfer:${call!.id}`);
+      });
+    });
+  });
+
+  // R4 (fix round): belt-and-braces, independent of markTransferFailed's own guard (voice.ts) -- even
+  // a row that somehow carries both transfer_failed_at AND outcome='transferred' (a race between the
+  // two stamps) must never surface as a failed transfer.
+  it("a candidate row whose own outcome is already 'transferred' never appears, even though transfer_failed_at is set (R4; mutation: drop .neq('outcome', 'transferred') -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: row } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "transferred",
+        transfer_failed_at: new Date(Date.now() - 3_600_000).toISOString(), transfer_failed_reason: "no_answer",
+      }).select("id").single();
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`failed_transfer:${row!.id}`);
+    });
+  });
+
+  // R6 (fix round): the served-later read's own lower bound must be the OLDEST candidate's
+  // started_at, not any other candidate's -- a bound taken from the wrong (e.g. the newest)
+  // candidate would exclude a served call that is genuinely later than an OLDER candidate merely
+  // because it is not later than a NEWER one, losing a real clear. Two failed-transfer candidates
+  // from the SAME caller, oldest (A, 3h ago) then newest (B, 2h ago), and one served call strictly
+  // BETWEEN them (2.5h ago, so after A but before B): the correct bound is `.gt(A's started_at)`,
+  // which includes this served call, so A clears (a later call from this caller reached a person)
+  // while B does not (nothing served THIS caller after B's own started_at yet). A bound taken from
+  // B's started_at instead would exclude the served call entirely, and A would wrongly still show.
+  it("the served-call read's lower bound is the OLDEST candidate's started_at (R6; mutation: bound by the newest candidate's started_at instead -> A wrongly still shows -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const caller = "+19565550499";
+      const { data: earlyFailedA } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 10_800_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 10_800_000).toISOString(), // 3h ago
+      }).select("id").single();
+      const { data: newerFailedB } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller,
+        transfer_failed_at: new Date(Date.now() - 7_200_000).toISOString(), transfer_failed_reason: "no_answer",
+        started_at: new Date(Date.now() - 7_200_000).toISOString(), // 2h ago
+      }).select("id").single();
+      // Strictly between the two: after A's started_at, before B's.
+      await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, caller_e164: caller, outcome: "transferred",
+        started_at: new Date(Date.now() - 9_000_000).toISOString(), // 2.5h ago
+      });
+
+      const rows = await listAccountWork(db, accountId);
+      const ids = rows.map((r) => r.id);
+      expect(ids).not.toContain(`failed_transfer:${earlyFailedA!.id}`); // A clears
+      expect(ids).toContain(`failed_transfer:${newerFailedB!.id}`); // B still shows
+    });
+  });
+});
+
+describe("booking acts reach listAccountWork, unsuppressed (F-077 part 1, review I2)", () => {
+  it("a booking act appears via listAccountWork, and an open task on the same contact does NOT hide it (mutation: route booking_act rows through the suppression filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Pat", last_name: "Nu" }), SEED_AUTHOR, SEED_VIA).select("id").single();
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: call } = await db.from("calls").insert({ account_id: accountId, phone_number_id: pn!.id }).select("id").single();
+      await insertAiActs(db, accountId, [{
+        kind: "booking_cancelled", actor: "voice", callId: call!.id, chatId: null, contactId: c!.id,
+        target: { bookingId: "bk_wq1" }, before: { startsAt: "2026-11-01T10:00:00Z", endsAt: "2026-11-01T11:00:00Z" },
+        after: { version: "2026-11-01T09:00:00Z" },
+      }]);
+      const { data: actRow } = await db.from("ai_acts").select("id")
+        .eq("account_id", accountId).eq("kind", "booking_cancelled").single();
+
+      await addTask(db, accountId, { contactId: c!.id, title: "Call Pat back" }, "user_test");
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).toContain(`booking_act:${actRow!.id}`);
+    });
   });
 });

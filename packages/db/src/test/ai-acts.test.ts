@@ -7,6 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   insertAiActs, getAiAct, listContactAiActs, undoAiBookingAct,
+  listPendingBookingActs, stampAiActAccepted, unstampAiActAccepted, stampAiActUndone,
 } from "../ai-acts";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, moveBooking } from "../booking";
@@ -220,6 +221,175 @@ describe("ai-acts accessors", () => {
         expect(await undoAiBookingAct(db, accountId, actId, "user_undoer", new Date())).toBe("changed");
         expect(await statusOf(db, old.id)).toBe("cancelled");
         expect(await statusOf(db, moved.id)).toBe("booked");
+      });
+    });
+  });
+});
+
+describe("listPendingBookingActs (F-077 part 1)", () => {
+  it("surfaces only control:booking kinds, un-undone and un-accepted (mutation: widen the kind filter to include contact_field_filled -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const booking = { kind: "booking_cancelled" as const, actor: "voice" as const, callId, chatId: null, contactId,
+        target: { bookingId: "bk_1" }, before: { startsAt: "2026-11-01T10:00:00Z", endsAt: "2026-11-01T11:00:00Z" },
+        after: { version: "2026-11-01T09:00:00Z" } };
+      const field = { kind: "contact_field_filled" as const, actor: "voice" as const, callId, chatId: null, contactId,
+        target: { field: "email" as const }, before: { value: null }, after: { value: "a@b.com" } };
+      await insertAiActs(db, accountId, [booking, field]);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.source).toBe("booking_act");
+      expect(rows[0]!.bookingAct!.kind).toBe("booking_cancelled");
+      expect(rows[0]!.contactId).toBe(contactId);
+    });
+  });
+
+  it("excludes an already-accepted act (mutation: drop .is('accepted_at', null) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Bo" }, "user_test");
+      const act = { kind: "booking_created" as const, actor: "voice" as const, callId, chatId: null, contactId,
+        target: { bookingId: "bk_2" }, before: null, after: { startsAt: "2026-11-02T10:00:00Z", endsAt: "2026-11-02T11:00:00Z" } };
+      await insertAiActs(db, accountId, [act]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_created").single();
+      await db.from("ai_acts").update({ accepted_at: new Date().toISOString(), accepted_by: "user_test" }).eq("id", row!.id);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`booking_act:${row!.id}`);
+    });
+  });
+
+  it("excludes an act UNDONE on the record, seeded through stampAiActUndone itself, not a hand-set column (review I4; mutation: drop .is('undone_at', null) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Iv" }, "user_test");
+      const act = { kind: "booking_rescheduled" as const, actor: "voice" as const, callId, chatId: null, contactId,
+        target: { bookingId: "bk_2b", fromBookingId: "bk_2a" },
+        before: { startsAt: "2026-11-02T10:00:00Z", endsAt: "2026-11-02T11:00:00Z", version: "2026-11-02T09:00:00Z" },
+        after: { startsAt: "2026-11-02T14:00:00Z", endsAt: "2026-11-02T15:00:00Z" } };
+      await insertAiActs(db, accountId, [act]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_rescheduled").single();
+      expect(await stampAiActUndone(db, accountId, row!.id, "user_owner", new Date())).toBe(true);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`booking_act:${row!.id}`);
+    });
+  });
+
+  it("surfaces all three booking kinds, not just one (review I4; mutation: narrow BOOKING_ACT_KINDS to a single kind -> the other two disappear -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Jo" }, "user_test");
+      await insertAiActs(db, accountId, [
+        { kind: "booking_created", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_created" }, before: null, after: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z" } },
+        { kind: "booking_rescheduled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_resched", fromBookingId: "bk_resched_from" },
+          before: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z", version: "2026-11-03T09:00:00Z" },
+          after: { startsAt: "2026-11-03T14:00:00Z", endsAt: "2026-11-03T15:00:00Z" } },
+        { kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_cancelled" }, before: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z" },
+          after: { version: "2026-11-03T09:00:00Z" } },
+      ]);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows.map((r) => r.bookingAct!.kind).sort()).toEqual(["booking_cancelled", "booking_created", "booking_rescheduled"]);
+    });
+  });
+
+  it("is account-scoped: account A does not see account B's booking act", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await seedCall(dbB, accountB);
+        const { id: contactId } = await createContact(dbB, accountB, { firstName: "Cy" }, "user_test");
+        await insertAiActs(dbB, accountB, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_3" }, before: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z" },
+          after: { version: "2026-11-03T09:00:00Z" } }]);
+        const rowsA = await listPendingBookingActs(dbA, accountA);
+        expect(rowsA).toHaveLength(0);
+      });
+    });
+  });
+});
+
+describe("stampAiActAccepted / unstampAiActAccepted (F-077 part 1)", () => {
+  it("is a real compare-and-swap: the second stamp returns false (mutation: drop .is('accepted_at', null) -> the second call also returns true -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Dee" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+        target: { bookingId: "bk_4" }, before: { startsAt: "2026-11-04T10:00:00Z", endsAt: "2026-11-04T11:00:00Z" },
+        after: { version: "2026-11-04T09:00:00Z" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_cancelled").single();
+      const at = new Date("2026-11-06T15:00:00Z");
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_a", at)).toBe(true);
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_b", new Date())).toBe(false);
+    });
+  });
+
+  it("refuses to accept a non-booking-kind act, even one the queue never showed (review M1; mutation: drop .in('kind', BOOKING_ACT_KINDS) -> succeeds on a contact_field_filled act -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Hal" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "contact_field_filled", actor: "voice", callId, chatId: null, contactId,
+        target: { field: "email" }, before: { value: null }, after: { value: "h@example.com" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "contact_field_filled").single();
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_a", new Date())).toBe(false);
+    });
+  });
+
+  it("unstampAiActAccepted requires the SAME PERSON and the exact instant: right by/wrong instant and wrong by/right instant each return false, only the true pair clears it (review I3; mutation: drop .eq('accepted_by', by) -> a different person's Undo succeeds -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Em" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+        target: { bookingId: "bk_5" }, before: { startsAt: "2026-11-05T10:00:00Z", endsAt: "2026-11-05T11:00:00Z" },
+        after: { version: "2026-11-05T09:00:00Z" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_cancelled").single();
+      const at1 = new Date("2026-11-06T15:00:00Z");
+      await stampAiActAccepted(db, accountId, row!.id, "user_a", at1);
+
+      // right person, wrong instant
+      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_a", new Date("2026-11-06T16:00:00Z"))).toBe(false);
+      // wrong person, right instant
+      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_b", at1)).toBe(false);
+      const { data: still } = await db.from("ai_acts").select("accepted_at, accepted_by").eq("id", row!.id).single();
+      expect(still!.accepted_by).toBe("user_a");
+
+      // the true pair
+      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_a", at1)).toBe(true);
+    });
+  });
+
+  it("refuses to accept an act already undone on the record (review C1; mutation: drop .is('undone_at', null) -> returns true -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Flo" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+        target: { bookingId: "bk_6" }, before: { startsAt: "2026-11-05T10:00:00Z", endsAt: "2026-11-05T11:00:00Z" },
+        after: { version: "2026-11-05T09:00:00Z" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_cancelled").single();
+      await stampAiActUndone(db, accountId, row!.id, "user_owner", new Date("2026-11-06T14:00:00Z"));
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_a", new Date("2026-11-06T15:00:00Z"))).toBe(false);
+    });
+  });
+
+  it("both stamps are account-scoped: another account's id matches nothing (review I3; mutation: drop .eq('account_id', accountId) from either writer -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await seedCall(dbB, accountB);
+        const { id: contactId } = await createContact(dbB, accountB, { firstName: "Gus" }, "user_test");
+        await insertAiActs(dbB, accountB, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_7" }, before: { startsAt: "2026-11-05T10:00:00Z", endsAt: "2026-11-05T11:00:00Z" },
+          after: { version: "2026-11-05T09:00:00Z" } }]);
+        const { data: row } = await dbB.from("ai_acts").select("id").eq("account_id", accountB).eq("kind", "booking_cancelled").single();
+        const at = new Date("2026-11-06T15:00:00Z");
+        // account A's scope never matches account B's act, even on a service client that bypasses RLS
+        expect(await stampAiActAccepted(dbA, accountA, row!.id, "user_a", at)).toBe(false);
+        expect(await stampAiActAccepted(dbB, accountB, row!.id, "user_b", at)).toBe(true);
+        expect(await unstampAiActAccepted(dbA, accountA, row!.id, "user_b", at)).toBe(false);
       });
     });
   });

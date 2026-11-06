@@ -66,6 +66,11 @@ describe("callerCanSee — the caller's own client vouches for the row (spec §7
     fake.results.bookings = { data: null, error: { message: "boom" } };
     await expect(callerCanSee("bookings", "acct_1", "bk_1")).rejects.toThrow("callerCanSee(bookings) failed: boom");
   });
+
+  it.each(["calls", "ai_acts"] as const)("accepts %s as a provable table too (F-077 part 1)", async (table) => {
+    fake.results[table] = row({ id: "x1" });
+    expect(await callerCanSee(table, "acct_1", "x1")).toBe(true);
+  });
 });
 
 /**

@@ -435,6 +435,7 @@ export * from "./ai-act-rules";
 export {
   insertAiActs, getAiAct, listContactAiActs, undoAiBookingAct, aiContactHeldBy, undoAiContactCreated,
   stampAiActUndone, clearAiActUndone, markAiActNotified,
+  listPendingBookingActs, stampAiActAccepted, unstampAiActAccepted, BOOKING_ACT_KINDS,
   type AiBookingUndoOutcome, type AiContactUndoOutcome,
 } from "./ai-acts";
 
