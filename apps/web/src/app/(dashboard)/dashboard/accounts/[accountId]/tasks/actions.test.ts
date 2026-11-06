@@ -37,9 +37,10 @@ const dbMocks = vi.hoisted(() => ({
   readPersonId: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me"),
   taskAssigneeFor: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-holder"),
   // F-077 part 1: the failed-transfer and booking-act queue actions. Default resolved values are
-  // the success shape (true/undefined) so a test that never touches these mocks still exercises the
-  // action's own success path, the same convention taskAssigneeFor/readPersonId follow above.
-  setTransferFollowedUp: vi.fn(async () => undefined),
+  // the success shape (true) so a test that never touches these mocks still exercises the action's
+  // own success path, the same convention taskAssigneeFor/readPersonId follow above. Round 2:
+  // setTransferFollowedUp returns boolean too (false = no match, an ordinary race), not void/throw.
+  setTransferFollowedUp: vi.fn(async () => true),
   clearTransferFollowup: vi.fn(async () => true),
   stampAiActAccepted: vi.fn(async () => true),
   unstampAiActAccepted: vi.fn(async () => true),
@@ -296,11 +297,32 @@ describe("completeFailedTransfer / reopenFailedTransfer (F-077 part 1)", () => {
     expect(vi.mocked(setTransferFollowedUp)).not.toHaveBeenCalled();
   });
 
-  it("reopenFailedTransfer passes the exact `at` it was given", async () => {
+  it("reopenFailedTransfer passes the same userId (by) and the exact `at` it was given (round 2: clearTransferFollowup requires the same person, mutation: drop the by argument -> FAILS)", async () => {
     vi.mocked(unstampAiActAccepted); // keep both mocks referenced for lint
     await reopenFailedTransfer("acct_1", "call_1", "2026-11-06T15:00:00.000Z");
     expect(vi.mocked(clearTransferFollowup)).toHaveBeenCalledWith(
-      serviceDbMock, "acct_1", "call_1", new Date("2026-11-06T15:00:00.000Z"));
+      serviceDbMock, "acct_1", "call_1", "user_1", new Date("2026-11-06T15:00:00.000Z"));
+  });
+
+  // Round 2 (coordinator fix, spec §10): setTransferFollowedUp now returns false instead of throwing
+  // when no row matched (already followed up, or the call was never shown as a failed transfer) --
+  // an ORDINARY double-click/race, not a bug, so it must not be logged the way a thrown DB error is.
+  it("treats a false return from setTransferFollowedUp as the worded 'couldn't update' outcome, with no console.error (round 2; mutation: console.error on a false return -> FAILS)", async () => {
+    vi.mocked(setTransferFollowedUp).mockResolvedValueOnce(false);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await completeFailedTransfer("acct_1", "call_1");
+    expect(r).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("still logs via loggableError, and fails honestly, when setTransferFollowedUp throws a real DB error (round 2)", async () => {
+    vi.mocked(setTransferFollowedUp).mockRejectedValueOnce(new Error("db exploded"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await completeFailedTransfer("acct_1", "call_1");
+    expect(r).toEqual({ ok: false, error: m["work.actionFailed"], errorKey: "work.actionFailed" });
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 

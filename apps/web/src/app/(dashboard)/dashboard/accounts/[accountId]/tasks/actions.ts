@@ -204,13 +204,19 @@ export type AcceptBookingActResult = { ok: true; at: string } | { ok: false; err
  * has -- so this writes through `serviceDb()`, behind a request-client proof that the caller may
  * see this call (`callerCanSee`, widened), exactly as `setBookingStatusAction` -> `proveBooking`
  * already does for bookings.
+ *
+ * Round 2 (coordinator fix, spec §10): `setTransferFollowedUp` returns `false`, rather than
+ * throwing, when no row matched -- already followed up, or the call no longer qualifies as a
+ * failed transfer. That is an ORDINARY double-click/race, not a bug, so it is worded the same
+ * generic failure and never logged; only a genuinely thrown error (a real database failure) reaches
+ * the catch block and `loggableError`.
  */
 export async function completeFailedTransfer(accountId: string, callId: string): Promise<FailedTransferDoneResult> {
   const { userId } = await requireAccountAccess(accountId);
   try {
     if (!(await callerCanSee("calls", accountId, callId))) return { ...ACTION_FAILED };
     const at = new Date();
-    await setTransferFollowedUp(serviceDb(), accountId, callId, userId, at);
+    if (!(await setTransferFollowedUp(serviceDb(), accountId, callId, userId, at))) return { ...ACTION_FAILED };
     revalidatePath(tasksPath(accountId));
     return { ok: true, at: at.toISOString() };
   } catch (e) {
@@ -219,15 +225,16 @@ export async function completeFailedTransfer(accountId: string, callId: string):
   }
 }
 
-/** Undo of completeFailedTransfer. */
+/**
+ * Undo of completeFailedTransfer. Round 2: `clearTransferFollowup` now takes `by` and requires BOTH
+ * the same person AND the exact instant written -- the same shape `unaccept BookingAct` already
+ * uses for `unstampAiActAccepted` -- so the caller's own id is captured here too.
+ */
 export async function reopenFailedTransfer(accountId: string, callId: string, at: string): Promise<ActionResult> {
-  // requireAccountAccess is the membership check itself; clearTransferFollowup's own column pair
-  // (calls.transfer_followup_at alone, no "by" column -- unlike ai_acts.accepted_by) has nothing
-  // for its returned userId to be written into, so it is not destructured.
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   try {
     if (!(await callerCanSee("calls", accountId, callId))) return { ...ACTION_FAILED };
-    if (!(await clearTransferFollowup(serviceDb(), accountId, callId, new Date(at)))) return { ...ACTION_FAILED };
+    if (!(await clearTransferFollowup(serviceDb(), accountId, callId, userId, new Date(at)))) return { ...ACTION_FAILED };
     revalidatePath(tasksPath(accountId));
     return { ok: true };
   } catch (e) {
