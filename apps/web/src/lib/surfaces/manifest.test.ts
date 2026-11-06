@@ -3,7 +3,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SURFACE_MANIFEST, audienceIncludes, surfaceById, type SurfaceEntry } from "./manifest";
-import { buildPaletteEntries, filterEntries } from "@/lib/palette/registry";
+import { buildPaletteEntries, filterEntries, ENTRY_KEYWORDS, type PaletteEntry } from "@/lib/palette/registry";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXED_BASE = "/dashboard/accounts/acc_1";
@@ -81,11 +81,44 @@ describe("SURFACE_MANIFEST shape", () => {
     expect(surfaceById("nav:dashboard").labelKey).toBe("nav.dashboard");
     expect(() => surfaceById("nav:does-not-exist")).toThrow(/nav:does-not-exist/);
   });
+
+  // F-087 fix round, Minor 4: ENTRY_KEYWORDS (registry.ts) is keyed by
+  // manifest id (Q3) — a stale key (the manifest entry it named was
+  // renamed or removed) would silently stop contributing its words to
+  // ⌘K's search, with nothing failing to say so.
+  it("every ENTRY_KEYWORDS key is a real manifest id (mutation: rename \"nav:/dashboard\" in the manifest → FAILS, naming the stale key)", () => {
+    const ids = new Set(SURFACE_MANIFEST.map((e) => e.id));
+    const keys = Object.keys(ENTRY_KEYWORDS);
+    expect(keys.length).toBeGreaterThan(0); // vacuous guard
+    for (const key of keys) {
+      expect(ids, `ENTRY_KEYWORDS["${key}"] names no manifest entry`).toContain(key);
+    }
+  });
 });
 
 // Probe 1 (spec §4.1): reverse settings-anchor parity. Every real id="…" on
 // a Settings card must be a registered manifest anchor — the exact D-080
 // shape, made structurally impossible instead of review-dependent.
+//
+// F-087 fix round, Minor 5: the regex is `<Card\b[^>]*\bid="…"`, not
+// `<Card\s+id="…"` — the earlier version only matched when `id` was the
+// FIRST attribute after `<Card`, so `<Card className="x" id="y">` (a real
+// JSX attribute order this codebase does not currently use, but nothing
+// enforces that it never will) was invisible to this probe. Verified: the
+// mutation `<Card className="x" id="new-thing" />` was invisible to the
+// OLD regex (zero matches) and is caught by the new one.
+//
+// `team-card.tsx`'s own `<Card id="team">` (components/team/team-card.tsx)
+// is deliberately NOT in SETTINGS_CARD_FILES below, and should not be
+// added: `id="team"` is the Card's ordinary scroll-margin convention
+// (`className="scroll-mt-24"`, same as every card here), never a fragment
+// a route points at — `grep -rn '#team"' apps/web/src` returns nothing, in
+// either the manifest's own route() outputs or any href in the app. Adding
+// it would make this probe fail permanently on a real, intentional
+// non-anchor (registry.ts's own historical comment on `settings:team`:
+// that card renders only while client access is on, so a `#team` fragment
+// "would scroll to nothing whenever access is off" — exactly why
+// `settings:team`'s route is the whole `/team` page, never a fragment).
 describe("Probe 1 — reverse settings-anchor parity (spec §4.1)", () => {
   it("every id on a Settings card is a registered manifest anchor (mutation: add <Card id=\"new-thing\"> to a card file with no manifest entry → FAILS)", () => {
     const sources = settingsCardSources();
@@ -101,11 +134,19 @@ describe("Probe 1 — reverse settings-anchor parity (spec §4.1)", () => {
     // matched every `id="…"` then SKIPPED whichever one was unregistered —
     // which cannot ever fail (red-first check: that version passed against
     // this exact mutation, below, and was replaced before being kept).
-    const idMatches = [...sources.matchAll(/<Card\s+id="([a-z0-9-]+)"/g)].map((m) => m[1]!);
+    const idMatches = [...sources.matchAll(/<Card\b[^>]*\bid="([a-z0-9-]+)"/g)].map((m) => m[1]!);
     expect(idMatches.length).toBeGreaterThan(0); // vacuous guard
     for (const id of idMatches) {
       expect(registeredAnchors, id).toContain(id);
     }
+  });
+
+  it("catches a mutated attribute order, which the old <Card\\s+id=\"…\" regex could not see (mutation: revert the regex to <Card\\s+id=\"…\" → this test's own red case below would be invisible)", () => {
+    const mutatedSource = '<Card className="x" id="new-thing" />';
+    const oldRegex = /<Card\s+id="([a-z0-9-]+)"/g;
+    const newRegex = /<Card\b[^>]*\bid="([a-z0-9-]+)"/g;
+    expect([...mutatedSource.matchAll(oldRegex)]).toHaveLength(0);
+    expect([...mutatedSource.matchAll(newRegex)].map((m) => m[1])).toEqual(["new-thing"]);
   });
 });
 
@@ -166,12 +207,30 @@ describe("Probe 3 — navigation-anchor parity, widened to every #fragment route
 
 // Probe 5 (spec §4.1): audience-matches-guard, spot-checked. For every
 // account-scoped entry whose audience is PURELY agency (no client role at
-// all — never "owner", never plain client) and whose route is not ALSO
-// pointed at by a broader-audience entry (a shared route is demonstrably
-// not agency-exclusive at the request level, whatever one menu id calls
-// it — settings:team's own page admits a client Owner too, per
-// team/page.tsx's own requireAccountOwner), its page.tsx must carry
-// requireAgency or requireAgencyOnlyAccountAccess.
+// all — never "owner", never plain client), its page.tsx must carry a REAL
+// CALL to requireAgency or requireAgencyOnlyAccountAccess — a call-shaped
+// regex, not a bare `toContain`, which an import line alone (no call) would
+// also satisfy (F-087 fix round, Minor 6: verified — commenting out
+// `await requireAgencyOnlyAccountAccess(accountId);` in checklist/page.tsx
+// while leaving its import line in place left the OLD bare-substring
+// version of this test green; reverted immediately, the regex below fixes
+// the class of mutation rather than just this one instance).
+//
+// NAMED_AUDIENCE_EXEMPTIONS (Minor 6): a fixed, reviewed set, not a DERIVED
+// "every entry sharing this route must also be pure-agency" rule — the
+// derived version happened to exclude exactly the one real case (below)
+// but, being derived, would also silently exempt any FUTURE entry that
+// merely happens to share a route with a broader one, which is not always
+// the right call and should not escape review by construction.
+const NAMED_AUDIENCE_EXEMPTIONS = new Set<string>([
+  // settings:team's route (`${base}/team`) is also nav:team's — a client
+  // Owner's own entry — and team/page.tsx's FIRST call is
+  // `requireAccountOwner`, which admits the agency AND a client Owner (its
+  // own doc comment: "it admits the agency and a client Owner and sends a
+  // Staff to their dashboard"). The route is real and guarded; it is simply
+  // not agency-EXCLUSIVE, which is the one thing this probe can check.
+  "settings:team",
+]);
 describe("Probe 5 — audience-matches-guard, spot-checked (spec §4.1)", () => {
   function routePathNoFragment(e: SurfaceEntry): string {
     return e.route(FIXED_BASE).split("#")[0]!;
@@ -179,18 +238,13 @@ describe("Probe 5 — audience-matches-guard, spot-checked (spec §4.1)", () => 
   function isPureAgency(e: SurfaceEntry): boolean {
     return e.audience.agency === true && e.audience.client === false && e.audience.technician === false;
   }
+  // A real invocation — `requireAgency(` or `requireAgencyOnlyAccountAccess(`
+  // — never merely an import line naming the identifier.
+  const GUARD_CALL = /\brequireAgency(OnlyAccountAccess)?\s*\(/;
 
-  it("every PURELY agency-scoped page not shared with a broader-audience entry is guarded by requireAgency or requireAgencyOnlyAccountAccess (mutation: mark a manifest entry agency:true for a route whose page.tsx has neither call → FAILS, naming the route)", () => {
-    const accountScoped = SURFACE_MANIFEST.filter((e) => e.scope === "account");
-    const byRoute = new Map<string, SurfaceEntry[]>();
-    for (const e of accountScoped) {
-      const p = routePathNoFragment(e);
-      if (!byRoute.has(p)) byRoute.set(p, []);
-      byRoute.get(p)!.push(e);
-    }
-
-    const toCheck = accountScoped.filter(
-      (e) => isPureAgency(e) && byRoute.get(routePathNoFragment(e))!.every(isPureAgency),
+  it("every PURELY agency-scoped page, except the named exemption, is guarded by a REAL CALL to requireAgency or requireAgencyOnlyAccountAccess (mutation: mark nav:required-documents agency:true/client:false → FAILS, naming documents/page.tsx)", () => {
+    const toCheck = SURFACE_MANIFEST.filter(
+      (e) => e.scope === "account" && isPureAgency(e) && !NAMED_AUDIENCE_EXEMPTIONS.has(e.id),
     );
     expect(toCheck.length).toBeGreaterThan(0); // vacuous guard
 
@@ -199,23 +253,42 @@ describe("Probe 5 — audience-matches-guard, spot-checked (spec §4.1)", () => 
       const pageFile = path.join(folder, "page.tsx");
       expect(existsSync(pageFile), `${e.id}: no page.tsx at ${pageFile}`).toBe(true);
       const source = stripComments(readFileSync(pageFile, "utf8"));
-      expect(source, `${e.id}'s route ${e.route(FIXED_BASE)} has neither requireAgency nor requireAgencyOnlyAccountAccess`)
-        .toContain("requireAgency");
+      expect(GUARD_CALL.test(source), `${e.id}'s route ${e.route(FIXED_BASE)} has no CALL to requireAgency or requireAgencyOnlyAccountAccess (an import line alone does not count)`)
+        .toBe(true);
     }
   });
 
-  it("settings:team is excluded from the spot-check: its route (/team) is shared with nav:team, a client-Owner-visible entry, so it is not agency-exclusive at the request level (team/page.tsx's own requireAccountOwner, not requireAgency)", () => {
+  it("settings:team is excluded from the spot-check by name: its route (/team) is shared with nav:team, a client-Owner-visible entry, so it is not agency-exclusive at the request level (team/page.tsx's own requireAccountOwner, not requireAgency)", () => {
     const entry = surfaceById("settings:team");
     expect(isPureAgency(entry)).toBe(true);
+    expect(NAMED_AUDIENCE_EXEMPTIONS.has(entry.id)).toBe(true);
+    // The reason for the exemption is still real, named here rather than
+    // re-derived: its route really is shared with a broader-audience entry.
     const siblings = SURFACE_MANIFEST.filter(
       (e) => e.scope === "account" && e.route(FIXED_BASE).split("#")[0] === entry.route(FIXED_BASE).split("#")[0],
     );
     expect(siblings.some((s) => !isPureAgency(s))).toBe(true);
   });
+
+  it("nav:required-documents, marked agency-only, is NOT exempt and fails against documents/page.tsx's own requireAccountAccess (mutation: mark nav:required-documents agency:true/client:false → FAILS)", () => {
+    const original = surfaceById("nav:required-documents");
+    const mutated: SurfaceEntry = { ...original, audience: { agency: true, client: false, technician: false } };
+    expect(isPureAgency(mutated)).toBe(true);
+    expect(NAMED_AUDIENCE_EXEMPTIONS.has(mutated.id)).toBe(false);
+    const folder = path.join(APP_ROOT, "dashboard/accounts/[accountId]", routePathNoFragment(mutated).slice(FIXED_BASE.length));
+    const source = stripComments(readFileSync(path.join(folder, "page.tsx"), "utf8"));
+    expect(GUARD_CALL.test(source)).toBe(false);
+  });
 });
 
 // Probe 6 (spec §4.1, Q5): route-existence, bounded to this manifest's own
-// finite entry list — not a full route-tree walk.
+// finite entry list — not a full route-tree walk. F-087 fix round, Minor
+// 7: checks for a real `page.tsx`, not merely the folder — a folder that
+// exists but holds no page.tsx (only a layout, say) is not a routable
+// Next.js App Router page, so "the folder exists" was a weaker claim than
+// this probe's own name promises. Verified: every entry's folder in the
+// real tree already has one, so this is a correctness strengthening, not
+// a behavior change today.
 describe("Probe 6 — route-existence, bounded to the manifest's own entries (spec §4.1, Q5)", () => {
   function routeFolder(e: SurfaceEntry): string {
     const withoutFragment = e.route(FIXED_BASE).split("#")[0]!;
@@ -226,12 +299,12 @@ describe("Probe 6 — route-existence, bounded to the manifest's own entries (sp
     return path.join(APP_ROOT, withoutFragment);
   }
 
-  it("every manifest entry's route resolves to an existing folder under the dashboard route tree (mutation: point one entry at a renamed/deleted folder → FAILS, naming the path)", () => {
+  it("every manifest entry's route resolves to a real page.tsx under the dashboard route tree (mutation: point one entry at a renamed/deleted folder → FAILS, naming the path)", () => {
     expect(SURFACE_MANIFEST.length).toBeGreaterThan(0); // vacuous guard
     for (const e of SURFACE_MANIFEST) {
-      const folder = routeFolder(e);
-      const ok = existsSync(folder) && statSync(folder).isDirectory();
-      expect(ok, `${e.id}: no folder at ${folder}`).toBe(true);
+      const pageFile = path.join(routeFolder(e), "page.tsx");
+      const ok = existsSync(pageFile) && statSync(pageFile).isFile();
+      expect(ok, `${e.id}: no page.tsx at ${pageFile}`).toBe(true);
     }
   });
 });
@@ -255,9 +328,23 @@ describe("Probe 7 — the agency's own /dashboard is findable by ⌘K (spec §4.
     expect(hit).toBeTruthy();
   });
 
-  it("is never offered inside an account, or to a client at the top level", () => {
+  it("is never offered inside an account, or to a client at the top level (F-087 fix round, Minor 8: the title named both cases, the assertions only covered the first)", () => {
     const inAccount = buildPaletteEntries(FIXED_BASE, true, false);
     expect(inAccount.some((e) => e.kind === "href" && (e as { href: string }).href === "/dashboard")).toBe(false);
+
+    const clientAtTopLevel = buildPaletteEntries(null, false, false);
+    expect(clientAtTopLevel.some((e) => e.kind === "href" && (e as { href: string }).href === "/dashboard")).toBe(false);
+  });
+
+  // F-087 fix round, Minor 8: the Spanish side of "found in English or
+  // Spanish" (owner ruling Q2) — a palette BUILT in Spanish must find the
+  // entry both by its own Spanish label word ("panel") and by the English
+  // word F-095's words() appends to every entry's keywords.
+  it("a palette built in Spanish finds the entry by 'panel' and by 'dashboard' (mutation: drop that one manifest row → FAILS)", () => {
+    const es = buildPaletteEntries(null, true, false, false, "es");
+    const isTheEntry = (e: PaletteEntry) => e.kind === "href" && (e as { href: string }).href === "/dashboard";
+    expect(filterEntries(es, "panel").some(isTheEntry)).toBe(true);
+    expect(filterEntries(es, "dashboard").some(isTheEntry)).toBe(true);
   });
 });
 
