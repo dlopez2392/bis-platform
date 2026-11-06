@@ -310,3 +310,13 @@ satisfied by a comment, a type-only change, or code that cannot regress
    small `fs.existsSync` loop over a fixed, short list, not a route-tree
    walk, and it closes the last easy direction of "the manifest says
    something that isn't true."
+
+## 7. Owner rulings (2026-11-06, binding)
+
+danlo accepted every recommendation:
+
+- **Q1 → (a)** The sidebar footer's three links read from the manifest in part 1.
+- **Q2 → (a)** Add the agency's own `/dashboard` entry now. It is part 1's one visible change: ⌘K finds it in EN and ES. Probe 7 is in scope.
+- **Q3 → (b)** Keywords stay a separate, palette-only lookup keyed by manifest id.
+- **Q4 → (b)** No F-098 UI. Only the `audience` field ships.
+- **Q5 → (a)** The route-existence test (probe 6) is in scope, bounded to the manifest's entry list.
