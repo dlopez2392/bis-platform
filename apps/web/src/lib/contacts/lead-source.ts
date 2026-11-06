@@ -117,7 +117,9 @@ function channelFrom(attribution: unknown): string | null {
  * free text, a manual correction) matches none of these and gets no
  * caption: there is nothing machine-made to translate.
  */
-function machineSourceCaption(source: string, locale: Locale): string | null {
+// F-115 PR E fix round 2 (review n3): exported so change-rows.ts's own "source" value formatting
+// can reuse the SAME machine-source words, rather than inventing a parallel copy of this logic.
+export function machineSourceCaption(source: string, locale: Locale): string | null {
   if (source === "voice") return t(m, "contact.source.machine.voice", locale);
   if (source === "booking") return t(m, "contact.source.machine.booking", locale);
   const formMatch = /^form: (.+)$/.exec(source);

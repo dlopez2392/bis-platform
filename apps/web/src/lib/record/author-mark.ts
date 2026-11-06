@@ -1,4 +1,4 @@
-import type { AuthorKind, TimelineEntry } from "@bis/db";
+import type { AuthorKind, ChangeGroup, TimelineEntry } from "@bis/db";
 import { isCustomerAuthor } from "@bis/db/document-rules";
 import type { Tr } from "./copy";
 
@@ -117,12 +117,31 @@ export function authorMark(entry: TimelineEntry, ctx: AuthorCtx): AuthorMarkView
   return { kind, label: authorLabel(kind, personId, ctx) };
 }
 
-/** The distinct person ids a page's marks name: what the one names read asks for. */
+/** The distinct person ids a page's marks name: what the one names read asks for. F-115 PR E fix
+ *  (review I5): a "change" row's own `assigned_to` before/after VALUE is a staff id too, read by
+ *  the SAME names map (`change-rows.ts`'s `formatChangeValue`'s "assigned_to" case) — collected
+ *  here so the one `listPeopleNames` read answers both the author marks and that value, never a
+ *  second read, on both the contact page's and the group page's loader (`personIdsOf` is their
+ *  only caller for this read). */
 export function personIdsOf(entries: readonly TimelineEntry[]): string[] {
   const ids = new Set<string>();
   for (const entry of entries) {
     const { kind, personId } = authorOf(entry);
     if (kind === "person" && personId) ids.add(personId);
+    if (entry.kind === "change") {
+      for (const row of entry.group.rows) {
+        if (row.field !== "assigned_to") continue;
+        if (typeof row.before === "string") ids.add(row.before);
+        if (typeof row.after === "string") ids.add(row.after);
+      }
+    }
   }
   return [...ids];
+}
+
+/** F-115 PR E fix (review I4): the "change" entries among a timeline page's own items, for the ONE
+ *  bounded name read their removal/value lines need (`readChangeNames`) — the contact page's and
+ *  the group page's loader share this, same reasoning as `personIdsOf` just above. */
+export function changeGroupsOf(entries: readonly TimelineEntry[]): ChangeGroup[] {
+  return entries.flatMap((e) => (e.kind === "change" ? [e.group] : []));
 }

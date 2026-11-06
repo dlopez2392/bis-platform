@@ -252,15 +252,20 @@ test("a form submission appears once, not twice: the inbox's copy is not a timel
 test("Older pages the timeline on the server, and Newer returns to the head", async ({ page }) => {
   await page.goto(url(made.pager!));
   const tl = timelineCard(page);
-  await expect(tl.locator("[data-timeline-item]")).toHaveCount(30);
+  // F-115: the pager contact's own creation now shows as a "change" row too (change-item.tsx) —
+  // correct product behaviour, but it is the OLDEST thing on this contact's page (seeded before any
+  // of its 31 notes), so it lands alongside "Pager note 1" on the second page and would otherwise
+  // read as a 32nd note. Scoped to exclude it: this test is about NOTE paging.
+  const notes = () => tl.locator('[data-timeline-item]:not([data-timeline-item="change"])');
+  await expect(notes()).toHaveCount(30);
   await expect(tl.locator("[data-timeline-pager]")).toHaveCount(1);
   await tl.getByRole("link", { name: m["timeline.older"] }).click();
   await expect(page).toHaveURL(/[?&]before=/);
-  await expect(timelineCard(page).locator("[data-timeline-item]")).toHaveCount(1);
+  await expect(notes()).toHaveCount(1);
   await expect(timelineCard(page).getByText("Pager note 1", { exact: true })).toBeVisible();
   await timelineCard(page).getByRole("link", { name: m["timeline.newer"] }).click();
   await expect(page).not.toHaveURL(/[?&]before=/);
-  await expect(timelineCard(page).locator("[data-timeline-item]")).toHaveCount(30);
+  await expect(notes()).toHaveCount(30);
 });
 
 test("in Spanish a row reads Cliente", async ({ page }) => {

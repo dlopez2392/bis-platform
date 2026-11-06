@@ -72,4 +72,18 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     for (const s of ["loading", "ready", "capped", "failed"]) expect(section).toContain(`data-state="${s}"`);
     expect(section).toContain("data-sg-ai-none");
   });
+
+  // F-115 part 1 (S-04), plan Task 5 (DoD: /styleguide gains the new disclosure).
+  it("a changed field's Was/Now disclosure with Put back, and a removal's Restore (mutation: drop the change-item specimen -> FAILS)", () => {
+    const start = html.indexOf("data-sg-change-item");
+    expect(start).toBeGreaterThan(-1);
+    const section = html.slice(start, html.indexOf("data-sg-change-item-end"));
+    expect(section).toContain('data-timeline-item="change"');
+    expect(section).toContain(">changed phone<");
+    expect(section).toContain("(956) 555-0111");
+    expect(section).toContain("(956) 555-0112");
+    expect(section).toContain(`>${m["history.putBack"]}<`);
+    expect(section).toContain(">removed the unit Carrier AC<");
+    expect(section).toContain(`>${m["history.restore"]}<`);
+  });
 });

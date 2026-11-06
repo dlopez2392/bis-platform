@@ -12,6 +12,7 @@ import { describeAct } from "@/lib/ai-acts/kinds";
 import type { ActFacts } from "@/lib/ai-acts/kinds/types";
 import { buildActView, type AiActView } from "@/lib/ai-acts/view";
 import { authorMark, type AuthorCtx, type AuthorMarkView } from "./author-mark";
+import { changeRowView, isDuplicateOpportunityInsert, type ChangeRowView, type ChangeViewCtx } from "./change-rows";
 import type { Tr } from "./copy";
 
 export type TimelineStatus = { tone: TimelineTone; word: string };
@@ -32,6 +33,11 @@ export type TimelineRow = {
   /** item 8c: an act's row only, its built view (the source line and the Undo state), from the act-kind
    *  registry and the page's one facts read (`view.ts`, pure, server-built). */
   act?: AiActView;
+  /** F-115 part 1 (S-04), plan Task 5: a "change" row only, its built view (the fields the disclosure
+   *  shows, Was/Now, and the step count) from `change-rows.ts`'s pure builder — `phrase()`'s own
+   *  "change" case already computed it once for `verb`/`detail`; attached here too so the renderer
+   *  never recomputes it from the raw `ChangeGroup`. */
+  change?: ChangeRowView;
 };
 export type TimelineSubjects = Readonly<Record<string, { label: string; href: string }>>;
 
@@ -119,7 +125,8 @@ function whenText(iso: string, zone: string, tr: Tr): string {
 
 function phrase(
   entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr, persona: string, stages: DescribeCtx["stages"],
-): Pick<TimelineRow, "verb" | "status" | "detail" | "verbParts" | "detailParts"> {
+  changeCtx?: Omit<ChangeViewCtx, "tr" | "zone">,
+): Pick<TimelineRow, "verb" | "status" | "detail" | "verbParts" | "detailParts" | "change"> {
   switch (entry.kind) {
     case "suggestion": return suggestionPhrase(entry.suggestion, entry.at, zone, tr, persona, stages);
     case "note": return { verb: tr.text("timeline.note"), status: null, detail: null };
@@ -236,10 +243,19 @@ function phrase(
         : tr.text("timeline.mergeOtherHidden");
       return { verb: tr.text("timeline.mergeUndone", { name }), status: null, detail: null };
     }
-    // F-115 part 1 (S-04), plan Task 4: a placeholder only, to keep this switch exhaustive now that
-    // `TimelineEntry` carries a "change" variant. Plan Task 5 (bis-frontend, PR E) replaces this with
-    // the real verb (field list), status-free, and the Was/Now disclosure, built from `entry.group`.
-    case "change": return { verb: tr.text("timeline.what.changes"), status: null, detail: null };
+    // F-115 part 1 (S-04), plan Task 5: the real verb (field list, a removal's own name, or "added"/
+    // "deleted"), status-free (rule 3 is for STATUS; a change row names no status), the "{count}
+    // changes" step label as `detail` (the same muted inline slot a deal's amount or a call's minutes
+    // use), and the full view attached as `change` so the renderer builds the Was/Now disclosure and
+    // Put back/Restore from it without recomputing (change-rows.ts's own `changeRowView`).
+    case "change": {
+      const view = changeRowView(entry.group, {
+        tr, zone,
+        names: changeCtx?.names ?? {}, customFieldLabels: changeCtx?.customFieldLabels ?? {},
+        groupKinds: changeCtx?.groupKinds,
+      });
+      return { verb: view.verb, status: null, detail: view.stepsText, change: view };
+    }
   }
 }
 
@@ -256,22 +272,37 @@ export function timelineRows(
     suggestionStages?: DescribeCtx["stages"];
     /** item 8c: the page's acts' facts (`loadTimeline`); null or absent, every act reads without an Undo. */
     actFacts?: ActFacts | null;
+    /** F-115 part 1 (S-04), plan Task 5: what a "change" row's verb/fields need beyond `author.names`
+     *  (reused directly — the SAME map the row's own mark already resolves names from) — the
+     *  account's custom field labels, a removed tag's name and a removed member's group's own kind,
+     *  all best-effort from data the PAGE already loaded for something else (see the report). Absent
+     *  entirely, a "change" row still renders, with every one of those falling back to its own
+     *  generic word (change-rows.ts's own doc comment).
+     */
+    changeFields?: Omit<ChangeViewCtx, "tr" | "zone" | "names">;
   },
 ): TimelineRow[] {
   let previousDay: string | null = null;
   // The AI mark's own rule (author-mark.ts's authorLabel): the account's persona, else Sofía.
   const persona = ctx.author.personaName?.trim() || "Sofía";
   const stages = ctx.suggestionStages ?? {};
-  // F-115 PR C fix (review I2, orchestrator ruling): the `changes` source stays dormant until PR E
-  // ships the real row — dropped here, before a "change" entry can become a row at all (never even a
-  // placeholder `<li>`), so no caller of `timelineRows` can show one by surprise while the loaders
-  // ask for `changes: true` (they do not, today) or if a future caller ever does before PR E lands.
-  return entries.filter((entry) => entry.kind !== "change").map((entry) => {
+  const changeCtx: Omit<ChangeViewCtx, "tr" | "zone"> = {
+    names: ctx.author.names,
+    customFieldLabels: ctx.changeFields?.customFieldLabels ?? {},
+    groupKinds: ctx.changeFields?.groupKinds,
+  };
+  // F-115 PR E fix (review I7, second half): a pure-insert "changes" row for an opportunity would
+  // say the SAME creation the "deals" source's own entry already says, by name, at the same
+  // instant (change-rows.ts's own `isDuplicateOpportunityInsert` doc comment); dropped here,
+  // before any row is built for it, never shown twice.
+  const visible = entries.filter((entry) => !(entry.kind === "change" && isDuplicateOpportunityInsert(entry.group)));
+  return visible.map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {
       key: `${entry.kind}-${entry.id}`, entry, day, showDay: day !== previousDay,
-      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr, persona, stages),
+      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark,
+      ...phrase(entry, mark, ctx.zone, ctx.tr, persona, stages, changeCtx),
       subject: ctx.subjects && Object.hasOwn(ctx.subjects, entry.contactId) ? ctx.subjects[entry.contactId]! : null,
       ...(entry.kind === "chat" && entry.chat.matchedExisting
         ? { note: { text: ctx.tr.text("conversations.webchat.unconfirmed"), lang: ctx.tr.locale } } : {}),
