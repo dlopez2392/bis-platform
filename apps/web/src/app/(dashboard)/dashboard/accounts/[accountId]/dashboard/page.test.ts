@@ -30,8 +30,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // `role` (S-47d Task 11): defaults to `null` so every pre-existing test (none of which set it) keeps
 // resolving exactly as before — only the business-status card reads it at all.
 const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
-// Mis preferencias: no stored choice, so the page keeps its existing locale.
-vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
+// Mis preferencias: no stored choice, so the page keeps its existing locale —
+// unless a test sets `language` (the zone note's Spanish test below).
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }) }));
 vi.mock("@/lib/auth", () => ({
   requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role }),
 }));
@@ -460,6 +462,22 @@ describe("AccountDashboardPage — the zone note", () => {
     // Settings is agency-only; a client following that link is redirected
     // straight back to this page.
     expect(clientHtml).not.toContain("/settings");
+  });
+
+  // The 2026-11-05 Spanish capture (screenshots/out/es/dashboard-dark.png):
+  // every other line of the dashboard was Spanish and this one read "Times
+  // shown in America/Chicago", because the page resolved the reader's locale
+  // and rendered the note without it — the calls page's I1, here.
+  it("names the zone in the reader's Spanish (mutation: drop locale from <ZoneNote> -> FAILS)", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" };
+    prefsFixture.language = "es";
+    try {
+      const text = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+      expect(text).toContain(m["zone.note.es"].replace("{zone}", "America/Chicago"));
+      expect(text).not.toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+    } finally {
+      prefsFixture.language = null;
+    }
   });
 });
 

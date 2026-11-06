@@ -68,7 +68,7 @@ export const DEMO_TRANSCRIPTS: readonly DemoTranscript[] = [
     summary: "El aire no enfría desde el martes. Cita agendada para el jueves 10–12.",
     turns: [
       { role: "assistant", text: "Gracias por llamar a Resaca Air Conditioning and Heating, habla Sofía. ¿En qué le puedo ayudar?" },
-      { role: "caller", text: "Buenos días. Fíjese que el aire no está enfriando bien desde el martes." },
+      { role: "caller", text: "Hola, buenas. Fíjese que el aire no está enfriando bien desde el martes." },
       { role: "assistant", text: "Con gusto le ayudo. ¿El aire prende y sopla, pero sale el aire tibio, o no prende nada?" },
       { role: "caller", text: "Sí prende, sopla, pero sale tibio. Y hace un ruido como un zumbido afuera." },
       { role: "assistant", text: "Entiendo — sopla pero no enfría, y con un zumbido en la unidad de afuera. Eso lo revisa el técnico en la primera visita. Tengo disponible el jueves de diez a doce, o el viernes temprano de ocho a diez. ¿Cuál le acomoda mejor?" },
