@@ -49,7 +49,10 @@ export type PaletteEntry = {
  * now carries (anchor, labelKey, route) — only the keyword WORDS stayed
  * behind, re-keyed.
  */
-const ENTRY_KEYWORDS: Record<string, string[]> = {
+// Exported only so a test can assert every key here is still a real
+// manifest id (F-087 fix round, Minor 4) — nothing in this module reads it
+// via the export, which continues to use the module-local binding below.
+export const ENTRY_KEYWORDS: Record<string, string[]> = {
   // F-095 part 1 (spec §4.2): "inicio" also means "sign-in" per the glossary's
   // own exclusion note — kept anyway since it is still the right word for
   // THIS destination; the exclusion only bans it as a stand-in elsewhere.

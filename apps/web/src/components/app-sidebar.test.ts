@@ -226,3 +226,15 @@ describe("AppSidebar — AccountSwitcher is gated on isAgency (the RUNTIME_AGENC
     expect(src).toContain("isAgency ? (\n        <AccountSwitcher");
   });
 });
+
+// F-087 fix round, Minor 10: the wordmark used to carry its own fourth,
+// independent "/dashboard" literal — the footer and ⌘K already read the
+// manifest's own nav:/dashboard entry (surfaceById, hoisted to module
+// scope), and the wordmark now does too, closing the exact duplication
+// this manifest exists to end.
+describe("AppSidebar — the wordmark reads the same manifest entry as the footer and ⌘K (F-087 fix round, Minor 10)", () => {
+  it("the wordmark's href is topLevelEntry.route(base), not a hard-coded \"/dashboard\" literal (mutation: revert to href=\"/dashboard\" → FAILS)", () => {
+    expect(src).toContain("href={topLevelEntry.route(base)}");
+    expect(src).not.toContain('href="/dashboard"');
+  });
+});
