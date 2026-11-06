@@ -301,14 +301,6 @@ export const SURFACE_MANIFEST: SurfaceEntry[] = [
     audience: { agency: false, client: "owner", technician: false },
   },
   {
-    // The agency's own entry point into the SAME page — /team admits both
-    // (team/page.tsx's own requireAccountOwner), so this is a second menu
-    // id for one shared route, not a second guard.
-    id: "settings:team", kind: "page", scope: "account", group: null,
-    labelKey: "palette.settings.team", route: (base) => `${base}/team`,
-    audience: { agency: true, client: false, technician: false },
-  },
-  {
     // S-07 3a (spec 3.3): a client Owner edits the required-documents list
     // on the Documents page's own card.
     id: "nav:required-documents", kind: "page", scope: "account", group: null,
@@ -330,6 +322,23 @@ export const SURFACE_MANIFEST: SurfaceEntry[] = [
   {
     id: "nav:setup", kind: "page", scope: "account", group: null,
     labelKey: "nav.setup", route: (base) => `${base}/setup`,
+    audience: { agency: true, client: false, technician: false },
+  },
+  {
+    // F-087 fix round, finding 3b (owner ruling 2026-11-06): this row sits
+    // AFTER nav:setup, not right after nav:team, so the agency's in-account
+    // ⌘K order equals origin/main's own push order (nav:preferences,
+    // nav:bis-access, nav:settings, nav:setup, settings:team — nav:team and
+    // nav:required-documents are owner-only and never reach an agency
+    // session at all, so their position among THIS array is immaterial to
+    // that order). The agency's own entry point into the SAME page as
+    // nav:team above — /team admits both (team/page.tsx's own
+    // requireAccountOwner) — so this is a second menu id for one shared
+    // route, not a second guard. Pinned by registry.test.ts's own order
+    // test (mutation: move this row back above nav:required-documents →
+    // FAILS).
+    id: "settings:team", kind: "page", scope: "account", group: null,
+    labelKey: "palette.settings.team", route: (base) => `${base}/team`,
     audience: { agency: true, client: false, technician: false },
   },
 

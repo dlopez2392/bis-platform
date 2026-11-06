@@ -87,14 +87,14 @@ describe("buildPaletteEntries", () => {
     }
   });
 
-  it("registers the alert-phone settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+  it("registers the alert-phone settings section (mutation: remove the manifest's settings-section entry → FAILS)", () => {
     const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
     const entry = settings.find((e) => e.id === "settings:alert-phone");
     expect(entry).toBeTruthy();
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
   });
 
-  it("registers the billing settings section, agency only (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+  it("registers the billing settings section, agency only (mutation: remove the manifest's settings-section entry → FAILS)", () => {
     const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:billing");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#billing`);
     expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:billing")).toBe(false);
@@ -103,24 +103,24 @@ describe("buildPaletteEntries", () => {
   // D-080: Branding, Weekly report and Website are real cards on the
   // Settings page (settings/page.tsx renders <BrandingPanel>, <WeeklyReportCard
   // id="weekly-report">, <LinkSiteCard id="website">) but none had a
-  // SETTINGS_SECTIONS entry, so DESIGN.md's "settings sections must be
+  // settings-section manifest entry, so DESIGN.md's "settings sections must be
   // registered in the palette index" went unmet for all three.
-  it("registers the branding settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+  it("registers the branding settings section (mutation: remove the manifest's settings-section entry → FAILS)", () => {
     const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:branding");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#branding`);
   });
 
-  it("registers the weekly report settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+  it("registers the weekly report settings section (mutation: remove the manifest's settings-section entry → FAILS)", () => {
     const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:weekly-report");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#weekly-report`);
   });
 
-  it("registers the website settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+  it("registers the website settings section (mutation: remove the manifest's settings-section entry → FAILS)", () => {
     const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:website");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#website`);
   });
 
-  it("registers the required documents settings section (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+  it("registers the required documents settings section (mutation: remove the manifest's settings-section entry -> FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const entry = entries.find((e) => e.id === "settings:required-documents");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#required-documents`);
@@ -130,8 +130,8 @@ describe("buildPaletteEntries", () => {
     expect(filterEntries(entries, "documentos").some((e) => e.id === "settings:required-documents")).toBe(true);
   });
 
-  // S-53: the company's trade (settings/trade-card.tsx, #trade). Agency only, like every SETTINGS_SECTIONS entry.
-  it("registers the trade settings section, agency only, found by 'giro' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+  // S-53: the company's trade (settings/trade-card.tsx, #trade). Agency only, like every settings-section manifest entry.
+  it("registers the trade settings section, agency only, found by 'giro' (mutation: remove the manifest's settings-section entry -> FAILS)", () => {
     const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
     const entry = settings.find((e) => e.id === "settings:trade");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#trade`);
@@ -142,7 +142,7 @@ describe("buildPaletteEntries", () => {
     expect(filterEntries(settings, "trade").some((e) => e.id === "settings:trade")).toBe(true);
   });
 
-  it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+  it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the manifest's settings-section entry -> FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const entry = entries.find((e) => e.id === "settings:ai");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#ai`);
@@ -153,7 +153,7 @@ describe("buildPaletteEntries", () => {
   });
 
   // Staff and roles (Task 8): a client Owner gets a direct `nav:team` entry;
-  // a client Staff does not. Not a SETTINGS_SECTIONS anchor — see
+  // a client Staff does not. Not a settings-section manifest anchor — see
   // registry.ts's own comment on why — so this is checked by id/href, not
   // by the `group: "settings"` anchor-parity loop below.
   it("registers nav:team for a client Owner, pointing at this account's /team; a client Staff never gets it (mutation: drop the isOwner check → the Staff assertion FAILS)", () => {
@@ -208,7 +208,7 @@ describe("buildPaletteEntries", () => {
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
-    // MUTATION: remove the NAV_KEYWORDS entry — this FAILS, and an operator
+    // MUTATION: remove the ENTRY_KEYWORDS entry — this FAILS, and an operator
     // typing "widget" finds nothing.
     for (const word of ["website", "widget", "chat", "concierge"]) {
       expect(voice.keywords).toContain(word);
@@ -216,7 +216,7 @@ describe("buildPaletteEntries", () => {
   });
 
   // S-47c (plan Task 9; spec 5.7): the Voice page's two new cards — Business hours, Services & prices.
-  it("finds the receptionist's hours and prices by the words an operator would type, in English and Spanish (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
+  it("finds the receptionist's hours and prices by the words an operator would type, in English and Spanish (mutation: drop any of these from ENTRY_KEYWORDS → FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
     for (const word of ["hours", "prices", "services", "horario", "precios"]) {
@@ -226,7 +226,7 @@ describe("buildPaletteEntries", () => {
 
   // D-062: an operator typing any one of the five automation recipes by name
   // found nothing — only no-show/reminder/review words were registered.
-  it("finds Automations by referral, reactivation, quote, confirmation and instant reply (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
+  it("finds Automations by referral, reactivation, quote, confirmation and instant reply (mutation: drop any of these from ENTRY_KEYWORDS → FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const automations = entries.find((e) => e.id === `nav:${BASE}/automations`)!;
     for (const word of ["referral", "reactivation", "quote", "confirmation", "instant reply"]) {
@@ -263,14 +263,14 @@ describe("buildPaletteEntries", () => {
     expect(hrefs.some((h) => h.includes("/contacts"))).toBe(false);
   });
 
-  it("finds Plans by the words an operator types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+  it("finds Plans by the words an operator types for it (mutation: drop its ENTRY_KEYWORDS entry → FAILS)", () => {
     const entries = buildPaletteEntries(null, true, false);
     for (const word of ["billing", "pricing", "stripe"]) {
       expect(filterEntries(entries, word).map((e) => e.id)).toContain("nav:/dashboard/plans");
     }
   });
 
-  it("finds a client's Billing page by the words a business owner types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+  it("finds a client's Billing page by the words a business owner types for it (mutation: drop its ENTRY_KEYWORDS entry → FAILS)", () => {
     const entries = buildPaletteEntries(BASE, false, true);
     for (const word of ["invoice", "card", "receipt"]) {
       expect(filterEntries(entries, word).map((e) => e.id)).toContain(`nav:${BASE}/billing`);
@@ -286,7 +286,7 @@ describe("buildPaletteEntries", () => {
 
   // D-080, review round: `id="branding"` (and every other settings anchor)
   // was unpinned — nothing proved the Settings page actually has a Card
-  // wearing the anchor a SETTINGS_SECTIONS entry points at. A registry
+  // wearing the anchor a settings-section manifest entry points at. A registry
   // entry pointing at a href that scrolls to nothing is a defect this
   // suite could not see before, since registry.ts never reads the page.
   // Reads the SOURCE of every card component the Settings page renders
@@ -342,8 +342,8 @@ describe("filterEntries", () => {
   it("finds the tasks route by keyword even though its own label is 'To do'", () => {
     // nav-groups.ts's `nav.tasks` label reads "To do" — an operator typing
     // the route's own name ("task") found nothing on a route literally
-    // called /tasks and full of records called tasks (NAV_KEYWORDS had no
-    // "/tasks" entry at all).
+    // called /tasks and full of records called tasks (ENTRY_KEYWORDS had no
+    // "nav:tasks" entry at all).
     expect(filterEntries(entries, "task").some((e) => e.label === "To do")).toBe(true);
   });
 
@@ -357,8 +357,8 @@ describe("filterEntries", () => {
   });
 
   // S-07 3a (spec 3.1, decision E2): the Documents page is findable by its
-  // own words, in both languages (mutation: no NAV_KEYWORDS entry -> FAILS).
-  it("the Documents page is findable by its words in both languages (mutation: no NAV_KEYWORDS entry -> FAILS)", () => {
+  // own words, in both languages (mutation: no ENTRY_KEYWORDS entry -> FAILS).
+  it("the Documents page is findable by its words in both languages (mutation: no ENTRY_KEYWORDS entry -> FAILS)", () => {
     const base = buildPaletteEntries(BASE, false, false);
     expect(filterEntries(base, "vencen").some((e) => e.id === `nav:${BASE}/documents`)).toBe(true);
     expect(filterEntries(base, "expiring").some((e) => e.id === `nav:${BASE}/documents`)).toBe(true);
@@ -520,7 +520,7 @@ describe("F-095 part 1: accent-insensitive matching, both ways", () => {
   // Test 1 (spec §6.4.1): the brief's own worked example. "citas" carries no
   // accent to begin with, so this alone cannot prove the fold runs — it
   // proves the ALIAS itself is registered (test 2 below is the real fold
-  // test). Mutation: drop "citas" from NAV_KEYWORDS["/calendar"] → FAILS.
+  // test). Mutation: drop "citas" from ENTRY_KEYWORDS["nav:calendar"] → FAILS.
   it("finds Calendar by typing 'citas', the brief's own worked example (mutation: drop the keyword → FAILS)", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     expect(filterEntries(entries, "citas").map((e) => e.id)).toContain(`nav:${BASE}/calendar`);
@@ -708,5 +708,63 @@ describe("F-095 part 1: ranking (spec §4.3)", () => {
     // would keep it first.
     const result = filterEntries([keywordOnly, labelMatch], "ajustes");
     expect(result.map((e) => e.id)).toEqual(["x:label-match", "x:keyword-only"]);
+  });
+});
+
+// F-087 fix round, finding 2 (owner ruling 2026-11-06): KEEP, the palette
+// side of the same change pinned in nav-groups.test.ts. A non-agency caller
+// with no account in scope (base === null) now gets none of the agency's
+// six top-level destinations — previously impossible to reach in practice,
+// but nothing stopped buildNavGroups(null, ...) from returning them to one.
+describe("buildPaletteEntries — a non-agency caller at the top level gets none of the six agency-top destinations (F-087 fix round, finding 2, KEEP)", () => {
+  it("a client (not agency) with no account in scope gets no agency-top hrefs (mutation: drop the audience check for agency-top scope → FAILS)", () => {
+    const entries = buildPaletteEntries(null, false, false);
+    const hrefs = entries.filter((e) => e.kind === "href").map((e) => (e as { href: string }).href);
+    for (const h of ["/dashboard/accounts", "/dashboard/blueprints", "/dashboard/work", "/dashboard/numbers", "/dashboard/screened", "/dashboard/plans", "/dashboard"]) {
+      expect(hrefs, h).not.toContain(h);
+    }
+  });
+
+  it("a Technician with no account in scope gets no agency-top hrefs (mutation: drop the audience check for agency-top scope → FAILS)", () => {
+    const entries = buildPaletteEntries(null, false, false, true);
+    const hrefs = entries.filter((e) => e.kind === "href").map((e) => (e as { href: string }).href);
+    expect(hrefs).not.toContain("/dashboard/accounts");
+  });
+});
+
+// F-087 fix round, finding 3a (owner ruling 2026-11-06): KEEP. The seven
+// ex-hand-pushed entries (Preferences, nav:team, settings:team, Required
+// documents, BIS access, Settings, Setup) now flow through the SAME
+// `words()` call every manifest-derived entry gets, so the OTHER
+// language's own label joins their keywords too (F-095's own rule,
+// §4.4) — the one-off hand-pushes used to carry only their own
+// hand-written keyword arrays, with no cross-language label word.
+describe("buildPaletteEntries — the ex-hand-pushed entries are findable by the other language's own label too (F-087 fix round, finding 3a, KEEP)", () => {
+  it("an English session finds Preferences by its Spanish label word 'preferencias' (mutation: revert to the hand-pushed, one-way keyword list → FAILS)", () => {
+    const en = buildPaletteEntries("/dashboard/accounts/acc_1", true, false, false, "en");
+    expect(filterEntries(en, "preferencias").map((e) => e.id)).toContain("nav:preferences");
+  });
+
+  it("a Spanish session finds Settings by its English label word 'settings' (mutation: revert to the hand-pushed, one-way keyword list → FAILS)", () => {
+    const es = buildPaletteEntries("/dashboard/accounts/acc_1", true, false, false, "es");
+    expect(filterEntries(es, "settings").map((e) => e.id)).toContain("nav:settings");
+  });
+});
+
+// F-087 fix round, finding 3b (owner ruling 2026-11-06): the consolidation
+// moved `settings:team` to right after `nav:team` in the manifest's own
+// array, which put it BEFORE nav:bis-access/nav:settings/nav:setup in an
+// agency session's ⌘K list — origin/main pushed it LAST among this exact
+// set of five (nav:preferences first, then nav:bis-access, nav:settings,
+// nav:setup, settings:team). Pins the restored order directly, not through
+// an intermediate "same ids, any order" check.
+describe("buildPaletteEntries — the agency's in-account ⌘K order matches origin/main (F-087 fix round, finding 3b)", () => {
+  it("nav:preferences, nav:bis-access, nav:settings, nav:setup, settings:team, in that order (mutation: move the settings:team manifest row back above nav:required-documents → FAILS)", () => {
+    const entries = buildPaletteEntries("/dashboard/accounts/acc_1", true, false);
+    const ids = entries.filter((e) => e.kind === "href").map((e) => e.id);
+    const order = ids.filter((id) =>
+      ["nav:preferences", "nav:bis-access", "nav:settings", "nav:setup", "settings:team"].includes(id),
+    );
+    expect(order).toEqual(["nav:preferences", "nav:bis-access", "nav:settings", "nav:setup", "settings:team"]);
   });
 });
