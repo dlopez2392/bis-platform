@@ -150,7 +150,7 @@ Keywords (`NAV_KEYWORDS`, `SETTINGS_SECTIONS`'s own arrays) stay a
   dedicated marker — plan-level detail), closing finding (a) and the
   three-way duplication in row 5 of §1's table in the same stroke (see Q1).
 
-### 2.3 The one real UI change this spec recommends (not silent)
+### 2.3 The real behavior changes this spec makes (not silent)
 
 Finding (a) — the agency's own `/dashboard` is literally unreachable from
 ⌘K today. Fixing it is a one-line manifest addition once the manifest
@@ -158,6 +158,21 @@ exists, and makes that page searchable for the first time. Per the
 invariant below ("no visible UI change in part 1 unless you find a real
 inconsistency — then list it as an owner question"), this is listed as Q2,
 not applied without asking.
+
+**A second sanctioned change, found and ruled on during the fix round
+(2026-11-06, owner ruling, "Finding 2"): a non-agency caller with no
+account in scope (`base === null`) now sees none of the agency's six
+flat top-level destinations.** Before this manifest, `buildNavGroups`'s
+`base === null` branch returned its six items unconditionally — it never
+read `isAgency` at all, so nothing in the function itself stopped a
+client or Technician session from getting the agency's own Companies/
+Blueprints/Work/Numbers/Screened/Plans list too, had one ever reached
+that branch (no real session does today: a client or Technician is never
+routed to the agency top level). Every top-level manifest entry's
+`audience` is now `{ agency: true, client: false, technician: false }`
+like every other entry's, so `audienceIncludes` withholds them from a
+non-agency caller by the same mechanism it already uses everywhere else
+— KEEP, pinned in `nav-groups.test.ts` and `registry.test.ts`.
 
 ### 2.4 Explicitly deferred
 
@@ -200,6 +215,20 @@ not applied without asking.
 - **`nav-groups.ts`'s own exported shapes (`NavGroupSpec`, `NavItemSpec`)
   do not change** — the sidebar's render contract is untouched; only where
   the data backing it comes from moves.
+- **A third sanctioned change, found and ruled on during the fix round
+  (2026-11-06, owner ruling, "Finding 3a"): the seven ex-hand-pushed
+  entries (Preferences, `nav:team`, `settings:team`, Required documents,
+  BIS access, Settings, Setup) are now findable by the OTHER language's
+  own label word too, the same F-095 rule (§4.4) every manifest-derived
+  entry already got.** Before this manifest, each of the seven was pushed
+  with its own hand-written keyword array and no call to `words()` — an
+  English session could not find, say, `nav:preferences` by its Spanish
+  label ("Preferencias…"), only by whatever words someone had thought to
+  hand-write. Routing every entry (nav-rendered or not) through the SAME
+  `buildPaletteEntries` loop and the SAME `words()` call closes that gap
+  as a side effect of the consolidation itself — KEEP, pinned in
+  `registry.test.ts` (EN "preferencias" finds `nav:preferences`; ES
+  "settings" finds `nav:settings`).
 
 ## 4. Test strategy (named mutation probes)
 
@@ -240,8 +269,10 @@ not applied without asking.
    evidence for — a display-only sanity check, never the enforcement
    itself, per the invariant above.)
 6. **Route-existence, bounded (new; see Q5).** Every manifest entry's
-   static route segments (after substituting a fixed `base`) resolve to an
-   existing folder under the dashboard route tree. Mutation: point one
+   static route segments (after substituting a fixed `base`) resolve to a
+   real `page.tsx` under the dashboard route tree — not merely an existing
+   folder, which a layout-only directory with no page would also satisfy
+   while still being unroutable (fix round, Minor 7). Mutation: point one
    manifest entry at a renamed/deleted folder → FAILS, naming the path.
    Bounded to part 1's finite, known entry list — not a full route-tree
    walk in the other direction (a brand-new, never-registered route is a

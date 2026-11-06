@@ -136,8 +136,10 @@ export function relativeKey(baseDir: string, absPath: string): string {
 // entirely from the scan, not frozen-but-included — DESIGN.md's bilingual
 // DoD line is itself qualified ("once a surface carries bilingual copy at
 // all"), and these routes are internal tooling with no bilingual intent.
-// Exactly the six top-level agency routes lib/nav-groups.ts names (plan-
-// review I1) — NOT dashboard/billing, which is the CLIENT's own account-
+// Exactly the six top-level agency routes lib/nav-groups.ts names, which
+// since F-087 part 1 reads them off lib/surfaces/manifest.ts's own
+// agency-top-scoped entries rather than inlining them (plan-review I1) —
+// NOT dashboard/billing, which is the CLIENT's own account-
 // scoped billing page (`${base}/billing`) and must stay scanned. Matched
 // against `relativeKey`'s output, which is already "/"-separated, so a
 // plain "/" in each pattern is correct on every OS — no [\\/] needed.
