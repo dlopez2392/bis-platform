@@ -527,3 +527,11 @@ The review found that the derived predicate (`outcome = 'abandoned'` and `handof
 1. **Record the failure when it happens.** 0114 adds `calls.transfer_failed_at timestamptz` and `calls.transfer_failed_reason text` (a closed set, for example `no_answer` and `refused`, CHECKed). The handoff-result route stamps them in its "reached nobody" branch and in its refusal branches (`apps/web/src/app/api/voice/texml/handoff-result/route.ts`). The queue's predicate becomes `transfer_failed_at is not null and transfer_followup_at is null`. A call still being handled never appears, and the 8 pre-release production rows never appear either, because none of them has a recorded failure.
 2. **A row clears itself when the same caller is later served.** Hide a failed transfer when a LATER call from the same `caller_e164`, in the same account, ended `transferred`, `booked`, `lead` or `message`. This is decided at read time, and nothing is written.
 3. **Record who pressed "Called back".** 0114 adds `calls.transfer_followup_by text`, with a pair CHECK (`(transfer_followup_at is null) = (transfer_followup_by is null)`). Undo of "Called back" requires the same person and the exact instant, matching Accept.
+
+## 11. Corrections after the end-of-PR review (2026-11-06)
+
+1. **Where `refused` is written.** §10.1's "refusal branches" are in the parent `handoff/route.ts` (the ask is too old or unreadable; there is no transfer target). `handoff-result/route.ts` stamps only `no_answer`. A database error in the parent route after the call has resolved is also stamped `refused` before the route hangs up.
+2. **A stamp never lands on a `transferred` call.** `markTransferFailed` requires `outcome <> 'transferred'`, and `failedTransfers` excludes transferred calls.
+3. **What the row says (§3.3).** A Sofía booking-change row shows `describeAct`'s verb, its detail (for example "From {when}" on a reschedule) and the AI author mark (DESIGN.md Provenance).
+4. **Styleguide.** No To do row shape has styleguide coverage today (`work-tray-demo` demos only the Suggestions tray), so this part adds none. Decision recorded 2026-11-06.
+5. **Undo toasts** keep sonner's default duration, like every other row on the To do page. A 10-second Undo toast would be a DESIGN rule 6 amendment for every surface.
