@@ -690,3 +690,9 @@ DESIGN.md, and the shipped code read for this spec.
   (`palette`/`labels.ts` become functions of the locale) — flagged here only
   because §4.2 extends it to seven MORE sections, widening a pattern that
   was never itself put to the owner as its own decision.
+
+## Owner rulings (2026-11-06; the owner said "go with your recommendations") — BINDING
+
+1. **Typo tolerance on the static index: defer.** Accent folding and the complete keyword fill ship now.
+2. **`PaletteEntry.labelKey` is additive-optional** (`labelKey?: MessageKey`).
+3. **No typed "go"/"ir a" prefix.** The existing "Go to"/"Ir a" group heading stays as it is.
