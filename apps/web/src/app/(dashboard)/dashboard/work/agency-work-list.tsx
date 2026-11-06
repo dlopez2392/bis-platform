@@ -42,6 +42,8 @@ import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { workRowHref } from "@/lib/documents/card-focus";
 import type { Tr } from "@/lib/record/copy";
+import { makeTr } from "@/lib/record/copy";
+import { describeAct } from "@/lib/ai-acts/kinds";
 import type { SuggestionGroup } from "@/lib/proposals/group";
 import {
   acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
@@ -80,6 +82,15 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
 function primaryLabel(row: AgencyWorkRow, contactName: string): string {
   if (row.source === "task") return row.title;
   if (row.source === "conversation") return m["work.conversation"].replace("{name}", () => contactName);
+  if (row.source === "failed_transfer") {
+    return row.callbackNumber
+      ? m["work.failedTransfer"].replace("{number}", () => row.callbackNumber!)
+      : m["work.failedTransfer.bare"];
+  }
+  // F-077 part 1 (deviation note): this screen's bucketed rows are English-only today (unlike the
+  // suggestion tray below them, which does take `tr`) -- `makeTr("en")` matches that existing
+  // posture rather than introducing new localization plumbing this task was not asked to add.
+  if (row.source === "booking_act") return describeAct(row.bookingAct!, { tr: makeTr("en"), zone: row.timezone }).verb;
   return m["work.booking"];
 }
 

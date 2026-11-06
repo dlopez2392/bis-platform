@@ -3,12 +3,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow, Proposal } from "@bis/db";
 import type { Proposal as Row } from "@bis/db/proposal-rules";
+import type { AiAct } from "@bis/db/ai-act-rules";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { m } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
 import { renderedText } from "@/lib/rendered-text";
 
 import { buildSuggestionView } from "@/lib/proposals/view";
+import { describeAct } from "@/lib/ai-acts/kinds";
 import { visibleAgencyBuckets, AgencyWorkList, type AgencySuggestionsLoad } from "./agency-work-list";
 
 /** The cards' words, as the agency page draws them (English: an operator reads this page). */
@@ -387,5 +389,47 @@ describe("the callback To do on the agency-wide list (F-033; DESIGN.md provenanc
     expect(callback).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
     expect(callback).toContain("Ana Reyes");
     expect(typed).not.toContain("· AI");
+  });
+});
+
+const ACT: AiAct = {
+  id: "act1", accountId: "acct-a", actor: "voice", callId: "call1", chatId: null, contactId: "ct1",
+  kind: "booking_cancelled", target: { bookingId: "bk1" },
+  before: { startsAt: "2026-11-10T16:00:00Z", endsAt: "2026-11-10T17:00:00Z" }, after: { version: "2026-11-10T15:00:00Z" },
+  createdAt: "2026-11-06T15:00:00Z", undoneAt: null, undoneBy: null, undoNotified: false,
+};
+
+describe("the two new sources on the agency screen (F-077 part 1)", () => {
+  it("renders the failed-transfer sentence and NO button (mutation: render a button for either new source -> the zero-buttons assertion FAILS)", () => {
+    const html = renderList(buckets({
+      waiting: [row({
+        id: "failed_transfer:c1", source: "failed_transfer", contactId: "ct1",
+        callbackNumber: "9565551212",
+      })],
+    }), { ct1: "Rio Flores" });
+    expect(html).toContain(m["work.failedTransfer"].replace("{number}", "9565551212"));
+    expect(html.match(/<button/g)).toBeNull();
+  });
+
+  it("renders describeAct's own verb for a booking-act row, and NO button (mutation: fall through to work.booking's bare question instead -> FAILS)", () => {
+    const html = renderList(buckets({
+      waiting: [row({
+        id: "booking_act:act1", source: "booking_act", contactId: "ct1",
+        bookingAct: ACT,
+      })],
+    }), { ct1: "Pat Nunez" });
+    expect(html.match(/<button/g)).toBeNull();
+    expect(html).toContain("Pat Nunez");
+    // This screen's own posture (task-6 brief's deviation note): English only, makeTr("en").
+    expect(html).toContain(describeAct(ACT, { tr: makeTr("en"), zone: "America/Chicago" }).verb);
+  });
+
+  it("falls back to the bare sentence with no callback number (apostrophe decoded through renderedText -- rendered-text.ts's own documented trap)", () => {
+    const html = renderList(buckets({
+      waiting: [row({
+        id: "failed_transfer:c2", source: "failed_transfer", contactId: null, callbackNumber: null,
+      })],
+    }));
+    expect(renderedText(html)).toContain(m["work.failedTransfer.bare"]);
   });
 });
