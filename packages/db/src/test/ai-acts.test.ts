@@ -246,7 +246,7 @@ describe("listPendingBookingActs (F-077 part 1)", () => {
     });
   });
 
-  it("excludes an already-undone or already-accepted act (mutation: drop .is('accepted_at', null) -> FAILS)", async () => {
+  it("excludes an already-accepted act (mutation: drop .is('accepted_at', null) -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const callId = await seedCall(db, accountId);
       const { id: contactId } = await createContact(db, accountId, { firstName: "Bo" }, "user_test");
@@ -258,6 +258,44 @@ describe("listPendingBookingActs (F-077 part 1)", () => {
 
       const rows = await listPendingBookingActs(db, accountId);
       expect(rows.map((r) => r.id)).not.toContain(`booking_act:${row!.id}`);
+    });
+  });
+
+  it("excludes an act UNDONE on the record, seeded through stampAiActUndone itself, not a hand-set column (review I4; mutation: drop .is('undone_at', null) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Iv" }, "user_test");
+      const act = { kind: "booking_rescheduled" as const, actor: "voice" as const, callId, chatId: null, contactId,
+        target: { bookingId: "bk_2b", fromBookingId: "bk_2a" },
+        before: { startsAt: "2026-11-02T10:00:00Z", endsAt: "2026-11-02T11:00:00Z", version: "2026-11-02T09:00:00Z" },
+        after: { startsAt: "2026-11-02T14:00:00Z", endsAt: "2026-11-02T15:00:00Z" } };
+      await insertAiActs(db, accountId, [act]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_rescheduled").single();
+      expect(await stampAiActUndone(db, accountId, row!.id, "user_owner", new Date())).toBe(true);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows.map((r) => r.id)).not.toContain(`booking_act:${row!.id}`);
+    });
+  });
+
+  it("surfaces all three booking kinds, not just one (review I4; mutation: narrow BOOKING_ACT_KINDS to a single kind -> the other two disappear -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Jo" }, "user_test");
+      await insertAiActs(db, accountId, [
+        { kind: "booking_created", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_created" }, before: null, after: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z" } },
+        { kind: "booking_rescheduled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_resched", fromBookingId: "bk_resched_from" },
+          before: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z", version: "2026-11-03T09:00:00Z" },
+          after: { startsAt: "2026-11-03T14:00:00Z", endsAt: "2026-11-03T15:00:00Z" } },
+        { kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_cancelled" }, before: { startsAt: "2026-11-03T10:00:00Z", endsAt: "2026-11-03T11:00:00Z" },
+          after: { version: "2026-11-03T09:00:00Z" } },
+      ]);
+
+      const rows = await listPendingBookingActs(db, accountId);
+      expect(rows.map((r) => r.bookingAct!.kind).sort()).toEqual(["booking_cancelled", "booking_created", "booking_rescheduled"]);
     });
   });
 
@@ -291,7 +329,18 @@ describe("stampAiActAccepted / unstampAiActAccepted (F-077 part 1)", () => {
     });
   });
 
-  it("unstampAiActAccepted only clears the exact instant it was given (mutation: drop .eq('accepted_at', at.toISOString()) -> FAILS)", async () => {
+  it("refuses to accept a non-booking-kind act, even one the queue never showed (review M1; mutation: drop .in('kind', BOOKING_ACT_KINDS) -> succeeds on a contact_field_filled act -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Hal" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "contact_field_filled", actor: "voice", callId, chatId: null, contactId,
+        target: { field: "email" }, before: { value: null }, after: { value: "h@example.com" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "contact_field_filled").single();
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_a", new Date())).toBe(false);
+    });
+  });
+
+  it("unstampAiActAccepted requires the SAME PERSON and the exact instant: right by/wrong instant and wrong by/right instant each return false, only the true pair clears it (review I3; mutation: drop .eq('accepted_by', by) -> a different person's Undo succeeds -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const callId = await seedCall(db, accountId);
       const { id: contactId } = await createContact(db, accountId, { firstName: "Em" }, "user_test");
@@ -301,7 +350,15 @@ describe("stampAiActAccepted / unstampAiActAccepted (F-077 part 1)", () => {
       const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_cancelled").single();
       const at1 = new Date("2026-11-06T15:00:00Z");
       await stampAiActAccepted(db, accountId, row!.id, "user_a", at1);
-      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_b", new Date("2026-11-06T16:00:00Z"))).toBe(false);
+
+      // right person, wrong instant
+      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_a", new Date("2026-11-06T16:00:00Z"))).toBe(false);
+      // wrong person, right instant
+      expect(await unstampAiActAccepted(db, accountId, row!.id, "user_b", at1)).toBe(false);
+      const { data: still } = await db.from("ai_acts").select("accepted_at, accepted_by").eq("id", row!.id).single();
+      expect(still!.accepted_by).toBe("user_a");
+
+      // the true pair
       expect(await unstampAiActAccepted(db, accountId, row!.id, "user_a", at1)).toBe(true);
     });
   });

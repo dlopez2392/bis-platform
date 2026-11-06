@@ -179,7 +179,11 @@ export async function markAiActNotified(db: SupabaseClient, accountId: string, a
   if (error) throw new Error(`markAiActNotified failed: ${error.message}`);
 }
 
-const BOOKING_ACT_KINDS = ["booking_created", "booking_rescheduled", "booking_cancelled"] as const;
+/** The three `control: "booking"` kinds (spec 4.2, D5). Exported (review M6) so a parity test living
+ *  where both are importable -- `@bis/db` cannot import the web registry, so that test lives in
+ *  apps/web -- can assert this list equals `ACT_KINDS`'s own `control: "booking"` entries
+ *  (`apps/web/src/lib/ai-acts/kinds/index.ts`). */
+export const BOOKING_ACT_KINDS = ["booking_created", "booking_rescheduled", "booking_cancelled"] as const;
 
 /** F-077 part 1: Sofia's booking changes, un-undone and un-accepted, for the To do queue. No stillSafe
  *  computation (that answers "may the record page still OFFER Undo"; this row never offers Undo
@@ -213,12 +217,15 @@ export async function listPendingBookingActs(
 /** Stamps an act "seen" on the To do queue -- the exact shape of stampAiActUndone, with its own
  *  column. Compare-and-swap on `accepted_at is null`: true when THIS call moved it. Also refuses an
  *  act already undone on the record (`.is("undone_at", null)`) -- an act undone on the record can't
- *  be accepted on the queue (plan review C1). THROWS on a database error. No emit(): matches
+ *  be accepted on the queue (plan review C1) -- and, round 2 (review M1), refuses an act whose kind
+ *  the queue never showed at all (`.in("kind", BOOKING_ACT_KINDS)`): Accept means "I saw this on the
+ *  queue," and the queue shows booking acts only. THROWS on a database error. No emit(): matches
  *  stampAiActUndone's own silence. */
 export async function stampAiActAccepted(db: SupabaseClient, accountId: string, actId: string, by: string, at: Date): Promise<boolean> {
   const { data, error } = await db.from("ai_acts")
     .update({ accepted_at: at.toISOString(), accepted_by: by })
-    .eq("account_id", accountId).eq("id", actId).is("accepted_at", null).is("undone_at", null)
+    .eq("account_id", accountId).eq("id", actId).in("kind", BOOKING_ACT_KINDS)
+    .is("accepted_at", null).is("undone_at", null)
     .select("id");
   if (error) throw new Error(`stampAiActAccepted failed: ${error.message}`);
   return (data ?? []).length > 0;
