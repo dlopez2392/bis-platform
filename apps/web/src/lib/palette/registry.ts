@@ -2,6 +2,11 @@ import { buildNavGroups } from "@/lib/nav-groups";
 import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
+// The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
+// this registry is imported by a client component (command-palette.tsx).
+// nameFold is the same accent fold search-highlight.ts already uses for
+// contact search (F-095 part 1) — reused, not reinvented.
+import { nameFold } from "@bis/db/dedupe-keys";
 
 export type PaletteGroup = "navigation" | "settings" | "actions";
 
@@ -21,6 +26,13 @@ export type PaletteEntry = {
   agencyOnly: boolean;
   /** Words an operator might type that the label does not contain. */
   keywords: string[];
+  /** F-095 part 1 (spec §4.4): the catalogue key `label` was rendered from,
+   *  threaded alongside the rendered string so a test can look up the OTHER
+   *  language's twin independently of whichever locale built this entry.
+   *  Additive-optional (owner ruling 2) — set at every `entries.push` call
+   *  site below that already computes `label(key)`, never a second source of
+   *  truth for the rendered text itself. */
+  labelKey?: MessageKey;
 } & (
   | { kind: "href"; href: string }
   | { kind: "action"; actionId: PaletteActionId }
@@ -36,18 +48,23 @@ export type PaletteEntry = {
  * agency-only.
  */
 const SETTINGS_SECTIONS: { anchor: string; labelKey: MessageKey; keywords: string[] }[] = [
-  { anchor: "client-access", labelKey: "palette.settings.clientAccess", keywords: ["login", "invite", "portal"] },
-  { anchor: "sending-address", labelKey: "palette.settings.sendingAddress", keywords: ["email", "from", "domain", "never record", "block", "ignore sender"] },
-  { anchor: "custom-fields", labelKey: "palette.settings.customFields", keywords: ["field", "crm"] },
-  { anchor: "custom-values", labelKey: "palette.settings.customValues", keywords: ["value", "variable", "merge"] },
-  { anchor: "alert-phone", labelKey: "palette.settings.alertPhone", keywords: ["sms", "text", "notify", "lead alert"] },
-  { anchor: "billing", labelKey: "palette.settings.billing", keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment"] },
+  // F-095 part 1 (spec §4.2): "acceso"/"invitación" added — "portal" is
+  // already shared between the two languages, so it is not repeated.
+  { anchor: "client-access", labelKey: "palette.settings.clientAccess", keywords: ["login", "invite", "portal", "acceso", "invitación"] },
+  { anchor: "sending-address", labelKey: "palette.settings.sendingAddress", keywords: ["email", "from", "domain", "never record", "block", "ignore sender", "correo", "dominio", "remitente"] },
+  // "crm" is already shared between the two languages.
+  { anchor: "custom-fields", labelKey: "palette.settings.customFields", keywords: ["field", "crm", "campo"] },
+  // "variable" is already shared between the two languages.
+  { anchor: "custom-values", labelKey: "palette.settings.customValues", keywords: ["value", "variable", "merge", "valor"] },
+  { anchor: "alert-phone", labelKey: "palette.settings.alertPhone", keywords: ["sms", "text", "notify", "lead alert", "texto", "alerta", "aviso"] },
+  // "plan" is already shared between the two languages.
+  { anchor: "billing", labelKey: "palette.settings.billing", keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment", "suscripción", "factura", "pago"] },
   // D-080: three real cards on this same page (settings/page.tsx's
   // <BrandingPanel>, <WeeklyReportCard id="weekly-report">, <LinkSiteCard
   // id="website">) had no entry here at all.
-  { anchor: "branding", labelKey: "palette.settings.branding", keywords: ["logo", "colors", "theme", "brand name"] },
-  { anchor: "weekly-report", labelKey: "palette.settings.weeklyReport", keywords: ["email report", "monday", "recipients"] },
-  { anchor: "website", labelKey: "palette.settings.website", keywords: ["analytics", "traffic", "vercel", "domain", "link site"] },
+  { anchor: "branding", labelKey: "palette.settings.branding", keywords: ["logo", "colors", "theme", "brand name", "logotipo", "colores", "marca"] },
+  { anchor: "weekly-report", labelKey: "palette.settings.weeklyReport", keywords: ["email report", "monday", "recipients", "reporte", "lunes", "destinatarios"] },
+  { anchor: "website", labelKey: "palette.settings.website", keywords: ["analytics", "traffic", "vercel", "domain", "link site", "tráfico", "análisis", "dominio"] },
   // S-07 2c: the required-documents list (settings/required-documents-card.tsx)
   { anchor: "required-documents", labelKey: "palette.settings.requiredDocuments", keywords: ["documents", "checklist", "required", "missing", "vault", "documentos", "requeridos"] },
   // Item 8a-1: the agency's AI card (settings/ai-card.tsx, #ai).
@@ -59,18 +76,21 @@ const SETTINGS_SECTIONS: { anchor: string; labelKey: MessageKey; keywords: strin
 /** Extra search words per nav destination, keyed by the href SUFFIX so this
  *  survives a base change. A destination with no entry simply has none. */
 const NAV_KEYWORDS: Record<string, string[]> = {
-  "/dashboard": ["home", "overview"],
-  "/contacts": ["people", "customers", "leads"],
+  // F-095 part 1 (spec §4.2): "inicio" also means "sign-in" per the glossary's
+  // own exclusion note — kept anyway since it is still the right word for
+  // THIS destination; the exclusion only bans it as a stand-in elsewhere.
+  "/dashboard": ["home", "overview", "inicio", "panel"],
+  "/contacts": ["people", "customers", "leads", "contactos", "clientes", "prospectos"],
   // S-07 3a (spec 3.1): the document vault's account-wide list.
   "/documents": ["files", "vault", "expiring", "expired", "expiry", "insurance", "permit", "license", "warranty", "documentos", "archivos", "vencen", "vencidos"],
-  "/pipeline": ["deals", "opportunities", "sales"],
-  "/conversations": ["messages", "inbox", "sms", "email"],
-  "/calls": ["phone", "receptionist", "sofia"],
+  "/pipeline": ["deals", "opportunities", "sales", "oportunidades", "embudo"],
+  "/conversations": ["messages", "inbox", "sms", "email", "conversaciones", "mensajes", "bandeja"],
+  "/calls": ["phone", "receptionist", "sofia", "llamadas", "teléfono"],
   // "activity" added 2026-09-21 (cleanup item 2): the nav label changed to
   // "What went out" to stop colliding with the dashboard's own Activity
   // card, but the old word should still find this page.
   "/activity": ["history", "activity", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
-  "/forms": ["lead form", "intake"],
+  "/forms": ["lead form", "intake", "formularios"],
   // "closed days"/"holiday"/"vacation"/"días cerrados"/"feriado"/"vacaciones" added S-47d (spec 5.6.3):
   // the Closed days card.
   // "phone calendar"/"subscribe"/"ical"/"ics"/"iphone"/"google calendar"/"outlook"/"calendario del teléfono"/
@@ -78,9 +98,12 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/calendar": ["booking", "availability", "hours", "closed days", "holiday", "vacation", "días cerrados", "feriado", "vacaciones",
     "phone calendar", "subscribe", "ical", "ics", "iphone", "google calendar", "outlook", "calendario del teléfono", "suscribirse",
     // F-046 part 1: the agenda card.
-    "agenda", "schedule", "add job", "trabajo", "agregar trabajo"],
+    "agenda", "schedule", "add job", "trabajo", "agregar trabajo",
+    // F-095 part 1 (spec §4.2): "cita" is the glossary's word for
+    // appointment/booking — the brief's own worked example.
+    "citas", "horario", "disponibilidad"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
-  "/branding": ["logo", "colors", "theme"],
+  "/branding": ["logo", "colors", "theme", "marca", "logotipo", "colores"],
   // "hours"/"prices"/"services"/"horario"/"precios" added S-47c (spec 5.7): the Business hours and
   // Services & prices cards.
   "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble", "transfer", "forward", "person", "phones", "hours", "prices", "services", "horario", "precios"],
@@ -113,12 +136,15 @@ export function buildPaletteEntries(
   base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false, locale: Locale = "en",
 ): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
-  // S-10: the label is in the reader's language; in Spanish its English
-  // twin joins the keywords, so a bilingual owner who types "contacts" still
-  // finds Contactos. (Spanish KEYWORDS for every entry are F-095.)
+  // S-10 + F-095 part 1: the label is in the reader's language, and the
+  // OTHER language's own label always joins the keywords — symmetric now
+  // (the one-way `locale === "en"` branch this used to have let a Spanish
+  // reader find an English word but never the reverse; registry.test.ts's
+  // completeness check, §4.4, pins the fix in both directions).
   const label = (key: MessageKey) => t(m, key, locale);
+  const otherLocale: Locale = locale === "en" ? "es" : "en";
   const words = (key: MessageKey, keywords: string[]) =>
-    locale === "en" ? keywords : [...keywords, m[key].toLowerCase()];
+    [...keywords, t(m, key, otherLocale).toLowerCase()];
 
   // A Technician (F-085 part 1, spec §9): the nav already leaves out every
   // route they cannot enter, so deriving from it leaves them out here too.
@@ -131,6 +157,7 @@ export function buildPaletteEntries(
         group: "navigation",
         agencyOnly: false, // buildNavGroups already withheld agency-only items
         keywords: words(item.labelKey, keywordsFor(item.href, base)),
+        labelKey: item.labelKey,
         href: item.href,
       });
     }
@@ -142,6 +169,7 @@ export function buildPaletteEntries(
   entries.push({
     kind: "href", id: "nav:preferences", label: label("prefs.palette"), group: "navigation", agencyOnly: false,
     keywords: ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my"],
+    labelKey: "prefs.palette",
     href: "/dashboard/preferences",
   });
 
@@ -157,7 +185,11 @@ export function buildPaletteEntries(
       label: label("nav.team"),
       group: "navigation",
       agencyOnly: false,
-      keywords: ["team", "staff", "people", "invite", "users", "logins", "employees"],
+      // "equipo" (F-095 part 1): nav.team's own Spanish label — the word
+      // itself was missing, so an English-locale session could not find
+      // this entry by it (registry.test.ts's completeness check, §4.4).
+      keywords: ["team", "staff", "people", "invite", "users", "logins", "employees", "equipo"],
+      labelKey: "nav.team",
       href: `${base}/team`,
     });
   }
@@ -169,6 +201,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href", id: "nav:required-documents", label: label("palette.settings.requiredDocuments"), group: "navigation", agencyOnly: false,
       keywords: ["documents", "checklist", "required", "missing", "documentos", "requeridos"],
+      labelKey: "palette.settings.requiredDocuments",
       href: `${base}/documents#required-documents`,
     });
   }
@@ -184,6 +217,7 @@ export function buildPaletteEntries(
     entries.push({
       kind: "href", id: "nav:bis-access", label: label("accessLog.title"), group: "navigation", agencyOnly: false,
       keywords: ["bis", "access", "log", "visits", "who looked", "acceso", "registro", "visitas"],
+      labelKey: "accessLog.title",
       href: `${base}/team#bis-access`,
     });
   }
@@ -195,7 +229,13 @@ export function buildPaletteEntries(
       label: label("nav.settings"),
       group: "navigation",
       agencyOnly: true,
-      keywords: ["configuration", "preferences"],
+      // "ajustes" (F-095 part 1): nav.settings' own Spanish label
+      // (messages.ts's "nav.settings.es"). Never "configuración"/
+      // "configuracion" here — the glossary bans that word for Settings
+      // (i18n/spanish-style.ts's G6 "settings" rule); those two keywords
+      // belong to nav:setup below (spec §0/§7's corrected mapping).
+      keywords: ["configuration", "preferences", "ajustes"],
+      labelKey: "nav.settings",
       href: `${base}/settings`,
     });
     entries.push({
@@ -204,7 +244,12 @@ export function buildPaletteEntries(
       label: label("nav.setup"),
       group: "navigation",
       agencyOnly: true,
-      keywords: ["wizard", "activation", "onboarding", "go live"],
+      // "configuración"/"configuracion" (F-095 part 1, spec §0/§7): the
+      // brief's own worked example, corrected against the shipped glossary
+      // — "Configuración" is nav.setup's Spanish label (not Settings').
+      // Both forms are kept (the fold handles either), documenting intent.
+      keywords: ["wizard", "activation", "onboarding", "go live", "configuración", "configuracion"],
+      labelKey: "nav.setup",
       href: `${base}/setup`,
     });
     // The agency's own entry point into this client's team management: the
@@ -224,7 +269,9 @@ export function buildPaletteEntries(
       label: label("palette.settings.team"),
       group: "navigation",
       agencyOnly: true,
-      keywords: ["team", "staff", "invite", "logins", "people"],
+      // "equipo" (F-095 part 1): palette.settings.team's own Spanish label.
+      keywords: ["team", "staff", "invite", "logins", "people", "equipo"],
+      labelKey: "palette.settings.team",
       href: `${base}/team`,
     });
     for (const section of SETTINGS_SECTIONS) {
@@ -235,6 +282,7 @@ export function buildPaletteEntries(
         group: "settings",
         agencyOnly: true,
         keywords: words(section.labelKey, section.keywords),
+        labelKey: section.labelKey,
         href: `${base}/settings#${section.anchor}`,
       });
     }
@@ -246,7 +294,11 @@ export function buildPaletteEntries(
     label: label("palette.action.toggleTheme"),
     group: "actions",
     agencyOnly: false,
-    keywords: ["dark", "light", "appearance", "theme"],
+    // "oscuro"/"claro"/"apariencia"/"tema" (F-095 part 1, spec §4.2): words
+    // of palette.action.toggleTheme's own Spanish label ("Cambiar entre
+    // modo claro y oscuro").
+    keywords: ["dark", "light", "appearance", "theme", "oscuro", "claro", "apariencia", "tema"],
+    labelKey: "palette.action.toggleTheme",
     actionId: "toggle-theme",
   });
 
@@ -254,19 +306,63 @@ export function buildPaletteEntries(
 }
 
 /**
- * Pure substring matching over label + keywords.
+ * F-095 part 1 (spec §4.1): the same accent fold `search-highlight.ts`
+ * already uses for contact search, reused unchanged rather than
+ * reimplemented — `nameFold` lower-cases AND strips the 24 upper/lower
+ * accented Spanish/Portuguese letters (dedupe-keys.ts), so "configuracion"
+ * (typed, no accent) matches a haystack holding "configuración" (stored,
+ * with the accent) and the reverse. Display is never folded — this helper
+ * is used ONLY inside matching, never on `entry.label` where it is rendered
+ * (command-palette.tsx reads `entry.label` directly).
+ */
+function foldWords(text: string): string {
+  return nameFold(text);
+}
+
+type Tier = 0 | 1 | 2; // lower ranks first
+
+/**
+ * F-095 part 1 (spec §4.3): a label match outranks a keyword-only match, so
+ * folding (which makes more entries match a short query than before) does
+ * not bury the obvious destination under one whose keyword merely happens
+ * to contain the same substring. Tier 0 (every term starts the folded
+ * label) and tier 1 (every term is somewhere in the folded label) only
+ * differ for a multi-term query; a single-term query that matches the
+ * label's own first word reaches tier 0, every other label match reaches
+ * tier 1, and a keyword-only match reaches tier 2. Returns null when the
+ * query does not match at all, so `filterEntries` can drop the entry.
+ */
+function matchTier(entry: PaletteEntry, terms: string[]): Tier | null {
+  const foldedLabel = foldWords(entry.label);
+  const foldedKeywords = foldWords(entry.keywords.join(" "));
+  const haystack = `${foldedLabel} ${foldedKeywords}`;
+  if (!terms.every((term) => haystack.includes(term))) return null;
+  if (terms.every((term) => foldedLabel.startsWith(term))) return 0;
+  if (terms.every((term) => foldedLabel.includes(term))) return 1;
+  return 2;
+}
+
+/**
+ * Accent-insensitive, ranked matching over label + keywords.
  *
  * The palette runs cmdk with `shouldFilter={false}` and calls this instead, for
  * two reasons: the live half's server results must NOT be re-filtered by a
  * client-side matcher that never saw the row's other columns, and matching that
  * lives in a pure function is testable in this app's vitest, which has no DOM.
+ *
+ * F-095 part 1: folds both the query and the haystack (§4.1) and ranks a
+ * label match ahead of a keyword-only match (§4.3) — `Array#sort` is
+ * stable, so entries tied on tier keep their original registration order.
  */
 export function filterEntries(entries: PaletteEntry[], query: string): PaletteEntry[] {
-  const q = query.trim().toLowerCase();
+  const q = foldWords(query.trim());
   if (!q) return entries;
-  const terms = q.split(/\s+/);
-  return entries.filter((entry) => {
-    const haystack = [entry.label, ...entry.keywords].join(" ").toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
+  const terms = q.split(/\s+/).filter(Boolean);
+  const scored: { entry: PaletteEntry; tier: Tier }[] = [];
+  for (const entry of entries) {
+    const tier = matchTier(entry, terms);
+    if (tier !== null) scored.push({ entry, tier });
+  }
+  scored.sort((a, b) => a.tier - b.tier);
+  return scored.map((row) => row.entry);
 }

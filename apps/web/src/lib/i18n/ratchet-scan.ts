@@ -527,10 +527,6 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
     reason: "DEFAULT_FOLLOWUP_BODY is a byte-identity anchor, not only a displayed string: calendar/actions.ts's own doc comment compares a raw submission against this EXACT English text to collapse it back to an empty column, and calendar-settings.tsx imports the same constant as its textarea's placeholder so the preview can never drift from what that comparison, and bookingFollowupEmail's own fallback, actually use. Localizing the placeholder without updating the comparison in lockstep would let a Spanish-reading operator's verbatim placeholder text be stored as a REAL body instead of collapsing to empty — a cross-file behavior change outside this gate-closing task's scope, flagged for the calendar lane",
   },
   {
-    file: "src/lib/palette/registry.ts",
-    reason: "words()'s own doc comment: in Spanish, an entry's ENGLISH twin joins its search keywords on purpose (\"a bilingual owner who types 'contacts' still finds Contactos\") — the displayed label a few lines above already reads through t(); this read is a second, deliberately-English SEARCH term, never shown as copy",
-  },
-  {
     file: "src/lib/record/ai-summary-prompt.ts",
     reason: "label()'s own doc comment: a stored code is handed to the MODEL as the catalogue's ENGLISH word, always, regardless of the reader's language — the rules are English and LANGUAGE_LINE asks the model for the reader's language separately; this is an AI prompt input, never UI copy a person reads",
   },

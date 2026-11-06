@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildNavGroups } from "@/lib/nav-groups";
-import { buildPaletteEntries, filterEntries } from "./registry";
+import { buildPaletteEntries, filterEntries, type PaletteEntry } from "./registry";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+// The SUBPATH, not "@bis/db" — same discipline registry.ts itself documents.
+import { nameFold } from "@bis/db/dedupe-keys";
 
 const BASE = "/dashboard/accounts/acc_1";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -469,5 +472,241 @@ describe("buildPaletteEntries in Spanish (S-10 T1)", () => {
 describe("one wording for the theme switch (S-10 review M-10)", () => {
   it("the palette action and the topbar toggle say the same thing in Spanish (mutation: reword one → FAILS)", () => {
     expect(m["palette.action.toggleTheme.es"]).toBe(m["theme.toggle.es"]);
+  });
+});
+
+// F-095 part 1 (spec 2026-11-06-palette-v2-design.md): palette v2, Spanish
+// keywords and accent-insensitive, bidirectional matching.
+
+/** Every role combination buildPaletteEntries can produce (spec §4.4: "all
+ *  four roles — agency, client Owner, client Staff, Technician"). */
+const ALL_ROLE_COMBINATIONS = [
+  { name: "agency", base: BASE, isAgency: true, isOwner: false, isTechnician: false },
+  { name: "client Owner", base: BASE, isAgency: false, isOwner: true, isTechnician: false },
+  { name: "client Staff", base: BASE, isAgency: false, isOwner: false, isTechnician: false },
+  { name: "Technician", base: BASE, isAgency: false, isOwner: false, isTechnician: true },
+] as const;
+
+/** Spec §4.4: the folded, ≥4-letter words of a label — a one-word label
+ *  whose English and Spanish render may coincide (e.g. "CRM", "Voz" is only
+ *  3 letters) contributes nothing, which the completeness test below treats
+ *  as "nothing to prove" rather than a failure. */
+function significantWords(label: string): string[] {
+  return nameFold(label).split(/[^\p{L}]+/u).filter((w) => w.length >= 4);
+}
+
+describe("F-095 part 1: every entry's own Spanish label is findable from an English session (mutation: revert words() to its one-way `locale === \"en\" ? keywords : [...]` form → every multi-word label entry FAILS)", () => {
+  it.each(ALL_ROLE_COMBINATIONS)("role=$name", ({ base, isAgency, isOwner, isTechnician }) => {
+    const entries = buildPaletteEntries(base, isAgency, isOwner, isTechnician, "en");
+    expect(entries.length).toBeGreaterThan(0); // the loop below is vacuous otherwise
+    for (const entry of entries) {
+      // Risk 6.3.4: a future `entries.push` site that computes `label(key)`
+      // but forgets to thread `labelKey` alongside it would silently exempt
+      // itself from this entire check — so every entry must carry one.
+      expect(entry.labelKey, `${entry.id} has no labelKey`).toBeDefined();
+      const esLabel = t(m, entry.labelKey!, "es");
+      const need = significantWords(esLabel);
+      if (need.length === 0) continue; // e.g. action/nav labels that are a single short word
+      const haystack = nameFold([entry.label, ...entry.keywords].join(" "));
+      expect(
+        need.some((w) => haystack.includes(w)),
+        `${entry.id} ("${entry.label}") has no reachable Spanish word for "${esLabel}" (needed one of: ${need.join(", ")})`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("F-095 part 1: accent-insensitive matching, both ways", () => {
+  // Test 1 (spec §6.4.1): the brief's own worked example. "citas" carries no
+  // accent to begin with, so this alone cannot prove the fold runs — it
+  // proves the ALIAS itself is registered (test 2 below is the real fold
+  // test). Mutation: drop "citas" from NAV_KEYWORDS["/calendar"] → FAILS.
+  it("finds Calendar by typing 'citas', the brief's own worked example (mutation: drop the keyword → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    expect(filterEntries(entries, "citas").map((e) => e.id)).toContain(`nav:${BASE}/calendar`);
+  });
+
+  // Test 2 (spec §6.4.2, adjusted per working rule 2 — see the task report):
+  // against the REAL nav:setup entry this cannot fail, because the table's
+  // own second, redundant ASCII keyword ("configuracion", added below for
+  // belt-and-braces per §4.2) already matches a folded query regardless of
+  // whether the haystack itself is folded — run and confirmed: a full
+  // revert of filterEntries to the plain, unfolded substring test still
+  // passes this exact query against the real registry. A synthetic entry
+  // whose ONLY stored word carries the accent isolates the property: typing
+  // WITHOUT an accent must still find a keyword stored WITH one, which can
+  // only happen if the HAYSTACK is folded. Mutation: replace the fold with
+  // `.toLowerCase()` in filterEntries → FAILS, because
+  // "configuracion".includes("configuración") is false without it.
+  it("finds a card typing 'configuracion' (no accent) when the ONLY stored keyword carries the accent (mutation: use .toLowerCase() instead of the fold in filterEntries → FAILS)", () => {
+    const accentedOnly: PaletteEntry = {
+      kind: "href", id: "x:accented-only", label: "Some other card", group: "settings",
+      agencyOnly: true, keywords: ["configuración"], href: "/x",
+    };
+    expect(filterEntries([accentedOnly], "configuracion").map((e) => e.id)).toContain("x:accented-only");
+  });
+
+  // Test 3 (spec §6.4.3, adjusted per working rule 2 for the same reason as
+  // test 2 above — run and confirmed: the full revert mutation above does
+  // NOT break the real nav:setup query either, for the same redundant-alias
+  // reason). The companion, reverse case: the ONLY stored word omits the
+  // accent and the typed query carries it, proving the QUERY side must be
+  // folded too, not just the haystack. Mutation: replace the fold with
+  // `.toLowerCase()` in filterEntries → FAILS, because
+  // "configuración".includes("configuracion") is false without it (the
+  // haystack's "o" never matches the query's un-folded "ó").
+  it("finds a card typing 'configuración' (with the accent) when the ONLY stored keyword omits it (mutation: use .toLowerCase() instead of the fold in filterEntries → FAILS)", () => {
+    const asciiOnly: PaletteEntry = {
+      kind: "href", id: "x:ascii-only", label: "Some other card", group: "settings",
+      agencyOnly: true, keywords: ["configuracion"], href: "/x",
+    };
+    expect(filterEntries([asciiOnly], "configuración").map((e) => e.id)).toContain("x:ascii-only");
+  });
+
+  // Test 4 (spec §6.4.4, §0/§7's corrected mapping): "configuración"/
+  // "configuracion" find Setup, and do NOT find Settings — directly encodes
+  // the brief's corrected example so it cannot regress to the brief's wrong
+  // one. Mutation: attach the keyword to nav:settings instead of nav:setup
+  // → the "does NOT find Settings" half FAILS.
+  it("'configuración' and 'configuracion' find Setup and do NOT find Settings (mutation: attach the keyword to nav:settings instead → the 'does NOT find Settings' half FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    for (const q of ["configuración", "configuracion"]) {
+      const ids = filterEntries(entries, q).map((e) => e.id);
+      expect(ids, q).toContain("nav:setup");
+      expect(ids, q).not.toContain("nav:settings");
+    }
+  });
+});
+
+describe("F-095 part 1: Spanish aliases beyond the label (spec §4.2, mutation: drop the keyword → FAILS)", () => {
+  const agency = buildPaletteEntries(BASE, true, false);
+  const owner = buildPaletteEntries(BASE, false, true);
+
+  it("finds Calendar by horario and disponibilidad", () => {
+    for (const q of ["horario", "disponibilidad"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/calendar`);
+    }
+  });
+
+  it("finds Pipeline by oportunidades and embudo", () => {
+    for (const q of ["oportunidades", "embudo"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/pipeline`);
+    }
+  });
+
+  it("finds the sending-address settings by correo, dominio and remitente", () => {
+    for (const q of ["correo", "dominio", "remitente"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:sending-address");
+    }
+  });
+
+  it("finds the toggle-theme action by oscuro, claro, apariencia and tema", () => {
+    for (const q of ["oscuro", "claro", "apariencia", "tema"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("action:toggle-theme");
+    }
+  });
+
+  it("finds Contacts by contactos, clientes and prospectos", () => {
+    for (const q of ["contactos", "clientes", "prospectos"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/contacts`);
+    }
+  });
+
+  it("finds Dashboard by inicio and panel", () => {
+    for (const q of ["inicio", "panel"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/dashboard`);
+    }
+  });
+
+  it("finds Calls by llamadas and teléfono", () => {
+    for (const q of ["llamadas", "teléfono"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/calls`);
+    }
+  });
+
+  it("finds Forms by formularios", () => {
+    expect(filterEntries(agency, "formularios").map((e) => e.id)).toContain(`nav:${BASE}/forms`);
+  });
+
+  it("finds Conversations by conversaciones, mensajes and bandeja", () => {
+    for (const q of ["conversaciones", "mensajes", "bandeja"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain(`nav:${BASE}/conversations`);
+    }
+  });
+
+  it("finds a client Owner's own Branding page by marca, logotipo and colores", () => {
+    for (const q of ["marca", "logotipo", "colores"]) {
+      expect(filterEntries(owner, q).map((e) => e.id), q).toContain(`nav:${BASE}/branding`);
+    }
+  });
+
+  it("finds the client-access settings by acceso and invitación", () => {
+    for (const q of ["acceso", "invitación"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:client-access");
+    }
+  });
+
+  it("finds the custom-fields settings by campo", () => {
+    expect(filterEntries(agency, "campo").map((e) => e.id)).toContain("settings:custom-fields");
+  });
+
+  it("finds the custom-values settings by valor", () => {
+    expect(filterEntries(agency, "valor").map((e) => e.id)).toContain("settings:custom-values");
+  });
+
+  it("finds the alert-phone settings by texto, alerta and aviso", () => {
+    for (const q of ["texto", "alerta", "aviso"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:alert-phone");
+    }
+  });
+
+  it("finds the billing settings by suscripción, factura and pago", () => {
+    for (const q of ["suscripción", "factura", "pago"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:billing");
+    }
+  });
+
+  it("finds the branding settings by logotipo, colores and marca", () => {
+    for (const q of ["logotipo", "colores", "marca"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:branding");
+    }
+  });
+
+  it("finds the weekly-report settings by reporte, lunes and destinatarios", () => {
+    for (const q of ["reporte", "lunes", "destinatarios"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:weekly-report");
+    }
+  });
+
+  it("finds the website settings by tráfico, análisis and dominio", () => {
+    for (const q of ["tráfico", "análisis", "dominio"]) {
+      expect(filterEntries(agency, q).map((e) => e.id), q).toContain("settings:website");
+    }
+  });
+
+  it("finds Settings by ajustes", () => {
+    expect(filterEntries(agency, "ajustes").map((e) => e.id)).toContain("nav:settings");
+  });
+
+  it("finds Team by equipo — the client Owner's nav:team and the agency's settings:team", () => {
+    expect(filterEntries(owner, "equipo").map((e) => e.id)).toContain("nav:team");
+    expect(filterEntries(agency, "equipo").map((e) => e.id)).toContain("settings:team");
+  });
+});
+
+describe("F-095 part 1: ranking (spec §4.3)", () => {
+  it("ranks a label match ahead of a keyword-only match (mutation: remove the tier sort, return filter order only → the keyword-only entry FAILS to come second when it was registered first)", () => {
+    const keywordOnly: PaletteEntry = {
+      kind: "href", id: "x:keyword-only", label: "Some random card", group: "settings",
+      agencyOnly: true, keywords: ["more ajustes words"], href: "/x",
+    };
+    const labelMatch: PaletteEntry = {
+      kind: "href", id: "x:label-match", label: "Ajustes", group: "navigation",
+      agencyOnly: true, keywords: [], href: "/y",
+    };
+    // keywordOnly registered FIRST — without the tier sort, filter() alone
+    // would keep it first.
+    const result = filterEntries([keywordOnly, labelMatch], "ajustes");
+    expect(result.map((e) => e.id)).toEqual(["x:label-match", "x:keyword-only"]);
   });
 });
