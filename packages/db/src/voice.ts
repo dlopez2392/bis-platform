@@ -549,6 +549,40 @@ export async function setCallOutcome(
 }
 
 /**
+ * Marks a failed transfer handled (F-077 part 1: a caller who asked for a person and never reached
+ * one, To do queue). Throws on no match -- wrong id, or already followed up -- mirroring reopenTask's
+ * own "no task" throw (activities.ts:140) and setCallOutcome's select-back check (above). No emit():
+ * no write on `calls` emits an event anywhere in this codebase today.
+ */
+export async function setTransferFollowedUp(
+  db: SupabaseClient, accountId: string, callId: string, by: string, at: Date,
+): Promise<void> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_followup_at: at.toISOString() })
+    .eq("id", callId).eq("account_id", accountId).is("transfer_followup_at", null)
+    .select("id");
+  if (error) throw new Error(`setTransferFollowedUp failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("setTransferFollowedUp matched no row");
+}
+
+/**
+ * Undo of setTransferFollowedUp. Compare-and-swap on the exact instant written, so a second Done
+ * elsewhere between click and undo-click is not silently clobbered -- same shape as
+ * clearAiActUndone (ai-acts.ts). Returns false, not a throw, when stale: an Undo toast's own failure
+ * path already handles a false result.
+ */
+export async function clearTransferFollowup(
+  db: SupabaseClient, accountId: string, callId: string, at: Date,
+): Promise<boolean> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_followup_at: null })
+    .eq("id", callId).eq("account_id", accountId).eq("transfer_followup_at", at.toISOString())
+    .select("id");
+  if (error) throw new Error(`clearTransferFollowup failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
  * Records what the carrier's answering-machine detection thought picked up
  * the transferred leg (Telnyx's `AnsweredBy`).
  *

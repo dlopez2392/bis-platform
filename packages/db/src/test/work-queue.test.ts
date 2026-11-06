@@ -277,3 +277,62 @@ describe("mapBounded", () => {
     expect(maxInFlight).toBeLessThanOrEqual(AGENCY_READ_CONCURRENCY);
   });
 });
+
+describe("failedTransfers (F-077 part 1)", () => {
+  it("appears only when handoff was requested, the call is abandoned, and it is not yet followed up", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const plain = await db.from("calls").insert({ account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned" }).select("id").single();
+      const transferredAnswered = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "transferred", handoff_requested_at: new Date().toISOString(),
+      }).select("id").single();
+      const followedUp = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned",
+        handoff_requested_at: new Date().toISOString(), transfer_followup_at: new Date().toISOString(),
+      }).select("id").single();
+      const failed = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned",
+        handoff_requested_at: new Date(Date.now() - 3_600_000).toISOString(), callback_number: "9565551212",
+      }).select("id").single();
+
+      const rows = await listAccountWork(db, accountId);
+      const ids = rows.map((r) => r.id);
+      expect(ids).not.toContain(`failed_transfer:${plain.data!.id}`);
+      expect(ids).not.toContain(`failed_transfer:${transferredAnswered.data!.id}`);
+      expect(ids).not.toContain(`failed_transfer:${followedUp.data!.id}`);
+      expect(ids).toContain(`failed_transfer:${failed.data!.id}`);
+      const row = rows.find((r) => r.id === `failed_transfer:${failed.data!.id}`)!;
+      expect(row.callbackNumber).toBe("9565551212");
+      expect(row.source).toBe("failed_transfer");
+    });
+  });
+
+  it("suppression is NOT reused: an open task on the same contact does not hide a failed-transfer row (mutation: add failed_transfer to listAccountWork's suppressed filter -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: c } = await withAuthor(db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Lee", last_name: "Park" }), SEED_AUTHOR, SEED_VIA).select("id").single();
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: call } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, contact_id: c!.id, outcome: "abandoned",
+        handoff_requested_at: new Date().toISOString(),
+      }).select("id").single();
+      await addTask(db, accountId, { contactId: c!.id, title: "Call Lee back" }, "user_test");
+
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.map((r) => r.id)).toContain(`failed_transfer:${call!.id}`);
+    });
+  });
+
+  it("is account-scoped: account A does not see account B's failed transfer", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const { data: pn } = await dbB.from("phone_numbers").insert({ account_id: accountB, e164: testPhoneNumber() }).select("id").single();
+        const { data: call } = await dbB.from("calls").insert({
+          account_id: accountB, phone_number_id: pn!.id, outcome: "abandoned", handoff_requested_at: new Date().toISOString(),
+        }).select("id").single();
+        const rowsA = await listAccountWork(dbA, accountA);
+        expect(rowsA.map((r) => r.id)).not.toContain(`failed_transfer:${call!.id}`);
+      });
+    });
+  });
+});

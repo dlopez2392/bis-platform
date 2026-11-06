@@ -18,6 +18,7 @@ import {
   listCalls, getCall, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
+  setTransferFollowedUp, clearTransferFollowup,
   callerInTouchSince,
   goLive, getPhoneNumberById,
   setCallCard, getCallCard, listCallReasons, ensureCallbackTask,
@@ -1415,5 +1416,56 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 
   it("the barrel exports emailKey, the twin of 0034's email_key (spec O1; mutation: drop the index.ts line -> FAILS)", () => {
     expect(barrelEmailKey("  Dan+BIS@Example.com ")).toBe("dan@example.com");
+  });
+});
+
+/**
+ * F-077 part 1 (migration 0114's calls.transfer_followup_at): the To do
+ * queue's own "Called back" / Undo for a failed transfer. Both functions
+ * mirror setCallOutcome's own account-scoped, loud-on-no-match shape above
+ * (lines 806-826) rather than a bespoke one.
+ */
+describe("setTransferFollowedUp / clearTransferFollowup (F-077 part 1)", () => {
+  it("stamps a failed transfer, account-scoped; a second stamp throws (mutation: drop .is('transfer_followup_at', null) -> the second call silently succeeds -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: call } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned",
+        handoff_requested_at: new Date().toISOString(),
+      }).select("id").single();
+      const at = new Date("2026-11-06T15:00:00Z");
+      await setTransferFollowedUp(db, accountId, call!.id, "user_test", at);
+      const { data: row } = await db.from("calls").select("transfer_followup_at").eq("id", call!.id).single();
+      expect(row!.transfer_followup_at).toBe(at.toISOString());
+      await expect(setTransferFollowedUp(db, accountId, call!.id, "user_test", new Date())).rejects.toThrow(/matched no row/);
+    });
+  });
+
+  it("is account-scoped: another account's call id matches nothing (mutation: drop .eq('account_id', accountId) -> cross-account write succeeds -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const { data: pn } = await dbB.from("phone_numbers").insert({ account_id: accountB, e164: testPhoneNumber() }).select("id").single();
+        const { data: call } = await dbB.from("calls").insert({
+          account_id: accountB, phone_number_id: pn!.id, outcome: "abandoned", handoff_requested_at: new Date().toISOString(),
+        }).select("id").single();
+        await expect(setTransferFollowedUp(dbA, accountA, call!.id, "user_test", new Date())).rejects.toThrow(/matched no row/);
+      });
+    });
+  });
+
+  it("clearTransferFollowup only clears the exact instant it was given (mutation: drop .eq('transfer_followup_at', at.toISOString()) -> a later Done is clobbered by a stale Undo -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+      const { data: call } = await db.from("calls").insert({
+        account_id: accountId, phone_number_id: pn!.id, outcome: "abandoned", handoff_requested_at: new Date().toISOString(),
+      }).select("id").single();
+      const at1 = new Date("2026-11-06T15:00:00Z");
+      await setTransferFollowedUp(db, accountId, call!.id, "user_a", at1);
+      const stale = await clearTransferFollowup(db, accountId, call!.id, new Date("2026-11-06T16:00:00Z"));
+      expect(stale).toBe(false);
+      const { data: still } = await db.from("calls").select("transfer_followup_at").eq("id", call!.id).single();
+      expect(still!.transfer_followup_at).toBe(at1.toISOString());
+      expect(await clearTransferFollowup(db, accountId, call!.id, at1)).toBe(true);
+    });
   });
 });

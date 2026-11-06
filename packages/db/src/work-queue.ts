@@ -5,8 +5,9 @@ import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
 import type { DocumentCategory } from "./document-rules";
 import type { ClosureKind } from "./business-status";
+import type { AiAct } from "./ai-act-rules";
 
-export type WorkSource = "task" | "conversation" | "booking";
+export type WorkSource = "task" | "conversation" | "booking" | "failed_transfer" | "booking_act";
 
 export type WorkRow = {
   id: string;
@@ -35,6 +36,12 @@ export type WorkRow = {
   /** S-47d (0097): a closure To-do (tasks.closure_kind / closure_on), for the row's link to the appointments the
    *  closure covers. Present ONLY on such a task. */
   closureFocus?: { kind: ClosureKind; on: string };
+  /** F-077 part 1: a failed-transfer row's own number to call back -- calls.callback_number, else
+   *  calls.caller_e164, else null (withheld caller ID). Present ONLY on a failed_transfer row. */
+  callbackNumber?: string | null;
+  /** F-077 part 1: a booking-act row's own act, in full, so the UI can call describeAct() with it --
+   *  never re-derived from a partial projection. Present and ALWAYS set on a booking_act row (Task 3). */
+  bookingAct?: AiAct;
 };
 
 async function openTasks(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
@@ -169,22 +176,51 @@ async function staleBookings(db: SupabaseClient, accountId: string, assignee?: A
 }
 
 /**
+ * F-077 part 1: the one abandoned call that is never a wrong number or a robocall -- the caller
+ * explicitly asked for a person (handoff_requested_at) and never reached one, and nobody has
+ * followed up yet (calls.transfer_followup_at, migration 0114). Exempt from suppression below, the
+ * same treatment as `staleBookings`: a derived row, not a task, so an open task on the same contact
+ * must not hide it.
+ */
+async function failedTransfers(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
+  const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  let q = db.from("calls")
+    .select(`id, contact_id, callback_number, caller_e164, started_at${embed}`)
+    .eq("account_id", accountId).eq("outcome", "abandoned")
+    .not("handoff_requested_at", "is", null).is("transfer_followup_at", null);
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
+  const { data, error } = await q.order("started_at", { ascending: true }).limit(200);
+  if (error) throw new Error(`failedTransfers failed: ${error.message}`);
+  return ((data ?? []) as unknown as {
+    id: string; contact_id: string | null; callback_number: string | null; caller_e164: string | null; started_at: string;
+  }[]).map((c) => ({
+    id: `failed_transfer:${c.id}`, source: "failed_transfer" as const, accountId,
+    contactId: c.contact_id, title: "",
+    dueAt: null, occurredAt: c.started_at,
+    callbackNumber: c.callback_number ?? c.caller_e164 ?? null,
+  }));
+}
+
+/**
  * SUPPRESSION (spec §3): an open task against a contact hides that contact's
  * derived conversation row, so a "Not now" dismissal does not leave the
  * original showing alongside the task it created. Bookings are exempt —
- * marking one changes `status`, so it stops matching on its own.
+ * marking one changes `status`, so it stops matching on its own. A failed
+ * transfer (F-077 part 1) is exempt the same way — it clears its own column,
+ * not a task.
  */
 export async function listAccountWork(
   db: SupabaseClient, accountId: string, opts: { assignee?: AssigneeFilter } = {},
 ): Promise<WorkRow[]> {
-  const [tasks, convos, bookings] = await Promise.all([
+  const [tasks, convos, bookings, transfers] = await Promise.all([
     openTasks(db, accountId, opts.assignee),
     unansweredConversations(db, accountId, opts.assignee),
     staleBookings(db, accountId, opts.assignee),
+    failedTransfers(db, accountId, opts.assignee),
   ]);
   const suppressed = new Set(tasks.map((t) => t.contactId).filter(Boolean) as string[]);
   const keep = (r: WorkRow) => !r.contactId || !suppressed.has(r.contactId);
-  return [...tasks, ...convos.filter(keep), ...bookings];
+  return [...tasks, ...convos.filter(keep), ...bookings, ...transfers];
 }
 
 /** `listAgencyWork`'s own row shape: every `WorkRow` field plus the three the
