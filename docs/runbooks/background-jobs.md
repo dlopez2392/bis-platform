@@ -50,9 +50,12 @@ watched clean for a couple of ticks.
    `grep -c "^EMAIL_DEV_REDIRECT_TO=\|^SMS_DEV_REDIRECT_TO=" apps/web/.env.local`
    must answer `0`. Setting them blank in the shell would only unset them
    and let the file's value load. Call the dispatcher and expect a 200 whose
-   JSON is the `reminders` pass's counters at the top level plus 20 nested
-   keys (the 19 other passes and `jobsDrain`), the same shape as today's
-   single tick; a fresh `cron.pass.<key>` row for each of the 21 keys on
+   JSON is the `reminders` pass's counters at the top level plus one nested
+   key for every other pass in `PLAN` (22 on 2026-11-06, `jobsDrain`
+   included — count `PLAN` rather than trusting a number here, because every
+   new pass adds one), the same shape as today's
+   single tick; a fresh `cron.pass.<key>` row for each pass key (23 on
+   2026-11-06) on
    bis-ci, a fresh `cron.tick`, and `jobs.dead`/`jobs.backlog` both ok. Enqueue one
    throwaway `platform.ping` row by SQL and run the dispatcher again: the
    row ends up `succeeded`. Delete it. Check first that no `screenshots.yml`
@@ -70,9 +73,14 @@ watched clean for a couple of ticks.
    - every `cron.pass.*` row and `cron.tick` are fresh;
    - `jobs.dead` and `jobs.backlog` are both ok;
    - no ops alert email arrives;
-   - Vercel's logs show 21 `/api/cron/pass/*` invocations per tick.
+   - Vercel's logs show one `/api/cron/pass/*` invocation per nested key per
+     tick (22 on 2026-11-06). The runtime-logs API returned no cron entries
+     on 2026-11-06, so read the counts from the heartbeats instead: every
+     `cron.pass.*` row's `last_ok_at` is after the tick started.
 6. After a week, read the project's Usage page and record what the extra
    invocations cost.
+
+**Switched on 2026-11-06.** The bis-ci dry run passed: 22 nested keys, 23 fresh pass rows, and a `platform.ping` job claimed and succeeded. `CRON_FANOUT=1` was then added on Production, and the project redeployed (`dpl_FXWC6YAS…`, ready 08:58Z). The 09:00 and 09:15 ticks were both clean: 23/23 pass heartbeats fresh, no failing keys, no ops alerts, `jobs.dead` and `jobs.backlog` ok, and no runtime errors. Rollback: delete `CRON_FANOUT` on Production and redeploy. Step 6, the cost reading, is due about 2026-11-13.
 
 ## 4. Reading dead jobs
 
