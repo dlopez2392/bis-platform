@@ -37,9 +37,12 @@
 -- SEARCH PATHS. This file creates and alters no function.
 --
 -- LOCKS AND COST. The file runs as one transaction; lock_timeout 5s below bounds only the WAIT to take each
--- lock, not the work done under it. Section 0 takes ACCESS EXCLUSIVE on ai_acts FIRST, then calls, in one
--- lock table statement, and holds both until the file commits: every read and write of either table waits
--- for the file, not just for one catalog change.
+-- lock, not the work done under it. Section 0 takes ACCESS EXCLUSIVE on ai_acts FIRST, then calls, inside
+-- its do block, and holds both until the file commits: every read and write of either table waits for the
+-- file, not just for one catalog change. The lock is taken INSIDE the do block (0088's and 0090's pattern):
+-- the Supabase CLI does not run a file inside a transaction block, and a bare LOCK TABLE there fails 25P01
+-- (CI verify, 2026-11-06). The second do block proves the next statement is still that transaction and still
+-- holds both locks; a path that commits between statements fails there, before any DDL.
 --   Why that order: the live writers hold ai_acts and then need calls (undo_ai_booking_act deletes a booking,
 --     whose calls.booking_id FK sets null; merge_contacts; insertAiActs' FK check on ai_acts_call_fkey). Taking
 --     calls first deadlocked such a writer on the PG 17.6 replica (40P01, and the victim can be a live call's
@@ -63,12 +66,26 @@
 --
 -- ASCII only, no backslash anywhere, and every dollar sign in this file is part of a dollar-quote pair.
 
--- 0. Fail fast instead of queueing behind a long lock.
+-- 0. Fail fast instead of queueing behind a long lock, then take both locks, ai_acts FIRST (LOCKS AND COST),
+--    inside the block so they run in the block's transaction on every client. Then prove the next statement
+--    is still that transaction, holding both, or stop before any DDL.
 do $$
 begin
   perform pg_catalog.set_config('lock_timeout', '5s', true);
+  perform pg_catalog.set_config('bis.m0114_xid', pg_catalog.txid_current()::text, true);
+  lock table public.ai_acts in access exclusive mode;
+  lock table public.calls in access exclusive mode;
 end $$;
-lock table public.ai_acts, public.calls in access exclusive mode;
+do $$
+begin
+  if pg_catalog.current_setting('bis.m0114_xid', true) is distinct from pg_catalog.txid_current()::text
+     or pg_catalog.current_setting('lock_timeout') <> '5s'
+     or (select count(*) from pg_catalog.pg_locks l
+          where l.locktype = 'relation' and l.relation in ('public.ai_acts'::regclass, 'public.calls'::regclass)
+            and l.pid = pg_catalog.pg_backend_pid() and l.mode = 'AccessExclusiveLock' and l.granted) <> 2 then
+    raise exception '0114_not_one_transaction' using errcode = 'P0001';
+  end if;
+end $$;
 
 -- 1. calls: when a person marked a failed transfer handled (called the caller back) from the To do queue.
 alter table public.calls add column transfer_followup_at timestamptz;
