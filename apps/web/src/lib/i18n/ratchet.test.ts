@@ -415,7 +415,7 @@ describe("G1's exemption and G3's scan — the pieces", () => {
     expect(r.reason.length).toBeGreaterThan(20);
   });
 
-  it("names exactly the twenty-seven English-only readers (mutation: add a twenty-eighth without a test row → FAILS)", () => {
+  it("names exactly the twenty-six English-only readers (mutation: add a twenty-seventh without a test row → FAILS)", () => {
     expect(ENGLISH_ONLY_READERS.map((r) => r.file)).toEqual([
       "src/app/(dashboard)/dashboard/accounts/[accountId]/calendar/server-words.ts",
       // S-10 fix round I6: the Activity page's stored-reason reader, the same pattern.
@@ -503,9 +503,15 @@ describe("G1's exemption and G3's scan — the pieces", () => {
       // compare against this EXACT English text) — localizing it is a
       // cross-file behavior change outside this task's scope.
       "src/lib/email/templates/followup.ts",
-      // S-10 T9b: words()'s own doc comment — the English twin joins the
-      // keywords on purpose, never shown as copy.
-      "src/lib/palette/registry.ts",
+      // F-095 part 1: palette/registry.ts's own `words()` USED to read
+      // `m[key]` directly (the English twin joining the keywords on
+      // purpose) — it was listed here for that. The rewrite now reaches the
+      // other language's label through `t(m, key, otherLocale)`, where
+      // `otherLocale` is a variable, not a literal, so it is no longer a
+      // direct read at all (ratchet-scan.ts's own I-1 rule: only a
+      // STRING-LITERAL locale argument to t()/plural() counts) — the
+      // exemption is gone because the thing it exempted is gone, not
+      // because the file stopped reading the catalogue.
       // S-10 T9b: label()'s own doc comment — the model always gets the
       // English word; LANGUAGE_LINE asks it for the reader's language
       // separately. An AI prompt input, never UI copy.
