@@ -202,3 +202,27 @@ describe("buildNavGroups", () => {
     }
   });
 });
+
+// F-087 fix round, finding 2 (owner ruling 2026-11-06): KEEP. Before the
+// surface manifest, the agency top-level branch (`base === null`) returned
+// its six flat items unconditionally — it never read `isAgency` at all, so
+// a client or Technician landing at the agency top level (never happens in
+// practice, but nothing in the function itself prevented it) would have
+// gotten the agency's own Companies/Blueprints/Work/Numbers/Screened/Plans
+// list too. Every top-level manifest entry's `audience` is now
+// `{ agency: true, client: false, technician: false }` like every other
+// entry's, so `audienceIncludes` withholds them from a non-agency caller —
+// a second, deliberate behavior change this spec sanctions (§2.3/§3).
+describe("buildNavGroups — a non-agency caller at the top level sees none of the six flat items (F-087 fix round, finding 2, KEEP)", () => {
+  it("a client (not agency) sees no top-level items at all (mutation: drop the audience check for agency-top scope → FAILS)", () => {
+    expect(hrefs(buildNavGroups(null, false, false))).toEqual([]);
+  });
+
+  it("a Technician sees no top-level items at all (mutation: drop the audience check for agency-top scope → FAILS)", () => {
+    expect(hrefs(buildNavGroups(null, false, false, true))).toEqual([]);
+  });
+
+  it("the agency itself is unaffected — still the full six (sanity, so the two tests above are not vacuously trivial)", () => {
+    expect(hrefs(buildNavGroups(null, true, false))).toHaveLength(6);
+  });
+});

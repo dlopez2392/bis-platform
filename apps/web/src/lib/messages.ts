@@ -4566,8 +4566,8 @@ export const m = {
   "palette.action.toggleTheme": "Switch between light and dark",
   "palette.action.toggleTheme.es": "Cambiar entre modo claro y oscuro",
   // Staff and roles (Task 8): the agency's own ⌘K entry point into this
-  // client's team management (registry.ts's own comment on why this is a
-  // plain navigation entry, not a SETTINGS_SECTIONS anchor).
+  // client's team management (the manifest's own comment on why this is a
+  // plain navigation entry, not a settings-section anchor — F-087 part 1).
   "palette.settings.team": "Team",
   "palette.settings.team.es": "Equipo",
   "palette.settings.clientAccess": "Client access",
