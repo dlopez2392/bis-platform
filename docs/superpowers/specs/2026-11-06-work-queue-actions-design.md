@@ -221,7 +221,7 @@ action that clears `accepted_at` back to `null` via the same compare-and-swap pa
 same screen at the same time (one is a toast action on the To do list, the other a button on the
 record page days or weeks later); see Owner decision 3 for the one open question this raises.
 
-Trigger change required: `app.ai_acts_act_is_fixed()` currently refuses any update outside
+(SUPERSEDED, see §9: no trigger change is needed.) Trigger change required: `app.ai_acts_act_is_fixed()` currently refuses any update outside
 `undone_at`/`undone_by`/`undo_notified` (`0091_ai_acts.sql:93-105`) — it must also permit
 `accepted_at`/`accepted_by` to move, or every Accept click fails with `P0001`. §4.2 details the exact
 migration.
@@ -289,6 +289,7 @@ alter table public.ai_acts
 
 alter table public.ai_acts
   add constraint ai_acts_accepted_pair check ((accepted_at is null) = (accepted_by is null)),
+  -- SUPERSEDED (§9): this CHECK is NOT built; it broke the record's own Undo.
   add constraint ai_acts_not_both_accepted_and_undone
     check (not (accepted_at is not null and undone_at is not null));
 
@@ -413,7 +414,7 @@ existing toast in this file.
   an update that moves `accepted_at` AND `target` in one statement; must raise `P0001`. Mutation: drop
   `target` from the trigger's own comparison list (an accidental side effect of hand-editing the
   function) → the forbidden move silently succeeds → test fails by name.
-- *`ai_acts_not_both_accepted_and_undone` is enforced at the database*, not only in application code —
+- (SUPERSEDED, §9: replaced by "an accepted act can still be undone from the record") *`ai_acts_not_both_accepted_and_undone` is enforced at the database*, not only in application code —
   a raw `UPDATE ... SET accepted_at = now()` against an already-undone row must violate the CHECK.
   Mutation: drop that constraint → the insert silently succeeds → test fails by name.
 
@@ -442,7 +443,7 @@ following `work-list.callback.test.ts`'s own pattern):
 ### Task list (PR-sized, tiered)
 
 1. **[HIGH] Migration** `0113_work_queue_actions.sql` (number TBD, §4): `calls.transfer_followup_at`;
-   `ai_acts.accepted_at`/`accepted_by` + the two CHECK constraints + the widened trigger function.
+   `ai_acts.accepted_at`/`accepted_by` (SUPERSEDED, §9: ONE CHECK, no trigger edit) + the two CHECK constraints + the widened trigger function.
    Ships with its own grants/CHECK test (mirrors `0091`'s and `0037`'s own migration test files) and
    runs through the CI-project-first sequence (`CLAUDE.md`'s bullet on migrations) before this spec's
    other tasks land. Files: new migration; `packages/db/src/test/*-grants.test.ts` additions.
@@ -510,3 +511,11 @@ following `work-list.callback.test.ts`'s own pattern):
 5. **The failed-transfer button says "Called back"** (Spanish per the copy table, checked against the glossary), not the generic "Done".
 
 **Migration number:** 0114, not 0113. F-115's 0113 is reserved and lands on or after 2026-11-11. Migrations reach bis-ci in number order (`db:push:ci` refuses `--include-all`), so this part's PR is built now and its migration is applied only after 0113 is on production, the same hold as F-115 PR E. Re-check the next free number on `origin/main` immediately before the PR opens.
+
+## 9. Corrections after planning and review (2026-11-06). The plan and these win over §3 to §6.
+
+1. **There is no trigger change.** `app.ai_acts_act_is_fixed()` names 11 columns and has no catch-all, so `accepted_at`/`accepted_by` already move freely. Read 0091 as re-created by 0096; plan correction 2.
+2. **There is no `ai_acts_not_both_accepted_and_undone` CHECK.** The live `undo_ai_booking_act` (0107:327-328) sets `undone_at`/`undone_by` and never clears `accepted_*`, so the CHECK would make the record's own Undo raise 23514 after an Accept. A plan review proved this on a PostgreSQL 17.6 replica. Instead, `stampAiActAccepted`'s compare-and-swap requires `undone_at is null`, and a schema test calls the real `undo_ai_booking_act` on an accepted act.
+3. **No grant is inherited.** 0020 revokes every write on `calls` from `authenticated`, and `ai_acts` grants it SELECT only. All four writes therefore go through `serviceDb()` behind `callerCanSee` (plan correction 1).
+4. **0114 locks `ai_acts` before `calls`.** That is the order live writers take them; the reverse order deadlocked in the T1 review. Both locks are ACCESS EXCLUSIVE until commit.
+5. **Technicians.** `calls_technician_scope` (0068) has no carve-out for a NULL `contact_id`, so a Technician sees no failed transfer from an unidentified caller (plan correction 3).
