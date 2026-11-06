@@ -8,7 +8,7 @@ import type { Locale } from "@/lib/i18n/locale";
  * server re-validation and duplicate check are all the EXISTING code —
  * nothing downstream of parsing is new. Parsing happens in the BROWSER
  * (DESIGN.md's CSV-import rule): this module never fetches, never uploads,
- * and the caller feeds it a string already read from the chosen File.
+ * and the caller feeds it bytes already read from the chosen File.
  */
 
 /** The one contact-shaped record a vCard block can produce. Every key is
@@ -37,28 +37,54 @@ type VCardField = (typeof VCARD_FIELDS)[number];
  * Detects a vCard by extension OR content, never by MIME alone — a phone's
  * share sheet hands the browser odd/missing MIME types for a `.vcf` far
  * more often than a desktop export does.
+ *
+ * Fix round M-7(c): the content check used to be `/^\s*BEGIN:VCARD/im`,
+ * which matches that text on ANY line of the sniffed slice — a `.csv`
+ * whose DATA happens to contain the literal words "BEGIN:VCARD" somewhere
+ * (a pasted note, say) would misfire. Only the file's own first non-empty
+ * line (after a leading BOM, which `.trim()` already strips — U+FEFF is
+ * ECMAScript WhiteSpace) counts now, matching how a real vCard always
+ * opens.
  */
 export function looksLikeVCard(fileName: string, text: string): boolean {
   if (/\.vcf$/i.test(fileName)) return true;
-  return /^\s*BEGIN:VCARD/im.test(text);
+  const firstLine = text.split(/\r\n|\r|\n/).map((l) => l.trim()).find((l) => l !== "");
+  return firstLine !== undefined && /^BEGIN:VCARD$/i.test(firstLine);
 }
 
 /**
- * A sane guard independent of the row cap below: a single vCard property
- * (PHOTO, almost always) can be tens of megabytes of folded base64, parsed
- * in one synchronous browser pass with no streaming the way Papa.parse
- * streams a File. The CSV path carries no file-size guard of its own (nothing
- * in that path reads `file.size`) because Papa.parse never holds the whole
- * file in memory at once; this path does, so it needs its own ceiling. Same
- * order of magnitude as the documents module's own per-file cap
- * (`DOCUMENT_MAX_BYTES`, 25 MiB) for one app-wide "that's a lot of file" line,
- * declared independently rather than imported — this module has no other
- * reason to depend on the documents feature.
+ * Fix round I-2 (RULING): raised from 25 MiB to 100 MiB. Parsing itself is
+ * cheap even past 100 MB — PHOTO's (and any other unwanted property's)
+ * folded continuation lines are dropped as they arrive, never copied, so
+ * the scan stays linear in the file's own line count (`unfoldLines`
+ * below). The real cost this ceiling guards is holding the WHOLE FILE in
+ * memory at once (`file.arrayBuffer()`), which Papa.parse's streamed read
+ * of a CSV never does — not the parse time itself.
  */
-export const MAX_VCARD_FILE_BYTES = 26_214_400;
+export const MAX_VCARD_FILE_BYTES = 104_857_600; // 100 MiB
 
 export function vCardFileTooLarge(size: number): boolean {
   return size > MAX_VCARD_FILE_BYTES;
+}
+
+/**
+ * Fix round I-1: the WHOLE FILE's own bytes, decoded once before any line
+ * splitting happens. A phone that never declares an encoding at all can
+ * still write raw 8-bit Latin-1/windows-1252 text (e.g. a bare 0xF1 byte
+ * for "ñ", no `ENCODING=QUOTED-PRINTABLE` anywhere on the line it sits in)
+ * — strict UTF-8 decoding throws on that lone byte (it is not a valid
+ * UTF-8 sequence on its own), which is exactly the signal to fall back to
+ * windows-1252 rather than silently losing the character to U+FFFD. A
+ * genuinely UTF-8 file (the common case today) decodes on the first try
+ * and is unaffected.
+ */
+export function decodeVCardBytes(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(view);
+  } catch {
+    return new TextDecoder("windows-1252").decode(view);
+  }
 }
 
 type Prop = { name: string; params: string[]; rawValue: string };
@@ -94,19 +120,31 @@ function isKeptPropertyLine(line: string): boolean {
 }
 
 /**
- * True when `line` (the logical line built so far) is a QUOTED-PRINTABLE
- * value's soft line break: it ends in a single trailing `=` and its own
- * property declares the encoding — vCard 2.1's `ENCODING=QUOTED-PRINTABLE`
- * param (3.0/4.0 spell it the same way) or 2.1's bare, unlabelled
- * `QUOTED-PRINTABLE` param. This break carries NO leading whitespace on its
- * continuation (unlike RFC 6350 folding below), which is why it is checked
- * as its own case rather than folded into that one.
+ * Whether a line's own header declares QUOTED-PRINTABLE — vCard 2.1's
+ * `ENCODING=QUOTED-PRINTABLE` param (3.0/4.0 spell it the same way) or
+ * 2.1's bare, unlabelled `QUOTED-PRINTABLE` param.
+ *
+ * Fix round M-1: split out of the old `isQuotedPrintableSoftBreak`, which
+ * re-derived "is this line still a pending soft break" from `current`'s
+ * own trailing character AND header on every single line — including a
+ * line belonging to an UNWANTED property, whose value this parser was
+ * never going to read anyway. This half (does the PROPERTY declare QP at
+ * all) is computed once, when the property starts; `pendingQpBreak` below
+ * carries the other half (does the line we just consumed end in a bare
+ * "=") forward without re-reading `current`.
  */
-function isQuotedPrintableSoftBreak(line: string): boolean {
-  if (!line.endsWith("=")) return false;
+function declaresQuotedPrintable(line: string): boolean {
   const colon = line.indexOf(":");
   const head = colon === -1 ? line : line.slice(0, colon);
   return /(^|;)ENCODING=QUOTED-PRINTABLE(;|$)/i.test(head) || /(^|;)QUOTED-PRINTABLE(;|$)/i.test(head);
+}
+
+/** Fix round M-2(c): a QP value's own stray trailing "=" must never be read
+ *  as a soft break onto a REAL `BEGIN:VCARD`/`END:VCARD` line — those are
+ *  structure, never data, however a dangling "=" happens to line up. */
+function isStructuralLine(line: string): boolean {
+  const trimmed = line.trim();
+  return /^BEGIN:VCARD$/i.test(trimmed) || /^END:VCARD$/i.test(trimmed);
 }
 
 /**
@@ -114,36 +152,49 @@ function isQuotedPrintableSoftBreak(line: string): boolean {
  * folding (a line starting with a single space or TAB continues the one
  * before it, that one leading character dropped) plus 2.1's
  * QUOTED-PRINTABLE soft break (a trailing `=` with no leading whitespace on
- * the next line). A property this parser never reads (PHOTO above all)
- * has its continuation lines dropped rather than appended, so a multi-MB
- * base64 block costs one string compare per line, never a copy.
+ * the next line, tracked here as `pendingQpBreak` rather than re-derived
+ * per line — fix round M-1). A property this parser never reads (PHOTO
+ * above all) has its continuation lines dropped in EITHER mechanism as
+ * they arrive, so a multi-MB block costs one flag check per line, never a
+ * copy — fixing the old code's quadratic cost on a QP-wrapped unwanted
+ * property specifically (its fold branch already skipped the copy; its
+ * soft-break-join branch did not). Fix round M-2(c): a soft break never
+ * joins onto a literal `BEGIN:VCARD`/`END:VCARD` line.
  */
 function unfoldLines(physical: string[]): string[] {
   const logical: string[] = [];
   let current = "";
   let hasCurrent = false;
   let currentIsUnwanted = false;
+  let currentIsQP = false;
+  let pendingQpBreak = false;
 
   function flush() {
     if (hasCurrent) logical.push(current);
     current = "";
     hasCurrent = false;
     currentIsUnwanted = false;
+    currentIsQP = false;
+    pendingQpBreak = false;
   }
 
   for (const raw of physical) {
     if (hasCurrent && (raw.startsWith(" ") || raw.startsWith("\t"))) {
       if (!currentIsUnwanted) current += raw.slice(1);
+      pendingQpBreak = currentIsQP && raw.endsWith("=");
       continue;
     }
-    if (hasCurrent && isQuotedPrintableSoftBreak(current)) {
-      current = current.slice(0, -1) + raw;
+    if (hasCurrent && pendingQpBreak && !isStructuralLine(raw)) {
+      if (!currentIsUnwanted) current = current.slice(0, -1) + raw;
+      pendingQpBreak = currentIsQP && raw.endsWith("=");
       continue;
     }
     flush();
     current = raw;
     hasCurrent = true;
     currentIsUnwanted = !isKeptPropertyLine(current);
+    currentIsQP = declaresQuotedPrintable(current);
+    pendingQpBreak = currentIsQP && current.endsWith("=");
   }
   flush();
   return logical;
@@ -161,8 +212,10 @@ function parseLine(line: string): Prop | null {
 
 /** QP hex escapes decode to raw BYTES, not characters — `Garc=C3=ADa` is the
  *  UTF-8 bytes for "García" split across two escapes, so the bytes are
- *  collected first and decoded as UTF-8 once, never escape-by-escape. */
-function decodeQuotedPrintable(value: string): string {
+ *  collected first and decoded as text once, never escape-by-escape (fix
+ *  round I-1: WHICH text decoding applies is the property's own declared
+ *  CHARSET, decided by the caller below). */
+function decodeQuotedPrintableBytes(value: string): Uint8Array {
   const bytes: number[] = [];
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]!;
@@ -173,7 +226,32 @@ function decodeQuotedPrintable(value: string): string {
       bytes.push(ch.charCodeAt(0));
     }
   }
-  return new TextDecoder("utf-8").decode(new Uint8Array(bytes));
+  return new Uint8Array(bytes);
+}
+
+/** The three CHARSET values the fix round names; any other spelling (or
+ *  none at all) falls back to the try-UTF-8-then-windows-1252 pair below —
+ *  the same two-step `decodeVCardBytes` uses for the whole file. */
+const CHARSET_LABEL: Record<string, string> = {
+  "UTF-8": "utf-8", "ISO-8859-1": "iso-8859-1", "WINDOWS-1252": "windows-1252",
+};
+
+function charsetParamOf(params: string[]): string | undefined {
+  for (const p of params) {
+    const match = /^CHARSET=(.+)$/i.exec(p);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function decodeBytesForCharset(bytes: Uint8Array, charsetParam: string | undefined): string {
+  const label = charsetParam ? CHARSET_LABEL[charsetParam.toUpperCase()] : undefined;
+  if (label) return new TextDecoder(label).decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
 }
 
 function isEncodedQuotedPrintable(params: string[]): boolean {
@@ -181,7 +259,8 @@ function isEncodedQuotedPrintable(params: string[]): boolean {
 }
 
 function decodeValue(prop: Prop): string {
-  return isEncodedQuotedPrintable(prop.params) ? decodeQuotedPrintable(prop.rawValue) : prop.rawValue;
+  if (!isEncodedQuotedPrintable(prop.params)) return prop.rawValue;
+  return decodeBytesForCharset(decodeQuotedPrintableBytes(prop.rawValue), charsetParamOf(prop.params));
 }
 
 /** 3.0/4.0 backslash escapes inside one already-split component: `\,` `\;`
@@ -217,9 +296,15 @@ function splitUnescaped(value: string, delimiter: string): string[] {
 }
 
 /** Splits a vCard 4.0 `TEL;VALUE=uri:tel:+15551234567` value down to the
- *  digits-and-punctuation a phone number actually is. */
+ *  digits-and-punctuation a phone number actually is. Fix round M-7(a): the
+ *  `tel:` URI (RFC 3966) can carry its OWN `;` parameters —
+ *  `tel:+1-956-555-0101;ext=12` — which are not vCard parameters at all and
+ *  are stripped along with the scheme. */
 function stripTelUri(value: string): string {
-  return /^tel:/i.test(value) ? value.slice(4) : value;
+  if (!/^tel:/i.test(value)) return value;
+  const withoutScheme = value.slice(4);
+  const semi = withoutScheme.indexOf(";");
+  return semi === -1 ? withoutScheme : withoutScheme.slice(0, semi);
 }
 
 function hasParam(params: string[], test: RegExp): boolean {
@@ -227,18 +312,37 @@ function hasParam(params: string[], test: RegExp): boolean {
 }
 
 const CELL_PARAM = /^(TYPE=)?.*\b(CELL|MOBILE)\b/i;
-const PREF_PARAM = /^(TYPE=)?.*\bPREF\b(=1)?/i;
 const INTERNET_PARAM = /^(TYPE=)?.*\bINTERNET\b/i;
+
+/**
+ * Fix round M-7(b) RULING: vCard's PREF is a 1–100 RANK — lower is more
+ * preferred — not a yes/no flag. A bare `PREF` (2.1/3.0, no number) or a
+ * `TYPE=...PREF...` form ranks as 1 (the best), matching how those are
+ * written when nothing distinguishes one PREF-marked entry from another.
+ * `undefined` means no PREF signal at all.
+ */
+function prefRank(params: string[]): number | undefined {
+  for (const p of params) {
+    const explicit = /^PREF=(\d+)$/i.exec(p);
+    if (explicit) return Number(explicit[1]);
+  }
+  if (params.some((p) => /^PREF$/i.test(p) || /^TYPE=.*\bPREF\b/i.test(p))) return 1;
+  return undefined;
+}
 
 function phoneScore(params: string[]): number {
   return hasParam(params, CELL_PARAM) ? 1 : 0;
 }
 
+/** Fix round M-7(b): a lower PREF rank must win decisively over the +1
+ *  INTERNET nudge — `1000 - rank` keeps any rank under 999 ahead of a
+ *  PREF-less INTERNET email, and a smaller rank always beats a larger one
+ *  regardless of which appeared first in the file. */
 function emailScore(params: string[]): number {
-  let score = 0;
-  if (hasParam(params, PREF_PARAM)) score += 2;
-  if (hasParam(params, INTERNET_PARAM)) score += 1;
-  return score;
+  const rank = prefRank(params);
+  const prefScore = rank === undefined ? 0 : 1000 - rank;
+  const internetScore = hasParam(params, INTERNET_PARAM) ? 1 : 0;
+  return prefScore + internetScore;
 }
 
 /** First-wins on a tie (`>`, never `>=`): among several TEL or EMAIL lines
@@ -302,11 +406,14 @@ function buildContact(props: Prop[]): VCardContact {
         break;
       }
       default:
-        break; // PHOTO, ADR, NOTE and anything else this import does not carry.
+        break; // PHOTO, ADR, NOTE, AGENT and anything else this import does not carry.
     }
   }
 
-  if (firstName === undefined && lastName === undefined && fnFallback) {
+  // Fix round M-3(a) RULING: a company card — FN carries the SAME text as
+  // ORG, with no N at all — is a business, not a person; splitting that
+  // text into first/last would invent a human name out of a company's own.
+  if (firstName === undefined && lastName === undefined && fnFallback && fnFallback !== company) {
     const split = splitFullName(fnFallback);
     firstName = split.firstName;
     lastName = split.lastName;
@@ -322,30 +429,60 @@ function buildContact(props: Prop[]): VCardContact {
 }
 
 /**
- * Parses one `.vcf` file's full text into one `VCardContact` per
- * `BEGIN:VCARD`…`END:VCARD` block. A block with no recognised property at
- * all still produces an (empty) contact — nothing is dropped HERE; `mapRows`
- * is where "no email or phone" is decided, identically for a vCard-sourced
- * row and a spreadsheet one. An unterminated trailing block (no closing
- * `END:VCARD`) is still built at end of file rather than silently dropped.
+ * Parses one `.vcf` file's full (already-decoded — `decodeVCardBytes`)
+ * text into one `VCardContact` per `BEGIN:VCARD`…`END:VCARD` block. A block
+ * with no recognised property at all still produces an (empty) contact —
+ * nothing is dropped HERE; `mapRows` is where "no email or phone" is
+ * decided, identically for a vCard-sourced row and a spreadsheet one.
+ *
+ * Fix round M-2: a `BEGIN:VCARD` appearing before the current card's own
+ * `END:VCARD` has closed is malformed either of two ways that share the
+ * same syntax. An AGENT's embedded vCard — the standard way a 2.1/3.0 card
+ * carries a second person inline — is swallowed whole (`agentDepth`) so it
+ * never overwrites the outer card's own fields; told apart from a
+ * genuinely missing `END:VCARD` (which instead closes the open card right
+ * now, rather than losing it) by the one property line immediately before
+ * the inner `BEGIN:`: an `AGENT:` line means "a nested person follows",
+ * anything else means "this card forgot its own END".
  */
 export function parseVCardText(text: string): VCardContact[] {
   const logical = unfoldLines(splitPhysicalLines(text));
   const contacts: VCardContact[] = [];
   let current: Prop[] | null = null;
+  let agentDepth = 0;
 
   for (const raw of logical) {
     const line = raw.trim();
     if (line === "") continue;
     if (/^BEGIN:VCARD$/i.test(line)) {
+      if (agentDepth > 0) {
+        agentDepth += 1;
+        continue;
+      }
+      if (current !== null) {
+        const lastProp = current[current.length - 1];
+        if (lastProp && lastProp.name === "AGENT") {
+          agentDepth = 1;
+          continue;
+        }
+        // No END before this new card started: close the open one now,
+        // rather than losing it when the fresh `current = []` below
+        // overwrites it.
+        contacts.push(buildContact(current));
+      }
       current = [];
       continue;
     }
     if (/^END:VCARD$/i.test(line)) {
+      if (agentDepth > 0) {
+        agentDepth -= 1;
+        continue;
+      }
       if (current) contacts.push(buildContact(current));
       current = null;
       continue;
     }
+    if (agentDepth > 0) continue; // inside a swallowed nested (AGENT) card
     if (current) {
       const prop = parseLine(raw);
       if (prop) current.push(prop);
@@ -353,6 +490,15 @@ export function parseVCardText(text: string): VCardContact[] {
   }
   if (current) contacts.push(buildContact(current));
   return contacts;
+}
+
+/** Fix round M-4: the skipped-rows download's own extra "name" column for a
+ *  vCard source (the CSV download's own shape is untouched) — one
+ *  best-effort display name per card, in the same order `vCardContactsToRows`
+ *  numbers its rows, so "line 3, no email or phone" can also say "Ana Ruiz".
+ *  Blank when a card truly carried neither a first nor a last name. */
+export function vCardDisplayNames(contacts: VCardContact[]): string[] {
+  return contacts.map((c) => [c.firstName, c.lastName].filter(Boolean).join(" "));
 }
 
 /**
@@ -363,6 +509,13 @@ export function parseVCardText(text: string): VCardContact[] {
  * unchanged and the owner can still review or re-point any column. Headers
  * are the reader's own language (`importFieldLabel`), matching the labels
  * the dropdown already shows for these same fields.
+ *
+ * Fix round M-3(b) RULING: `company_name` is the one exception — it starts
+ * UNMATCHED ("Don't import"), not pre-mapped to Business name. A vCard's
+ * ORG is often the customer's own EMPLOYER, not the business this account
+ * tracks for them; pre-mapping it would silently write someone else's
+ * company onto the contact. The column still appears (with the ORG text
+ * in it) so the owner can map it themselves when it IS the right business.
  */
 export function vCardContactsToRows(
   contacts: VCardContact[],
@@ -370,7 +523,9 @@ export function vCardContactsToRows(
 ): { headers: string[]; rows: ParsedRow[]; mapping: Record<string, string | null> } {
   const headers = VCARD_FIELDS.map((field) => importFieldLabel(field, locale));
   const mapping: Record<string, string | null> = {};
-  VCARD_FIELDS.forEach((field, i) => { mapping[headers[i]!] = field; });
+  VCARD_FIELDS.forEach((field, i) => {
+    mapping[headers[i]!] = field === "company_name" ? null : field;
+  });
 
   const fieldValue: Record<VCardField, keyof VCardContact> = {
     first_name: "firstName", last_name: "lastName", email: "email",

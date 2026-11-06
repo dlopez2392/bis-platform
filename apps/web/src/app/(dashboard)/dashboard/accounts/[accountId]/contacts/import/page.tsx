@@ -41,7 +41,12 @@ export default async function ImportContactsPage(
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // Fix round D1: kept in its own name (not just folded into `tr` below) so
+  // it can ALSO be handed to the client component as a plain boolean prop —
+  // `?locale=pseudo` resolved this page's own strings (tr.text above) but
+  // never reached ImportWizard's, which read `t(m, ..., locale)` directly.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
   const tags = await listTags(db, accountId);
 
   return (
@@ -49,7 +54,7 @@ export default async function ImportContactsPage(
       <div lang={locale}>
         <PageHeader title={tr.text("contacts.import.title")} />
         <div className="mx-auto max-w-2xl">
-          <ImportWizard accountId={accountId} existingTags={tags.map((tag) => tag.name)} />
+          <ImportWizard accountId={accountId} existingTags={tags.map((tag) => tag.name)} pseudo={pseudo} />
         </div>
       </div>
     </LocaleProvider>
