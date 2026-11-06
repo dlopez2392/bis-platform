@@ -42,7 +42,28 @@ vi.mock("@bis/db", () => ({
   },
   getPhoneNumberByE164: (...a: unknown[]) => platformNumberMock(...a),
   recordForwardedCall: (...a: unknown[]) => recordForwardedCallMock(...a),
+  // F-077 part 1: reached only through the REAL recordTransferFailed, which
+  // the resilience cases below switch on (realStamp).
+  markTransferFailed: (...a: unknown[]) => markTransferFailedMock(...a),
 }));
+const markTransferFailedMock = vi.hoisted(() => vi.fn());
+
+// F-077 part 1: the failed-transfer stamp is a side-write in its own module
+// (lib/voice/transfer-failed.ts), mocked here the way `@/lib/ops/stamp` is, so
+// the `after()` recorders above keep counting only this route's own work. The
+// resilience cases turn `realStamp.on` to run the real helper against the
+// `@bis/db` mock above.
+const recordTransferFailedMock = vi.hoisted(() => vi.fn());
+const realStamp = vi.hoisted(() => ({ on: false }));
+vi.mock("@/lib/voice/transfer-failed", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/voice/transfer-failed")>();
+  return {
+    recordTransferFailed: (...a: Parameters<typeof actual.recordTransferFailed>) => {
+      recordTransferFailedMock(...a);
+      if (realStamp.on) actual.recordTransferFailed(...a);
+    },
+  };
+});
 
 const REQUESTED = {
   id: "c1",
@@ -92,6 +113,9 @@ beforeEach(() => {
   ]);
   stampMock.mockReset();
   platformNumberMock.mockReset().mockResolvedValue(null);
+  recordTransferFailedMock.mockReset();
+  markTransferFailedMock.mockReset().mockResolvedValue(true);
+  realStamp.on = false;
 });
 
 describe("voice texml handoff route", () => {
@@ -539,3 +563,115 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   });
 });
 
+
+// F-077 part 1 (spec section 10, ruling 1; migration 0114): a caller who asked
+// for a person and was never dialled is RECORDED here, when it happens, as
+// `refused`, so the To do queue shows only real failures.
+describe("voice texml handoff route — records a transfer it refused (F-077)", () => {
+  const NOW = new Date("2026-11-06T15:04:05.000Z");
+  const HANGUP_XML = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  function expectRefused(accountId = "acct1", callId = "c1"): void {
+    expect(recordTransferFailedMock).toHaveBeenCalledOnce();
+    const [db, acct, call, reason, at, label] = recordTransferFailedMock.mock.calls[0]!;
+    expect(db).toEqual({});
+    expect([acct, call, reason]).toEqual([accountId, callId, "refused"]);
+    expect((at as Date).toISOString()).toBe(NOW.toISOString());
+    expect(label).toBe("handoff");
+  }
+
+  it("a request too old to act on stamps the call refused, at the route's clock (mutation: swap the reason → FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, handoff_requested_at: agoIso(60 * MINUTE) });
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+  });
+
+  it("an unreadable ask stamp is refused, and recorded refused", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, handoff_requested_at: "not a date" });
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+  });
+
+  it("no transfer number configured stamps the call refused", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    getTransferPhoneMock.mockResolvedValue(null);
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+  });
+
+  it("a transfer number that is the account's own line stamps the call refused", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    getTransferPhoneMock.mockResolvedValue("+19565550999");
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+  });
+
+  it("a call that is dialled records no failure (mutation: stamp on the dial → FAILS)", async () => {
+    const xml = await post("tok_abc");
+    expect(xml).toContain("<Dial");
+    expect(recordTransferFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("a call that never asked records nothing: it is the ordinary end of every other call", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, handoff_requested_at: null });
+    await post("tok_abc");
+    expect(recordTransferFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("an unknown token records nothing: there is no call to stamp", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue(null);
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(recordTransferFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("stamps the call and account the TOKEN resolved, never ids carried in the request", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, id: "c9", account_id: "acct9" });
+    getTransferPhoneMock.mockResolvedValue(null);
+    await post("tok_abc", { CallSid: "c1", AccountSid: "acct1", account_id: "acct1", call_id: "c1" });
+    expectRefused("acct9", "c9");
+  });
+
+  it("a database failure on the stamp still returns the exact same TeXML and status", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getTransferPhoneMock.mockResolvedValue(null);
+    realStamp.on = true;
+    markTransferFailedMock.mockRejectedValue(new Error("markTransferFailed failed: boom"));
+    const res = await POST(req("tok_abc"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(HANGUP_XML);
+    for (const [cb] of afterMock.mock.calls) await expect((cb as () => Promise<void>)()).resolves.toBeUndefined();
+    expect(markTransferFailedMock).toHaveBeenCalledOnce();
+    expect(markTransferFailedMock.mock.calls[0]!.slice(1, 4)).toEqual(["acct1", "c1", "refused"]);
+    errSpy.mockRestore();
+  });
+
+  it("a database that never answers cannot hold the caller's TeXML (mutation: await the write inline → FAILS by timeout)", async () => {
+    getTransferPhoneMock.mockResolvedValue(null);
+    realStamp.on = true;
+    markTransferFailedMock.mockReturnValue(new Promise(() => {}));
+    const res = await POST(req("tok_abc"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(HANGUP_XML);
+  }, 2000);
+
+  it("a retried callback (the CAS already matched once) answers the same and never throws", async () => {
+    getTransferPhoneMock.mockResolvedValue(null);
+    realStamp.on = true;
+    const first = await post("tok_abc");
+    markTransferFailedMock.mockResolvedValue(false);
+    const second = await post("tok_abc");
+    expect(second).toBe(first);
+    for (const [cb] of afterMock.mock.calls) await expect((cb as () => Promise<void>)()).resolves.toBeUndefined();
+    expect(markTransferFailedMock).toHaveBeenCalledTimes(2);
+  });
+});
