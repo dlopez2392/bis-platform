@@ -1436,7 +1436,7 @@ describe("setTransferFollowedUp / clearTransferFollowup (F-077 part 1)", () => {
       const at = new Date("2026-11-06T15:00:00Z");
       await setTransferFollowedUp(db, accountId, call!.id, "user_test", at);
       const { data: row } = await db.from("calls").select("transfer_followup_at").eq("id", call!.id).single();
-      expect(row!.transfer_followup_at).toBe(at.toISOString());
+      expect(new Date(row!.transfer_followup_at as string).toISOString()).toBe(at.toISOString()); // PostgREST answers "+00:00" text: compare instants
       await expect(setTransferFollowedUp(db, accountId, call!.id, "user_test", new Date())).rejects.toThrow(/matched no row/);
     });
   });
@@ -1464,7 +1464,7 @@ describe("setTransferFollowedUp / clearTransferFollowup (F-077 part 1)", () => {
       const stale = await clearTransferFollowup(db, accountId, call!.id, new Date("2026-11-06T16:00:00Z"));
       expect(stale).toBe(false);
       const { data: still } = await db.from("calls").select("transfer_followup_at").eq("id", call!.id).single();
-      expect(still!.transfer_followup_at).toBe(at1.toISOString());
+      expect(new Date(still!.transfer_followup_at as string).toISOString()).toBe(at1.toISOString()); // compare instants, not text
       expect(await clearTransferFollowup(db, accountId, call!.id, at1)).toBe(true);
     });
   });
