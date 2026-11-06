@@ -57,8 +57,10 @@ Migration 0114_work_queue_actions.sql:
   alter table public.calls add column transfer_followup_at timestamptz;
   alter table public.ai_acts add column accepted_at timestamptz, add column accepted_by text;
   alter table public.ai_acts add constraint ai_acts_accepted_pair check ((accepted_at is null) = (accepted_by is null));
-  alter table public.ai_acts add constraint ai_acts_not_both_accepted_and_undone
-    check (not (accepted_at is not null and undone_at is not null));
+  -- NO "not both accepted and undone" CHECK (plan review C1, 2026-11-06): undo_ai_booking_act
+  -- (0091:348-349) sets undone_at and never clears accepted_at, so such a CHECK would make the
+  -- record page's own Undo raise 23514 on any act accepted on the queue. "Accept an undone act"
+  -- is refused in stampAiActAccepted's own CAS (`.is("undone_at", null)`) instead.
   -- No grant change. No function edit. No new SECURITY DEFINER. No RLS policy change.
 
 packages/db/src/work-queue.ts:
@@ -104,7 +106,7 @@ apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts:
 | T7 | e2e (written now, run after the migration hold clears) | MEDIUM | bis-e2e-qa | 2 |
 | T8 | Roadmap/tracker row | LOW | orchestrator | — |
 
-**Lanes (2 at most):** Lane 1: T1 → T2 → T4 → T5. Lane 2: T3 (starts once T1's migration file is committed; independent of T2's files) → T6 → T7 (needs T4, T5, T6 all landed). T8 last, by the orchestrator, after the PR merges.
+**Lanes (2 at most):** Lane 1: T1 → T2 → T3 → T4 → T5 (T2 and T3 BOTH edit `packages/db/src/work-queue.ts`'s `WorkSource` and `listAccountWork`, so they run SEQUENTIALLY in one lane — plan review I2). Lane 2: T6 (once T4's action names exist) → T7 (needs T4, T5, T6 all landed). T8 last, by the orchestrator, after the PR merges.
 
 ---
 
@@ -132,7 +134,7 @@ select count(*) || '|' || md5(string_agg(x, ',' order by x)) as digest from (
    where n.nspname = 'public' and c.relkind = 'r' and has_table_privilege(r, c.oid, p)) s;   -- record it: 0114 must not move it
 ```
 
-- [ ] **Step 2: The schema tests, red first.** Create `work-queue-actions-schema.test.ts`. Copy the helpers `seedAccount`/`actAsMember`/`asService` pattern from `call-handoff-grants.test.ts` (grep its own imports from `./db`). Cases:
+- [ ] **Step 2: The schema tests, red first.** Create `work-queue-actions-schema.test.ts`. Copy the helpers `seedAccount`/`asService` pattern from `record-changes-schema.test.ts` or `contact-merge-schema.test.ts` (they define both; `call-handoff-grants.test.ts` has neither — plan review m4). Cases:
 
 ```ts
 import { describe, it, expect } from "vitest";
@@ -179,13 +181,14 @@ describe("0114: ai_acts.accepted_at / accepted_by", () => {
         .rejects.toMatchObject({ code: "23514", constraint: "ai_acts_accepted_pair" });
     }));
 
-  it("ai_acts_not_both_accepted_and_undone: enforced at the database, not only in application code (mutation: drop the constraint -> FAILS)", () =>
+  it("an ACCEPTED act can still be undone from the record: undo_ai_booking_act's own final write (0091:348-349, undone_at/undone_by only) succeeds after accepted_at is set (plan review C1; mutation: add `check (not (accepted_at is not null and undone_at is not null))` inside this transaction -> the update raises 23514 -> FAILS)", () =>
     withRollback(async (c) => {
       await actAsOwner(c);
       const id = await insActForTest(c);
-      await c.query("update public.ai_acts set undone_at = now(), undone_by = 'u1' where id = $1", [id]);
-      await expect(c.query("update public.ai_acts set accepted_at = now(), accepted_by = 'u2' where id = $1", [id]))
-        .rejects.toMatchObject({ code: "23514", constraint: "ai_acts_not_both_accepted_and_undone" });
+      await c.query("update public.ai_acts set accepted_at = now(), accepted_by = 'u2' where id = $1", [id]);
+      // the exact shape of undo_ai_booking_act's final statement:
+      await expect(c.query("update public.ai_acts set undone_at = now(), undone_by = 'u1' where id = $1", [id]))
+        .resolves.toBeDefined();
     }));
 
   it("the existing trigger still refuses target to move even in the SAME statement as accepted_at (mutation, performed and reverted inside this test's own transaction: drop `or new.target is distinct from old.target` from app.ai_acts_act_is_fixed() -> the combined update that should raise P0001 instead succeeds -> FAILS)", () =>
@@ -261,12 +264,11 @@ comment on column public.ai_acts.accepted_at is
   'yet accepted.';
 
 alter table public.ai_acts
-  add constraint ai_acts_accepted_pair check ((accepted_at is null) = (accepted_by is null)),
-  add constraint ai_acts_not_both_accepted_and_undone
-    check (not (accepted_at is not null and undone_at is not null));
+  add constraint ai_acts_accepted_pair check ((accepted_at is null) = (accepted_by is null));
+-- Deliberately NO "not both accepted and undone" CHECK: see the plan's Shared facts (review C1).
 ```
 
-  ROLLBACK: `alter table public.ai_acts drop constraint ai_acts_not_both_accepted_and_undone, drop constraint ai_acts_accepted_pair, drop column accepted_at, drop column accepted_by; alter table public.calls drop column transfer_followup_at;`. LOCKS AND COST: both `alter table … add column` with no default take a brief metadata-only lock (no table rewrite, PG11+); state this and the table sizes read at Step 1.
+  ROLLBACK: `alter table public.ai_acts drop constraint ai_acts_accepted_pair, drop column accepted_at, drop column accepted_by; alter table public.calls drop column transfer_followup_at;`. LOCKS AND COST: both `alter table … add column` with no default take a brief metadata-only lock (no table rewrite, PG11+); state this and the table sizes read at Step 1.
 
 - [ ] **Step 5: Green on the replica.** Run `sh pg17-t1.sh post`; expected `0114 apply exit 0`. Run both test files against `/post`; expected all green, including the Step 3 update. Run each named mutation (drop a constraint; the trigger-function swap inside Step 2's last test) and paste the failing line, then confirm it reverts clean (the trigger swap is inside its own `withRollback` transaction, so no revert step is needed outside the test). Re-run the Step 1 digest and definer-count queries on `post`; paste both, confirming NEITHER moved.
 - [ ] **Step 6: Commit** `feat(db): 0114 calls.transfer_followup_at and ai_acts.accepted_at/accepted_by, with their CHECKs (F-077 part 1)` -- the three paths.
@@ -521,7 +523,7 @@ export async function listAccountWork(
 - [ ] **Step 1: Red first.** Append to `ai-acts.test.ts`:
 
 ```ts
-import { listPendingBookingActs, stampAiActAccepted, unstampAiActAccepted } from "../ai-acts";
+import { listPendingBookingActs, stampAiActAccepted, unstampAiActAccepted, stampAiActUndone } from "../ai-acts";
 
 describe("listPendingBookingActs (F-077 part 1)", () => {
   it("surfaces only control:booking kinds, un-undone and un-accepted (mutation: widen the kind filter to include contact_field_filled -> FAILS)", async () => {
@@ -602,6 +604,37 @@ describe("stampAiActAccepted / unstampAiActAccepted (F-077 part 1)", () => {
       expect(await unstampAiActAccepted(db, accountId, row!.id, "user_a", at1)).toBe(true);
     });
   });
+
+  it("refuses to accept an act already undone on the record (review C1; mutation: drop .is('undone_at', null) -> returns true -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Flo" }, "user_test");
+      await insertAiActs(db, accountId, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+        target: { bookingId: "bk_6" }, before: { startsAt: "2026-11-05T10:00:00Z", endsAt: "2026-11-05T11:00:00Z" },
+        after: { version: "2026-11-05T09:00:00Z" } }]);
+      const { data: row } = await db.from("ai_acts").select("id").eq("account_id", accountId).eq("kind", "booking_cancelled").single();
+      await stampAiActUndone(db, accountId, row!.id, "user_owner", new Date("2026-11-06T14:00:00Z"));
+      expect(await stampAiActAccepted(db, accountId, row!.id, "user_a", new Date("2026-11-06T15:00:00Z"))).toBe(false);
+    });
+  });
+
+  it("both stamps are account-scoped: another account's id matches nothing (review I3; mutation: drop .eq('account_id', accountId) from either writer -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await seedCall(dbB, accountB);
+        const { id: contactId } = await createContact(dbB, accountB, { firstName: "Gus" }, "user_test");
+        await insertAiActs(dbB, accountB, [{ kind: "booking_cancelled", actor: "voice", callId, chatId: null, contactId,
+          target: { bookingId: "bk_7" }, before: { startsAt: "2026-11-05T10:00:00Z", endsAt: "2026-11-05T11:00:00Z" },
+          after: { version: "2026-11-05T09:00:00Z" } }]);
+        const { data: row } = await dbB.from("ai_acts").select("id").eq("account_id", accountB).eq("kind", "booking_cancelled").single();
+        const at = new Date("2026-11-06T15:00:00Z");
+        // account A's scope never matches account B's act, even on a service client that bypasses RLS
+        expect(await stampAiActAccepted(dbA, accountA, row!.id, "user_a", at)).toBe(false);
+        expect(await stampAiActAccepted(dbB, accountB, row!.id, "user_b", at)).toBe(true);
+        expect(await unstampAiActAccepted(dbA, accountA, row!.id, "user_b", at)).toBe(false);
+      });
+    });
+  });
 });
 ```
 
@@ -651,7 +684,7 @@ export async function listPendingBookingActs(
 export async function stampAiActAccepted(db: SupabaseClient, accountId: string, actId: string, by: string, at: Date): Promise<boolean> {
   const { data, error } = await db.from("ai_acts")
     .update({ accepted_at: at.toISOString(), accepted_by: by })
-    .eq("account_id", accountId).eq("id", actId).is("accepted_at", null)
+    .eq("account_id", accountId).eq("id", actId).is("accepted_at", null).is("undone_at", null)
     .select("id");
   if (error) throw new Error(`stampAiActAccepted failed: ${error.message}`);
   return (data ?? []).length > 0;
@@ -1332,7 +1365,7 @@ Toasts for the failed-transfer row reuse the existing, generic `work.done.toast`
 7. Re-read `e2e` for a fresh push's head SHA; its migration-history check should now be green. Run `pnpm --filter web test:e2e` for Task 7's new spec specifically (one gate at a time, per the top-level working rules), on the per-run fixture account.
 8. Merge. Then Task 8.
 
-**Pre-checks (read-only, before each apply):** the definer count (39, unchanged) and the client-write digest (Task 1 Step 1's query). `select to_regclass('public.calls')`/`'public.ai_acts'` both non-null already. **Post-checks:** the same two values, unchanged. `select column_name from information_schema.columns where table_name = 'calls' and column_name = 'transfer_followup_at'` returns one row. `select conname from pg_constraint where conrelid = 'public.ai_acts'::regclass and conname in ('ai_acts_accepted_pair','ai_acts_not_both_accepted_and_undone')` returns both. `has_table_privilege('authenticated','public.calls','UPDATE')` and the same for `public.ai_acts` are both `false`. Any other answer: stop before the next project and report.
+**Pre-checks (read-only, before each apply):** the definer count (39, unchanged) and the client-write digest (Task 1 Step 1's query). `select to_regclass('public.calls')`/`'public.ai_acts'` both non-null already. **Post-checks:** the same two values, unchanged. `select column_name from information_schema.columns where table_name = 'calls' and column_name = 'transfer_followup_at'` returns one row. `select conname from pg_constraint where conrelid = 'public.ai_acts'::regclass and conname = 'ai_acts_accepted_pair'` returns one row (and no `ai_acts_not_both_accepted_and_undone` exists). `has_table_privilege('authenticated','public.calls','UPDATE')` and the same for `public.ai_acts` are both `false`. Any other answer: stop before the next project and report.
 
 ## Not in this plan
 
