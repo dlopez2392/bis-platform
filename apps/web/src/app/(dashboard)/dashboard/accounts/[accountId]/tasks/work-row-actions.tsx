@@ -40,7 +40,9 @@ import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
 import type { Locale } from "@/lib/i18n/locale";
-import type { ActionResult, DismissResult, WorkActionErrorKey } from "./actions";
+import type {
+  ActionResult, DismissResult, WorkActionErrorKey, FailedTransferDoneResult, AcceptBookingActResult,
+} from "./actions";
 
 /**
  * A failed action's toast, in the reader's language (F-085 follow-ups): a failure this screen
@@ -66,6 +68,10 @@ export function WorkRowActions({
   reopenWorkTask,
   dismissToTask,
   closeOutBooking,
+  completeFailedTransfer,
+  reopenFailedTransfer,
+  acceptBookingAct,
+  unacceptBookingAct,
 }: {
   source: WorkSource;
   /** The row's own database id with the `"${source}:"` prefix stripped —
@@ -81,6 +87,10 @@ export function WorkRowActions({
   reopenWorkTask: (taskId: string) => Promise<ActionResult>;
   dismissToTask: (row: { source: WorkSource; contactId: string | null; title: string }) => Promise<DismissResult>;
   closeOutBooking: (bookingId: string, status: "completed" | "no_show") => Promise<ActionResult>;
+  completeFailedTransfer: (callId: string) => Promise<FailedTransferDoneResult>;
+  reopenFailedTransfer: (callId: string, at: string) => Promise<ActionResult>;
+  acceptBookingAct: (actId: string) => Promise<AcceptBookingActResult>;
+  unacceptBookingAct: (actId: string, at: string) => Promise<ActionResult>;
 }) {
   const [pending, startTransition] = useTransition();
   // F-085 follow-up (Task B): the To do page now wraps this client leaf in a
@@ -127,6 +137,38 @@ export function WorkRowActions({
     });
   }
 
+  function runFailedTransferDone() {
+    startTransition(async () => {
+      const result = await completeFailedTransfer(rawId);
+      if (!result.ok) { toast.error(failureText(result, locale)); return; }
+      toast.success(t(m, "work.done.toast", locale), {
+        action: {
+          label: t(m, "common.undo", locale),
+          onClick: () => startTransition(async () => {
+            const r = await reopenFailedTransfer(rawId, result.at);
+            if (!r.ok) toast.error(failureText(r, locale));
+          }),
+        },
+      });
+    });
+  }
+
+  function runAcceptBookingAct() {
+    startTransition(async () => {
+      const result = await acceptBookingAct(rawId);
+      if (!result.ok) { toast.error(failureText(result, locale)); return; }
+      toast.success(t(m, "work.act.accept.toast", locale), {
+        action: {
+          label: t(m, "common.undo", locale),
+          onClick: () => startTransition(async () => {
+            const r = await unacceptBookingAct(rawId, result.at);
+            if (!r.ok) toast.error(failureText(r, locale));
+          }),
+        },
+      });
+    });
+  }
+
   function runBooking(status: "completed" | "no_show") {
     startTransition(async () => {
       const result = await closeOutBooking(rawId, status);
@@ -157,18 +199,44 @@ export function WorkRowActions({
     );
   }
 
-  // source === "booking" — terminal, no undo (see file doc above). Ghost for
-  // Completed (the everything-but-one-primary default); `destructive` for
-  // No-show is the deliberate exception that makes the two visually
-  // distinguishable, not an accident of copy-paste.
-  return (
-    <div className="flex shrink-0 gap-2">
-      <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("completed")}>
-        {t(m, "work.booking.completed", locale)}
+  if (source === "failed_transfer") {
+    return (
+      <Button data-work-row-done type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runFailedTransferDone}>
+        {t(m, "work.failedTransfer.done", locale)}
       </Button>
-      <Button type="button" variant="destructive" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("no_show")}>
-        {t(m, "work.booking.noShow", locale)}
+    );
+  }
+
+  if (source === "booking_act") {
+    return (
+      <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runAcceptBookingAct}>
+        {t(m, "work.act.accept", locale)}
       </Button>
-    </div>
-  );
+    );
+  }
+
+  if (source === "booking") {
+    // Terminal, no undo (see file doc above). Ghost for Completed (the
+    // everything-but-one-primary default); `destructive` for No-show is the
+    // deliberate exception that makes the two visually distinguishable, not
+    // an accident of copy-paste.
+    return (
+      <div className="flex shrink-0 gap-2">
+        <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("completed")}>
+          {t(m, "work.booking.completed", locale)}
+        </Button>
+        <Button type="button" variant="destructive" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("no_show")}>
+          {t(m, "work.booking.noShow", locale)}
+        </Button>
+      </div>
+    );
+  }
+
+  // Exhaustiveness guard (F-077 part 1, hand-off c; review M5 found this file falling through to the
+  // booking buttons above for any source it did not name). Every `WorkSource` literal gets its own
+  // explicit branch and returns above; if a future member is added to that union with no branch here,
+  // `source` below is not narrowed to `never` and this assignment fails to COMPILE, rather than a new
+  // source silently drawing the booking buttons.
+  const exhaustive: never = source;
+  throw new Error(`WorkRowActions: no action branch for work source "${String(exhaustive)}"`);
 }

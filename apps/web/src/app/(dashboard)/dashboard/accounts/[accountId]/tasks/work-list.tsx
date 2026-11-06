@@ -23,8 +23,10 @@ import { cn } from "@/lib/utils";
 import {
   completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking,
   confirmStopFromTask, notAStopFromTask, undoHoldDecisionFromTask,
-  type ActionResult, type DismissResult,
+  completeFailedTransfer, reopenFailedTransfer, acceptBookingAct, unacceptBookingAct,
+  type ActionResult, type DismissResult, type FailedTransferDoneResult, type AcceptBookingActResult,
 } from "./actions";
+import { describeAct } from "@/lib/ai-acts/kinds";
 import { WorkRowActions } from "./work-row-actions";
 import { ConsentHoldActions } from "./consent-hold-actions";
 import type { TextsActionResult } from "@/lib/consent/staff-actions";
@@ -49,6 +51,10 @@ type WorkActionProps = {
   confirmStopFromTask: (taskId: string) => Promise<TextsActionResult>;
   notAStopFromTask: (taskId: string) => Promise<TextsActionResult>;
   undoHoldDecisionFromTask: (contactId: string, eventId: string, reopenTaskIds: string[]) => Promise<TextsActionResult>;
+  completeFailedTransfer: (callId: string) => Promise<FailedTransferDoneResult>;
+  reopenFailedTransfer: (callId: string, at: string) => Promise<ActionResult>;
+  acceptBookingAct: (actId: string) => Promise<AcceptBookingActResult>;
+  unacceptBookingAct: (actId: string, at: string) => Promise<ActionResult>;
 };
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
@@ -99,9 +105,15 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
  * conversation case: a contact's own name is untrusted input that could
  * contain a `$&`/`$1` pattern `String.replace` would treat specially.
  */
-function primaryLabel(row: WorkRow, contactName: string, tr: Tr): string {
+function primaryLabel(row: WorkRow, contactName: string, tr: Tr, zone: string): string {
   if (row.source === "task") return row.title;
   if (row.source === "conversation") return tr.text("work.conversation", { name: contactName });
+  if (row.source === "failed_transfer") {
+    return row.callbackNumber
+      ? tr.text("work.failedTransfer", { number: row.callbackNumber })
+      : tr.text("work.failedTransfer.bare");
+  }
+  if (row.source === "booking_act") return describeAct(row.bookingAct!, { tr, zone }).verb;
   return tr.text("work.booking");
 }
 
@@ -217,7 +229,7 @@ function WorkRowItem({
   tr: Tr;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
-  const primary = primaryLabel(row, contactName, tr);
+  const primary = primaryLabel(row, contactName, tr, timezone);
   const secondary = secondaryLine(row, contactName);
   // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
   // the receptionist's, and says so beside the person it is about, as its
@@ -338,6 +350,10 @@ function WorkRowItem({
               reopenWorkTask={actions.reopenWorkTask}
               dismissToTask={actions.dismissToTask}
               closeOutBooking={actions.closeOutBooking}
+              completeFailedTransfer={actions.completeFailedTransfer}
+              reopenFailedTransfer={actions.reopenFailedTransfer}
+              acceptBookingAct={actions.acceptBookingAct}
+              unacceptBookingAct={actions.unacceptBookingAct}
             />
           )}
         </div>
@@ -442,6 +458,10 @@ export function WorkList({
     confirmStopFromTask: confirmStopFromTask.bind(null, accountId),
     notAStopFromTask: notAStopFromTask.bind(null, accountId),
     undoHoldDecisionFromTask: undoHoldDecisionFromTask.bind(null, accountId),
+    completeFailedTransfer: completeFailedTransfer.bind(null, accountId),
+    reopenFailedTransfer: reopenFailedTransfer.bind(null, accountId),
+    acceptBookingAct: acceptBookingAct.bind(null, accountId),
+    unacceptBookingAct: unacceptBookingAct.bind(null, accountId),
   };
 
   return (
