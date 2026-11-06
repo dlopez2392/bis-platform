@@ -500,3 +500,13 @@ following `work-list.callback.test.ts`'s own pattern):
    reads oddly beside a sentence phrased as an instruction ("Call back at...") rather than a statement
    of a thing to finish. This is a small copy call, not a structural one; flagged only because it is
    the one place this spec invents new UI vocabulary rather than reusing an existing word.
+
+## 8. Owner rulings (2026-11-06, all as recommended) — BINDING
+
+1. **Booking changes only.** The queue shows `control: "booking"` acts. Contact-created and field-filled acts stay on the timeline until part 2.
+2. **A derived To do row only** for a failed transfer: no stored task and no alert. Those are F-035's, later.
+3. **Accept's own reversal reuses `common.undo`** (orchestrator's call; the two Undos never share a screen).
+4. **No "Not now"** on the two new rows in this part. Snoozing needs part 2's dismissals table.
+5. **The failed-transfer button says "Called back"** (Spanish per the copy table, checked against the glossary), not the generic "Done".
+
+**Migration number:** 0114, not 0113. F-115's 0113 is reserved and lands on or after 2026-11-11. Migrations reach bis-ci in number order (`db:push:ci` refuses `--include-all`), so this part's PR is built now and its migration is applied only after 0113 is on production, the same hold as F-115 PR E. Re-check the next free number on `origin/main` immediately before the PR opens.
