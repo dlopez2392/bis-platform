@@ -16,7 +16,7 @@
 --     for undone_by), nullable, no default: when and by whom the act was accepted on the queue.
 --   ai_acts_accepted_pair: (accepted_at is null) = (accepted_by is null).
 --   Deliberately NO "not both accepted and undone" CHECK (plan review C1, 2026-11-06): undo_ai_booking_act's
---     final write (0091, section 4: update ... set undone_at = p_now, undone_by = p_by) never clears
+--     final write (0091, as re-created by 0107: update ... set undone_at = p_now, undone_by = p_by) never clears
 --     accepted_at, so such a CHECK would make the record's Undo raise 23514 on any act accepted on the queue.
 --     Accepting an act already undone is refused by the app's compare-and-swap instead
 --     (stampAiActAccepted: undone_at is null).
@@ -37,8 +37,13 @@
 -- SEARCH PATHS. This file creates and alters no function.
 --
 -- LOCKS AND COST. The file runs as one transaction; lock_timeout 5s below bounds only the WAIT to take each
--- lock, not the work done under it. Each alter table takes ACCESS EXCLUSIVE on its table until the file
--- commits: calls first, then ai_acts.
+-- lock, not the work done under it. Section 0 takes ACCESS EXCLUSIVE on ai_acts FIRST, then calls, in one
+-- lock table statement, and holds both until the file commits: every read and write of either table waits
+-- for the file, not just for one catalog change.
+--   Why that order: the live writers hold ai_acts and then need calls (undo_ai_booking_act deletes a booking,
+--     whose calls.booking_id FK sets null; merge_contacts; insertAiActs' FK check on ai_acts_call_fkey). Taking
+--     calls first deadlocked such a writer on the PG 17.6 replica (40P01, and the victim can be a live call's
+--     insertAiActs, whose act is then lost). Taking ai_acts first, the file waits behind that writer instead.
 --   An added column with no default and no NOT NULL is a catalog change only: no table rewrite, no scan.
 --   ai_acts_accepted_pair is added valid, so it scans ai_acts once under that lock; every existing row has both
 --     new columns null and passes.
@@ -63,6 +68,7 @@ do $$
 begin
   perform pg_catalog.set_config('lock_timeout', '5s', true);
 end $$;
+lock table public.ai_acts, public.calls in access exclusive mode;
 
 -- 1. calls: when a person marked a failed transfer handled (called the caller back) from the To do queue.
 alter table public.calls add column transfer_followup_at timestamptz;
