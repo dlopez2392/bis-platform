@@ -40,7 +40,11 @@ concurrency:
 
 jobs:
   capture:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: ubuntu-latest has been moving to Ubuntu 26,
+    # whose mirror stalled `playwright install --with-deps` on font packages
+    # past any reasonable timeout (BIS-Website #79, 2026-10-27). This job has
+    # no retry, and a failed capture costs a re-seed and a re-run.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # The CI project, exactly as ci-project-setup.yml names it: literals for
     # what is not secret (ci-workflow.test.ts pins that the two agree), the CI_*
