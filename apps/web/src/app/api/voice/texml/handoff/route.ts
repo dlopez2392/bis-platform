@@ -360,10 +360,23 @@ async function decide(
   //    own-number loop guard would then silently not run for precisely the
   //    accounts this feature is first tried on. `incoming/route.ts:799-813`
   //    makes the same choice for the same reason.
-  const [transferPhone, ownedRows] = await Promise.all([
-    getTransferPhone(db, accountId),
-    listPhoneNumbersForAccount(db, accountId),
-  ]);
+  //
+  //    R5 (fix round): a THROW here (not just the ordinary "no target" refusal below) means the
+  //    caller still asked and is still never dialled, so it must still be stamped refused -- without
+  //    this wrapper a thrown read skipped the stamp entirely, reaching only the route's own outer
+  //    catch. Rethrown unchanged: this wrapper only ADDS the stamp, it does not change what the
+  //    caller ultimately hears (the same outer catch still answers the same <Hangup/>).
+  let targets: [string | null, Awaited<ReturnType<typeof listPhoneNumbersForAccount>>];
+  try {
+    targets = await Promise.all([
+      getTransferPhone(db, accountId),
+      listPhoneNumbersForAccount(db, accountId),
+    ]);
+  } catch (e) {
+    recordTransferFailed(db, accountId, call.id, "refused", new Date(now), "handoff");
+    throw e;
+  }
+  const [transferPhone, ownedRows] = targets;
   const usable = ownedRows.filter((n) => n.status === "testing" || n.status === "live");
   const owned = usable.map((n) => n.e164);
   const target = resolveHandoffTarget(transferPhone, owned);

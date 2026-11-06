@@ -614,6 +614,41 @@ describe("voice texml handoff route — records a transfer it refused (F-077)", 
     expectRefused();
   });
 
+  // R5 (fix round): once the call has resolved WITH a fresh handoff_requested_at, a THROW from either
+  // of the two reads below it (not just an ordinary "no target" refusal) must still stamp the call
+  // refused before the outer catch turns it into the same <Hangup/>. Before this fix neither read
+  // was wrapped, so a thrown error skipped the stamp entirely and reached the outer catch silent.
+  it("getTransferPhone THROWING still stamps the call refused, then hangs up the same way (R5; mutation: drop the stamp on this path -> FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getTransferPhoneMock.mockRejectedValue(new Error("db down"));
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+    errSpy.mockRestore();
+  });
+
+  it("listPhoneNumbersForAccount THROWING still stamps the call refused, then hangs up the same way (R5; mutation: drop the stamp on this path -> FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listPhoneNumbersForAccountMock.mockRejectedValue(new Error("db down"));
+    expect(await post("tok_abc")).toBe(HANGUP_XML);
+    expectRefused();
+    errSpy.mockRestore();
+  });
+
+  it("the throw still propagates to the outer catch (the stamp does not swallow it): the response is the SAME <Hangup/> the outer catch always returns (R5)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getTransferPhoneMock.mockRejectedValue(new Error("db down"));
+    const res = await POST(req("tok_abc"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(HANGUP_XML);
+    errSpy.mockRestore();
+  });
+
   it("a call that is dialled records no failure (mutation: stamp on the dial → FAILS)", async () => {
     const xml = await post("tok_abc");
     expect(xml).toContain("<Dial");
