@@ -222,6 +222,16 @@ they re-resolve against the accent each element inherits.
   column. Never promise a number the screen cannot know: which rows are new is
   only knowable against the stored contacts, so the preview counts rows that
   are ready and the add/update split is reported afterwards, from real results.
+  **Amended 2026-11-05 (F-150 part 1):** the same route takes a phone's
+  contacts file (vCard, `.vcf`), recognised by its extension or by a first line
+  of `BEGIN:VCARD`, never by its MIME type (phones send odd ones). It follows
+  every rule above: parsed in the browser, never uploaded, the same three
+  steps, the same server re-validation. The cards arrive with their columns
+  already matched, and the owner can still re-point any of them. A phone's
+  company field starts unmatched, because on a phone it is often the
+  customer's employer, not their business. A name is decoded in the charset
+  the file declares, so "Peña" from an old phone stays "Peña". On this path
+  the screen says "contacts", not "rows".
 - **The weekly report:** every Monday morning, in the account's OWN zone, each
   client with recipients gets four numbers — calls answered, leads captured,
   bookings, website visitors — each with a week-over-week delta; the agency

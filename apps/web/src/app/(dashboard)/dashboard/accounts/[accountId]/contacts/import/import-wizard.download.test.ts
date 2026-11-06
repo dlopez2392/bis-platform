@@ -89,6 +89,41 @@ describe("the downloaded skipped-rows CSV reads the reader's locale (review fix 
       const body = String(blobParts[0]![0]);
       expect(body).toContain("sin correo ni teléfono");
       expect(body).not.toContain("no email or phone");
+      // Fix round M-4: the CSV download's own shape stays "line,reason" —
+      // unchanged, no name column — since this row's source is "csv" (the
+      // default, index 4 left un-overridden above).
+      expect(body).toContain("line,reason");
+      expect(body).not.toContain("line,name,reason");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Fix round M-4: a vCard source adds the card's own name, read back by
+  // line number, so "no email or phone" points at someone.
+  it("a vCard source's download adds a name column, read back by line number (mutation: drop the source === \"vcard\" branch in downloadSkipped -> FAILS, the CSV shape 'line,reason' comes back instead)", () => {
+    localeMock.value = "en";
+    overrides = {
+      0: { name: "map" },
+      1: ["Name"],
+      2: [{ line: 1, values: { Name: "" } }],
+      3: { Name: "first_name" },
+      4: "vcard",
+      5: ["Ana Ruiz"],
+    };
+    const blobParts: unknown[][] = [];
+    class FakeBlob { constructor(parts: unknown[]) { blobParts.push(parts); } }
+    const anchor = { href: "", download: "", click: vi.fn() };
+    vi.stubGlobal("Blob", FakeBlob as unknown as typeof Blob);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:fake"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("document", { createElement: vi.fn(() => anchor) });
+    try {
+      const tree = render();
+      const downloadBtn = find(tree, (el) => el.type === "button" && el.props.type === "button" && typeof el.props.onClick === "function");
+      (downloadBtn!.props.onClick as () => void)();
+      const body = String(blobParts[0]![0]);
+      expect(body).toContain("line,name,reason");
+      expect(body).toContain('1,"Ana Ruiz"');
     } finally {
       vi.unstubAllGlobals();
     }

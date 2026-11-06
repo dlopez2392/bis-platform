@@ -10,7 +10,12 @@ const action = readFileSync(path.join(here, "actions.ts"), "utf8");
 describe("import wizard", () => {
   it("parses in the browser — the file is never sent whole", () => {
     expect(src).toContain("papaparse");
-    expect(src).not.toMatch(/FormData|file\.arrayBuffer\(\)/);
+    // FormData is the real upload tell. file.arrayBuffer() is a LOCAL
+    // browser-side byte read (F-150 part 1 fix round I-1, for a vCard's own
+    // charset handling) — never a network call, so its presence here does
+    // not mean the file left the browser.
+    expect(src).not.toContain("FormData");
+    expect(src).not.toMatch(/fetch\(.*file/i);
   });
 
   it("commits in bounded batches, not one request", () => {
