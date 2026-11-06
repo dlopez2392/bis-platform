@@ -519,3 +519,11 @@ following `work-list.callback.test.ts`'s own pattern):
 3. **No grant is inherited.** 0020 revokes every write on `calls` from `authenticated`, and `ai_acts` grants it SELECT only. All four writes therefore go through `serviceDb()` behind `callerCanSee` (plan correction 1).
 4. **0114 locks `ai_acts` before `calls`.** That is the order live writers take them; the reverse order deadlocked in the T1 review. Both locks are ACCESS EXCLUSIVE until commit.
 5. **Technicians.** `calls_technician_scope` (0068) has no carve-out for a NULL `contact_id`, so a Technician sees no failed transfer from an unidentified caller (plan correction 3).
+
+## 10. Owner rulings, round 2 (2026-11-06, all as recommended) — BINDING, after the T2/T3 review
+
+The review found that the derived predicate (`outcome = 'abandoned'` and `handoff_requested_at` set) also matches every SUCCESSFUL transfer while the caller is still talking to the owner. Every call row starts as `abandoned` (0019:53), and the handoff-result route writes `transferred` only when the human conversation ends. If that write is refused or fails, the row stays for good.
+
+1. **Record the failure when it happens.** 0114 adds `calls.transfer_failed_at timestamptz` and `calls.transfer_failed_reason text` (a closed set, for example `no_answer` and `refused`, CHECKed). The handoff-result route stamps them in its "reached nobody" branch and in its refusal branches (`apps/web/src/app/api/voice/texml/handoff-result/route.ts`). The queue's predicate becomes `transfer_failed_at is not null and transfer_followup_at is null`. A call still being handled never appears, and the 8 pre-release production rows never appear either, because none of them has a recorded failure.
+2. **A row clears itself when the same caller is later served.** Hide a failed transfer when a LATER call from the same `caller_e164`, in the same account, ended `transferred`, `booked`, `lead` or `message`. This is decided at read time, and nothing is written.
+3. **Record who pressed "Called back".** 0114 adds `calls.transfer_followup_by text`, with a pair CHECK (`(transfer_followup_at is null) = (transfer_followup_by is null)`). Undo of "Called back" requires the same person and the exact instant, matching Accept.
