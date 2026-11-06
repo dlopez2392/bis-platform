@@ -33,6 +33,7 @@ import { AccountSwitcher, type AccountOption } from "@/components/account-switch
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
+import { surfaceById } from "@/lib/surfaces/manifest";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import { useLocale } from "@/components/locale-provider";
 import { t } from "@/lib/i18n/t";
@@ -213,12 +214,21 @@ export function AppSidebar({
   // instead (DESIGN.md rule 10's pinned footer cluster), the same self-
   // service entry point the palette's nav:team registers. A client Staff,
   // like the old unconditional client case, gets no footer item at all.
+  //
+  // F-087 part 1 (owner ruling Q1): these three links now read their own
+  // href/labelKey from the SAME manifest entries the palette registers
+  // (nav:settings, nav:team, and the agency's own top-level nav:/dashboard)
+  // instead of each being written a third time, independently of both
+  // buildNavGroups and the palette's own extra pushes.
+  const settingsEntry = surfaceById("nav:settings");
+  const teamEntry = surfaceById("nav:team");
+  const topLevelEntry = surfaceById("nav:/dashboard");
   const footer: NavItem | null = isAgency
     ? (base
-        ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }
-        : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard })
+        ? { href: settingsEntry.route(base), label: t(m, settingsEntry.labelKey, locale), icon: Settings }
+        : { href: topLevelEntry.route(base), label: t(m, topLevelEntry.labelKey, locale), icon: LayoutDashboard })
     : (base && isOwner
-        ? { href: `${base}/team`, label: t(m, "nav.team", locale), icon: Users }
+        ? { href: teamEntry.route(base), label: t(m, teamEntry.labelKey, locale), icon: Users }
         : null);
 
   // Only shown inside an account, and only for the agency — a client has
