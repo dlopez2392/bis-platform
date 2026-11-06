@@ -6,6 +6,7 @@ import { withAssigneeOn } from "./contacts";
 import type { DocumentCategory } from "./document-rules";
 import type { ClosureKind } from "./business-status";
 import type { AiAct } from "./ai-act-rules";
+import { listPendingBookingActs } from "./ai-acts";
 
 export type WorkSource = "task" | "conversation" | "booking" | "failed_transfer" | "booking_act";
 
@@ -212,15 +213,16 @@ async function failedTransfers(db: SupabaseClient, accountId: string, assignee?:
 export async function listAccountWork(
   db: SupabaseClient, accountId: string, opts: { assignee?: AssigneeFilter } = {},
 ): Promise<WorkRow[]> {
-  const [tasks, convos, bookings, transfers] = await Promise.all([
+  const [tasks, convos, bookings, transfers, bookingActs] = await Promise.all([
     openTasks(db, accountId, opts.assignee),
     unansweredConversations(db, accountId, opts.assignee),
     staleBookings(db, accountId, opts.assignee),
     failedTransfers(db, accountId, opts.assignee),
+    listPendingBookingActs(db, accountId, opts.assignee),
   ]);
   const suppressed = new Set(tasks.map((t) => t.contactId).filter(Boolean) as string[]);
   const keep = (r: WorkRow) => !r.contactId || !suppressed.has(r.contactId);
-  return [...tasks, ...convos.filter(keep), ...bookings, ...transfers];
+  return [...tasks, ...convos.filter(keep), ...bookings, ...transfers, ...bookingActs];
 }
 
 /** `listAgencyWork`'s own row shape: every `WorkRow` field plus the three the
