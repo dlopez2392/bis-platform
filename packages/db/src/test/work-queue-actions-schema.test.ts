@@ -4,16 +4,20 @@ import { randomInt } from "node:crypto";
 import { withRollback } from "./db";
 
 /**
- * 0114 (F-077 part 1, plan Task 1): the To do queue's two new inline actions each need one narrow stamp.
- *  - calls.transfer_followup_at: a person marked a failed transfer handled ("Called back").
+ * 0114 (F-077 part 1, plan Task 1; spec section 10, round-2 rulings): the To do queue's two new inline actions.
+ *  - calls.transfer_failed_at / transfer_failed_reason ('no_answer' | 'refused'): the handoff routes record the
+ *    failure when it happens (calls_transfer_failed_pair, calls_transfer_failed_reason_check), so a call still
+ *    being handled never reads as failed; calls_transfer_failed_open indexes the queue's read.
+ *  - calls.transfer_followup_at / transfer_followup_by: who marked it handled ("Called back"), and when
+ *    (calls_transfer_followup_pair).
  *  - ai_acts.accepted_at / accepted_by: a person marked Sofia's live booking change seen ("Accept"),
  *    held together by ai_acts_accepted_pair.
  * No grant, no policy, no function and no trigger changes. app.ai_acts_act_is_fixed() (0091) forbids eleven NAMED
  * columns and nothing else, so the new columns move without any edit to it.
  *
- * RED BEFORE 0114, legitimately: every case that names a new column or the new constraint (both column pins,
- * the service-role stamp, the column-level privilege pin, the pair CHECK's three cases, the accepted-then-undone
- * case, the trigger case). GREEN BEFORE 0114 too, and said so: the table-level privilege pin (0020 and 0091
+ * RED BEFORE 0114, legitimately: every case that names a new column, constraint or index (every case here but
+ * one). Red against 0114 as first committed (d2b9d402 to 4157d096), legitimately: every calls case and the
+ * column-level privilege pin, because the round-2 columns, CHECKs and index are new. GREEN BEFORE 0114 too, and said so: the table-level privilege pin (0020 and 0091
  * already give anon/authenticated no write on either table; it is a non-regression pin for "0114 grants
  * nothing").
  *
@@ -77,24 +81,78 @@ async function seedAct(c: Client) {
 
 const WRITES = ["INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"] as const;
 
-describe("0114: calls.transfer_followup_at", () => {
-  it("exists as a nullable timestamptz with no default (mutation: add a default -> FAILS)", () =>
+const CALL_COLS = [
+  { column_name: "transfer_failed_at", data_type: "timestamp with time zone" },
+  { column_name: "transfer_failed_reason", data_type: "text" },
+  { column_name: "transfer_followup_at", data_type: "timestamp with time zone" },
+  { column_name: "transfer_followup_by", data_type: "text" },
+];
+const T = "2026-11-06T12:00:00Z";
+
+describe("0114: calls records a failed transfer and who called back (round-2 rulings)", () => {
+  it("the four columns exist, nullable, with no default (mutation: add a default to any -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
-        `select data_type, is_nullable, column_default from information_schema.columns
-          where table_schema = 'public' and table_name = 'calls' and column_name = 'transfer_followup_at'`);
-      expect(rows).toEqual([{ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null }]);
+        `select column_name, data_type, is_nullable, column_default from information_schema.columns
+          where table_schema = 'public' and table_name = 'calls' and column_name = any($1) order by column_name`,
+        [CALL_COLS.map((x) => x.column_name)]);
+      expect(rows).toEqual(CALL_COLS.map((x) => ({ ...x, is_nullable: "YES", column_default: null })));
     }));
 
-  it("is stamped and cleared by service_role, as setTransferFollowedUp/clearTransferFollowup will write it", () =>
+  it("the three CHECKs are exactly these (mutation: add a third reason to the set -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ conname: string; d: string }>(
+        `select conname, pg_get_constraintdef(oid) as d from pg_constraint
+          where conrelid = 'public.calls'::regclass
+            and conname in ('calls_transfer_failed_pair', 'calls_transfer_failed_reason_check', 'calls_transfer_followup_pair')
+          order by conname`);
+      expect(rows).toEqual([
+        { conname: "calls_transfer_failed_pair", d: "CHECK (((transfer_failed_at IS NULL) = (transfer_failed_reason IS NULL)))" },
+        { conname: "calls_transfer_failed_reason_check", d: "CHECK ((transfer_failed_reason = ANY (ARRAY['no_answer'::text, 'refused'::text])))" },
+        { conname: "calls_transfer_followup_pair", d: "CHECK (((transfer_followup_at IS NULL) = (transfer_followup_by IS NULL)))" },
+      ]);
+    }));
+
+  it.each([
+    ["transfer_failed_at without a reason", "calls_transfer_failed_pair", `transfer_failed_at = '${T}'`],
+    ["a reason without transfer_failed_at", "calls_transfer_failed_pair", "transfer_failed_reason = 'no_answer'"],
+    ["a reason outside the set", "calls_transfer_failed_reason_check", `transfer_failed_at = '${T}', transfer_failed_reason = 'busy'`],
+    ["transfer_followup_at without who", "calls_transfer_followup_pair", `transfer_followup_at = '${T}'`],
+    ["who without transfer_followup_at", "calls_transfer_followup_pair", "transfer_followup_by = 'u1'"],
+  ])("refuses %s, by %s (mutation: drop that constraint -> the update lands -> FAILS)", (_t, name, set) =>
+    withRollback(async (c) => {
+      const s = await seedAct(c);
+      await svc(c, () => expect(attempt(c, `update calls set ${set} where id = $1`, [s.call]))
+        .rejects.toMatchObject({ code: "23514", constraint: name }));
+    }));
+
+  it("the queue's partial index is (account_id, transfer_failed_at) over failed transfers not yet followed up (mutation: drop it, or drop the followup clause -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ d: string }>(
+        "select indexdef as d from pg_indexes where schemaname = 'public' and tablename = 'calls' and indexname = 'calls_transfer_failed_open'");
+      expect(rows.map((r) => r.d)).toEqual([
+        "CREATE INDEX calls_transfer_failed_open ON public.calls USING btree (account_id, transfer_failed_at) WHERE ((transfer_failed_at IS NOT NULL) AND (transfer_followup_at IS NULL))",
+      ]);
+    }));
+
+  it("service_role stamps all four (the route's failure, then Called back with who) and clears the follow-up, compare-and-swap on the instant and the person (mutation: revoke update on calls from service_role -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seedAct(c);
       await svc(c, async () => {
-        const r = await attempt(c, "update calls set transfer_followup_at = $2 where id = $1 and transfer_followup_at is null", [s.call, NOW.toISOString()]);
-        expect(r.rowCount).toBe(1);
-        const back = await attempt(c, "update calls set transfer_followup_at = null where id = $1 and transfer_followup_at = $2", [s.call, NOW.toISOString()]);
+        const failed = await attempt(c,
+          "update calls set transfer_failed_at = $2, transfer_failed_reason = 'refused' where id = $1 and transfer_failed_at is null", [s.call, T]);
+        expect(failed.rowCount).toBe(1);
+        const done = await attempt(c,
+          "update calls set transfer_followup_at = $2, transfer_followup_by = 'u_caller' where id = $1 and transfer_followup_at is null", [s.call, NOW.toISOString()]);
+        expect(done.rowCount).toBe(1);
+        const back = await attempt(c,
+          "update calls set transfer_followup_at = null, transfer_followup_by = null where id = $1 and transfer_followup_at = $2 and transfer_followup_by = 'u_caller'",
+          [s.call, NOW.toISOString()]);
         expect(back.rowCount).toBe(1);
       });
+      const { rows: [row] } = await c.query(
+        "select transfer_failed_at, transfer_failed_reason, transfer_followup_at, transfer_followup_by from calls where id = $1", [s.call]);
+      expect(row).toEqual({ transfer_failed_at: new Date(T), transfer_failed_reason: "refused", transfer_followup_at: null, transfer_followup_by: null });
     }));
 });
 
@@ -110,12 +168,14 @@ describe("0114 grants nothing to a client role", () => {
       expect(rows).toEqual([]);
     }));
 
-  it("anon and authenticated hold no column-level write on the three new columns (mutation: grant update (accepted_at, accepted_by) on public.ai_acts to authenticated -> FAILS; has_table_privilege alone does not see a column grant)", () =>
+  it("anon and authenticated hold no column-level write on the six new columns (mutation: grant update (accepted_at, accepted_by) on public.ai_acts, or update (transfer_followup_by) on public.calls, to authenticated -> FAILS; has_table_privilege alone does not see a column grant)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ x: string }>(
         `select r || ' ' || t || '.' || col || ' ' || p as x
            from (values ('anon'), ('authenticated')) v(r)
-          cross join (values ('public.calls', 'transfer_followup_at'), ('public.ai_acts', 'accepted_at'), ('public.ai_acts', 'accepted_by')) tc(t, col)
+          cross join (values ('public.calls', 'transfer_failed_at'), ('public.calls', 'transfer_failed_reason'),
+                             ('public.calls', 'transfer_followup_at'), ('public.calls', 'transfer_followup_by'),
+                             ('public.ai_acts', 'accepted_at'), ('public.ai_acts', 'accepted_by')) tc(t, col)
           cross join (values ('INSERT'), ('UPDATE'), ('REFERENCES')) w(p)
           where has_column_privilege(r, t, col, p)`);
       expect(rows).toEqual([]);
