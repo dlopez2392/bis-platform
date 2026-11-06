@@ -424,6 +424,18 @@ describe("the two new sources on the agency screen (F-077 part 1)", () => {
     expect(html).toContain(describeAct(ACT, { tr: makeTr("en"), zone: "America/Chicago" }).verb);
   });
 
+  // D1 (design CRITICAL, DESIGN.md Provenance): same mark the per-account screen's booking-act row
+  // carries -- a live act is always Sofía's (author-mark.ts:78), never the bare verb alone.
+  it("carries the AI author mark (mutation: drop it -> FAILS)", () => {
+    const html = renderList(buckets({
+      waiting: [row({
+        id: "booking_act:act1", source: "booking_act", contactId: "ct1",
+        bookingAct: ACT,
+      })],
+    }), { ct1: "Pat Nunez" });
+    expect(html).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
+  });
+
   it("falls back to the bare sentence with no callback number (apostrophe decoded through renderedText -- rendered-text.ts's own documented trap)", () => {
     const html = renderList(buckets({
       waiting: [row({
@@ -431,5 +443,31 @@ describe("the two new sources on the agency screen (F-077 part 1)", () => {
       })],
     }));
     expect(renderedText(html)).toContain(m["work.failedTransfer.bare"]);
+  });
+});
+
+// R7 (fix round): the agency screen's own, separately-maintained secondaryLine gains the same branch
+// as the per-account screen's.
+describe("a rescheduled booking-act row shows its own detail line on the agency screen too (F-077 part 1, R7)", () => {
+  const RESCHEDULED: AiAct = {
+    id: "act2", accountId: "acct-a", actor: "voice", callId: "call1", chatId: null, contactId: "ct1",
+    kind: "booking_rescheduled",
+    target: { bookingId: "bk2", fromBookingId: "bk1" },
+    before: { startsAt: "2026-11-09T16:00:00Z", endsAt: "2026-11-09T17:00:00Z", version: "2026-11-05T15:00:00Z" },
+    after: { startsAt: "2026-11-11T16:00:00Z", endsAt: "2026-11-11T17:00:00Z" },
+    createdAt: "2026-11-06T15:00:00Z", undoneAt: null, undoneBy: null, undoNotified: false,
+  };
+
+  it("the detail (\"From {when}\") renders verbatim (mutation: drop the detail from the row -> FAILS)", () => {
+    const html = renderList(buckets({
+      waiting: [row({
+        id: "booking_act:act2", source: "booking_act", contactId: "ct1",
+        bookingAct: RESCHEDULED,
+      })],
+    }), { ct1: "Pat Nunez" });
+    const { verb, detail } = describeAct(RESCHEDULED, { tr: makeTr("en"), zone: "America/Chicago" });
+    expect(html).toContain(verb);
+    expect(detail).not.toBeNull();
+    expect(html).toContain(detail!);
   });
 });
