@@ -18,6 +18,7 @@ import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
+import { loggableError } from "@/lib/loggable-error";
 
 type Target =
   | { channel: "sms"; to: string }
@@ -162,7 +163,7 @@ export async function processReviewRequests(
           gate = await resolveSmsSender(ctx.db, row.accountId);
         } catch (e) {
           c.failed++;
-          console.error(`review request: sms gate read failed for account ${row.accountId}: ${String(e)}`);
+          console.error(`review request: sms gate read failed for account ${row.accountId}: ${loggableError(e)}`);
           continue;
         }
         smsGates.set(row.accountId, gate);
@@ -294,7 +295,7 @@ export async function processReviewRequests(
       c.sent++;
     } catch (e) {
       c.failed++;
-      console.error(`review request send failed for booking ${row.bookingId}: ${String(e)}`);
+      console.error(`review request send failed for booking ${row.bookingId}: ${loggableError(e)}`);
       continue;
     }
   }

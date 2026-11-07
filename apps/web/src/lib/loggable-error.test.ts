@@ -62,6 +62,31 @@ describe("loggableError: phone numbers", () => {
       .toMatch(/\.replace\(PHONE_LIKE, "\[phone\]"\)/);
   });
 
+  it("every SMS-sending path logs its errors through loggableError, never raw (mutation: put String(e) back in one console.error → FAILS)", () => {
+    // A Telnyx failure's message quotes the customer's number; these are the
+    // paths it reaches. A raw String(e) or e.message in their console.error
+    // lines would print that number.
+    const sendPaths = [
+      "./automations/passes/sms-reminder.ts",
+      "./automations/passes/appointment-confirm.ts",
+      "./automations/passes/no-show-nudge.ts",
+      "./automations/passes/quote-followup.ts",
+      "./automations/passes/referral-ask.ts",
+      "./automations/passes/review-request.ts",
+      "./automations/instant-reply.ts",
+      "./voice/textback.ts",
+    ];
+    for (const path of sendPaths) {
+      const src = readFileSync(resolve(__dirname, path), "utf8");
+      const errorLines = src.split(/\r?\n/).filter((l) => l.includes("console.error("));
+      expect(errorLines.length, `${path} has no console.error lines`).toBeGreaterThan(0);
+      for (const line of errorLines) {
+        expect(line, `${path}: ${line.trim()}`).not.toMatch(/\$\{String\(e\)\}|\$\{\(?e as Error\)?\.message\}|\$\{e\.message\}|\$\{error\}/);
+      }
+      expect(src, `${path} never calls loggableError`).toMatch(/loggableError\(e\)/);
+    }
+  });
+
   it("keeps the class, Stripe code and status prefix untouched", () => {
     const e = Object.assign(new Error("No such phone +15551234567"), { type: "StripeInvalidRequestError", code: "resource_missing", statusCode: 404 });
     expect(loggableError(e)).toBe("StripeInvalidRequestError code=resource_missing status=404: No such phone [phone]");

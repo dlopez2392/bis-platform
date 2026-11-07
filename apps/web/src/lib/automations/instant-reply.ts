@@ -8,6 +8,7 @@ import {
 } from "./caps";
 import { smsSenderFor } from "@/lib/consent/gate";
 import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext, pastRetryAge } from "./send-sms";
+import { loggableError } from "@/lib/loggable-error";
 import {
   holdOrSend, logSkipped, subjectOf, REASONS, type SmsHoldSubject, type LogSubject, type Releaser,
 } from "./hold-or-send";
@@ -233,12 +234,12 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
         await stampInstantReplySent(db, submissionId);
       } catch (e) {
         unstamped = true;
-        console.error(`${WHAT}: text sent but submission ${submissionId} not stamped: ${String(e)}`);
+        console.error(`${WHAT}: text sent but submission ${submissionId} not stamped: ${loggableError(e)}`);
       }
     });
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
-    console.error(`${WHAT} failed for submission ${submissionId}: ${error}`);
+    console.error(`${WHAT} failed for submission ${submissionId}: ${loggableError(e)}`);
     return { kind: "failed", error };
   }
   if (outcome === "held") return { kind: "held" };

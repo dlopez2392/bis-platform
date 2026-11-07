@@ -13,6 +13,7 @@ import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
+import { loggableError } from "@/lib/loggable-error";
 
 /**
  * The text reminder, ~2h before `starts_at` — the second step of the
@@ -100,7 +101,7 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
         gate = await resolveSmsSender(ctx.db, row.accountId);
       } catch (e) {
         c.failed++;
-        console.error(`text reminder: sms gate read failed for account ${row.accountId}: ${String(e)}`);
+        console.error(`text reminder: sms gate read failed for account ${row.accountId}: ${loggableError(e)}`);
         continue;
       }
       smsGates.set(row.accountId, gate);
@@ -155,7 +156,7 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
       c.sent++;
     } catch (e) {
       c.failed++;
-      console.error(`text reminder send failed for booking ${row.bookingId}: ${String(e)}`);
+      console.error(`text reminder send failed for booking ${row.bookingId}: ${loggableError(e)}`);
     }
   }
 
