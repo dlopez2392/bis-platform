@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { loggableError } from "./loggable-error";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /** The message part of a line, after the "<kind>: " prefix. */
 const msg = (text: string): string => loggableError(new Error(text)).slice("Error: ".length);
@@ -45,6 +47,19 @@ describe("loggableError: phone numbers", () => {
       "rate 1,234,567 per day",
     ];
     for (const line of keep) expect(msg(line)).toBe(line);
+  });
+
+  it("packages/db's contact-import copy of PHONE_LIKE stays byte-identical to this one", () => {
+    // packages/db cannot import from apps/web, so contact-import.ts keeps a copy.
+    const block = (path: string) => {
+      const src = readFileSync(resolve(__dirname, path), "utf8").replace(/\r\n/g, "\n");
+      const m = src.match(/const PHONE_LIKE = new RegExp\([\s\S]*?\n\);/);
+      expect(m, `${path} has no PHONE_LIKE block`).not.toBeNull();
+      return m![0];
+    };
+    expect(block("../../../../packages/db/src/contact-import.ts")).toBe(block("./loggable-error.ts"));
+    expect(readFileSync(resolve(__dirname, "../../../../packages/db/src/contact-import.ts"), "utf8"))
+      .toMatch(/\.replace\(PHONE_LIKE, "\[phone\]"\)/);
   });
 
   it("keeps the class, Stripe code and status prefix untouched", () => {

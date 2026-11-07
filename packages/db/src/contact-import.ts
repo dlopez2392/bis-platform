@@ -12,9 +12,20 @@ import type { RowAuthor } from "./provenance";
  *  underlying error is a plain Error with no `.code`, so the message itself
  *  is redacted instead of dropped. */
 const EMAIL_LIKE = /[^\s<>()[\]{},;:"'`]+@[^\s<>()[\]{},;:"'`]+/g;
+/** Anything shaped like a phone number, for the same reason. A verbatim copy
+ *  of apps/web's loggable-error.ts PHONE_LIKE (see that file for what it
+ *  matches and what it leaves alone); apps/web's loggable-error.test.ts
+ *  fails if the two copies drift apart. */
+const PHONE_LIKE = new RegExp(
+  [
+    String.raw`(?:\+|%2[bB])\d{8,15}(?!\d)`,
+    String.raw`(?<![\w+%-])(?<!\d\.)(?:\+?1[ .-]?)?(?:\(\d{3}\) ?\d{3}[ .-]|\d{3}([ .-])\d{3}\1)\d{4}(?![\w-])(?!\.\d)`,
+  ].join("|"),
+  "g",
+);
 function loggableMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
-  return raw.replace(EMAIL_LIKE, "[email]").slice(0, 300);
+  return raw.replace(EMAIL_LIKE, "[email]").replace(PHONE_LIKE, "[phone]").slice(0, 300);
 }
 
 /**
