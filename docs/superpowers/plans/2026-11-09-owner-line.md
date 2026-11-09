@@ -5534,6 +5534,10 @@ export function ownerLineReadClient(
   4. `localDayStart(first, "UTC")` → "fall-back: a named date on the day the clocks changed" and "spring-forward" FAIL.
   5. Delete the two loops in `localDayStart` → the America/Santiago case FAILS (03:00Z; measured with Node 24.13 ICU when this plan was fixed).
 
+  **As built (2026-11-09, commits 9c7d855e and 1fcc0ea8).** All five probes fail by name. Two additions:
+  - A fall-back-TO-midnight case (America/Havana, 2026-11-01, day start 04:00Z, the value 0115's SQL pins). In JavaScript the mirror image of SQL holds: `localMidnightInstant` already lands on Havana's FIRST midnight, so deleting only the step-back loop leaves every case green (it is a guard no case can reach), while deleting only the forward loop fails Santiago. The Havana case is a pinned value and claims no probe. PostgreSQL is the other way round (0115's `app.owner_line_day_start`: its step-back loop is the load-bearing one).
+  - `reader.test.ts` casts its one-key env through `unknown`: Next types `NODE_ENV` as required on `ProcessEnv`, so the plan's direct cast was TS2352.
+
 - [ ] **Step 6: Commit.**
 
   ```bash
@@ -6094,7 +6098,7 @@ Copy:
   "ownerLine.tool.aCustomer": "a customer",
   "ownerLine.tool.aCustomer.es": "un cliente",
   "ownerLine.tool.outcome.booked": "booked an appointment",
-  "ownerLine.tool.outcome.booked.es": "reservó una cita",
+  "ownerLine.tool.outcome.booked.es": "agendó una cita",
   "ownerLine.tool.outcome.lead": "left their details",
   "ownerLine.tool.outcome.lead.es": "dejó sus datos",
   "ownerLine.tool.outcome.message": "left a message",
@@ -6126,6 +6130,23 @@ Copy:
   6. Spread the whole booking row into the appointment item → "appointments: never the note…" FAILS.
   7. Set `what: w.title` → the `needs_attention` case FAILS.
 
+  **As built (2026-11-09, commit f3b191dc).** All seven fail by name, plus:
+  - **One `needs_attention` case per To do source** (task, conversation, booking), each alone, so a wrong sentence for one source fails by its name (probe 7 fails the conversation and booking cases; the task case stays green under `what: w.title` because a task's words ARE its title).
+  - **`truncated`:** a case where every listing page is full of the tile's calls: `listCalls` is read 10 times, `truncated` is true, and `count` is still the tile's (probe: never set truncated → FAILS).
+  - **No ids, phone digits, note, email or address in ANY tool's output:** one case scans all three outputs for every fixture id and digit string (probe: add `id` to a spoken call → FAILS).
+  - **`workRowLabel` is an exhaustive switch.** A source with no branch is a `never` and stops the typecheck (probes: the conversation or booking branch returning the title → their row-label and needs_attention cases FAIL).
+  - **The live scope test (I-11) uses the REAL live re-check**, not the plan's stub, so it seeds what `owner_line_session_check` needs: a verified enrollment with a PIN for every person, the switch on (`setOwnerLineSwitch`), client access on. Seeding goes through `createAccount`, `createContact`, `createBooking` and `ensureCallbackTask` (the writers `ai-acts/actions.live.test.ts` uses), with ONE live number per account (`phone_numbers_one_active_per_account`) and A's two bookings two hours apart (the slot guard). The range is today through tomorrow as named dates, never `this_week`. Five groups, each for all three tools:
+    - A's Owner: A's two, and nothing of B's text;
+    - A's Staff: A's two, and nothing of B's text;
+    - B's Owner: B's one;
+    - A's Owner naming business B: `couldnt_read`, refused by the live re-check (not a member) under BOTH data paths;
+    - A's Technician: `couldnt_read` under F2 (the factory refuses before any read); under T, the assigned customer's one.
+
+    Result on the replica kit (PG18 + PostgREST 14.14, the f032-db stack): `Tests  15 passed | 3 skipped (18)`; the three skips are the T-only Technician group. Live probes: skip the re-check → the three "naming business B" cases FAIL (B's data comes back); drop the Technician refusal → the three F2 Technician cases FAIL.
+  - **Copy:** "booked" in Spanish is "agendó una cita". The plan's "reservó una cita" broke the glossary gate (`lib/i18n/spanish-style.ts:65`: book is "agendar, cita", never "reserv").
+  - **After #343 (F-077) merges, re-read and decide:**
+    - `WorkSource` gains `failed_transfer` and `booking_act`. `workRowLabel`'s `never` stops the typecheck until both have branches. Move THAT branch's `primaryLabel` (with `zone`, for `describeAct`) into `workRowLabel`, and add one `needs_attention` case and one row-label case per source.
+    - **Owner question:** the page's `failed_transfer` words carry the caller's callback NUMBER (`work.failedTransfer`, `{number}`). §5 lists no phone for `needs_attention`, and the coordinator's rule is no phone digits beyond what the plan allows. Either the owner line says the number (the page does), or it uses `work.failedTransfer.bare`. Decide before the merge.
 - [ ] **Step 7: Commit.**
 
   ```bash
