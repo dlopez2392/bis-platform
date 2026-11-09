@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 const h = vi.hoisted(() => ({
   form: { ok: true, form: new URLSearchParams(), authenticated: true } as
     | { ok: true; form: URLSearchParams; authenticated: boolean } | { ok: false; response: Response },
-  today: vi.fn(), bridge: vi.fn(), again: vi.fn(), failsafe: vi.fn(),
+  today: vi.fn(), bridge: vi.fn(), again: vi.fn(), failsafe: vi.fn(), offered: vi.fn(),
   phone: vi.fn(), look: vi.fn(), verify: vi.fn(), pin: vi.fn(), lockout: vi.fn(),
   after: vi.fn(),
 }));
@@ -18,6 +18,7 @@ vi.mock("../route", () => ({
   actionOrigin: () => "https://x.example",
   answer: (...a: unknown[]) => h.today(...a),
   ownerLineBridge: (...a: unknown[]) => h.bridge(...a),
+  ownerLineStillOffered: (...a: unknown[]) => h.offered(...a),
   ownerLineGatherAgain: (...a: unknown[]) => h.again(...a),
   bridgeAfterFailure: (...a: unknown[]) => h.failsafe(...a),
   xmlResponse: (s: string) => xml(s),
@@ -70,6 +71,8 @@ beforeEach(async () => {
   h.lockout.mockReset().mockResolvedValue(undefined);
   h.form = { ok: true, form: new URLSearchParams(), authenticated: true };
   process.env.OWNER_LINE_PIN_PEPPER = "p".repeat(40);
+  process.env.VOICE_HANDOFF_SECRET = "h".repeat(48);   // review m-3: owner-pin answers only with a usable secret
+  h.offered.mockResolvedValue(true);
   HASH ||= await hashPin(PIN);
   // A fresh response per call: a body can be read once, and some cases post twice.
   h.today.mockImplementation(async () => xml("TODAY"));
@@ -98,6 +101,15 @@ describe("owner-pin (F-032 §4.2): signed requests only", () => {
     expect(h.bridge).not.toHaveBeenCalled();
   });
 
+  it("no usable VOICE_HANDOFF_SECRET: today's path, nothing read and no attempt counted, because no owner pass could be signed (review m-3; mutation: drop the secret from the entry guard -> FAILS)", async () => {
+    process.env.VOICE_HANDOFF_SECRET = "short";
+    h.pin.mockResolvedValue({ status: "ok" });
+    expect(await (await post({ Digits: PIN })).text()).toBe("TODAY");
+    expect(h.today).toHaveBeenCalledWith(...TODAY_ARGS);
+    for (const f of [h.phone, h.look, h.pin, h.verify, h.bridge]) expect(f).not.toHaveBeenCalled();
+    expect(logged()).toContain("texml owner-pin: VOICE_HANDOFF_SECRET is not usable — today's path, nothing checked");
+  });
+
   it("a request whose signature the reader refused is answered with the reader's refusal and nothing else (mutation: decide on a refused read -> FAILS)", async () => {
     h.form = { ok: false, response: new NextResponse(null, { status: 403 }) };
     const res = await POST(new Request("https://x.example/api/voice/texml/owner-pin", { method: "POST", body: "" }));
@@ -112,8 +124,17 @@ describe("owner-pin: the PIN", () => {
     expect(await (await post({ Digits: PIN })).text()).toBe("BRIDGE");
     expect(h.pin).toHaveBeenCalledWith({}, "e1", HASH);
     expect(h.bridge).toHaveBeenCalledWith(TO, CELL, "https://x.example", { accountId: "a1", userId: "u1", role: "staff" });
+    expect(h.offered).toHaveBeenCalledWith(TO, CELL, "a1");
     expect(logged()).toContain("texml owner-pin: PIN ok, accountId a1");
     for (const secret of [PIN, HASH, HASH.slice(14, 36), CELL, CELL.slice(2)]) expect(logged()).not.toContain(secret);
+  });
+
+  it("the right PIN while today's path no longer reaches Sofía (the forward, billing's no-voice, the drill, VOICE_FORWARD_TO): today's path, and NO owner pass (review m-4; mutation: skip the re-read -> FAILS)", async () => {
+    h.pin.mockResolvedValue({ status: "ok" });
+    h.offered.mockResolvedValue(false);
+    expect(await (await post({ Digits: PIN })).text()).toBe("TODAY");
+    expect(h.today).toHaveBeenCalledWith(...TODAY_ARGS);
+    expect(h.bridge).not.toHaveBeenCalled();
   });
 
   it("the right PIN followed by the finish key is the same PIN", async () => {
@@ -177,6 +198,9 @@ describe("owner-pin: the PIN", () => {
       h.form = { ok: true, form: new URLSearchParams({ To: TO, From: CELL, Digits: "111112" }), authenticated: true };
       const res = await freshPost(new Request("https://x.example/api/voice/texml/owner-pin", { method: "POST", body: "" }));
       expect(await res.text()).toBe("TODAY");
+      // Review m-5: let anything the handler set off WITHOUT awaiting it (a `void import(...)`) finish first, so a
+      // load that merely started before the response is counted here, before after() has run.
+      for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
       expect(loads).toBe(0);                                 // answered, and the module was never evaluated
       expect(h.lockout).not.toHaveBeenCalled();
       expect(h.after).toHaveBeenCalledTimes(1);
@@ -294,11 +318,23 @@ describe("owner-pin: who may key at all", () => {
 });
 
 describe("owner-pin: failures", () => {
-  it("anything that throws is the last-resort bridge, never a 500, logged by error class only (mutation: log String(e) -> FAILS)", async () => {
-    h.look.mockRejectedValue(new Error(`db down for ${CELL} pin_params ${HASH.slice(0, 36)}`));
+  it.each([
+    ["the lookup", () => h.look.mockRejectedValue(new Error(`db down for ${CELL} pin_params ${HASH.slice(0, 36)}`))],
+    ["the PIN attempt", () => h.pin.mockRejectedValue(new Error(`attemptOwnerLinePin failed for ${CELL}`))],
+  ])("%s throwing tries TODAY'S PATH first, so every customer check re-runs (review m-2, fail closed), logged by error class only (mutation: go straight to the last-resort bridge -> FAILS; mutation: log String(e) -> FAILS)", async (_what, arrange) => {
+    arrange();
+    expect(await (await post({ Digits: PIN })).text()).toBe("TODAY");
+    expect(h.today).toHaveBeenCalledWith(...TODAY_ARGS);
+    expect(h.failsafe).not.toHaveBeenCalled();
+    expect(logged()).toContain(`texml owner-pin failed (Error) — today's path for ${TO}`);
+    for (const secret of [CELL.slice(2), HASH.slice(14, 36), PIN]) expect(logged()).not.toContain(secret);
+  });
+
+  it("only when today's path ALSO throws is it the last-resort bridge, never a 500 (review m-2)", async () => {
+    h.look.mockRejectedValue(new Error("db down"));
+    h.today.mockRejectedValue(new Error("today down"));
     expect(await (await post({ Digits: PIN })).text()).toBe("FAILSAFE");
     expect(h.failsafe).toHaveBeenCalledWith(TO, CELL, "https://x.example", true);
-    expect(logged()).toContain(`texml owner-pin failed (Error) — bridging for ${TO}`);
-    for (const secret of [CELL.slice(2), HASH.slice(14, 36), PIN]) expect(logged()).not.toContain(secret);
+    expect(logged()).toContain(`texml owner-pin: today's path failed too (Error) — the last-resort bridge, for ${TO}`);
   });
 });

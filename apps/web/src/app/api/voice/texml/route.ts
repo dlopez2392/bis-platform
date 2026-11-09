@@ -278,6 +278,23 @@ function withDeadline<T>(p: Promise<T>, ms: number, onLate: () => void): Promise
   return Promise.race([p, late]).finally(() => clearTimeout(timer));
 }
 
+/** The database module, as a type only: the value is always the lazy `await import("@bis/db")` (SC-18). */
+type DbModule = typeof import("@bis/db");
+
+/**
+ * Billing's verdict on whether this account has a voice at all (M7a PR-4, plan G9): `NoVoice` when it does not, null
+ * when it does. ONE read, shared by `classify` and `ownerLineStillOffered`, so the owner line re-reads exactly what
+ * the answer route reads. Async, so a synchronous throw becomes a rejection the caller's own catch sees. Call it only
+ * with BILLING_ENFORCE on (`billingEnforced()`), as both callers do.
+ */
+async function readNoVoice(
+  dbModule: DbModule, db: ReturnType<DbModule["serviceDb"]>, accountId: string,
+): Promise<NoVoice | null> {
+  const standing = await dbModule.readBillingStanding(db, accountId);
+  const { billingVerdict, voiceBlock } = await import("@/lib/billing/standing");
+  return voiceBlock(billingVerdict(standing, true, new Date()));
+}
+
 /**
  * `ownerLineEligible` is true only on a Telnyx-signed request with a usable
  * VOICE_HANDOFF_SECRET that is not the press-1 re-run (`route`): the only
@@ -384,11 +401,7 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
     // waits for it.
     const accountId = row.account_id;
     const billingRead: Promise<NoVoice | null> = billingEnforced()
-      ? (async () => {
-        const standing = await dbModule.readBillingStanding(db, accountId);
-        const { billingVerdict, voiceBlock } = await import("@/lib/billing/standing");
-        return voiceBlock(billingVerdict(standing, true, new Date()));
-      })().catch((e: unknown) => {
+      ? readNoVoice(dbModule, db, accountId).catch((e: unknown) => {
         console.error(`texml billing read failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
         return null;
       })
@@ -889,6 +902,38 @@ export function ownerLineBridge(
   console.log(`texml owner line PIN ok — bridging with an owner pass, accountId ${owner.accountId}`);
   return xmlResponse(dialXml(calledE164, callerE164, origin, true,
     { accountId: owner.accountId, callerE164 }, false, { ownerLine: owner }).body);
+}
+
+/**
+ * F-032 Task 9 review m-4: a correct PIN mints an owner pass only while today's path for this call still reaches
+ * Sofía. The ask was offered only when it did (SC-17, decided in `classify`), but the PIN arrives seconds later, and
+ * in between the agency may have turned its forward on, billing may have paused the account, a drill may be set, or
+ * VOICE_FORWARD_TO may be set. Each is re-read here with the reads the answer route itself makes: the two env checks
+ * (`forwardTarget`, `fallbackDrillActive`), `getVoiceProfile`'s `forward_calls`, and `readNoVoice`. False sends the
+ * caller to today's path with no pass. A read that fails is false too, logged by error class: FAIL CLOSED to today's
+ * path (the orchestrator's decision for owner-pin, review m-2). Never throws. Logged by account only.
+ */
+export async function ownerLineStillOffered(calledE164: string, callerE164: string, accountId: string): Promise<boolean> {
+  const no = (why: string) => {
+    console.log(`texml owner line PIN ok but ${why} — today's path, no owner pass, accountId ${accountId}`);
+    return false;
+  };
+  if (forwardTarget()) return no("VOICE_FORWARD_TO");
+  if (fallbackDrillActive(calledE164, callerE164)) return no("the fallback drill");
+  try {
+    const dbModule = await import("@bis/db");
+    const db = dbModule.serviceDb();
+    const [profile, noVoice] = await Promise.all([
+      dbModule.getVoiceProfile(db, accountId),
+      billingEnforced() ? readNoVoice(dbModule, db, accountId) : Promise.resolve(null),
+    ]);
+    if (profile?.forward_calls === true) return no("forward_calls");
+    if (noVoice) return no("billing has no voice");
+    return true;
+  } catch (e) {
+    console.error(`texml owner line PIN ok but today's states could not be read (${e instanceof Error ? e.name : typeof e}) — today's path, no owner pass, accountId ${accountId}`);
+    return false;
+  }
 }
 
 /** F-032 §4.2: a wrong PIN (below 3) or a wrong code. Asks again, falling through to today's bridge with no pass.

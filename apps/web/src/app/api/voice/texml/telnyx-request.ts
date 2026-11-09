@@ -30,8 +30,15 @@ export type TelnyxForm =
  *
  * `tag` prefixes every log line, so the main route's lines read exactly as
  * they always have (`texml: rejected request (missing-headers), …`).
+ *
+ * `logCaller` (default true) keeps the claimed caller in those refusal lines.
+ * The owner-line PIN route passes false (F-032 Task 9 review m-6): its callers
+ * are a business's own team, and its logs never carry their numbers. The
+ * claimed called number, a business line, stays.
  */
-export async function readTelnyxForm(req: Request, tag: string): Promise<TelnyxForm> {
+export async function readTelnyxForm(
+  req: Request, tag: string, opts: { logCaller?: boolean } = {},
+): Promise<TelnyxForm> {
   let rawBody = "";
   try {
     rawBody = await req.text();
@@ -49,12 +56,13 @@ export async function readTelnyxForm(req: Request, tag: string): Promise<TelnyxF
     // lines. Anything that is not a real phone number is logged as "none".
     const safeTo = e164Of(form.get("To") || null) ?? "none";
     const safeFrom = e164Of(form.get("From") || null) ?? "none";
+    const claimed = opts.logCaller === false ? `claimedTo ${safeTo}` : `claimedTo ${safeTo}, claimedFrom ${safeFrom}`;
     if (!timestamp || !signatureB64) {
-      console.error(`${tag}: rejected request (missing-headers), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
+      console.error(`${tag}: rejected request (missing-headers), ${claimed}`);
       return { ok: false, response: new NextResponse(null, { status: 403 }) };
     }
     if (!verifyTelnyxSignature({ rawBody, timestamp, signatureB64, publicKeyB64: publicKey })) {
-      console.error(`${tag}: rejected request (invalid-signature), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
+      console.error(`${tag}: rejected request (invalid-signature), ${claimed}`);
       return { ok: false, response: new NextResponse(null, { status: 403 }) };
     }
   }

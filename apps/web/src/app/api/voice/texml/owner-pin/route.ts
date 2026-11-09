@@ -21,24 +21,30 @@
 // owner line skipped, which re-runs every customer check (a refusal is spoken and recorded in screened_calls, a
 // clear call gets the cleared bridge). Never a hang-up of this route's own (plan I-3, spec §2.1).
 //   - pound, a timeout, or no digits: today's path, and NOT an attempt;
-//   - the right PIN: today's bridge with the owner pass, bound to THAT dial's handoff token (ownerLineBridge);
+//   - the right PIN: today's bridge with the owner pass, bound to THAT dial's handoff token (ownerLineBridge),
+//     once today's states are re-read (ownerLineStillOffered);
 //   - a wrong PIN, 1st or 2nd: asked again; the re-ask re-reads today's verdicts for its own fallthrough;
 //   - the 3rd wrong PIN: the lock, today's path as a customer, and the two emails, prepared and sent after the response;
 //   - no OWNER_LINE_PIN_PEPPER (plan O-3): today's path, and no attempt is counted against the person;
 //   - a call-in code: verified (a goodbye), wrong (asked again), spent or unknown (today's path; the card tells the
 //     person to make a new code);
-//   - anything that throws: the last-resort bridge, never a 500 (screen/route.ts's posture).
+//   - the right PIN while today's path no longer reaches Sofía (the forward, billing, the drill): today's path;
+//   - no usable VOICE_HANDOFF_SECRET: today's path, nothing checked (SC-14);
+//   - anything that throws: today's path (fail closed); only if that throws too, the last-resort bridge, never a 500.
 //
 // No module-scope @bis/db, directly or through anything imported here (plan SC-18; ../texml-no-static-db.test.ts):
 // the database is imported inside the handler, and the lockout module (which reaches it through the email gate)
 // only inside after(), once the caller has been answered (lockoutEmailsAfterResponse).
 import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
-import { actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, xmlResponse } from "../route";
+import {
+  actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, ownerLineStillOffered, xmlResponse,
+} from "../route";
 import { logFormFields, readTelnyxForm } from "../telnyx-request";
 import { ownerVerifiedXml } from "../owner-line-xml";
 import { candidateFor, hashVerifyCode, pinPepperConfigured } from "@/lib/owner-line/secrets";
 import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { sipHandoffSecretConfigured } from "@/lib/voice/sip-handoff-signature";
 
 export const runtime = "nodejs";
 const SIX = /^[0-9]{6}$/;
@@ -82,6 +88,12 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
   try {
     if (!authenticated) {
       console.error("texml owner-pin: request not Telnyx-signed — today's path, nothing checked");
+      return await today();
+    }
+    // Review m-3 (SC-14): with no usable VOICE_HANDOFF_SECRET no owner pass can be signed, so no PIN is checked and no
+    // attempt is counted against anyone: today's path.
+    if (!sipHandoffSecretConfigured()) {
+      console.error("texml owner-pin: VOICE_HANDOFF_SECRET is not usable — today's path, nothing checked");
       return await today();
     }
     if (!called || !caller) {
@@ -134,7 +146,12 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
     const candidate = (await candidateFor(digits, look.pinParams ?? "")) ?? "invalid";
     const r = await attemptOwnerLinePin(db, look.enrollmentId, candidate);
     console.log(`texml owner-pin: PIN ${r.status}, ${who}`);
-    if (r.status === "ok") return ownerLineBridge(called, caller, origin, { accountId: line.account_id, userId: look.userId, role: look.role });
+    if (r.status === "ok") {
+      // Review m-4: the pass only while today's path still reaches Sofía (the forward, billing's no-voice, the drill,
+      // VOICE_FORWARD_TO, each re-read; ../route.ts ownerLineStillOffered). Otherwise today's path, with no pass.
+      if (!(await ownerLineStillOffered(called, caller, line.account_id))) return await today();
+      return ownerLineBridge(called, caller, origin, { accountId: line.account_id, userId: look.userId, role: look.role });
+    }
     if (r.status === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "pin", locale, accountId: line.account_id, name: look.name });
     if (r.status === "locked_now") {
       lockoutEmailsAfterResponse({ accountId: line.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
@@ -142,8 +159,16 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
     // locked_now, locked (another call locked it first) and none: today's path, as a customer.
     return await today();
   } catch (e) {
-    console.error(`texml owner-pin failed (${errorClass(e)}) — bridging for ${called ?? "unknown"}`);
-    return bridgeAfterFailure(called, caller, origin, authenticated);
+    // Review m-2 (orchestrator decision): FAIL CLOSED to today's path, which re-runs every customer check, so an
+    // over-cap caller still hears the cap sentence and the screened_calls row is still written. Only if today's
+    // path ALSO throws is it the last-resort bridge, never a 500.
+    console.error(`texml owner-pin failed (${errorClass(e)}) — today's path for ${called ?? "unknown"}`);
+    try {
+      return await today();
+    } catch (e2) {
+      console.error(`texml owner-pin: today's path failed too (${errorClass(e2)}) — the last-resort bridge, for ${called ?? "unknown"}`);
+      return bridgeAfterFailure(called, caller, origin, authenticated);
+    }
   }
 }
 
@@ -152,7 +177,7 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const read = await readTelnyxForm(req, "texml owner-pin");
+  const read = await readTelnyxForm(req, "texml owner-pin", { logCaller: false });
   if (!read.ok) return read.response;
   // Field NAMES only (telnyx-request.ts): `Digits` appears as a name, and its value is never printed.
   logFormFields("texml owner-pin", read.form);

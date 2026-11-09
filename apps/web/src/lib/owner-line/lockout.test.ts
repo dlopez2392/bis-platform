@@ -6,6 +6,7 @@ vi.mock("@bis/db", () => ({
   serviceDb: () => ({}), listAccountTeam: db.team, getBranding: db.brand, readAccountTimezone: db.zone,
 }));
 import { sendOwnerLineLockoutEmails } from "./lockout";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const AT = new Date("2026-11-09T20:14:00.000Z");      // 2:14 PM in America/Chicago
 const UNTIL = "2026-11-09T20:44:00.000Z";
@@ -81,3 +82,25 @@ describe("three wrong PINs email the person and the account's Owner (spec §4.2)
 
 // The lock-instant capture (m-7) and the never-throws-outside-a-request-scope guard moved with the after() call into
 // owner-pin/route.ts (lockoutEmailsAfterResponse), and are pinned there, in owner-pin/route.test.ts.
+
+describe("the lockout emails' failure lines never carry an address (F-032 Task 9 review m-1)", () => {
+  it("a send the provider rejects, quoting the recipient, is logged through loggableError: [email], never the address (mutation: log e.message -> FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const send = vi.fn()
+      .mockRejectedValueOnce(new EmailNotSent({ kind: "failed", stage: "provider", error: "550 <ana@example.com>: recipient rejected" }))
+      .mockResolvedValue({ id: "x" });
+    await sendOwnerLineLockoutEmails(P, { send });
+    const lines = err.mock.calls.flat().map(String).join("\n");
+    expect(lines).toContain("owner line lockout email failed for one recipient, accountId a1: EmailNotSent: 550 <[email]>: recipient rejected");
+    expect(lines).not.toContain("ana@example.com");
+  });
+
+  it("a preparation failure quoting an address is logged through loggableError too (mutation: log String(e) -> FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    db.team.mockRejectedValue(new Error("listAccountTeam failed for dan@example.com"));
+    await sendOwnerLineLockoutEmails(P, { send: vi.fn() });
+    const lines = err.mock.calls.flat().map(String).join("\n");
+    expect(lines).toContain("owner line lockout emails could not be prepared, accountId a1: Error: listAccountTeam failed for [email]");
+    expect(lines).not.toContain("dan@example.com");
+  });
+});

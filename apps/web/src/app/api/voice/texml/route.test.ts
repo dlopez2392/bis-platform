@@ -2260,3 +2260,57 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     expect(ownerLines).toEqual([`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId a1`]);
   });
 });
+
+describe("ownerLineStillOffered: today's states re-read before an owner pass is minted (F-032 Task 9 review m-4)", () => {
+  const TO = "+19565550999";
+  const CELL = "+19565550142";
+  const ACCOUNT = "11111111-1111-4111-8111-111111111111";
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  const logged = () => [...logSpy.mock.calls, ...errSpy.mock.calls].flat().map(String).join("\n");
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const k of ["VOICE_FORWARD_TO", "VOICE_FALLBACK_DRILL_TO", "VOICE_FALLBACK_DRILL_FROM", "BILLING_ENFORCE"]) delete process.env[k];
+  });
+  const offered = async () => (await import("./route")).ownerLineStillOffered(TO, CELL, ACCOUNT);
+
+  it("every state clear: still offered, through the SAME profile read the answer route makes", async () => {
+    expect(await offered()).toBe(true);
+    expect(profileMock).toHaveBeenCalledWith({}, ACCOUNT);
+  });
+
+  it.each([
+    ["the agency's forward is on (mutation: drop the forward_calls check -> FAILS)", "forward_calls",
+      () => { profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true }); }],
+    ["VOICE_FORWARD_TO is set (mutation: drop the VOICE_FORWARD_TO check -> FAILS)", "VOICE_FORWARD_TO",
+      () => { process.env.VOICE_FORWARD_TO = "+19565550777"; }],
+    ["the fallback drill is engaged for this call (mutation: drop the drill check -> FAILS)", "the fallback drill",
+      () => { process.env.VOICE_FALLBACK_DRILL_TO = TO; process.env.VOICE_FALLBACK_DRILL_FROM = CELL; }],
+    ["billing has no voice for the account (mutation: drop the billing check -> FAILS)", "billing has no voice",
+      () => {
+        process.env.BILLING_ENFORCE = "1";
+        readBillingStandingMock.mockResolvedValue({
+          complimentary: false, pausedAt: new Date(Date.now() - 31 * 86_400_000).toISOString(), subscriptionStatus: "past_due",
+          features: { voice_receptionist: true, web_concierge: true },
+        });
+      }],
+  ])("%s: not offered, logged by account", async (_name, why, arrange) => {
+    arrange();
+    expect(await offered()).toBe(false);
+    expect(logged()).toContain(`texml owner line PIN ok but ${why} — today's path, no owner pass, accountId ${ACCOUNT}`);
+  });
+
+  it.each([
+    ["the profile read", () => profileMock.mockRejectedValue(new Error(`profile read failed for ${CELL}`))],
+    ["the billing read", () => { process.env.BILLING_ENFORCE = "1"; readBillingStandingMock.mockRejectedValue(new Error(`billing read failed for ${CELL}`)); }],
+  ])("%s failing: not offered (fail closed to today's path), logged by error class only", async (_what, arrange) => {
+    arrange();
+    expect(await offered()).toBe(false);
+    expect(logged()).toContain(`texml owner line PIN ok but today's states could not be read (Error) — today's path, no owner pass, accountId ${ACCOUNT}`);
+    expect(logged()).not.toContain(CELL.slice(2));
+  });
+});

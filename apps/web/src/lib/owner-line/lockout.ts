@@ -2,6 +2,7 @@ import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { ownerLineLockoutEmail } from "@/lib/email/templates/owner-line";
 import { firstName } from "@/lib/owner-line/names";
+import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
 /**
@@ -49,10 +50,11 @@ export async function sendOwnerLineLockoutEmails(
         await deps.send({ accountId: p.accountId, kind: "operator.owner_line_lockout", to, fromName: brand.name,
           subject: email.subject, body: email.text, html: email.html });
       } catch (e) {
-        console.error(`owner line lockout email failed for one recipient, accountId ${p.accountId}: ${e instanceof Error ? e.message : String(e)}`);
+        // loggableError (review m-1): a provider's rejection can quote the recipient ("550 <ana@…>: recipient rejected").
+        console.error(`owner line lockout email failed for one recipient, accountId ${p.accountId}: ${loggableError(e)}`);
       }
     }
   } catch (e) {
-    console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${String(e)}`);
+    console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${loggableError(e)}`);
   }
 }

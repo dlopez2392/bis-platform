@@ -132,6 +132,45 @@ describe("owner-pin through the real answer route (F-032 Task 9)", () => {
     }
   });
 
+  it("the refusal line names the claimed called number but NEVER the claimed caller on owner-pin, whose callers are a business's own team (review m-6; mutation: log the caller here as the other routes do -> FAILS)", async () => {
+    await signed({ To: TO, From: CELL, Digits: PIN }, { badSignature: true });
+    const lines = logged();
+    expect(lines).toContain(`texml owner-pin: rejected request (invalid-signature), claimedTo ${TO}`);
+    expect(lines).not.toContain("claimedFrom");
+    expect(lines).not.toContain(CELL.slice(2));
+  });
+
+  it("the database failing at the PIN attempt, for a caller over today's cap: today's cap sentence and the screened_calls row, never the last-resort bridge (review m-2: fail closed to today's path; mutation: go straight to the last-resort bridge -> FAILS)", async () => {
+    db.countCaller.mockResolvedValue(99);
+    db.pin.mockRejectedValue(new Error("attemptOwnerLinePin failed: connection reset"));
+    const xml = await (await signed({ To: TO, From: CELL, Digits: PIN })).text();
+    expect(xml).toBe(CAP_DOC);
+    await flushAfter();
+    expect(db.screened).toHaveBeenCalledExactlyOnceWith({}, {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: TO, callerE164: CELL, reason: "over-cap",
+    });
+  });
+
+  it("no usable VOICE_HANDOFF_SECRET: today's path, and the PIN is never checked (review m-3)", async () => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    db.pin.mockResolvedValue({ status: "ok" });
+    const xml = await (await signed({ To: TO, From: CELL, Digits: PIN })).text();
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
+    expect(db.look).not.toHaveBeenCalled();
+    expect(db.pin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the agency's forward is on", () => { db.profile.mockResolvedValue({ ...PROFILE, forward_calls: true }); }],
+    ["VOICE_FORWARD_TO is set", () => { process.env.VOICE_FORWARD_TO = "+19565550777"; }],
+  ])("the right PIN while %s: today's path, never an owner pass (review m-4: today's states re-read before the pass)", async (_state, arrange) => {
+    db.pin.mockResolvedValue({ status: "ok" });
+    arrange();
+    const xml = await (await signed({ To: TO, From: CELL, Digits: PIN })).text();
+    expect(xml).not.toContain("X-BIS-Owner-Pass");
+    expect(db.pin).toHaveBeenCalledTimes(1);
+  });
+
   it("pound from a caller every guard clears: today's cleared bridge, with no owner pass", async () => {
     const xml = await (await signed({ To: TO, From: CELL, Digits: "#" })).text();
     expect(xml).toContain("&amp;f=");
