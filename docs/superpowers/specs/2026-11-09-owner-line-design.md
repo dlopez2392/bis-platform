@@ -127,6 +127,14 @@ asking for the state the switch is already in writes nothing.)
   - `created_at`
 
   Unique on (account_id, e164), so one cell maps to one person per business.
+  Only a verified or still-pending claim holds a cell (amended 2026-11-09, Task 5
+  review I-2): when a code expires or is used up without the cell being
+  verified, the next person to claim that cell on that business takes it, and
+  the earlier claimant is left with no cell, no code and no PIN. So a typo can
+  never lock out the real holder, and nobody can keep a number they do not
+  hold, a customer's included, in the call-in prompt. A person may ask for at
+  most five codes per business in any 24 hours; removing the cell does not
+  reset that count.
 - `accounts.owner_line_enabled_at` (timestamptz, null = off), so the switch
   records when it was turned on, with `owner_line_changed_at` and
   `owner_line_changed_by_kind` ('owner' or 'agency') for the last change

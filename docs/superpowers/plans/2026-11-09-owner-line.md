@@ -336,7 +336,7 @@ Modify:
   - The functions (no day-start argument: the ACCOUNT's local day is computed inside, Q-F):
     - `app.owner_line_day_start(text, timestamptz) → timestamptz`
     - `owner_line_answer_lookup(uuid, text, integer) → jsonb`
-    - `owner_line_start_verification(uuid, uuid, text, text, integer) → text`
+    - `owner_line_start_verification(uuid, uuid, text, text, integer) → text`: `ok`, `taken` or `too_many` (Task 5 review I-2). Only a VERIFIED cell or a LIVE code holds a cell: a new claim displaces a lapsed or spent unverified claim on the same business, whose person is left with no cell, no code and no PIN (`e164` is nullable for exactly that, `owner_line_enrollments_no_cell_check`). At most five starts per person per business in any rolling 24 hours (`verify_window_started_at`, `verify_starts`): each start keeps a number in the call-in prompt for at most ten minutes, so a day bound caps that at 50 minutes a day where an hour bound would allow most of the day. A row whose cell goes is CLEARED, never deleted, so its count survives.
     - `owner_line_attempt_verify(uuid, text, text) → text`
     - `owner_line_attempt_pin(uuid, text, integer) → jsonb`
     - `owner_line_session_check(uuid, uuid, text, integer) → jsonb`
@@ -367,7 +367,7 @@ Modify:
 
 - [ ] **Step 2: Write the failing schema test.** Model it on `packages/db/src/test/calendar-feeds-schema.test.ts` (the `withRollback`, `actAsMember` and privilege-matrix shapes, which were read from `./db`).
 
-**The block below is the committed file as of the Task 2 review fix round (55 cases: the two m-B cases joined after `21fc2433`, and the Task 2 review's teardown pin, m-2), copied whole so the plan cannot drift from it; the file is authoritative.** Beyond the first draft it holds the review round's cases: I-1, one second-business case per account-scoped read (the lookup, its count, `attempt_verify`, `session_check` and its count; same cell or same person at business B); I-2, one case per refusal branch, asserting the reason by name (`no_client_access`, `switch_off`, `not_enrolled`, `locked`, `over_limit`, and the lookup's client-access gate and no-PIN branch); m-2, the switch-record trigger; m-3, `note_agency_open`'s refusal; and the 2026-11-09 ruling's kind-only record. ONE refused statement per `withRollback` throughout (25P02).
+**The block below is the committed file as of the Task 2 review fix round (64 cases: the two m-B cases joined after `21fc2433`, the Task 2 review's teardown pin, and the Task 5 review's nine I-2 cases), copied whole so the plan cannot drift from it; the file is authoritative.** Beyond the first draft it holds the review round's cases: I-1, one second-business case per account-scoped read (the lookup, its count, `attempt_verify`, `session_check` and its count; same cell or same person at business B); I-2, one case per refusal branch, asserting the reason by name (`no_client_access`, `switch_off`, `not_enrolled`, `locked`, `over_limit`, and the lookup's client-access gate and no-PIN branch); m-2, the switch-record trigger; m-3, `note_agency_open`'s refusal; and the 2026-11-09 ruling's kind-only record. ONE refused statement per `withRollback` throughout (25P02).
 
 ```ts
 // packages/db/src/test/owner-line-schema.test.ts
@@ -552,7 +552,7 @@ describe("0115 owner_line_enrollments: grants, RLS, function privileges", () => 
 });
 
 describe("0115: one cell is one person per business", () => {
-  it("a second person cannot claim the same cell on the same business; another business can (probe: drop owner_line_enrollments_one_cell -> FAILS)", () =>
+  it("a second person cannot claim the same cell on the same business while the first holds a live code; another business can (probe: displace a live code -> ok, FAILS; the unique key itself is pinned in the I-2 block)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await asService(c);
@@ -1121,6 +1121,115 @@ describe("0115: teardown", () => {
     expect(ACCOUNT_OWNED_TABLES.slice(0, 2)).toEqual(["ai_ledger", "account_ai_settings"]);
   });
 });
+
+// Task 5 review I-2 (2026-11-09): an unverified claim whose code has lapsed or been spent no longer holds a cell. A new
+// claim on that cell DISPLACES it (the displaced person is left with no cell, no code and no PIN); a verified holder or a
+// live code still answers `taken`. And a person may start at most five codes per business in any 24 hours, so nobody
+// can keep a number they do not hold in the call-in prompt for long (spec 2.1).
+describe("0115: a lapsed claim never holds a cell (review I-2)", () => {
+  const CELL = "+19565550123";
+  const start = async (c: Client, account: string, user: string, cell = CELL) => (await c.query(
+    "select public.owner_line_start_verification($1, $2, $3, $4, 10) as r", [account, user, cell, hex64()])).rows[0].r;
+  const rowOf = async (c: Client, user: string) => (await c.query(
+    `select e164, verified_at, verify_code_hash, pin_hash from owner_line_enrollments where user_id = $1`, [user])).rows;
+  const CLEARED = [{ e164: null, verified_at: null, verify_code_hash: null, pin_hash: null }];
+
+  it("an expired claim is displaced: the real holder gets the cell, the other person keeps no cell, code or PIN (probe: never displace -> 'taken', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      expect(await start(c, s.a, s.staff)).toBe("ok");
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.owner)).toBe("ok");
+      expect([(await rowOf(c, s.owner))[0].e164, await rowOf(c, s.staff)]).toEqual([CELL, CLEARED]);
+    }));
+
+  it("a spent claim (three wrong codes) is displaced too (probe: displace only an expired code -> 'taken', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      for (let i = 0; i < 3; i++) await c.query("select public.owner_line_attempt_verify($1, $2, $3)", [s.a, CELL, hex64()]);
+      expect(await start(c, s.a, s.owner)).toBe("ok");
+      expect(await rowOf(c, s.staff)).toEqual(CLEARED);
+    }));
+
+  it("a live code is not displaced: the newcomer is told taken and the holder keeps the cell and the code (probe: displace a live code -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      expect(await start(c, s.a, s.owner)).toBe("taken");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verify_code_hash: expect.any(String) });
+    }));
+
+  it("a verified holder is never displaced, PIN and all (probe: displace a verified row -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect(await start(c, s.a, s.owner)).toBe("taken");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verified_at: expect.anything(), pin_hash: expect.any(String) });
+    }));
+
+  it("another business's claim never displaces this one's, even a lapsed one (probe: drop account_id from the holder read -> A's row cleared, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.b, s.bOwner)).toBe("ok");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verify_code_hash: expect.any(String) });
+    }));
+
+  it("five starts per person per business in 24 hours; the sixth is too_many and stores nothing; a day later it is allowed again (probe: no cap -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      const answers = [];
+      for (let i = 1; i <= 6; i++) answers.push(await start(c, s.a, s.staff, `+1956555020${i}`));
+      expect(answers).toEqual(["ok", "ok", "ok", "ok", "ok", "too_many"]);
+      expect((await rowOf(c, s.staff))[0].e164).toBe("+19565550205");
+      expect(await start(c, s.b, s.bOwner, "+19565550206")).toBe("ok");   // another person, another business: their own budget
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_window_started_at = now() - interval '24 hours' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.staff, "+19565550207")).toBe("ok");
+    }));
+
+  it("a displaced or removed row keeps its restart count, so clearing a cell never resets the cap (probe: reset verify_starts when a row is displaced -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      for (let i = 1; i <= 5; i++) await start(c, s.a, s.staff, `+1956555030${i}`);
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.owner, "+19565550305")).toBe("ok");   // displaces the staff member's lapsed claim
+      expect(await start(c, s.a, s.staff, "+19565550399")).toBe("too_many");
+    }));
+
+  // Since I-2 the function answers taken BEFORE it writes, so the unique key is a backstop no function case reaches
+  // (the old "second person" case survived dropping it). Pinned here, on the table itself.
+  it("the table itself refuses a second person on the same cell of the same business (probe: drop owner_line_enrollments_one_cell -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query("insert into owner_line_enrollments (account_id, user_id, e164) values ($1, $2, $3)", [s.a, s.owner, CELL]);
+      await expect(c.query("insert into owner_line_enrollments (account_id, user_id, e164) values ($1, $2, $3)", [s.a, s.staff, CELL]))
+        .rejects.toMatchObject({ code: "23505", constraint: "owner_line_enrollments_one_cell" });
+    }));
+
+  it("a row with no cell can hold no verification, code or PIN (probe: drop owner_line_enrollments_no_cell_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("insert into owner_line_enrollments (account_id, user_id, e164, verified_at) values ($1, $2, null, now())", [s.a, s.owner]))
+        .rejects.toMatchObject({ code: "23514", constraint: "owner_line_enrollments_no_cell_check" });
+    }));
+});
 ```
 
 - [ ] **Step 3: Run it on the replica's `pre` database (no 0115) and see it fail.**
@@ -1161,6 +1270,15 @@ describe("0115: teardown", () => {
 --     APP computes), the PIN as an scrypt string the APP computes (pin_hash; SQL only compares, 0036's split), the
 --     wrong-PIN counter and the lock. The composite FK to memberships cascades: a person removed from the team, a
 --     deleted user and a deleted account take the row with them.
+--     Only a VERIFIED cell, or one with a LIVE code, holds a cell (Task 5 review I-2): a new claim on a cell whose
+--     holder is unverified and whose code has lapsed or been spent displaces that holder, who is left with no cell,
+--     no code and no PIN (e164 is null then; owner_line_enrollments_no_cell_check). Without that, a typo held a
+--     teammate's cell forever and a requester could keep any number, a customer's included, in the call-in prompt.
+--     A row is CLEARED, never deleted, when its cell goes (displaced, or removed by its person), so its restart
+--     counter survives: at most five codes per person per business in any 24 hours (verify_window_started_at,
+--     verify_starts). Why five a day and not five an hour: each start keeps a number in the prompt for at most ten
+--     minutes, so a day bound caps it at 50 minutes a day, where an hour bound would allow most of the day; a
+--     person who mistypes or misses the call still has several tries.
 --   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default. owner_line_changed_at and
 --     owner_line_changed_by_kind ('owner' or 'agency'): WHEN it last changed and WHAT KIND of person changed it, never
 --     WHO. Owner ruling 2026-11-09, "Say BIS, keep names private": every member reads accounts (authenticated holds
@@ -1305,7 +1423,7 @@ create table public.owner_line_enrollments (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null,
   user_id uuid not null,
-  e164 text not null constraint owner_line_enrollments_e164_check
+  e164 text constraint owner_line_enrollments_e164_check
     check (substr(e164, 1, 1) = '+' and substr(e164, 2, 1) <> '0' and substr(e164, 2) !~ '[^0-9]'
            and char_length(e164) between 9 and 16),
   verified_at timestamptz,
@@ -1314,6 +1432,9 @@ create table public.owner_line_enrollments (
   verify_expires_at timestamptz,
   verify_attempts integer not null default 0 constraint owner_line_enrollments_verify_attempts_check
     check (verify_attempts between 0 and 3),
+  verify_window_started_at timestamptz,
+  verify_starts integer not null default 0 constraint owner_line_enrollments_verify_starts_check
+    check (verify_starts between 0 and 5),
   pin_hash text constraint owner_line_enrollments_pin_hash_check
     check (pin_hash is null or (char_length(pin_hash) = 80 and substr(pin_hash, 1, 14) = 'scrypt:17:8:1:'
            and substr(pin_hash, 15) !~ '[^A-Za-z0-9_:-]')),
@@ -1328,7 +1449,9 @@ create table public.owner_line_enrollments (
   constraint owner_line_enrollments_one_cell unique (account_id, e164),
   constraint owner_line_enrollments_pin_pair_check check ((pin_hash is null) = (pin_set_at is null)),
   constraint owner_line_enrollments_code_pair_check check ((verify_code_hash is null) = (verify_expires_at is null)),
-  constraint owner_line_enrollments_pin_needs_cell_check check (pin_hash is null or verified_at is not null)
+  constraint owner_line_enrollments_pin_needs_cell_check check (pin_hash is null or verified_at is not null),
+  constraint owner_line_enrollments_no_cell_check
+    check (e164 is not null or (verified_at is null and verify_code_hash is null and pin_hash is null))
 );
 comment on table public.owner_line_enrollments is
   'F-032 (0115): a person''s registered cell and PIN for calling in to hear the day. Server-written and server-read only.';
@@ -1560,17 +1683,43 @@ begin
   return v_base || jsonb_build_object('status', 'pin', 'pin_params', substr(e.pin_hash, 1, 36));
 end $$;
 
--- 5. (Re)start a call-in code. A new cell clears the verification, the PIN, the counter and the lock.
+-- 5. (Re)start a call-in code. A new cell clears the verification, the PIN, the counter and the lock. Answers 'ok',
+--    'taken' (another person on this business holds the cell: verified, or with a live code) or 'too_many' (this
+--    person has started five codes on this business in the last 24 hours; nothing is stored). A lapsed or spent
+--    unverified claim on the cell is displaced first (review I-2). One cell at a time on one business: the advisory
+--    lock below serializes two claims racing for the same cell, so only one of them can displace.
 create function public.owner_line_start_verification(
   p_account_id uuid, p_user_id uuid, p_e164 text, p_code_hash text, p_minutes integer)
 returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare mine public.owner_line_enrollments%rowtype; holder public.owner_line_enrollments%rowtype;
+        v_fresh boolean;
 begin
   if p_account_id is null or p_user_id is null or p_e164 is null or p_code_hash is null or p_minutes is null then
     raise exception 'owner_line_start_verification: a required argument is null' using errcode = '22004';
   end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('owner_line_cell|' || p_account_id::text || '|' || p_e164, 0));
+  select * into mine from public.owner_line_enrollments
+   where account_id = p_account_id and user_id = p_user_id for update;
+  v_fresh := not found or mine.verify_window_started_at is null
+    or mine.verify_window_started_at <= now() - interval '24 hours';
+  if not v_fresh and mine.verify_starts >= 5 then return 'too_many'; end if;
+  select * into holder from public.owner_line_enrollments
+   where account_id = p_account_id and e164 = p_e164 and user_id <> p_user_id for update;
+  if found then
+    if holder.verified_at is not null
+       or (holder.verify_code_hash is not null and holder.verify_expires_at > now() and holder.verify_attempts < 3) then
+      return 'taken';
+    end if;
+    update public.owner_line_enrollments
+       set e164 = null, verified_at = null, verify_code_hash = null, verify_expires_at = null, verify_attempts = 0,
+           pin_hash = null, pin_set_at = null, failed_attempts = 0, locked_until = null
+     where id = holder.id;
+  end if;
   begin
-    insert into public.owner_line_enrollments as e (account_id, user_id, e164, verify_code_hash, verify_expires_at)
-    values (p_account_id, p_user_id, p_e164, p_code_hash, now() + make_interval(mins => p_minutes))
+    insert into public.owner_line_enrollments as e
+      (account_id, user_id, e164, verify_code_hash, verify_expires_at, verify_window_started_at, verify_starts)
+    values (p_account_id, p_user_id, p_e164, p_code_hash, now() + make_interval(mins => p_minutes), now(), 1)
     on conflict (account_id, user_id) do update
        set e164 = excluded.e164,
            verify_code_hash = excluded.verify_code_hash,
@@ -1580,7 +1729,9 @@ begin
            pin_hash = case when e.e164 = excluded.e164 then e.pin_hash end,
            pin_set_at = case when e.e164 = excluded.e164 then e.pin_set_at end,
            failed_attempts = case when e.e164 = excluded.e164 then e.failed_attempts else 0 end,
-           locked_until = case when e.e164 = excluded.e164 then e.locked_until end;
+           locked_until = case when e.e164 = excluded.e164 then e.locked_until end,
+           verify_window_started_at = case when v_fresh then now() else e.verify_window_started_at end,
+           verify_starts = case when v_fresh then 1 else e.verify_starts + 1 end;
   exception when unique_violation then
     return 'taken';
   end;
@@ -1776,6 +1927,8 @@ grant execute on function public.note_owner_line_call(uuid, uuid, text, text, te
   14. **note_agency_open (review m-3).** Delete its `owner_line_` guard → "an agency note with an owner_line_ kind is refused" FAILS.
   15. **An ON switch keeps its record (re-review m-B).** Drop `accounts_owner_line_on_has_record_check` → "clearing the record while the switch is on is refused" FAILS. The reset case beside it (off with a fresh record, then the record cleared) stays green, so Task 15's two-write cleanup still works.
   16. **Teardown (Task 2 review m-2).** Remove `"owner_line_enrollments"` from `ACCOUNT_OWNED_TABLES` → "owner_line_enrollments is on ACCOUNT_OWNED_TABLES" FAILS.
+  17. **A lapsed claim never holds a cell (Task 5 review I-2).** Never displace → the expired, spent and cap-survives cases FAIL; displace only an EXPIRED code → "a spent claim" FAILS; displace a live code → "a live code is not displaced" and the older "second person" case FAIL; displace a verified holder → "a verified holder is never displaced" FAILS; drop `account_id` from the holder read → "another business's claim never displaces" FAILS; drop the cap → the sixth start trips `verify_starts_check`, and with that CHECK widened (the CHECK-free variant) the sixth answers `ok` → "five starts" FAILS; reset the count on displacement → "clearing a cell never resets" FAILS; never reopen the window within 48 hours → "five starts" FAILS; drop `owner_line_enrollments_no_cell_check` → its case FAILS. The holder check answers `taken` before anything is written, so dropping `owner_line_enrollments_one_cell` no longer fails the old "second person" case: a table-level case now pins that key, and that case FAILS instead. The `verify_attempts < 3` clause in the holder check is a guard no case can reach: `owner_line_attempt_verify` clears the code on the third wrong one.
+  18. **The wrappers (Task 5 review m-1, I-2), live:** `setOwnerLinePin` without its verified-only filter → the CHECK throws, "is not verified answers false" FAILS; `removeOwnerLineEnrollment` deleting the row → "five starts a day" FAILS (`ok` where `too_many` was due); `startOwnerLineVerification` dropping `too_many` → FAILS ("unexpected answer"); `readMyOwnerLineEnrollment` without its `e164` filter → FAILS (a cleared row reads as an enrollment).
 
   Paste each FAIL line.
 
@@ -1829,7 +1982,7 @@ export type OwnerLineLookup =
 export type OwnerLineSessionFacts = { name: string | null; language: "en" | "es" | null; clerkUserId: string;
   clerkOrgId: string; timezone: string; accountLanguage: "en" | "es" | null };
 export async function readMyOwnerLineEnrollment(db, accountId, userId): Promise<OwnerLineEnrollment | null>;
-export async function startOwnerLineVerification(db, accountId, userId, e164, codeHash): Promise<"ok" | "taken">;
+export async function startOwnerLineVerification(db, accountId, userId, e164, codeHash): Promise<"ok" | "taken" | "too_many">;   // too_many stores NOTHING: never show a code (I-2)
 export async function attemptOwnerLineVerify(db, accountId, callerE164, codeHash): Promise<"verified" | "wrong" | "spent" | "none">;
 export async function setOwnerLinePin(db, accountId, userId, pinHash): Promise<boolean>;
 export async function removeOwnerLinePin(db, accountId, userId): Promise<void>;
@@ -1876,7 +2029,7 @@ export async function setOwnerLineSwitch(db, accountId, on: boolean, by: OwnerLi
 | SQL functions that read `calls` (0064, 0068, 0088, 0091, 0092, 0103, 0106, 0112) (re-grep) | contact links, merges, RLS, AI acts | none: none of them counts calls; an owner-line row has no `contact_id` |
 | `usage_events` meters `voice_minutes`, `sms`, `ai_chats` (`DB/billing.ts:13`) (re-grep) | billing | none: there is no per-answered-call meter; owner-line minutes stay on `voice_minutes` (Q-B) |
 
-- [ ] **Step 1: Write the failing counting test** (it uses `withTestAccount`, read from `packages/db/src/test/fixtures.ts:140`). **The block below is the committed file** (8 cases: the four counting cases, one live round trip through every wrapper that also pins the ten-a-day limit through both wrappers (Task 2 review I-1), a lock case, re-review m-E's no-op case, and the Task 2 review m-3 missing-account case). It runs in CI `verify`, and locally against a PostgREST in front of the PG18 replica (2026-11-09: PostgREST 14.14 on its own port, a `/rest/v1` proxy, keys signed with a local-only secret, no `.env` in the worktree); never against bis-ci before 0115 is there.
+- [ ] **Step 1: Write the failing counting test** (it uses `withTestAccount`, read from `packages/db/src/test/fixtures.ts:140`). **The block below is the committed file** (10 cases; the Task 5 review added a PIN on an unverified cell answering false (m-1) and the restart cap surviving a removed cell (I-2): the four counting cases, one live round trip through every wrapper that also pins the ten-a-day limit through both wrappers (Task 2 review I-1), a lock case, re-review m-E's no-op case, and the Task 2 review m-3 missing-account case). It runs in CI `verify`, and locally against a PostgREST in front of the PG18 replica (2026-11-09: PostgREST 14.14 on its own port, a `/rest/v1` proxy, keys signed with a local-only secret, no `.env` in the worktree); never against bis-ci before 0115 is there.
 
 ```ts
 // packages/db/src/test/owner-line-counting.test.ts
@@ -2066,6 +2219,47 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
       await expect(setOwnerLineSwitch(db, gone, false, "agency")).rejects.toThrow(`setOwnerLineSwitch: no such account ${gone}`);
     }));
 });
+
+/** A person on the account, through the service client; the users row is not account-owned, so `done` deletes it. */
+async function seedPerson(db: SupabaseClient, accountId: string, role: "owner" | "staff") {
+  const clerk = `user_ol_p_${randomBytes(4).toString("hex")}`;
+  const { data: u, error: uErr } = await db.from("users").insert({ clerk_user_id: clerk, email: `${clerk}@example.com` }).select("id").single();
+  if (uErr || !u) throw new Error(`seed user: ${uErr?.message}`);
+  const userId = (u as { id: string }).id;
+  const { error: mErr } = await db.from("memberships").insert({ user_id: userId, scope: "account", account_id: accountId, role });
+  if (mErr) throw new Error(`seed membership: ${mErr.message}`);
+  return {
+    userId,
+    done: async () => {
+      const { error } = await db.from("users").delete().eq("id", userId);
+      if (error) throw new Error(`owner-line test cleanup (users) failed: ${error.message}`);
+    },
+  };
+}
+
+describe("the owner-line wrappers: an unverified cell and the restart cap (Task 5 review m-1, I-2)", () => {
+  it("setting a PIN on a cell that is not verified answers false and stores nothing, never a database error (mutation: drop the verified-only filter -> the CHECK throws, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const p = await seedPerson(db, accountId, "staff");
+      try {
+        expect(await startOwnerLineVerification(db, accountId, p.userId, CELL, randomBytes(32).toString("hex"))).toBe("ok");
+        expect(await setOwnerLinePin(db, accountId, p.userId, `scrypt:17:8:1:${"A".repeat(22)}:${"B".repeat(43)}`)).toBe(false);
+        expect(await readMyOwnerLineEnrollment(db, accountId, p.userId)).toMatchObject({ e164: CELL, verifiedAt: null, pinSetAt: null });
+      } finally { await p.done(); }
+    }));
+
+  it("five starts a day; removing the cell reads as no enrollment but does NOT reset the count (mutations: removal deletes the row -> 'ok'; the wrapper drops too_many -> throws; FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const p = await seedPerson(db, accountId, "staff");
+      try {
+        const code = () => randomBytes(32).toString("hex");
+        for (let i = 1; i <= 5; i++) expect(await startOwnerLineVerification(db, accountId, p.userId, `+1956555040${i}`, code())).toBe("ok");
+        await removeOwnerLineEnrollment(db, accountId, p.userId);
+        expect(await readMyOwnerLineEnrollment(db, accountId, p.userId)).toBeNull();
+        expect(await startOwnerLineVerification(db, accountId, p.userId, "+19565550499", code())).toBe("too_many");
+      } finally { await p.done(); }
+    }));
+});
 ```
 
 `getDisclosureResults` gets no case: it counts only `trial`-stamped calls, and the owner-line call row is never stamped, so a case could not fail. The inventory table records why it needs no exclusion.
@@ -2172,12 +2366,16 @@ export type OwnerLineSessionFacts = {
 const ROLES: readonly string[] = ["owner", "staff", "technician"];
 const lang = (v: unknown): "en" | "es" | null => (v === "en" || v === "es" ? v : null);
 
+/**
+ * This person's cell on this business, or null when they have none. A row whose cell was displaced or removed stays
+ * (its restart count must survive: 0115, Task 5 review I-2) with e164 null, and reads as null here, exactly as no row.
+ */
 export async function readMyOwnerLineEnrollment(
   db: SupabaseClient, accountId: string, userId: string,
 ): Promise<OwnerLineEnrollment | null> {
   const { data, error } = await db.from("owner_line_enrollments")
     .select("id, e164, verified_at, verify_expires_at, pin_set_at, locked_until")
-    .eq("account_id", accountId).eq("user_id", userId).maybeSingle();
+    .eq("account_id", accountId).eq("user_id", userId).not("e164", "is", null).maybeSingle();
   if (error) throw new Error(`readMyOwnerLineEnrollment failed: ${error.message}`);
   if (!data) return null;
   const r = data as { id: string; e164: string; verified_at: string | null; verify_expires_at: string | null;
@@ -2186,14 +2384,21 @@ export async function readMyOwnerLineEnrollment(
     pinSetAt: r.pin_set_at, lockedUntil: r.locked_until };
 }
 
+/**
+ * Start (or restart) a call-in code for this person's cell on this business.
+ *   - "ok": stored. A lapsed or spent unverified claim on the cell by someone else was displaced first.
+ *   - "taken": another person on this business holds the cell (verified, or with a live code).
+ *   - "too_many": this person has started five codes on this business in the last 24 hours. NOTHING was stored, so the
+ *     caller must not show a code (Task 5 review I-2; the bound and its reason are in 0115's header).
+ */
 export async function startOwnerLineVerification(
   db: SupabaseClient, accountId: string, userId: string, e164: string, codeHash: string,
-): Promise<"ok" | "taken"> {
+): Promise<"ok" | "taken" | "too_many"> {
   const { data, error } = await db.rpc("owner_line_start_verification", {
     p_account_id: accountId, p_user_id: userId, p_e164: e164, p_code_hash: codeHash, p_minutes: OWNER_LINE_VERIFY_MINUTES,
   });
   if (error) throw new Error(`startOwnerLineVerification failed: ${error.message}`);
-  if (data === "ok" || data === "taken") return data;
+  if (data === "ok" || data === "taken" || data === "too_many") return data;
   throw new Error(`startOwnerLineVerification: unexpected answer ${JSON.stringify(data)}`);
 }
 
@@ -2226,8 +2431,16 @@ export async function removeOwnerLinePin(db: SupabaseClient, accountId: string, 
   if (error) throw new Error(`removeOwnerLinePin failed: ${error.message}`);
 }
 
+/**
+ * The person removes their cell: no cell, no code, no PIN, no lock. The row is CLEARED, never deleted, so its restart
+ * count survives (Task 5 review I-2): deleting it would let anyone reset the five-a-day bound by removing and re-adding.
+ * readMyOwnerLineEnrollment then answers null, as for someone who never had a cell.
+ */
 export async function removeOwnerLineEnrollment(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
-  const { error } = await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
+  const { error } = await db.from("owner_line_enrollments")
+    .update({ e164: null, verified_at: null, verify_code_hash: null, verify_expires_at: null, verify_attempts: 0,
+      pin_hash: null, pin_set_at: null, failed_attempts: 0, locked_until: null })
+    .eq("account_id", accountId).eq("user_id", userId);
   if (error) throw new Error(`removeOwnerLineEnrollment failed: ${error.message}`);
 }
 
@@ -2927,6 +3140,7 @@ export function extractOwnerPass(eventData: unknown): string | null {
 **Interfaces:**
 - Consumes (Task 2): `readMyOwnerLineEnrollment`, `startOwnerLineVerification`, `setOwnerLinePin`, `removeOwnerLinePin`, `removeOwnerLineEnrollment`, `setOwnerLineSwitch`, `OwnerLineSwitchState`, `OWNER_LINE_VERIFY_MINUTES`.
 - Consumes (this task, bis-db): `emitAgencyEvent(db, type, actorClerkUserId, payload)`.
+- **`startOwnerLineVerification` answers `"ok" | "taken" | "too_many"` (Task 5 review I-2).** On `too_many` nothing was stored, so the action must NOT show the code it generated; it fails with its own copy ("You've asked for five codes today. Try again tomorrow." / *usted* Spanish), as it fails on `taken`. `readMyOwnerLineEnrollment` answers null for a cell that was displaced or removed, exactly as for none, and `removeOwnerLineEnrollment` clears rather than deletes; neither changes the action's code.
 
 **Which BIS person turned the switch off (owner ruling 2026-11-09, "Say BIS, keep names private").** `accounts` stores only the who-kind, so the person goes in BIS's own record: one `events` row with `account_id` NULL, `type 'owner_line.switch_off'`, `actor_type 'user'`, `actor_id` = the BIS person's Clerk user id, `payload { account_id, changed_at }`, written on `serviceDb()`. Why that row and not the existing patterns, measured on the replica 2026-11-09: an account-scoped event is readable by the client's Owner AND Staff (`events_read`, 0109:198: `is_agency() or account_id = current_account_id()`), so its `actor_id` would name the BIS person to them; an access-log item is Owner-readable next to the visit's `actor_name` on the same Team page. With `account_id` null only `is_agency()` and service_role read the row (Owner 0, Staff 0, agency 1). These rows **outlive `deleteAccountCascade`** (it deletes events by `account_id`), so any test that writes one deletes it itself, by its id.
 
