@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { ownerLineLockoutEmail } from "@/lib/email/templates/owner-line";
@@ -10,8 +9,10 @@ import type { Locale } from "@/lib/i18n/locale";
  * 2:14 PM')". Each recipient in their own language (users.language, then the account's, then English), deduplicated
  * by address, each send in its own try/catch so one failure never costs the other. Never throws.
  * THIS MODULE REACHES @bis/db AT MODULE SCOPE, through email-gate.ts:1-5 and templates/shell.ts:1, so a TeXML route
- * must never import it statically (route.ts:219-226; SC-18). owner-pin imports it with await import() inside its
- * locked_now branch only. The await import("@bis/db") below is for this file's own reads.
+ * must never import it statically (route.ts:219-226; SC-18). owner-pin imports it with await import() INSIDE after(),
+ * once the caller has been answered, and captures the lock instant (`at`) before calling after()
+ * (owner-pin/route.ts lockoutEmailsAfterResponse; the module's chunk is about 613 KB with the catalogue, which must
+ * never load on Telnyx's answer deadline). The await import("@bis/db") below is for this file's own reads.
  */
 export async function sendOwnerLineLockoutEmails(
   p: { accountId: string; userId: string; lockedUntil: string; at: Date; accountLanguage: "en" | "es" | null },
@@ -53,22 +54,5 @@ export async function sendOwnerLineLockoutEmails(
     }
   } catch (e) {
     console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${String(e)}`);
-  }
-}
-
-/**
- * Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path.
- *
- * The lock instant is captured HERE, before after() defers the send past the response, so the email's "at 2:14 PM"
- * is when the PIN was wrong a third time — not whenever the deferred send happens to run.
- */
-export function scheduleOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
-): void {
-  const lockedAt = new Date();
-  try {
-    after(() => sendOwnerLineLockoutEmails({ ...p, at: lockedAt }));
-  } catch (e) {
-    console.error(`owner line: could not schedule the lockout emails, accountId ${p.accountId}: ${String(e)}`);
   }
 }

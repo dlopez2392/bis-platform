@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { m } from "@/lib/messages";
 
 const db = vi.hoisted(() => ({ team: vi.fn(), brand: vi.fn(), zone: vi.fn() }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}), listAccountTeam: db.team, getBranding: db.brand, readAccountTimezone: db.zone,
 }));
-import { sendOwnerLineLockoutEmails, scheduleOwnerLineLockoutEmails } from "./lockout";
+import { sendOwnerLineLockoutEmails } from "./lockout";
 
 const AT = new Date("2026-11-09T20:14:00.000Z");      // 2:14 PM in America/Chicago
 const UNTIL = "2026-11-09T20:44:00.000Z";
@@ -79,52 +79,5 @@ describe("three wrong PINs email the person and the account's Owner (spec §4.2)
   });
 });
 
-// scheduleOwnerLineLockoutEmails runs from a TeXML route's request handler, so it must never escape that call with
-// an uncaught throw regardless of what next/server's after() does once there is no request scope to attach to —
-// e.g. this very test file, which calls it directly outside any request.
-describe("scheduleOwnerLineLockoutEmails is safe to call outside a request scope", () => {
-  it("never throws, even outside a request scope — where next/server's after() throws synchronously on its own (mutation: drop the try/catch around after() in scheduleOwnerLineLockoutEmails -> FAILS)", () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => scheduleOwnerLineLockoutEmails({ accountId: "a1", userId: "u-staff", lockedUntil: UNTIL, accountLanguage: null })).not.toThrow();
-  });
-});
-
-// m-7: after() defers its callback until after the response is sent, which can be noticeably later than the instant
-// the third wrong PIN landed. The email must state THAT instant, not whenever the deferred send happens to run —
-// so scheduleOwnerLineLockoutEmails must capture `new Date()` before calling after(), never inside its callback.
-// after() throws synchronously outside a request scope (confirmed above) and never runs its callback when it does,
-// so observing the captured instant needs a fake after() that defers for real — scoped to this one test via
-// vi.doMock + vi.resetModules, so every other test keeps using the real, unmocked next/server.
-describe("the lock instant is captured before after() defers the send (m-7)", () => {
-  afterEach(() => {
-    vi.doUnmock("next/server");
-    vi.doUnmock("@/lib/consent/email-gate");
-    vi.resetModules();
-    vi.useRealTimers();
-  });
-
-  it("emails the time the PIN was wrong a third time, not the time the deferred send finally runs (mutation: read new Date() inside the after() callback instead of capturing it before calling after() -> FAILS)", async () => {
-    let deferred: (() => unknown) | undefined;
-    vi.doMock("next/server", () => ({ after: (fn: () => unknown) => { deferred = fn; } }));
-    const sendCapture = vi.fn().mockResolvedValue({ id: "x" });
-    vi.doMock("@/lib/consent/email-gate", () => ({ sendEmailOrThrow: sendCapture }));
-    vi.resetModules();
-    const { scheduleOwnerLineLockoutEmails: schedule } = await import("./lockout");
-
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-11-09T20:14:00.000Z"));   // 2:14 PM Chicago: the third wrong PIN, right now
-    schedule({ accountId: "a1", userId: "u-staff", lockedUntil: UNTIL, accountLanguage: "en" });
-    expect(deferred).toBeDefined();
-
-    vi.setSystemTime(new Date("2026-11-09T20:20:00.000Z"));   // the deferred send actually runs 6 minutes later
-    await deferred!();
-
-    // u-staff is not the Owner, so the self email (Spanish: "2:14 p.m.") AND the Owner's English copy both go —
-    // both must carry the lock instant, 2:14, never the deferred send's own later clock, 2:20.
-    expect(sendCapture).toHaveBeenCalledTimes(2);
-    for (const call of sendCapture.mock.calls) {
-      expect(call[0]!.body).toContain("2:14");
-      expect(call[0]!.body).not.toContain("2:20");
-    }
-  });
-});
+// The lock-instant capture (m-7) and the never-throws-outside-a-request-scope guard moved with the after() call into
+// owner-pin/route.ts (lockoutEmailsAfterResponse), and are pinned there, in owner-pin/route.test.ts.

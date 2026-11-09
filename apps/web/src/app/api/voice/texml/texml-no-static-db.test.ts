@@ -80,7 +80,7 @@ describe("no TeXML route reaches @bis/db at module scope (SC-18; reviews I-8 and
       "lib/owner-line/lockout.ts -> lib/consent/email-gate.ts -> @bis/db");
   });
 
-  it("no source under app/api/voice/texml/ reaches @bis/db at module scope, directly or through anything it imports (mutation: import scheduleOwnerLineLockoutEmails statically in owner-pin/route.ts -> FAILS naming the chain)", () => {
+  it("no source under app/api/voice/texml/ reaches @bis/db at module scope, directly or through anything it imports (mutation: import sendOwnerLineLockoutEmails statically in owner-pin/route.ts -> FAILS naming the chain)", () => {
     const files = entries(TEXML);
     expect(files.some((f) => f.endsWith(join("owner-pin", "route.ts")))).toBe(true);   // the walk sees owner-pin
     expect(files.flatMap((f) => forbiddenChains(f))).toEqual([]);

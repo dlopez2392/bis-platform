@@ -1,6 +1,6 @@
 // apps/web/src/app/api/voice/texml/owner-pin/route.test.ts
 // F-032 plan Task 9: the PIN and call-in code step, as a DECISION. `../route`, `../telnyx-request`, `@bis/db` and the
-// lockout scheduler are mocked, so each case says which of today's documents the caller gets. The real chain
+// lockout module are mocked, so each case says which of today's documents the caller gets. The real chain
 // (signature, re-run, screened_calls row, owner pass) is ./today-path.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextResponse } from "next/server";
@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
     | { ok: true; form: URLSearchParams; authenticated: boolean } | { ok: false; response: Response },
   today: vi.fn(), bridge: vi.fn(), again: vi.fn(), failsafe: vi.fn(),
   phone: vi.fn(), look: vi.fn(), verify: vi.fn(), pin: vi.fn(), lockout: vi.fn(),
+  after: vi.fn(),
 }));
 const xml = (s: string) => new NextResponse(s, { status: 200 });
 vi.mock("../telnyx-request", () => ({ readTelnyxForm: vi.fn(async () => h.form), logFormFields: vi.fn() }));
@@ -26,7 +27,19 @@ vi.mock("@bis/db", () => ({
   getPhoneNumberByE164: h.phone, ownerLineAnswerLookup: h.look,
   attemptOwnerLineVerify: h.verify, attemptOwnerLinePin: h.pin,
 }));
-vi.mock("@/lib/owner-line/lockout", () => ({ scheduleOwnerLineLockoutEmails: h.lockout }));
+vi.mock("@/lib/owner-line/lockout", () => ({ sendOwnerLineLockoutEmails: h.lockout }));
+// after() becomes a recorder this file runs itself (route.test.ts's pattern), so a case can look at the moment
+// between the response and the deferred work.
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => h.after(cb) };
+});
+/** Runs every callback after() has recorded so far, as production does once the response is sent. */
+async function flushAfter(): Promise<void> {
+  const calls = [...h.after.mock.calls];
+  h.after.mockClear();
+  for (const [cb] of calls) await (cb as () => unknown)();
+}
 
 import { GET, POST } from "./route";
 import { hashPin, hashVerifyCode } from "@/lib/owner-line/secrets";
@@ -52,6 +65,9 @@ const logged = () => [...logSpy.mock.calls, ...errSpy.mock.calls].flat().map(Str
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations; these two are re-armed per case because some cases make them throw.
+  h.after.mockReset();
+  h.lockout.mockReset().mockResolvedValue(undefined);
   h.form = { ok: true, form: new URLSearchParams(), authenticated: true };
   process.env.OWNER_LINE_PIN_PEPPER = "p".repeat(40);
   HASH ||= await hashPin(PIN);
@@ -65,7 +81,7 @@ beforeEach(async () => {
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("owner-pin (F-032 §4.2): signed requests only", () => {
   it("GET is 405 whatever the environment", async () => {
@@ -141,14 +157,66 @@ describe("owner-pin: the PIN", () => {
     expect(res).toBe("TODAY");
     expect(res).not.toContain("Hangup");
     expect(h.today).toHaveBeenCalledWith(...TODAY_ARGS);
-    expect(h.lockout).toHaveBeenCalledWith({ accountId: "a1", userId: "u1", lockedUntil: "2026-11-09T20:44:00.000Z", accountLanguage: null });
+    await flushAfter();
+    expect(h.lockout).toHaveBeenCalledWith({
+      accountId: "a1", userId: "u1", lockedUntil: "2026-11-09T20:44:00.000Z", at: expect.any(Date), accountLanguage: null,
+    });
   });
 
-  it("the emails failing to schedule never cost the caller today's path", async () => {
+  it("the response is produced WITHOUT loading the lockout module; it loads inside after(), once the caller is answered (Task 9 decision: the 613 KB chunk off Telnyx's deadline; mutation: import it before the response -> FAILS)", async () => {
+    // A fresh registry with a factory that COUNTS its own evaluation: the lockout module is evaluated the first time
+    // anything imports it, so a count still 0 once the caller is answered proves the 613 KB chunk never loaded
+    // before the response. (A hoisted vi.mock factory's result is cached across resetModules, so it cannot count;
+    // vi.doMock after resetModules registers one that runs again, lockout.test.ts's m-7 pattern.)
+    let loads = 0;
+    vi.resetModules();
+    vi.doMock("@/lib/owner-line/lockout", () => { loads += 1; return { sendOwnerLineLockoutEmails: h.lockout }; });
+    try {
+      const { POST: freshPost } = await import("./route");
+      h.pin.mockResolvedValue({ status: "locked_now", lockedUntil: "2026-11-09T20:44:00.000Z" });
+      h.form = { ok: true, form: new URLSearchParams({ To: TO, From: CELL, Digits: "111112" }), authenticated: true };
+      const res = await freshPost(new Request("https://x.example/api/voice/texml/owner-pin", { method: "POST", body: "" }));
+      expect(await res.text()).toBe("TODAY");
+      expect(loads).toBe(0);                                 // answered, and the module was never evaluated
+      expect(h.lockout).not.toHaveBeenCalled();
+      expect(h.after).toHaveBeenCalledTimes(1);
+      await flushAfter();
+      expect(loads).toBe(1);                                 // loaded inside after(), exactly once
+      expect(h.lockout).toHaveBeenCalledTimes(1);
+    } finally {
+      // Back to this file's own default mock (never doUnmock: that would drop it, and later cases would load the
+      // real module), in a fresh registry.
+      vi.doMock("@/lib/owner-line/lockout", () => ({ sendOwnerLineLockoutEmails: h.lockout }));
+      vi.resetModules();
+    }
+  });
+
+  it("the email states the moment the PIN was wrong a third time, captured BEFORE after(), not when the deferred send runs (mutation: read new Date() inside the after() callback -> FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-09T20:14:00.000Z"));
     h.pin.mockResolvedValue({ status: "locked_now", lockedUntil: "2026-11-09T20:44:00.000Z" });
-    h.lockout.mockImplementation(() => { throw new Error(`could not schedule for ${CELL}`); });
     expect(await (await post({ Digits: "111112" })).text()).toBe("TODAY");
+    vi.setSystemTime(new Date("2026-11-09T20:20:00.000Z"));   // the deferred work runs six minutes later
+    await flushAfter();
+    expect(h.lockout.mock.calls[0]![0].at).toEqual(new Date("2026-11-09T20:14:00.000Z"));
+  });
+
+  it("after() throwing (outside a request scope) never costs the caller today's path, and is logged by class and account only (mutation: drop the try/catch around after() -> the outer catch's last-resort bridge, FAILS)", async () => {
+    h.pin.mockResolvedValue({ status: "locked_now", lockedUntil: "2026-11-09T20:44:00.000Z" });
+    h.after.mockImplementation(() => { throw new Error(`no request scope for ${CELL}`); });
+    expect(await (await post({ Digits: "111112" })).text()).toBe("TODAY");
+    expect(h.failsafe).not.toHaveBeenCalled();
+    expect(h.lockout).not.toHaveBeenCalled();
     expect(logged()).toContain("texml owner-pin: lockout emails could not be scheduled (Error), accountId a1");
+    expect(logged()).not.toContain(CELL.slice(2));
+  });
+
+  it("a send that fails inside after() is caught there and logged by class and account only (mutation: drop the callback's try/catch -> the deferred work rejects, FAILS)", async () => {
+    h.pin.mockResolvedValue({ status: "locked_now", lockedUntil: "2026-11-09T20:44:00.000Z" });
+    h.lockout.mockRejectedValue(new Error(`send failed for ${CELL}`));
+    expect(await (await post({ Digits: "111112" })).text()).toBe("TODAY");
+    await expect(flushAfter()).resolves.toBeUndefined();
+    expect(logged()).toContain("texml owner-pin: lockout emails failed (Error), accountId a1");
     expect(logged()).not.toContain(CELL.slice(2));
   });
 
@@ -156,7 +224,7 @@ describe("owner-pin: the PIN", () => {
     h.pin.mockResolvedValue(status === "locked" ? { status, lockedUntil: "2026-11-09T20:44:00.000Z" } : { status });
     expect(await (await post({ Digits: PIN })).text()).toBe("TODAY");
     expect(h.bridge).not.toHaveBeenCalled();
-    expect(h.lockout).not.toHaveBeenCalled();
+    expect(h.after).not.toHaveBeenCalled();
   });
 });
 

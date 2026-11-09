@@ -21,7 +21,7 @@ vi.mock("@bis/db", () => ({
   ownerLineAnswerLookup: db.look, attemptOwnerLineVerify: db.verify, attemptOwnerLinePin: db.pin,
 }));
 const lockout = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/owner-line/lockout", () => ({ scheduleOwnerLineLockoutEmails: lockout }));
+vi.mock("@/lib/owner-line/lockout", () => ({ sendOwnerLineLockoutEmails: lockout }));
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: () => {} }));
 const afterMock = vi.hoisted(() => vi.fn());
 vi.mock("next/server", async (importOriginal) => {
@@ -123,6 +123,13 @@ describe("owner-pin through the real answer route (F-032 Task 9)", () => {
     expect(db.screened).toHaveBeenCalledExactlyOnceWith({}, {
       accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: TO, callerE164: CELL, reason: "over-cap",
     });
+    // The lockout emails ran in after(), from the module loaded there, with the captured lock instant.
+    if (fields.Digits === "111112") {
+      expect(lockout).toHaveBeenCalledExactlyOnceWith({ accountId: ACCOUNT, userId: USER,
+        lockedUntil: "2026-11-09T20:44:00.000Z", at: expect.any(Date), accountLanguage: null });
+    } else {
+      expect(lockout).not.toHaveBeenCalled();
+    }
   });
 
   it("pound from a caller every guard clears: today's cleared bridge, with no owner pass", async () => {

@@ -23,15 +23,16 @@
 //   - pound, a timeout, or no digits: today's path, and NOT an attempt;
 //   - the right PIN: today's bridge with the owner pass, bound to THAT dial's handoff token (ownerLineBridge);
 //   - a wrong PIN, 1st or 2nd: asked again; the re-ask re-reads today's verdicts for its own fallthrough;
-//   - the 3rd wrong PIN: the lock, the two emails (scheduled after the response), and today's path, as a customer;
+//   - the 3rd wrong PIN: the lock, today's path as a customer, and the two emails, prepared and sent after the response;
 //   - no OWNER_LINE_PIN_PEPPER (plan O-3): today's path, and no attempt is counted against the person;
 //   - a call-in code: verified (a goodbye), wrong (asked again), spent or unknown (today's path; the card tells the
 //     person to make a new code);
 //   - anything that throws: the last-resort bridge, never a 500 (screen/route.ts's posture).
 //
 // No module-scope @bis/db, directly or through anything imported here (plan SC-18; ../texml-no-static-db.test.ts):
-// the database and the lockout module (which reaches it through the email gate) are imported inside the handler.
-import { NextResponse } from "next/server";
+// the database is imported inside the handler, and the lockout module (which reaches it through the email gate)
+// only inside after(), once the caller has been answered (lockoutEmailsAfterResponse).
+import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, xmlResponse } from "../route";
 import { logFormFields, readTelnyxForm } from "../telnyx-request";
@@ -44,6 +45,35 @@ const SIX = /^[0-9]{6}$/;
 
 /** An error as a log line may name it: its class only. */
 const errorClass = (e: unknown) => (e instanceof Error ? e.name : typeof e);
+
+/**
+ * The third wrong PIN's two emails (spec §4.2), entirely OFF Telnyx's answer deadline.
+ *   - The lock instant is captured HERE, before after() defers anything, so the email's "at 2:14 PM" is when the PIN
+ *     was wrong a third time, not whenever the deferred work runs (Task 8's m-7).
+ *   - The lockout module is imported INSIDE after(), never before the response: it reaches @bis/db through the email
+ *     gate (SC-18; ../texml-no-static-db.test.ts), and its chunk is about 613 KB with the catalogue, which a cold
+ *     load would otherwise spend on the carrier's clock.
+ *   - after() itself throws synchronously outside a request scope; that throw is caught here, so it can never turn
+ *     this caller's today's path into the last-resort bridge. The deferred work has its own catch, so nothing it
+ *     does can reject unseen. Both log the error's class and the account only.
+ */
+function lockoutEmailsAfterResponse(
+  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
+): void {
+  const at = new Date();
+  try {
+    after(async () => {
+      try {
+        const { sendOwnerLineLockoutEmails } = await import("@/lib/owner-line/lockout");
+        await sendOwnerLineLockoutEmails({ ...p, at });
+      } catch (e) {
+        console.error(`texml owner-pin: lockout emails failed (${errorClass(e)}), accountId ${p.accountId}`);
+      }
+    });
+  } catch (e) {
+    console.error(`texml owner-pin: lockout emails could not be scheduled (${errorClass(e)}), accountId ${p.accountId}`);
+  }
+}
 
 async function decide(form: URLSearchParams, origin: string, authenticated: boolean): Promise<NextResponse> {
   const called = e164Of(form.get("To") || null);
@@ -107,14 +137,7 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
     if (r.status === "ok") return ownerLineBridge(called, caller, origin, { accountId: line.account_id, userId: look.userId, role: look.role });
     if (r.status === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "pin", locale, accountId: line.account_id, name: look.name });
     if (r.status === "locked_now") {
-      // Imported HERE, never at module scope: the lockout module reaches @bis/db through the email gate (SC-18).
-      // The scheduler captures the lock instant itself, before after() defers the send (lockout.ts).
-      try {
-        const { scheduleOwnerLineLockoutEmails } = await import("@/lib/owner-line/lockout");
-        scheduleOwnerLineLockoutEmails({ accountId: line.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
-      } catch (e) {
-        console.error(`texml owner-pin: lockout emails could not be scheduled (${errorClass(e)}), ${who}`);
-      }
+      lockoutEmailsAfterResponse({ accountId: line.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
     }
     // locked_now, locked (another call locked it first) and none: today's path, as a customer.
     return await today();
