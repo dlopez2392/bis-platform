@@ -7621,3 +7621,11 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
     3. then production;
     4. then a one-line flip to `"token"` with all three roles.
   - No new production secret is added for PR 1, beyond `OWNER_LINE_PIN_PEPPER`.
+
+- **Impersonation (2026-11-09, owner): REFUSED.** A Clerk session carrying `actor` (BIS staff signed in as a client) is redirected before any owner-line read or write, on every setup action (Task 5 `member()`, b8ec379e). The Team switch is already refused through `lib/auth.ts:69`. This matches the access-log rule that BIS enters a client account only through the logged agency path.
+- **Orchestrator decisions (2026-11-09), owner-protective, inside the rulings above:**
+  - the Owner's and the agency's OFF are allowed during a billing pause; ON is not;
+  - "Stop calling in" is open to any current member, Technicians included;
+  - after a real agency OFF, a failed BIS event is retried once and then logged; the action still answers ok;
+  - the lockout email chunk loads only inside `after()`;
+  - the Spanish ask says "la tecla de gato" with no spoken "(#)".
