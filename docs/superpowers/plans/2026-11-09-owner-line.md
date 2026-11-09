@@ -367,7 +367,7 @@ Modify:
 
 - [ ] **Step 2: Write the failing schema test.** Model it on `packages/db/src/test/calendar-feeds-schema.test.ts` (the `withRollback`, `actAsMember` and privilege-matrix shapes, which were read from `./db`).
 
-**The block below is the committed file as of the Task 2 commit (54 cases: the two m-B cases joined after `21fc2433`), copied whole so the plan cannot drift from it; the file is authoritative.** Beyond the first draft it holds the review round's cases: I-1, one second-business case per account-scoped read (the lookup, its count, `attempt_verify`, `session_check` and its count; same cell or same person at business B); I-2, one case per refusal branch, asserting the reason by name (`no_client_access`, `switch_off`, `not_enrolled`, `locked`, `over_limit`, and the lookup's client-access gate and no-PIN branch); m-2, the switch-record trigger; m-3, `note_agency_open`'s refusal; and the 2026-11-09 ruling's kind-only record. ONE refused statement per `withRollback` throughout (25P02).
+**The block below is the committed file as of the Task 2 review fix round (55 cases: the two m-B cases joined after `21fc2433`, and the Task 2 review's teardown pin, m-2), copied whole so the plan cannot drift from it; the file is authoritative.** Beyond the first draft it holds the review round's cases: I-1, one second-business case per account-scoped read (the lookup, its count, `attempt_verify`, `session_check` and its count; same cell or same person at business B); I-2, one case per refusal branch, asserting the reason by name (`no_client_access`, `switch_off`, `not_enrolled`, `locked`, `over_limit`, and the lookup's client-access gate and no-PIN branch); m-2, the switch-record trigger; m-3, `note_agency_open`'s refusal; and the 2026-11-09 ruling's kind-only record. ONE refused statement per `withRollback` throughout (25P02).
 
 ```ts
 // packages/db/src/test/owner-line-schema.test.ts
@@ -375,6 +375,7 @@ import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { randomBytes, randomInt } from "node:crypto";
 import { withRollback, actAsMember } from "./db";
+import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 
 /**
  * 0115 (F-032 owner line). Spec docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
@@ -1111,6 +1112,15 @@ describe("0115: an ON switch keeps its record (review m-B)", () => {
       expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null }]);
     }));
 });
+
+// Review (Task 2) m-2: the teardown names the table (calendar-feeds-schema.test.ts case 8 is the precedent). It also
+// cascades with its membership, so a test that forgets it still cleans up today; the list is the record of intent.
+describe("0115: teardown", () => {
+  it("owner_line_enrollments is on ACCOUNT_OWNED_TABLES, and the first two stay the AI tables (probe: remove \"owner_line_enrollments\" -> FAILS)", () => {
+    expect((ACCOUNT_OWNED_TABLES as readonly string[]).includes("owner_line_enrollments")).toBe(true);
+    expect(ACCOUNT_OWNED_TABLES.slice(0, 2)).toEqual(["ai_ledger", "account_ai_settings"]);
+  });
+});
 ```
 
 - [ ] **Step 3: Run it on the replica's `pre` database (no 0115) and see it fail.**
@@ -1228,8 +1238,14 @@ describe("0115: an ON switch keeps its record (review m-B)", () => {
 --   accounts, agency_visits and agency_visit_items are added valid, so each scans its table once under the lock
 --   already held.
 -- APPLY ORDER: after 0113 and 0114. CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
---   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this; the
---   build after it selects calls.owner_line_user_id in listCalls, so it goes BEFORE the deploy.
+--   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this. The
+--   build after it is LOAD-BEARING on it, so it goes BEFORE the deploy, and the cost of getting that wrong is not a
+--   visible error (Task 2 review m-1): the app filters calls.owner_line_user_id in countCallsSince and
+--   countCallsByCallerSince, and BOTH voice routes FAIL OPEN when a cap read errors (apps/web/src/app/api/voice/
+--   texml/route.ts's "fail open" catch; incoming/route.ts's "call-limit counts failed - failing open"). An app
+--   deployed before this file therefore answers every call with BOTH call caps silently off, and the Calls list,
+--   the dashboard and the weekly report fail outright (listCalls and listCallStartsByOutcomeBetween name the column
+--   too). Never deploy the F-032 build to a project whose schema_migrations lacks this file.
 --
 -- Rollback (by hand, in this order; revert the app first). It destroys every enrollment and every owner-line
 -- access-log entry:
@@ -1759,6 +1775,7 @@ grant execute on function public.note_owner_line_call(uuid, uuid, text, text, te
   13. **The insert guard, one column at a time** (each case sets ONE guarded column, so a CHECK cannot refuse it in the guard's place): drop `owner_line_enabled_at`, `owner_line_changed_at` or `owner_line_changed_by_kind` from the guard → that column's case FAILS. Drop `accounts_owner_line_agency_off_check` → "BIS's last word can only be OFF" FAILS. Add a person-id column (`owner_line_changed_by_user text`) → "exactly three owner_line columns" FAILS.
   14. **note_agency_open (review m-3).** Delete its `owner_line_` guard → "an agency note with an owner_line_ kind is refused" FAILS.
   15. **An ON switch keeps its record (re-review m-B).** Drop `accounts_owner_line_on_has_record_check` → "clearing the record while the switch is on is refused" FAILS. The reset case beside it (off with a fresh record, then the record cleared) stays green, so Task 15's two-write cleanup still works.
+  16. **Teardown (Task 2 review m-2).** Remove `"owner_line_enrollments"` from `ACCOUNT_OWNED_TABLES` → "owner_line_enrollments is on ACCOUNT_OWNED_TABLES" FAILS.
 
   Paste each FAIL line.
 
@@ -1788,6 +1805,7 @@ grant execute on function public.note_owner_line_call(uuid, uuid, text, text, te
 - Modify: `packages/db/src/account-teardown.ts:28-35` (add `"owner_line_enrollments"` beside `"calendar_feeds"`).
 - Modify: `ACCT/dashboard/page.tsx:171`, and its `page.test.ts` (one case: the recent calls ask for `excludeOwnerLine: true`, the only test that can see the page pass it).
 - Modify, because `CallListRow` gains a REQUIRED `owner_line_user_id` (found by the web typecheck, 2026-11-09): six fixtures gain `owner_line_user_id: null`, one line each: `ACCT/calls/[callId]/page.test.ts`, `ACCT/calls/calls-table.test.ts`, `ACCT/calls/page.test.ts`, `ACCT/calls/textback-window.test.ts`, `ACCT/dashboard/calls-chart-card.test.ts`, `ACCT/voice/knowledge/[version]/page.test.ts`. Optional would hide a missing select column from every later reader.
+- Create: `packages/db/src/test/owner-line-wrappers.test.ts` (pure, a scripted builder; Task 2 review m-3): `setOwnerLineSwitch` answers a real change from the UPDATE's own row in one round trip, re-reads only on a no-op, and throws for a missing account.
 - Modify: `packages/db/src/test/call-outcome-starts-pagination.test.ts`: its fake builder learns `.is` (column-aware, like its siblings), plus one case that pins the owner-line filter on EVERY page without a database.
 
 **Interfaces:**
@@ -1844,7 +1862,7 @@ export async function setOwnerLineSwitch(db, accountId, on: boolean, by: OwnerLi
 | `DB/voice.ts:1010` `countCallsByCallerSince` | per-number cap (`texml/route.ts:339`, `incoming/route.ts:1042`) | **exclude** (SC-9) |
 | `DB/voice.ts:976` `countAnsweredCallsSince` | setup wizard "Test call" step (`WEB/lib/setup/setup-inputs.ts:118`) | **exclude** |
 | `DB/voice.ts:1134` `listCallStartsByOutcomeBetween` | `WEB/lib/reports/weekly-metrics.ts:86,111,134,149`. Through it: the dashboard tiles and conversion (`ACCT/dashboard/page.tsx:158,168,204,205`), the weekly report and the agency roll-up (`weekly-metrics.ts:169-170`), and the AI-presence count (`WEB/lib/voice/presence.ts:58`) | **exclude** (the one choke point) |
-| `DB/voice.ts:1248` `listCalls` | Calls list (a record: rows stay, labelled in Task 13), dashboard "recent calls" (`ACCT/dashboard/page.tsx:171`) | **dashboard passes `excludeOwnerLine: true`** |
+| `DB/voice.ts:1248` `listCalls` | Calls list (a record: rows stay, labelled in Task 13), dashboard "recent calls" (`ACCT/dashboard/page.tsx:171`) | **dashboard passes `excludeOwnerLine: true`**. Basis: spec §6 (an owner-line call is excluded from the dashboard tiles) and SC-9 (it is not a customer's call). NOT Q-E, which is about the answered count `calls_and_messages` shares with the tile |
 | `DB/voice.ts:389` `getDisclosureResults` | S-47a results card | none: it counts only calls stamped `trial`, and owner-line rows are never stamped (a test could not fail, so none is written) |
 | `DB/voice.ts:999` `hasActiveCallSince` | the topbar pulse "on a call" | none: Sofía IS on a call; the spec excludes only the *count* |
 | `DB/voice.ts:1058` `countCallerHistorySince` | Guard 2 and the press-1 screen | none: an owner-line row reads as `otherCalls`, which only ever unblocks |
@@ -1858,7 +1876,7 @@ export async function setOwnerLineSwitch(db, accountId, on: boolean, by: OwnerLi
 | SQL functions that read `calls` (0064, 0068, 0088, 0091, 0092, 0103, 0106, 0112) (re-grep) | contact links, merges, RLS, AI acts | none: none of them counts calls; an owner-line row has no `contact_id` |
 | `usage_events` meters `voice_minutes`, `sms`, `ai_chats` (`DB/billing.ts:13`) (re-grep) | billing | none: there is no per-answered-call meter; owner-line minutes stay on `voice_minutes` (Q-B) |
 
-- [ ] **Step 1: Write the failing counting test** (it uses `withTestAccount`, read from `packages/db/src/test/fixtures.ts:140`). **The block below is the committed file** (7 cases: the four counting cases, one live round trip through every wrapper, a lock case, and re-review m-E's no-op case). It runs in CI `verify`, and locally against a PostgREST in front of the PG18 replica (2026-11-09: PostgREST 14.14 on its own port, a `/rest/v1` proxy, keys signed with a local-only secret, no `.env` in the worktree); never against bis-ci before 0115 is there.
+- [ ] **Step 1: Write the failing counting test** (it uses `withTestAccount`, read from `packages/db/src/test/fixtures.ts:140`). **The block below is the committed file** (8 cases: the four counting cases, one live round trip through every wrapper that also pins the ten-a-day limit through both wrappers (Task 2 review I-1), a lock case, re-review m-E's no-op case, and the Task 2 review m-3 missing-account case). It runs in CI `verify`, and locally against a PostgREST in front of the PG18 replica (2026-11-09: PostgREST 14.14 on its own port, a `/rest/v1` proxy, keys signed with a local-only secret, no `.env` in the worktree); never against bis-ci before 0115 is there.
 
 ```ts
 // packages/db/src/test/owner-line-counting.test.ts
@@ -1982,6 +2000,12 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
 
         const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
         const call = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: CELL, ownerLineUserId: userId });
+        // The ten-a-day limit is the ONLY bound on owner-line calls (Q-C), and Tasks 7 and 12 mock both wrappers, so it
+        // is pinned HERE, through them (review I-1): with one owner-line call today and a limit of one, the lookup says
+        // over_limit with the person's facts, and the session check refuses (mutations: drop over_limit from the
+        // lookup's mapping; send p_max null from the session check; send a huge p_max from the lookup -> FAILS).
+        expect(await ownerLineAnswerLookup(db, accountId, CELL, 1)).toMatchObject({ status: "over_limit", enrollmentId, userId });
+        expect(await ownerLineSessionCheck(db, { accountId, userId, role: "staff", maxCalls: 1 })).toEqual({ ok: false, reason: "over_limit" });
         await noteOwnerLineCall(db, { accountId, callId: call.id, actorClerkUserId: clerk, actorName: "Dan Lopez",
           kinds: ["owner_line_appointments", "owner_line_calls_and_messages"] });
         expect((await readOwnerLineCallLog(db, accountId, call.id)).sort()).toEqual(["owner_line_appointments", "owner_line_calls_and_messages"]);
@@ -2034,6 +2058,12 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
       expect([on.changed, again.changed, off.changed, bisOff.changed]).toEqual([true, false, true, false]);
       expect(again.state).toEqual(on.state);
       expect(bisOff.state).toEqual({ enabledAt: null, changedAt: off.state.changedAt, changedByKind: "owner" });
+    }));
+
+  it("a switch write on an account that does not exist throws (review m-3; mutation: answer changed: false with an all-null state -> FAILS)", () =>
+    withTestAccount(async (db) => {
+      const gone = randomUUID();
+      await expect(setOwnerLineSwitch(db, gone, false, "agency")).rejects.toThrow(`setOwnerLineSwitch: no such account ${gone}`);
     }));
 });
 ```
@@ -2286,17 +2316,20 @@ export async function readOwnerLineCallLog(db: SupabaseClient, accountId: string
 export type OwnerLineSwitchKind = "owner" | "agency";
 export type OwnerLineSwitchState = { enabledAt: string | null; changedAt: string | null; changedByKind: OwnerLineSwitchKind | null };
 
+const SWITCH_COLS = "owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind";
+type SwitchRow = { owner_line_enabled_at: string | null; owner_line_changed_at: string | null; owner_line_changed_by_kind: string | null };
+
+function switchState(r: SwitchRow | null, who: string): OwnerLineSwitchState {
+  const kind = r?.owner_line_changed_by_kind ?? null;
+  if (kind !== null && kind !== "owner" && kind !== "agency") throw new Error(`${who}: unexpected kind ${kind}`);
+  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByKind: kind };
+}
+
 /** Server code only (the Team page after requireAccountOwner; the preferences card after the membership check). */
 export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string): Promise<OwnerLineSwitchState> {
-  const { data, error } = await db.from("accounts")
-    .select("owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind")
-    .eq("id", accountId).maybeSingle();
+  const { data, error } = await db.from("accounts").select(SWITCH_COLS).eq("id", accountId).maybeSingle();
   if (error) throw new Error(`readOwnerLineSwitch failed: ${error.message}`);
-  const r = data as { owner_line_enabled_at: string | null; owner_line_changed_at: string | null;
-    owner_line_changed_by_kind: string | null } | null;
-  const kind = r?.owner_line_changed_by_kind ?? null;
-  if (kind !== null && kind !== "owner" && kind !== "agency") throw new Error(`readOwnerLineSwitch: unexpected kind ${kind}`);
-  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByKind: kind };
+  return switchState(data as SwitchRow | null, "readOwnerLineSwitch");
 }
 
 /**
@@ -2310,6 +2343,10 @@ export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string)
  * on a switch the Owner already turned off must not relabel it "Turned off by BIS", and Task 5 emits BIS's
  * owner_line.switch_off event only when `changed` is true. The test is the UPDATE's own filter, so two clicks racing
  * each other change it once.
+ *
+ * The answer's `state` is the UPDATE's OWN returned row when it changed something (review m-3: one round trip, and no
+ * window for another write to show through), and a re-read only on a no-op. An account that does not exist THROWS:
+ * it is never answered as an all-null "off".
  */
 export async function setOwnerLineSwitch(
   db: SupabaseClient, accountId: string, on: boolean, by: OwnerLineSwitchKind,
@@ -2320,9 +2357,14 @@ export async function setOwnerLineSwitch(
     .update({ owner_line_enabled_at: on ? at : null, owner_line_changed_at: at, owner_line_changed_by_kind: by })
     .eq("id", accountId);
   const { data, error } = await (on ? base.is("owner_line_enabled_at", null) : base.not("owner_line_enabled_at", "is", null))
-    .select("id");
+    .select(SWITCH_COLS);
   if (error) throw new Error(`setOwnerLineSwitch failed: ${error.message}`);
-  return { changed: (data ?? []).length === 1, state: await readOwnerLineSwitch(db, accountId) };
+  const rows = (data ?? []) as SwitchRow[];
+  if (rows.length === 1) return { changed: true, state: switchState(rows[0]!, "setOwnerLineSwitch") };
+  const { data: now, error: readError } = await db.from("accounts").select(SWITCH_COLS).eq("id", accountId).maybeSingle();
+  if (readError) throw new Error(`setOwnerLineSwitch (no change) failed: ${readError.message}`);
+  if (now === null) throw new Error(`setOwnerLineSwitch: no such account ${accountId}`);
+  return { changed: false, state: switchState(now as SwitchRow, "setOwnerLineSwitch") };
 }
 ```
 
@@ -2356,7 +2398,10 @@ Add `export * from "./owner-line";` to `packages/db/src/index.ts` beside its sib
   9. `setOwnerLineSwitch` without its conditional filter (re-review m-E) → "a switch write that changes nothing" FAILS (`[true, true, true, true]`).
   10. The dashboard page without `excludeOwnerLine` → its page-test case FAILS; `listCallStartsByOutcomeBetween` without the filter → the pagination case FAILS (both run without a database).
 
-  All ten were run locally on 2026-11-09 against the PostgREST-fronted replica; CI verify re-proves them on its own stack.
+  11. **The ten-a-day limit through the wrappers (Task 2 review I-1; the ONLY bound on owner-line calls, Q-C, and Tasks 7 and 12 mock both wrappers):** x1 `ownerLineAnswerLookup` stops mapping `over_limit` → the round trip FAILS ("unexpected answer"); x3 `ownerLineSessionCheck` sends `p_max: null` → FAILS (`{ ok: true }` where `over_limit` was due); x4 `ownerLineAnswerLookup` sends `p_max: 1000000` → FAILS (`pin` where `over_limit` was due).
+  12. **The switch's answer (Task 2 review m-3):** re-read after a real change → "a real change answers from the UPDATE's own row" FAILS; answer an all-null state for a missing account → both missing-account cases FAIL.
+
+  All were run locally on 2026-11-09 against the PostgREST-fronted replica; CI verify re-proves them on its own stack.
 
 - [ ] **Step 8: Commit.**
 
@@ -3116,7 +3161,7 @@ describe("the business's switch (F-032 §3.3; owner rulings Q-A and 2026-11-09)"
 });
 ```
 
-`setOwnerLineSwitch` itself also refuses an agency ON (Task 2), so no other caller can bypass the action. **That case is already in `owner-line-counting.test.ts` (Task 2): the round trip asserts the wrapper's own refusal, and the m-E case pins the no-op. Do not append the block below; it is kept only as the record of what Task 2 now covers:**
+`setOwnerLineSwitch` itself also refuses an agency ON (Task 2), so no other caller can bypass the action. **`setOwnerLineSwitch` throws `setOwnerLineSwitch: no such account <id>` when the account does not exist (Task 2 review m-3); it never answers an all-null "off".** The action calls it only after `requireAccountOwner(accountId)` has found the account, so the throw is reachable only if the account is deleted in between. The action needs no handling of its own: like every other database error it surfaces as the action's failure, and nothing was written. **That case is already in `owner-line-counting.test.ts` (Task 2): the round trip asserts the wrapper's own refusal, and the m-E case pins the no-op. Do not append the block below; it is kept only as the record of what Task 2 now covers:**
 
 ```ts
 it("setOwnerLineSwitch refuses an agency ON before writing, and records an agency OFF as the agency's kind (mutation: drop its guard -> FAILS)", () =>
