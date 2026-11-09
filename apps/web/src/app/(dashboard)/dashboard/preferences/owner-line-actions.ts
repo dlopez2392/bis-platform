@@ -28,10 +28,16 @@ export type OwnerLineResult<T = null> = { ok: true; value: T } | { ok: false; er
 const lc = (l: Locale): Locale => (l === "es" ? "es" : "en");
 const fail = (locale: Locale, key: keyof typeof m): { ok: false; error: string } => ({ ok: false, error: t(m, key, lc(locale)) });
 
-/** The signed-in person's current membership of this business, in ANY role. Only "Stop calling in" uses it alone. */
+/**
+ * The signed-in person's current membership of this business, in ANY role. Only "Stop calling in" uses it alone.
+ * Every setup action authorises HERE. An impersonation session (Clerk's act claim, `actor` on auth()) is refused before
+ * anything is read: it would look like that person and enrol, or remove, their cell (owner ruling 2026-11-09;
+ * lib/auth.ts:69's pattern, which the Team switch already gets through requireAccountOwner).
+ */
 async function member(accountId: string): Promise<MyMembership | null> {
-  const { userId } = await auth();
+  const { userId, actor } = await auth();
   if (!userId) redirect("/sign-in");
+  if (actor) redirect("/no-access?reason=none");
   return myMembership(serviceDb(), userId, accountId);
 }
 

@@ -45,6 +45,14 @@ describe("listMyMemberships / myMembership (F-032 §3.1)", () => {
     expect(f.log.map((l) => l.table)).toEqual(["memberships"]);   // no number read for nobody
   });
 
+  it("THE TENANCY LINE: the person's users row is an INNER embed, so the clerk_user_id filter removes other people's memberships instead of blanking their users field (review I-1; mutation: drop !inner -> FAILS; the live proof is memberships.live.test.ts)", async () => {
+    const f = fakeDb({ memberships: { data: [], error: null } });
+    await listMyMemberships(f.db, "user_clerk_me");
+    const selects = f.log.find((l) => l.table === "memberships")!.ops.filter((o) => o[0] === "select");
+    expect(selects).toHaveLength(1);
+    expect(String(selects[0]![1])).toContain("users!inner(clerk_user_id)");
+  });
+
   it("two businesses: each card carries its OWN number, never the other's, and a live number beats a testing one (mutation: drop the account_id match in the number pick -> FAILS)", async () => {
     const f = fakeDb({
       memberships: { data: [row(A, "staff", open("Rio Roofing")), row(B, "owner", open("Valle Lawn"))], error: null },

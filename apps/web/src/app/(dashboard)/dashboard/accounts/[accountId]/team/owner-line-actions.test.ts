@@ -69,6 +69,32 @@ describe("the business's switch (F-032 §3.3; owner rulings Q-A and 2026-11-09)"
     await expect(setOwnerLineSwitchAction(A, "en", false)).rejects.toThrow(`setOwnerLineSwitch: no such account ${A}`);
     expect(mocks.emit).not.toHaveBeenCalled();
   });
+  it("BIS's record is retried once when its first write fails, so a passing blip does not lose who turned it off (review m-2; mutation: drop the retry -> FAILS)", async () => {
+    mocks.owner.mockResolvedValue({ userId: "user_bis", isAgency: true });
+    mocks.set.mockResolvedValue({ changed: true, state: OFF });
+    mocks.emit.mockRejectedValueOnce(new Error("event emit failed: fetch failed")).mockResolvedValueOnce(undefined);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await setOwnerLineSwitchAction(A, "en", false)).toEqual({ ok: true, value: OFF });
+    expect(mocks.emit).toHaveBeenCalledTimes(2);
+    expect(mocks.emit.mock.calls[1]).toEqual([{}, "owner_line.switch_off", "user_bis", { account_id: A, changed_at: OFF.changedAt }]);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+  it("when BIS's record fails twice, the OFF still stands and answers ok, and ONE server-side line names the account and the event, never the person (review m-2; mutations: throw instead -> FAILS; log the Clerk id -> FAILS)", async () => {
+    mocks.owner.mockResolvedValue({ userId: "user_bis_ana", isAgency: true });
+    mocks.set.mockResolvedValue({ changed: true, state: OFF });
+    mocks.emit.mockRejectedValue(new Error("event emit failed: permission denied for table events"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await setOwnerLineSwitchAction(A, "en", false)).toEqual({ ok: true, value: OFF });
+    expect(mocks.emit).toHaveBeenCalledTimes(2);
+    expect(err).toHaveBeenCalledTimes(1);
+    const line = err.mock.calls.flat().map(String).join(" ");
+    expect(line).toContain(A);
+    expect(line).toContain("owner_line.switch_off");
+    expect(line).toContain("permission denied for table events");
+    expect(line).not.toContain("user_bis_ana");
+    err.mockRestore();
+  });
   it("OFF asks the guard to allow it during a billing pause; ON asks with no option (the pattern lib/billing/read-only.test.ts pins)", async () => {
     mocks.owner.mockResolvedValue({ userId: "user_owner", isAgency: false });
     mocks.set.mockResolvedValue({ changed: true, state: OWNER_OFF });

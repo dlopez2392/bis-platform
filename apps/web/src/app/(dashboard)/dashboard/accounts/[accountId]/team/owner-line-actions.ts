@@ -2,6 +2,7 @@
 
 import { serviceDb, setOwnerLineSwitch, emitAgencyEvent, type OwnerLineSwitchState } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
+import { loggableError } from "@/lib/loggable-error";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
@@ -35,8 +36,28 @@ export async function setOwnerLineSwitchAction(
   const db = serviceDb();
   const { changed, state } = await setOwnerLineSwitch(db, accountId, on, isAgency ? "agency" : "owner");
   // Only a real change is BIS's to record (re-review m-E): asking for the state it is already in wrote nothing.
-  if (isAgency && changed) {
-    await emitAgencyEvent(db, "owner_line.switch_off", userId, { account_id: accountId, changed_at: state.changedAt });
-  }
+  if (isAgency && changed) await recordAgencyOff(db, accountId, userId, state.changedAt);
   return { ok: true, value: state };
+}
+
+/**
+ * BIS's own record of which BIS person turned the switch off (review m-2). A retry of the ACTION cannot write it: the
+ * switch is already off, so the retry changes nothing and records nothing. So the record itself is tried twice, and a
+ * second failure leaves one server-side line naming the account and the event (never the person's Clerk id, which is
+ * exactly what the client must not see by name), while the OFF, already written, stands and answers ok.
+ */
+async function recordAgencyOff(
+  db: ReturnType<typeof serviceDb>, accountId: string, actorClerkUserId: string, changedAt: string | null,
+): Promise<void> {
+  const type = "owner_line.switch_off";
+  const payload = { account_id: accountId, changed_at: changedAt };
+  try {
+    await emitAgencyEvent(db, type, actorClerkUserId, payload);
+  } catch {
+    try {
+      await emitAgencyEvent(db, type, actorClerkUserId, payload);
+    } catch (e) {
+      console.error(`owner line: BIS's ${type} record for account ${accountId} failed twice; the switch is off: ${loggableError(e)}`);
+    }
+  }
 }

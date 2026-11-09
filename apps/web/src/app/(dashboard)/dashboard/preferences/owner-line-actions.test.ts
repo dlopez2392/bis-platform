@@ -48,6 +48,19 @@ describe("the owner line's setup actions (F-032 §3.1, §3.2; SC-4)", () => {
     expect(mocks.start).not.toHaveBeenCalled();
   });
 
+  it("an impersonation session (Clerk's actor) is refused on all four setup actions, before any read, with nothing written (owner ruling 2026-11-09, review I-3; lib/auth.ts:69's pattern; mutation: drop the actor refusal in member() -> FAILS)", async () => {
+    mocks.auth.mockResolvedValue({ userId: "user_clerk_me", actor: { sub: "user_bis_support" } });
+    mocks.my.mockResolvedValue({ ...ME, role: "owner" });
+    const refused = "NEXT_REDIRECT /no-access?reason=none";
+    await expect(startOwnerLineVerificationAction(A, "en", "956 555 0142")).rejects.toThrow(refused);
+    await expect(setOwnerLinePinAction(A, "en", "482913")).rejects.toThrow(refused);
+    await expect(removeOwnerLinePinAction(A, "en")).rejects.toThrow(refused);
+    await expect(removeOwnerLineCellAction(A, "en")).rejects.toThrow(refused);
+    for (const f of [mocks.my, mocks.phone, mocks.read, mocks.start, mocks.setPin, mocks.removePin, mocks.removeCell]) {
+      expect(f).not.toHaveBeenCalled();
+    }
+  });
+
   it("not a member of the named business: refused, nothing written (mutation: skip the membership check -> FAILS)", async () => {
     mocks.my.mockResolvedValue(null);
     expect(await startOwnerLineVerificationAction(A, "en", "956 555 0142")).toMatchObject({ ok: false });
