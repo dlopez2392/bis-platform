@@ -7,9 +7,9 @@
 // No imports at all: the TeXML routes import this file statically (plan SC-18).
 export const OWNER_LINE_SAY = {
   "ownerLine.say.pinPrompt": "Hi {name}. Enter your PIN, or press pound to talk to {persona}.",
-  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de gato (#) para hablar con {persona}.",
+  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de gato para hablar con {persona}.",
   "ownerLine.say.pinPromptNoName": "Hi. Enter your PIN, or press pound to talk to {persona}.",
-  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de gato (#) para hablar con {persona}.",
+  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de gato para hablar con {persona}.",
   "ownerLine.say.pinWrong": "That PIN didn't match. Try again.",
   "ownerLine.say.pinWrong.es": "Ese PIN no coincide. Intente de nuevo.",
   "ownerLine.say.limit": "You've reached today's limit for calling in. Here is {persona}.",

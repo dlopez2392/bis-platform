@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { GET, POST } from "./route";
+import { GET, POST, OWNER_LINE_LOOKUP_DEADLINE_MS } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
 import type { BillingStanding } from "@bis/db";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
@@ -2218,5 +2218,45 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
       expect(asked).toContain("<Dial answerOnBridge=\"true\"");
       expect(asked).not.toContain("&amp;f=");
     });
+
+    // Re-review M-A: one case per state the first ask is never offered in (SC-17). In each, today's path is not
+    // Sofía's bridge, so nothing vouches for a ticketed one: the re-ask falls through to the UNCLEARED bridge.
+    it.each([
+      ["the agency's forward is on", () => { profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true }); }],
+      ["billing has no voice", () => {
+        process.env.BILLING_ENFORCE = "1";
+        readBillingStandingMock.mockResolvedValue({
+          complimentary: false, pausedAt: new Date(Date.now() - 31 * 86_400_000).toISOString(), subscriptionStatus: "past_due",
+          features: { voice_receptionist: true, web_concierge: true },
+        });
+      }],
+      ["the fallback drill is engaged", () => { process.env.VOICE_FALLBACK_DRILL_TO = TO; process.env.VOICE_FALLBACK_DRILL_FROM = CELL; }],
+    ])("%s: the re-ask's bridge carries NO fallback ticket (re-review M-A; mutation C1f: drop the three state checks from the vouch -> FAILS)", async (_state, arrange) => {
+      const { ownerLineGatherAgain } = await import("./route");
+      arrange();
+      const asked = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+        { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
+      expect(asked).toContain("<Dial answerOnBridge=\"true\"");
+      expect(asked).not.toContain("&amp;f=");
+    });
+  });
+
+  it("once the deadline has fired, a lookup that fails LATE logs nothing more: one line, the timeout, never a second 'lookup failed' (re-review M-B; mutation: drop the late flag -> FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    ownerLookupMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error("db blip")), OWNER_LINE_LOOKUP_DEADLINE_MS + 200);
+    }));
+    let settled = false;
+    const pending = telnyxSigned({ To: TO, From: CELL }).then((r) => { settled = true; return r.text(); });
+    const drain = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
+    await drain();
+    await vi.advanceTimersByTimeAsync(OWNER_LINE_LOOKUP_DEADLINE_MS);
+    await drain();
+    expect(settled).toBe(true);
+    expect(await pending).not.toContain("<Gather");
+    await vi.advanceTimersByTimeAsync(200);
+    await drain();
+    const ownerLines = logged(errSpy).split("\n").filter((l) => l.includes("owner-line lookup"));
+    expect(ownerLines).toEqual([`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId a1`]);
   });
 });

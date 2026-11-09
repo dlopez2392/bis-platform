@@ -13,7 +13,7 @@ describe("the owner line's TeXML words (spec §4.1, §4.2)", () => {
   });
   it("Spanish speaks es-MX, in usted", () => {
     const xml = ownerPinAskXml({ locale: "es", name: "Dan", persona: "Sofía", action: "a", retry: false, fallthrough: DIAL });
-    expect(xml).toContain(`<Say language="es-MX">Hola, Dan. Marque su PIN, o oprima la tecla de gato (#) para hablar con Sofía.</Say>`);
+    expect(xml).toContain(`<Say language="es-MX">Hola, Dan. Marque su PIN, o oprima la tecla de gato para hablar con Sofía.</Say>`);
   });
   it("a retry says the PIN did not match before asking again, inside the same Gather", () => {
     const xml = ownerPinAskXml({ locale: "en", name: null, persona: "Sofía", action: "a", retry: true, fallthrough: DIAL });

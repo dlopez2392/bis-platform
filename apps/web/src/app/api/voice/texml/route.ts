@@ -409,15 +409,25 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
     // number, and never the error's message, because the wrapper's
     // "unexpected answer" message quotes the RPC's answer (a name, the PIN
     // hash's parameters).
+    // `ownerReadLate`: once the deadline has fired, the call has already taken
+    // today's path and said so; a failure arriving after that is not news,
+    // and a second "lookup failed" line would misdescribe the call (re-review
+    // M-B), so the catch stays silent.
+    let ownerReadLate = false;
     const ownerRead: Promise<OwnerLineLookup | null> = ownerLineEligible && callerE164
       ? withDeadline(
         (async () => dbModule.ownerLineAnswerLookup(db, accountId, callerE164, dbModule.OWNER_LINE_MAX_CALLS_PER_DAY))()
           .catch((e: unknown) => {
-            console.error(`texml owner-line lookup failed (${e instanceof Error ? e.name : typeof e}) — today's path, accountId ${accountId}`);
+            if (!ownerReadLate) {
+              console.error(`texml owner-line lookup failed (${e instanceof Error ? e.name : typeof e}) — today's path, accountId ${accountId}`);
+            }
             return null;
           }),
         OWNER_LINE_LOOKUP_DEADLINE_MS,
-        () => console.error(`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId ${accountId}`),
+        () => {
+          ownerReadLate = true;
+          console.error(`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId ${accountId}`);
+        },
       )
       : Promise.resolve(null);
     let ownerLine: OfferedOwnerLine | undefined;

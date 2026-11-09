@@ -7975,9 +7975,9 @@ export const m = {
   // F-032 owner line (plan Task 7): what a registered team member hears on the phone before the call reaches
   // Sofía (TeXML <Say>, spec §4.1, §4.2). One line each, in the person's language; Spanish is usted.
   "ownerLine.say.pinPrompt": "Hi {name}. Enter your PIN, or press pound to talk to {persona}.",
-  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de gato (#) para hablar con {persona}.",
+  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de gato para hablar con {persona}.",
   "ownerLine.say.pinPromptNoName": "Hi. Enter your PIN, or press pound to talk to {persona}.",
-  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de gato (#) para hablar con {persona}.",
+  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de gato para hablar con {persona}.",
   "ownerLine.say.pinWrong": "That PIN didn't match. Try again.",
   "ownerLine.say.pinWrong.es": "Ese PIN no coincide. Intente de nuevo.",
   "ownerLine.say.limit": "You've reached today's limit for calling in. Here is {persona}.",
