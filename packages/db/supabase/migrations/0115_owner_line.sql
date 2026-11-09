@@ -30,10 +30,17 @@
 --     BIS". Which BIS person did it is BIS's own record, written by the app outside this table (plan Task 5).
 --     Both set together or neither (accounts_owner_line_change_check). Owner ruling Q-A in the database: the agency
 --     may turn it OFF, never ON, so a row whose last change was BIS's is off (accounts_owner_line_agency_off_check).
---     No account is born with any of the three set: a trigger refuses each on INSERT, for every role. And the switch
---     never moves without its record (review m-2): a second trigger refuses any UPDATE that changes
+--     No account is born with any of the three set: a trigger refuses each on INSERT, for every role. The switch
+--     never moves without a fresh TIME on its record (review m-2): a second trigger refuses any UPDATE that changes
 --     owner_line_enabled_at unless owner_line_changed_at changes with it to a non-null value (the pair CHECK then
---     needs the who-kind). A writer that forgets the record, or leaves a stale one, is refused.
+--     needs a who-kind). A writer that moves the switch and forgets the record is refused. What the database does
+--     NOT guarantee (review m-A): that the who-kind is CURRENT. A writer that moves the time but leaves a stale
+--     who-kind is accepted; keeping it current is the writer's job, and setOwnerLineSwitch (packages/db/src/
+--     owner-line.ts) always writes both. Two more edges, named: two flips inside ONE transaction that both stamp
+--     now() carry the same time, so the second is refused; and a backdated owner_line_changed_at (any value other
+--     than the old one) is accepted. And an ON switch always has its record (review m-B,
+--     accounts_owner_line_on_has_record_check): the trigger fires only when the switch moves, so without that CHECK
+--     an UPDATE that left it on and cleared its record was accepted.
 --   public.calls.owner_line_user_id: the person an owner-line call was for; null on every customer call. No foreign
 --     key on purpose: the mark must outlive a deleted user, or the call would start counting as a customer's.
 --   app.owner_line_day_start(zone, instant): the first instant of the instant's local date in that zone (owner
@@ -108,7 +115,8 @@
 --   drop trigger accounts_owner_line_switch_record on public.accounts; drop function app.owner_line_switch_record_guard();
 --   drop trigger accounts_owner_line_insert_guard on public.accounts; drop function app.owner_line_insert_guard();
 --   re-run 0105's note_agency_open as create or replace, with its revoke and grant lines;
---   alter table public.accounts drop constraint accounts_owner_line_agency_off_check,
+--   alter table public.accounts drop constraint accounts_owner_line_on_has_record_check,
+--     drop constraint accounts_owner_line_agency_off_check,
 --     drop constraint accounts_owner_line_change_check, drop column owner_line_changed_by_kind,
 --     drop column owner_line_changed_at;
 --   re-run 0112's access_log_page (its section 6) as create or replace;
@@ -196,7 +204,9 @@ alter table public.accounts
   add constraint accounts_owner_line_change_check
     check ((owner_line_changed_at is null) = (owner_line_changed_by_kind is null)),
   add constraint accounts_owner_line_agency_off_check
-    check (owner_line_changed_by_kind is distinct from 'agency' or owner_line_enabled_at is null);
+    check (owner_line_changed_by_kind is distinct from 'agency' or owner_line_enabled_at is null),
+  add constraint accounts_owner_line_on_has_record_check
+    check (owner_line_enabled_at is null or owner_line_changed_at is not null);
 comment on column public.accounts.owner_line_enabled_at is
   'F-032 (0115): when the Owner let the team call in to hear the day; null = off (the default). Only the client''s Owner turns it on; the agency may turn it off (owner ruling Q-A).';
 comment on column public.accounts.owner_line_changed_by_kind is
@@ -220,10 +230,11 @@ revoke all on function app.owner_line_insert_guard() from public, anon, authenti
 create trigger accounts_owner_line_insert_guard before insert on public.accounts
   for each row execute function app.owner_line_insert_guard();
 
--- The switch never moves without a fresh record (review m-2). When owner_line_enabled_at changes, the same UPDATE must
--- move owner_line_changed_at to a new, non-null value; the pair CHECK then requires the who-kind, and the agency-off
--- CHECK holds BIS to off. A stale record (the time unchanged) or a cleared one is refused. A write that does not move
--- the switch is not touched (the WHEN clause), so every other accounts UPDATE costs nothing.
+-- The switch never moves without a fresh TIME on its record (review m-2). When owner_line_enabled_at changes, the same
+-- UPDATE must move owner_line_changed_at to a new, non-null value; the pair CHECK then requires a who-kind, and the
+-- agency-off CHECK holds BIS to off. An unchanged time or a cleared record is refused. Whether the who-kind is CURRENT
+-- is the writer's job (review m-A; the header names the edges). A write that does not move the switch is not touched
+-- (the WHEN clause), so every other accounts UPDATE costs nothing.
 create function app.owner_line_switch_record_guard() returns trigger
 language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
 begin

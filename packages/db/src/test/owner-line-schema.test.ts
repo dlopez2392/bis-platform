@@ -715,3 +715,27 @@ describe("0115: note_agency_open refuses the owner-line kinds (review m-3)", () 
       await expect(note("owner_line_appointments")).rejects.toMatchObject({ code: "22023" });
     }));
 });
+
+// Review m-B (2026-11-09): a switched-on business always says who-kind and when. The record trigger (m-2) fires only
+// when the switch MOVES, so without this CHECK an UPDATE that leaves the switch on and clears its record was accepted.
+describe("0115: an ON switch keeps its record (review m-B)", () => {
+  it("clearing the record while the switch is on is refused (probe: drop accounts_owner_line_on_has_record_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await expect(c.query(
+        "update accounts set owner_line_changed_at = null, owner_line_changed_by_kind = null where id = $1", [s.a]))
+        .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_on_has_record_check" });
+    }));
+
+  it("Task 15's reset still works: off with a fresh record, then the record cleared with the switch off", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await switchTo(c, s.a, false, "owner");
+      await c.query("update accounts set owner_line_changed_at = null, owner_line_changed_by_kind = null where id = $1", [s.a]);
+      const { rows } = await c.query(
+        "select owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind from accounts where id = $1", [s.a]);
+      expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null }]);
+    }));
+});
