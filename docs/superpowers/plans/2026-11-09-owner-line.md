@@ -6209,8 +6209,8 @@ Copy:
 
   **As built (2026-11-09, commit f3b191dc).** All seven fail by name, plus:
   - **One `needs_attention` case per To do source** (task, conversation, booking), each alone, so a wrong sentence for one source fails by its name (probe 7 fails the conversation and booking cases; the task case stays green under `what: w.title` because a task's words ARE its title).
-  - **`truncated`:** a case where every listing page is full of the tile's calls: `listCalls` is read 10 times, `truncated` is true, and `count` is still the tile's (probe: never set truncated → FAILS).
-  - **No ids, phone digits, note, email or address in ANY tool's output:** one case scans all three outputs for every fixture id and digit string (probe: add `id` to a spoken call → FAILS).
+  - **`truncated`:** a case where every listing page is full of the tile's calls: `listCalls` is read 10 times, `truncated` is true, and `count` is still the tile's (probe: never set truncated → FAILS). **Superseded by review m-2 (below): `calls_and_messages` no longer returns `truncated`.**
+  - **No ids, phone digits, note, email or address in ANY tool's output, with ONE sanctioned exception:** the callback number inside a callback To do's own words in `needs_attention`'s `what`, read exactly as the To do row shows it (owner ruling 2026-11-09, extended, in the rulings section). Today that is Sofía's callback To do (`callbackTaskTitle`, "Call back at {number}: {reason}"); after #343, a failed transfer's (`work.failedTransfer`, `{number}`). Nothing else may carry a number: the scan replaces exactly that `what` and then forbids every fixture id, every phone digit string, any run of 5 or more digits and any `+` followed by a digit across all three outputs, so the same number as a call's caller ID in `calls_and_messages` still fails (probes: add `id`, or the caller's number, to a spoken call → FAILS).
   - **`workRowLabel` is an exhaustive switch.** A source with no branch is a `never` and stops the typecheck (probes: the conversation or booking branch returning the title → their row-label and needs_attention cases FAIL).
   - **The live scope test (I-11) uses the REAL live re-check**, not the plan's stub, so it seeds what `owner_line_session_check` needs: a verified enrollment with a PIN for every person, the switch on (`setOwnerLineSwitch`), client access on. Seeding goes through `createAccount`, `createContact`, `createBooking` and `ensureCallbackTask` (the writers `ai-acts/actions.live.test.ts` uses), with ONE live number per account (`phone_numbers_one_active_per_account`) and A's two bookings two hours apart (the slot guard). The range is today through tomorrow as named dates, never `this_week`. Five groups, each for all three tools:
     - A's Owner: A's two, and nothing of B's text;
@@ -6223,7 +6223,26 @@ Copy:
   - **Copy:** "booked" in Spanish is "agendó una cita". The plan's "reservó una cita" broke the glossary gate (`lib/i18n/spanish-style.ts:65`: book is "agendar, cita", never "reserv").
   - **After #343 (F-077) merges, re-read and decide:**
     - `WorkSource` gains `failed_transfer` and `booking_act`. `workRowLabel`'s `never` stops the typecheck until both have branches. Move THAT branch's `primaryLabel` (with `zone`, for `describeAct`) into `workRowLabel`, and add one `needs_attention` case and one row-label case per source.
-    - **Owner question:** the page's `failed_transfer` words carry the caller's callback NUMBER (`work.failedTransfer`, `{number}`). §5 lists no phone for `needs_attention`, and the coordinator's rule is no phone digits beyond what the plan allows. Either the owner line says the number (the page does), or it uses `work.failedTransfer.bare`. Decide before the merge.
+    - **Decided (owner ruling 2026-11-09, extended):** the owner line reads a callback number aloud as the To do row shows it. For a failed transfer that is `work.failedTransfer` with `{number}`, never `work.failedTransfer.bare` when the row has a number. Add the `failed_transfer` case with a number to the scan's sanctioned exception, exactly as the callback To do's is.
+  **Review fix round (2026-11-09, Tasks 10/11 review).** No tenancy hole was found in the code. The gaps were in the tests, and these are the changes:
+  - **I-1:** the live calls case could not see the listing read another business: the count is the tile's read, a different query. Now every listed call must be one the count counts (`calls.length === count`), and B's call carries an outcome none of A's does ("left a message"), which A must never hear. Probe N1 (drop `listCalls`' account filter, service path): the three `calls_and_messages` cases FAIL by name (A's Owner, A's Staff, B's Owner; 3 listed against 2 and 1).
+  - **I-2:** a unit case where `recheck` REJECTS: `couldnt_read` for every tool, the client and every reader never called. Probe P12 (`let live = true`): it FAILS.
+  - **Logging (Task 12 review):** a failed re-check and a failed tool log the error CLASS and the account id, never the message, which can quote a customer (`e instanceof Error ? e.name : typeof e`, the pattern in `finish.ts`). A case throws a message holding a name and a phone and asserts neither reaches the log. Probes: either log line back on `e.message` → FAILS.
+  - **I-3:** the unit and live fixtures write the callback To do with the REAL writer, `callbackTaskTitle(number, reason)`, in both stored shapes: caller ID (`+19565550177`) and a national number the caller said (`9565550123`). The tests pin that the number is read as written. Probe: scrub numbers from `what` → the `needs_attention` cases and the scan FAIL.
+  - **I-4:** the live seed gave A's two customers one phone, so `createContact` returned the first contact for the second and the Technician (assigned one) saw both. Now A's second customer has its own phone, B's customer keeps A's first customer's name AND phone, and every `createContact` in the seed asserts `existing === false`. Probes on the token path:
+    - T0a, the old seed with no guard: the three T Technician cases FAIL;
+    - T0b, the old seed with the guard: `beforeAll` FAILS, naming `createContact` and the phone;
+    - T1, the fixed seed (not a mutation): `Tests  15 passed | 3 skipped (18)`, with the T Technician group run and passed and the F2 group skipped.
+    `data-path.ts` was restored to `"service"` and proven byte-identical.
+  - **m-1:** `resolveRange` never throws. A year above 9998 is `bad_range`, because the day after 9999-12-31 has no ISO form, and a zone the conversion cannot use is caught and answered `bad_range`. Probes: drop the year check → 9999-01-01 accepted, FAILS; drop the try → "Invalid time zone", FAILS; drop both → throws, FAILS.
+  - **m-2:** the listing stops once it holds the 20 calls it describes, still at most 10 pages. **`truncated` is DROPPED** from `calls_and_messages`: the count is the tile's, which pages to the end, so it is never capped, and "the list stopped early" is already what `more` says. The tool's description no longer mentions it. `appointments` keeps its `truncated`, which does mean its count was capped (`AGENDA_ROW_CAP`), and its description now says so. Cases:
+    - exactly 1000 answered calls: one page read, count 1000, more 980, no `truncated` key;
+    - a sparse first page reads on to 20;
+    - the 10-page bound.
+    Probes: drop the stop → FAILS; `CALL_PAGES` 11 → FAILS; put `truncated` back → FAILS.
+  - **m-4:** `OUTCOME_WORDS` is keyed on `(typeof ANSWERED_CALL_OUTCOMES)[number]`, and the listing is narrowed to those outcomes. Probe: add `"abandoned"` to `ANSWERED_CALL_OUTCOMES` → `tsc` fails in `read.ts` only (TS2741, `OUTCOME_WORDS`).
+  - **m-5:** `meetingType` and `status` are spoken as the agenda's own words, in the person's language, through the agenda view model's `meetingWord` and `statusWord` (`calendar.job.*` and `calendar.bookings.status.*`, each with its `.es`). There is no new copy. A null `meetingType` stays null. Probes: either back to the stored code → FAILS.
+  - **m-6:** the listing compares instants, never strings. PostgREST writes `+00:00`, and as strings a call on the range's first instant sorted before `…000Z`. The break is on `<=`, because `listCalls`' `before` is strict, so nothing in range can follow a row on the first instant. Probes: the string compare → the `+00:00` boundary call is dropped, FAILS; `<` → a second read, FAILS.
 - [ ] **Step 7: Commit.**
 
   ```bash
@@ -7736,6 +7755,8 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
 
 - **Q-G (2026-11-09): the dashboard's spam number only** (the plan's default). The phone says "plus N calls that looked like spam", using the same read as the dashboard. Calls refused before Sofía answered (`screened_calls`) are not counted, so the phone and the dashboard always agree.
 
+- **Callback numbers (2026-11-09, owner, extended): the owner line reads a callback number aloud as the To do row shows it.** Today that is Sofía's own callback To do ("Call back at {number}: {reason}", `callbackTaskTitle`). After #343 it also covers failed transfers, through `work.failedTransfer` with `{number}`. It is the ONE sanctioned number in any owner tool's output (Task 11's scan). No other id or digit string is allowed.
+
 - **O-1 DECIDED (2026-11-09, owner): F2 now, T later.**
   - Task 10 writes `OWNER_LINE_DATA_PATH = "service"` with roles `["owner","staff"]`.
   - Technicians are not offered the owner line: the card does not render for them, and the enrolment action refuses them.
@@ -7743,7 +7764,9 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
     1. danlo's dashboard inventory (the spike record §4 question);
     2. the ES256 import-then-rotate on bis-ci, until the probe prints six PASS lines;
     3. then production;
-    4. then a one-line flip to `"token"` with all three roles.
+    4. then a one-line flip to `"token"` with all three roles, on two conditions (Tasks 10/11 review):
+       - the live scope test's Technician group passes under `"token"` on the seed where A's two customers are two contacts (review I-4; measured green on the replica 2026-11-09, T1);
+       - the live re-check binds the session's Clerk ids, the ones the minted token carries, to the person it re-reads (review m-3, `session.ts`), so a token can never name a person other than the one re-checked.
   - No new production secret is added for PR 1, beyond `OWNER_LINE_PIN_PEPPER`.
 
 - **Impersonation (2026-11-09, owner): REFUSED.** A Clerk session carrying `actor` (BIS staff signed in as a client) is redirected before any owner-line read or write, on every setup action (Task 5 `member()`, b8ec379e). The Team switch is already refused through `lib/auth.ts:69`. This matches the access-log rule that BIS enters a client account only through the logged agency path.
