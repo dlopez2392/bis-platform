@@ -100,6 +100,18 @@ day". It is **off by default**. While it is off, nobody's PIN step runs and
 the cards say why. The agency can see the switch but cannot turn it on for
 a client: the client's Owner decides who can phone into their data.
 
+(Amended 2026-11-09. Plan SC-1: the switch is a card on **Team**, because
+Settings is agency-only. Owner ruling Q-A: the agency may turn it **off**,
+never on; turning it off is protective (a lost phone, a person let go).
+Owner ruling "Say BIS, keep names private": the card says what kind of
+person last changed it and when, never a name: "Turned on by the Owner,
+Nov 9, 2:14 PM" or "Turned off by BIS, Nov 9, 2:14 PM". Every member of the
+business can read the account's row, so it stores only that kind ("owner"
+or "agency") and the time, never a person's id. Which BIS person turned it
+off is kept in BIS's own record, which only BIS can read. The database
+holds the rule too: a business whose last change was BIS's is always off,
+and the switch never moves without a fresh record of who-kind and when.)
+
 ### 3.4 Storage (one migration, numbered after 0114)
 
 - `owner_line_enrollments`, one row per (account, user):
@@ -113,7 +125,9 @@ a client: the client's Owner decides who can phone into their data.
 
   Unique on (account_id, e164), so one cell maps to one person per business.
 - `accounts.owner_line_enabled_at` (timestamptz, null = off), so the switch
-  records when it was turned on.
+  records when it was turned on, with `owner_line_changed_at` and
+  `owner_line_changed_by_kind` ('owner' or 'agency') for the last change
+  (§3.3's 2026-11-09 amendment: never a person's id).
 - `calls.owner_line_user_id` (uuid, null for every customer call), which
   marks an owner-line call.
 - RLS: a person reads and writes only their own enrollment, and never sees

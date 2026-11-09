@@ -331,7 +331,7 @@ Modify:
 - Consumes: `memberships (account_id, user_id)` unique key (0066, used by `MIG/0104_calendar_feeds.sql:72-73`). 0112's `access_log_page` body (`MIG/0112_record_changes_q1.sql:1028-1075`) and kind CHECK (`:1024-1027`).
 - Produces, for Task 2 and the routes:
   - Table `public.owner_line_enrollments`, with columns `id, account_id, user_id, e164, verified_at, verify_code_hash, verify_expires_at, verify_attempts, pin_hash, pin_set_at, failed_attempts, locked_until, created_at`.
-  - On `public.accounts`: `owner_line_enabled_at timestamptz`, `owner_line_changed_at timestamptz`, `owner_line_changed_by text` (a Clerk user id) and `owner_line_changed_by_agency boolean`. These are Q-A's "who turned it off and when". A trigger refuses any INSERT that carries a non-null `owner_line_enabled_at`.
+  - On `public.accounts`: `owner_line_enabled_at timestamptz`, `owner_line_changed_at timestamptz` and `owner_line_changed_by_kind text` (`'owner'` | `'agency'`). These are Q-A's record: WHEN the switch last changed and WHAT KIND of person changed it, never WHO (owner ruling 2026-11-09, "Say BIS, keep names private": every member reads `accounts`). `accounts_owner_line_change_check` pairs the two record columns; `accounts_owner_line_agency_off_check` holds BIS's last change to off (Q-A in the database). `accounts_owner_line_insert_guard` refuses an INSERT carrying any of the three columns; `accounts_owner_line_switch_record` refuses an UPDATE that moves the switch without a fresh, non-null `owner_line_changed_at` (review m-2). Which BIS person turned it off is BIS's own record, a null-account `events` row (Task 5).
   - On `public.calls`: `owner_line_user_id uuid`.
   - The functions (no day-start argument: the ACCOUNT's local day is computed inside, Q-F):
     - `app.owner_line_day_start(text, timestamptz) → timestamptz`
@@ -342,6 +342,8 @@ Modify:
     - `owner_line_session_check(uuid, uuid, text, integer) → jsonb`
     - `note_owner_line_call(uuid, uuid, text, text, text[]) → uuid`
     - `app.owner_line_insert_guard() → trigger`
+    - `app.owner_line_switch_record_guard() → trigger` (review m-2)
+    - `note_agency_open` is re-created with an `owner_line_` refusal (review m-3), 0105's body otherwise unchanged.
   - The item kinds `owner_line_calls_and_messages`, `owner_line_appointments`, `owner_line_needs_attention` and `owner_line_lookup_customer`.
 
 - [ ] **Step 1: Re-read the moving parts (O-2).** After 0113 and 0114 are merged into this branch, run:
@@ -365,17 +367,23 @@ Modify:
 
 - [ ] **Step 2: Write the failing schema test.** Model it on `packages/db/src/test/calendar-feeds-schema.test.ts` (the `withRollback`, `actAsMember` and privilege-matrix shapes, which were read from `./db`).
 
+**The block below is the committed file at `21fc2433` (52 cases), copied whole so the plan cannot drift from it; the file is authoritative.** Beyond the first draft it holds the review round's cases: I-1, one second-business case per account-scoped read (the lookup, its count, `attempt_verify`, `session_check` and its count; same cell or same person at business B); I-2, one case per refusal branch, asserting the reason by name (`no_client_access`, `switch_off`, `not_enrolled`, `locked`, `over_limit`, and the lookup's client-access gate and no-PIN branch); m-2, the switch-record trigger; m-3, `note_agency_open`'s refusal; and the 2026-11-09 ruling's kind-only record. ONE refused statement per `withRollback` throughout (25P02).
+
 ```ts
 // packages/db/src/test/owner-line-schema.test.ts
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { withRollback, actAsMember } from "./db";
 
 /**
- * 0115 (F-032 owner line). RED BEFORE APPLY: every case (42P01 on the table, 42883 on the functions).
- * GREEN AFTER APPLY: all of them. Run on the PG18 replica pre/post (memory bis-local-db-replica); CI verify is
- * the authoritative green.
+ * 0115 (F-032 owner line). Spec docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
+ * plan docs/superpowers/plans/2026-11-09-owner-line.md Task 1 (SC-3, SC-4, SC-5, SC-13; owner rulings Q-A, Q-F).
+ * Every case runs in withRollback: the table owner seeds, `set local role service_role` stands for the server (the
+ * functions' only grantee, so each case proves service_role runs them on its OWN grants), actAsMember for a signed-in
+ * person. RED BEFORE APPLY: every case (42P01 on the table, 42883 on the functions, 42703 on the new columns).
+ * GREEN AFTER APPLY: all of them. Run on the PG18 replica pre/post (memory bis-local-db-replica); CI verify is the
+ * authoritative green.
  */
 const TABLE = "public.owner_line_enrollments";
 const FUNCTIONS = [
@@ -392,6 +400,8 @@ const RUN = randomBytes(4).toString("hex");
 const hex64 = () => randomBytes(32).toString("hex");
 /** A pin_hash of the shape 0115's CHECK accepts: "scrypt:17:8:1:" + 22 + ":" + 43 = 80 characters. */
 const pinHash = (salt = "A".repeat(22), key = "B".repeat(43)) => `scrypt:17:8:1:${salt}:${key}`;
+/** phone_numbers.e164 is unique across every account (0019), so each case dials its own business number. */
+const businessNumber = () => `+1956${randomInt(1_000_000, 9_999_999)}`;
 
 type Seed = { a: string; b: string; aOrg: string; owner: string; staff: string; tech: string; bOwner: string };
 
@@ -418,13 +428,52 @@ async function seed(c: Client): Promise<Seed> {
   };
 }
 
+/**
+ * Turn the business's switch on or off the way the app must (0115's record trigger): the switch, a NEW change time
+ * and the who-kind, in one statement. clock_timestamp(), not now(): now() is fixed for the whole transaction, so a
+ * second change inside one withRollback would carry the same time and read as a stale record.
+ */
+async function switchTo(c: Client, account: string, on: boolean, kind: "owner" | "agency" = "owner") {
+  await c.query(
+    `update accounts set owner_line_enabled_at = case when $2 then clock_timestamp() end,
+            owner_line_changed_at = clock_timestamp(), owner_line_changed_by_kind = $3 where id = $1`, [account, on, kind]);
+}
+
 /** A verified enrollment with a PIN, switch on. Inserted as the table owner (seeding, not the code under test). */
 async function enrolled(c: Client, account: string, user: string, e164: string) {
-  await c.query("update accounts set owner_line_enabled_at = now() where id = $1", [account]);
+  const { rows: [on] } = await c.query<{ on: boolean }>(
+    "select owner_line_enabled_at is not null as on from accounts where id = $1", [account]);
+  if (!on!.on) await switchTo(c, account, true);
   const { rows: [e] } = await c.query<{ id: string }>(
     `insert into owner_line_enrollments (account_id, user_id, e164, verified_at, pin_hash, pin_set_at)
      values ($1, $2, $3, now(), $4, now()) returning id`, [account, user, e164, pinHash()]);
   return e!.id;
+}
+
+/** A verified cell with NO PIN yet (Q-D: a person may verify before setting one). */
+async function verifiedNoPin(c: Client, account: string, user: string, e164: string) {
+  await c.query("insert into owner_line_enrollments (account_id, user_id, e164, verified_at) values ($1, $2, $3, now())",
+    [account, user, e164]);
+}
+
+/** The same person on a second business (the I-1 cases): a membership at `account`, as the table owner. */
+async function memberOf(c: Client, user: string, account: string, role: "owner" | "staff" | "technician") {
+  await c.query("insert into memberships (user_id, scope, account_id, role) values ($1, 'account', $2, $3)", [user, account, role]);
+}
+
+async function liveNumber(c: Client, account: string): Promise<string> {
+  const { rows: [pn] } = await c.query<{ id: string }>(
+    "insert into phone_numbers (account_id, e164, status) values ($1, $2, 'live') returning id", [account, businessNumber()]);
+  return pn!.id;
+}
+
+/** n owner-line calls for `user` on `account`, started now (this local day), as the table owner. */
+async function ownerLineCalls(c: Client, account: string, user: string, n: number) {
+  const pn = await liveNumber(c, account);
+  for (let i = 0; i < n; i++) {
+    await c.query("insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id) values ($1, $2, '+19565550101', $3)",
+      [account, pn, user]);
+  }
 }
 
 const asService = (c: Client) => c.query("set local role service_role");
@@ -567,6 +616,21 @@ describe("0115: the call-in code", () => {
       expect((await c.query("select public.owner_line_attempt_verify($1, '+19565550101', $2) as r", [s.a, right])).rows[0].r).toBe("spent");
     }));
 
+  it("the answer route is told 'verify' while a code is pending, with the switch still off (Q-D), and 'none' once it has expired unused (probe: drop the e.verify_expires_at > now() test from the lookup -> the expired case answers 'verify', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const look = async () => (await c.query(
+        "select public.owner_line_answer_lookup($1, '+19565550101', 10) as r", [s.a])).rows[0].r;
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10)", [s.a, s.owner, hex64()]);
+      expect(await look()).toMatchObject({ status: "verify", user_id: s.owner, role: "owner", name: "Dan Lopez" });
+      await c.query("reset role");
+      // Nobody called within the ten minutes: the code is still stored (only an attempt clears it), but it is dead.
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.owner]);
+      await asService(c);
+      expect(await look()).toEqual({ status: "none" });
+    }));
+
   it("changing the cell clears the verification and the PIN (probe: keep pin_hash on a new e164 -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -617,10 +681,9 @@ describe("0115: the PIN and the lock", () => {
       const hit = await look("+19565550101");
       expect(hit).toMatchObject({ status: "pin", enrollment_id: id, user_id: s.owner, role: "owner", name: "Dan Lopez", pin_params: pinHash().slice(0, 36) });
       await c.query("reset role");
-      const { rows: [pn] } = await c.query<{ id: string }>(
-        "insert into phone_numbers (account_id, e164, status) values ($1, '+19565550900', 'live') returning id", [s.a]);
+      const pn = await liveNumber(c, s.a);
       for (let i = 0; i < 10; i++) {
-        await c.query("insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id) values ($1, $2, '+19565550101', $3)", [s.a, pn!.id, s.owner]);
+        await c.query("insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id) values ($1, $2, '+19565550101', $3)", [s.a, pn, s.owner]);
       }
       await asService(c);
       expect((await look("+19565550101")).status).toBe("over_limit");
@@ -629,7 +692,7 @@ describe("0115: the PIN and the lock", () => {
       await asService(c);
       expect(await look("+19565550101")).toEqual({ status: "locked" });
       await c.query("reset role");
-      await c.query("update accounts set owner_line_enabled_at = null where id = $1", [s.a]);
+      await switchTo(c, s.a, false);
       await asService(c);
       expect(await look("+19565550101")).toEqual({ status: "off" });
     }));
@@ -668,10 +731,23 @@ describe("0115: the account's local day (owner ruling Q-F)", () => {
       expect(await dayStart(c, "America/Chicago", "2026-11-02T05:59:00Z")).toBe("2026-11-01T05:00:00.000Z");  // 23:59 CST
     }));
 
-  it("a zone whose clocks jump AT midnight (America/Santiago, 2026-09-06 00:00 -> 01:00): the day starts at the first instant that exists (probe: drop the existence correction -> FAILS)", () =>
+  // A pinned VALUE, not a probe: PostgreSQL already reads this missing midnight as the instant the clocks jump, so no
+  // mutation of owner_line_day_start's loops can fail it (replica, 2026-11-09). The Havana case below carries the probe.
+  it("a zone whose clocks jump AT midnight (America/Santiago, 2026-09-06 00:00 -> 01:00): the day starts at the first instant that exists, 04:00Z", () =>
     withRollback(async (c) => {
-      // Before trusting this literal, confirm it with node's ICU: 2026-09-06T03:59Z is Sept 5 and 04:00Z is Sept 6 in Santiago.
+      // Confirmed with node's ICU (77.1, tz 2025b): 2026-09-06T03:59Z is Sept 5 23:59 and 04:00Z is Sept 6 01:00 in Santiago.
       expect(await dayStart(c, "America/Santiago", "2026-09-06T15:00:00Z")).toBe("2026-09-06T04:00:00.000Z");
+    }));
+
+  // PostgreSQL resolves an AMBIGUOUS local time to the LATER instant: ('2026-11-01'::timestamp at time zone
+  // 'America/Havana') is 05:00Z, the second midnight. The day began an hour earlier, at the first one (04:00Z, read
+  // with node's ICU: 03:59Z is Oct 31 23:59 GMT-4, 04:00Z is Nov 1 00:00 GMT-4, 05:00Z is Nov 1 00:00 GMT-5). Only the
+  // step-back loop finds it; the Santiago case above cannot fail without the loops, because PostgreSQL already reads
+  // a midnight that does not exist as the instant the clocks jump.
+  it("a zone whose clocks fall back to midnight (America/Havana, 2026-11-01 01:00 -> 00:00): the day starts at the FIRST midnight (probe: drop the step-back loop -> 05:00Z, FAILS)", () =>
+    withRollback(async (c) => {
+      expect(await dayStart(c, "America/Havana", "2026-11-01T15:00:00Z")).toBe("2026-11-01T04:00:00.000Z");
+      expect(await dayStart(c, "America/Havana", "2026-11-01T04:30:00Z")).toBe("2026-11-01T04:00:00.000Z");
     }));
 
   it("the daily limit counts this account-local day only: ten calls YESTERDAY local do not refuse today (probe: count from utc midnight -> FAILS)", () =>
@@ -679,42 +755,101 @@ describe("0115: the account's local day (owner ruling Q-F)", () => {
       const s = await seed(c);
       await enrolled(c, s.a, s.owner, "+19565550101");
       await c.query("update accounts set timezone = 'America/Chicago' where id = $1", [s.a]);
-      const { rows: [pn] } = await c.query<{ id: string }>(
-        "insert into phone_numbers (account_id, e164, status) values ($1, '+19565550902', 'live') returning id", [s.a]);
+      const pn = await liveNumber(c, s.a);
       // One minute before this account's local midnight: yesterday, local, whatever the UTC date says.
       for (let i = 0; i < 10; i++) {
         await c.query(`insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id, started_at)
                        values ($1, $2, '+19565550101', $3, app.owner_line_day_start('America/Chicago', now()) - interval '1 minute')`,
-          [s.a, pn!.id, s.owner]);
+          [s.a, pn, s.owner]);
       }
       await asService(c);
       expect((await c.query("select public.owner_line_answer_lookup($1, '+19565550101', 10) as r", [s.a])).rows[0].r.status).toBe("pin");
     }));
 });
 
-describe("0115: the switch's guard and its record (owner rulings Q-A, §3.3)", () => {
+describe("0115: the switch's guard and its record (owner rulings Q-A, spec 3.3)", () => {
+  // The guard's own refusal carries its message and no constraint name, so each case below fails if the guard stops
+  // testing its column, even where a CHECK would still refuse the same row with another message.
+  const GUARD = { code: "23514", message: expect.stringMatching(/the owner line starts off/) };
+  const newAccount = async (c: Client, tag: string, cols: string, vals: string) => {
+    const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
+    return c.query(`insert into accounts (agency_id, clerk_org_id, name${cols}) values ($1, $2, 'OL guard'${vals})`,
+      [ag!.id, `org_ol_${tag}_${RUN}`]);
+  };
+
   it("no account can be CREATED with the switch on, by any role (probe: drop trigger accounts_owner_line_insert_guard -> FAILS)", () =>
     withRollback(async (c) => {
-      const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
-      await expect(c.query(
-        "insert into accounts (agency_id, clerk_org_id, name, owner_line_enabled_at) values ($1, $2, 'OL guard', now())",
-        [ag!.id, `org_ol_guard_${RUN}`])).rejects.toMatchObject({ code: "23514" });
+      await expect(newAccount(c, "guard", ", owner_line_enabled_at", ", now()")).rejects.toMatchObject(GUARD);
+    }));
+
+  // One column per case: a row that sets two guarded columns is still refused by the other one when the guard forgets
+  // either, so it cannot catch that probe (it survived on the replica, 2026-11-09).
+  it("no account can be created carrying a record of a change that never happened (no CHECK reaches this row: both record columns set; probe: drop trigger -> FAILS)", () =>
+    withRollback(async (c) => {
+      await expect(newAccount(c, "guard3", ", owner_line_changed_at, owner_line_changed_by_kind", ", now(), 'owner'")).rejects.toMatchObject(GUARD);
+    }));
+
+  it("no account can be created with only a change time set (probe: drop owner_line_changed_at from the guard -> the pair CHECK refuses instead, FAILS)", () =>
+    withRollback(async (c) => {
+      await expect(newAccount(c, "guard5", ", owner_line_changed_at", ", now()")).rejects.toMatchObject(GUARD);
+    }));
+
+  it("no account can be created with only a who-kind set (probe: drop owner_line_changed_by_kind from the guard -> the pair CHECK refuses instead, FAILS)", () =>
+    withRollback(async (c) => {
+      await expect(newAccount(c, "guard4", ", owner_line_changed_by_kind", ", 'agency'")).rejects.toMatchObject(GUARD);
     }));
 
   it("an account created with it off is fine, and the record columns start empty", () =>
     withRollback(async (c) => {
-      const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
+      await newAccount(c, "guard2", "", "");
       const { rows: [a] } = await c.query(
-        "insert into accounts (agency_id, clerk_org_id, name) values ($1, $2, 'OL guard') returning owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by, owner_line_changed_by_agency",
-        [ag!.id, `org_ol_guard2_${RUN}`]);
-      expect(a).toEqual({ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by: null, owner_line_changed_by_agency: null });
+        "select owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind from accounts where clerk_org_id = $1",
+        [`org_ol_guard2_${RUN}`]);
+      expect(a).toEqual({ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null });
     }));
 
-  it("the record travels with the switch: a change names who and whether it was the agency (probe: drop owner_line_change_pair_check -> FAILS)", () =>
+  it("accounts stores WHO-KIND and WHEN only, never a person's id: exactly three owner_line columns (owner ruling 2026-11-09, 'Say BIS, keep names private'; probe: add a person-id column, owner_line_changed_by_user text -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select column_name, data_type, is_nullable from information_schema.columns
+          where table_schema = 'public' and table_name = 'accounts' and column_name like 'owner_line%' order by column_name`);
+      expect(rows).toEqual([
+        { column_name: "owner_line_changed_at", data_type: "timestamp with time zone", is_nullable: "YES" },
+        { column_name: "owner_line_changed_by_kind", data_type: "text", is_nullable: "YES" },
+        { column_name: "owner_line_enabled_at", data_type: "timestamp with time zone", is_nullable: "YES" },
+      ]);
+    }));
+
+  it("the record travels with the switch: a change says when AND who-kind (probe: drop accounts_owner_line_change_check -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await expect(c.query("update accounts set owner_line_changed_at = now() where id = $1", [s.a]))
         .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_change_check" });
+    }));
+
+  it("the who-kind is the Owner or BIS, nothing else (probe: drop accounts_owner_line_changed_by_kind_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("update accounts set owner_line_changed_at = now(), owner_line_changed_by_kind = 'user_2abc' where id = $1", [s.a]))
+        .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_changed_by_kind_check" });
+    }));
+
+  it("the Owner may leave it on or off; BIS may leave it off", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true, "owner");
+      await switchTo(c, s.a, false, "owner");
+      await switchTo(c, s.a, false, "agency");
+      const { rows } = await c.query("select owner_line_enabled_at, owner_line_changed_by_kind from accounts where id = $1", [s.a]);
+      expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_by_kind: "agency" }]);
+    }));
+
+  it("BIS's last word can only be OFF: on with who-kind agency is refused (owner ruling Q-A; probe: drop accounts_owner_line_agency_off_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query(
+        "update accounts set owner_line_enabled_at = now(), owner_line_changed_at = now(), owner_line_changed_by_kind = 'agency' where id = $1", [s.a]))
+        .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_agency_off_check" });
     }));
 });
 
@@ -722,10 +857,9 @@ describe("0115: the access log learns owner_line_call", () => {
   it("note_owner_line_call writes one owner_line visit and one item per tool; the BIS access page does not show it (probe: drop actor_kind = 'agency' from access_log_page -> total 1, FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      const { rows: [pn] } = await c.query<{ id: string }>(
-        "insert into phone_numbers (account_id, e164, status) values ($1, '+19565550901', 'live') returning id", [s.a]);
+      const pn = await liveNumber(c, s.a);
       const { rows: [call] } = await c.query<{ id: string }>(
-        "insert into calls (account_id, phone_number_id, owner_line_user_id) values ($1, $2, $3) returning id", [s.a, pn!.id, s.owner]);
+        "insert into calls (account_id, phone_number_id, owner_line_user_id) values ($1, $2, $3) returning id", [s.a, pn, s.owner]);
       await asService(c);
       await c.query("select public.note_owner_line_call($1, $2, 'user_x', 'Dan Lopez', array['owner_line_appointments', 'owner_line_calls_and_messages', 'owner_line_appointments'])",
         [s.a, call!.id]);
@@ -747,6 +881,212 @@ describe("0115: the access log learns owner_line_call", () => {
         .rejects.toMatchObject({ code: "22023" });
     }));
 });
+
+// Review I-1 (2026-11-09): every read is THIS business's. Each case puts the same cell or the same person at business
+// B, so a read that loses its account filter answers from B's row and fails here by name.
+describe("0115: every read is the dialed business's only (review I-1)", () => {
+  const CELL = "+19565550101";
+  const look = async (c: Client, account: string) => (await c.query(
+    "select public.owner_line_answer_lookup($1, $2, 10) as r", [account, CELL])).rows[0].r;
+  const check = async (c: Client, account: string, user: string, role: string, max: number | null) => (await c.query(
+    "select public.owner_line_session_check($1, $2, $3, $4) as r", [account, user, role, max])).rows[0].r;
+
+  it("the lookup on A's line answers none for a cell enrolled only at B, the same person on both (probe t1: drop account_id from the lookup's enrollment read -> B's 'pin', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await switchTo(c, s.a, true);
+      await enrolled(c, s.b, s.owner, CELL);
+      await asService(c);
+      expect(await look(c, s.a)).toEqual({ status: "none" });
+      expect((await look(c, s.b)).status).toBe("pin");   // control: the row is live where it belongs
+    }));
+
+  it("B's owner-line calls never count toward A's ten a day, for the same person and the same cell (probe t2: drop c.account_id from the lookup's count -> 'over_limit', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await enrolled(c, s.a, s.owner, CELL);
+      await enrolled(c, s.b, s.owner, CELL);
+      await ownerLineCalls(c, s.b, s.owner, 10);
+      await asService(c);
+      expect((await look(c, s.a)).status).toBe("pin");
+      expect((await look(c, s.b)).status).toBe("over_limit");   // control: they count at B
+    }));
+
+  it("a code attempt on A's line never touches B's pending code for the same cell, even with B's right code (probe t3: drop account_id from attempt_verify's read -> 'verified', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const codeB = hex64();
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, $3, $4, 10)", [s.b, s.bOwner, CELL, codeB]);
+      const r = (await c.query("select public.owner_line_attempt_verify($1, $2, $3) as r", [s.a, CELL, codeB])).rows[0].r;
+      const { rows } = await c.query(
+        "select verified_at, verify_attempts, verify_code_hash from owner_line_enrollments where account_id = $1", [s.b]);
+      expect([r, rows]).toEqual(["none", [{ verified_at: null, verify_attempts: 0, verify_code_hash: codeB }]]);
+    }));
+
+  it("the session check on A refuses a person enrolled only at B (probe t4: drop account_id from session_check's enrollment read -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await switchTo(c, s.a, true);
+      await enrolled(c, s.b, s.owner, CELL);
+      await asService(c);
+      expect(await check(c, s.a, s.owner, "owner", null)).toEqual({ ok: false, reason: "not_enrolled" });
+      expect(await check(c, s.b, s.owner, "staff", null)).toMatchObject({ ok: true });   // control
+    }));
+
+  it("the session check counts A's calls only (probe t5: drop c.account_id from session_check's count -> 'over_limit', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await enrolled(c, s.a, s.owner, CELL);
+      await enrolled(c, s.b, s.owner, CELL);
+      await ownerLineCalls(c, s.b, s.owner, 10);
+      await asService(c);
+      expect(await check(c, s.a, s.owner, "owner", 10)).toMatchObject({ ok: true });
+      expect(await check(c, s.b, s.owner, "staff", 10)).toEqual({ ok: false, reason: "over_limit" });   // control
+    }));
+});
+
+// Review I-2 (2026-11-09): every refusal branch, by name. Each case reaches exactly one branch with everything else
+// holding, so deleting that branch lets the call through ('pin' or ok: true) and the case fails by name.
+describe("0115: every refusal answers by name (review I-2)", () => {
+  const CELL = "+19565550102";
+  const check = async (c: Client, s: Seed, max: number | null = null) => (await c.query(
+    "select public.owner_line_session_check($1, $2, 'staff', $3) as r", [s.a, s.staff, max])).rows[0].r;
+  const look = async (c: Client, s: Seed) => (await c.query(
+    "select public.owner_line_answer_lookup($1, $2, 10) as r", [s.a, CELL])).rows[0].r;
+
+  it("session check: client access off, or the business archived, is no_client_access (probe u1: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update accounts set client_access_enabled = false where id = $1", [s.a]);
+      await asService(c);
+      const off = await check(c, s);
+      await c.query("reset role");
+      await c.query("update accounts set client_access_enabled = true, status = 'archived' where id = $1", [s.a]);
+      await asService(c);
+      expect([off, await check(c, s)]).toEqual([
+        { ok: false, reason: "no_client_access" }, { ok: false, reason: "no_client_access" }]);
+    }));
+
+  it("session check: the switch off is switch_off (probe u2: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await switchTo(c, s.a, false, "agency");
+      await asService(c);
+      expect(await check(c, s)).toEqual({ ok: false, reason: "switch_off" });
+    }));
+
+  it("session check: no enrollment, or a verified cell with no PIN, is not_enrolled (probe u3: delete that branch -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await asService(c);
+      const none = await check(c, s);
+      await c.query("reset role");
+      await verifiedNoPin(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect([none, await check(c, s)]).toEqual([
+        { ok: false, reason: "not_enrolled" }, { ok: false, reason: "not_enrolled" }]);
+    }));
+
+  it("session check: a locked enrollment is locked (probe u4: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update owner_line_enrollments set locked_until = now() + interval '5 minutes' where id = $1", [id]);
+      await asService(c);
+      expect(await check(c, s)).toEqual({ ok: false, reason: "locked" });
+    }));
+
+  it("session check: the tenth call today is over_limit at the webhook (p_max 10), never on a tool call (p_max null) (probe u5: delete the over_limit block -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await ownerLineCalls(c, s.a, s.staff, 10);
+      await asService(c);
+      expect([await check(c, s, 10), (await check(c, s, null)).ok]).toEqual([{ ok: false, reason: "over_limit" }, true]);
+    }));
+
+  it("lookup: client access off, or the business archived, answers none, never asks for a PIN (probe u6: delete the client-access gate -> 'pin', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update accounts set client_access_enabled = false where id = $1", [s.a]);
+      await asService(c);
+      const off = await look(c, s);
+      await c.query("reset role");
+      await c.query("update accounts set client_access_enabled = true, status = 'archived' where id = $1", [s.a]);
+      await asService(c);
+      expect([off, await look(c, s)]).toEqual([{ status: "none" }, { status: "none" }]);
+    }));
+
+  it("lookup: a verified cell with no PIN answers none (probe u7: delete the no-PIN line -> 'pin' with no pin_params, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await verifiedNoPin(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect(await look(c, s)).toEqual({ status: "none" });
+    }));
+});
+
+// Review m-2 (2026-11-09): the switch never moves without its record. Each refusal is the trigger's own (its message,
+// no constraint name), so a case cannot pass on a CHECK refusing the same row.
+describe("0115: the switch moves only with a fresh record (review m-2)", () => {
+  const RECORD = { code: "23514", message: expect.stringMatching(/must record when and who-kind/) };
+
+  it("turning it on with no record is refused (probe: drop trigger accounts_owner_line_switch_record -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("update accounts set owner_line_enabled_at = now() where id = $1", [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("turning it on over a stale 'owner' record is refused (probe: drop the 'is not distinct from old' test -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, false, "owner");
+      await expect(c.query("update accounts set owner_line_enabled_at = now() where id = $1", [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("turning it on while clearing the record is refused (probe: drop the 'is null' test -> the change goes through, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, false, "owner");
+      await expect(c.query(
+        "update accounts set owner_line_enabled_at = now(), owner_line_changed_at = null, owner_line_changed_by_kind = null where id = $1",
+        [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("a write that does not move the switch needs no record (probe: drop the trigger WHEN clause -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await c.query("update accounts set name = 'OL renamed', owner_line_enabled_at = owner_line_enabled_at where id = $1", [s.a]);
+      const { rows } = await c.query("select name from accounts where id = $1", [s.a]);
+      expect(rows).toEqual([{ name: "OL renamed" }]);
+    }));
+});
+
+// Review m-3 (2026-11-09): an agency visit never carries an owner-line item. parseVisit (packages/db/src/access-log.ts)
+// accepts only ACCESS_LOG_KINDS, so one such item on an agency visit would make the Team page's BIS access section throw.
+describe("0115: note_agency_open refuses the owner-line kinds (review m-3)", () => {
+  it("an agency note with an owner_line_ kind is refused 22023, while a contact note on the same live visit is ok (probe: drop the guard -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await c.query("select public.start_agency_visit($1, 'user_bis_ol', 'Dan', 'sess_ol', 'support')", [s.a]);
+      const note = (kind: string) => c.query(
+        "select public.note_agency_open($1, 'user_bis_ol', 'sess_ol', $2, gen_random_uuid(), null) as r", [s.a, kind]);
+      expect((await note("contact")).rows[0].r).toBe("ok");
+      await expect(note("owner_line_appointments")).rejects.toMatchObject({ code: "22023" });
+    }));
+});
 ```
 
 - [ ] **Step 3: Run it on the replica's `pre` database (no 0115) and see it fail.**
@@ -759,10 +1099,27 @@ describe("0115: the access log learns owner_line_call", () => {
 
 - [ ] **Step 4: Write the migration.**
 
+**The block below is the committed file at `1cda0c20` (a DRAFT until 0113 lands: its header lists what to re-read), copied whole; the file is authoritative.**
+
 ```sql
 -- 0115_owner_line.sql - the owner line (F-032 PR 1)
 -- (docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
 --  docs/superpowers/plans/2026-11-09-owner-line.md, Task 1, spec corrections SC-3 to SC-9 and SC-13)
+--
+-- DRAFT (2026-11-09). Written and replica-tested against 0112 plus 0114 (read from feat/f077-work-queue with git
+-- show), because 0113 (F-115 PR D) does not exist yet. RE-READ AFTER 0113 IS MERGED (plan O-2, Task 1 Step 1), and
+-- delete this paragraph when the file is final:
+--   a. section 3's agency_visit_items_kind_check list: copied from 0112 section 6. If 0113 replaces it, copy 0113's.
+--   b. section 3's agency_visits_actor_kind_check and agency_visits_reason_check: copied from 0105. Same rule.
+--   c. section 3's access_log_page: 0112 section 6's text plus the two actor_kind filters. If 0113 replaces the
+--      function, re-copy 0113's body and re-add the two filters.
+--   d. section 3's grant insert (actor_kind) on agency_visits: if 0113 changes agency_visits' column grants, the
+--      eleven-column pin in access-log-schema.test.ts moves with it.
+--   e. section 0's lock order: if 0113 locks any of agency_visit_items, calls, agency_visits, memberships or
+--      accounts, keep this file's children-first order consistent with it.
+--   f. the number: if the highest migration is not 0114, renumber to the next free one.
+--   g. section 3's note_agency_open: 0105's text plus the owner_line_ guard (0112 left it unchanged). If 0113
+--      replaces it, re-copy 0113's body and re-add the guard.
 --
 -- WHAT.
 --   public.owner_line_enrollments: one row per (account, person) who calls in to hear the day. The cell (e164) is
@@ -770,20 +1127,46 @@ describe("0115: the access log learns owner_line_call", () => {
 --     APP computes), the PIN as an scrypt string the APP computes (pin_hash; SQL only compares, 0036's split), the
 --     wrong-PIN counter and the lock. The composite FK to memberships cascades: a person removed from the team, a
 --     deleted user and a deleted account take the row with them.
---   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default.
+--   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default. owner_line_changed_at and
+--     owner_line_changed_by_kind ('owner' or 'agency'): WHEN it last changed and WHAT KIND of person changed it, never
+--     WHO. Owner ruling 2026-11-09, "Say BIS, keep names private": every member reads accounts (authenticated holds
+--     table-level SELECT), so no person's id is stored here; the card says "Turned on by the Owner" or "Turned off by
+--     BIS". Which BIS person did it is BIS's own record, written by the app outside this table (plan Task 5).
+--     Both set together or neither (accounts_owner_line_change_check). Owner ruling Q-A in the database: the agency
+--     may turn it OFF, never ON, so a row whose last change was BIS's is off (accounts_owner_line_agency_off_check).
+--     No account is born with any of the three set: a trigger refuses each on INSERT, for every role. And the switch
+--     never moves without its record (review m-2): a second trigger refuses any UPDATE that changes
+--     owner_line_enabled_at unless owner_line_changed_at changes with it to a non-null value (the pair CHECK then
+--     needs the who-kind). A writer that forgets the record, or leaves a stale one, is refused.
 --   public.calls.owner_line_user_id: the person an owner-line call was for; null on every customer call. No foreign
 --     key on purpose: the mark must outlive a deleted user, or the call would start counting as a customer's.
+--   app.owner_line_day_start(zone, instant): the first instant of the instant's local date in that zone (owner
+--     ruling Q-F: "per day" is the ACCOUNT's day). The 10-a-day limit counts from it.
 --   The access log learns the owner_line_call entry (SC-13): agency_visits.actor_kind gains 'owner_line', reason gains
 --     'owner_line_call' (the two travel together), agency_visit_items.kind gains one kind per owner-line tool, and
 --     service_role may insert actor_kind. access_log_page reads actor_kind = 'agency' only, so the Team page's BIS
---     access section is unchanged.
--- FUNCTIONS. Six, all SECURITY INVOKER with set search_path = pg_catalog, pg_temp (0096's rule), EXECUTE to
---   service_role only. Only service_role runs them and it already holds what they touch, so a definer would add
---   privilege and nothing else (0104's reasoning). EXPECTED_DEFINERS does not change. Every policy-like NULL is
---   coalesced to a refusal (the plpgsql NULL-guard lesson).
+--     access section is unchanged (its parser, parseVisit in packages/db/src/access-log.ts, refuses any reason
+--     outside setup, support, fix and billing, so an unfiltered page would break that section outright).
+--     agency_visit_live (0105) is NOT changed and does not filter on actor_kind. It finds a visit by actor, account
+--     AND clerk_session_id, and it stays agency-only because the two session shapes never meet: an owner-line visit's
+--     is 'call:<calls.id>', a Clerk session id is 'sess_...'. Anything that ever writes another session shape into
+--     agency_visits must add actor_kind = 'agency' to agency_visit_live first.
+--     note_agency_open (0105) is re-created with one guard (review m-3): it refuses every owner_line_ kind (22023).
+--     Those kinds now pass the items CHECK, and parseVisit accepts only ACCESS_LOG_KINDS, so an agency visit carrying
+--     one would make the Team page's BIS access section throw. Owner-line items come only from note_owner_line_call.
+-- FUNCTIONS. Seven callable, all SECURITY INVOKER with set search_path = pg_catalog, pg_temp (0096's rule), EXECUTE
+--   to service_role only: app.owner_line_day_start, owner_line_answer_lookup, owner_line_start_verification,
+--   owner_line_attempt_verify, owner_line_attempt_pin, owner_line_session_check, note_owner_line_call. Plus two
+--   trigger functions, app.owner_line_insert_guard and app.owner_line_switch_record_guard, executable by no role (a
+--   trigger's function is checked for EXECUTE only when the trigger is created). note_agency_open (0105) is
+--   re-created, still an invoker, with 0105's grants restated. Only service_role runs them and it already holds what they touch,
+--   so a definer would add privilege and nothing else (0104's reasoning). EXPECTED_DEFINERS does not change (39).
+--   Every policy-like NULL is coalesced to a refusal (the plpgsql NULL-guard lesson).
 -- GRANTS. The default ACL hands ALL on a new table to anon, authenticated and service_role by name: revoked from all
 --   three, then SELECT, INSERT, UPDATE, DELETE back to service_role (0104's shape). RLS on, no policy. No client
---   grant moves, so EXPECTED_WRITES in schema-grants-guard.test.ts is unchanged.
+--   grant moves, so EXPECTED_WRITES in schema-grants-guard.test.ts is unchanged. The new accounts and calls columns
+--   get no column grant: authenticated holds table-level SELECT on both (so a member reads them under the existing
+--   row policies) and no UPDATE on either column.
 -- LOCKS. Five tables, taken up front inside a do block with lock_timeout 5s. The Supabase CLI does not run a file
 --   inside a transaction block, and a bare LOCK TABLE there fails 25P01 (0114's header). The second do block raises
 --   0115_not_one_transaction unless the rest of the file runs in that same transaction (0088's self-check), so a path
@@ -796,12 +1179,23 @@ describe("0115: the access log learns owner_line_call", () => {
 --   holds calls, then its FK check needs accounts; note_agency_open holds agency_visit_items, then needs
 --   agency_visits. Taking a parent first deadlocks such a writer: the file holds accounts and waits for calls while
 --   the writer holds calls and waits for accounts (40P01). 0114 recorded exactly this on the PG 17.6 replica
---   (feat/f077-work-queue, 0114 lines 66-69), and there the victim can be a live call's row. Children first, the file
---   simply waits behind the writer.
+--   (feat/f077-work-queue, 0114 LOCKS AND COST), and there the victim can be a live call's row. Children first, the
+--   file simply waits behind the writer. Proven on the PG18 replica, 2026-11-09 (plan Task 1 Step 6b): with a call
+--   insert held open, this order waited and applied; accounts first deadlocked the same writer.
+--   0114 locks ai_acts then calls; this file does not lock ai_acts, so the two orders cannot cross.
 --   Residual risk, named: public.set_account_member_role (0066) locks the account row and then updates memberships.
 --   If an Owner changes a role in the milliseconds between this file's memberships lock and its accounts lock, one
 --   side fails 40P01. If the file is the victim it applies nothing and is re-run; if the role change is, the Owner
---   presses Save again. Apply outside business hours.
+--   presses Save again.
+--   Residual risk, named (review m-4): deleting an account takes accounts first and then cascades into its
+--   children (memberships, agency_visits and agency_visit_items; calls by its own statement first, through
+--   deleteAccountCascade's ACCOUNT_OWNED_TABLES). A delete that has locked its accounts row when this file reaches
+--   accounts holds what the file waits for while waiting on a child the file holds: one side fails 40P01. If the
+--   file is the victim it applies nothing and is re-run; if the delete is, the agency runs it again. Account
+--   deletion is agency-only and rare. Apply outside business hours, and not during an account deletion.
+--   An added column with no default and no NOT NULL is a catalog change only: no table rewrite. The new CHECKs on
+--   accounts, agency_visits and agency_visit_items are added valid, so each scans its table once under the lock
+--   already held.
 -- APPLY ORDER: after 0113 and 0114. CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
 --   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this; the
 --   build after it selects calls.owner_line_user_id in listCalls, so it goes BEFORE the deploy.
@@ -815,9 +1209,12 @@ describe("0115: the access log learns owner_line_call", () => {
 --   drop function public.owner_line_start_verification(uuid, uuid, text, text, integer);
 --   drop function public.owner_line_answer_lookup(uuid, text, integer);
 --   drop function app.owner_line_day_start(text, timestamptz);
+--   drop trigger accounts_owner_line_switch_record on public.accounts; drop function app.owner_line_switch_record_guard();
 --   drop trigger accounts_owner_line_insert_guard on public.accounts; drop function app.owner_line_insert_guard();
---   alter table public.accounts drop constraint accounts_owner_line_change_check, drop column owner_line_changed_at,
---     drop column owner_line_changed_by, drop column owner_line_changed_by_agency;
+--   re-run 0105's note_agency_open as create or replace, with its revoke and grant lines;
+--   alter table public.accounts drop constraint accounts_owner_line_agency_off_check,
+--     drop constraint accounts_owner_line_change_check, drop column owner_line_changed_by_kind,
+--     drop column owner_line_changed_at;
 --   re-run 0112's access_log_page (its section 6) as create or replace;
 --   by OWNER DECISION ONLY (it deletes access-log rows): delete from public.agency_visits where actor_kind = 'owner_line';
 --   restore 0112's agency_visit_items_kind_check, 0105's agency_visits_actor_kind_check and agency_visits_reason_check;
@@ -889,31 +1286,36 @@ comment on table public.owner_line_enrollments is
   'F-032 (0115): a person''s registered cell and PIN for calling in to hear the day. Server-written and server-read only.';
 
 alter table public.owner_line_enrollments enable row level security;
+-- No policy: RLS on with none refuses every row to every role that does not bypass it, and the grants below
+-- refuse anon and authenticated outright (0104's shape, SC-4).
 revoke all on public.owner_line_enrollments from anon, authenticated, service_role;
 grant select, insert, update, delete on public.owner_line_enrollments to service_role;
 
--- 2. The switch and the call mark.
+-- 2. The switch and its record: when, and what kind of person, never who (owner ruling 2026-11-09).
 alter table public.accounts
   add column owner_line_enabled_at timestamptz,
   add column owner_line_changed_at timestamptz,
-  add column owner_line_changed_by text,
-  add column owner_line_changed_by_agency boolean,
-  add constraint accounts_owner_line_change_check check (
-    (owner_line_changed_at is null) = (owner_line_changed_by is null)
-    and (owner_line_changed_at is null) = (owner_line_changed_by_agency is null)
-    and (owner_line_changed_by is null or btrim(owner_line_changed_by) <> ''));
+  add column owner_line_changed_by_kind text constraint accounts_owner_line_changed_by_kind_check
+    check (owner_line_changed_by_kind in ('owner', 'agency')),
+  add constraint accounts_owner_line_change_check
+    check ((owner_line_changed_at is null) = (owner_line_changed_by_kind is null)),
+  add constraint accounts_owner_line_agency_off_check
+    check (owner_line_changed_by_kind is distinct from 'agency' or owner_line_enabled_at is null);
 comment on column public.accounts.owner_line_enabled_at is
   'F-032 (0115): when the Owner let the team call in to hear the day; null = off (the default). Only the client''s Owner turns it on; the agency may turn it off (owner ruling Q-A).';
-comment on column public.accounts.owner_line_changed_by is
-  'F-032 (0115): the Clerk user id of whoever last turned the switch on or off; owner_line_changed_by_agency says whether that was BIS.';
+comment on column public.accounts.owner_line_changed_by_kind is
+  'F-032 (0115): who last turned the switch on or off, as a kind only: owner (the client''s Owner) or agency (BIS). Never a person''s id (owner ruling 2026-11-09: every member reads accounts). BIS may only turn it off (accounts_owner_line_agency_off_check).';
 
--- The switch is never ON at birth (spec 3.3: the client's Owner decides). authenticated holds a TABLE-level INSERT on
--- accounts (schema-grants-guard.test.ts EXPECTED_WRITES), so a column grant cannot express this; a trigger can, for
--- every role, service_role's createAccount included (it never sets the column).
+-- The switch is never ON at birth (spec 3.3: the client's Owner decides), and no account is born carrying a record of
+-- a change nobody made. authenticated holds a TABLE-level INSERT on accounts (schema-grants-guard.test.ts
+-- EXPECTED_WRITES), so a column grant cannot express this; a trigger can, for every role, service_role's
+-- createAccount included (it never sets these columns). It tests each of the three columns by name, so its own
+-- refusal (this message, no constraint name) comes before any CHECK could refuse the same row.
 create function app.owner_line_insert_guard() returns trigger
 language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
 begin
-  if new.owner_line_enabled_at is not null then
+  if new.owner_line_enabled_at is not null or new.owner_line_changed_at is not null
+     or new.owner_line_changed_by_kind is not null then
     raise exception 'accounts: the owner line starts off; only the client''s Owner turns it on' using errcode = '23514';
   end if;
   return new;
@@ -922,9 +1324,31 @@ revoke all on function app.owner_line_insert_guard() from public, anon, authenti
 create trigger accounts_owner_line_insert_guard before insert on public.accounts
   for each row execute function app.owner_line_insert_guard();
 
+-- The switch never moves without a fresh record (review m-2). When owner_line_enabled_at changes, the same UPDATE must
+-- move owner_line_changed_at to a new, non-null value; the pair CHECK then requires the who-kind, and the agency-off
+-- CHECK holds BIS to off. A stale record (the time unchanged) or a cleared one is refused. A write that does not move
+-- the switch is not touched (the WHEN clause), so every other accounts UPDATE costs nothing.
+create function app.owner_line_switch_record_guard() returns trigger
+language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+begin
+  if new.owner_line_changed_at is null
+     or new.owner_line_changed_at is not distinct from old.owner_line_changed_at then
+    raise exception 'accounts: turning the owner line on or off must record when and who-kind' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+revoke all on function app.owner_line_switch_record_guard() from public, anon, authenticated, service_role;
+create trigger accounts_owner_line_switch_record before update on public.accounts
+  for each row when (old.owner_line_enabled_at is distinct from new.owner_line_enabled_at)
+  execute function app.owner_line_switch_record_guard();
+
 -- The ACCOUNT's local day (owner ruling Q-F): the first instant whose local date, in p_zone, is p_at's local date.
--- date_trunc on the local wall time, back to an instant; then, for a zone whose clocks jump AT midnight (local 00:00
--- does not exist), step forward to the first instant that is on that date. Bounded: no zone jumps more than 2 hours.
+-- The local midnight, back to an instant; then two bounded corrections, 15 minutes at a time (no zone moves its
+-- clocks by more than 2 hours, and every transition falls on a quarter hour):
+--   forward, while that instant is still on the previous date (a defensive guard: PostgreSQL already reads a
+--     midnight that does not exist, America/Santiago's 2026-09-06, as the instant the clocks jump);
+--   back, while the instant 15 minutes earlier is still on this date (load-bearing: PostgreSQL reads a midnight that
+--     happens TWICE, America/Havana's 2026-11-01, as the LATER one, an hour after the day began).
 create function app.owner_line_day_start(p_zone text, p_at timestamptz) returns timestamptz
 language plpgsql stable security invoker set search_path = pg_catalog, pg_temp as $$
 declare v_day date; v_start timestamptz; i integer := 0;
@@ -946,13 +1370,15 @@ begin
 end $$;
 revoke all on function app.owner_line_day_start(text, timestamptz) from public, anon, authenticated, service_role;
 grant execute on function app.owner_line_day_start(text, timestamptz) to service_role;
+
+-- The call mark, and the read behind the 10-a-day limit.
 alter table public.calls add column owner_line_user_id uuid;
 comment on column public.calls.owner_line_user_id is
   'F-032 (0115): the person an owner-line call was for; null on every customer call. No FK: the mark outlives the user.';
 create index calls_owner_line_idx on public.calls (account_id, owner_line_user_id, started_at desc)
   where owner_line_user_id is not null;
 
--- 3. The access log learns owner_line_call (SC-13). Copy the kind list from the newest migration that set it (Step 1).
+-- 3. The access log learns owner_line_call (SC-13). The kind list is 0112 section 6's, plus four (DRAFT note a).
 alter table public.agency_visits drop constraint agency_visits_actor_kind_check;
 alter table public.agency_visits add constraint agency_visits_actor_kind_check check (actor_kind in ('agency', 'owner_line'));
 alter table public.agency_visits drop constraint agency_visits_reason_check;
@@ -966,6 +1392,35 @@ alter table public.agency_visit_items add constraint agency_visit_items_kind_che
   'form_answers', 'customer_list_export', 'record_history_export',
   'owner_line_calls_and_messages', 'owner_line_appointments', 'owner_line_needs_attention', 'owner_line_lookup_customer'));
 grant insert (actor_kind) on public.agency_visits to service_role;
+
+-- note_agency_open: 0105's text with one guard (review m-3; DRAFT note g). An owner_line_ kind is
+-- note_owner_line_call's alone; on an agency visit it would blank the BIS access section (parseVisit).
+create or replace function public.note_agency_open(
+  p_account_id uuid, p_actor text, p_session text, p_kind text, p_record_id uuid, p_item_count integer)
+returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare v_visit uuid;
+begin
+  if p_account_id is null or p_actor is null or p_session is null or p_kind is null then
+    raise exception 'note_agency_open: a required argument is null' using errcode = '22004';
+  end if;
+  if left(p_kind, 11) = 'owner_line_' then
+    raise exception 'note_agency_open: owner_line_ kinds belong to note_owner_line_call' using errcode = '22023';
+  end if;
+  -- The live visit for THIS person, session and account: a caller can never name another visit.
+  v_visit := public.agency_visit_live(p_account_id, p_actor, p_session);
+  if v_visit is null then return 'no_visit'; end if;
+  if p_kind = 'customer_list_export' then
+    insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count)
+    values (v_visit, p_account_id, p_kind, null, p_item_count);
+  else
+    insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count)
+    values (v_visit, p_account_id, p_kind, p_record_id, null)
+    on conflict (visit_id, kind, record_id) where record_id is not null do nothing;
+  end if;
+  return 'ok';
+end $$;
+revoke all on function public.note_agency_open(uuid, text, text, text, uuid, integer) from public, anon, authenticated, service_role;
+grant execute on function public.note_agency_open(uuid, text, text, text, uuid, integer) to service_role;
 
 -- access_log_page: 0112's text with one change, actor_kind = 'agency' on the count and on the page.
 create or replace function public.access_log_page(
@@ -1227,7 +1682,11 @@ grant execute on function public.note_owner_line_call(uuid, uuid, text, text, te
   Any other pin in that file that 0115 moves (a kind or reason CHECK listing) is updated the same way, named in the report, never loosened.
 
   ```bash
-  psql -h localhost -p 55433 -U postgres -d post -v ON_ERROR_STOP=1 -1 -f packages/db/supabase/migrations/0115_owner_line.sql
+  # Apply the way the Supabase CLI does: ONE extended-protocol pipeline, one Sync, no transaction block (memory
+  # bis-local-db-replica, 2026-11-06). psql -1 -f is a transaction block, so it hides a bare LOCK; and psql in pipeline
+  # mode exits 0 even on an ERROR, so judge the apply by its output, never its exit code.
+  python pipeline.py packages/db/supabase/migrations/0115_owner_line.sql 0115.pipe.psql
+  psql -h localhost -p <your port> -U postgres -d post -v ON_ERROR_STOP=1 -f 0115.pipe.psql   # then: no ERROR line
   cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/owner-line-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/access-log-schema.test.ts
   ```
 
@@ -1255,9 +1714,15 @@ grant execute on function public.note_owner_line_call(uuid, uuid, text, text, te
   3. In `owner_line_session_check`, delete the `role_changed` line → "refuses a removed person and a changed role" FAILS.
   4. `alter function public.owner_line_attempt_pin(uuid, text, integer) security definer` → "all seven run as their CALLER" FAILS.
   5. In `access_log_page`, drop `and v.actor_kind = 'agency'` from the count → "note_owner_line_call writes one owner_line visit" FAILS.
-  6. `create or replace` `app.owner_line_day_start` to `return date_trunc('day', p_at);` → the America/Chicago day-start case FAILS. Delete its two `while` loops → the America/Santiago case FAILS (if PG's own conversion already lands on 04:00Z, say so: the loops are then a guard this PG version does not need, and the case is kept as the pin).
+  6. `create or replace` `app.owner_line_day_start` to `return date_trunc('day', p_at);` → the America/Chicago day-start case FAILS. Delete its two `while` loops → **the America/Santiago case CANNOT fail on PostgreSQL** (measured 2026-11-09: PostgreSQL already reads that missing midnight as the jump, 04:00Z), so it is kept as a pinned value and claims no probe; the America/Havana case (a midnight that happens twice, which PostgreSQL reads as the later one) carries the step-back loop's probe and FAILS. Deleting only the forward loop fails nothing: it is a guard no case can reach.
   7. `drop trigger accounts_owner_line_insert_guard on public.accounts` → "no account can be CREATED with the switch on" FAILS.
   8. In `owner_line_answer_lookup`, count from `date_trunc('day', now())` (UTC) instead of `app.owner_line_day_start(v_zone, now())` → "the daily limit counts this account-local day only" FAILS, because the ten calls one minute before Chicago midnight fall after UTC midnight. The exception is 00:00-06:00 UTC, when the Chicago date is still the previous one and the mutation survives. Run this probe outside those hours, and say when it ran.
+  9. **CHECK-free variants (review m-8).** Probe 2 also trips `owner_line_enrollments_failed_attempts_check` (0..2), so on its own it cannot tell the function's logic from the CHECK. Run it clamped as well: `>= 4` AND `failed_attempts = least(e.failed_attempts + 1, 2)` in both the update and the returned value → "the third wrong PIN locks" FAILS (`expected 'wrong' to be 'locked_now'`). Likewise "keep pin_hash on a new e164" trips `pin_needs_cell_check`; run it as keep the PIN AND the verification (`verified_at = e.verified_at, pin_hash = e.pin_hash, pin_set_at = e.pin_set_at`) → "changing the cell clears the verification and the PIN" FAILS on the values.
+  10. **Business scope (review I-1).** Drop the account filter from each read, one at a time: t1 the lookup's enrollment read, t2 the lookup's count, t3 `attempt_verify`'s read, t4 `session_check`'s enrollment read, t5 `session_check`'s count → each one's second-business case FAILS.
+  11. **Every refusal by name (review I-2).** Delete, one at a time: u1 `no_client_access`, u2 `switch_off`, u3 the `not_enrolled` branch, u4 `locked`, u5 the `over_limit` block (all `session_check`), u6 the lookup's client-access/archived gate, u7 the lookup's no-PIN line → each one's case FAILS by its reason.
+  12. **The switch record (review m-2).** Drop trigger `accounts_owner_line_switch_record` → "turning it on with no record" FAILS; drop its `is not distinct from old` test → "over a stale 'owner' record" FAILS; drop its `is null` test → "while clearing the record" FAILS; drop its WHEN clause → "a write that does not move the switch" FAILS.
+  13. **The insert guard, one column at a time** (each case sets ONE guarded column, so a CHECK cannot refuse it in the guard's place): drop `owner_line_enabled_at`, `owner_line_changed_at` or `owner_line_changed_by_kind` from the guard → that column's case FAILS. Drop `accounts_owner_line_agency_off_check` → "BIS's last word can only be OFF" FAILS. Add a person-id column (`owner_line_changed_by_user text`) → "exactly three owner_line columns" FAILS.
+  14. **note_agency_open (review m-3).** Delete its `owner_line_` guard → "an agency note with an owner_line_ kind is refused" FAILS.
 
   Paste each FAIL line.
 
@@ -1314,15 +1779,17 @@ export async function setOwnerLinePin(db, accountId, userId, pinHash): Promise<b
 export async function removeOwnerLinePin(db, accountId, userId): Promise<void>;
 export async function removeOwnerLineEnrollment(db, accountId, userId): Promise<void>;
 export async function ownerLineAnswerLookup(db, accountId, callerE164, max): Promise<OwnerLineLookup>;   // the account-local day is SQL's (Q-F)
-export async function attemptOwnerLinePin(db, enrollmentId, candidate): Promise<{ status: "ok" | "wrong" | "locked_now" | "locked" | "none"; lockedUntil: string | null }>;
+export type OwnerLinePinResult = { status: "ok" | "wrong" | "none" } | { status: "locked_now" | "locked"; lockedUntil: string };
+export async function attemptOwnerLinePin(db, enrollmentId, candidate): Promise<OwnerLinePinResult>;
 export async function ownerLineSessionCheck(db, p: { accountId: string; userId: string; role: AccountRole;
   maxCalls: number | null }): Promise<({ ok: true } & OwnerLineSessionFacts) | { ok: false; reason: string }>;
 export async function noteOwnerLineCall(db, p: { accountId: string; callId: string; actorClerkUserId: string;
   actorName: string | null; kinds: readonly OwnerLineLogKind[] }): Promise<void>;
 export async function readOwnerLineCallLog(db, accountId, callId): Promise<OwnerLineLogKind[]>;
-export type OwnerLineSwitchState = { enabledAt: string | null; changedAt: string | null; changedByName: string | null; changedByAgency: boolean | null };
+export type OwnerLineSwitchKind = "owner" | "agency";
+export type OwnerLineSwitchState = { enabledAt: string | null; changedAt: string | null; changedByKind: OwnerLineSwitchKind | null };
 export async function readOwnerLineSwitch(db, accountId): Promise<OwnerLineSwitchState>;
-export async function setOwnerLineSwitch(db, accountId, on: boolean, actor: { clerkUserId: string; agency: boolean }): Promise<OwnerLineSwitchState>;   // throws on agency ON
+export async function setOwnerLineSwitch(db, accountId, on: boolean, by: OwnerLineSwitchKind): Promise<OwnerLineSwitchState>;   // throws on agency ON
 ```
 
 `voice.ts` gains the following. `startCallRow`'s input gains `ownerLineUserId?: string`. `CallListRow` gains `owner_line_user_id: string | null`. `listCalls`' opts gain `excludeOwnerLine?: boolean`. These four functions each gain `.is("owner_line_user_id", null)`:
@@ -1604,15 +2071,20 @@ export async function ownerLineAnswerLookup(
 
 export async function attemptOwnerLinePin(
   db: SupabaseClient, enrollmentId: string, candidate: string,
-): Promise<{ status: "ok" | "wrong" | "locked_now" | "locked" | "none"; lockedUntil: string | null }> {
+): Promise<OwnerLinePinResult> {
   const { data, error } = await db.rpc("owner_line_attempt_pin", {
     p_enrollment_id: enrollmentId, p_candidate: candidate, p_lock_minutes: OWNER_LINE_LOCK_MINUTES,
   });
   if (error) throw new Error(`attemptOwnerLinePin failed: ${error.message}`);
   const r = data as { status?: unknown; locked_until?: unknown } | null;
   const s = r?.status;
-  if (s === "ok" || s === "wrong" || s === "locked_now" || s === "locked" || s === "none") {
-    return { status: s, lockedUntil: typeof r?.locked_until === "string" ? r.locked_until : null };
+  // A lock always carries its end: owner_line_attempt_pin returns locked_until from the same UPDATE ... RETURNING
+  // (locked_now) or from the row it read (locked). A lock without one is an unexpected answer, never a null that the
+  // lockout email would have to print as nothing (Task 8).
+  if (s === "locked_now" || s === "locked") {
+    if (typeof r?.locked_until === "string") return { status: s, lockedUntil: r.locked_until };
+  } else if (s === "ok" || s === "wrong" || s === "none") {
+    return { status: s };
   }
   throw new Error(`attemptOwnerLinePin: unexpected answer ${JSON.stringify(data)}`);
 }
@@ -1653,42 +2125,40 @@ export async function readOwnerLineCallLog(db: SupabaseClient, accountId: string
   return ((data ?? []) as { kind: OwnerLineLogKind }[]).map((r) => r.kind);
 }
 
-/** The switch and its record (owner ruling Q-A): who last turned it on or off, when, and whether that was BIS. */
-export type OwnerLineSwitchState = {
-  enabledAt: string | null; changedAt: string | null; changedByName: string | null; changedByAgency: boolean | null;
-};
+/**
+ * The switch and its record (owner rulings Q-A and 2026-11-09 "Say BIS, keep names private"): WHEN it last changed and
+ * WHAT KIND of person changed it, never who. The card says "Turned on by the Owner" or "Turned off by BIS". Which BIS
+ * person did it is BIS's own null-account event (Task 5), never read here.
+ */
+export type OwnerLineSwitchKind = "owner" | "agency";
+export type OwnerLineSwitchState = { enabledAt: string | null; changedAt: string | null; changedByKind: OwnerLineSwitchKind | null };
 
 /** Server code only (the Team page after requireAccountOwner; the preferences card after the membership check). */
 export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string): Promise<OwnerLineSwitchState> {
   const { data, error } = await db.from("accounts")
-    .select("owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by, owner_line_changed_by_agency")
+    .select("owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`readOwnerLineSwitch failed: ${error.message}`);
   const r = data as { owner_line_enabled_at: string | null; owner_line_changed_at: string | null;
-    owner_line_changed_by: string | null; owner_line_changed_by_agency: boolean | null } | null;
-  let changedByName: string | null = null;
-  if (r?.owner_line_changed_by) {
-    const { data: u, error: uErr } = await db.from("users").select("name, email").eq("clerk_user_id", r.owner_line_changed_by).maybeSingle();
-    if (uErr) throw new Error(`readOwnerLineSwitch (who) failed: ${uErr.message}`);
-    changedByName = (u as { name: string | null; email: string } | null)?.name ?? null;
-  }
-  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByName,
-    changedByAgency: r?.owner_line_changed_by_agency ?? null };
+    owner_line_changed_by_kind: string | null } | null;
+  const kind = r?.owner_line_changed_by_kind ?? null;
+  if (kind !== null && kind !== "owner" && kind !== "agency") throw new Error(`readOwnerLineSwitch: unexpected kind ${kind}`);
+  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByKind: kind };
 }
 
 /**
  * Server code only, after requireAccountOwner. Owner ruling Q-A: the client's Owner turns it on or off; the agency may
- * turn it OFF and never ON. That rule is enforced here as well as in the action, so no other caller can bypass it.
- * Every change records who (the Clerk user id) and when, on the database's clock.
+ * turn it OFF and never ON. Enforced here, in the action, and in the database (accounts_owner_line_agency_off_check).
+ * The switch, a NEW change time and the who-kind travel in one UPDATE: 0115's accounts_owner_line_switch_record refuses
+ * a switch change whose owner_line_changed_at does not move.
  */
 export async function setOwnerLineSwitch(
-  db: SupabaseClient, accountId: string, on: boolean, actor: { clerkUserId: string; agency: boolean },
+  db: SupabaseClient, accountId: string, on: boolean, by: OwnerLineSwitchKind,
 ): Promise<OwnerLineSwitchState> {
-  if (on && actor.agency) throw new Error("setOwnerLineSwitch: the agency cannot turn the owner line on");
+  if (on && by === "agency") throw new Error("setOwnerLineSwitch: the agency cannot turn the owner line on");
   const at = new Date().toISOString();
   const { error } = await db.from("accounts")
-    .update({ owner_line_enabled_at: on ? at : null, owner_line_changed_at: at,
-      owner_line_changed_by: actor.clerkUserId, owner_line_changed_by_agency: actor.agency })
+    .update({ owner_line_enabled_at: on ? at : null, owner_line_changed_at: at, owner_line_changed_by_kind: by })
     .eq("id", accountId);
   if (error) throw new Error(`setOwnerLineSwitch failed: ${error.message}`);
   return readOwnerLineSwitch(db, accountId);
@@ -2238,9 +2708,31 @@ export function extractOwnerPass(eventData: unknown): string | null {
 - Create: `ACCT/team/owner-line-actions.ts` and `owner-line-actions.test.ts`
 - Modify: `ACCT/access-log-routes.test.ts` (one line in `NOT_A_RECORD_ACTIONS`)
 - Modify: `apps/web/src/lib/messages.ts` (append the `ownerLine.error.*` and `ownerLine.switch.*` keys with their `.es` twins)
+- Modify (bis-db, additive, its own symbol only): `packages/db/src/events.ts` gains `emitAgencyEvent`; `packages/db/src/index.ts` already exports `./events`. Create `packages/db/src/test/events-agency.test.ts`.
 
 **Interfaces:**
 - Consumes (Task 2): `readMyOwnerLineEnrollment`, `startOwnerLineVerification`, `setOwnerLinePin`, `removeOwnerLinePin`, `removeOwnerLineEnrollment`, `setOwnerLineSwitch`, `OwnerLineSwitchState`, `OWNER_LINE_VERIFY_MINUTES`.
+- Consumes (this task, bis-db): `emitAgencyEvent(db, type, actorClerkUserId, payload)`.
+
+**Which BIS person turned the switch off (owner ruling 2026-11-09, "Say BIS, keep names private").** `accounts` stores only the who-kind, so the person goes in BIS's own record: one `events` row with `account_id` NULL, `type 'owner_line.switch_off'`, `actor_type 'user'`, `actor_id` = the BIS person's Clerk user id, `payload { account_id, changed_at }`, written on `serviceDb()`. Why that row and not the existing patterns, measured on the replica 2026-11-09: an account-scoped event is readable by the client's Owner AND Staff (`events_read`, 0109:198: `is_agency() or account_id = current_account_id()`), so its `actor_id` would name the BIS person to them; an access-log item is Owner-readable next to the visit's `actor_name` on the same Team page. With `account_id` null only `is_agency()` and service_role read the row (Owner 0, Staff 0, agency 1). These rows **outlive `deleteAccountCascade`** (it deletes events by `account_id`), so any test that writes one deletes it itself, by its id.
+
+```ts
+// packages/db/src/events.ts (additive)
+/**
+ * An AGENCY-ONLY record (account_id null): events_read (0109) shows it to the agency and to service_role, never to a
+ * client member. For what BIS did that the client must not see by name (F-032: which BIS person turned a switch off).
+ * The service client only: a user client cannot write events at all (0053), and record_event would stamp its sub.
+ */
+export async function emitAgencyEvent(
+  db: SupabaseClient, type: string, actorClerkUserId: string, payload: object,
+): Promise<void> {
+  if (isUserClient(db)) throw new Error(`event emit failed: an agency-only event needs the service client (${type})`);
+  const { error } = await db.from("events").insert({ account_id: null, type, actor_type: "user", actor_id: actorClerkUserId, payload });
+  if (error) throw new Error(`event emit failed: ${error.message}`);
+}
+```
+
+`events-agency.test.ts` holds two cases: a fake-builder unit case that the inserted row is exactly `{ account_id: null, type, actor_type: "user", actor_id, payload }` and that a user client is refused before any write (mutation: send `account_id: payload.account_id` -> FAILS), and a `withRollback` case that seeds one null-account event and one account event for the same account and reads them as the account's Owner, its Staff and the agency: 0 / 1, 0 / 1 and 1 (mutation: write the account's id -> the Owner case FAILS). Both run on the replica and in CI verify; neither writes a row that outlives its transaction.
 - Consumes (Task 3): `checkPin`, `hashPin`, `newVerifyCode`, `hashVerifyCode`.
 - Consumes: `requireAccountOwner(accountId)` (`WEB/lib/auth.ts:104-110`, which returns `{ userId, isAgency }`, userId being the Clerk user id), `e164Of` (`WEB/lib/voice/phone-number.ts:17`), `getPhoneNumberByE164` (`DB/voice.ts:101`).
 - Produces:
@@ -2406,33 +2898,39 @@ describe("the owner line's setup actions (F-032 §3.1, §3.2; SC-4)", () => {
 // apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mocks = vi.hoisted(() => ({ owner: vi.fn(), set: vi.fn() }));
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), set: vi.fn(), emit: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requireAccountOwner: mocks.owner }));
-vi.mock("@bis/db", () => ({ serviceDb: () => ({}), setOwnerLineSwitch: mocks.set }));
+vi.mock("@bis/db", () => ({ serviceDb: () => ({}), setOwnerLineSwitch: mocks.set, emitAgencyEvent: mocks.emit }));
 
 import { setOwnerLineSwitchAction } from "./owner-line-actions";
 
 const A = "11111111-1111-4111-8111-111111111111";
-const STATE = { enabledAt: null, changedAt: "2026-11-09T20:00:00.000Z", changedByName: "Ana", changedByAgency: true };
-beforeEach(() => { vi.clearAllMocks(); mocks.set.mockResolvedValue(STATE); });
+const ON = { enabledAt: "2026-11-09T20:00:00.000Z", changedAt: "2026-11-09T20:00:00.000Z", changedByKind: "owner" };
+const OFF = { enabledAt: null, changedAt: "2026-11-09T20:00:00.000Z", changedByKind: "agency" };
+beforeEach(() => { vi.clearAllMocks(); mocks.emit.mockResolvedValue(undefined); });
 
-describe("the business's switch (F-032 §3.3; owner ruling Q-A)", () => {
-  it("the client's Owner turns it on, attributed to them and not to the agency", async () => {
+describe("the business's switch (F-032 §3.3; owner rulings Q-A and 2026-11-09)", () => {
+  it("the client's Owner turns it on as the Owner's kind, and no agency record is written", async () => {
     // requireAccountOwner returns { userId, isAgency } (WEB/lib/auth.ts:104-110); userId is the Clerk user id.
     mocks.owner.mockResolvedValue({ userId: "user_owner", isAgency: false });
-    expect(await setOwnerLineSwitchAction(A, "en", true)).toEqual({ ok: true, value: STATE });
-    expect(mocks.set).toHaveBeenCalledWith({}, A, true, { clerkUserId: "user_owner", agency: false });
+    mocks.set.mockResolvedValue(ON);
+    expect(await setOwnerLineSwitchAction(A, "en", true)).toEqual({ ok: true, value: ON });
+    expect(mocks.set).toHaveBeenCalledWith({}, A, true, "owner");
+    expect(mocks.emit).not.toHaveBeenCalled();
   });
   it("the agency's ON is refused, and nothing is written (mutation: drop the agency-ON refusal -> FAILS)", async () => {
     mocks.owner.mockResolvedValue({ userId: "user_bis", isAgency: true });
     expect(await setOwnerLineSwitchAction(A, "en", true)).toMatchObject({ ok: false });
     expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalled();
   });
-  it("the agency's OFF works and is attributed to the agency (mutation: refuse every agency change -> FAILS; record agency:false -> FAILS)", async () => {
+  it("the agency's OFF works as the agency's kind, and BIS's own record names the person (mutations: record 'owner' -> FAILS; drop the emit -> FAILS)", async () => {
     mocks.owner.mockResolvedValue({ userId: "user_bis", isAgency: true });
-    expect(await setOwnerLineSwitchAction(A, "en", false)).toEqual({ ok: true, value: STATE });
-    expect(mocks.set).toHaveBeenCalledWith({}, A, false, { clerkUserId: "user_bis", agency: true });
+    mocks.set.mockResolvedValue(OFF);
+    expect(await setOwnerLineSwitchAction(A, "en", false)).toEqual({ ok: true, value: OFF });
+    expect(mocks.set).toHaveBeenCalledWith({}, A, false, "agency");
+    expect(mocks.emit).toHaveBeenCalledWith({}, "owner_line.switch_off", "user_bis", { account_id: A, changed_at: OFF.changedAt });
   });
   it("staff never reach it: requireAccountOwner redirects them", async () => {
     mocks.owner.mockRejectedValue(new Error("NEXT_REDIRECT"));
@@ -2445,12 +2943,12 @@ describe("the business's switch (F-032 §3.3; owner ruling Q-A)", () => {
 `setOwnerLineSwitch` itself also refuses an agency ON (Task 2), so no other caller can bypass the action. Append this case to `packages/db/src/test/owner-line-counting.test.ts` (CI `verify`; import `setOwnerLineSwitch` and `readOwnerLineSwitch` from `../index`):
 
 ```ts
-it("setOwnerLineSwitch refuses an agency ON before writing, and records an agency OFF as the agency's (mutation: drop its guard -> FAILS)", () =>
+it("setOwnerLineSwitch refuses an agency ON before writing, and records an agency OFF as the agency's kind (mutation: drop its guard -> FAILS)", () =>
   withTestAccount(async (db, accountId) => {
-    await expect(setOwnerLineSwitch(db, accountId, true, { clerkUserId: "user_bis", agency: true })).rejects.toThrow(/agency/);
+    await expect(setOwnerLineSwitch(db, accountId, true, "agency")).rejects.toThrow(/agency/);
     expect((await readOwnerLineSwitch(db, accountId)).enabledAt).toBeNull();
-    const off = await setOwnerLineSwitch(db, accountId, false, { clerkUserId: "user_bis", agency: true });
-    expect(off).toMatchObject({ enabledAt: null, changedByAgency: true, changedAt: expect.any(String) });
+    const off = await setOwnerLineSwitch(db, accountId, false, "agency");
+    expect(off).toMatchObject({ enabledAt: null, changedByKind: "agency", changedAt: expect.any(String) });
   }));
 ```
 
@@ -2601,7 +3099,7 @@ export async function removeOwnerLineCellAction(accountId: string, locale: Local
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { serviceDb, setOwnerLineSwitch, type OwnerLineSwitchState } from "@bis/db";
+import { serviceDb, setOwnerLineSwitch, emitAgencyEvent, type OwnerLineSwitchState } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
@@ -2613,14 +3111,20 @@ import type { Locale } from "@/lib/i18n/locale";
  *   - The client's Owner turns it on or off.
  *   - The agency may turn it OFF, a protective act (a lost phone, a person let go), and never ON: the client's Owner
  *     decides who may phone into their data.
- * Every change is recorded with who and when (shown on the card).
+ * Every change records WHEN and WHAT KIND of person (shown on the card: "Turned off by BIS"), never who (owner ruling
+ * 2026-11-09). Which BIS person turned it off is BIS's own null-account event, read by the agency only. The switch is
+ * written first: an OFF is protective, so a failed audit write must not leave it on; the error then surfaces.
  */
 export async function setOwnerLineSwitchAction(
   accountId: string, locale: Locale, on: boolean,
 ): Promise<{ ok: true; value: OwnerLineSwitchState } | { ok: false; error: string }> {
   const { userId, isAgency } = await requireAccountOwner(accountId);
   if (on && isAgency) return { ok: false, error: t(m, "ownerLine.switch.agencyCannot", locale === "es" ? "es" : "en") };
-  const state = await setOwnerLineSwitch(serviceDb(), accountId, on === true, { clerkUserId: userId, agency: isAgency });
+  const db = serviceDb();
+  const state = await setOwnerLineSwitch(db, accountId, on === true, isAgency ? "agency" : "owner");
+  if (isAgency) {
+    await emitAgencyEvent(db, "owner_line.switch_off", userId, { account_id: accountId, changed_at: state.changedAt });
+  }
   revalidatePath(`/dashboard/accounts/${accountId}/team`);
   revalidatePath("/dashboard/preferences");
   return { ok: true, value: state };
@@ -2923,7 +3427,8 @@ type Result = { ok: true; value: OwnerLineSwitchState } | { ok: false; error: st
 
 /**
  * F-032 §3.3, owner ruling Q-A: off by default. The client's Owner turns it on or off; the agency may turn it OFF,
- * never ON. The card says who last changed it and when ("Turned off by BIS · Ana, Nov 9, 2:14 PM").
+ * never ON. The card says what kind of person last changed it and when ("Turned off by BIS, Nov 9, 2:14 PM";
+ * "Turned on by the Owner, ..."), never a name (owner ruling 2026-11-09, "Say BIS, keep names private").
  * Status is dot + word (rule 3). A change runs at once; Undo is offered only when THIS viewer may make the reverse
  * change (rule 6): an Owner always, the agency never, because undoing its OFF would be an ON.
  */
@@ -2947,9 +3452,7 @@ export function OwnerLineSwitchCard(props: {
   const when = state.changedAt ? new Intl.DateTimeFormat(props.locale === "es" ? "es-US" : "en-US",
     { timeZone: props.zone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
     .format(new Date(state.changedAt)).replace(/\u202f/g, " ") : null;
-  const who = state.changedByAgency
-    ? tr.text("ownerLine.switch.byBis", { name: state.changedByName ?? tr.text("ownerLine.switch.someoneAtBis") })
-    : state.changedByName ?? tr.text("ownerLine.calls.someone");
+  const who = tr.text(state.changedByKind === "agency" ? "ownerLine.switch.byBis" : "ownerLine.switch.byOwner");
   return (
     <Card data-owner-line-switch className="mt-6">
       <CardHeader>
@@ -2988,10 +3491,10 @@ Copy for the record line, appended to the F-032 block:
   "ownerLine.switch.turnedOnBy.es": "Lo encendió {who}, {when}.",
   "ownerLine.switch.turnedOffBy": "Turned off by {who}, {when}.",
   "ownerLine.switch.turnedOffBy.es": "Lo apagó {who}, {when}.",
-  "ownerLine.switch.byBis": "BIS · {name}",
-  "ownerLine.switch.byBis.es": "BIS · {name}",
-  "ownerLine.switch.someoneAtBis": "someone at BIS",
-  "ownerLine.switch.someoneAtBis.es": "alguien de BIS",
+  "ownerLine.switch.byBis": "BIS",
+  "ownerLine.switch.byBis.es": "BIS",
+  "ownerLine.switch.byOwner": "the Owner",
+  "ownerLine.switch.byOwner.es": "el Dueño",
 ```
 
 `ownerLine.switch.agencyCannot` now reads "Only the business's Owner can turn this on." / "Solo el Dueño del negocio puede encenderlo." (it is shown to the agency while the switch is off). Update both values in Task 5's block.
@@ -3660,7 +4163,7 @@ it("a customer who pressed 1 is never asked for a PIN on the re-run (mutation: d
 ```ts
 export function ownerLineLockoutEmail(i: { brand: EmailBrand; locale: Locale; forSelf: boolean; personName: string | null;
   time: string; until: string }): { subject: string; text: string; html: string };
-export async function sendOwnerLineLockoutEmails(p: { accountId: string; userId: string; lockedUntil: string | null;
+export async function sendOwnerLineLockoutEmails(p: { accountId: string; userId: string; lockedUntil: string;
   at: Date; accountLanguage: "en" | "es" | null }, deps?: { send: typeof sendEmailOrThrow }): Promise<void>;
 export function scheduleOwnerLineLockoutEmails(p: Omit<Parameters<typeof sendOwnerLineLockoutEmails>[0], "at">): void;
 ```
@@ -3803,7 +4306,7 @@ import type { Locale } from "@/lib/i18n/locale";
  * locked_now branch only. The await import("@bis/db") below is for this file's own reads.
  */
 export async function sendOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string | null; at: Date; accountLanguage: "en" | "es" | null },
+  p: { accountId: string; userId: string; lockedUntil: string; at: Date; accountLanguage: "en" | "es" | null },
   deps: { send: typeof sendEmailOrThrow } = { send: sendEmailOrThrow },
 ): Promise<void> {
   try {
@@ -3831,7 +4334,7 @@ export async function sendOwnerLineLockoutEmails(
       const locale: Locale = r.language ?? p.accountLanguage ?? "en";
       const email = ownerLineLockoutEmail({
         brand, locale, forSelf: r.forSelf, personName: firstName(person?.name ?? null),
-        time: at(p.at, locale), until: p.lockedUntil ? at(p.lockedUntil, locale) : "",
+        time: at(p.at, locale), until: at(p.lockedUntil, locale),
       });
       try {
         await deps.send({ accountId: p.accountId, kind: "operator.owner_line_lockout", to, fromName: brand.name,
@@ -3847,15 +4350,24 @@ export async function sendOwnerLineLockoutEmails(
 
 /** Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path. */
 export function scheduleOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string | null; accountLanguage: "en" | "es" | null },
+  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
 ): void {
+  // The time the PIN was keyed is NOW, not when after() gets round to running: capture it first.
+  const at = new Date();
   try {
-    after(() => sendOwnerLineLockoutEmails({ ...p, at: new Date() }));
+    after(() => sendOwnerLineLockoutEmails({ ...p, at }));
   } catch (e) {
     console.error(`owner line: could not schedule the lockout emails, accountId ${p.accountId}: ${String(e)}`);
   }
 }
 ```
+
+**Corrections from the Task 8 review (2026-11-09), binding on the code above:**
+- `lockedUntil` is a `string`, never null: Task 2's `attemptOwnerLinePin` returns it on every `locked_now` (the same UPDATE's RETURNING) and throws otherwise, so the email never prints an empty "until".
+- `scheduleOwnerLineLockoutEmails` captures `new Date()` BEFORE `after()`: the email states when the PIN was keyed, not when the deferred work ran.
+- The narrow no-break space is matched by the six-character escape `\u202f` in both regexes. Keep it an escape: the Write and Edit tools turn it into the literal character, which no reviewer can see.
+- The tail names the page as the app does: "Preferences" / "Preferencias", never "Mis preferencias".
+- **No test that merely imports `lockout.ts` through `import()` and checks that its exports are functions.** Static and dynamic imports resolve the same module, so that case cannot fail on the import FORM, which is the only thing SC-18 is about. The real guard is Task 9's source scan (`texml-no-static-db.test.ts`): no file under `app/api/voice/texml/` imports `lib/owner-line/lockout` (or anything else that reaches `@bis/db`) statically.
 
 Add the `classes.ts` line `"operator.owner_line_lockout": { class: "operator", hours: "any", footer: "none" },` beside `operator.call_alert`. Add the copy to `messages.ts`:
 
@@ -3864,8 +4376,8 @@ Add the `classes.ts` line `"operator.owner_line_lockout": { class: "operator", h
   "ownerLine.email.subject.es": "Alguien marcó el PIN incorrecto 3 veces",
   "ownerLine.email.self": "Someone entered the wrong PIN 3 times from your phone at {time}. Calling in from your phone is paused until {until}.",
   "ownerLine.email.self.es": "Alguien marcó el PIN incorrecto 3 veces desde su teléfono a las {time}. Las llamadas desde su teléfono están en pausa hasta las {until}.",
-  "ownerLine.email.selfTail": "If it was you, wait and try again. If it was not you, change your PIN in Mis preferencias.",
-  "ownerLine.email.selfTail.es": "Si fue usted, espere e intente de nuevo. Si no fue usted, cambie su PIN en Mis preferencias.",
+  "ownerLine.email.selfTail": "If it was you, wait and try again. If it was not you, change your PIN in Preferences.",
+  "ownerLine.email.selfTail.es": "Si fue usted, espere e intente de nuevo. Si no fue usted, cambie su PIN en Preferencias.",
   "ownerLine.email.owner": "Someone entered the wrong PIN 3 times from {name}'s phone at {time}. Calling in from that phone is paused until {until}.",
   "ownerLine.email.owner.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de {name} a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
   "ownerLine.email.ownerNoName": "Someone entered the wrong PIN 3 times from a team member's phone at {time}. Calling in from that phone is paused until {until}.",
@@ -3895,6 +4407,7 @@ Add the `classes.ts` line `"operator.owner_line_lockout": { class: "operator", h
 
 **Files:**
 - Create: `apps/web/src/app/api/voice/texml/owner-pin/route.ts` and `route.test.ts`
+- Create: `apps/web/src/app/api/voice/texml/texml-no-static-db.test.ts` (the I-8 guard, SC-18)
 
 **Interfaces:**
 - Consumes (Task 7): `answer`, `ownerLineBridge`, `ownerLineGatherAgain`, `bridgeAfterFailure`, `actionOrigin`, `xmlResponse` (`../route`), plus `ownerVerifiedXml` (`../owner-line-xml`).
@@ -4032,13 +4545,42 @@ describe("owner-pin (F-032 §4.2)", () => {
 });
 ```
 
+**The source scan (I-8; SC-18).** The unit tests mock `@/lib/owner-line/lockout`, so they cannot see HOW it is imported. This file reads every route source under `app/api/voice/texml/` and fails, naming the file and the path, when any of them imports a module that reaches `@bis/db` at module scope, `lib/owner-line/lockout` first among them. Only `import type` and the dynamic `await import(...)` inside a handler are allowed.
+
+```ts
+// apps/web/src/app/api/voice/texml/texml-no-static-db.test.ts
+import { describe, it, expect } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
+/** Modules that reach @bis/db at module scope (route.ts:219-226; SC-18). A TeXML route may import them only lazily. */
+const FORBIDDEN = [/^@bis\/db$/, /lib\/owner-line\/lockout$/, /lib\/consent\/email-gate$/, /lib\/email\/templates\//];
+const sources = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+  const p = join(dir, n);
+  if (statSync(p).isDirectory()) return sources(p);
+  return /\.ts$/.test(n) && !/\.test\.ts$/.test(n) ? [p] : [];
+});
+
+describe("no TeXML route reaches @bis/db at module scope (SC-18; review I-8)", () => {
+  it("every static import under app/api/voice/texml/ is clear of the lockout module and the email gate (mutation: import scheduleOwnerLineLockoutEmails statically in owner-pin/route.ts -> FAILS naming it)", () => {
+    const files = sources(ROOT);
+    expect(files.some((f) => f.endsWith(join("owner-pin", "route.ts")))).toBe(true);   // positive control: the scan sees owner-pin
+    const bad = files.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/^import (?!type )[^;]*?from "([^"]+)";?$/gm)]
+      .map((m) => m[1]!).filter((p) => FORBIDDEN.some((r) => r.test(p))).map((p) => `${relative(ROOT, f)} -> ${p}`));
+    expect(bad).toEqual([]);
+  });
+});
+```
+
 - [ ] **Step 2: Run it and see it fail.**
 
   ```bash
-  pnpm --filter web exec vitest run src/app/api/voice/texml/owner-pin/route.test.ts
+  pnpm --filter web exec vitest run src/app/api/voice/texml/owner-pin/route.test.ts src/app/api/voice/texml/texml-no-static-db.test.ts
   ```
 
-  Expected: FAIL, `Failed to resolve import "./route"`.
+  Expected: FAIL, `Failed to resolve import "./route"` for the route test; the scan FAILS its positive control (`owner-pin/route.ts` does not exist yet).
 
 - [ ] **Step 3: Implement.**
 
@@ -4173,7 +4715,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   2. Remove `if (digits === "")` → "Digits "" … does NOT count" FAILS.
   3. Return `xmlResponse("<Response><Hangup/></Response>")` on `locked_now` → "the third wrong PIN … continues as a customer's" FAILS.
   4. Answer `spent` with a goodbye and `<Hangup/>` → "a call-in code that is spent goes to today's path" FAILS.
-  5. Move the lockout import to the top of the file → the static-path check in Step 4 prints `STATIC DB PATH`, and the orchestrator's build fails. (The unit tests mock the module, so they cannot see this; the check is the probe.)
+  5. Move the lockout import to the top of `owner-pin/route.ts` → `texml-no-static-db.test.ts` FAILS naming `owner-pin/route.ts -> @/lib/owner-line/lockout`, and the orchestrator's build fails. (The unit tests mock the module, so they cannot see this; the scan is the probe. Step 4's one-off `node -e` check stays as a quick look; the test is the guard.)
 
 - [ ] **Step 6: Commit.**
 
@@ -6222,9 +6764,14 @@ test.describe.serial("owner line setup (F-032 §3)", () => {
     const db = serviceDb();
     const del = await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
     if (del.error) throw new Error(`owner-line e2e cleanup (enrollment) failed: ${del.error.message}`);
-    const off = await db.from("accounts").update({ owner_line_enabled_at: null, owner_line_changed_at: null,
-      owner_line_changed_by: null, owner_line_changed_by_agency: null }).eq("id", accountId);
+    // Two writes, because 0115's accounts_owner_line_switch_record refuses a switch change that does not move
+    // owner_line_changed_at to a new, non-null value: first OFF with a fresh record (a no-op for the trigger when it was
+    // already off), then clear the record with the switch unchanged, so the next run starts from "never changed".
+    const off = await db.from("accounts").update({ owner_line_enabled_at: null, owner_line_changed_at: new Date().toISOString(),
+      owner_line_changed_by_kind: "owner" }).eq("id", accountId);
     if (off.error) throw new Error(`owner-line e2e cleanup (switch) failed: ${off.error.message}`);
+    const clear = await db.from("accounts").update({ owner_line_changed_at: null, owner_line_changed_by_kind: null }).eq("id", accountId);
+    if (clear.error) throw new Error(`owner-line e2e cleanup (record) failed: ${clear.error.message}`);
   }
 
   test("a cell gets a 6-digit call-in code with the business's number", async ({ clientPage: page }) => {
@@ -6524,7 +7071,8 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
 - **Renamed during review:** `lib/owner-line/texml.ts` became `app/api/voice/texml/owner-line-xml.ts`, so the TeXML helpers sit with `xml.ts`. `firstName` lives in `lib/owner-line/names.ts`, and every `lib/` file imports it from there, so `lib/` never imports from `app/`.
 - **Signatures changed by the fix round:**
   - `ownerLineAnswerLookup(db, accountId, callerE164, max)` and `ownerLineSessionCheck(db, { accountId, userId, role, maxCalls })` have no day-start argument; SQL computes the account's day (Q-F).
-  - `setOwnerLineSwitch(db, accountId, on, actor)` and `readOwnerLineSwitch` return `OwnerLineSwitchState`.
+  - `setOwnerLineSwitch(db, accountId, on, by: "owner" | "agency")` and `readOwnerLineSwitch` return `OwnerLineSwitchState` (`changedByKind`, never a name: owner ruling 2026-11-09).
+  - `attemptOwnerLinePin` returns `OwnerLinePinResult`; a lock always carries `lockedUntil: string`.
   - `hashPin` / `candidateFor` take the pepper from `env`.
 
   Every call site in Tasks 2, 5, 6, 7, 9, 10 and 12 was updated.
