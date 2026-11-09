@@ -8075,6 +8075,24 @@ export const m = {
   "ownerLine.tool.outcome.message.es": "dejó un mensaje",
   "ownerLine.tool.outcome.transferred": "was put through to a person",
   "ownerLine.tool.outcome.transferred.es": "se le comunicó con una persona",
+
+  // F-032 Task 13: the Calls list label and "Asked about" on the call page.
+  "ownerLine.calls.label": "Owner line · {name}",
+  "ownerLine.calls.label.es": "Línea del dueño · {name}",
+  "ownerLine.calls.someone": "Someone on the team",
+  "ownerLine.calls.someone.es": "Alguien del equipo",
+  "ownerLine.calls.askedAbout": "Asked about: {list}",
+  "ownerLine.calls.askedAbout.es": "Preguntó por: {list}",
+  "ownerLine.calls.kind.calls": "calls and messages",
+  "ownerLine.calls.kind.calls.es": "llamadas y mensajes",
+  "ownerLine.calls.kind.appointments": "appointments",
+  "ownerLine.calls.kind.appointments.es": "citas",
+  "ownerLine.calls.kind.attention": "what needs attention",
+  "ownerLine.calls.kind.attention.es": "lo que necesita atención",
+  "ownerLine.calls.kind.lookup": "a customer",
+  "ownerLine.calls.kind.lookup.es": "un cliente",
+  "ownerLine.calls.askedAboutError": "We couldn't load what was asked on this call.",
+  "ownerLine.calls.askedAboutError.es": "No pudimos cargar lo que se preguntó en esta llamada.",
 } as const;
 
 export type MessageKey = keyof typeof m;

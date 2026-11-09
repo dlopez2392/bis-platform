@@ -1,4 +1,5 @@
 import type { CallListRow, CallOutcome } from "@bis/db";
+import { OWNER_LINE_LOG_KINDS, type OwnerLineLogKind } from "@bis/db";
 import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { tag } from "@/lib/format";
@@ -138,4 +139,38 @@ export function callerLabel(row: CallerFields, locale: Locale = "en"): string {
   const number = row.caller_e164?.trim();
   if (number) return number;
   return t(m, "calls.unknownCaller", locale);
+}
+
+/**
+ * F-032 Task 13. An owner-line call is stored with outcome `abandoned` and an
+ * empty summary (Task 12's finish) — "Abandoned" on that row would be a false
+ * word, so this label REPLACES the outcome pill wherever the list and the
+ * call page show the outcome. `name` is the first name (Task 7's `firstName`)
+ * of the team member `owner_line_user_id` names; null when the reader cannot
+ * be named (DESIGN.md's provenance rule: "Someone on the team" is still the
+ * person mark, never a sixth kind).
+ */
+export function ownerLineLabel(name: string | null, locale: Locale): string {
+  return t(m, "ownerLine.calls.label", locale, { name: name ?? t(m, "ownerLine.calls.someone", locale) });
+}
+
+/** Catalogue key per owner-tool log kind, typed so a typo'd key is a compile error. */
+const ASKED: Record<OwnerLineLogKind, MessageKey> = {
+  owner_line_calls_and_messages: "ownerLine.calls.kind.calls",
+  owner_line_appointments: "ownerLine.calls.kind.appointments",
+  owner_line_needs_attention: "ownerLine.calls.kind.attention",
+  owner_line_lookup_customer: "ownerLine.calls.kind.lookup",
+};
+
+/**
+ * "Asked about: calls and messages, appointments" — in the order the tools
+ * are LISTED (`OWNER_LINE_LOG_KINDS`), not the order the log rows happen to
+ * come back in, so the sentence reads the same every time regardless of
+ * which tool the person reached first. Null when nothing ran, so the call
+ * page's own section renders nothing rather than an empty sentence.
+ */
+export function askedAboutLine(kinds: readonly OwnerLineLogKind[], locale: Locale): string | null {
+  const ordered = OWNER_LINE_LOG_KINDS.filter((k) => kinds.includes(k));
+  if (ordered.length === 0) return null;
+  return t(m, "ownerLine.calls.askedAbout", locale, { list: ordered.map((k) => t(m, ASKED[k], locale)).join(", ") });
 }

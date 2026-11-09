@@ -14,7 +14,7 @@ import { ListPanel } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
-import { callerLabel, formatCallTime, formatDuration } from "./format";
+import { callerLabel, formatCallTime, formatDuration, ownerLineLabel } from "./format";
 import { OutcomePill } from "./outcome-pill";
 import { TextbackFailedBadge } from "./textback-failed-badge";
 import { CallRow, StopPropagation } from "./call-row";
@@ -39,6 +39,7 @@ export function CallsTable({
   reasons,
   locale = "en",
   pseudo = false,
+  ownerNames = {},
 }: {
   rows: CallListRow[];
   accountId: string;
@@ -63,6 +64,12 @@ export function CallsTable({
   /** S-10 T5: optional, default English — only calls/page.tsx passes it today. */
   locale?: Locale;
   pseudo?: boolean;
+  /** F-032 Task 13: the owner line's own team member's first name, by their
+   *  BIS user id — keyed to `row.owner_line_user_id`, built by the page in
+   *  ONE read for the whole table, only when some row needs it. A missing
+   *  entry (a person removed from the team since the call) falls back to
+   *  "Someone on the team" via `ownerLineLabel`, never a blank cell. */
+  ownerNames?: Record<string, string>;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
   const tr = makeTr(locale, pseudo);
@@ -155,10 +162,26 @@ export function CallsTable({
                     sentence on a row that is untrue of that call. */}
                 <TableCell className={CELL}>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <OutcomePill outcome={row.outcome} locale={locale} pseudo={pseudo} />
-                    {row.outcome === "abandoned" && textbackFailed?.has(row.id) ? (
-                      <TextbackFailedBadge locale={locale} pseudo={pseudo} />
-                    ) : null}
+                    {row.owner_line_user_id ? (
+                      // F-032 Task 13: the row's stored outcome is `abandoned` (Task
+                      // 12's finish) — a false word here — so this REPLACES the
+                      // outcome pill and the text-back badge rather than joining
+                      // them. Dot and word (DESIGN.md rule 3), the dot on the
+                      // cell's own span rather than a second pill component.
+                      <span className="inline-flex items-center gap-2 text-sm" data-owner-line-call>
+                        <span aria-hidden className="size-2 rounded-full bg-[var(--accent)]" />
+                        {tr.text("ownerLine.calls.label", {
+                          name: ownerNames[row.owner_line_user_id] ?? tr.text("ownerLine.calls.someone"),
+                        })}
+                      </span>
+                    ) : (
+                      <>
+                        <OutcomePill outcome={row.outcome} locale={locale} pseudo={pseudo} />
+                        {row.outcome === "abandoned" && textbackFailed?.has(row.id) ? (
+                          <TextbackFailedBadge locale={locale} pseudo={pseudo} />
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 </TableCell>
 

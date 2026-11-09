@@ -60,11 +60,15 @@ const listFailedOutboundSmsMock = vi.fn();
 /** Why each call happened (the call card, 0064): one read per page, like the
  *  failed-text-back read above, and as swallowable. */
 const listCallReasonsMock = vi.fn(async () => new Map<string, string>());
+/** F-032 Task 13: the owner line's own team names, keyed by BIS user id — one read for the whole
+ *  page, only when some row needs it. */
+const listAccountTeamMock = vi.fn<(...a: unknown[]) => Promise<{ userId: string; email: string; name: string | null }[]>>(async () => []);
 vi.mock("@bis/db", () => ({
   listCallReasons: (...args: unknown[]) => listCallReasonsMock(...(args as [])),
   listCalls: (...args: unknown[]) => listCallsMock(...args),
   countCallsSince: (...args: unknown[]) => countCallsSinceMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
+  listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
 }));
 
 /** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
@@ -116,6 +120,8 @@ describe("CallsPage", () => {
   beforeEach(() => {
     listFailedOutboundSmsMock.mockReset();
     listFailedOutboundSmsMock.mockResolvedValue([]);
+    listAccountTeamMock.mockReset();
+    listAccountTeamMock.mockResolvedValue([]);
     prefsFixture.language = null;
   });
 
@@ -277,6 +283,43 @@ describe("CallsPage", () => {
     expect(html).not.toContain("Text-back");
     // …and the swallow left a trace, the way finish-call.ts's four legs do.
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed-text-back read failed"));
+    spy.mockRestore();
+  });
+});
+
+/**
+ * F-032 Task 13: an owner-line call's row names the team member it was for, read from
+ * `listAccountTeam` in ONE call for the whole page, only when some row needs it.
+ */
+describe("CallsPage — the owner line (F-032 Task 13)", () => {
+  beforeEach(() => {
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    listAccountTeamMock.mockReset();
+    listAccountTeamMock.mockResolvedValue([
+      { userId: "u1", email: "dan@example.com", name: "Dan Lopez" },
+    ]);
+  });
+
+  it("names the person on an owner-line row (mutation: never pass ownerNames to the table -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([{ ...ROW, owner_line_user_id: "u1", outcome: "abandoned" }]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain("Owner line · Dan");
+    expect(listAccountTeamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reads the team when no row on the page is an owner-line call (mutation: always read the team -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([ROW]);
+    renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(listAccountTeamMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to 'Someone on the team' when the team read fails, and still renders every call (mutation: drop the .catch -> the page throws, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listCallsMock.mockResolvedValue([{ ...ROW, owner_line_user_id: "u1", outcome: "abandoned" }]);
+    listAccountTeamMock.mockRejectedValue(new Error("permission denied for table users"));
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain("Owner line · Someone on the team");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("team read failed"));
     spy.mockRestore();
   });
 });

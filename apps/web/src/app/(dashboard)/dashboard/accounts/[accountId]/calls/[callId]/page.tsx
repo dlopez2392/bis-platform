@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   getCall, listFailedOutboundSms, listProposalsForCall, listPeopleNames, getContact, getCallCard, getVoiceProfile,
+  listAccountTeam, readOwnerLineCallLog,
   type FailedOutboundSms, type CallCard, type TradeModuleSetting, type BusinessStatusCode,
 } from "@bis/db";
 import { SuggestionSection, type SuggestionSectionData } from "@/components/proposals/suggestion-section";
@@ -36,7 +37,8 @@ import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
 import { loggableError } from "@/lib/loggable-error";
 import type { MessageKey } from "@/lib/messages";
-import { callerLabel, formatCallTime, formatDuration } from "../format";
+import { firstName } from "@/lib/owner-line/names";
+import { callerLabel, formatCallTime, formatDuration, ownerLineLabel, askedAboutLine } from "../format";
 import { OutcomePill } from "../outcome-pill";
 import { TextbackFailedBadge } from "../textback-failed-badge";
 import { textbackWindow } from "../textback-window";
@@ -130,6 +132,39 @@ export default async function CallDetailPage({
   const zone = await renderZone(account.timezone);
   const timezone = zone.zone;
   const base = `/dashboard/accounts/${accountId}`;
+
+  // F-032 Task 13: the owner line's own label ("Owner line · Dan") and "Asked about…". Both are
+  // read ONLY when this call has `owner_line_user_id` — the overwhelming majority of calls do not.
+  //
+  // The name: the same team lookup the list page makes, given a list of one, swallowed the same
+  // way (a decoration on the record, never a reason to blank the call page) and falling back to
+  // "Someone on the team" via `ownerLineLabel`.
+  //
+  // "Asked about": `readOwnerLineCallLog`'s own RLS returns rows to the agency and this account's
+  // Owner only — [] to anyone else, Staff included — so a Staff reader (who may even be the person
+  // THIS call was for) sees the section render nothing, by the database's own rule, not a role
+  // check written here. A read that actually FAILS is not swallowed (final review): it is logged
+  // and the section says so, rather than reading as "nothing was asked".
+  let ownerLineName: string | null = null;
+  let askedAbout: string | null = null;
+  let askedAboutError = false;
+  if (call.owner_line_user_id) {
+    try {
+      const team = await listAccountTeam(db, accountId);
+      const person = team.find((p) => p.userId === call.owner_line_user_id);
+      ownerLineName = person ? firstName(person.name) ?? person.email.split("@")[0]! : null;
+    } catch (e) {
+      console.error(`call detail ${callId}: owner-line team read failed, rendering 'Someone on the team': ${loggableError(e)}`);
+      ownerLineName = null;
+    }
+    try {
+      const kinds = await readOwnerLineCallLog(db, accountId, callId);
+      askedAbout = askedAboutLine(kinds, locale);
+    } catch (e) {
+      console.error(`call detail ${callId}: owner-line log read failed: ${loggableError(e)}`);
+      askedAboutError = true;
+    }
+  }
   const blocks = splitSummaryBlocks(call.summary ?? "");
 
   // The missed-call text-back that never went out — THIS call's, bounded by
@@ -287,7 +322,18 @@ export default async function CallDetailPage({
     <>
       <PageHeader
         title={tr.text("calls.detail.title")}
-        tabs={<OutcomePill outcome={call.outcome} locale={locale} pseudo={pseudo} />}
+        tabs={
+          // F-032 Task 13: the row's stored outcome is `abandoned` (Task 12's finish) — a false
+          // word here — so this REPLACES the outcome pill, never joins it.
+          call.owner_line_user_id ? (
+            <span className="inline-flex items-center gap-2 text-sm" data-owner-line-call>
+              <span aria-hidden className="size-2 rounded-full bg-[var(--accent)]" />
+              {tr.text("ownerLine.calls.label", { name: ownerLineName ?? tr.text("ownerLine.calls.someone") })}
+            </span>
+          ) : (
+            <OutcomePill outcome={call.outcome} locale={locale} pseudo={pseudo} />
+          )
+        }
         selector={
           // A description list, not a row of spans: each value here answers a
           // question the list page answers with a column header, and the
@@ -397,6 +443,19 @@ export default async function CallDetailPage({
               the time; this says which zone that abbreviation belongs to,
               and whether it is this account's own. */}
           <ZoneNote zone={zone} isAgency={isAgency} locale={locale} />
+          {/* F-032 Task 13: "Asked about…", below the owner-line label above. Its own loaded /
+              empty / error states (DESIGN.md rule 5, extended to the section): loaded is the
+              sentence itself; empty — nothing ran, OR this reader's RLS returned no rows
+              (Staff, per `readOwnerLineCallLog`'s own rule: the agency and this account's Owner
+              only) — renders nothing at all, the same as a customer call; error is NOT swallowed,
+              and says so rather than reading as "nothing was asked". */}
+          {call.owner_line_user_id && askedAboutError ? (
+            <p data-asked-about className="text-sm text-muted-foreground">
+              {tr.text("ownerLine.calls.askedAboutError")}
+            </p>
+          ) : call.owner_line_user_id && askedAbout ? (
+            <p data-asked-about className="text-sm text-muted-foreground">{askedAbout}</p>
+          ) : null}
           {/* First, above everything that follows: the three-second read of
               the call. The failed text-back panel below still sits above the
               summary, as before. */}
