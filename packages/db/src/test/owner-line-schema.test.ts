@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { randomBytes, randomInt } from "node:crypto";
 import { withRollback, actAsMember } from "./db";
+import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 
 /**
  * 0115 (F-032 owner line). Spec docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
@@ -738,4 +739,13 @@ describe("0115: an ON switch keeps its record (review m-B)", () => {
         "select owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind from accounts where id = $1", [s.a]);
       expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null }]);
     }));
+});
+
+// Review (Task 2) m-2: the teardown names the table (calendar-feeds-schema.test.ts case 8 is the precedent). It also
+// cascades with its membership, so a test that forgets it still cleans up today; the list is the record of intent.
+describe("0115: teardown", () => {
+  it("owner_line_enrollments is on ACCOUNT_OWNED_TABLES, and the first two stay the AI tables (probe: remove \"owner_line_enrollments\" -> FAILS)", () => {
+    expect((ACCOUNT_OWNED_TABLES as readonly string[]).includes("owner_line_enrollments")).toBe(true);
+    expect(ACCOUNT_OWNED_TABLES.slice(0, 2)).toEqual(["ai_ledger", "account_ai_settings"]);
+  });
 });

@@ -119,6 +119,12 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
 
         const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
         const call = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: CELL, ownerLineUserId: userId });
+        // The ten-a-day limit is the ONLY bound on owner-line calls (Q-C), and Tasks 7 and 12 mock both wrappers, so it
+        // is pinned HERE, through them (review I-1): with one owner-line call today and a limit of one, the lookup says
+        // over_limit with the person's facts, and the session check refuses (mutations: drop over_limit from the
+        // lookup's mapping; send p_max null from the session check; send a huge p_max from the lookup -> FAILS).
+        expect(await ownerLineAnswerLookup(db, accountId, CELL, 1)).toMatchObject({ status: "over_limit", enrollmentId, userId });
+        expect(await ownerLineSessionCheck(db, { accountId, userId, role: "staff", maxCalls: 1 })).toEqual({ ok: false, reason: "over_limit" });
         await noteOwnerLineCall(db, { accountId, callId: call.id, actorClerkUserId: clerk, actorName: "Dan Lopez",
           kinds: ["owner_line_appointments", "owner_line_calls_and_messages"] });
         expect((await readOwnerLineCallLog(db, accountId, call.id)).sort()).toEqual(["owner_line_appointments", "owner_line_calls_and_messages"]);
@@ -171,5 +177,11 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
       expect([on.changed, again.changed, off.changed, bisOff.changed]).toEqual([true, false, true, false]);
       expect(again.state).toEqual(on.state);
       expect(bisOff.state).toEqual({ enabledAt: null, changedAt: off.state.changedAt, changedByKind: "owner" });
+    }));
+
+  it("a switch write on an account that does not exist throws (review m-3; mutation: answer changed: false with an all-null state -> FAILS)", () =>
+    withTestAccount(async (db) => {
+      const gone = randomUUID();
+      await expect(setOwnerLineSwitch(db, gone, false, "agency")).rejects.toThrow(`setOwnerLineSwitch: no such account ${gone}`);
     }));
 });

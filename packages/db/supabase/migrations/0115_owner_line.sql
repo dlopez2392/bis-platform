@@ -100,8 +100,14 @@
 --   accounts, agency_visits and agency_visit_items are added valid, so each scans its table once under the lock
 --   already held.
 -- APPLY ORDER: after 0113 and 0114. CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
---   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this; the
---   build after it selects calls.owner_line_user_id in listCalls, so it goes BEFORE the deploy.
+--   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this. The
+--   build after it is LOAD-BEARING on it, so it goes BEFORE the deploy, and the cost of getting that wrong is not a
+--   visible error (Task 2 review m-1): the app filters calls.owner_line_user_id in countCallsSince and
+--   countCallsByCallerSince, and BOTH voice routes FAIL OPEN when a cap read errors (apps/web/src/app/api/voice/
+--   texml/route.ts's "fail open" catch; incoming/route.ts's "call-limit counts failed - failing open"). An app
+--   deployed before this file therefore answers every call with BOTH call caps silently off, and the Calls list,
+--   the dashboard and the weekly report fail outright (listCalls and listCallStartsByOutcomeBetween name the column
+--   too). Never deploy the F-032 build to a project whose schema_migrations lacks this file.
 --
 -- Rollback (by hand, in this order; revert the app first). It destroys every enrollment and every owner-line
 -- access-log entry:

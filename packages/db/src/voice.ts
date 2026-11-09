@@ -962,6 +962,11 @@ export async function moveHoldingThread(
 /**
  * The account's CUSTOMER calls since `sinceIso`: the per-account cap and the Calls page's meter. An owner-line call
  * (0115) is not counted (owner ruling Q-C): it is bounded by its own per-person limit instead.
+ *
+ * owner_line_user_id (0115): LOAD-BEARING, and SILENTLY so. Here and in countCallsByCallerSince, a project without
+ * 0115 makes the read fail, and both voice routes FAIL OPEN on a cap-read error (texml/route.ts and incoming/route.ts
+ * log and carry on), so a build deployed before 0115 turns BOTH call caps off without a visible error. 0115 must be
+ * on a project before this build reaches it (0115's APPLY ORDER).
  */
 export async function countCallsSince(
   db: SupabaseClient, accountId: string, sinceIso: string,
@@ -1017,7 +1022,10 @@ export async function hasActiveCallSince(
   return count > 0;
 }
 
-/** The per-number cap's count: this caller's CUSTOMER calls since `sinceIso`. Owner-line calls (0115) are not counted (Q-C). */
+/**
+ * The per-number cap's count: this caller's CUSTOMER calls since `sinceIso`. Owner-line calls (0115) are not counted (Q-C).
+ * LOAD-BEARING on 0115, failing open: see countCallsSince.
+ */
 export async function countCallsByCallerSince(
   db: SupabaseClient, accountId: string, callerE164: string, sinceIso: string,
 ): Promise<number> {

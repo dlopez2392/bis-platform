@@ -177,17 +177,20 @@ export async function readOwnerLineCallLog(db: SupabaseClient, accountId: string
 export type OwnerLineSwitchKind = "owner" | "agency";
 export type OwnerLineSwitchState = { enabledAt: string | null; changedAt: string | null; changedByKind: OwnerLineSwitchKind | null };
 
+const SWITCH_COLS = "owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind";
+type SwitchRow = { owner_line_enabled_at: string | null; owner_line_changed_at: string | null; owner_line_changed_by_kind: string | null };
+
+function switchState(r: SwitchRow | null, who: string): OwnerLineSwitchState {
+  const kind = r?.owner_line_changed_by_kind ?? null;
+  if (kind !== null && kind !== "owner" && kind !== "agency") throw new Error(`${who}: unexpected kind ${kind}`);
+  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByKind: kind };
+}
+
 /** Server code only (the Team page after requireAccountOwner; the preferences card after the membership check). */
 export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string): Promise<OwnerLineSwitchState> {
-  const { data, error } = await db.from("accounts")
-    .select("owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind")
-    .eq("id", accountId).maybeSingle();
+  const { data, error } = await db.from("accounts").select(SWITCH_COLS).eq("id", accountId).maybeSingle();
   if (error) throw new Error(`readOwnerLineSwitch failed: ${error.message}`);
-  const r = data as { owner_line_enabled_at: string | null; owner_line_changed_at: string | null;
-    owner_line_changed_by_kind: string | null } | null;
-  const kind = r?.owner_line_changed_by_kind ?? null;
-  if (kind !== null && kind !== "owner" && kind !== "agency") throw new Error(`readOwnerLineSwitch: unexpected kind ${kind}`);
-  return { enabledAt: r?.owner_line_enabled_at ?? null, changedAt: r?.owner_line_changed_at ?? null, changedByKind: kind };
+  return switchState(data as SwitchRow | null, "readOwnerLineSwitch");
 }
 
 /**
@@ -201,6 +204,10 @@ export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string)
  * on a switch the Owner already turned off must not relabel it "Turned off by BIS", and Task 5 emits BIS's
  * owner_line.switch_off event only when `changed` is true. The test is the UPDATE's own filter, so two clicks racing
  * each other change it once.
+ *
+ * The answer's `state` is the UPDATE's OWN returned row when it changed something (review m-3: one round trip, and no
+ * window for another write to show through), and a re-read only on a no-op. An account that does not exist THROWS:
+ * it is never answered as an all-null "off".
  */
 export async function setOwnerLineSwitch(
   db: SupabaseClient, accountId: string, on: boolean, by: OwnerLineSwitchKind,
@@ -211,7 +218,12 @@ export async function setOwnerLineSwitch(
     .update({ owner_line_enabled_at: on ? at : null, owner_line_changed_at: at, owner_line_changed_by_kind: by })
     .eq("id", accountId);
   const { data, error } = await (on ? base.is("owner_line_enabled_at", null) : base.not("owner_line_enabled_at", "is", null))
-    .select("id");
+    .select(SWITCH_COLS);
   if (error) throw new Error(`setOwnerLineSwitch failed: ${error.message}`);
-  return { changed: (data ?? []).length === 1, state: await readOwnerLineSwitch(db, accountId) };
+  const rows = (data ?? []) as SwitchRow[];
+  if (rows.length === 1) return { changed: true, state: switchState(rows[0]!, "setOwnerLineSwitch") };
+  const { data: now, error: readError } = await db.from("accounts").select(SWITCH_COLS).eq("id", accountId).maybeSingle();
+  if (readError) throw new Error(`setOwnerLineSwitch (no change) failed: ${readError.message}`);
+  if (now === null) throw new Error(`setOwnerLineSwitch: no such account ${accountId}`);
+  return { changed: false, state: switchState(now as SwitchRow, "setOwnerLineSwitch") };
 }
