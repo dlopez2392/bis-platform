@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { serviceDb, setOwnerLineSwitch, emitAgencyEvent, type OwnerLineSwitchState } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
 import { t } from "@/lib/i18n/t";
@@ -17,11 +16,19 @@ import type { Locale } from "@/lib/i18n/locale";
  * 2026-11-09). Which BIS person turned it off is BIS's own null-account event, read by the agency only. The switch is
  * written first: an OFF is protective, so a failed audit write must not leave it on; the error then surfaces.
  * serviceDb(): the three switch columns are server-only (0115), and the guard above stands in front of the write.
+ *
+ * A billing pause (lib/billing/read-only.ts) refuses a client's writes. Turning the line OFF is protective, so OFF
+ * passes the guard's allow-while-paused option (READ_ONLY_ALLOWED in lib/billing/read-only.test.ts); ON calls the guard with no
+ * option and stays refused while paused. The agency is never refused by a pause. Because the OFF may run while
+ * paused, this action does NOT revalidate: a re-render inside the action's own request would meet the pause guard on
+ * the Team page. The card renders the state this action returns (Task 6).
  */
 export async function setOwnerLineSwitchAction(
   accountId: string, locale: Locale, on: boolean,
 ): Promise<{ ok: true; value: OwnerLineSwitchState } | { ok: false; error: string }> {
-  const { userId, isAgency } = await requireAccountOwner(accountId);
+  const { userId, isAgency } = on === false
+    ? await requireAccountOwner(accountId, { duringPause: "allow" })
+    : await requireAccountOwner(accountId);
   // The browser sends this value: a string "true" would otherwise read as OFF for an Owner (on === true below).
   if (typeof on !== "boolean") throw new Error("setOwnerLineSwitchAction: on must be true or false");
   if (on && isAgency) return { ok: false, error: t(m, "ownerLine.switch.agencyCannot", locale === "es" ? "es" : "en") };
@@ -31,7 +38,5 @@ export async function setOwnerLineSwitchAction(
   if (isAgency && changed) {
     await emitAgencyEvent(db, "owner_line.switch_off", userId, { account_id: accountId, changed_at: state.changedAt });
   }
-  revalidatePath(`/dashboard/accounts/${accountId}/team`);
-  revalidatePath("/dashboard/preferences");
   return { ok: true, value: state };
 }

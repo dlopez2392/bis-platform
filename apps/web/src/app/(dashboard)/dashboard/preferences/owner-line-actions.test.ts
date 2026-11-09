@@ -64,14 +64,32 @@ describe("the owner line's setup actions (F-032 §3.1, §3.2; SC-4)", () => {
     vi.doUnmock("@/lib/owner-line/data-path");
   });
 
-  it("the decided data path (O-1 = F2) refuses a Technician on every action, with the real data-path module (mutation: OWNER_LINE_ROLES gains 'technician' -> FAILS)", async () => {
+  it("the decided data path (O-1 = F2) refuses a Technician enrolment, verification, a PIN and a PIN change, with the real data-path module (mutation: OWNER_LINE_ROLES gains 'technician' -> FAILS)", async () => {
     mocks.my.mockResolvedValue({ ...ME, role: "technician" });
     const refused = { ok: false, error: "You can't set this up for that business." };
     expect(await startOwnerLineVerificationAction(A, "en", "956 555 0142")).toEqual(refused);
     expect(await setOwnerLinePinAction(A, "en", "482913")).toEqual(refused);
     expect(await removeOwnerLinePinAction(A, "en")).toEqual(refused);
-    expect(await removeOwnerLineCellAction(A, "en")).toEqual(refused);
-    for (const f of [mocks.start, mocks.setPin, mocks.removePin, mocks.removeCell, mocks.read, mocks.phone]) expect(f).not.toHaveBeenCalled();
+    for (const f of [mocks.start, mocks.setPin, mocks.removePin, mocks.read, mocks.phone]) expect(f).not.toHaveBeenCalled();
+  });
+
+  it("Stop calling in works for ANY current member: a Technician (Staff demoted after enrolling) removes their own enrolment, and only their own (coordinator fix 2; mutation: apply OWNER_LINE_ROLES to the removal -> FAILS)", async () => {
+    mocks.my.mockResolvedValue({ ...ME, userId: "u-tech", role: "technician" });
+    expect(await removeOwnerLineCellAction(A, "en")).toEqual({ ok: true, value: null });
+    expect(mocks.my).toHaveBeenCalledWith({}, "user_clerk_me", A);
+    expect(mocks.removeCell.mock.calls).toEqual([[{}, A, "u-tech"]]);
+  });
+
+  it("Stop calling in still needs a current membership of that business: a non-member is refused and nothing is deleted (mutation: drop the membership check on the removal -> FAILS)", async () => {
+    mocks.my.mockResolvedValue(null);
+    expect(await removeOwnerLineCellAction(A, "en")).toEqual({ ok: false, error: "You can't set this up for that business." });
+    expect(mocks.removeCell).not.toHaveBeenCalled();
+  });
+
+  it("Stop calling in, signed out: redirected, nothing deleted", async () => {
+    mocks.auth.mockResolvedValue({ userId: null });
+    await expect(removeOwnerLineCellAction(A, "en")).rejects.toThrow("NEXT_REDIRECT /sign-in");
+    expect(mocks.removeCell).not.toHaveBeenCalled();
   });
 
   it("an Owner enrols as well as Staff (the decided roles are exactly owner and staff)", async () => {

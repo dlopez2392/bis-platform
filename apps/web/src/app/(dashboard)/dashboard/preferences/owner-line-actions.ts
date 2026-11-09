@@ -28,10 +28,16 @@ export type OwnerLineResult<T = null> = { ok: true; value: T } | { ok: false; er
 const lc = (l: Locale): Locale => (l === "es" ? "es" : "en");
 const fail = (locale: Locale, key: keyof typeof m): { ok: false; error: string } => ({ ok: false, error: t(m, key, lc(locale)) });
 
-async function me(accountId: string): Promise<MyMembership | null> {
+/** The signed-in person's current membership of this business, in ANY role. Only "Stop calling in" uses it alone. */
+async function member(accountId: string): Promise<MyMembership | null> {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
-  const mine = await myMembership(serviceDb(), userId, accountId);
+  return myMembership(serviceDb(), userId, accountId);
+}
+
+/** The same, in a role the owner line is offered to: enrol, verify, set or change a PIN, remove the PIN. */
+async function me(accountId: string): Promise<MyMembership | null> {
+  const mine = await member(accountId);
   return mine && OWNER_LINE_ROLES.includes(mine.role) ? mine : null;
 }
 
@@ -76,8 +82,13 @@ export async function removeOwnerLinePinAction(accountId: string, locale: Locale
   return { ok: true, value: null };
 }
 
+/**
+ * "Stop calling in": deletes the person's own enrolment. Protective, so ANY current member may do it, a Technician
+ * included (Staff demoted after enrolling must still be able to shut their own access; coordinator fix 2). Still
+ * keyed on auth() and still refused for a business the person is not on.
+ */
 export async function removeOwnerLineCellAction(accountId: string, locale: Locale): Promise<OwnerLineResult> {
-  const mine = await me(accountId);
+  const mine = await member(accountId);
   if (!mine) return fail(locale, "ownerLine.error.notMember");
   await removeOwnerLineEnrollment(serviceDb(), accountId, mine.userId);
   revalidatePath("/dashboard/preferences");
