@@ -1,0 +1,5676 @@
+# F-032 The Owner Line Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A person on a business's team calls the business's own number from their verified cell, keys a 6-digit PIN before the call ever reaches OpenAI, and Sofía answers read-only questions (calls, appointments, To do; customer lookup in PR 2) within exactly what their role sees, while every other caller hears exactly what they hear today.
+
+**Architecture:** The TeXML answer route gains one enrollment lookup that runs beside its existing count reads and fails to a miss. On a hit it answers with a `<Gather>` whose action, `/api/voice/texml/owner-pin`, checks the PIN in SQL under a row lock and, on a match, bridges exactly as today with a signed owner pass on the SIP URI. The pass is signed with the same secret family as `X-BIS-Signature` and bound to the call's handoff token. The Realtime SIP webhook verifies the pass against the INVITE's own signed statement and a live re-read, then accepts a separate owner-line session. That session's only tools are read-only, and they read through ONE client factory (`lib/owner-line/reader.ts`) whose data path the Task 0 spike decides. Owner-line calls are ordinary `calls` rows marked by `owner_line_user_id`, and every counting choke point excludes them.
+
+**Tech Stack:** Next.js 16 route handlers (Node runtime), Telnyx TeXML, OpenAI Realtime SIP (`gpt-realtime`), Supabase Postgres 17 + PostgREST, Clerk third-party auth, vitest 4, Playwright, `node:crypto` (scrypt, HMAC, SHA-256).
+
+**Spec:** `docs/superpowers/specs/2026-11-09-owner-line-design.md` (owner-approved 2026-11-09; binding). §2 holds the non-negotiables and §9 the owner's decisions.
+
+---
+
+## Spec corrections (the code wins; each item cites file:line evidence)
+
+Paths below are short: `WEB` = `apps/web/src`, `ACCT` = `WEB/app/(dashboard)/dashboard/accounts/[accountId]`, `MIG` = `packages/db/supabase/migrations`, `DB` = `packages/db/src`.
+
+- **SC-1. The switch cannot live on Settings, because Settings is agency-only.** `ACCT/settings/page.tsx:78` runs `await requireAgencyOnlyAccountAccess(accountId)`, and `ACCT/settings/layout.tsx` is the agency-only English island. A client Owner never reaches it. **Path:** the switch is a card on **Team**: `ACCT/team/page.tsx:58` is `requireAccountOwner`, the BIS access log already lives on that page, and the page is about who can see the business's data. The agency sees the card read-only (§3.3).
+- **SC-2. Role scope lives only in RLS, never in the readers, so the spec's fallback cannot "reuse" a role filter.** Evidence:
+  - `DB/booking.ts:1188-1190`, on `listAgendaBookings`: "On the CALLER's client: RLS (0068) decides what a Technician sees".
+  - `MIG/0068_mine_unassigned_technician.sql:113-119` puts restrictive policies on `calls`, `bookings` and `conversations`, and `:134-138` on `tasks`.
+  - `listCalls` (`DB/voice.ts:1248`) and `listAccountWork` (`DB/work-queue.ts:177`) carry no role filter.
+
+  For Owner and Staff, `app.sees_all_customers` is true (0068:70-73), and no other restrictive policy touches those four tables (the restrictive-policy inventory in `MIG/*.sql`). So an account-scoped service-role read equals what an Owner or Staff member sees, and only a Technician's scope would need re-implementing. **Path:** the spike's decision point offers three options:
+  - **T:** a minted token, so RLS applies (the preferred path).
+  - **F2:** service reads for Owner and Staff, with Technicians not offered the owner line until T exists.
+  - **F1:** F2 plus a Technician code filter that mirrors `app.my_contact_ids()`, pinned by a parity test.
+
+  The choice lives in ONE module (`lib/owner-line/reader.ts`).
+- **SC-3. The PIN check is SECURITY INVOKER, not DEFINER.** `MIG/0104_calendar_feeds.sql:22-28` gives the reason: "only service_role may execute them, and it already holds what they touch … so a definer would add privilege and nothing else (0057's reasoning)". 0105:20-24 says the same. `EXPECTED_DEFINERS` (`DB/test/definer-search-path.test.ts:33`) does not change. The search-path pin still covers every new function: that file says "Scope is every function that SETS a search_path" (lines 12-15), and the new schema test asserts `prosecdef = false` with `search_path=pg_catalog, pg_temp`.
+- **SC-4. The enrollment table is server-only, with no client grant and no client RLS read.** `MIG/0104_calendar_feeds.sql:19-20` sets the pattern: "Server code only (0053's pattern): RLS on with no policy, every client privilege revoked. The card reads its own person's row through serviceDb()". A client write grant would let a person set their own `verified_at`, `failed_attempts` or `locked_until`, which §3.2 and §4.2 forbid, and §3.4 already requires that `pin_hash` is never readable. "A person reads and writes only their own enrollment" is enforced by the server actions, which key on Clerk's `userId` (the `WEB/app/(dashboard)/dashboard/preferences/actions.ts:13-18` pattern).
+- **SC-5. §3.4 stores nothing for the call-in code that §3.2 requires.** §3.2 needs a code, a 10-minute expiry and three attempts, and §3.4 lists no column for any of them. **Path:** add `verify_code_hash`, `verify_expires_at` and `verify_attempts`, plus the `id`, `account_id` and `user_id` columns.
+- **SC-6. Neither argon2 nor bcrypt is in the dependency tree.** See the `dependencies` of `apps/web/package.json:17-38` and `packages/db/package.json`. Node's argon2 (`crypto.argon2`) is experimental and needs Node 24.7 or later; `package.json` engines only require 22 or later. **Path:** `node:crypto` scrypt with N=2^15, r=8, p=1, a 16-byte salt and a 32-byte key. scrypt is memory-hard and built in, so no native dependency is added. **The comparison stays in SQL:** Node derives the candidate with the stored salt, and `owner_line_attempt_pin` compares under a row lock and owns the counter and the lock. This is the same Node-hashes, SQL-checks split as `MIG/0036_alert_phone_verifications.sql:153` ("SQL never computes it"). pgcrypto would add a dependency no migration has yet.
+- **SC-7. The pass cannot bind a Telnyx "call control id".** The OpenAI webhook never sees that id. The one identifier both legs share is the handoff token:
+  - it is minted at `WEB/app/api/voice/texml/route.ts:502`;
+  - it rides the SIP URI as `X-BIS-Handoff` (`:521`);
+  - it is covered by `X-BIS-Signature`'s MAC (`WEB/lib/voice/sip-handoff-signature.ts:58-59,81`).
+
+  **Path:** the pass's MAC covers the handoff token. Single use is enforced by the owner-line `calls` row insert, which `calls_handoff_token_unique` (`MIG/0037_call_handoff.sql:176-178`) refuses a second time.
+- **SC-8. The role must be in the pass, and the live role must EQUAL it.** §4.3's HMAC payload carries no role. §7 requires refusal when "their role was downgraded after minting", while §4.3's "the same role or one inside it" would ACCEPT a downgrade. **Path:** the pass carries the role at mint time, and the webhook and every tool call require the live role to equal it.
+- **SC-9. Today's customer caps would refuse the owner's 6th call of the day.** Three facts combine:
+  - `countCallsByCallerSince` (`DB/voice.ts:1010`) counts every call from the cell;
+  - `PHONE_MAX_CALLS_PER_NUMBER_PER_DAY` defaults to 5 (`WEB/lib/voice/call-limits.ts:20`);
+  - the TeXML route applies that cap (`route.ts:378`) before any owner-line branch could run.
+
+  That contradicts §4.4's 10. **Path:** owner-line rows are excluded from `countCallsSince` and `countCallsByCallerSince`, and the owner-line limit (10 per person, per business, per UTC day, counted from owner-line rows) bounds them. This changes a cost guardrail, so it goes to the owner at the decision point (Q-C).
+- **SC-10. Bookings have no service field.** `AGENDA_COLS` (`DB/booking.ts:1172-1174`) and `BookingStatus` (`DB/booking.ts:24`) show none. **Path:** `appointments` returns the time, the customer's name, the meeting type and the status. It never returns `note`.
+- **SC-11. `calls_and_messages` returns calls only.** §5's table lists call fields only. "Messages" means the calls in which the caller left one, which the needs-callback flag and the reason line carry. Texts are out of PR 1.
+- **SC-12. The 60-second freshness applies at redemption only.** It cannot apply to a tool call minutes into the call. **Path:** §5's "each tool re-validates the pass" is the live re-check on every tool call: membership, same role, switch on, enrollment not locked.
+- **SC-13. Today the access log only records agency visits.** `MIG/0105_access_log.sql:49-56`: `actor_kind in ('agency')`, and reasons are setup, support, fix or billing. Service_role may insert only named columns, and `actor_kind` is not among them (0105:102). **Path:** the `owner_line_call` entry is:
+  - one visit row with `actor_kind 'owner_line'`, `reason 'owner_line_call'` and `clerk_session_id 'call:<calls.id>'`;
+  - one item per tool that ran (four new item kinds, `record_id` = the call).
+
+  `access_log_page` gains `actor_kind = 'agency'`, so the BIS access section is byte-for-byte unchanged. The Owner sees "Asked about …" on the owner-line call's own page.
+- **SC-14. Signed TeXML is live in production, so the owner line requires it.** `TELNYX_PUBLIC_KEY` has been set in production since 2026-09-29 (`docs/runbooks/voice-setup.md:715-716`), and `VOICE_HANDOFF_SECRET` with `VOICE_HANDOFF_ENFORCE=1` since 2026-10-08 (ledger `.superpowers/sdd/progress.md:13459`). The voice agent's standing brief still says the key is unset; the runbook wins. **Path:** the branch runs only on a Telnyx-signed request with a usable `VOICE_HANDOFF_SECRET`. Anything else gets today's path.
+- **SC-15. The migration is 0115.** `origin/main` ends at `0112_record_changes_q1.sql` (`git ls-tree`). `0114_work_queue_actions.sql` is on `feat/f077-work-queue`. 0113 is on no branch yet: it is F-115 PR D, due 2026-11-11 (memory `bis-next-work`). The spec's "after 0114" holds.
+- **SC-16. The press-1 screen still exists behind `VOICE_SCREEN_NUMBERS`** (`route.ts:39-44,748-772`). **Path:** the owner-line branch runs ahead of it, so an enrolled person is never asked to press 1. The customer path is unchanged.
+- **SC-17. The owner-line branch is skipped in three states, because in each the Gather's fallthrough would not be today's path:**
+  - `forward_calls` is on (`route.ts:814`);
+  - billing has no voice (`noVoice`, `route.ts:783`);
+  - the fallback drill is engaged (`route.ts:833`).
+
+  This keeps "On a miss, follow today's path exactly" true, and keeps the PIN step's fallthrough identical to today's bridge.
+
+**Owner questions for the decision point** (these are not corrections; the plan's default is in brackets):
+- **Q-A.** May the agency turn a client's switch OFF? [no: read-only for the agency]
+- **Q-B.** "Minutes appear in usage at cost": [owner-line minutes are recorded on the same `voice_minutes` meter as any call Sofía talked to; no separate price]
+- **Q-C.** The cap exclusion in SC-9: [yes]
+- **Q-D.** May a person verify their cell while the switch is off? [yes, so they are ready when the Owner turns it on]
+
+## Assumptions not verified (each names the task that verifies it)
+
+- **A-1.** Hosted Supabase PostgREST accepts a server-minted JWT beside Clerk's third-party issuer. Locally it does: `.github/scripts/ci-local-supabase.sh:21-34` hands PostgREST "those keys plus the stack's own secret as one JWKS". **Verified by Task 0.**
+- **A-2.** bis-ci and production still hold a usable legacy JWT secret, or allow importing a signing key. **Task 0, as a read-only inventory by danlo.**
+- **A-3.** Telnyx `<Gather>` documents `finishOnKey`, and what Telnyx sends for "#" with no digits is unknown. The existing screen's Gather uses only `action`, `numDigits` and `timeout`, and states "nothing undocumented goes in" (`route.ts:171-176`). **Task 7 Step 1** reads https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather (a documentation read, not a provider call). The documents handle all three outcomes: `Digits` "", `Digits` "#", and fall-through. If `finishOnKey` is not documented, the attribute is left out (Task 7 Step 1 says how).
+- **A-4.** The Gather callback carries `To` and `From`. That is documented but has not been seen on a real call (`WEB/app/api/voice/texml/screen/route.ts:18-23`). owner-pin never acts without both. **O-5 (the real call).**
+- **A-5.** DTMF keyed inside a Gather never reaches the SIP leg. This holds by construction, because `<Dial>` has not run yet. **O-5** checks the transcript holds no digits.
+- **A-6.** OpenAI passes `?X-BIS-Owner-Pass=` into `sip_headers` exactly as it passes the three `X-BIS-*` values already proven (`sip-handoff-signature.ts:13-17`). **Task 12's log line, then O-5.**
+- **A-7.** One extra indexed read run beside the existing batch adds less than 25 ms at p95 on Vercel to Supabase. **Task 0 measures it.**
+- **A-8.** Node's scrypt with `maxmem` 64 MiB runs inside a Vercel function. **Task 3 runs it locally; O-5 proves it in production.**
+
+## Global Constraints
+
+The spec's requirements, copied verbatim where quoted. Every task's requirements include this section.
+
+**The feature itself**
+- "Customers never hear anything new. Only a call from a registered, verified cell on the dialed business, with the business's switch on, gets the PIN step."
+- "The PIN is keyed, never spoken. The phone system collects the DTMF digits (TeXML `<Gather>`) before the call is bridged to OpenAI."
+- "Authorisation lives in code, not in the prompt. Owner tools exist only on a session built from a valid signed pass." No security property rests on Sofía's instructions (memory: prompt-only limits).
+- "Read-only. Nothing on this line books, cancels, texts, or changes a record."
+- "Same visibility as the app. A person hears only what their role shows them in the app, for the dialed business only."
+- The PIN is exactly 6 digits. 000000, 123456, a repeated digit and a run are refused with a reason. It is stored only as a slow salted hash, never shown again, and changeable or removable at any time.
+- A pending code expires in 10 minutes, with three attempts.
+- The switch is off by default, and the agency cannot turn it on.
+- `<Gather numDigits="6" timeout="8" finishOnKey="#">`, with its action at `/api/voice/texml/owner-pin` (but see A-3).
+- Wrong PIN 3 times sets `locked_until = now() + 30 min`, emails the person and the account's Owner, and the call continues as a normal customer call. The counter is per enrollment, so a redial does not reset it.
+- The pass is valid for 60 seconds from issue and is single use.
+- Each call ends at 10 minutes, with a spoken 1-minute warning. Each person gets 10 owner-line calls per business per day, and the 11th goes to the normal path after a short line.
+- A range is today, yesterday, tomorrow, this week, or named dates, always in the account's zone, and at most 31 days.
+- An owner-line call is excluded from "calls answered", conversion, the dashboard tiles, the weekly report (client and agency roll-up), the AI-presence count, and billing as an answered call. Its minutes appear in usage.
+- An owner-line call writes no customer timeline row. The access log is the record of who heard what.
+
+**Repo rules**
+- Tokens only (DESIGN.md), and status is dot plus word (rule 3).
+- Spanish uses *usted*, and Owner is "Dueño" (`WEB/lib/messages.ts:5372`).
+- A name shown to a customer is `brandDisplayName`, never `accounts.name`.
+- Server actions take `locale` right after `accountId`. Pages `.bind()` actions; they never pass an arrow function from a server component to a client one.
+- Every new route or guarded action is classified in `ACCT/access-log-routes.test.ts`.
+- Before any push, run the i18n gates (`WEB/lib/i18n/*.test.ts`, `WEB/lib/messages.test.ts`) and the consent scans (`WEB/lib/consent/scans.test.ts`).
+- `@bis/db` is imported lazily inside the TeXML route handlers (`route.ts:219-226`). Module-scope imports break `next build`.
+
+**Migration rules**
+- Only the orchestrator applies a migration. The order is bis-ci (`ci-project-setup.yml`: push-dry-run, then push), then production (MCP `apply_migration`, once), then the parity check.
+- No bare `LOCK` outside a `do` block: locks and `lock_timeout` go inside a `do` block, followed by the 0088-style self-check.
+- The migration text is ASCII only, with no backslash, and every dollar sign in it belongs to a dollar-quote pair.
+
+**Running tests and gates**
+- No `@bis/db` vitest runs against bis-ci until 0115 is there. Locally, those tests run only against the PG18 replica (memory `bis-local-db-replica`, with `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` unset in that shell). CI `verify` is the authoritative green.
+- Agents never place calls, call providers, edit `.env*`, or run `pnpm check`, `build` or `test:e2e`.
+
+## Tasks, tiers and sizes
+
+Tiers follow the binding speed rule (memory `bis-speed-process`): HIGH gets a full review with mutation probes, MEDIUM one review, and LOW no per-task review (only the end-of-PR review).
+
+| # | Task | Tier | Size | Depends on |
+|---|---|---|---|---|
+| 0 | Spike: a minted token beside Clerk's issuer; lookup latency; DECISION POINT | HIGH | 2–3 days | none |
+| 1 | Migration 0115 and its schema, grants and RLS tests | HIGH | 1 day | 0 |
+| 2 | DB wrappers, counting exclusions, `startCallRow` and `listCalls` | HIGH | 0.75 day | 1 |
+| 3 | PIN and code primitives (scrypt, trivial refusals, code hash) | HIGH | 0.25 day | none |
+| 4 | Signed owner pass and header extraction | HIGH | 0.5 day | none |
+| 5 | Setup actions: enrol and verify the cell, set or remove the PIN, the Team switch | HIGH | 0.75 day | 2, 3 |
+| 6 | Setup card on Mis preferencias, switch card on Team, copy, ⌘K words | LOW | 0.75 day | 5 |
+| 7 | Answer-route branch and the `<Gather>` | HIGH | 0.75 day | 2, 4 |
+| 8 | Lockout email | MEDIUM | 0.25 day | 2 |
+| 9 | `owner-pin` route: verify, PIN, lockout | HIGH | 1 day | 3, 7, 8 |
+| 10 | Range resolver and the ONE reader factory | HIGH | 0.5 day | 0 decision |
+| 11 | The three owner tools (schemas and registry) | HIGH | 1 day | 10 |
+| 12 | Owner-line session: prompt, config, webhook branch, lifecycle hooks, finish | HIGH | 1.5 days | 4, 11 |
+| 13 | Calls list label and "Asked about" on the call page | LOW | 0.5 day | 2, 12 |
+| 14 | No-guessing corpus, code-graded, repeat=3 | MEDIUM | 0.5 day (plus a run) | 11, 12 |
+| 15 | e2e: the setup card | LOW | 0.5 day | 6 |
+| 16 | Plan docs (`crm-features.md`) and a runbook proposal | LOW | 0.25 day | none |
+| 17 | PR 2: `lookup_customer`, with privacy tests | HIGH | 1 day | PR 1 merged |
+
+PR 1 is Tasks 1–16, about 10.75 days of agent work; PR 2 is Task 17, about 1 day. With the 2–3-day spike, that is 13.75–14.75 days in all. The spec's estimate is 5–6 ew.
+
+## Orchestrator checklist (not agent tasks)
+
+- **O-1. Decision point after Task 0.** Bring the spike's decision document and Q-A to Q-D to the owner as choice tiles, with the recommended option first. Tasks 1+ start only after the owner answers. (Task 1 does not depend on T versus F2; Task 10 does.)
+- **O-2. Holds.** Merge `origin/main` into the branch after 0113 (F-115 PR D) and 0114 (#343) are merged, and re-read the files Task 1 Step 1 names before Task 1's SQL is final. Applying 0115 follows the migration rules above, only after 0113 and 0114 are on production. The PR's `e2e` job fails until 0115 is in bis-ci's history (`.github/scripts/ci-migrations-applied.sh`).
+- **O-3. Env (danlo, Vercel Production only), under decision T.** Add `SUPABASE_JWT_SECRET`, or the imported signing key the spike names, as **Sensitive**. Never add it to Preview (`docs/runbooks/production-isolation.md`). It is as powerful as the service-role key already there. Under F2, nothing new is added.
+- **O-4. Corpus.** Run Task 14's script with `--repeat 3` from danlo's shell (`OPENAI_API_KEY` from the shell only). A person reviews the transcripts, and the code grader's verdict must be 3/3 per item.
+- **O-5. The real call (danlo; runbook Step 6 is the exit gate).** Before any client's switch is on, call the BIS account's live number from danlo's verified cell:
+  1. Enter the right PIN and ask the four questions (three in PR 1).
+  2. Enter a wrong PIN three times on a second call.
+  3. Press pound on a third call.
+
+  Check the Vercel log lines `texml owner line asking for a PIN`, `owner pass checked` and `owner line accepted`, and confirm the transcript holds no digits.
+- **O-6.** Update the roadmap tracker row for F-032 (memory `bis-roadmap-tracker`) to match Task 16.
+
+## File map
+
+Create:
+- `docs/superpowers/specs/2026-11-09-owner-line-spike.md`: the spike's decision record (Task 0).
+- `packages/db/supabase/migrations/0115_owner_line.sql` (Task 1).
+- `packages/db/src/test/owner-line-schema.test.ts` (Task 1). Replica-run and CI-verified.
+- `packages/db/src/owner-line.ts`: the typed wrappers (Task 2).
+- `packages/db/src/test/owner-line-counting.test.ts` (Task 2). CI only, because it uses `withTestAccount`.
+- `apps/web/src/lib/owner-line/secrets.ts` and `secrets.test.ts` (Task 3).
+- `apps/web/src/lib/owner-line/memberships.ts`, `apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.ts` and `.test.ts` (Task 5).
+- `ACCT/team/owner-line-actions.ts` and `.test.ts` (Task 5).
+- `apps/web/src/components/owner-line/owner-line-card.tsx` and `owner-line-switch-card.tsx`, with `owner-line-view.ts` and `.test.ts` (Task 6).
+- `apps/web/src/app/api/voice/texml/owner-line-xml.ts` and `.test.ts` (Task 7). A colocated helper like `./xml.ts`, not a route.
+- `apps/web/src/lib/owner-line/lockout.ts` and `.test.ts`, `apps/web/src/lib/email/templates/owner-line.ts` and `.test.ts` (Task 8).
+- `apps/web/src/app/api/voice/texml/owner-pin/route.ts` and `route.test.ts` (Task 9).
+- `apps/web/src/lib/owner-line/range.ts` and `.test.ts`, `token.ts`, `session.ts`, `reader.ts` and `reader.test.ts` (Task 10).
+- `apps/web/src/lib/owner-line/data-path.ts`: THE one module holding the Task 0 decision (Task 5). Only `reader.ts` branches on it.
+- `apps/web/src/lib/owner-line/tools/schemas.ts`, `read.ts`, `registry.ts`, and their tests (Task 11).
+- `apps/web/src/lib/owner-line/prompt.ts`, `session-config.ts`, `events.ts`, `finish.ts`, and their tests (Task 12). Task 12 also extends `session.ts`.
+- `apps/web/scripts/owner-line-corpus.ts`, `apps/web/src/lib/owner-line/corpus/*.json` and `grade.ts` with `grade.test.ts` (Task 14).
+- `apps/web/e2e/owner-line-setup.spec.ts` (Task 15).
+
+Modify:
+- `packages/db/src/voice.ts`, `packages/db/src/index.ts`, `packages/db/src/account-teardown.ts` (Task 2).
+- `ACCT/dashboard/page.tsx:171` (Task 2).
+- `apps/web/src/lib/voice/sip-handoff-signature.ts`, `sip-headers.ts` and their tests (Task 4).
+- `apps/web/src/app/api/voice/texml/route.ts` and `route.test.ts` (Task 7).
+- `apps/web/src/app/api/voice/incoming/route.ts` and `route.test.ts` (Task 12).
+- `apps/web/src/lib/messages.ts`, adding the `ownerLine.*` namespace only (Tasks 5–8, 11–13).
+- `apps/web/src/lib/consent/classes.ts` (Task 8).
+- `apps/web/src/app/api/voice/texml/wellformed.test.ts` (Task 7).
+- `apps/web/.gitignore` (Task 14).
+- `apps/web/src/lib/palette/registry.ts` (Task 6).
+- The preferences page and the team page (Task 6).
+- The calls list and call page (Task 13).
+- `ACCT/access-log-routes.test.ts` (Task 5).
+- `docs/crm-features.md` (Task 16).
+
+---
+
+## Task 0: SPIKE. Can a server-minted short-lived token read PostgREST as a person under RLS, beside Clerk's issuer? (HIGH, 2–3 days, time-boxed)
+
+**Runs on:** the local CLI stack or PG18 replica, and the CI project `bis-ci` (`odnobiodsftffphuuosz`). **NEVER production** (`tlbkbmlrfafquucsmsmm`), not even read-only, except the dashboard inventory in Step 2, which is names and statuses only.
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-11-09-owner-line-spike.md` (the decision record, committed).
+- Scratch only, never committed: `<scratchpad>/owner-line-spike/probe.ts` and `latency.ts`.
+
+**Interfaces:**
+- Consumes: `userDb(accessToken)` (`packages/db/src/user-client.ts:17`), `serviceDb()` (`packages/db/src/service.ts:4`), `listCalls`, `listAgendaBookings`, `listAccountWork`, and `app.jwt()` (0001:4-7), which reads `sub`, `org_id` and `app_role`.
+- Produces: a decision, recorded as `OWNER_LINE_DATA_PATH = "token" | "service"` and its role list, which Task 10 writes into `reader.ts`. Under T it also produces the token's exact shape (algorithm, claims, key env var name).
+
+- [ ] **Step 1: Read the code that decides the answer (no edits).**
+  - `packages/db/src/user-client.ts:1-33` and `service.ts:1-9`.
+  - `apps/web/src/lib/db.ts:21-26`: the request client is `userDb(Clerk getToken())`.
+  - `MIG/0001_tenancy.sql:4-12` (`app.jwt`, `app.is_agency`), `0008_client_access.sql:13-18` (`app.current_account_id` needs `client_access_enabled`), `0066_staff_and_roles.sql:52-61` (`app.account_role` by `sub`), and `0068_mine_unassigned_technician.sql:65-79,103-138`.
+  - `.github/scripts/ci-local-supabase.sh:15-34`: the local stack's PostgREST JWKS holds the stack's `oct` secret AND Clerk's RSA keys.
+  - `packages/db/src/test/ai-acts-schema.test.ts:844-881,1102-1107`: an HS256 token the repo already mints for the replica (`BIS_REPLICA_JWT_SECRET`).
+  - `docs/runbooks/production-isolation.md:755-770`: legacy `eyJ…` keys versus `sb_secret_` keys.
+
+  Write down the claims RLS needs: `role: "authenticated"`, `sub` (the Clerk user id), `org_id` (the Clerk org id), and never `app_role`.
+
+- [ ] **Step 2: Inventory (danlo, read-only, about 5 minutes per project; write the answers into the decision record).**
+  - In the bis-ci dashboard, go to Settings → JWT Keys. Is a "Legacy JWT secret" listed and *in use*, or has the project moved to signing keys (ES256/RSA)? Does "Import key" exist?
+  - Go to Authentication → Third-Party Auth: which Clerk domain is listed?
+  - Repeat the same three reads for production: **names and statuses only, never a value.**
+
+  The agent drafts the questions. danlo pastes back the answers.
+
+- [ ] **Step 3: Local proof that a minted token reads under RLS beside Clerk.** Write a vitest file **in the scratchpad**, not the repo, modelled on `ai-acts-schema.test.ts:845-881`. Run it on the replica kit (`BIS_REPLICA_JWT_SECRET`) or a local CLI stack. It seeds:
+  - two accounts, A and B, with `client_access_enabled`;
+  - A's Owner, Staff and Technician, plus B's Owner;
+  - in A and in B, a contact assigned to A's Technician, a contact assigned to nobody, a call on each, a booking on each, and a task on each.
+
+  It then mints an HS256 token per person, `{ role: "authenticated", aud: "authenticated", sub, org_id, iat, exp: iat + 120 }`, and asserts through `userDb(token)`:
+  - (a) the Owner's `listCalls`, `listAgendaBookings` and `listAccountWork` return A's rows only, with zero from B;
+  - (b) the Technician sees only the assigned contact's call, booking and task;
+  - (c) a token whose `exp` is in the past is refused (PostgREST 401 / `PGRST301` or `PGRST303`);
+  - (d) a token signed with a different secret is refused;
+  - (e) a token carrying `org_id` of B and `sub` of A's Owner reads nothing from A.
+
+  Paste vitest's summary line.
+
+- [ ] **Step 4: Hosted proof on bis-ci (danlo runs it; the agent writes it).** Write `probe.ts`, which reads only `process.env`. It creates one throwaway account on bis-ci through `serviceDb()` with the Step 3 seed, runs (a)–(e) through `userDb(minted)` against bis-ci's REST URL, and deletes the account in a `finally` with `deleteAccountCascade(db, id, "owner-line-spike")`. The signing key is typed into danlo's shell for that one run (`SPIKE_JWT_SIGNING_KEY`), never written to a file, and never printed: the script prints only `PASS a` … `FAIL e` lines. Run it with:
+
+  ```bash
+  node --env-file=apps/web/.env.local --import tsx <scratchpad>/owner-line-spike/probe.ts
+  ```
+
+  If Step 2 showed the legacy secret is revoked, run the ES256 variant: sign with a key pair danlo generated and **imported as a standby key** on bis-ci only. Record which variant passed.
+
+- [ ] **Step 5: Measure the answer route's added latency.**
+  - Write `latency.ts` against bis-ci. Run 50 iterations of `Promise.all` over today's four reads (`countCallsSince`, `countCallsByCallerSince`, `countCallerHistorySince`, `countForwardedCallsSince`, the shape at `route.ts:337-348`), then 50 iterations of the same plus one `calls_caller_idx`-served select standing in for `owner_line_answer_lookup` (also one unique-index lookup).
+  - Report p50 and p95 of each, and the difference.
+  - Read the baseline `/api/voice/texml` durations for the last 14 days from Vercel's runtime logs (Vercel MCP `get_runtime_logs`, read-only, project `prj_JAfRdX8D…` per memory `bis-vercel-project`).
+
+  **Budget:** the added p95 is at most 25 ms, with a hard ceiling of 50 ms. Because the lookup runs beside the batch (Task 7), its cost is `max()`, not `+`. Above 50 ms, the plan changes to starting the lookup before the profile read.
+
+- [ ] **Step 6: Write the decision record** at `docs/superpowers/specs/2026-11-09-owner-line-spike.md`, with these sections in this order:
+  1. The question, verbatim.
+  2. The inventory answers from Step 2.
+  3. Step 3's summary line.
+  4. Step 4's PASS/FAIL lines.
+  5. The latency table and the verdict against the budget.
+  6. **Recommendation: T, F2 or F1, in one sentence first.** The rule: T if Step 4 passed (a)–(e) on bis-ci and production's inventory allows the same key type; otherwise F2 (SC-2).
+  7. Under T: the exact token shape, the env var name for Vercel Production (`SUPABASE_JWT_SECRET`, or `OWNER_LINE_JWT_PRIVATE_KEY` for ES256), the TTL (120 s), and the rule that `app_role` is never set.
+  8. The open owner questions Q-A to Q-D.
+
+- [ ] **Step 7: Commit the record only.**
+
+  ```bash
+  git add docs/superpowers/specs/2026-11-09-owner-line-spike.md
+  git commit -m "docs(voice): F-032 owner line spike: minted-token RLS reads and lookup latency, with a recommendation" -- docs/superpowers/specs/2026-11-09-owner-line-spike.md
+  ```
+
+**DECISION POINT (O-1).** Stop here. The orchestrator brings the record to the owner. No task below starts until the owner has answered.
+
+**Mutation probe for this task:** in Step 3, flip the Technician's assignment to nobody. Case (b) must then report zero rows, and it must FAIL if it still sees the call. That proves the probe reads RLS rather than a filter of its own.
+
+---
+
+## Task 1: Migration 0115 and its schema, grants and RLS tests (HIGH, 1 day)
+
+**Files:**
+- Create: `packages/db/supabase/migrations/0115_owner_line.sql`
+- Create: `packages/db/src/test/owner-line-schema.test.ts`
+
+**Interfaces:**
+- Consumes: `memberships (account_id, user_id)` unique key (0066, used by `MIG/0104_calendar_feeds.sql:72-73`). 0112's `access_log_page` body (`MIG/0112_record_changes_q1.sql:1028-1075`) and kind CHECK (`:1024-1027`).
+- Produces, for Task 2 and the routes:
+  - Table `public.owner_line_enrollments`, with columns `id, account_id, user_id, e164, verified_at, verify_code_hash, verify_expires_at, verify_attempts, pin_hash, pin_set_at, failed_attempts, locked_until, created_at`.
+  - `public.accounts.owner_line_enabled_at timestamptz` and `public.calls.owner_line_user_id uuid`.
+  - The functions:
+    - `owner_line_answer_lookup(uuid, text, timestamptz, integer) → jsonb`
+    - `owner_line_start_verification(uuid, uuid, text, text, integer) → text`
+    - `owner_line_attempt_verify(uuid, text, text) → text`
+    - `owner_line_attempt_pin(uuid, text, integer) → jsonb`
+    - `owner_line_session_check(uuid, uuid, text, timestamptz, integer) → jsonb`
+    - `note_owner_line_call(uuid, uuid, text, text, text[]) → uuid`
+  - The item kinds `owner_line_calls_and_messages`, `owner_line_appointments`, `owner_line_needs_attention` and `owner_line_lookup_customer`.
+
+- [ ] **Step 1: Re-read the moving parts (O-2).** After 0113 and 0114 are merged into this branch, run:
+
+  ```bash
+  git ls-tree --name-only HEAD packages/db/supabase/migrations/ | tail -4
+  grep -n "agency_visit_items_kind_check\|function public.access_log_page" packages/db/supabase/migrations/011[3-4]*.sql
+  ```
+
+  If either file replaced the kind CHECK or `access_log_page`, copy THAT file's text below instead of 0112's, and say so in the report. If the highest number is not 0114, renumber this file to the next free number.
+
+- [ ] **Step 2: Write the failing schema test.** Model it on `packages/db/src/test/calendar-feeds-schema.test.ts` (the `withRollback`, `actAsMember` and privilege-matrix shapes, which were read from `./db`).
+
+```ts
+// packages/db/src/test/owner-line-schema.test.ts
+import { describe, it, expect } from "vitest";
+import type { Client } from "pg";
+import { randomBytes } from "node:crypto";
+import { withRollback, actAsMember } from "./db";
+
+/**
+ * 0115 (F-032 owner line). RED BEFORE APPLY: every case (42P01 on the table, 42883 on the functions).
+ * GREEN AFTER APPLY: all of them. Run on the PG18 replica pre/post (memory bis-local-db-replica); CI verify is
+ * the authoritative green.
+ */
+const TABLE = "public.owner_line_enrollments";
+const FUNCTIONS = [
+  "public.note_owner_line_call(uuid,uuid,text,text,text[])",
+  "public.owner_line_answer_lookup(uuid,text,timestamp with time zone,integer)",
+  "public.owner_line_attempt_pin(uuid,text,integer)",
+  "public.owner_line_attempt_verify(uuid,text,text)",
+  "public.owner_line_session_check(uuid,uuid,text,timestamp with time zone,integer)",
+  "public.owner_line_start_verification(uuid,uuid,text,text,integer)",
+].sort();
+const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "MAINTAIN"] as const;
+const RUN = randomBytes(4).toString("hex");
+const hex64 = () => randomBytes(32).toString("hex");
+/** A pin_hash of the shape 0115's CHECK accepts: "scrypt:15:8:1:" + 22 + ":" + 43 = 80 characters. */
+const pinHash = (salt = "A".repeat(22), key = "B".repeat(43)) => `scrypt:15:8:1:${salt}:${key}`;
+const DAY = "2000-01-01T00:00:00Z";
+
+type Seed = { a: string; b: string; aOrg: string; owner: string; staff: string; tech: string; bOwner: string };
+
+async function seed(c: Client): Promise<Seed> {
+  const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL schema') returning id");
+  const acct = async (tag: string) => (await c.query<{ id: string }>(
+    "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1, $2, $3, true) returning id",
+    [ag!.id, `org_ol_${tag}_${RUN}`, `OL ${tag}`])).rows[0]!.id;
+  const a = await acct("a");
+  const b = await acct("b");
+  const person = async (tag: string, account: string, role: string, name: string | null = null) => {
+    const { rows: [u] } = await c.query<{ id: string }>(
+      "insert into users (clerk_user_id, email, name) values ($1, $1 || '@example.com', $2) returning id",
+      [`user_ol_${tag}_${RUN}`, name]);
+    await c.query("insert into memberships (user_id, scope, account_id, role) values ($1, 'account', $2, $3)", [u!.id, account, role]);
+    return u!.id;
+  };
+  return {
+    a, b, aOrg: `org_ol_a_${RUN}`,
+    owner: await person("owner", a, "owner", "Dan Lopez"),
+    staff: await person("staff", a, "staff"),
+    tech: await person("tech", a, "technician"),
+    bOwner: await person("b", b, "owner"),
+  };
+}
+
+/** A verified enrollment with a PIN, switch on. Inserted as the table owner (seeding, not the code under test). */
+async function enrolled(c: Client, account: string, user: string, e164: string) {
+  await c.query("update accounts set owner_line_enabled_at = now() where id = $1", [account]);
+  const { rows: [e] } = await c.query<{ id: string }>(
+    `insert into owner_line_enrollments (account_id, user_id, e164, verified_at, pin_hash, pin_set_at)
+     values ($1, $2, $3, now(), $4, now()) returning id`, [account, user, e164, pinHash()]);
+  return e!.id;
+}
+
+const asService = (c: Client) => c.query("set local role service_role");
+
+describe("0115 owner_line_enrollments: grants, RLS, function privileges", () => {
+  it("the whole table privilege matrix is service_role's DELETE, INSERT, SELECT, UPDATE and nothing else (probe: grant select on public.owner_line_enrollments to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ r: string; p: string }>(
+        `select r, p from unnest(array['anon', 'authenticated', 'public', 'service_role']) r
+           cross join unnest($1::text[]) p
+          where has_table_privilege(r, '${TABLE}', p) order by r, p`, [TABLE_PRIVS]);
+      expect(rows).toEqual([
+        { r: "service_role", p: "DELETE" }, { r: "service_role", p: "INSERT" },
+        { r: "service_role", p: "SELECT" }, { r: "service_role", p: "UPDATE" },
+      ]);
+    }));
+
+  it("no column privilege for anon, authenticated or PUBLIC, so pin_hash is never readable through PostgREST (probe: grant select (pin_hash) to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select r, p from unnest(array['anon', 'authenticated', 'public']) r
+           cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p
+          where has_any_column_privilege(r, '${TABLE}', p)`);
+      expect(rows).toEqual([]);
+    }));
+
+  it("row level security is on with NO policy (probe: disable row level security -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows: [t] } = await c.query<{ relrowsecurity: boolean }>(`select relrowsecurity from pg_class where oid = '${TABLE}'::regclass`);
+      const { rows: policies } = await c.query(`select polname from pg_policy where polrelid = '${TABLE}'::regclass`);
+      expect([t!.relrowsecurity, policies]).toEqual([true, []]);
+    }));
+
+  it("a signed-in Owner selecting the table is refused 42501, not shown zero rows (probe: grant select to authenticated -> no error, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.owner, "+19565550101");
+      await actAsMember(c, s.a, s.aOrg, "owner");
+      await expect(c.query("select pin_hash from public.owner_line_enrollments")).rejects.toMatchObject({ code: "42501" });
+    }));
+
+  it("EXECUTE on all six functions is service_role's alone (probe: grant execute on owner_line_attempt_pin to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select f, r, has_function_privilege(r, f::regprocedure, 'EXECUTE') as x
+           from unnest($1::text[]) f cross join unnest(array['anon', 'authenticated', 'public', 'service_role']) r order by f, r`,
+        [FUNCTIONS]);
+      expect(rows).toEqual(FUNCTIONS.flatMap((f) => [
+        { f, r: "anon", x: false }, { f, r: "authenticated", x: false },
+        { f, r: "public", x: false }, { f, r: "service_role", x: true },
+      ]));
+    }));
+
+  it("all six run as their CALLER with search_path pg_catalog, pg_temp: the PIN-check pin (SC-3; probe: security definer on owner_line_attempt_pin, or search_path '' -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select f, p.prosecdef, p.proconfig from unnest($1::text[]) f join pg_proc p on p.oid = f::regprocedure order by f`, [FUNCTIONS]);
+      expect(rows).toEqual(FUNCTIONS.map((f) => ({ f, prosecdef: false, proconfig: ["search_path=pg_catalog, pg_temp"] })));
+    }));
+
+  it("calls.owner_line_user_id and accounts.owner_line_enabled_at exist, nullable, with no client write (probe: grant update (owner_line_enabled_at) on accounts to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select table_name, column_name, is_nullable, data_type from information_schema.columns
+          where table_schema = 'public' and column_name in ('owner_line_user_id', 'owner_line_enabled_at') order by table_name`);
+      expect(rows).toEqual([
+        { table_name: "accounts", column_name: "owner_line_enabled_at", is_nullable: "YES", data_type: "timestamp with time zone" },
+        { table_name: "calls", column_name: "owner_line_user_id", is_nullable: "YES", data_type: "uuid" },
+      ]);
+      const { rows: w } = await c.query(
+        `select has_column_privilege('authenticated', 'public.accounts', 'owner_line_enabled_at', 'UPDATE') as acct,
+                has_column_privilege('authenticated', 'public.calls', 'owner_line_user_id', 'UPDATE') as calls`);
+      expect(w).toEqual([{ acct: false, calls: false }]);
+    }));
+});
+
+describe("0115: one cell is one person per business", () => {
+  it("a second person cannot claim the same cell on the same business; another business can (probe: drop owner_line_enrollments_one_cell -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      expect((await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10) as r", [s.a, s.owner, hex64()])).rows[0].r).toBe("ok");
+      expect((await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10) as r", [s.a, s.staff, hex64()])).rows[0].r).toBe("taken");
+      expect((await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10) as r", [s.b, s.bOwner, hex64()])).rows[0].r).toBe("ok");
+    }));
+
+  it("a PIN cannot be stored on an unverified cell, and a malformed hash is refused (probe: drop owner_line_enrollments_pin_needs_cell_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query(
+        "insert into owner_line_enrollments (account_id, user_id, e164, pin_hash, pin_set_at) values ($1, $2, '+19565550101', $3, now())",
+        [s.a, s.owner, pinHash()])).rejects.toMatchObject({ code: "23514" });
+      await expect(c.query(
+        "insert into owner_line_enrollments (account_id, user_id, e164, verified_at, pin_hash, pin_set_at) values ($1, $2, '+19565550101', now(), '123456', now())",
+        [s.a, s.owner])).rejects.toMatchObject({ code: "23514" });
+    }));
+
+  it("removing the person from the team deletes their enrollment (probe: drop the cascade -> 23503, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.owner, "+19565550101");
+      await c.query("delete from memberships where account_id = $1 and user_id = $2", [s.a, s.owner]);
+      const { rows } = await c.query("select 1 from owner_line_enrollments where user_id = $1", [s.owner]);
+      expect(rows).toEqual([]);
+    }));
+});
+
+describe("0115: the call-in code", () => {
+  it("the right code verifies; a wrong one counts; the third wrong spends it (probe: verify_attempts + 1 >= 4 -> the third answer is 'wrong', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const right = hex64();
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10)", [s.a, s.owner, right]);
+      const attempt = async (h: string) => (await c.query("select public.owner_line_attempt_verify($1, '+19565550101', $2) as r", [s.a, h])).rows[0].r;
+      expect(await attempt(hex64())).toBe("wrong");
+      expect(await attempt(hex64())).toBe("wrong");
+      expect(await attempt(hex64())).toBe("spent");
+      expect(await attempt(right)).toBe("none");
+      await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10)", [s.a, s.owner, right]);
+      expect(await attempt(right)).toBe("verified");
+    }));
+
+  it("an expired code is spent, never verified (probe: drop the verify_expires_at > now() test -> 'verified', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const right = hex64();
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, '+19565550101', $3, 10)", [s.a, s.owner, right]);
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.owner]);
+      await asService(c);
+      expect((await c.query("select public.owner_line_attempt_verify($1, '+19565550101', $2) as r", [s.a, right])).rows[0].r).toBe("spent");
+    }));
+
+  it("changing the cell clears the verification and the PIN (probe: keep pin_hash on a new e164 -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.owner, "+19565550101");
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, '+19565550199', $3, 10)", [s.a, s.owner, hex64()]);
+      const { rows } = await c.query("select e164, verified_at, pin_hash from owner_line_enrollments where user_id = $1", [s.owner]);
+      expect(rows).toEqual([{ e164: "+19565550199", verified_at: null, pin_hash: null }]);
+    }));
+});
+
+describe("0115: the PIN and the lock", () => {
+  it("a correct PIN is ok and resets the counter (probe: compare pin_hash <> p_candidate -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await enrolled(c, s.a, s.owner, "+19565550101");
+      await asService(c);
+      expect((await c.query("select public.owner_line_attempt_pin($1, 'nope', 30) as r", [id])).rows[0].r).toMatchObject({ status: "wrong", failed_attempts: 1 });
+      expect((await c.query("select public.owner_line_attempt_pin($1, $2, 30) as r", [id, pinHash()])).rows[0].r).toEqual({ status: "ok" });
+      await c.query("reset role");
+      expect((await c.query("select failed_attempts from owner_line_enrollments where id = $1", [id])).rows[0].failed_attempts).toBe(0);
+    }));
+
+  it("the third wrong PIN locks for 30 minutes; the lock refuses even the right PIN; the counter is per enrollment, so a new call does not reset it (probe: >= 4 -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await enrolled(c, s.a, s.owner, "+19565550101");
+      await asService(c);
+      const pin = async (cand: string) => (await c.query("select public.owner_line_attempt_pin($1, $2, 30) as r", [id, cand])).rows[0].r;
+      expect((await pin("x")).status).toBe("wrong");
+      expect((await pin("y")).status).toBe("wrong");   // "a redial": nothing about the call is an argument
+      const third = await pin("z");
+      expect(third.status).toBe("locked_now");
+      const minutes = (new Date(third.locked_until).getTime() - Date.now()) / 60_000;
+      expect(minutes).toBeGreaterThan(29);
+      expect(minutes).toBeLessThanOrEqual(30.1);
+      expect((await pin(pinHash())).status).toBe("locked");
+    }));
+
+  it("the answer lookup: pin for a verified, unlocked, switched-on person; off; locked; over_limit at the 10th prior owner-line call; none for a stranger (probe: count >= p_max + 1 -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await enrolled(c, s.a, s.owner, "+19565550101");
+      const look = async (caller: string) => (await c.query(
+        "select public.owner_line_answer_lookup($1, $2, $3, 10) as r", [s.a, caller, DAY])).rows[0].r;
+      await asService(c);
+      expect(await look("+19565550199")).toEqual({ status: "none" });
+      const hit = await look("+19565550101");
+      expect(hit).toMatchObject({ status: "pin", enrollment_id: id, user_id: s.owner, role: "owner", name: "Dan Lopez", pin_params: pinHash().slice(0, 36) });
+      await c.query("reset role");
+      const { rows: [pn] } = await c.query<{ id: string }>(
+        "insert into phone_numbers (account_id, e164, status) values ($1, '+19565550900', 'live') returning id", [s.a]);
+      for (let i = 0; i < 10; i++) {
+        await c.query("insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id) values ($1, $2, '+19565550101', $3)", [s.a, pn!.id, s.owner]);
+      }
+      await asService(c);
+      expect((await look("+19565550101")).status).toBe("over_limit");
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set locked_until = now() + interval '5 minutes' where id = $1", [id]);
+      await asService(c);
+      expect(await look("+19565550101")).toEqual({ status: "locked" });
+      await c.query("reset role");
+      await c.query("update accounts set owner_line_enabled_at = null where id = $1", [s.a]);
+      await asService(c);
+      expect(await look("+19565550101")).toEqual({ status: "off" });
+    }));
+
+  it("the session check refuses a removed person and a changed role, and answers the person's facts when all holds (probe: drop the role comparison -> the downgrade case FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, "+19565550102");
+      const check = async (role: string) => (await c.query(
+        "select public.owner_line_session_check($1, $2, $3, $4, null) as r", [s.a, s.staff, role, DAY])).rows[0].r;
+      await asService(c);
+      expect(await check("staff")).toMatchObject({ ok: true, clerk_org_id: s.aOrg });
+      expect(await check("owner")).toEqual({ ok: false, reason: "role_changed" });
+      await c.query("reset role");
+      await c.query("update memberships set role = 'technician' where account_id = $1 and user_id = $2", [s.a, s.staff]);
+      await asService(c);
+      expect(await check("staff")).toEqual({ ok: false, reason: "role_changed" });
+      await c.query("reset role");
+      await c.query("delete from memberships where account_id = $1 and user_id = $2", [s.a, s.staff]);
+      await asService(c);
+      expect(await check("technician")).toEqual({ ok: false, reason: "not_a_member" });
+    }));
+});
+
+describe("0115: the access log learns owner_line_call", () => {
+  it("note_owner_line_call writes one owner_line visit and one item per tool; the BIS access page does not show it (probe: drop actor_kind = 'agency' from access_log_page -> total 1, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const { rows: [pn] } = await c.query<{ id: string }>(
+        "insert into phone_numbers (account_id, e164, status) values ($1, '+19565550901', 'live') returning id", [s.a]);
+      const { rows: [call] } = await c.query<{ id: string }>(
+        "insert into calls (account_id, phone_number_id, owner_line_user_id) values ($1, $2, $3) returning id", [s.a, pn!.id, s.owner]);
+      await asService(c);
+      await c.query("select public.note_owner_line_call($1, $2, 'user_x', 'Dan Lopez', array['owner_line_appointments', 'owner_line_calls_and_messages', 'owner_line_appointments'])",
+        [s.a, call!.id]);
+      await c.query("reset role");
+      const { rows: v } = await c.query("select actor_kind, reason, clerk_session_id from agency_visits where account_id = $1", [s.a]);
+      expect(v).toEqual([{ actor_kind: "owner_line", reason: "owner_line_call", clerk_session_id: `call:${call!.id}` }]);
+      const { rows: i } = await c.query("select kind from agency_visit_items where account_id = $1 order by kind", [s.a]);
+      expect(i).toEqual([{ kind: "owner_line_appointments" }, { kind: "owner_line_calls_and_messages" }]);
+      await actAsMember(c, s.a, s.aOrg, "owner");
+      const { rows: [p] } = await c.query("select public.access_log_page($1, null, null, 20) as p", [s.a]);
+      expect(p.p).toEqual({ total: 0, visits: [] });
+    }));
+
+  it("note_owner_line_call refuses an agency kind (probe: drop the owner_line_ prefix guard -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await expect(c.query("select public.note_owner_line_call($1, gen_random_uuid(), 'user_x', null, array['contact'])", [s.a]))
+        .rejects.toMatchObject({ code: "22023" });
+    }));
+});
+```
+
+- [ ] **Step 3: Run it on the replica's `pre` database (no 0115) and see it fail.**
+
+  ```bash
+  cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55433/pre pnpm exec vitest run src/test/owner-line-schema.test.ts
+  ```
+
+  Expected: every case FAILS (`relation "public.owner_line_enrollments" does not exist`, or `function … does not exist`). Paste one failing assertion line and the summary line. Judge the run by vitest's own summary, never the exit code (repo rule 4).
+
+- [ ] **Step 4: Write the migration.**
+
+```sql
+-- 0115_owner_line.sql - the owner line (F-032 PR 1)
+-- (docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
+--  docs/superpowers/plans/2026-11-09-owner-line.md, Task 1, spec corrections SC-3 to SC-9 and SC-13)
+--
+-- WHAT.
+--   public.owner_line_enrollments: one row per (account, person) who calls in to hear the day. The cell (e164) is
+--     unique per account, so one cell is one person per business. A pending call-in code (verify_*, sha256 hex the
+--     APP computes), the PIN as an scrypt string the APP computes (pin_hash; SQL only compares, 0036's split), the
+--     wrong-PIN counter and the lock. The composite FK to memberships cascades: a person removed from the team, a
+--     deleted user and a deleted account take the row with them.
+--   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default.
+--   public.calls.owner_line_user_id: the person an owner-line call was for; null on every customer call. No foreign
+--     key on purpose: the mark must outlive a deleted user, or the call would start counting as a customer's.
+--   The access log learns the owner_line_call entry (SC-13): agency_visits.actor_kind gains 'owner_line', reason gains
+--     'owner_line_call' (the two travel together), agency_visit_items.kind gains one kind per owner-line tool, and
+--     service_role may insert actor_kind. access_log_page reads actor_kind = 'agency' only, so the Team page's BIS
+--     access section is unchanged.
+-- FUNCTIONS. Six, all SECURITY INVOKER with set search_path = pg_catalog, pg_temp (0096's rule), EXECUTE to
+--   service_role only. Only service_role runs them and it already holds what they touch, so a definer would add
+--   privilege and nothing else (0104's reasoning). EXPECTED_DEFINERS does not change. Every policy-like NULL is
+--   coalesced to a refusal (the plpgsql NULL-guard lesson).
+-- GRANTS. The default ACL hands ALL on a new table to anon, authenticated and service_role by name: revoked from all
+--   three, then SELECT, INSERT, UPDATE, DELETE back to service_role (0104's shape). RLS on, no policy. No client
+--   grant moves, so EXPECTED_WRITES in schema-grants-guard.test.ts is unchanged.
+-- LOCKS. accounts, calls, agency_visits and agency_visit_items take ACCESS EXCLUSIVE (new columns, constraint swaps);
+--   memberships SHARE ROW EXCLUSIVE (the new FK). All five are taken up front, in one order, inside a do block with
+--   lock_timeout 5s; the second do block raises 0115_not_one_transaction unless the rest of the file runs in that
+--   same transaction (0088's self-check), so a path that commits between statements fails before any DDL.
+-- APPLY ORDER: after 0113 and 0114. CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
+--   apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of this; the
+--   build after it selects calls.owner_line_user_id in listCalls, so it goes BEFORE the deploy.
+--
+-- Rollback (by hand, in this order; revert the app first). It destroys every enrollment and every owner-line
+-- access-log entry:
+--   drop function public.note_owner_line_call(uuid, uuid, text, text, text[]);
+--   drop function public.owner_line_session_check(uuid, uuid, text, timestamptz, integer);
+--   drop function public.owner_line_attempt_pin(uuid, text, integer);
+--   drop function public.owner_line_attempt_verify(uuid, text, text);
+--   drop function public.owner_line_start_verification(uuid, uuid, text, text, integer);
+--   drop function public.owner_line_answer_lookup(uuid, text, timestamptz, integer);
+--   re-run 0112's access_log_page (its section 6) as create or replace;
+--   by OWNER DECISION ONLY (it deletes access-log rows): delete from public.agency_visits where actor_kind = 'owner_line';
+--   restore 0112's agency_visit_items_kind_check, 0105's agency_visits_actor_kind_check and agency_visits_reason_check;
+--   alter table public.agency_visits drop constraint agency_visits_owner_line_check;
+--   revoke insert (actor_kind) on public.agency_visits from service_role;
+--   drop index public.calls_owner_line_idx; alter table public.calls drop column owner_line_user_id;
+--   alter table public.accounts drop column owner_line_enabled_at;
+--   drop table public.owner_line_enrollments;
+--
+-- ASCII only, no backslash anywhere, and every dollar sign in this file is part of a dollar-quote pair.
+
+-- 0. One transaction, holding the locks, or nothing at all (0088 section 0).
+do $$
+begin
+  perform pg_catalog.set_config('lock_timeout', '5s', true);
+  perform pg_catalog.set_config('bis.m0115_xid', pg_catalog.txid_current()::text, true);
+  lock table public.accounts, public.calls, public.agency_visits, public.agency_visit_items in access exclusive mode;
+  lock table public.memberships in share row exclusive mode;
+end $$;
+do $$
+begin
+  if pg_catalog.current_setting('bis.m0115_xid', true) is distinct from pg_catalog.txid_current()::text
+     or pg_catalog.current_setting('lock_timeout') <> '5s'
+     or (select count(*) from pg_catalog.pg_locks l
+          where l.pid = pg_catalog.pg_backend_pid() and l.granted and l.locktype = 'relation'
+            and ((l.relation in ('public.accounts'::regclass, 'public.calls'::regclass,
+                                 'public.agency_visits'::regclass, 'public.agency_visit_items'::regclass)
+                  and l.mode = 'AccessExclusiveLock')
+              or (l.relation = 'public.memberships'::regclass and l.mode = 'ShareRowExclusiveLock'))) <> 5 then
+    raise exception '0115_not_one_transaction' using errcode = 'P0001';
+  end if;
+end $$;
+
+-- 1. The enrollments.
+create table public.owner_line_enrollments (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid not null,
+  user_id uuid not null,
+  e164 text not null constraint owner_line_enrollments_e164_check
+    check (substr(e164, 1, 1) = '+' and substr(e164, 2, 1) <> '0' and substr(e164, 2) !~ '[^0-9]'
+           and char_length(e164) between 9 and 16),
+  verified_at timestamptz,
+  verify_code_hash text constraint owner_line_enrollments_code_hash_check
+    check (verify_code_hash is null or (char_length(verify_code_hash) = 64 and verify_code_hash !~ '[^0-9a-f]')),
+  verify_expires_at timestamptz,
+  verify_attempts integer not null default 0 constraint owner_line_enrollments_verify_attempts_check
+    check (verify_attempts between 0 and 3),
+  pin_hash text constraint owner_line_enrollments_pin_hash_check
+    check (pin_hash is null or (char_length(pin_hash) = 80 and substr(pin_hash, 1, 14) = 'scrypt:15:8:1:'
+           and substr(pin_hash, 15) !~ '[^A-Za-z0-9_:-]')),
+  pin_set_at timestamptz,
+  failed_attempts integer not null default 0 constraint owner_line_enrollments_failed_attempts_check
+    check (failed_attempts between 0 and 2),
+  locked_until timestamptz,
+  created_at timestamptz not null default now(),
+  constraint owner_line_enrollments_member_fkey foreign key (account_id, user_id)
+    references public.memberships (account_id, user_id) on delete cascade,
+  constraint owner_line_enrollments_one_per_member unique (account_id, user_id),
+  constraint owner_line_enrollments_one_cell unique (account_id, e164),
+  constraint owner_line_enrollments_pin_pair_check check ((pin_hash is null) = (pin_set_at is null)),
+  constraint owner_line_enrollments_code_pair_check check ((verify_code_hash is null) = (verify_expires_at is null)),
+  constraint owner_line_enrollments_pin_needs_cell_check check (pin_hash is null or verified_at is not null)
+);
+comment on table public.owner_line_enrollments is
+  'F-032 (0115): a person''s registered cell and PIN for calling in to hear the day. Server-written and server-read only.';
+
+alter table public.owner_line_enrollments enable row level security;
+revoke all on public.owner_line_enrollments from anon, authenticated, service_role;
+grant select, insert, update, delete on public.owner_line_enrollments to service_role;
+
+-- 2. The switch and the call mark.
+alter table public.accounts add column owner_line_enabled_at timestamptz;
+comment on column public.accounts.owner_line_enabled_at is
+  'F-032 (0115): when the Owner let the team call in to hear the day; null = off (the default).';
+alter table public.calls add column owner_line_user_id uuid;
+comment on column public.calls.owner_line_user_id is
+  'F-032 (0115): the person an owner-line call was for; null on every customer call. No FK: the mark outlives the user.';
+create index calls_owner_line_idx on public.calls (account_id, owner_line_user_id, started_at desc)
+  where owner_line_user_id is not null;
+
+-- 3. The access log learns owner_line_call (SC-13). Copy the kind list from the newest migration that set it (Step 1).
+alter table public.agency_visits drop constraint agency_visits_actor_kind_check;
+alter table public.agency_visits add constraint agency_visits_actor_kind_check check (actor_kind in ('agency', 'owner_line'));
+alter table public.agency_visits drop constraint agency_visits_reason_check;
+alter table public.agency_visits add constraint agency_visits_reason_check
+  check (reason in ('setup', 'support', 'fix', 'billing', 'owner_line_call'));
+alter table public.agency_visits add constraint agency_visits_owner_line_check
+  check ((actor_kind = 'owner_line') = (reason = 'owner_line_call'));
+alter table public.agency_visit_items drop constraint agency_visit_items_kind_check;
+alter table public.agency_visit_items add constraint agency_visit_items_kind_check check (kind in (
+  'contact', 'group', 'call', 'conversation', 'document_view', 'document_download', 'document_share',
+  'form_answers', 'customer_list_export', 'record_history_export',
+  'owner_line_calls_and_messages', 'owner_line_appointments', 'owner_line_needs_attention', 'owner_line_lookup_customer'));
+grant insert (actor_kind) on public.agency_visits to service_role;
+
+-- access_log_page: 0112's text with one change, actor_kind = 'agency' on the count and on the page.
+create or replace function public.access_log_page(
+  p_account_id uuid, p_before_started timestamptz, p_before_id uuid, p_limit integer)
+returns jsonb language plpgsql stable security invoker set search_path = pg_catalog, pg_temp as $$
+declare v_total bigint; v_visits jsonb;
+begin
+  if p_account_id is null or p_limit is null then
+    raise exception 'access_log_page: a required argument is null' using errcode = '22004';
+  end if;
+  if p_limit < 1 or p_limit > 50 then
+    raise exception 'access_log_page: p_limit must be 1 to 50' using errcode = '22023';
+  end if;
+  if (p_before_started is null) <> (p_before_id is null) then
+    raise exception 'access_log_page: a cursor needs both halves' using errcode = '22023';
+  end if;
+  select count(*) into v_total from public.agency_visits v where v.account_id = p_account_id and v.actor_kind = 'agency';
+  select coalesce(jsonb_agg(pg.visit order by pg.started_at desc, pg.id desc), '[]'::jsonb) into v_visits
+  from (
+    select v.id, v.started_at, jsonb_build_object(
+      'id', v.id, 'actor_name', v.actor_name, 'reason', v.reason, 'started_at', v.started_at,
+      'ended_at', (select max(i.first_opened_at) from public.agency_visit_items i where i.visit_id = v.id),
+      'counts', (select jsonb_build_object(
+          'contact', count(*) filter (where i.kind = 'contact'),
+          'group', count(*) filter (where i.kind = 'group'),
+          'call', count(*) filter (where i.kind = 'call'),
+          'conversation', count(*) filter (where i.kind = 'conversation'),
+          'file', count(distinct i.record_id) filter (where i.kind in ('document_view', 'document_download', 'document_share')),
+          'form_answers', count(*) filter (where i.kind = 'form_answers'),
+          'customer_list_export', count(*) filter (where i.kind = 'customer_list_export'),
+          'record_history_export', count(*) filter (where i.kind = 'record_history_export'))
+        from public.agency_visit_items i where i.visit_id = v.id),
+      'item_total', (select count(*) from public.agency_visit_items i where i.visit_id = v.id),
+      'items', (select coalesce(jsonb_agg(jsonb_build_object(
+            'kind', x.kind, 'record_id', x.record_id, 'item_count', x.item_count, 'first_opened_at', x.first_opened_at)
+            order by x.first_opened_at desc, x.id desc), '[]'::jsonb)
+        from (select i.id, i.kind, i.record_id, i.item_count, i.first_opened_at
+                from public.agency_visit_items i where i.visit_id = v.id
+               order by i.first_opened_at desc, i.id desc limit 100) x)
+    ) as visit
+    from public.agency_visits v
+    where v.account_id = p_account_id and v.actor_kind = 'agency'
+      and (p_before_started is null or (v.started_at, v.id) < (p_before_started, p_before_id))
+    order by v.started_at desc, v.id desc
+    limit p_limit + 1
+  ) pg;
+  return jsonb_build_object('total', v_total, 'visits', v_visits);
+end $$;
+revoke all on function public.access_log_page(uuid, timestamptz, uuid, integer) from public, anon, authenticated, service_role;
+grant execute on function public.access_log_page(uuid, timestamptz, uuid, integer) to authenticated;
+
+-- 4. What the answer route does for this caller on this business. One unique-index read for a stranger.
+create function public.owner_line_answer_lookup(
+  p_account_id uuid, p_caller_e164 text, p_day_start timestamptz, p_max integer)
+returns jsonb language plpgsql stable security invoker set search_path = pg_catalog, pg_temp as $$
+declare e public.owner_line_enrollments%rowtype; v_role text; v_name text; v_lang text; v_acct_lang text;
+        v_open boolean; v_on timestamptz; v_count bigint; v_base jsonb;
+begin
+  if p_account_id is null or p_caller_e164 is null or p_day_start is null or p_max is null then
+    raise exception 'owner_line_answer_lookup: a required argument is null' using errcode = '22004';
+  end if;
+  select * into e from public.owner_line_enrollments where account_id = p_account_id and e164 = p_caller_e164;
+  if not found then return jsonb_build_object('status', 'none'); end if;
+  select m.role into v_role from public.memberships m
+   where m.scope = 'account' and m.account_id = e.account_id and m.user_id = e.user_id;
+  if not coalesce(v_role in ('owner', 'staff', 'technician'), false) then return jsonb_build_object('status', 'none'); end if;
+  select coalesce(a.client_access_enabled, false) and a.status <> 'archived', a.owner_line_enabled_at, a.language
+    into v_open, v_on, v_acct_lang from public.accounts a where a.id = e.account_id;
+  if not coalesce(v_open, false) then return jsonb_build_object('status', 'none'); end if;
+  select u.name, u.language into v_name, v_lang from public.users u where u.id = e.user_id;
+  v_base := jsonb_build_object('enrollment_id', e.id, 'user_id', e.user_id, 'role', v_role, 'name', v_name,
+    'language', v_lang, 'account_language', v_acct_lang);
+  if e.verified_at is null then
+    if e.verify_code_hash is not null and e.verify_expires_at > now() and e.verify_attempts < 3 then
+      return v_base || jsonb_build_object('status', 'verify');
+    end if;
+    return jsonb_build_object('status', 'none');
+  end if;
+  if e.pin_hash is null then return jsonb_build_object('status', 'none'); end if;
+  if v_on is null then return jsonb_build_object('status', 'off'); end if;
+  if e.locked_until is not null and e.locked_until > now() then return jsonb_build_object('status', 'locked'); end if;
+  select count(*) into v_count from public.calls c
+   where c.account_id = e.account_id and c.owner_line_user_id = e.user_id and c.started_at >= p_day_start;
+  if v_count >= p_max then return v_base || jsonb_build_object('status', 'over_limit'); end if;
+  return v_base || jsonb_build_object('status', 'pin', 'pin_params', substr(e.pin_hash, 1, 36));
+end $$;
+
+-- 5. (Re)start a call-in code. A new cell clears the verification, the PIN, the counter and the lock.
+create function public.owner_line_start_verification(
+  p_account_id uuid, p_user_id uuid, p_e164 text, p_code_hash text, p_minutes integer)
+returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+begin
+  if p_account_id is null or p_user_id is null or p_e164 is null or p_code_hash is null or p_minutes is null then
+    raise exception 'owner_line_start_verification: a required argument is null' using errcode = '22004';
+  end if;
+  begin
+    insert into public.owner_line_enrollments as e (account_id, user_id, e164, verify_code_hash, verify_expires_at)
+    values (p_account_id, p_user_id, p_e164, p_code_hash, now() + make_interval(mins => p_minutes))
+    on conflict (account_id, user_id) do update
+       set e164 = excluded.e164,
+           verify_code_hash = excluded.verify_code_hash,
+           verify_expires_at = excluded.verify_expires_at,
+           verify_attempts = 0,
+           verified_at = case when e.e164 = excluded.e164 then e.verified_at end,
+           pin_hash = case when e.e164 = excluded.e164 then e.pin_hash end,
+           pin_set_at = case when e.e164 = excluded.e164 then e.pin_set_at end,
+           failed_attempts = case when e.e164 = excluded.e164 then e.failed_attempts else 0 end,
+           locked_until = case when e.e164 = excluded.e164 then e.locked_until end;
+  exception when unique_violation then
+    return 'taken';
+  end;
+  return 'ok';
+end $$;
+
+-- 6. One call-in code attempt, under the row lock.
+create function public.owner_line_attempt_verify(p_account_id uuid, p_caller_e164 text, p_code_hash text)
+returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare e public.owner_line_enrollments%rowtype;
+begin
+  if p_account_id is null or p_caller_e164 is null or p_code_hash is null then
+    raise exception 'owner_line_attempt_verify: a required argument is null' using errcode = '22004';
+  end if;
+  select * into e from public.owner_line_enrollments
+   where account_id = p_account_id and e164 = p_caller_e164 for update;
+  if not found or e.verified_at is not null or e.verify_code_hash is null then return 'none'; end if;
+  if e.verify_expires_at <= now() or e.verify_attempts >= 3 then
+    update public.owner_line_enrollments set verify_code_hash = null, verify_expires_at = null where id = e.id;
+    return 'spent';
+  end if;
+  if e.verify_code_hash = p_code_hash then
+    update public.owner_line_enrollments
+       set verified_at = now(), verify_code_hash = null, verify_expires_at = null, verify_attempts = 0
+     where id = e.id;
+    return 'verified';
+  end if;
+  if e.verify_attempts + 1 >= 3 then
+    update public.owner_line_enrollments
+       set verify_attempts = 3, verify_code_hash = null, verify_expires_at = null where id = e.id;
+    return 'spent';
+  end if;
+  update public.owner_line_enrollments set verify_attempts = e.verify_attempts + 1 where id = e.id;
+  return 'wrong';
+end $$;
+
+-- 7. One PIN attempt, under the row lock. Owns the counter (per enrollment, so a redial never resets it) and the lock.
+create function public.owner_line_attempt_pin(p_enrollment_id uuid, p_candidate text, p_lock_minutes integer)
+returns jsonb language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare e public.owner_line_enrollments%rowtype; v_until timestamptz;
+begin
+  if p_enrollment_id is null or p_candidate is null or p_lock_minutes is null then
+    raise exception 'owner_line_attempt_pin: a required argument is null' using errcode = '22004';
+  end if;
+  select * into e from public.owner_line_enrollments where id = p_enrollment_id for update;
+  if not found or e.verified_at is null or e.pin_hash is null then return jsonb_build_object('status', 'none'); end if;
+  if e.locked_until is not null and e.locked_until > now() then
+    return jsonb_build_object('status', 'locked', 'locked_until', e.locked_until);
+  end if;
+  if e.pin_hash = p_candidate then
+    update public.owner_line_enrollments set failed_attempts = 0, locked_until = null where id = e.id;
+    return jsonb_build_object('status', 'ok');
+  end if;
+  if e.failed_attempts + 1 >= 3 then
+    update public.owner_line_enrollments
+       set failed_attempts = 0, locked_until = now() + make_interval(mins => p_lock_minutes)
+     where id = e.id returning locked_until into v_until;
+    return jsonb_build_object('status', 'locked_now', 'locked_until', v_until);
+  end if;
+  update public.owner_line_enrollments set failed_attempts = e.failed_attempts + 1 where id = e.id;
+  return jsonb_build_object('status', 'wrong', 'failed_attempts', e.failed_attempts + 1);
+end $$;
+
+-- 8. The live re-read: the SIP webhook (with p_max) and every owner tool call (p_max null).
+create function public.owner_line_session_check(
+  p_account_id uuid, p_user_id uuid, p_role text, p_day_start timestamptz, p_max integer)
+returns jsonb language plpgsql stable security invoker set search_path = pg_catalog, pg_temp as $$
+declare e public.owner_line_enrollments%rowtype; v_role text; v_open boolean; v_on timestamptz; v_org text;
+        v_zone text; v_acct_lang text; v_name text; v_lang text; v_clerk text; v_count bigint;
+begin
+  if p_account_id is null or p_user_id is null or p_role is null or p_day_start is null then
+    raise exception 'owner_line_session_check: a required argument is null' using errcode = '22004';
+  end if;
+  select m.role into v_role from public.memberships m
+   where m.scope = 'account' and m.account_id = p_account_id and m.user_id = p_user_id;
+  if v_role is null then return jsonb_build_object('ok', false, 'reason', 'not_a_member'); end if;
+  if v_role is distinct from p_role then return jsonb_build_object('ok', false, 'reason', 'role_changed'); end if;
+  select coalesce(a.client_access_enabled, false) and a.status <> 'archived', a.owner_line_enabled_at, a.clerk_org_id,
+         a.timezone, a.language
+    into v_open, v_on, v_org, v_zone, v_acct_lang from public.accounts a where a.id = p_account_id;
+  if not coalesce(v_open, false) then return jsonb_build_object('ok', false, 'reason', 'no_client_access'); end if;
+  if v_on is null then return jsonb_build_object('ok', false, 'reason', 'switch_off'); end if;
+  select * into e from public.owner_line_enrollments where account_id = p_account_id and user_id = p_user_id;
+  if not found or e.verified_at is null or e.pin_hash is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_enrolled');
+  end if;
+  if e.locked_until is not null and e.locked_until > now() then return jsonb_build_object('ok', false, 'reason', 'locked'); end if;
+  if p_max is not null then
+    select count(*) into v_count from public.calls c
+     where c.account_id = p_account_id and c.owner_line_user_id = p_user_id and c.started_at >= p_day_start;
+    if v_count >= p_max then return jsonb_build_object('ok', false, 'reason', 'over_limit'); end if;
+  end if;
+  select u.name, u.language, u.clerk_user_id into v_name, v_lang, v_clerk from public.users u where u.id = p_user_id;
+  return jsonb_build_object('ok', true, 'name', v_name, 'language', v_lang, 'clerk_user_id', v_clerk,
+    'clerk_org_id', v_org, 'timezone', v_zone, 'account_language', v_acct_lang);
+end $$;
+
+-- 9. The access-log entry for one owner-line call: one visit, one item per tool that ran (duplicates folded).
+create function public.note_owner_line_call(
+  p_account_id uuid, p_call_id uuid, p_actor text, p_actor_name text, p_kinds text[])
+returns uuid language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare v_visit uuid;
+begin
+  if p_account_id is null or p_call_id is null or p_actor is null or p_kinds is null then
+    raise exception 'note_owner_line_call: a required argument is null' using errcode = '22004';
+  end if;
+  if exists (select 1 from unnest(p_kinds) k where k is null or left(k, 11) <> 'owner_line_') then
+    raise exception 'note_owner_line_call: only owner_line_ kinds' using errcode = '22023';
+  end if;
+  insert into public.agency_visits (account_id, actor_kind, actor_clerk_user_id, actor_name, clerk_session_id, reason)
+  values (p_account_id, 'owner_line', p_actor, nullif(pg_catalog.btrim(p_actor_name), ''), 'call:' || p_call_id::text,
+          'owner_line_call')
+  returning id into v_visit;
+  insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count)
+  select v_visit, p_account_id, k, p_call_id, null from (select distinct unnest(p_kinds) as k) x;
+  return v_visit;
+end $$;
+
+-- 10. Function privileges: everything revoked by name (0043's lesson), then EXECUTE to service_role.
+revoke all on function public.owner_line_answer_lookup(uuid, text, timestamptz, integer) from public, anon, authenticated, service_role;
+revoke all on function public.owner_line_start_verification(uuid, uuid, text, text, integer) from public, anon, authenticated, service_role;
+revoke all on function public.owner_line_attempt_verify(uuid, text, text) from public, anon, authenticated, service_role;
+revoke all on function public.owner_line_attempt_pin(uuid, text, integer) from public, anon, authenticated, service_role;
+revoke all on function public.owner_line_session_check(uuid, uuid, text, timestamptz, integer) from public, anon, authenticated, service_role;
+revoke all on function public.note_owner_line_call(uuid, uuid, text, text, text[]) from public, anon, authenticated, service_role;
+grant execute on function public.owner_line_answer_lookup(uuid, text, timestamptz, integer) to service_role;
+grant execute on function public.owner_line_start_verification(uuid, uuid, text, text, integer) to service_role;
+grant execute on function public.owner_line_attempt_verify(uuid, text, text) to service_role;
+grant execute on function public.owner_line_attempt_pin(uuid, text, integer) to service_role;
+grant execute on function public.owner_line_session_check(uuid, uuid, text, timestamptz, integer) to service_role;
+grant execute on function public.note_owner_line_call(uuid, uuid, text, text, text[]) to service_role;
+```
+
+- [ ] **Step 5: Check the file's text against the repo rules.** Use a node byte check, never `grep -P` in Git Bash (the replica memory's gotcha):
+
+  ```bash
+  node -e "const b=require('fs').readFileSync('packages/db/supabase/migrations/0115_owner_line.sql');let bad=0;for(const x of b){if(x>127||x===92)bad++}const t=b.toString();const d=(t.match(/[$]/g)||[]).length;const q=(t.match(/[$][$]/g)||[]).length*2;console.log('non-ascii-or-backslash',bad,'stray-dollars',d-q)"
+  ```
+
+  Expected: `non-ascii-or-backslash 0 stray-dollars 0`. As a positive control, run the same command on a temporary copy with an `é` added, and expect `1`.
+
+- [ ] **Step 6: Apply to the replica's `post` database and run the test green.**
+
+  ```bash
+  psql -h localhost -p 55433 -U postgres -d post -1 -f packages/db/supabase/migrations/0115_owner_line.sql
+  cd packages/db && SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/owner-line-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/access-log-schema.test.ts
+  ```
+
+  Expected: every case passes. `definer-search-path`, `schema-grants-guard` and `access-log-schema` stay green unchanged. That is SC-3's "EXPECTED_DEFINERS unchanged" and "no client grant moves", measured. Paste the summary line.
+
+- [ ] **Step 7: Mutation probes (HIGH).** Apply each mutation straight to `post` (`create or replace`, or `alter`), run the named case, see it FAIL BY NAME, then reset `post` (`dropdb post; createdb -T pre post`, then re-apply):
+  1. `grant select (pin_hash) on public.owner_line_enrollments to authenticated` → "no column privilege … pin_hash is never readable" FAILS.
+  2. In `owner_line_attempt_pin`, change `e.failed_attempts + 1 >= 3` to `>= 4` → "the third wrong PIN locks" FAILS.
+  3. In `owner_line_session_check`, delete the `role_changed` line → "refuses a removed person and a changed role" FAILS.
+  4. `alter function public.owner_line_attempt_pin(uuid, text, integer) security definer` → "all six run as their CALLER" FAILS.
+  5. In `access_log_page`, drop `and v.actor_kind = 'agency'` from the count → "note_owner_line_call writes one owner_line visit" FAILS.
+
+  Paste each FAIL line.
+
+- [ ] **Step 8: Commit.**
+
+  ```bash
+  git add packages/db/supabase/migrations/0115_owner_line.sql packages/db/src/test/owner-line-schema.test.ts
+  git commit -m "feat(db): 0115 owner line: enrollments with a call-in code and an scrypt PIN, the business switch, the owner-line call mark, and its access-log entry"
+  ```
+
+  Do not apply the migration anywhere else (O-2).
+
+---
+
+## Task 2: DB wrappers, counting exclusions, `startCallRow` and `listCalls` (HIGH, 0.75 day)
+
+**Files:**
+- Create: `packages/db/src/owner-line.ts`, `packages/db/src/test/owner-line-counting.test.ts`
+- Modify: `packages/db/src/voice.ts`:
+  - `:347-373` `startCallRow`;
+  - `:957-966` `countCallsSince`;
+  - `:976-986` `countAnsweredCallsSince`;
+  - `:1010-1019` `countCallsByCallerSince`;
+  - `:1134-1158` `listCallStartsByOutcomeBetween`;
+  - `:1209-1259` `CallListRow`, `CALL_LIST_COLS` and `listCalls`.
+- Modify: `packages/db/src/index.ts` (add an `export * from "./owner-line"` line beside its neighbours, touching no other line).
+- Modify: `packages/db/src/account-teardown.ts:28-35` (add `"owner_line_enrollments"` beside `"calendar_feeds"`).
+- Modify: `ACCT/dashboard/page.tsx:171`.
+
+**Interfaces:**
+- Consumes: the Task 1 SQL.
+- Produces (exact names; every later task uses these):
+
+```ts
+// packages/db/src/owner-line.ts
+export const OWNER_LINE_MAX_CALLS_PER_DAY = 10;
+export const OWNER_LINE_LOCK_MINUTES = 30;
+export const OWNER_LINE_VERIFY_MINUTES = 10;
+export const OWNER_LINE_LOG_KINDS = ["owner_line_calls_and_messages", "owner_line_appointments",
+  "owner_line_needs_attention", "owner_line_lookup_customer"] as const;
+export type OwnerLineLogKind = (typeof OWNER_LINE_LOG_KINDS)[number];
+export type OwnerLineEnrollment = { id: string; e164: string; verifiedAt: string | null; verifyExpiresAt: string | null;
+  pinSetAt: string | null; lockedUntil: string | null };
+export type OwnerLineLookup =
+  | { status: "none" | "off" | "locked" }
+  | { status: "verify" | "pin" | "over_limit"; enrollmentId: string; userId: string; role: AccountRole;
+      name: string | null; language: "en" | "es" | null; accountLanguage: "en" | "es" | null; pinParams: string | null };
+export type OwnerLineSessionFacts = { name: string | null; language: "en" | "es" | null; clerkUserId: string;
+  clerkOrgId: string; timezone: string; accountLanguage: "en" | "es" | null };
+export async function readMyOwnerLineEnrollment(db, accountId, userId): Promise<OwnerLineEnrollment | null>;
+export async function startOwnerLineVerification(db, accountId, userId, e164, codeHash): Promise<"ok" | "taken">;
+export async function attemptOwnerLineVerify(db, accountId, callerE164, codeHash): Promise<"verified" | "wrong" | "spent" | "none">;
+export async function setOwnerLinePin(db, accountId, userId, pinHash): Promise<boolean>;
+export async function removeOwnerLinePin(db, accountId, userId): Promise<void>;
+export async function removeOwnerLineEnrollment(db, accountId, userId): Promise<void>;
+export async function ownerLineAnswerLookup(db, accountId, callerE164, dayStartIso, max): Promise<OwnerLineLookup>;
+export async function attemptOwnerLinePin(db, enrollmentId, candidate): Promise<{ status: "ok" | "wrong" | "locked_now" | "locked" | "none"; lockedUntil: string | null }>;
+export async function ownerLineSessionCheck(db, p: { accountId: string; userId: string; role: AccountRole;
+  dayStartIso: string; maxCalls: number | null }): Promise<({ ok: true } & OwnerLineSessionFacts) | { ok: false; reason: string }>;
+export async function noteOwnerLineCall(db, p: { accountId: string; callId: string; actorClerkUserId: string;
+  actorName: string | null; kinds: readonly OwnerLineLogKind[] }): Promise<void>;
+export async function readOwnerLineCallLog(db, accountId, callId): Promise<OwnerLineLogKind[]>;
+export async function readOwnerLineSwitch(db, accountId): Promise<string | null>;
+export async function setOwnerLineSwitch(db, accountId, on: boolean): Promise<string | null>;
+```
+
+`voice.ts` gains the following. `startCallRow`'s input gains `ownerLineUserId?: string`. `CallListRow` gains `owner_line_user_id: string | null`. `listCalls`' opts gain `excludeOwnerLine?: boolean`. These four functions each gain `.is("owner_line_user_id", null)`:
+- `countCallsSince`
+- `countAnsweredCallsSince`
+- `countCallsByCallerSince`
+- `listCallStartsByOutcomeBetween`
+
+**Every reader of `calls` that counts, and what it does about owner-line rows.** This is the whole inventory: `grep -rn 'from("calls")'` over `packages/db/src` and `apps/web/src`, plus every caller of each helper.
+
+| Reader (file:line) | Feeds | Change |
+|---|---|---|
+| `DB/voice.ts:957` `countCallsSince` | caps (`texml/route.ts:338`, `incoming/route.ts:1041`), Calls page meter (`ACCT/calls/page.tsx:72`) | **exclude** (SC-9) |
+| `DB/voice.ts:1010` `countCallsByCallerSince` | per-number cap (`texml/route.ts:339`, `incoming/route.ts:1042`) | **exclude** (SC-9) |
+| `DB/voice.ts:976` `countAnsweredCallsSince` | setup wizard "Test call" step (`WEB/lib/setup/setup-inputs.ts:118`) | **exclude** |
+| `DB/voice.ts:1134` `listCallStartsByOutcomeBetween` | `WEB/lib/reports/weekly-metrics.ts:86,111,134,149`. Through it: the dashboard tiles and conversion (`ACCT/dashboard/page.tsx:158,168,204,205`), the weekly report and the agency roll-up (`weekly-metrics.ts:169-170`), and the AI-presence count (`WEB/lib/voice/presence.ts:57`) | **exclude** (the one choke point) |
+| `DB/voice.ts:1248` `listCalls` | Calls list (a record: rows stay, labelled in Task 13), dashboard "recent calls" (`ACCT/dashboard/page.tsx:171`) | **dashboard passes `excludeOwnerLine: true`** |
+| `DB/voice.ts:389` `getDisclosureResults` | S-47a results card | none: it counts only calls stamped `trial`, and owner-line rows are never stamped; pinned below |
+| `DB/voice.ts:999` `hasActiveCallSince` | the topbar pulse "on a call" | none: Sofía IS on a call; the spec excludes only the *count* |
+| `DB/voice.ts:1058` `countCallerHistorySince` | Guard 2 and the press-1 screen | none: an owner-line row reads as `otherCalls`, which only ever unblocks |
+| `DB/automation-log.ts:236` `callsHandled` | the Activity usage card | none: the owner-line finish writes no `automation_log` row (pinned in Task 12) |
+| `WEB/lib/voice/finish-call.ts:990` `voice_minutes` | billing | the owner-line finish records `voice_minutes` too: "its minutes appear in usage" (Q-B) |
+| `DB/work-queue.ts:128`, `ACCT/tasks/page.tsx:149`, `WEB/lib/proposals/view-reads.ts:92`, `WEB/lib/access-log/names.ts:58` | reads by call id from tasks, conversations and proposals | none: an owner-line call has no task, conversation or proposal |
+| `DB/voice.ts:1282` `listContactCalls` | record timeline | none: `contact_id` is null on an owner-line row, so there is no timeline row (§6) |
+
+- [ ] **Step 1: Write the failing counting test** (CI only, because it uses `withTestAccount`; it is read from `packages/db/src/test/fixtures.ts:140`).
+
+```ts
+// packages/db/src/test/owner-line-counting.test.ts
+import { describe, it, expect } from "vitest";
+import { randomUUID } from "node:crypto";
+import {
+  assignPhoneNumber, startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince, countAnsweredCallsSince,
+  listCallStartsByOutcomeBetween, listCalls, getDisclosureResults,
+} from "../index";
+import { withTestAccount, testPhoneNumber } from "./fixtures";
+
+/**
+ * F-032 §6 / SC-9: an owner-line call moves none of the counted numbers. CI verify only (withTestAccount writes
+ * through serviceDb); never run against bis-ci before 0115 is there.
+ */
+const FROM = "2000-01-01T00:00:00.000Z";
+const TO = "2999-01-01T00:00:00.000Z";
+const CELL = "+19565550142";
+
+async function twoCalls(db: Parameters<Parameters<typeof withTestAccount>[0]>[0], accountId: string) {
+  const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+  const customer = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550177" });
+  const owner = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: CELL, ownerLineUserId: randomUUID() });
+  const done = { endedAt: new Date(), durationSecs: 60, turnCount: 2, transcript: [], summary: "", language: "en" as const };
+  await finishCallRow(db, accountId, customer.id, { ...done, outcome: "lead" });
+  await finishCallRow(db, accountId, owner.id, { ...done, outcome: "abandoned" });
+  return { customer: customer.id, owner: owner.id };
+}
+
+describe("owner-line calls are not customer calls (F-032 §6, SC-9)", () => {
+  it("the caps count only the customer call (mutation: drop .is('owner_line_user_id', null) from countCallsSince -> 2, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await twoCalls(db, accountId);
+      expect(await countCallsSince(db, accountId, FROM)).toBe(1);
+      expect(await countCallsByCallerSince(db, accountId, CELL, FROM)).toBe(0);
+    }));
+
+  it("answered and abandoned starts ignore it: dashboard, weekly report, presence (mutation: drop it from listCallStartsByOutcomeBetween -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await twoCalls(db, accountId);
+      expect(await listCallStartsByOutcomeBetween(db, accountId, ["booked", "lead", "message", "transferred"], FROM, TO)).toHaveLength(1);
+      expect(await listCallStartsByOutcomeBetween(db, accountId, ["abandoned"], FROM, TO)).toEqual([]);
+      expect(await countAnsweredCallsSince(db, accountId, FROM)).toBe(1);
+    }));
+
+  it("the Calls list keeps it, marked; the dashboard's recent calls drop it (mutation: ignore excludeOwnerLine -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { owner } = await twoCalls(db, accountId);
+      const all = await listCalls(db, accountId, { limit: 10 });
+      expect(all.map((r) => r.id)).toContain(owner);
+      expect(all.find((r) => r.id === owner)?.owner_line_user_id).toEqual(expect.any(String));
+      expect((await listCalls(db, accountId, { limit: 10, excludeOwnerLine: true })).map((r) => r.id)).not.toContain(owner);
+    }));
+
+  it("the disclosure results never count it: it carries no trial stamp (control for the 'none' row of the inventory)", () =>
+    withTestAccount(async (db, accountId) => {
+      await twoCalls(db, accountId);
+      const r = await getDisclosureResults(db, accountId);
+      expect(r.said.counted + r.didnt.counted).toBe(0);
+    }));
+});
+```
+
+- [ ] **Step 2: Confirm the red without touching bis-ci.** The red here is the type error: `ownerLineUserId` is not on `startCallRow`'s input, and `excludeOwnerLine` is not on `listCalls`' opts.
+
+  ```bash
+  pnpm --filter @bis/db exec tsc --noEmit -p . 2>&1 | grep owner-line-counting
+  ```
+
+  Expected: `error TS2353: Object literal may only specify known properties, and 'ownerLineUserId' does not exist`. Paste it. The runtime red and green come from CI `verify` after 0115 is on bis-ci (Global Constraints).
+
+- [ ] **Step 3: Implement the `voice.ts` changes.** Exact edits:
+
+```ts
+// startCallRow input type (voice.ts:349-355): add
+    ownerLineUserId?: string;
+// in its insert object, after businessStatus:
+      ...(input.ownerLineUserId === undefined ? {} : { owner_line_user_id: input.ownerLineUserId }),
+
+// countCallsSince (voice.ts:960-962):
+  const { count, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).gte("started_at", sinceIso).is("owner_line_user_id", null);
+
+// countAnsweredCallsSince (voice.ts:979-982): append  .is("owner_line_user_id", null)  after .in("outcome", …)
+// countCallsByCallerSince (voice.ts:1013-1015): append  .is("owner_line_user_id", null)  after .gte("started_at", sinceIso)
+
+// listCallStartsByOutcomeBetween (voice.ts:1144-1148):
+    let query = db.from("calls")
+      .select("id, started_at")
+      .eq("account_id", accountId).in("outcome", outcomes as string[])
+      .gte("started_at", fromIso).lt("started_at", toIso)
+      .is("owner_line_user_id", null)
+      .order("id", { ascending: true });
+
+// CallListRow (voice.ts:1209-1228): add the field
+  /** F-032 (0115): the person an owner-line call was for; null on every customer call. */
+  owner_line_user_id: string | null;
+// CALL_LIST_COLS (voice.ts:1239-1241): LOAD-BEARING like 0094's columns, so 0115 must be on a project before this build reads it.
+const CALL_LIST_COLS =
+  "id, started_at, ended_at, duration_secs, outcome, language, caller_e164, contact_id, " +
+  "conversation_id, owner_line_user_id, contact:contacts(first_name, last_name)";
+// listCalls (voice.ts:1248-1259):
+export async function listCalls(
+  db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string; excludeOwnerLine?: boolean } = {},
+): Promise<CallListRow[]> {
+  let q = db.from("calls").select(CALL_LIST_COLS)
+    .eq("account_id", accountId)
+    .order("started_at", { ascending: false })
+    .limit(opts.limit ?? 50);
+  if (opts.before) q = q.lt("started_at", opts.before);
+  if (opts.excludeOwnerLine) q = q.is("owner_line_user_id", null);
+  const { data, error } = await q;
+  if (error) throw new Error(`listCalls failed: ${error.message}`);
+  return (data ?? []) as unknown as CallListRow[];
+}
+```
+
+Then edit the two comments that now lie:
+- `voice.ts:1130-1132` says these helpers "must count every call that cost money". Replace it with: "must count every customer call that cost money; an owner-line call (0115) is bounded by its own per-person limit (owner_line_answer_lookup, owner_line_session_check), never by these."
+- `WEB/lib/voice/presence.ts:47-48` gets the same wording.
+
+`ACCT/dashboard/page.tsx:171` becomes `listCalls(db, accountId, { limit: 3, excludeOwnerLine: true }),`.
+
+- [ ] **Step 4: Write `packages/db/src/owner-line.ts`.**
+
+```ts
+// packages/db/src/owner-line.ts
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AccountRole } from "./team";
+
+/**
+ * F-032 (0115): the owner line's database seam. Every function takes serviceDb() EXCEPT readOwnerLineCallLog, which
+ * takes the READER's request client (the access log's RLS: the agency, or this account's Owner). The table has no
+ * client grant at all (SC-4): a person's own row is reached only through a server action keyed on Clerk's userId.
+ * Every wrapper THROWS on an error and on an answer it did not expect, naming itself. pin_hash and the code hash are
+ * written here and never read back out, except the PIN's salt prefix (pin_params) the answer lookup returns.
+ */
+export const OWNER_LINE_MAX_CALLS_PER_DAY = 10;
+export const OWNER_LINE_LOCK_MINUTES = 30;
+export const OWNER_LINE_VERIFY_MINUTES = 10;
+export const OWNER_LINE_LOG_KINDS = ["owner_line_calls_and_messages", "owner_line_appointments",
+  "owner_line_needs_attention", "owner_line_lookup_customer"] as const;
+export type OwnerLineLogKind = (typeof OWNER_LINE_LOG_KINDS)[number];
+
+export type OwnerLineEnrollment = {
+  id: string; e164: string; verifiedAt: string | null; verifyExpiresAt: string | null;
+  pinSetAt: string | null; lockedUntil: string | null;
+};
+export type OwnerLineLookup =
+  | { status: "none" | "off" | "locked" }
+  | { status: "verify" | "pin" | "over_limit"; enrollmentId: string; userId: string; role: AccountRole;
+      name: string | null; language: "en" | "es" | null; accountLanguage: "en" | "es" | null; pinParams: string | null };
+export type OwnerLineSessionFacts = {
+  name: string | null; language: "en" | "es" | null; clerkUserId: string; clerkOrgId: string;
+  timezone: string; accountLanguage: "en" | "es" | null;
+};
+
+const ROLES: readonly string[] = ["owner", "staff", "technician"];
+const lang = (v: unknown): "en" | "es" | null => (v === "en" || v === "es" ? v : null);
+
+export async function readMyOwnerLineEnrollment(
+  db: SupabaseClient, accountId: string, userId: string,
+): Promise<OwnerLineEnrollment | null> {
+  const { data, error } = await db.from("owner_line_enrollments")
+    .select("id, e164, verified_at, verify_expires_at, pin_set_at, locked_until")
+    .eq("account_id", accountId).eq("user_id", userId).maybeSingle();
+  if (error) throw new Error(`readMyOwnerLineEnrollment failed: ${error.message}`);
+  if (!data) return null;
+  const r = data as { id: string; e164: string; verified_at: string | null; verify_expires_at: string | null;
+    pin_set_at: string | null; locked_until: string | null };
+  return { id: r.id, e164: r.e164, verifiedAt: r.verified_at, verifyExpiresAt: r.verify_expires_at,
+    pinSetAt: r.pin_set_at, lockedUntil: r.locked_until };
+}
+
+export async function startOwnerLineVerification(
+  db: SupabaseClient, accountId: string, userId: string, e164: string, codeHash: string,
+): Promise<"ok" | "taken"> {
+  const { data, error } = await db.rpc("owner_line_start_verification", {
+    p_account_id: accountId, p_user_id: userId, p_e164: e164, p_code_hash: codeHash, p_minutes: OWNER_LINE_VERIFY_MINUTES,
+  });
+  if (error) throw new Error(`startOwnerLineVerification failed: ${error.message}`);
+  if (data === "ok" || data === "taken") return data;
+  throw new Error(`startOwnerLineVerification: unexpected answer ${JSON.stringify(data)}`);
+}
+
+export async function attemptOwnerLineVerify(
+  db: SupabaseClient, accountId: string, callerE164: string, codeHash: string,
+): Promise<"verified" | "wrong" | "spent" | "none"> {
+  const { data, error } = await db.rpc("owner_line_attempt_verify", {
+    p_account_id: accountId, p_caller_e164: callerE164, p_code_hash: codeHash,
+  });
+  if (error) throw new Error(`attemptOwnerLineVerify failed: ${error.message}`);
+  if (data === "verified" || data === "wrong" || data === "spent" || data === "none") return data;
+  throw new Error(`attemptOwnerLineVerify: unexpected answer ${JSON.stringify(data)}`);
+}
+
+/** False when the cell is not verified (the row's pin_needs_cell CHECK would refuse; this asks first). */
+export async function setOwnerLinePin(
+  db: SupabaseClient, accountId: string, userId: string, pinHash: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("owner_line_enrollments")
+    .update({ pin_hash: pinHash, pin_set_at: new Date().toISOString(), failed_attempts: 0, locked_until: null })
+    .eq("account_id", accountId).eq("user_id", userId).not("verified_at", "is", null).select("id");
+  if (error) throw new Error(`setOwnerLinePin failed: ${error.message}`);
+  return (data ?? []).length === 1;
+}
+
+export async function removeOwnerLinePin(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
+  const { error } = await db.from("owner_line_enrollments")
+    .update({ pin_hash: null, pin_set_at: null, failed_attempts: 0, locked_until: null })
+    .eq("account_id", accountId).eq("user_id", userId);
+  if (error) throw new Error(`removeOwnerLinePin failed: ${error.message}`);
+}
+
+export async function removeOwnerLineEnrollment(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
+  const { error } = await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
+  if (error) throw new Error(`removeOwnerLineEnrollment failed: ${error.message}`);
+}
+
+export async function ownerLineAnswerLookup(
+  db: SupabaseClient, accountId: string, callerE164: string, dayStartIso: string, max: number,
+): Promise<OwnerLineLookup> {
+  const { data, error } = await db.rpc("owner_line_answer_lookup", {
+    p_account_id: accountId, p_caller_e164: callerE164, p_day_start: dayStartIso, p_max: max,
+  });
+  if (error) throw new Error(`ownerLineAnswerLookup failed: ${error.message}`);
+  const r = data as Record<string, unknown> | null;
+  const status = r?.status;
+  if (status === "none" || status === "off" || status === "locked") return { status };
+  if ((status === "verify" || status === "pin" || status === "over_limit")
+      && typeof r?.enrollment_id === "string" && typeof r?.user_id === "string" && ROLES.includes(String(r?.role))) {
+    return {
+      status, enrollmentId: r.enrollment_id, userId: r.user_id, role: r.role as AccountRole,
+      name: typeof r.name === "string" ? r.name : null, language: lang(r.language), accountLanguage: lang(r.account_language),
+      pinParams: typeof r.pin_params === "string" ? r.pin_params : null,
+    };
+  }
+  throw new Error(`ownerLineAnswerLookup: unexpected answer ${JSON.stringify(data)}`);
+}
+
+export async function attemptOwnerLinePin(
+  db: SupabaseClient, enrollmentId: string, candidate: string,
+): Promise<{ status: "ok" | "wrong" | "locked_now" | "locked" | "none"; lockedUntil: string | null }> {
+  const { data, error } = await db.rpc("owner_line_attempt_pin", {
+    p_enrollment_id: enrollmentId, p_candidate: candidate, p_lock_minutes: OWNER_LINE_LOCK_MINUTES,
+  });
+  if (error) throw new Error(`attemptOwnerLinePin failed: ${error.message}`);
+  const r = data as { status?: unknown; locked_until?: unknown } | null;
+  const s = r?.status;
+  if (s === "ok" || s === "wrong" || s === "locked_now" || s === "locked" || s === "none") {
+    return { status: s, lockedUntil: typeof r?.locked_until === "string" ? r.locked_until : null };
+  }
+  throw new Error(`attemptOwnerLinePin: unexpected answer ${JSON.stringify(data)}`);
+}
+
+export async function ownerLineSessionCheck(
+  db: SupabaseClient,
+  p: { accountId: string; userId: string; role: AccountRole; dayStartIso: string; maxCalls: number | null },
+): Promise<({ ok: true } & OwnerLineSessionFacts) | { ok: false; reason: string }> {
+  const { data, error } = await db.rpc("owner_line_session_check", {
+    p_account_id: p.accountId, p_user_id: p.userId, p_role: p.role, p_day_start: p.dayStartIso, p_max: p.maxCalls,
+  });
+  if (error) throw new Error(`ownerLineSessionCheck failed: ${error.message}`);
+  const r = data as Record<string, unknown> | null;
+  if (r?.ok === false && typeof r.reason === "string") return { ok: false, reason: r.reason };
+  if (r?.ok === true && typeof r.clerk_user_id === "string" && typeof r.clerk_org_id === "string" && typeof r.timezone === "string") {
+    return { ok: true, name: typeof r.name === "string" ? r.name : null, language: lang(r.language),
+      clerkUserId: r.clerk_user_id, clerkOrgId: r.clerk_org_id, timezone: r.timezone, accountLanguage: lang(r.account_language) };
+  }
+  throw new Error(`ownerLineSessionCheck: unexpected answer ${JSON.stringify(data)}`);
+}
+
+export async function noteOwnerLineCall(
+  db: SupabaseClient,
+  p: { accountId: string; callId: string; actorClerkUserId: string; actorName: string | null; kinds: readonly OwnerLineLogKind[] },
+): Promise<void> {
+  const { error } = await db.rpc("note_owner_line_call", {
+    p_account_id: p.accountId, p_call_id: p.callId, p_actor: p.actorClerkUserId, p_actor_name: p.actorName,
+    p_kinds: [...p.kinds],
+  });
+  if (error) throw new Error(`noteOwnerLineCall failed: ${error.message}`);
+}
+
+/** On the READER's client: RLS returns rows to the agency and this account's Owner only, [] to anyone else. */
+export async function readOwnerLineCallLog(db: SupabaseClient, accountId: string, callId: string): Promise<OwnerLineLogKind[]> {
+  const { data, error } = await db.from("agency_visit_items").select("kind")
+    .eq("account_id", accountId).eq("record_id", callId).in("kind", [...OWNER_LINE_LOG_KINDS]);
+  if (error) throw new Error(`readOwnerLineCallLog failed: ${error.message}`);
+  return ((data ?? []) as { kind: OwnerLineLogKind }[]).map((r) => r.kind);
+}
+
+export async function readOwnerLineSwitch(db: SupabaseClient, accountId: string): Promise<string | null> {
+  const { data, error } = await db.from("accounts").select("owner_line_enabled_at").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`readOwnerLineSwitch failed: ${error.message}`);
+  return (data as { owner_line_enabled_at: string | null } | null)?.owner_line_enabled_at ?? null;
+}
+
+/** Server code only, after requireAccountOwner refused the agency (§3.3). Returns the stored instant, or null. */
+export async function setOwnerLineSwitch(db: SupabaseClient, accountId: string, on: boolean): Promise<string | null> {
+  const { data, error } = await db.from("accounts")
+    .update({ owner_line_enabled_at: on ? new Date().toISOString() : null })
+    .eq("id", accountId).select("owner_line_enabled_at").single();
+  if (error || !data) throw new Error(`setOwnerLineSwitch failed: ${error?.message ?? "no row"}`);
+  return (data as { owner_line_enabled_at: string | null }).owner_line_enabled_at;
+}
+```
+
+Add `export * from "./owner-line";` to `packages/db/src/index.ts` beside its siblings (additive only). Add `"owner_line_enrollments",` to `ACCOUNT_OWNED_TABLES` in `account-teardown.ts`, beside `"calendar_feeds"`, with the comment `// F-032 (0115): owner-line enrollments (cascade with their membership too).`
+
+- [ ] **Step 5: Typecheck green.**
+
+  ```bash
+  pnpm --filter @bis/db exec tsc --noEmit -p . && pnpm --filter web typecheck
+  ```
+
+  Expected: no output from either, with the exit status captured to a file and nothing after it (repo rule 4).
+
+- [ ] **Step 6: Run the web tests that read these functions.** A mocked `@bis/db` stays valid.
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice "src/app/(dashboard)/dashboard/accounts/[accountId]/calls" "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard" src/lib/voice/presence.test.ts src/lib/reports
+  ```
+
+  Expected: green. Paste vitest's summary line.
+
+- [ ] **Step 7: Mutation probes (on CI, after O-2).** These run on a probe branch of the PR's head (memory `bis-lane-pipeline`: own probe worktree). Each must FAIL BY NAME in CI `verify`:
+  1. Remove `.is("owner_line_user_id", null)` from `countCallsSince` → "the caps count only the customer call" FAILS.
+  2. Remove it from `listCallStartsByOutcomeBetween` → "answered and abandoned starts ignore it" FAILS.
+  3. Make `listCalls` ignore `excludeOwnerLine` → "the dashboard's recent calls drop it" FAILS.
+
+- [ ] **Step 8: Commit.**
+
+  ```bash
+  git add packages/db/src/owner-line.ts packages/db/src/index.ts packages/db/src/account-teardown.ts packages/db/src/voice.ts packages/db/src/test/owner-line-counting.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx" apps/web/src/lib/voice/presence.ts
+  git commit -m "feat(db): owner line wrappers; owner-line calls never count as customer calls (caps, answered, dashboard, weekly report, presence)"
+  ```
+
+---
+
+## Task 3: PIN and code primitives (HIGH, 0.25 day)
+
+**Files:**
+- Create: `apps/web/src/lib/owner-line/secrets.ts`, `apps/web/src/lib/owner-line/secrets.test.ts`
+
+**Interfaces:**
+- Produces:
+
+```ts
+export const PIN_PARAMS_PREFIX = "scrypt:15:8:1:";
+export type PinRefusal = "not_six_digits" | "repeated" | "run";
+export function checkPin(pin: string): { ok: true } | { ok: false; reason: PinRefusal };
+export async function hashPin(pin: string): Promise<string>;                // 80 chars, 0115's CHECK shape
+export async function candidateFor(pin: string, pinParams: string): Promise<string | null>; // pinParams = first 36 chars
+export function newVerifyCode(): string;                                    // 6 digits, zero-padded
+export function hashVerifyCode(code: string): string;                       // sha256 lowercase hex
+```
+
+- [ ] **Step 1: Write the failing test.**
+
+```ts
+// apps/web/src/lib/owner-line/secrets.test.ts
+import { describe, it, expect } from "vitest";
+import { checkPin, hashPin, candidateFor, newVerifyCode, hashVerifyCode, PIN_PARAMS_PREFIX } from "./secrets";
+
+const SHAPE = /^scrypt:15:8:1:[A-Za-z0-9_-]{22}:[A-Za-z0-9_-]{43}$/;
+
+describe("checkPin (spec §3.1: exactly 6 digits; 000000, 123456, a repeated digit, a run refused with a reason)", () => {
+  it.each([["000000", "repeated"], ["777777", "repeated"], ["123456", "run"], ["654321", "run"], ["345678", "run"],
+    ["12345", "not_six_digits"], ["1234567", "not_six_digits"], ["12a456", "not_six_digits"], [" 48291", "not_six_digits"]])(
+    "%s is refused as %s (mutation: drop the descending run -> 654321 passes, FAILS)", (pin, reason) => {
+      expect(checkPin(pin)).toEqual({ ok: false, reason });
+    });
+  it.each(["482913", "135790", "112358", "090807"])("%s is accepted", (pin) => {
+    expect(checkPin(pin)).toEqual({ ok: true });
+  });
+});
+
+describe("hashPin / candidateFor (SC-6: scrypt; SQL compares the strings)", () => {
+  it("is the exact shape 0115's pin_hash CHECK accepts: 80 characters", async () => {
+    const h = await hashPin("482913");
+    expect(h).toMatch(SHAPE);
+    expect(h).toHaveLength(80);
+    expect(h.startsWith(PIN_PARAMS_PREFIX)).toBe(true);
+  });
+  it("salts: one PIN hashes differently twice", async () => {
+    expect(await hashPin("482913")).not.toBe(await hashPin("482913"));
+  });
+  it("the candidate for the right PIN, derived from the stored salt prefix, IS the stored hash (mutation: N = 2**14 in candidateFor -> FAILS)", async () => {
+    const h = await hashPin("482913");
+    expect(await candidateFor("482913", h.slice(0, 36))).toBe(h);
+    expect(await candidateFor("482914", h.slice(0, 36))).not.toBe(h);
+  });
+  it("a malformed prefix or a non-6-digit entry has no candidate (it can never match)", async () => {
+    const h = await hashPin("482913");
+    expect(await candidateFor("482913", "scrypt:14:8:1:" + h.slice(14, 36))).toBeNull();
+    expect(await candidateFor("4829", h.slice(0, 36))).toBeNull();
+  });
+});
+
+describe("the call-in code", () => {
+  it("is 6 digits, zero-padded, and hashes to 64 lowercase hex (0115's verify_code_hash CHECK)", () => {
+    for (let i = 0; i < 50; i++) expect(newVerifyCode()).toMatch(/^[0-9]{6}$/);
+    expect(hashVerifyCode("123456")).toBe("8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92");
+  });
+});
+```
+
+The digest literal is the one Postgres produced, already pinned in `packages/db/src/test/alert-phone-verification-grants.test.ts:36-37`.
+
+- [ ] **Step 2: Run it and see it fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/secrets.test.ts
+  ```
+
+  Expected: FAIL, `Failed to resolve import "./secrets"`. Paste the line.
+
+- [ ] **Step 3: Implement.**
+
+```ts
+// apps/web/src/lib/owner-line/secrets.ts
+// The owner line's two secrets (F-032 §3.1, §3.2; plan SC-6). The PIN: scrypt from node:crypto (memory-hard,
+// built in; neither argon2 nor bcrypt is a dependency), N=2^15 r=8 p=1, a 16-byte salt, a 32-byte key, written as
+// "scrypt:15:8:1:<salt b64url 22>:<key b64url 43>" (80 characters, 0115's CHECK). SQL never derives it: the answer
+// lookup returns the first 36 characters (the parameters and the salt), this file derives the candidate, and
+// owner_line_attempt_pin compares under a row lock. The call-in code: sha256 hex, exactly like the alert-phone code
+// (packages/db/src/alert-phone-verification.ts:68), because a 10-minute, 3-attempt code is defended by its limits.
+import { createHash, randomBytes, randomInt, scrypt } from "node:crypto";
+
+export const PIN_PARAMS_PREFIX = "scrypt:15:8:1:";
+const N = 2 ** 15;
+const R = 8;
+const P = 1;
+const KEYLEN = 32;
+/** 128 * N * r = 32 MiB is exactly node's default maxmem, which it refuses; 64 MiB leaves room. */
+const MAXMEM = 64 * 1024 * 1024;
+
+export type PinRefusal = "not_six_digits" | "repeated" | "run";
+
+export function checkPin(pin: string): { ok: true } | { ok: false; reason: PinRefusal } {
+  if (!/^[0-9]{6}$/.test(pin)) return { ok: false, reason: "not_six_digits" };
+  const d = [...pin].map(Number);
+  if (d.every((x) => x === d[0])) return { ok: false, reason: "repeated" };
+  const up = d.every((x, i) => i === 0 || x === d[i - 1]! + 1);
+  const down = d.every((x, i) => i === 0 || x === d[i - 1]! - 1);
+  if (up || down) return { ok: false, reason: "run" };
+  return { ok: true };
+}
+
+function derive(pin: string, salt: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(pin, salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM }, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+export async function hashPin(pin: string): Promise<string> {
+  const salt = randomBytes(16).toString("base64url");
+  return `${PIN_PARAMS_PREFIX}${salt}:${(await derive(pin, salt)).toString("base64url")}`;
+}
+
+/** The string owner_line_attempt_pin compares. Null for a malformed prefix or an entry that is not 6 digits. */
+export async function candidateFor(pin: string, pinParams: string): Promise<string | null> {
+  if (!/^[0-9]{6}$/.test(pin)) return null;
+  if (pinParams.length !== 36 || !pinParams.startsWith(PIN_PARAMS_PREFIX)) return null;
+  const salt = pinParams.slice(PIN_PARAMS_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]{22}$/.test(salt)) return null;
+  return `${pinParams}:${(await derive(pin, salt)).toString("base64url")}`;
+}
+
+export function newVerifyCode(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+export function hashVerifyCode(code: string): string {
+  return createHash("sha256").update(code, "utf8").digest("hex");
+}
+```
+
+- [ ] **Step 4: Run it green.** Use the same command as Step 2. Expected: all pass. Paste the summary line.
+
+- [ ] **Step 5: Mutation probe.** In `candidateFor`, replace `derive(pin, salt)` with a derive at `N = 2 ** 14`. "the candidate for the right PIN … IS the stored hash" must FAIL BY NAME. Revert, run again, and see it green.
+
+- [ ] **Step 6: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line/secrets.ts apps/web/src/lib/owner-line/secrets.test.ts
+  git commit -m "feat(voice): owner line PIN (scrypt, trivial PINs refused) and call-in code primitives"
+  ```
+
+---
+
+## Task 4: The signed owner pass and header extraction (HIGH, 0.5 day)
+
+**Files:**
+- Modify: `apps/web/src/lib/voice/sip-handoff-signature.ts` (`key()` at `:41-45` becomes one use of a domain-keyed derivation; the new exports are appended).
+- Modify: `apps/web/src/lib/voice/sip-headers.ts` (append `extractOwnerPass`).
+- Test: `apps/web/src/lib/voice/sip-handoff-signature.test.ts` (append a `describe`) and `apps/web/src/lib/voice/sip-headers.test.ts` (append one case).
+
+**Interfaces:**
+- Produces:
+
+```ts
+export const OWNER_PASS_HEADER = "X-BIS-Owner-Pass";
+export const OWNER_PASS_MAX_AGE_MS = 60_000;
+export type OwnerPassRole = "owner" | "staff" | "technician";
+export function signOwnerPass(handoffToken: string,
+  p: { accountId: string; userId: string; role: OwnerPassRole; calledE164: string },
+  nowMs: number, env?: NodeJS.ProcessEnv): string | null;
+export type OwnerPassCheck =
+  | { ok: true; accountId: string; userId: string; role: OwnerPassRole; calledE164: string; issuedAtMs: number }
+  | { ok: false; reason: "no-key" | "absent" | "malformed" | "bad-signature" | "expired" };
+export function verifyOwnerPass(value: string | null | undefined, handoffToken: string | null, nowMs: number,
+  env?: NodeJS.ProcessEnv, maxAgeMs?: number): OwnerPassCheck;
+// sip-headers.ts
+export function extractOwnerPass(eventData: unknown): string | null;
+```
+
+The format is `<issuedAtMs>.<accountId>.<userId>.<role>.<calledDigits>.<hmac>`, six dot-separated parts. Every character is in `[0-9A-Za-z._-]`, so URI encoding leaves it byte-identical, the same property as `X-BIS-Signature` (`:13-17`). The MAC covers `${handoffToken}|${payload}`, keyed by `sha256("bis-voice-owner-pass:" + VOICE_HANDOFF_SECRET)`. That is a separate domain from the handoff key, so neither value can stand in for the other.
+
+- [ ] **Step 1: Write the failing tests** (append to `sip-handoff-signature.test.ts`).
+
+```ts
+import { createHash, createHmac } from "node:crypto";
+import { signOwnerPass, verifyOwnerPass, OWNER_PASS_MAX_AGE_MS, signSipHandoff, verifySipHandoff } from "./sip-handoff-signature";
+
+describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
+  const SECRET = "s".repeat(40);
+  const env = { VOICE_HANDOFF_SECRET: SECRET } as NodeJS.ProcessEnv;
+  const TOKEN = "a".repeat(32);
+  const A = "11111111-1111-4111-8111-111111111111";
+  const U = "22222222-2222-4222-8222-222222222222";
+  const B = "33333333-3333-4333-8333-333333333333";
+  const T0 = 1_800_000_000_000;
+  const mint = (over: Partial<{ accountId: string; userId: string; role: "owner" | "staff" | "technician"; calledE164: string }> = {}) =>
+    signOwnerPass(TOKEN, { accountId: A, userId: U, role: "staff", calledE164: "+19565550100", ...over }, T0, env)!;
+
+  it("round-trips account, person, role and called number", () => {
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 1000, env)).toEqual({
+      ok: true, accountId: A, userId: U, role: "staff", calledE164: "+19565550100", issuedAtMs: T0 });
+  });
+  it("is refused when tampered: another account swapped in keeps the MAC of the first (mutation: MAC over the token only -> FAILS)", () => {
+    expect(verifyOwnerPass(mint().replace(A, B), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+    expect(verifyOwnerPass(mint().replace(".staff.", ".owner."), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is bound to this call's handoff token", () => {
+    expect(verifyOwnerPass(mint(), "b".repeat(32), T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is valid at 60 s and expired at 61 s (mutation: OWNER_PASS_MAX_AGE_MS = 2 * 60_000 -> FAILS)", () => {
+    expect(OWNER_PASS_MAX_AGE_MS).toBe(60_000);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 60_000, env).ok).toBe(true);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 61_000, env)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("is its own key domain: a MAC made with the handoff key is refused (mutation: owner domain = handoff domain -> FAILS)", () => {
+    const value = mint();
+    const payload = value.slice(0, value.lastIndexOf("."));
+    const handoffKey = createHash("sha256").update(`bis-voice-sip-handoff:${SECRET}`).digest();
+    const forged = `${payload}.${createHmac("sha256", handoffKey).update(`${TOKEN}|${payload}`).digest("base64url")}`;
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("the handoff signature is byte-identical to before the refactor (the existing key derivation is untouched)", () => {
+    const sig = signSipHandoff(TOKEN, "+19565550100", "+19565550142", T0, env)!;
+    const key = createHash("sha256").update(`bis-voice-sip-handoff:${SECRET}`).digest();
+    const payload = `${T0}.19565550100.19565550142`;
+    expect(sig).toBe(`${payload}.${createHmac("sha256", key).update(`${TOKEN}|${payload}`).digest("base64url")}`);
+    expect(verifySipHandoff(sig, TOKEN, T0, env).ok).toBe(true);
+  });
+  it("is null with no usable secret, and verify says no-key first", () => {
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, T0, {} as NodeJS.ProcessEnv)).toBeNull();
+    expect(verifyOwnerPass("x", TOKEN, T0, {} as NodeJS.ProcessEnv)).toEqual({ ok: false, reason: "no-key" });
+  });
+  it("refuses a role outside the three and a malformed value", () => {
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "agency" as never, calledE164: "+19565550100" }, T0, env)).toBeNull();
+    expect(verifyOwnerPass("1.2.3", TOKEN, T0, env)).toEqual({ ok: false, reason: "malformed" });
+    expect(verifyOwnerPass(null, TOKEN, T0, env)).toEqual({ ok: false, reason: "absent" });
+  });
+});
+```
+
+Append to `sip-headers.test.ts`:
+
+```ts
+import { extractOwnerPass } from "./sip-headers";
+it("extractOwnerPass reads X-BIS-Owner-Pass verbatim, case-insensitively, and null when absent", () => {
+  expect(extractOwnerPass({ sip_headers: [{ name: "x-bis-owner-pass", value: " 1.a.b.owner.19565550100.mac " }] })).toBe("1.a.b.owner.19565550100.mac");
+  expect(extractOwnerPass({ sip_headers: [{ name: "X-BIS-Signature", value: "v" }] })).toBeNull();
+});
+```
+
+- [ ] **Step 2: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/voice/sip-handoff-signature.test.ts src/lib/voice/sip-headers.test.ts
+  ```
+
+  Expected: FAIL, `signOwnerPass is not a function` / `extractOwnerPass is not a function`. Paste the line.
+
+- [ ] **Step 3: Implement.** In `sip-handoff-signature.ts`, replace `key()` (`:41-45`) with:
+
+```ts
+function derivedKey(domain: string, env: NodeJS.ProcessEnv): Buffer | null {
+  const secret = env.VOICE_HANDOFF_SECRET?.trim();
+  if (!secret || secret.length < SIP_HANDOFF_MIN_SECRET_LENGTH) return null;
+  return createHash("sha256").update(`${domain}:${secret}`).digest();
+}
+
+function key(env: NodeJS.ProcessEnv): Buffer | null {
+  return derivedKey("bis-voice-sip-handoff", env);
+}
+```
+
+and append:
+
+```ts
+// ---------------------------------------------------------------------------
+// THE OWNER PASS (F-032 §4.3). Minted by /api/voice/texml/owner-pin after a correct PIN and carried on the same
+// <Sip> URI as X-BIS-Owner-Pass. It says: this call, on this business's number, is this person, in this role. Bound
+// to the call's handoff token (the one identifier both legs see; plan SC-7) and to the role at mint (SC-8: the
+// webhook requires the live role to EQUAL it). Its own key domain, so a handoff signature can never pass for one.
+// Single use is not this file's job: the owner-line calls row the webhook inserts carries the handoff token, and
+// calls_handoff_token_unique (0037) refuses a second redemption.
+export const OWNER_PASS_HEADER = "X-BIS-Owner-Pass";
+export const OWNER_PASS_MAX_AGE_MS = 60_000;
+export type OwnerPassRole = "owner" | "staff" | "technician";
+const PASS_ROLES: readonly string[] = ["owner", "staff", "technician"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function ownerKey(env: NodeJS.ProcessEnv): Buffer | null {
+  return derivedKey("bis-voice-owner-pass", env);
+}
+
+export function signOwnerPass(
+  handoffToken: string, p: { accountId: string; userId: string; role: OwnerPassRole; calledE164: string },
+  nowMs: number, env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const k = ownerKey(env);
+  const called = digitsOf(p.calledE164);
+  if (!k || !handoffToken || !UUID.test(p.accountId) || !UUID.test(p.userId)
+      || !PASS_ROLES.includes(p.role) || !DIGITS.test(called)) return null;
+  const payload = `${Math.trunc(nowMs)}.${p.accountId}.${p.userId}.${p.role}.${called}`;
+  return `${payload}.${mac(k, handoffToken, payload)}`;
+}
+
+export type OwnerPassCheck =
+  | { ok: true; accountId: string; userId: string; role: OwnerPassRole; calledE164: string; issuedAtMs: number }
+  | { ok: false; reason: "no-key" | "absent" | "malformed" | "bad-signature" | "expired" };
+
+export function verifyOwnerPass(
+  value: string | null | undefined, handoffToken: string | null, nowMs: number,
+  env: NodeJS.ProcessEnv = process.env, maxAgeMs: number = OWNER_PASS_MAX_AGE_MS,
+): OwnerPassCheck {
+  const k = ownerKey(env);
+  if (!k) return { ok: false, reason: "no-key" };
+  if (!value) return { ok: false, reason: "absent" };
+  const parts = value.split(".");
+  if (parts.length !== 6) return { ok: false, reason: "malformed" };
+  const [issuedRaw, accountId, userId, role, called, given] = parts as [string, string, string, string, string, string];
+  const issued = Number(issuedRaw);
+  if (!/^[0-9]{1,16}$/.test(issuedRaw) || !Number.isFinite(issued) || !UUID.test(accountId) || !UUID.test(userId)
+      || !PASS_ROLES.includes(role) || !DIGITS.test(called)) {
+    return { ok: false, reason: "malformed" };
+  }
+  const expected = Buffer.from(mac(k, handoffToken ?? "", `${issuedRaw}.${accountId}.${userId}.${role}.${called}`));
+  const actual = Buffer.from(given);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return { ok: false, reason: "bad-signature" };
+  if (Math.abs(nowMs - issued) > maxAgeMs) return { ok: false, reason: "expired" };
+  return { ok: true, accountId, userId, role: role as OwnerPassRole, calledE164: `+${called}`, issuedAtMs: issued };
+}
+```
+
+In `sip-headers.ts`, append:
+
+```ts
+/**
+ * The owner pass our owner-pin route put on the SIP URI as `X-BIS-Owner-Pass` (sip-handoff-signature.ts), verbatim.
+ * Null when absent, which is every customer call. Never logged: it is a credential.
+ */
+export function extractOwnerPass(eventData: unknown): string | null {
+  return rawHeader(headers(eventData), "x-bis-owner-pass");
+}
+```
+
+- [ ] **Step 4: Run green.** Use the Step 2 command, plus the existing signature users:
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/voice/sip-handoff-signature.test.ts src/lib/voice/sip-headers.test.ts src/app/api/voice/incoming/webhook-signing.test.ts src/app/api/voice/texml
+  ```
+
+  Expected: green. The handoff signature's own tests are unchanged. Paste the summary line.
+
+- [ ] **Step 5: Mutation probes.** Each must FAIL BY NAME:
+  1. `OWNER_PASS_MAX_AGE_MS = 2 * 60_000` → "is valid at 60 s and expired at 61 s" FAILS.
+  2. `ownerKey` returns `derivedKey("bis-voice-sip-handoff", env)` → "is its own key domain" FAILS.
+  3. `mac(k, handoffToken, String(Math.trunc(nowMs)))` in sign → "is refused when tampered" FAILS.
+
+- [ ] **Step 6: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/voice/sip-handoff-signature.ts apps/web/src/lib/voice/sip-handoff-signature.test.ts apps/web/src/lib/voice/sip-headers.ts apps/web/src/lib/voice/sip-headers.test.ts
+  git commit -m "feat(voice): the owner pass: a 60-second, role-bound signature on the SIP URI, its own key domain beside X-BIS-Signature"
+  ```
+
+---
+
+## Task 5: Setup actions: enrol and verify the cell, set or remove the PIN, the Team switch (HIGH, 0.75 day)
+
+**Files:**
+- Create: `apps/web/src/lib/owner-line/data-path.ts`. **The ONE module that holds the Task 0 decision.**
+- Create: `apps/web/src/lib/owner-line/memberships.ts`
+- Create: `apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.ts` and `owner-line-actions.test.ts`
+- Create: `ACCT/team/owner-line-actions.ts` and `owner-line-actions.test.ts`
+- Modify: `ACCT/access-log-routes.test.ts` (one line in `NOT_A_RECORD_ACTIONS`)
+- Modify: `apps/web/src/lib/messages.ts` (append the `ownerLine.error.*` and `ownerLine.switch.*` keys with their `.es` twins)
+
+**Interfaces:**
+- Consumes (Task 2): `readMyOwnerLineEnrollment`, `startOwnerLineVerification`, `setOwnerLinePin`, `removeOwnerLinePin`, `removeOwnerLineEnrollment`, `setOwnerLineSwitch`, `OWNER_LINE_VERIFY_MINUTES`.
+- Consumes (Task 3): `checkPin`, `hashPin`, `newVerifyCode`, `hashVerifyCode`.
+- Consumes: `requireAccountOwner(accountId)` (`WEB/lib/auth.ts:104`, which returns `{ userId, isAgency, role, canManage }`), `e164Of` (`WEB/lib/voice/phone-number.ts:17`), `getPhoneNumberByE164` (`DB/voice.ts:101`).
+- Produces:
+
+```ts
+// lib/owner-line/data-path.ts
+export type OwnerLineDataPath = "token" | "service";
+export const OWNER_LINE_DATA_PATH: OwnerLineDataPath;     // set from the Task 0 decision record
+export const OWNER_LINE_ROLES: readonly AccountRole[];   // token: all three; service (F2): owner, staff
+// lib/owner-line/memberships.ts
+export type MyMembership = { accountId: string; userId: string; role: AccountRole; businessName: string; number: string | null };
+export async function listMyMemberships(db: SupabaseClient, clerkUserId: string): Promise<MyMembership[]>;
+export async function myMembership(db: SupabaseClient, clerkUserId: string, accountId: string): Promise<MyMembership | null>;
+// preferences/owner-line-actions.ts ("use server"); every one keyed on auth().userId, never a person id argument
+export type OwnerLineResult<T = null> = { ok: true; value: T } | { ok: false; error: string };
+export async function startOwnerLineVerificationAction(accountId: string, locale: Locale, cell: string): Promise<OwnerLineResult<{ code: string; expiresAt: string }>>;
+export async function setOwnerLinePinAction(accountId: string, locale: Locale, pin: string): Promise<OwnerLineResult>;
+export async function removeOwnerLinePinAction(accountId: string, locale: Locale): Promise<OwnerLineResult>;
+export async function removeOwnerLineCellAction(accountId: string, locale: Locale): Promise<OwnerLineResult>;
+// team/owner-line-actions.ts ("use server")
+export async function setOwnerLineSwitchAction(accountId: string, locale: Locale, on: boolean): Promise<OwnerLineResult<{ enabledAt: string | null }>>;
+```
+
+- [ ] **Step 1: Write `data-path.ts` from the decision record** (no test of its own; Task 10 pins it):
+
+```ts
+// apps/web/src/lib/owner-line/data-path.ts
+// THE ONE PLACE the Task 0 decision lives (docs/superpowers/specs/2026-11-09-owner-line-spike.md, decided by the
+// owner on <date>). Only `ownerLineReadClient` (./reader.ts) branches on OWNER_LINE_DATA_PATH; the setup card and
+// the answer route read OWNER_LINE_ROLES. "token": reads run as the person through a minted token, RLS decides,
+// Technicians included. "service" (F2, plan SC-2): service-role reads scoped to the account, which equal what an
+// Owner or Staff member sees; a Technician is not offered the owner line, because their scope lives only in RLS.
+import type { AccountRole } from "@bis/db";
+
+export type OwnerLineDataPath = "token" | "service";
+export const OWNER_LINE_DATA_PATH: OwnerLineDataPath = "token";
+export const OWNER_LINE_ROLES: readonly AccountRole[] =
+  OWNER_LINE_DATA_PATH === "token" ? ["owner", "staff", "technician"] : ["owner", "staff"];
+```
+
+  If the owner chose F2, write `"service"` on the `OWNER_LINE_DATA_PATH` line. Nothing else in the plan changes.
+
+- [ ] **Step 2: Write the failing action tests.**
+
+```ts
+// apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  auth: vi.fn(),
+  redirect: vi.fn((to: string) => { throw new Error(`NEXT_REDIRECT ${to}`); }),
+  my: vi.fn(),
+  phone: vi.fn(),
+  read: vi.fn(),
+  start: vi.fn(),
+  setPin: vi.fn(),
+  removePin: vi.fn(),
+  removeCell: vi.fn(),
+}));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("@clerk/nextjs/server", () => ({ auth: mocks.auth }));
+vi.mock("@/lib/owner-line/memberships", () => ({ myMembership: mocks.my }));
+vi.mock("@bis/db", () => ({
+  serviceDb: () => ({}), OWNER_LINE_VERIFY_MINUTES: 10,
+  getPhoneNumberByE164: mocks.phone, readMyOwnerLineEnrollment: mocks.read, startOwnerLineVerification: mocks.start,
+  setOwnerLinePin: mocks.setPin, removeOwnerLinePin: mocks.removePin, removeOwnerLineEnrollment: mocks.removeCell,
+}));
+
+import {
+  startOwnerLineVerificationAction, setOwnerLinePinAction, removeOwnerLinePinAction, removeOwnerLineCellAction,
+} from "./owner-line-actions";
+
+const A = "11111111-1111-4111-8111-111111111111";
+const ME = { accountId: A, userId: "u-me", role: "staff", businessName: "Rio Roofing", number: "+19565550100" };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.auth.mockResolvedValue({ userId: "user_clerk_me" });
+  mocks.my.mockResolvedValue(ME);
+  mocks.phone.mockResolvedValue(null);
+  mocks.read.mockResolvedValue(null);
+  mocks.start.mockResolvedValue("ok");
+  mocks.setPin.mockResolvedValue(true);
+});
+
+describe("the owner line's setup actions (F-032 §3.1, §3.2; SC-4)", () => {
+  it("signed out: redirected, nothing written (mutation: drop the !userId redirect -> FAILS)", async () => {
+    mocks.auth.mockResolvedValue({ userId: null });
+    await expect(startOwnerLineVerificationAction(A, "en", "956 555 0142")).rejects.toThrow("NEXT_REDIRECT /sign-in");
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it("not a member of the named business: refused, nothing written (mutation: skip the membership check -> FAILS)", async () => {
+    mocks.my.mockResolvedValue(null);
+    expect(await startOwnerLineVerificationAction(A, "en", "956 555 0142")).toMatchObject({ ok: false });
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it("writes as the signed-in person only: the user id comes from the Clerk session's membership, never an argument", async () => {
+    const r = await startOwnerLineVerificationAction(A, "en", "(956) 555-0142");
+    expect(r).toMatchObject({ ok: true, value: { code: expect.stringMatching(/^[0-9]{6}$/) } });
+    expect(mocks.my).toHaveBeenCalledWith({}, "user_clerk_me", A);
+    expect(mocks.start).toHaveBeenCalledWith({}, A, "u-me", "+19565550142", expect.stringMatching(/^[0-9a-f]{64}$/));
+  });
+
+  it("refuses a business's own number as a cell (it would ring straight back into Sofía)", async () => {
+    mocks.phone.mockResolvedValue({ id: "pn" });
+    expect(await startOwnerLineVerificationAction(A, "en", "+19565550100")).toMatchObject({ ok: false });
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it("a cell someone else on the business holds is refused with words", async () => {
+    mocks.start.mockResolvedValue("taken");
+    expect(await startOwnerLineVerificationAction(A, "es", "+19565550142")).toEqual({
+      ok: false, error: expect.stringMatching(/./) });
+  });
+
+  it("a trivial PIN is refused with its reason, and nothing is hashed or stored (mutation: skip checkPin -> FAILS)", async () => {
+    expect(await setOwnerLinePinAction(A, "en", "123456")).toMatchObject({ ok: false });
+    expect(mocks.setPin).not.toHaveBeenCalled();
+  });
+
+  it("a good PIN is stored as an 80-character scrypt string, never the digits", async () => {
+    expect(await setOwnerLinePinAction(A, "en", "482913")).toEqual({ ok: true, value: null });
+    const stored = mocks.setPin.mock.calls[0]![3] as string;
+    expect(stored).toHaveLength(80);
+    expect(stored).not.toContain("482913");
+  });
+
+  it("a PIN before the cell is verified is refused", async () => {
+    mocks.setPin.mockResolvedValue(false);
+    expect(await setOwnerLinePinAction(A, "en", "482913")).toMatchObject({ ok: false });
+  });
+
+  it("removing the PIN and the cell act on the signed-in person's row only", async () => {
+    await removeOwnerLinePinAction(A, "en");
+    await removeOwnerLineCellAction(A, "en");
+    expect(mocks.removePin).toHaveBeenCalledWith({}, A, "u-me");
+    expect(mocks.removeCell).toHaveBeenCalledWith({}, A, "u-me");
+  });
+});
+```
+
+```ts
+// apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), set: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireAccountOwner: mocks.owner }));
+vi.mock("@bis/db", () => ({ serviceDb: () => ({}), setOwnerLineSwitch: mocks.set }));
+
+import { setOwnerLineSwitchAction } from "./owner-line-actions";
+
+const A = "11111111-1111-4111-8111-111111111111";
+beforeEach(() => { vi.clearAllMocks(); mocks.set.mockResolvedValue("2026-11-09T20:00:00.000Z"); });
+
+describe("the business's switch (F-032 §3.3)", () => {
+  it("the client's Owner turns it on", async () => {
+    mocks.owner.mockResolvedValue({ userId: "u", isAgency: false, role: "owner", canManage: true });
+    expect(await setOwnerLineSwitchAction(A, "en", true)).toEqual({ ok: true, value: { enabledAt: "2026-11-09T20:00:00.000Z" } });
+    expect(mocks.set).toHaveBeenCalledWith({}, A, true);
+  });
+  it("the agency can see it but cannot turn it on or off (mutation: drop the isAgency refusal -> FAILS)", async () => {
+    mocks.owner.mockResolvedValue({ userId: "u", isAgency: true, role: null, canManage: true });
+    expect(await setOwnerLineSwitchAction(A, "en", true)).toMatchObject({ ok: false });
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+  it("staff never reach it: requireAccountOwner redirects them", async () => {
+    mocks.owner.mockRejectedValue(new Error("NEXT_REDIRECT"));
+    await expect(setOwnerLineSwitchAction(A, "en", true)).rejects.toThrow("NEXT_REDIRECT");
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 3: Run both test files and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/preferences/owner-line-actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.test.ts"
+  ```
+
+  Expected: FAIL, `Failed to resolve import "./owner-line-actions"`. Paste the line.
+
+- [ ] **Step 4: Implement `memberships.ts`.**
+
+```ts
+// apps/web/src/lib/owner-line/memberships.ts
+// A person's own business memberships, for the "Call in to your business" card (F-032 §3.1: one card per
+// membership). serviceDb() keyed on Clerk's own userId, the pre-trust read preferences/actions.ts and
+// person-prefs.ts already use; the businesses come back only through the person's own memberships, and only those
+// with client access on and not archived. businessName is brandDisplayName's answer, never accounts.name.
+import type { SupabaseClient, AccountRole, Branding } from "@bis/db";
+import { brandDisplayName } from "@/lib/email/templates/shell";
+
+export type MyMembership = { accountId: string; userId: string; role: AccountRole; businessName: string; number: string | null };
+
+type Row = {
+  account_id: string; user_id: string; role: AccountRole;
+  accounts: { client_access_enabled: boolean; status: string; brand_name: string | null } | null;
+};
+
+export async function listMyMemberships(db: SupabaseClient, clerkUserId: string): Promise<MyMembership[]> {
+  const { data, error } = await db.from("memberships")
+    .select("account_id, user_id, role, users!inner(clerk_user_id), accounts!inner(client_access_enabled, status, brand_name)")
+    .eq("scope", "account").eq("users.clerk_user_id", clerkUserId);
+  if (error) throw new Error(`listMyMemberships failed: ${error.message}`);
+  const rows = ((data ?? []) as unknown as Row[])
+    .filter((r) => r.accounts?.client_access_enabled === true && r.accounts.status !== "archived");
+  if (rows.length === 0) return [];
+  const { data: nums, error: nErr } = await db.from("phone_numbers")
+    .select("account_id, e164, status").in("account_id", rows.map((r) => r.account_id)).in("status", ["live", "testing"]);
+  if (nErr) throw new Error(`listMyMemberships numbers failed: ${nErr.message}`);
+  const numberOf = (id: string) => {
+    const mine = ((nums ?? []) as { account_id: string; e164: string; status: string }[]).filter((n) => n.account_id === id);
+    return (mine.find((n) => n.status === "live") ?? mine[0])?.e164 ?? null;
+  };
+  return rows.map((r) => ({
+    accountId: r.account_id, userId: r.user_id, role: r.role, number: numberOf(r.account_id),
+    businessName: brandDisplayName({ brandName: r.accounts?.brand_name ?? null } as Branding),
+  }));
+}
+
+export async function myMembership(db: SupabaseClient, clerkUserId: string, accountId: string): Promise<MyMembership | null> {
+  return (await listMyMemberships(db, clerkUserId)).find((x) => x.accountId === accountId) ?? null;
+}
+```
+
+  Read `brandDisplayName` (`WEB/lib/email/templates/shell.ts:46`) before this step. If it reads any `Branding` field besides `brandName`, select those columns too, rather than casting.
+
+- [ ] **Step 5: Implement the two action files.**
+
+```ts
+// apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.ts
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import {
+  serviceDb, getPhoneNumberByE164, readMyOwnerLineEnrollment, startOwnerLineVerification, setOwnerLinePin,
+  removeOwnerLinePin, removeOwnerLineEnrollment, OWNER_LINE_VERIFY_MINUTES,
+} from "@bis/db";
+import { myMembership, type MyMembership } from "@/lib/owner-line/memberships";
+import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { checkPin, hashPin, newVerifyCode, hashVerifyCode } from "@/lib/owner-line/secrets";
+import { e164Of } from "@/lib/voice/phone-number";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+
+/**
+ * "Call in to your business" (F-032 §3.1, §3.2; plan SC-4). NO person id parameter, by design: auth() is the only
+ * source of the row these actions touch, and the business named must be one of THAT person's memberships, in a role
+ * the owner line is offered to (OWNER_LINE_ROLES). Writes go through serviceDb() (the table has no client grant).
+ */
+export type OwnerLineResult<T = null> = { ok: true; value: T } | { ok: false; error: string };
+
+const lc = (l: Locale): Locale => (l === "es" ? "es" : "en");
+const fail = (locale: Locale, key: keyof typeof m): { ok: false; error: string } => ({ ok: false, error: t(m, key, lc(locale)) });
+
+async function me(accountId: string): Promise<MyMembership | null> {
+  const { userId } = await auth();
+  if (!userId) redirect("/sign-in");
+  const mine = await myMembership(serviceDb(), userId, accountId);
+  return mine && OWNER_LINE_ROLES.includes(mine.role) ? mine : null;
+}
+
+export async function startOwnerLineVerificationAction(
+  accountId: string, locale: Locale, cell: string,
+): Promise<OwnerLineResult<{ code: string; expiresAt: string }>> {
+  const mine = await me(accountId);
+  if (!mine) return fail(locale, "ownerLine.error.notMember");
+  const e164 = e164Of(cell);
+  if (!e164) return fail(locale, "ownerLine.error.cell");
+  const db = serviceDb();
+  if (await getPhoneNumberByE164(db, e164)) return fail(locale, "ownerLine.error.cellIsBusiness");
+  const existing = await readMyOwnerLineEnrollment(db, accountId, mine.userId);
+  if (existing?.verifiedAt && existing.e164 === e164) return fail(locale, "ownerLine.error.alreadyVerified");
+  const code = newVerifyCode();
+  if (await startOwnerLineVerification(db, accountId, mine.userId, e164, hashVerifyCode(code)) === "taken") {
+    return fail(locale, "ownerLine.error.cellTaken");
+  }
+  revalidatePath("/dashboard/preferences");
+  return { ok: true, value: { code, expiresAt: new Date(Date.now() + OWNER_LINE_VERIFY_MINUTES * 60_000).toISOString() } };
+}
+
+export async function setOwnerLinePinAction(accountId: string, locale: Locale, pin: string): Promise<OwnerLineResult> {
+  const mine = await me(accountId);
+  if (!mine) return fail(locale, "ownerLine.error.notMember");
+  const check = checkPin(pin.trim());
+  if (!check.ok) return fail(locale, `ownerLine.error.pin.${check.reason}` as keyof typeof m);
+  if (!(await setOwnerLinePin(serviceDb(), accountId, mine.userId, await hashPin(pin.trim())))) {
+    return fail(locale, "ownerLine.error.notVerified");
+  }
+  revalidatePath("/dashboard/preferences");
+  return { ok: true, value: null };
+}
+
+export async function removeOwnerLinePinAction(accountId: string, locale: Locale): Promise<OwnerLineResult> {
+  const mine = await me(accountId);
+  if (!mine) return fail(locale, "ownerLine.error.notMember");
+  await removeOwnerLinePin(serviceDb(), accountId, mine.userId);
+  revalidatePath("/dashboard/preferences");
+  return { ok: true, value: null };
+}
+
+export async function removeOwnerLineCellAction(accountId: string, locale: Locale): Promise<OwnerLineResult> {
+  const mine = await me(accountId);
+  if (!mine) return fail(locale, "ownerLine.error.notMember");
+  await removeOwnerLineEnrollment(serviceDb(), accountId, mine.userId);
+  revalidatePath("/dashboard/preferences");
+  return { ok: true, value: null };
+}
+```
+
+```ts
+// apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { serviceDb, setOwnerLineSwitch } from "@bis/db";
+import { requireAccountOwner } from "@/lib/auth";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+
+/**
+ * "Let your team call in to hear the day" (F-032 §3.3; plan SC-1, Q-A). requireAccountOwner admits the agency and
+ * a client Owner; the agency is then refused, because the client's Owner decides who can phone into their data.
+ * Reversible, so the card runs it at once with an Undo that calls this again with the opposite value (rule 6).
+ */
+export async function setOwnerLineSwitchAction(
+  accountId: string, locale: Locale, on: boolean,
+): Promise<{ ok: true; value: { enabledAt: string | null } } | { ok: false; error: string }> {
+  const { isAgency } = await requireAccountOwner(accountId);
+  if (isAgency) return { ok: false, error: t(m, "ownerLine.switch.agencyCannot", locale === "es" ? "es" : "en") };
+  const enabledAt = await setOwnerLineSwitch(serviceDb(), accountId, on === true);
+  revalidatePath(`/dashboard/accounts/${accountId}/team`);
+  revalidatePath("/dashboard/preferences");
+  return { ok: true, value: { enabledAt } };
+}
+```
+
+- [ ] **Step 6: Add the copy keys to `messages.ts`** (append in one block under a `// F-032 owner line` comment, inside the `m` object; additive only):
+
+```ts
+  // F-032 owner line (plan Tasks 5-9, 11, 13). Spanish is usted; Owner is "Dueño".
+  "ownerLine.error.notMember": "You can't set this up for that business.",
+  "ownerLine.error.notMember.es": "No puede configurar esto para ese negocio.",
+  "ownerLine.error.cell": "Enter your cell number with its area code.",
+  "ownerLine.error.cell.es": "Escriba su número de celular con el código de área.",
+  "ownerLine.error.cellIsBusiness": "That is one of your business's own numbers. Enter your personal cell.",
+  "ownerLine.error.cellIsBusiness.es": "Ese es uno de los números de su negocio. Escriba su celular personal.",
+  "ownerLine.error.cellTaken": "Someone else on your team already uses that cell here.",
+  "ownerLine.error.cellTaken.es": "Otra persona de su equipo ya usa ese celular aquí.",
+  "ownerLine.error.alreadyVerified": "That cell is already verified.",
+  "ownerLine.error.alreadyVerified.es": "Ese celular ya está verificado.",
+  "ownerLine.error.notVerified": "Verify your cell first.",
+  "ownerLine.error.notVerified.es": "Primero verifique su celular.",
+  "ownerLine.error.pin.not_six_digits": "Your PIN must be exactly 6 digits.",
+  "ownerLine.error.pin.not_six_digits.es": "Su PIN debe tener exactamente 6 dígitos.",
+  "ownerLine.error.pin.repeated": "Use different digits. A PIN like 000000 is too easy to guess.",
+  "ownerLine.error.pin.repeated.es": "Use dígitos distintos. Un PIN como 000000 es muy fácil de adivinar.",
+  "ownerLine.error.pin.run": "Avoid digits in a row. A PIN like 123456 is too easy to guess.",
+  "ownerLine.error.pin.run.es": "Evite dígitos seguidos. Un PIN como 123456 es muy fácil de adivinar.",
+  "ownerLine.switch.agencyCannot": "Only the business's Owner can change this.",
+  "ownerLine.switch.agencyCannot.es": "Solo el Dueño del negocio puede cambiar esto.",
+```
+
+- [ ] **Step 7: Classify the guarded action** in `ACCT/access-log-routes.test.ts`'s `NOT_A_RECORD_ACTIONS`, beside the `team/actions.ts` line:
+
+  ```ts
+  ...each(`${A}/team/owner-line-actions.ts`, ["setOwnerLineSwitchAction"], CFG),
+  ```
+
+- [ ] **Step 8: Run green, with the gates this task touches.**
+
+  ```bash
+  pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/preferences/owner-line-actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/access-log-routes.test.ts" src/lib/i18n src/lib/messages.test.ts src/lib/consent/scans.test.ts
+  ```
+
+  Expected: green. If `access-log-routes` names the preferences actions file (it calls no guard, so it should not), add its four actions with `CFG` too and say so in the report. If the Spanish style gate (`spanish-style.test.ts`) flags a word, change the Spanish copy, never the gate. Paste the summary line.
+
+- [ ] **Step 9: Mutation probes.** Each must FAIL BY NAME:
+  1. Delete `if (isAgency) return …` → "the agency can see it but cannot turn it on" FAILS.
+  2. In `me()`, return `myMembership(...)` without the role filter and drop the null check → "not a member … refused" FAILS.
+  3. Skip `checkPin` → "a trivial PIN is refused" FAILS.
+
+- [ ] **Step 10: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line/data-path.ts apps/web/src/lib/owner-line/memberships.ts "apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.ts" "apps/web/src/app/(dashboard)/dashboard/preferences/owner-line-actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/access-log-routes.test.ts" apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): owner line setup actions: verify a cell by call-in code, set a PIN, and the Owner-only business switch"
+  ```
+
+---
+
+## Task 6: Setup card on Mis preferencias, switch card on Team, copy, ⌘K words (LOW, 0.75 day)
+
+**Files:**
+- Create: `apps/web/src/components/owner-line/owner-line-view.ts` and `owner-line-view.test.ts` (the pure status logic, tested)
+- Create: `apps/web/src/components/owner-line/owner-line-card.tsx` and `owner-line-switch-card.tsx` (client)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/preferences/page.tsx` (render one card per membership)
+- Modify: `ACCT/team/page.tsx` (render the switch card under `TeamSection`, above `BisAccessFrame`)
+- Modify: `apps/web/src/lib/messages.ts` (the `ownerLine.card.*` keys)
+- Modify: `apps/web/src/lib/palette/registry.ts:113` and `:101` (append keywords to the existing arrays, never reorder)
+
+**Interfaces:**
+- Consumes (Task 5): the actions, `listMyMemberships`, `MyMembership`. Consumes (Task 2): `readMyOwnerLineEnrollment`, `readOwnerLineSwitch`.
+- Produces:
+
+```ts
+export type OwnerLineCardStep = "cell" | "pin" | "ready" | "off" | "locked";
+export type OwnerLineCardView = { step: OwnerLineCardStep; cell: string | null;
+  status: { key: "ownerLine.card.status.ready" | "ownerLine.card.status.off" | "ownerLine.card.status.locked" | null;
+    params: Record<string, string> } };
+export function ownerLineCardView(i: { enrollment: OwnerLineEnrollment | null; switchOn: boolean; number: string | null;
+  now: Date; zone: string; locale: Locale }): OwnerLineCardView;
+export function nationalNumber(e164: string | null): string;
+```
+
+- [ ] **Step 1: Write the failing view test.**
+
+```ts
+// apps/web/src/components/owner-line/owner-line-view.test.ts
+import { describe, it, expect } from "vitest";
+import { ownerLineCardView, nationalNumber } from "./owner-line-view";
+
+const NOW = new Date("2026-11-09T20:00:00.000Z");
+const base = { switchOn: true, number: "+19565550100", now: NOW, zone: "America/Chicago", locale: "en" as const };
+const enr = (over = {}) => ({ id: "e", e164: "+19565550142", verifiedAt: "2026-11-09T19:00:00Z", verifyExpiresAt: null,
+  pinSetAt: "2026-11-09T19:01:00Z", lockedUntil: null, ...over });
+
+describe("the card's status line in words (spec §3.1)", () => {
+  it("ready: names the business's number in its national form", () => {
+    expect(ownerLineCardView({ ...base, enrollment: enr() })).toEqual({ step: "ready", cell: "956-555-0142",
+      status: { key: "ownerLine.card.status.ready", params: { number: "956-555-0100" } } });
+  });
+  it("the switch off says so, whatever else is ready (mutation: ignore switchOn -> FAILS)", () => {
+    expect(ownerLineCardView({ ...base, switchOn: false, enrollment: enr() }).status.key).toBe("ownerLine.card.status.off");
+  });
+  it("locked: says until when, in the account's zone", () => {
+    const v = ownerLineCardView({ ...base, enrollment: enr({ lockedUntil: "2026-11-09T20:30:00.000Z" }) });
+    expect(v).toMatchObject({ step: "locked", status: { key: "ownerLine.card.status.locked", params: { time: "2:30 PM" } } });
+  });
+  it("no cell yet, or not verified: the cell step; verified without a PIN: the PIN step", () => {
+    expect(ownerLineCardView({ ...base, enrollment: null }).step).toBe("cell");
+    expect(ownerLineCardView({ ...base, enrollment: enr({ verifiedAt: null, pinSetAt: null }) }).step).toBe("cell");
+    expect(ownerLineCardView({ ...base, enrollment: enr({ pinSetAt: null }) }).step).toBe("pin");
+  });
+  it("nationalNumber: US numbers read 956-555-0100; others stay E.164", () => {
+    expect(nationalNumber("+19565550100")).toBe("956-555-0100");
+    expect(nationalNumber("+528991234567")).toBe("+528991234567");
+  });
+});
+```
+
+- [ ] **Step 2: Run it and see it fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/components/owner-line/owner-line-view.test.ts
+  ```
+
+  Expected: FAIL, unresolved import.
+
+- [ ] **Step 3: Implement the view, the cards and the copy.**
+
+```ts
+// apps/web/src/components/owner-line/owner-line-view.ts
+import type { OwnerLineEnrollment } from "@bis/db";
+import type { Locale } from "@/lib/i18n/locale";
+
+export type OwnerLineCardStep = "cell" | "pin" | "ready" | "off" | "locked";
+export type OwnerLineCardView = {
+  step: OwnerLineCardStep; cell: string | null;
+  status: { key: "ownerLine.card.status.ready" | "ownerLine.card.status.off" | "ownerLine.card.status.locked" | null;
+    params: Record<string, string> };
+};
+
+export function nationalNumber(e164: string | null): string {
+  if (!e164) return "";
+  const d = e164.replace(/[^0-9]/g, "");
+  return e164.startsWith("+1") && d.length === 11 ? `${d.slice(1, 4)}-${d.slice(4, 7)}-${d.slice(7)}` : e164;
+}
+
+export function ownerLineCardView(i: {
+  enrollment: OwnerLineEnrollment | null; switchOn: boolean; number: string | null; now: Date; zone: string; locale: Locale;
+}): OwnerLineCardView {
+  const e = i.enrollment;
+  const none = { key: null, params: {} };
+  if (!e || !e.verifiedAt) return { step: "cell", cell: e ? nationalNumber(e.e164) : null, status: none };
+  const cell = nationalNumber(e.e164);
+  if (!e.pinSetAt) return { step: "pin", cell, status: none };
+  if (!i.switchOn) return { step: "off", cell, status: { key: "ownerLine.card.status.off", params: {} } };
+  if (e.lockedUntil && new Date(e.lockedUntil) > i.now) {
+    const time = new Intl.DateTimeFormat(i.locale === "es" ? "es-US" : "en-US",
+      { timeZone: i.zone, hour: "numeric", minute: "2-digit" }).format(new Date(e.lockedUntil)).replace(/ /g, " ");
+    return { step: "locked", cell, status: { key: "ownerLine.card.status.locked", params: { time } } };
+  }
+  return { step: "ready", cell, status: { key: "ownerLine.card.status.ready", params: { number: nationalNumber(i.number) } } };
+}
+```
+
+```tsx
+// apps/web/src/components/owner-line/owner-line-card.tsx
+"use client";
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
+import type { OwnerLineCardView } from "./owner-line-view";
+
+type Result<T = null> = { ok: true; value: T } | { ok: false; error: string };
+
+/**
+ * "Call in to your business" (F-032 §3.1, §3.2), one per membership on Mis preferencias. One primary per step
+ * (DESIGN rule 8): Verify this cell, or Save PIN; everything else is ghost. The code is shown only from the action's
+ * answer: it is stored hashed, so a reload shows "Make a new code" rather than a code nobody can read back.
+ */
+export function OwnerLineCard(props: {
+  businessName: string; number: string; view: OwnerLineCardView; locale: Locale; pseudo: boolean;
+  startVerification: (cell: string) => Promise<Result<{ code: string; expiresAt: string }>>;
+  setPin: (pin: string) => Promise<Result>; removePin: () => Promise<Result>; removeCell: () => Promise<Result>;
+}) {
+  const tr = makeTr(props.locale, props.pseudo);
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [code, setCode] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const run = <T,>(fn: () => Promise<Result<T>>, done?: (v: T) => void) => start(async () => {
+    const r = await fn();
+    if (!r.ok) { setError(r.error); return; }
+    setError(null);
+    done?.(r.value);
+    router.refresh();
+  });
+  const v = props.view;
+  return (
+    <Card data-owner-line-card>
+      <CardHeader>
+        <CardTitle>{tr.text("ownerLine.card.title")}</CardTitle>
+        <p className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.card.body", { business: props.businessName })}</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {v.status.key ? <p data-owner-line-status className="text-sm">{tr.text(v.status.key, v.status.params)}</p> : null}
+        {v.step === "cell" ? (
+          <form className="space-y-2" onSubmit={(e) => {
+            e.preventDefault();
+            const cell = String(new FormData(e.currentTarget).get("cell") ?? "");
+            run(() => props.startVerification(cell), (val) => setCode(val.code));
+          }}>
+            <Label htmlFor={`ol-cell-${props.businessName}`}>{tr.text("ownerLine.card.cell.label")}</Label>
+            <Input id={`ol-cell-${props.businessName}`} name="cell" inputMode="tel" autoComplete="tel" defaultValue={v.cell ?? ""} />
+            <Button type="submit" disabled={pending}>{tr.text(code ? "ownerLine.card.cell.again" : "ownerLine.card.cell.save")}</Button>
+          </form>
+        ) : null}
+        {v.step === "cell" && code ? (
+          <div data-owner-line-code className="space-y-2">
+            <p className="text-sm">{tr.text("ownerLine.card.verify.instructions", { number: props.number })}</p>
+            <p className="font-mono text-2xl tabular-nums tracking-[0.3em]" aria-label={tr.text("ownerLine.card.verify.codeLabel")}>{code}</p>
+            <Button type="button" variant="ghost" onClick={() => router.refresh()}>{tr.text("ownerLine.card.verify.check")}</Button>
+          </div>
+        ) : null}
+        {v.step === "pin" ? (
+          <form className="space-y-2" onSubmit={(e) => {
+            e.preventDefault();
+            const pin = String(new FormData(e.currentTarget).get("pin") ?? "");
+            run(() => props.setPin(pin), () => toast.success(tr.text("ownerLine.card.pin.saved")));
+          }}>
+            <Label htmlFor={`ol-pin-${props.businessName}`}>{tr.text("ownerLine.card.pin.label")}</Label>
+            <Input id={`ol-pin-${props.businessName}`} name="pin" type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} />
+            <Button type="submit" disabled={pending}>{tr.text("ownerLine.card.pin.save")}</Button>
+          </form>
+        ) : null}
+        {v.step === "ready" || v.step === "off" || v.step === "locked" ? (
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="ghost" disabled={pending} onClick={() => run(props.removePin, () => toast.success(tr.text("ownerLine.card.pin.removed")))}>
+              {tr.text("ownerLine.card.pin.change")}
+            </Button>
+            <Button type="button" variant="ghost" disabled={pending} onClick={() => run(props.removeCell, () => toast.success(tr.text("ownerLine.card.removed")))}>
+              {tr.text("ownerLine.card.remove")}
+            </Button>
+          </div>
+        ) : null}
+        {error ? <p role="alert" className="text-sm text-[var(--crit)]">{error}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+"Change PIN" removes the stored PIN, which drops the card back to the PIN step. That is two clicks and never shows the old PIN. Removing is a fresh start, not a destructive purge: the toast states it and the person sets a new one (rule 6: nothing here can be undone, because the hash is gone; it is not a record a typed-name confirm would protect).
+
+```tsx
+// apps/web/src/components/owner-line/owner-line-switch-card.tsx
+"use client";
+
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { makeTr } from "@/lib/record/copy";
+import type { Locale } from "@/lib/i18n/locale";
+
+type Result = { ok: true; value: { enabledAt: string | null } } | { ok: false; error: string };
+
+/** F-032 §3.3: Owner-only, off by default. The agency sees the state and the reason it cannot change it. Turning it
+ *  on or off is reversible, so it runs at once with Undo (DESIGN rule 6). Status is dot + word (rule 3). */
+export function OwnerLineSwitchCard(props: {
+  on: boolean; canChange: boolean; locale: Locale; pseudo: boolean; setSwitch?: (on: boolean) => Promise<Result>;
+}) {
+  const tr = makeTr(props.locale, props.pseudo);
+  const [on, setOn] = useState(props.on);
+  const [pending, start] = useTransition();
+  const flip = (next: boolean, undo = true) => start(async () => {
+    const r = await props.setSwitch!(next);
+    if (!r.ok) { toast.error(r.error); return; }
+    setOn(next);
+    if (undo) toast.success(tr.text(next ? "ownerLine.switch.turnedOn" : "ownerLine.switch.turnedOff"),
+      { action: { label: tr.text("common.undo"), onClick: () => flip(!next, false) } });
+  });
+  return (
+    <Card data-owner-line-switch className="mt-6">
+      <CardHeader>
+        <CardTitle>{tr.text("ownerLine.switch.title")}</CardTitle>
+        <p className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.switch.body")}</p>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <span className="inline-flex items-center gap-2 text-sm">
+          <span aria-hidden className={`size-2 rounded-full ${on ? "bg-[var(--good)]" : "bg-[var(--text-3)]"}`} />
+          {tr.text(on ? "ownerLine.switch.on" : "ownerLine.switch.off")}
+        </span>
+        {props.canChange && props.setSwitch ? (
+          <Button type="button" variant={on ? "ghost" : "default"} disabled={pending} onClick={() => flip(!on)}>
+            {tr.text(on ? "ownerLine.switch.turnOff" : "ownerLine.switch.turnOn")}
+          </Button>
+        ) : (
+          <p className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.switch.agencyCannot")}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+Read `components/ui/button.tsx` first and use its real variant names for primary and ghost. If they differ from `default` and `ghost`, use the file's names.
+
+Wire the preferences page. In `preferences/page.tsx`, after the `PreferencesPanel`, render the cards for a client person (an agency person has no memberships, so nothing renders). Add this to the existing `Promise.all`:
+
+```tsx
+// preferences/page.tsx additions (imports)
+import { serviceDb, readMyOwnerLineEnrollment, readOwnerLineSwitch, readAccountTimezone } from "@bis/db";
+import { listMyMemberships } from "@/lib/owner-line/memberships";
+import { ownerLineCardView, nationalNumber } from "@/components/owner-line/owner-line-view";
+import { OwnerLineCard } from "@/components/owner-line/owner-line-card";
+import {
+  startOwnerLineVerificationAction, setOwnerLinePinAction, removeOwnerLinePinAction, removeOwnerLineCellAction,
+} from "./owner-line-actions";
+// …inside PreferencesPage, after `prefs` resolves; `locale` is prefs.language ?? accountLanguage ?? "en":
+  const memberships = isAgency ? [] : await listMyMemberships(serviceDb(), userId);
+  const cards = await Promise.all(memberships.map(async (mb) => {
+    const db = serviceDb();
+    const [enrollment, enabledAt, zone] = await Promise.all([
+      readMyOwnerLineEnrollment(db, mb.accountId, mb.userId), readOwnerLineSwitch(db, mb.accountId),
+      readAccountTimezone(db, mb.accountId),
+    ]);
+    return { mb, view: ownerLineCardView({ enrollment, switchOn: enabledAt !== null, number: mb.number, now: new Date(), zone, locale }) };
+  }));
+// …in the JSX, after <PreferencesPanel …/>:
+      {cards.length > 0 ? (
+        <section id="owner-line" className="mt-6 space-y-4">
+          {cards.map(({ mb, view }) => (
+            <OwnerLineCard key={mb.accountId} businessName={mb.businessName} number={nationalNumber(mb.number)}
+              view={view} locale={locale} pseudo={false}
+              startVerification={startOwnerLineVerificationAction.bind(null, mb.accountId, locale)}
+              setPin={setOwnerLinePinAction.bind(null, mb.accountId, locale)}
+              removePin={removeOwnerLinePinAction.bind(null, mb.accountId, locale)}
+              removeCell={removeOwnerLineCellAction.bind(null, mb.accountId, locale)} />
+          ))}
+        </section>
+      ) : null}
+```
+
+`readAccountTimezone` is the existing export used by `WEB/lib/shell/snapshot.ts:2`. Read its signature there before calling it.
+
+Also hide the card for a role not in `OWNER_LINE_ROLES` (`listMyMemberships` returns every role, so filter with `memberships.filter((mb) => OWNER_LINE_ROLES.includes(mb.role))`).
+
+Wire the team page. In `ACCT/team/page.tsx`, after the `TeamSection` `Suspense`:
+
+```tsx
+import { serviceDb, readOwnerLineSwitch } from "@bis/db";
+import { OwnerLineSwitchCard } from "@/components/owner-line/owner-line-switch-card";
+import { setOwnerLineSwitchAction } from "./owner-line-actions";
+// …after `locale`/`pseudo`:
+  const ownerLineOn = (await readOwnerLineSwitch(serviceDb(), accountId)) !== null;
+// …JSX, between the TeamSection Suspense and BisAccessFrame:
+        <OwnerLineSwitchCard on={ownerLineOn} canChange={!isAgency} locale={locale} pseudo={pseudo}
+          setSwitch={isAgency ? undefined : setOwnerLineSwitchAction.bind(null, accountId, locale)} />
+```
+
+(`requireAccountOwner` ran first on this page, so the service read is scoped to an account this caller may manage.)
+
+The copy, appended to the `F-032 owner line` block in `messages.ts`:
+
+```ts
+  "ownerLine.card.title": "Call in to your business",
+  "ownerLine.card.title.es": "Llame a su negocio",
+  "ownerLine.card.body": "Call {business} from your cell, enter your PIN, and Sofía tells you about your calls, your appointments and what needs your attention.",
+  "ownerLine.card.body.es": "Llame a {business} desde su celular, marque su PIN y Sofía le cuenta sobre sus llamadas, sus citas y lo que necesita su atención.",
+  "ownerLine.card.cell.label": "Your cell",
+  "ownerLine.card.cell.label.es": "Su celular",
+  "ownerLine.card.cell.save": "Verify this cell",
+  "ownerLine.card.cell.save.es": "Verificar este celular",
+  "ownerLine.card.cell.again": "Make a new code",
+  "ownerLine.card.cell.again.es": "Generar otro código",
+  "ownerLine.card.verify.instructions": "From this cell, call {number} and enter this code. It works for 10 minutes.",
+  "ownerLine.card.verify.instructions.es": "Desde este celular, llame al {number} y marque este código. Sirve por 10 minutos.",
+  "ownerLine.card.verify.codeLabel": "Your code",
+  "ownerLine.card.verify.codeLabel.es": "Su código",
+  "ownerLine.card.verify.check": "I called. Check again",
+  "ownerLine.card.verify.check.es": "Ya llamé. Revisar de nuevo",
+  "ownerLine.card.pin.label": "PIN (6 digits)",
+  "ownerLine.card.pin.label.es": "PIN (6 dígitos)",
+  "ownerLine.card.pin.save": "Save PIN",
+  "ownerLine.card.pin.save.es": "Guardar PIN",
+  "ownerLine.card.pin.saved": "PIN saved.",
+  "ownerLine.card.pin.saved.es": "PIN guardado.",
+  "ownerLine.card.pin.change": "Change PIN",
+  "ownerLine.card.pin.change.es": "Cambiar PIN",
+  "ownerLine.card.pin.removed": "PIN removed. Set a new one to call in again.",
+  "ownerLine.card.pin.removed.es": "Se quitó el PIN. Ponga uno nuevo para volver a llamar.",
+  "ownerLine.card.remove": "Stop calling in from this cell",
+  "ownerLine.card.remove.es": "Dejar de llamar desde este celular",
+  "ownerLine.card.removed": "This cell no longer calls in.",
+  "ownerLine.card.removed.es": "Este celular ya no puede llamar.",
+  "ownerLine.card.status.ready": "Ready: call {number} from your cell.",
+  "ownerLine.card.status.ready.es": "Listo: llame al {number} desde su celular.",
+  "ownerLine.card.status.off": "Your business has calling in turned off. Ask the Owner.",
+  "ownerLine.card.status.off.es": "Su negocio tiene apagada esta opción. Pídasela al Dueño.",
+  "ownerLine.card.status.locked": "Calling in is paused until {time} after 3 wrong PINs.",
+  "ownerLine.card.status.locked.es": "Las llamadas están en pausa hasta las {time} por 3 PIN incorrectos.",
+  "ownerLine.switch.title": "Let your team call in to hear the day",
+  "ownerLine.switch.title.es": "Permita que su equipo llame para escuchar el día",
+  "ownerLine.switch.body": "Each person calls this business's number from their own verified cell and enters their own PIN. They hear only what they see in the app.",
+  "ownerLine.switch.body.es": "Cada persona llama al número de este negocio desde su propio celular verificado y marca su propio PIN. Solo escucha lo que ve en la aplicación.",
+  "ownerLine.switch.on": "On",
+  "ownerLine.switch.on.es": "Encendido",
+  "ownerLine.switch.off": "Off",
+  "ownerLine.switch.off.es": "Apagado",
+  "ownerLine.switch.turnOn": "Turn on",
+  "ownerLine.switch.turnOn.es": "Encender",
+  "ownerLine.switch.turnOff": "Turn off",
+  "ownerLine.switch.turnOff.es": "Apagar",
+  "ownerLine.switch.turnedOn": "Your team can call in now.",
+  "ownerLine.switch.turnedOn.es": "Su equipo ya puede llamar.",
+  "ownerLine.switch.turnedOff": "Calling in is off.",
+  "ownerLine.switch.turnedOff.es": "Las llamadas están apagadas.",
+```
+
+⌘K: in `WEB/lib/palette/registry.ts`, append `"owner line", "call in", "pin", "llamar"` to the end of the `"nav:preferences"` array (`:113`), and `"call in", "owner line"` to the end of the `"settings:team"` array (`:101`). Do not reorder anything.
+
+- [ ] **Step 4: Run green.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/components/owner-line "src/app/(dashboard)/dashboard/preferences" "src/app/(dashboard)/dashboard/accounts/[accountId]/team" src/lib/palette src/lib/i18n src/lib/messages.test.ts src/lib/consent/scans.test.ts && pnpm --filter web typecheck
+  ```
+
+  Expected: green, and typecheck silent. Paste the summary line. LOW tier: no mutation probe of its own beyond the switch-ignored case in Step 1.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add apps/web/src/components/owner-line "apps/web/src/app/(dashboard)/dashboard/preferences/page.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/team/page.tsx" apps/web/src/lib/messages.ts apps/web/src/lib/palette/registry.ts
+  git commit -m "feat(voice): the Call in to your business card on Mis preferencias and the Owner's switch on Team (EN/ES)"
+  ```
+
+---
+
+## Task 7: Answer-route branch and the `<Gather>` (HIGH, 0.75 day)
+
+**Files:**
+- Create: `apps/web/src/app/api/voice/texml/owner-line-xml.ts` and `owner-line-xml.test.ts`. These are colocated helpers, not routes, like `./xml.ts` and `./telnyx-request.ts`, so `lib/` never imports from `app/`.
+- Modify: `apps/web/src/app/api/voice/texml/route.ts`:
+  - `Routability` (`:89-103`)
+  - `classify` (`:218-409`)
+  - `dialXml` (`:479-540`)
+  - `answer` (`:684-700`)
+  - `route` (`:715-844`)
+- Modify: `apps/web/src/app/api/voice/texml/route.test.ts` (append one `describe`) and `wellformed.test.ts` (append one `describe`).
+- Modify: `apps/web/src/lib/messages.ts` (the `ownerLine.say.*` keys).
+
+**Interfaces:**
+- Consumes (Task 2): `ownerLineAnswerLookup`, `OWNER_LINE_MAX_CALLS_PER_DAY`, `OwnerLineLookup` (lazy `@bis/db` import).
+- Consumes (Task 4): `signOwnerPass`, `OWNER_PASS_HEADER`, `OwnerPassRole`.
+- Consumes (Task 5): `OWNER_LINE_ROLES` (`lib/owner-line/data-path.ts`).
+- Produces (exported from `route.ts`, for Task 9):
+
+```ts
+export async function answer(calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+  opts?: { skipScreen?: boolean; skipOwnerLine?: boolean }): Promise<NextResponse>;
+export function ownerLineBridge(calledE164: string, callerE164: string, origin: string,
+  owner: { accountId: string; userId: string; role: OwnerPassRole }): NextResponse;
+export async function ownerLineGatherAgain(calledE164: string, callerE164: string, origin: string,
+  p: { kind: "pin" | "verify"; locale: Locale; accountId: string; name: string | null }): Promise<NextResponse>;
+```
+
+and from `owner-line-xml.ts`:
+
+```ts
+export const OWNER_PIN_TIMEOUT_SECONDS = 8;
+export function ownerPinUrl(origin: string): string;     // `${origin}/api/voice/texml/owner-pin`
+export function firstName(name: string | null): string | null;
+export function ownerPinAskXml(p: { locale: Locale; name: string | null; persona: string; action: string; retry: boolean; bridge: string }): string;
+export function ownerVerifyAskXml(p: { locale: Locale; action: string; retry: boolean; bridge: string }): string;
+export function ownerLimitXml(p: { locale: Locale; persona: string; bridge: string }): string;
+export function ownerVerifiedXml(locale: Locale): string;
+export function ownerVerifySpentXml(locale: Locale): string;
+```
+
+- [ ] **Step 1: Verify the `<Gather>` attributes (A-3); a documentation read, not a provider call.**
+  - Read https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather and record in the report:
+    - (a) whether `finishOnKey` is a documented attribute, and its default;
+    - (b) what the docs say is sent when the finish key is pressed with no digits;
+    - (c) whether `timeout` with no input falls through to the next verb or posts to `action`.
+  - If (a) is NO, delete `finishOnKey="#"` from `gather()` below and from the test's expected string.
+  - Every case of (b) and (c) is already handled: the next verb after the Gather is today's bridge, and owner-pin treats `Digits` "" and "#" as today's path.
+
+  Write the answers into the file header of `owner-line-xml.ts`, with the date read, as `route.ts:171-176` does for the screen.
+
+- [ ] **Step 2: Write the failing tests.**
+
+```ts
+// apps/web/src/app/api/voice/texml/owner-line-xml.test.ts
+import { describe, it, expect } from "vitest";
+import { ownerPinAskXml, ownerVerifyAskXml, ownerLimitXml, ownerVerifiedXml, firstName, ownerPinUrl } from "./owner-line-xml";
+
+const DIAL = `<Dial answerOnBridge="true" action="https://x/h" method="POST"><Sip>sip:p@sip.api.openai.com</Sip></Dial>`;
+
+describe("the owner line's TeXML words (spec §4.1, §4.2)", () => {
+  it("asks for the PIN by first name, in one Gather of exactly six digits, then falls through to today's bridge", () => {
+    const xml = ownerPinAskXml({ locale: "en", name: "Dan", persona: "Sofía", action: ownerPinUrl("https://x"), retry: false, bridge: DIAL });
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Gather action="https://x/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>${DIAL}</Response>`);
+  });
+  it("Spanish speaks es-MX, in usted", () => {
+    const xml = ownerPinAskXml({ locale: "es", name: "Dan", persona: "Sofía", action: "a", retry: false, bridge: DIAL });
+    expect(xml).toContain(`<Say language="es-MX">Hola, Dan. Marque su PIN, o oprima la tecla de número para hablar con Sofía.</Say>`);
+  });
+  it("a retry says the PIN did not match before asking again, inside the same Gather", () => {
+    const xml = ownerPinAskXml({ locale: "en", name: null, persona: "Sofía", action: "a", retry: true, bridge: DIAL });
+    // xmlText escapes the apostrophe (./xml.ts: five entities), so the document carries &apos;.
+    expect(xml).toContain(`<Gather action="a" numDigits="6" timeout="8" finishOnKey="#"><Say>That PIN didn&apos;t match. Try again.</Say><Say>Hi. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`);
+  });
+  it("the call-in code ask, the limit line and the verified goodbye", () => {
+    expect(ownerVerifyAskXml({ locale: "en", action: "a", retry: false, bridge: DIAL })).toContain("<Say>Enter the 6-digit code shown on your screen.</Say>");
+    expect(ownerLimitXml({ locale: "en", persona: "Sofía", bridge: DIAL })).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>You&apos;ve reached today&apos;s limit for calling in. Here is Sofía.</Say>${DIAL}</Response>`);
+    expect(ownerVerifiedXml("en")).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Thank you. This phone is verified. You can hang up now.</Say><Hangup/></Response>`);
+  });
+  it("escapes a name: a stored name can never break the document", () => {
+    expect(ownerPinAskXml({ locale: "en", name: "A&B <x>", persona: "Sofía", action: "a", retry: false, bridge: DIAL }))
+      .toContain("Hi A&amp;B. Enter");
+    expect(firstName("  Dan   Lopez ")).toBe("Dan");
+    expect(firstName(null)).toBeNull();
+  });
+});
+```
+
+Append to `route.test.ts`. Extend the existing `vi.mock("@bis/db", …)` object, keeping every existing key, with:
+
+```ts
+  ownerLineAnswerLookup: (...a: unknown[]) => ownerLookupMock(...a),
+  OWNER_LINE_MAX_CALLS_PER_DAY: 10,
+```
+
+Declare `const ownerLookupMock = vi.hoisted(() => vi.fn());` beside the other hoisted mocks. In the top-level `beforeEach`, add `ownerLookupMock.mockReset().mockResolvedValue({ status: "none" });`. Then:
+
+```ts
+describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, SC-17)", () => {
+  const SECRET = "h".repeat(48);
+  const TO = "+19565550999";
+  const CELL = "+19565550142";
+  const HIT = { status: "pin", enrollmentId: "e1", userId: "22222222-2222-4222-8222-222222222222", role: "owner",
+    name: "Dan Lopez", language: "en", accountLanguage: "es", pinParams: "scrypt:15:8:1:" + "A".repeat(22) };
+
+  function telnyxSigned(params: Record<string, string>) {
+    const raw = new URLSearchParams(params).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const sig = cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey);
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    return POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw,
+      headers: { "content-type": "application/x-www-form-urlencoded", "telnyx-timestamp": ts, "telnyx-signature-ed25519": sig.toString("base64") },
+    }));
+  }
+  const sipParams = (xml: string) => {
+    const uri = /<Sip>([^<]*)<\/Sip>/.exec(xml)![1]!.replaceAll("&amp;", "&");
+    return new URLSearchParams(uri.slice(uri.indexOf("?") + 1));
+  };
+
+  beforeEach(() => { process.env.VOICE_HANDOFF_SECRET = SECRET; });
+  afterEach(() => { delete process.env.VOICE_HANDOFF_SECRET; delete process.env.TELNYX_PUBLIC_KEY; });
+
+  it("a registered, verified cell with a PIN hears the PIN step, and the fallthrough is today's bridge with no owner pass", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial`);
+    expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
+    expect(ownerLookupMock).toHaveBeenCalledWith({}, "a1", CELL, utcDayStart(new Date()), 10);
+  });
+
+  it("a customer (no enrollment) gets today's document byte-for-byte apart from the per-call token (mutation: offer the Gather on 'none' -> FAILS)", async () => {
+    const xml = await (await telnyxSigned({ To: TO, From: "+19565550177" })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toMatch(/^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Dial answerOnBridge="true" action="[^"]+" method="POST"><Sip>[^<]+<\/Sip><\/Dial><\/Response>$/);
+  });
+
+  it("an UNSIGNED request never looks the owner up, so it can never offer the step (mutation: drop authenticated from the eligibility -> FAILS)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: new URLSearchParams({ To: TO, From: CELL }),
+      headers: { "content-type": "application/x-www-form-urlencoded" } }))).text();
+    expect(xml).not.toContain("<Gather");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  it("a lookup that throws is a miss: today's bridge, logged, nothing else changes", async () => {
+    ownerLookupMock.mockRejectedValue(new Error("db blip"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toContain("<Dial");
+    expect(err.mock.calls.flat().join(" ")).toContain("owner-line lookup failed");
+  });
+
+  it.each([["off"], ["locked"]])("status %s is today's path (a locked person continues as a customer)", async (status) => {
+    ownerLookupMock.mockResolvedValue({ status });
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).not.toContain("<Gather");
+  });
+
+  it("over the daily limit: a short line in their language, then today's bridge", async () => {
+    ownerLookupMock.mockResolvedValue({ ...HIT, status: "over_limit", language: "es" });
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain(`<Response><Say language="es-MX">Ya llegó al límite de llamadas de hoy. Le comunico con Sofía.</Say><Dial`);
+  });
+
+  it("the agency's forward is on: not offered, so the fallthrough can never differ from today's path (SC-17)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true });
+    transferPhoneMock.mockResolvedValue(null);
+    ownedNumbersMock.mockResolvedValue([]);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).not.toContain("<Gather");
+  });
+
+  it("a role the data path does not offer is not asked (F2: a Technician)", async () => {
+    vi.doMock("@/lib/owner-line/data-path", () => ({ OWNER_LINE_ROLES: ["owner", "staff"], OWNER_LINE_DATA_PATH: "service" }));
+    vi.resetModules();
+    const { POST: post } = await import("./route");
+    ownerLookupMock.mockResolvedValue({ ...HIT, role: "technician" });
+    const raw = new URLSearchParams({ To: TO, From: CELL }).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    const res = await post(new Request("https://x.example/api/voice/texml", { method: "POST", body: raw, headers: {
+      "content-type": "application/x-www-form-urlencoded", "telnyx-timestamp": ts,
+      "telnyx-signature-ed25519": cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey).toString("base64") } }));
+    expect(await res.text()).not.toContain("<Gather");
+    vi.doUnmock("@/lib/owner-line/data-path");
+  });
+
+  it("ownerLineBridge carries an owner pass that verifies against THIS dial's handoff token (mutation: sign with a fresh token -> FAILS)", async () => {
+    const { ownerLineBridge } = await import("./route");
+    const { verifyOwnerPass } = await import("@/lib/voice/sip-handoff-signature");
+    const xml = await ownerLineBridge(TO, CELL, "https://x.example", { accountId: "11111111-1111-4111-8111-111111111111", userId: HIT.userId, role: "staff" }).text();
+    const p = sipParams(xml);
+    expect(verifyOwnerPass(p.get("X-BIS-Owner-Pass"), p.get("X-BIS-Handoff"), Date.now())).toMatchObject({
+      ok: true, accountId: "11111111-1111-4111-8111-111111111111", userId: HIT.userId, role: "staff", calledE164: TO });
+    expect(p.get("X-BIS-Signature")).toBeTruthy();
+  });
+});
+```
+
+`profileMock`, `transferPhoneMock`, `ownedNumbersMock`, `ENABLED_PROFILE`, `generateKeyPairSync`, `cryptoSign` and `utcDayStart` already exist at the top of `route.test.ts` (`:1-90`). Read them before writing. If the forward test needs a stub shape other than the one above, use whatever that file's own forward cases (`forward.test.ts`) use.
+
+Append to `wellformed.test.ts`:
+
+```ts
+import { ownerPinAskXml, ownerVerifyAskXml, ownerLimitXml, ownerVerifiedXml, ownerVerifySpentXml } from "./owner-line-xml";
+describe("the owner line's documents parse (F-032)", () => {
+  const DIAL = `<Dial answerOnBridge="true" action="https://x/h?t=a&amp;f=b" method="POST"><Sip>sip:p@sip.api.openai.com;transport=tls?X-BIS-Called=%2B1&amp;X-BIS-Handoff=t</Sip></Dial>`;
+  it.each([
+    ownerPinAskXml({ locale: "en", name: "O'Brien & Sons", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
+    ownerVerifyAskXml({ locale: "es", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
+    ownerLimitXml({ locale: "en", persona: "Sofía", bridge: DIAL }),
+    ownerVerifiedXml("es"), ownerVerifySpentXml("en"),
+  ])("parses strictly: %#", (xml) => { expect(() => parseXmlStrict(xml)).not.toThrow(); });
+});
+```
+
+- [ ] **Step 3: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice/texml/owner-line-xml.test.ts src/app/api/voice/texml/route.test.ts src/app/api/voice/texml/wellformed.test.ts
+  ```
+
+  Expected: FAIL (unresolved `./owner-line-xml`, and `ownerLineBridge is not a function`). Paste one line.
+
+- [ ] **Step 4: Implement `owner-line-xml.ts`.**
+
+```ts
+// apps/web/src/app/api/voice/texml/owner-line-xml.ts
+// The owner line's TeXML (F-032 §4.1, §4.2). NOT a route: a helper colocated with ./xml.ts.
+//
+// THE GATHER. Telnyx's <Gather> (https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather,
+// read <date> in Task 7 Step 1): action, numDigits, timeout, finishOnKey <record (a), (b), (c) here>. No `method`,
+// for the screen's reason (route.ts:171-176). The digits are keyed into Telnyx's leg BEFORE <Dial> runs, so they never
+// reach OpenAI, its audio or our transcripts (spec §2.2).
+//
+// THE FALLTHROUGH IS TODAY'S BRIDGE. Every ask is followed by the same <Dial> a customer gets (passed in as `bridge`),
+// with NO owner pass. Whatever Telnyx does when the ask times out, falling through or posting with no Digits, the
+// caller reaches Sofía as a customer: "pound, or a timeout with no digits: today's normal call path" (§4.2).
+import { xmlText } from "./xml";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+
+export const OWNER_PIN_TIMEOUT_SECONDS = 8;
+const HEAD = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>`;
+
+export function ownerPinUrl(origin: string): string {
+  return `${origin}/api/voice/texml/owner-pin`;
+}
+
+export function firstName(name: string | null): string | null {
+  const first = name?.trim().split(/\s+/)[0];
+  return first ? first : null;
+}
+
+function say(locale: Locale, text: string): string {
+  return locale === "es" ? `<Say language="es-MX">${xmlText(text)}</Say>` : `<Say>${xmlText(text)}</Say>`;
+}
+
+function gather(action: string, inner: string): string {
+  return `<Gather action="${xmlText(action)}" numDigits="6" timeout="${OWNER_PIN_TIMEOUT_SECONDS}" finishOnKey="#">${inner}</Gather>`;
+}
+
+export function ownerPinAskXml(p: { locale: Locale; name: string | null; persona: string; action: string; retry: boolean; bridge: string }): string {
+  const name = firstName(p.name);
+  const prompt = name
+    ? t(m, "ownerLine.say.pinPrompt", p.locale, { name, persona: p.persona })
+    : t(m, "ownerLine.say.pinPromptNoName", p.locale, { persona: p.persona });
+  const inner = (p.retry ? say(p.locale, t(m, "ownerLine.say.pinWrong", p.locale)) : "") + say(p.locale, prompt);
+  return `${HEAD}${gather(p.action, inner)}${p.bridge}</Response>`;
+}
+
+export function ownerVerifyAskXml(p: { locale: Locale; action: string; retry: boolean; bridge: string }): string {
+  const inner = (p.retry ? say(p.locale, t(m, "ownerLine.say.verifyWrong", p.locale)) : "")
+    + say(p.locale, t(m, "ownerLine.say.verifyPrompt", p.locale));
+  return `${HEAD}${gather(p.action, inner)}${p.bridge}</Response>`;
+}
+
+export function ownerLimitXml(p: { locale: Locale; persona: string; bridge: string }): string {
+  return `${HEAD}${say(p.locale, t(m, "ownerLine.say.limit", p.locale, { persona: p.persona }))}${p.bridge}</Response>`;
+}
+
+export function ownerVerifiedXml(locale: Locale): string {
+  return `${HEAD}${say(locale, t(m, "ownerLine.say.verifyDone", locale))}<Hangup/></Response>`;
+}
+
+export function ownerVerifySpentXml(locale: Locale): string {
+  return `${HEAD}${say(locale, t(m, "ownerLine.say.verifySpent", locale))}<Hangup/></Response>`;
+}
+```
+
+The spoken copy goes into `messages.ts`'s F-032 block. This is customer-adjacent telephone copy (TeXML `<Say>`): plain words, *usted*, no jargon.
+
+```ts
+  "ownerLine.say.pinPrompt": "Hi {name}. Enter your PIN, or press pound to talk to {persona}.",
+  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de número para hablar con {persona}.",
+  "ownerLine.say.pinPromptNoName": "Hi. Enter your PIN, or press pound to talk to {persona}.",
+  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de número para hablar con {persona}.",
+  "ownerLine.say.pinWrong": "That PIN didn't match. Try again.",
+  "ownerLine.say.pinWrong.es": "Ese PIN no coincide. Intente de nuevo.",
+  "ownerLine.say.limit": "You've reached today's limit for calling in. Here is {persona}.",
+  "ownerLine.say.limit.es": "Ya llegó al límite de llamadas de hoy. Le comunico con {persona}.",
+  "ownerLine.say.verifyPrompt": "Enter the 6-digit code shown on your screen.",
+  "ownerLine.say.verifyPrompt.es": "Marque el código de 6 dígitos que aparece en su pantalla.",
+  "ownerLine.say.verifyWrong": "That code didn't match. Try again.",
+  "ownerLine.say.verifyWrong.es": "Ese código no coincide. Intente de nuevo.",
+  "ownerLine.say.verifyDone": "Thank you. This phone is verified. You can hang up now.",
+  "ownerLine.say.verifyDone.es": "Gracias. Este teléfono quedó verificado. Ya puede colgar.",
+  "ownerLine.say.verifySpent": "That code can't be used anymore. Make a new one on your screen.",
+  "ownerLine.say.verifySpent.es": "Ese código ya no se puede usar. Genere uno nuevo en su pantalla.",
+```
+
+- [ ] **Step 5: Implement the `route.ts` changes.**
+  1. Imports: add `import { signOwnerPass, OWNER_PASS_HEADER, type OwnerPassRole } from "@/lib/voice/sip-handoff-signature";` to the existing sip-handoff import line, plus `import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";`, `import type { OwnerLineLookup } from "@bis/db";` (type-only, so there is no runtime import), `import type { Locale } from "@/lib/i18n/locale";`, and `import { ownerPinUrl, ownerPinAskXml, ownerVerifyAskXml, ownerLimitXml, firstName } from "./owner-line-xml";`.
+  2. `Routability`'s `dial` arm gains `ownerLine?: Extract<OwnerLineLookup, { status: "verify" | "pin" | "over_limit" }>; personaName?: string;`.
+  3. `classify(calledE164, callerE164, ownerLineEligible: boolean)`. Inside the inner `try`, right after `const dayStart = utcDayStart(now);`:
+
+```ts
+      // F-032 (§4.1): started BESIDE the batch below, never inside it, so its failure can never fail the caps open
+      // or closed, and a stranger's call waits for max(), not +. A throw is a miss: today's path.
+      const ownerRead: Promise<OwnerLineLookup | null> = ownerLineEligible && callerE164
+        ? dbModule.ownerLineAnswerLookup(db, row.account_id, callerE164, dayStart, dbModule.OWNER_LINE_MAX_CALLS_PER_DAY)
+          .catch((e: unknown) => {
+            console.error(`texml owner-line lookup failed — today's path, accountId ${row.account_id}: ${String(e)}`);
+            return null;
+          })
+        : Promise.resolve(null);
+```
+
+     The cleared `dial` return (`:400-404`) becomes:
+
+```ts
+    const looked = await ownerRead;
+    const ownerLine = looked && (looked.status === "verify" || looked.status === "pin" || looked.status === "over_limit")
+      && OWNER_LINE_ROLES.includes(looked.role) ? looked : undefined;
+    return {
+      kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
+      forwardCalls: profile.forward_calls === true, cleared: true,
+      languages: profile.languages, firstTimeCaller, personaName: profile.persona_name,
+      ...(ownerLine ? { ownerLine } : {}), ...(await withBilling()),
+    };
+```
+
+     `ownerRead` must be declared before the inner `try`, so the cleared return can see it. Move `const now = new Date(); const dayStart = utcDayStart(now);` above the inner `try`, unchanged. The fail-open return inside `catch` (`:394-398`) does not await it, so an uncleared call is never offered the owner line.
+  4. `dialXml(…, drill = false, extra: { ownerLine?: { accountId: string; userId: string; role: OwnerPassRole }; wrap?: (dial: string) => string } = {})`. After `signature` is computed, add:
+
+```ts
+  // F-032 §4.3: the owner pass, only for a Telnyx-signed request (owner-pin refuses any other) and only with a
+  // usable secret. A pass that cannot be signed is logged and the call reaches the receptionist, never an error.
+  const ownerPass = extra.ownerLine && authenticated && calledE164
+    ? signOwnerPass(token, { ...extra.ownerLine, calledE164 }, Date.now())
+    : null;
+  if (extra.ownerLine && !ownerPass) {
+    console.error(`texml: an owner pass could not be signed — this call reaches the receptionist, accountId ${extra.ownerLine.accountId}`);
+  }
+```
+
+     Then add `...(ownerPass ? [`${OWNER_PASS_HEADER}=${encodeURIComponent(ownerPass)}`] : []),` as the last element of `params`. The return becomes:
+
+```ts
+  const dial = `<Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial>`;
+  return {
+    body: extra.wrap ? extra.wrap(dial) : `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${dial}</Response>`,
+    unsignedBridge,
+  };
+```
+
+     The default body is byte-identical to before, which the existing tests pin.
+  5. `answer(..., opts: { skipScreen?: boolean; skipOwnerLine?: boolean } = {})` passes `opts.skipOwnerLine === true` as a sixth argument to `route`. `route(..., skipScreen = false, skipOwnerLine = false)` calls `classify(calledE164, callerE164, !skipOwnerLine && authenticated && sipHandoffSecretConfigured())`.
+  6. In `route`, right after the `cap` return (`:742`) and before the press-1 screen block:
+
+```ts
+    // F-032 §4.1: the owner line. AHEAD of the press-1 screen (SC-16), only on a cleared call whose Gather can fall
+    // through to today's bridge (SC-17: never with the agency's forward on, billing's no-voice, or the drill), and
+    // only on a signed request (the lookup was not even read otherwise; SC-14).
+    const ol = result.ownerLine;
+    if (ol && result.cleared && result.accountId && !result.noVoice && !result.forwardCalls
+        && !fallbackDrillActive(calledE164, callerE164)) {
+      const locale: Locale = ol.language ?? ol.accountLanguage ?? "en";
+      const persona = result.personaName || "Sofía";
+      const cleared = { accountId: result.accountId, callerE164 };
+      const action = ownerPinUrl(origin);
+      const ask = (wrap: (dial: string) => string) =>
+        done(xmlResponse(dialXml(calledE164, callerE164, origin, authenticated, cleared, false, { wrap }).body));
+      if (ol.status === "verify") {
+        console.log(`texml owner line asking for a call-in code, accountId ${result.accountId}`);
+        return ask((dial) => ownerVerifyAskXml({ locale, action, retry: false, bridge: dial }));
+      }
+      if (ol.status === "pin") {
+        console.log(`texml owner line asking for a PIN, accountId ${result.accountId}`);
+        return ask((dial) => ownerPinAskXml({ locale, name: ol.name, persona, action, retry: false, bridge: dial }));
+      }
+      console.log(`texml owner line over its daily limit — today's path, accountId ${result.accountId}`);
+      return ask((dial) => ownerLimitXml({ locale, persona, bridge: dial }));
+    }
+```
+
+  7. Append the two exports for Task 9:
+
+```ts
+/** F-032 §4.2: a correct PIN. The bridge every call gets, plus the owner pass. Only owner-pin calls this, and only
+ *  for a Telnyx-signed request, so `authenticated` is true by construction. */
+export function ownerLineBridge(
+  calledE164: string, callerE164: string, origin: string,
+  owner: { accountId: string; userId: string; role: OwnerPassRole },
+): NextResponse {
+  console.log(`texml owner line PIN ok — bridging with an owner pass, accountId ${owner.accountId}`);
+  return xmlResponse(dialXml(calledE164, callerE164, origin, true,
+    { accountId: owner.accountId, callerE164 }, false, { ownerLine: owner }).body);
+}
+
+/** F-032 §4.2: a wrong PIN (below 3) or a wrong code. Asks again, falling through to today's bridge. */
+export async function ownerLineGatherAgain(
+  calledE164: string, callerE164: string, origin: string,
+  p: { kind: "pin" | "verify"; locale: Locale; accountId: string; name: string | null },
+): Promise<NextResponse> {
+  let persona = "Sofía";
+  try {
+    const { serviceDb, getVoiceProfile } = await import("@bis/db");
+    persona = (await getVoiceProfile(serviceDb(), p.accountId))?.persona_name || persona;
+  } catch (e) {
+    console.error(`texml owner line: persona read failed — saying Sofía, accountId ${p.accountId}: ${String(e)}`);
+  }
+  const action = ownerPinUrl(origin);
+  return xmlResponse(dialXml(calledE164, callerE164, origin, true, { accountId: p.accountId, callerE164 }, false, {
+    wrap: (dial) => p.kind === "pin"
+      ? ownerPinAskXml({ locale: p.locale, name: p.name, persona, action, retry: true, bridge: dial })
+      : ownerVerifyAskXml({ locale: p.locale, action, retry: true, bridge: dial }),
+  }).body);
+}
+```
+
+- [ ] **Step 6: Run green, the whole TeXML folder included.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice/texml src/lib/voice/sip-handoff-signature.test.ts src/lib/i18n src/lib/messages.test.ts
+  ```
+
+  Expected: green, and every pre-existing case unchanged. Paste the summary line.
+
+- [ ] **Step 7: Mutation probes.** Each must FAIL BY NAME:
+  1. Pass `true` instead of `authenticated` into the eligibility → "an UNSIGNED request never looks the owner up" FAILS.
+  2. Await `ownerRead` inside the `Promise.all` array → "a lookup that throws is a miss" FAILS (the batch fails open, so the uncleared path is taken and the `owner-line lookup failed` line is absent).
+  3. Remove `!result.forwardCalls` → "the agency's forward is on: not offered" FAILS.
+  4. In `ownerLineBridge`, sign with `newHandoffToken()` instead of the dial's `token` → "carries an owner pass that verifies against THIS dial's handoff token" FAILS.
+
+- [ ] **Step 8: Commit.**
+
+  ```bash
+  git add apps/web/src/app/api/voice/texml/owner-line-xml.ts apps/web/src/app/api/voice/texml/owner-line-xml.test.ts apps/web/src/app/api/voice/texml/route.ts apps/web/src/app/api/voice/texml/route.test.ts apps/web/src/app/api/voice/texml/wellformed.test.ts apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): the answer route asks a registered, verified cell for its PIN before the bridge; every other caller's call is unchanged"
+  ```
+
+---
+
+## Task 8: Lockout email (MEDIUM, 0.25 day)
+
+**Files:**
+- Create: `apps/web/src/lib/email/templates/owner-line.ts` and `owner-line.test.ts` (following bis-comms' template conventions: `shell`, `escapeHtml`, `emailBrand`, as in `templates/voice.ts:1-4`).
+- Create: `apps/web/src/lib/owner-line/lockout.ts` and `lockout.test.ts`.
+- Modify: `apps/web/src/lib/consent/classes.ts:125` (add `"operator.owner_line_lockout"` beside `"operator.call_alert"`).
+- Modify: `apps/web/src/lib/messages.ts` (the `ownerLine.email.*` keys).
+
+**Interfaces:**
+- Consumes: `sendEmailOrThrow({ accountId, kind, to, fromName, subject, body, html })` (`WEB/lib/consent/email-gate.ts:406`, called at `finish-call.ts:716-720`), `listAccountTeam(db, accountId): TeamMember[]` (`DB/team.ts:156`), `getBranding(db, accountId)` (`DB/branding.ts:345`), `readAccountTimezone(db, accountId): string | null` (`DB/automation-settings.ts:13`), `emailBrand(branding)` (`WEB/lib/email/templates/shell.ts:68`).
+- Produces:
+
+```ts
+export function ownerLineLockoutEmail(i: { brand: EmailBrand; locale: Locale; forSelf: boolean; personName: string | null;
+  time: string; until: string }): { subject: string; text: string; html: string };
+export async function sendOwnerLineLockoutEmails(p: { accountId: string; userId: string; lockedUntil: string | null;
+  at: Date; accountLanguage: "en" | "es" | null }, deps?: { send: typeof sendEmailOrThrow }): Promise<void>;
+export function scheduleOwnerLineLockoutEmails(p: Omit<Parameters<typeof sendOwnerLineLockoutEmails>[0], "at">): void;
+```
+
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+// apps/web/src/lib/owner-line/lockout.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const db = vi.hoisted(() => ({ team: vi.fn(), brand: vi.fn(), zone: vi.fn() }));
+vi.mock("@bis/db", () => ({
+  serviceDb: () => ({}), listAccountTeam: db.team, getBranding: db.brand, readAccountTimezone: db.zone,
+}));
+import { sendOwnerLineLockoutEmails } from "./lockout";
+
+const AT = new Date("2026-11-09T20:14:00.000Z");      // 2:14 PM in America/Chicago
+const UNTIL = "2026-11-09T20:44:00.000Z";
+const P = { accountId: "a1", userId: "u-staff", lockedUntil: UNTIL, at: AT, accountLanguage: "en" as const };
+beforeEach(() => {
+  db.brand.mockResolvedValue({ brandName: "Rio Roofing" });
+  db.zone.mockResolvedValue("America/Chicago");
+  db.team.mockResolvedValue([
+    { userId: "u-staff", clerkUserId: "c1", email: "dan@example.com", name: "Dan Lopez", role: "staff", language: "es" },
+    { userId: "u-owner", clerkUserId: "c2", email: "ana@example.com", name: "Ana", role: "owner", language: null },
+  ]);
+});
+
+describe("three wrong PINs email the person and the account's Owner (spec §4.2)", () => {
+  it("one email each, each in its reader's own language, kind operator.owner_line_lockout, with the time in the account's zone", async () => {
+    const send = vi.fn().mockResolvedValue({ id: "x" });
+    await sendOwnerLineLockoutEmails(P, { send });
+    expect(send).toHaveBeenCalledTimes(2);
+    const [self, owner] = send.mock.calls.map((c) => c[0]);
+    expect(self).toMatchObject({ accountId: "a1", kind: "operator.owner_line_lockout", to: "dan@example.com" });
+    expect(self.body).toContain("2:14");          // es-US renders "2:14 p.m."
+    expect(self.subject).toBe("Alguien marcó el PIN incorrecto 3 veces");
+    expect(owner).toMatchObject({ to: "ana@example.com" });
+    expect(owner.body).toContain("Someone entered the wrong PIN 3 times from Dan's phone at 2:14 PM");
+    expect(owner.body).toContain("2:44 PM");
+  });
+  it("an Owner locked out gets one email, not two (mutation: no dedupe by email -> FAILS)", async () => {
+    const send = vi.fn().mockResolvedValue({ id: "x" });
+    await sendOwnerLineLockoutEmails({ ...P, userId: "u-owner" }, { send });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("one failed send never stops the other (mutation: drop the per-recipient catch -> FAILS)", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new Error("resend down")).mockResolvedValue({ id: "x" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await sendOwnerLineLockoutEmails(P, { send });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+  it("never names the business by its internal label: the brand name only", async () => {
+    const send = vi.fn().mockResolvedValue({ id: "x" });
+    await sendOwnerLineLockoutEmails(P, { send });
+    expect(send.mock.calls[0]![0].fromName).toBe("Rio Roofing");
+  });
+});
+```
+
+```ts
+// apps/web/src/lib/email/templates/owner-line.test.ts
+import { describe, it, expect } from "vitest";
+import { ownerLineLockoutEmail } from "./owner-line";
+
+const brand = { name: "Rio Roofing", logoUrl: null, color: "#6D28D9" } as never;
+describe("ownerLineLockoutEmail", () => {
+  it("escapes the person's name and keeps one language end to end", () => {
+    const e = ownerLineLockoutEmail({ brand, locale: "en", forSelf: false, personName: "<b>Dan</b>", time: "2:14 PM", until: "2:44 PM" });
+    expect(e.html).not.toContain("<b>Dan</b>");
+    expect(e.text).toContain("from <b>Dan</b>'s phone");
+    expect(e.subject).toBe("Someone entered the wrong PIN 3 times");
+  });
+});
+```
+
+Read `EmailBrand`'s real fields in `shell.ts:4` before writing `brand`, and build it with `emailBrand({ brandName: "Rio Roofing" } as Branding)` if the shape differs.
+
+- [ ] **Step 2: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/lockout.test.ts src/lib/email/templates/owner-line.test.ts
+  ```
+
+  Expected: FAIL, unresolved imports.
+
+- [ ] **Step 3: Implement.**
+
+```ts
+// apps/web/src/lib/email/templates/owner-line.ts
+import { shell, escapeHtml, type EmailBrand } from "./shell";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+
+/** F-032 §4.2: three wrong PINs. To the person (forSelf) or to the account's Owner. One language end to end. */
+export function ownerLineLockoutEmail(i: {
+  brand: EmailBrand; locale: Locale; forSelf: boolean; personName: string | null; time: string; until: string;
+}): { subject: string; text: string; html: string } {
+  const subject = t(m, "ownerLine.email.subject", i.locale);
+  const body = i.forSelf
+    ? t(m, "ownerLine.email.self", i.locale, { time: i.time, until: i.until })
+    : i.personName
+      ? t(m, "ownerLine.email.owner", i.locale, { name: i.personName, time: i.time, until: i.until })
+      : t(m, "ownerLine.email.ownerNoName", i.locale, { time: i.time, until: i.until });
+  const tail = t(m, i.forSelf ? "ownerLine.email.selfTail" : "ownerLine.email.ownerTail", i.locale);
+  const text = `${body}\n\n${tail}`;
+  const html = shell(i.brand, `<p>${escapeHtml(body)}</p><p>${escapeHtml(tail)}</p>`);
+  return { subject, text, html };
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/lockout.ts
+import { after } from "next/server";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+import { emailBrand } from "@/lib/email/templates/shell";
+import { ownerLineLockoutEmail } from "@/lib/email/templates/owner-line";
+import { firstName } from "@/app/api/voice/texml/owner-line-xml";
+import type { Locale } from "@/lib/i18n/locale";
+
+/**
+ * F-032 §4.2: "email the person and the account's Owner ('Someone entered the wrong PIN 3 times from your phone at
+ * 2:14 PM')". Each recipient in their own language (users.language, then the account's, then English), deduplicated
+ * by address, each send in its own try/catch so one failure never costs the other. Never throws. @bis/db is imported
+ * lazily: owner-pin is a TeXML route (route.ts:219-226).
+ */
+export async function sendOwnerLineLockoutEmails(
+  p: { accountId: string; userId: string; lockedUntil: string | null; at: Date; accountLanguage: "en" | "es" | null },
+  deps: { send: typeof sendEmailOrThrow } = { send: sendEmailOrThrow },
+): Promise<void> {
+  try {
+    const { serviceDb, listAccountTeam, getBranding, readAccountTimezone } = await import("@bis/db");
+    const db = serviceDb();
+    const [team, branding, zoneRead] = await Promise.all([
+      listAccountTeam(db, p.accountId), getBranding(db, p.accountId), readAccountTimezone(db, p.accountId),
+    ]);
+    const zone = zoneRead ?? "America/Chicago";
+    const brand = emailBrand(branding);
+    const person = team.find((x) => x.userId === p.userId);
+    const recipients = new Map<string, { language: "en" | "es" | null; forSelf: boolean }>();
+    if (person) recipients.set(person.email, { language: person.language, forSelf: true });
+    for (const o of team.filter((x) => x.role === "owner")) {
+      if (!recipients.has(o.email)) recipients.set(o.email, { language: o.language, forSelf: false });
+    }
+    // ICU writes a narrow no-break space before AM/PM; a plain space reads the same and matches every other email.
+    const at = (iso: Date | string, locale: Locale) => new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US",
+      { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(iso)).replace(/ /g, " ");
+    for (const [to, r] of recipients) {
+      const locale: Locale = r.language ?? p.accountLanguage ?? "en";
+      const email = ownerLineLockoutEmail({
+        brand, locale, forSelf: r.forSelf, personName: firstName(person?.name ?? null),
+        time: at(p.at, locale), until: p.lockedUntil ? at(p.lockedUntil, locale) : "",
+      });
+      try {
+        await deps.send({ accountId: p.accountId, kind: "operator.owner_line_lockout", to, fromName: brand.name,
+          subject: email.subject, body: email.text, html: email.html });
+      } catch (e) {
+        console.error(`owner line lockout email failed for one recipient, accountId ${p.accountId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  } catch (e) {
+    console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${String(e)}`);
+  }
+}
+
+/** Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path. */
+export function scheduleOwnerLineLockoutEmails(
+  p: { accountId: string; userId: string; lockedUntil: string | null; accountLanguage: "en" | "es" | null },
+): void {
+  try {
+    after(() => sendOwnerLineLockoutEmails({ ...p, at: new Date() }));
+  } catch (e) {
+    console.error(`owner line: could not schedule the lockout emails, accountId ${p.accountId}: ${String(e)}`);
+  }
+}
+```
+
+Add the `classes.ts` line `"operator.owner_line_lockout": { class: "operator", hours: "any", footer: "none" },` beside `operator.call_alert`. Add the copy to `messages.ts`:
+
+```ts
+  "ownerLine.email.subject": "Someone entered the wrong PIN 3 times",
+  "ownerLine.email.subject.es": "Alguien marcó el PIN incorrecto 3 veces",
+  "ownerLine.email.self": "Someone entered the wrong PIN 3 times from your phone at {time}. Calling in from your phone is paused until {until}.",
+  "ownerLine.email.self.es": "Alguien marcó el PIN incorrecto 3 veces desde su teléfono a las {time}. Las llamadas desde su teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.selfTail": "If it was you, wait and try again. If it was not you, change your PIN in Mis preferencias.",
+  "ownerLine.email.selfTail.es": "Si fue usted, espere e intente de nuevo. Si no fue usted, cambie su PIN en Mis preferencias.",
+  "ownerLine.email.owner": "Someone entered the wrong PIN 3 times from {name}'s phone at {time}. Calling in from that phone is paused until {until}.",
+  "ownerLine.email.owner.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de {name} a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.ownerNoName": "Someone entered the wrong PIN 3 times from a team member's phone at {time}. Calling in from that phone is paused until {until}.",
+  "ownerLine.email.ownerNoName.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de alguien de su equipo a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.ownerTail": "Nothing about your business was read out. The caller was answered like any customer.",
+  "ownerLine.email.ownerTail.es": "No se leyó nada de su negocio. A la persona se le atendió como a cualquier cliente.",
+```
+
+- [ ] **Step 4: Run green with the consent and i18n gates.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/lockout.test.ts src/lib/email/templates src/lib/consent src/lib/i18n src/lib/messages.test.ts
+  ```
+
+  Expected: green. Paste the summary line.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line/lockout.ts apps/web/src/lib/owner-line/lockout.test.ts apps/web/src/lib/email/templates/owner-line.ts apps/web/src/lib/email/templates/owner-line.test.ts apps/web/src/lib/consent/classes.ts apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): owner line lockout email to the person and the Owner, each in their own language"
+  ```
+
+---
+
+## Task 9: The `owner-pin` route: verify, PIN, lockout (HIGH, 1 day)
+
+**Files:**
+- Create: `apps/web/src/app/api/voice/texml/owner-pin/route.ts` and `route.test.ts`
+
+**Interfaces:**
+- Consumes (Task 7): `answer`, `ownerLineBridge`, `ownerLineGatherAgain`, `bridgeAfterFailure`, `actionOrigin`, `xmlResponse` (`../route`), plus `ownerVerifiedXml` and `ownerVerifySpentXml` (`../owner-line-xml`).
+- Consumes (Task 2): `readTelnyxForm` and `logFormFields` (`../telnyx-request`), `ownerLineAnswerLookup`, `attemptOwnerLineVerify`, `attemptOwnerLinePin`, `getPhoneNumberByE164`, `OWNER_LINE_MAX_CALLS_PER_DAY`.
+- Consumes (Task 3): `candidateFor`, `hashVerifyCode`.
+- Consumes (Task 8): `scheduleOwnerLineLockoutEmails`.
+- Produces: `GET` (always 405) and `POST` at `/api/voice/texml/owner-pin`.
+
+- [ ] **Step 1: Write the failing tests.** These isolate the decision: `../route`, `../telnyx-request`, `@bis/db` and the lockout scheduler are mocked.
+
+```ts
+// apps/web/src/app/api/voice/texml/owner-pin/route.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NextResponse } from "next/server";
+
+const h = vi.hoisted(() => ({
+  form: { ok: true as const, form: new URLSearchParams(), authenticated: true },
+  today: vi.fn(), bridge: vi.fn(), again: vi.fn(), failsafe: vi.fn(),
+  phone: vi.fn(), look: vi.fn(), verify: vi.fn(), pin: vi.fn(), lockout: vi.fn(),
+}));
+const xml = (s: string) => new NextResponse(s, { status: 200 });
+vi.mock("../telnyx-request", () => ({ readTelnyxForm: vi.fn(async () => h.form), logFormFields: vi.fn() }));
+vi.mock("../route", () => ({
+  actionOrigin: () => "https://x.example",
+  answer: (...a: unknown[]) => h.today(...a),
+  ownerLineBridge: (...a: unknown[]) => h.bridge(...a),
+  ownerLineGatherAgain: (...a: unknown[]) => h.again(...a),
+  bridgeAfterFailure: (...a: unknown[]) => h.failsafe(...a),
+  xmlResponse: (s: string) => xml(s),
+}));
+vi.mock("@bis/db", () => ({
+  serviceDb: () => ({}), OWNER_LINE_MAX_CALLS_PER_DAY: 10,
+  getPhoneNumberByE164: h.phone, ownerLineAnswerLookup: h.look,
+  attemptOwnerLineVerify: h.verify, attemptOwnerLinePin: h.pin,
+}));
+vi.mock("@/lib/owner-line/lockout", () => ({ scheduleOwnerLineLockoutEmails: h.lockout }));
+
+import { GET, POST } from "./route";
+import { hashPin } from "@/lib/owner-line/secrets";
+
+const TO = "+19565550999";
+const CELL = "+19565550142";
+const post = (fields: Record<string, string>) => {
+  h.form = { ok: true, form: new URLSearchParams({ To: TO, From: CELL, ...fields }), authenticated: h.form.authenticated };
+  return POST(new Request("https://x.example/api/voice/texml/owner-pin", { method: "POST", body: "" }));
+};
+let HASH = "";
+const PIN_HIT = () => ({ status: "pin", enrollmentId: "e1", userId: "u1", role: "staff", name: "Dan", language: "en",
+  accountLanguage: null, pinParams: HASH.slice(0, 36) });
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  h.form = { ok: true, form: new URLSearchParams(), authenticated: true };
+  HASH ||= await hashPin("482913");
+  h.today.mockResolvedValue(xml("TODAY"));
+  h.bridge.mockReturnValue(xml("BRIDGE"));
+  h.again.mockResolvedValue(xml("AGAIN"));
+  h.failsafe.mockReturnValue(xml("FAILSAFE"));
+  h.phone.mockResolvedValue({ id: "pn", account_id: "a1", status: "live" });
+  h.look.mockResolvedValue(PIN_HIT());
+});
+
+describe("owner-pin (F-032 §4.2)", () => {
+  it("GET is 405 whatever the environment", async () => {
+    expect((await GET(new Request("https://x.example/api/voice/texml/owner-pin?Digits=482913"))).status).toBe(405);
+  });
+
+  it("an UNSIGNED request checks nothing and gets today's path (mutation: drop the authenticated guard -> FAILS)", async () => {
+    h.form.authenticated = false;
+    expect(await (await post({ Digits: "482913" })).text()).toBe("TODAY");
+    expect(h.look).not.toHaveBeenCalled();
+    expect(h.pin).not.toHaveBeenCalled();
+  });
+
+  it("the right PIN bridges with the owner pass for THIS person and role, and the digits never reach a log", async () => {
+    h.pin.mockResolvedValue({ status: "ok", lockedUntil: null });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await (await post({ Digits: "482913" })).text()).toBe("BRIDGE");
+    expect(h.pin).toHaveBeenCalledWith({}, "e1", HASH);
+    expect(h.bridge).toHaveBeenCalledWith(TO, CELL, "https://x.example", { accountId: "a1", userId: "u1", role: "staff" });
+    expect(log.mock.calls.flat().join(" ")).not.toContain("482913");
+  });
+
+  it.each([[""], ["#"]])("Digits %j (pound, or a timeout) is today's path and does NOT count as a wrong PIN (mutation: attempt it -> FAILS)", async (d) => {
+    expect(await (await post({ Digits: d })).text()).toBe("TODAY");
+    expect(h.pin).not.toHaveBeenCalled();
+    expect(h.today).toHaveBeenCalledWith(TO, CELL, "https://x.example", true, { skipScreen: true, skipOwnerLine: true });
+  });
+
+  it("a wrong PIN below three asks again; a short entry counts as wrong", async () => {
+    h.pin.mockResolvedValue({ status: "wrong", lockedUntil: null });
+    expect(await (await post({ Digits: "1234#" })).text()).toBe("AGAIN");
+    expect(h.pin).toHaveBeenCalledWith({}, "e1", "invalid");
+    expect(h.again).toHaveBeenCalledWith(TO, CELL, "https://x.example", { kind: "pin", locale: "en", accountId: "a1", name: "Dan" });
+  });
+
+  it("the third wrong PIN emails both people and the call continues as a customer's (mutation: hang up instead -> FAILS)", async () => {
+    h.pin.mockResolvedValue({ status: "locked_now", lockedUntil: "2026-11-09T20:44:00.000Z" });
+    expect(await (await post({ Digits: "111112" })).text()).toBe("TODAY");
+    expect(h.lockout).toHaveBeenCalledWith({ accountId: "a1", userId: "u1", lockedUntil: "2026-11-09T20:44:00.000Z", accountLanguage: null });
+  });
+
+  it("a call-in code: the sha256 of the digits is what is checked, never the digits", async () => {
+    h.look.mockResolvedValue({ ...PIN_HIT(), status: "verify", pinParams: null });
+    h.verify.mockResolvedValue("verified");
+    const res = await (await post({ Digits: "123456" })).text();
+    expect(res).toContain("This phone is verified");
+    expect(h.verify).toHaveBeenCalledWith({}, "a1", CELL, "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92");
+  });
+
+  it("a stranger or a status that is not verify/pin is today's path", async () => {
+    h.look.mockResolvedValue({ status: "none" });
+    expect(await (await post({ Digits: "482913" })).text()).toBe("TODAY");
+    expect(h.pin).not.toHaveBeenCalled();
+  });
+
+  it("anything that throws is the last-resort bridge, never a 500", async () => {
+    h.look.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await (await post({ Digits: "482913" })).text()).toBe("FAILSAFE");
+  });
+});
+```
+
+- [ ] **Step 2: Run it and see it fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice/texml/owner-pin/route.test.ts
+  ```
+
+  Expected: FAIL, `Failed to resolve import "./route"`.
+
+- [ ] **Step 3: Implement.**
+
+```ts
+// apps/web/src/app/api/voice/texml/owner-pin/route.ts
+// The owner line's PIN and call-in code step (F-032 §3.2, §4.2). /api/voice/texml asked a registered cell for a
+// PIN (or for the code shown on their screen) with <Gather>; Telnyx posts the keys here.
+//
+// TELNYX-SIGNED OR NOTHING. An unsigned request checks nothing and gets today's path: this route would otherwise be
+// an oracle anyone could feed a caller ID and guesses (spec §4.2: "must carry a valid Telnyx signature"). GET is 405
+// always, because a GET carries no signed body.
+//
+// The account and the person are re-derived from the SIGNED To/From on every request; nothing on the query string is
+// trusted. A PIN check happens only in SQL (owner_line_attempt_pin), under a row lock that owns the counter and the
+// lock. The digits are never logged.
+//
+// WHAT THE CALLER GETS:
+//   - pound, a timeout, or no digits: today's path, and NOT an attempt;
+//   - the right PIN: today's bridge with the owner pass (route.ts ownerLineBridge);
+//   - a wrong PIN, 1st or 2nd: asked again;
+//   - the 3rd wrong PIN: the lock, the two emails, and today's path, as a customer;
+//   - a call-in code: verified (a goodbye), wrong (asked again), or spent (start again on the screen);
+//   - anything that throws: the last-resort bridge, never a 500 (screen/route.ts's posture).
+import { NextResponse } from "next/server";
+import { e164Of } from "@/lib/voice/phone-number";
+import { actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, xmlResponse } from "../route";
+import { logFormFields, readTelnyxForm } from "../telnyx-request";
+import { ownerVerifiedXml, ownerVerifySpentXml } from "../owner-line-xml";
+import { candidateFor, hashVerifyCode } from "@/lib/owner-line/secrets";
+import { scheduleOwnerLineLockoutEmails } from "@/lib/owner-line/lockout";
+import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { utcDayStart } from "@/lib/voice/call-limits";
+
+export const runtime = "nodejs";
+const SIX = /^[0-9]{6}$/;
+
+async function decide(form: URLSearchParams, origin: string, authenticated: boolean): Promise<NextResponse> {
+  const called = e164Of(form.get("To") || null);
+  const caller = e164Of(form.get("From") || null);
+  const today = () => answer(called, caller, origin, authenticated, { skipScreen: true, skipOwnerLine: true });
+  try {
+    if (!authenticated) {
+      console.error("texml owner-pin: request not Telnyx-signed — today's path, nothing checked");
+      return await today();
+    }
+    if (!called || !caller) {
+      console.log("texml owner-pin: no called or caller number — today's path");
+      return await today();
+    }
+    const {
+      serviceDb, getPhoneNumberByE164, ownerLineAnswerLookup, attemptOwnerLineVerify, attemptOwnerLinePin,
+      OWNER_LINE_MAX_CALLS_PER_DAY,
+    } = await import("@bis/db");
+    const db = serviceDb();
+    const phone = await getPhoneNumberByE164(db, called);
+    if (!phone || (phone.status !== "testing" && phone.status !== "live")) return await today();
+    const look = await ownerLineAnswerLookup(db, phone.account_id, caller, utcDayStart(new Date()), OWNER_LINE_MAX_CALLS_PER_DAY);
+    if ((look.status !== "verify" && look.status !== "pin") || !OWNER_LINE_ROLES.includes(look.role)) return await today();
+    const who = `accountId ${phone.account_id}`;
+    const locale = look.language ?? look.accountLanguage ?? "en";
+    const digits = (form.get("Digits") ?? "").trim().replace(/#+$/, "");
+
+    if (look.status === "verify") {
+      if (!SIX.test(digits)) {
+        console.log(`texml owner-pin: no call-in code entered — today's path, ${who}`);
+        return await today();
+      }
+      const r = await attemptOwnerLineVerify(db, phone.account_id, caller, hashVerifyCode(digits));
+      console.log(`texml owner-pin: call-in code ${r}, ${who}`);
+      if (r === "verified") return xmlResponse(ownerVerifiedXml(locale));
+      if (r === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "verify", locale, accountId: phone.account_id, name: look.name });
+      if (r === "spent") return xmlResponse(ownerVerifySpentXml(locale));
+      return await today();
+    }
+
+    if (digits === "") {
+      console.log(`texml owner-pin: pound or no PIN — today's path, ${who}`);
+      return await today();
+    }
+    const candidate = (await candidateFor(digits, look.pinParams ?? "")) ?? "invalid";
+    const r = await attemptOwnerLinePin(db, look.enrollmentId, candidate);
+    console.log(`texml owner-pin: PIN ${r.status}, ${who}`);
+    if (r.status === "ok") return ownerLineBridge(called, caller, origin, { accountId: phone.account_id, userId: look.userId, role: look.role });
+    if (r.status === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "pin", locale, accountId: phone.account_id, name: look.name });
+    if (r.status === "locked_now") {
+      scheduleOwnerLineLockoutEmails({ accountId: phone.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
+    }
+    return await today();
+  } catch (e) {
+    console.error(`texml owner-pin failed — bridging for ${called ?? "unknown"}: ${String(e)}`);
+    return bridgeAfterFailure(called, caller, origin, authenticated);
+  }
+}
+
+export async function GET(): Promise<NextResponse> {
+  return new NextResponse(null, { status: 405 });
+}
+
+export async function POST(req: Request): Promise<NextResponse> {
+  const read = await readTelnyxForm(req, "texml owner-pin");
+  if (!read.ok) return read.response;
+  logFormFields("texml owner-pin", read.form);
+  return decide(read.form, actionOrigin(req), read.authenticated);
+}
+```
+
+`logFormFields` prints field NAMES only (`telnyx-request.ts:60-79`): `Digits` appears as a name, and its value is never printed.
+
+- [ ] **Step 4: Run green.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice/texml
+  ```
+
+  Expected: green, and the `wellformed` documents unchanged. Paste the summary line.
+
+- [ ] **Step 5: Mutation probes.** Each must FAIL BY NAME:
+  1. Delete the `!authenticated` early return → "an UNSIGNED request checks nothing" FAILS.
+  2. Remove `if (digits === "")` → "Digits "" … does NOT count" FAILS.
+  3. Return `xmlResponse("<Response><Hangup/></Response>")` on `locked_now` → "the third wrong PIN … continues as a customer's" FAILS.
+
+- [ ] **Step 6: Commit.**
+
+  ```bash
+  git add apps/web/src/app/api/voice/texml/owner-pin
+  git commit -m "feat(voice): owner-pin: the PIN and call-in code step, checked in SQL; three wrong PINs lock for 30 minutes and the call continues as a customer's"
+  ```
+
+---
+
+## Task 10: The range resolver and the ONE reader factory (HIGH, 0.5 day)
+
+**Files:**
+- Create: `apps/web/src/lib/owner-line/range.ts` and `range.test.ts`
+- Create: `apps/web/src/lib/owner-line/token.ts` (used only under decision T)
+- Create: `apps/web/src/lib/owner-line/reader.ts` and `reader.test.ts`
+- Create: `apps/web/src/lib/owner-line/session.ts` (the session type and the live re-check; Task 12 adds `decideOwnerSession`)
+
+**Interfaces:**
+- Consumes: `dayKeyInZone(instant, timezone)` (`WEB/lib/booking/availability.ts:119`), `localMidnightInstant(dayKey, zone): Date` (`WEB/lib/reports/weekly-window.ts:100`), `utcDayStart(now)` (`WEB/lib/voice/call-limits.ts:51`), `userDb`, `serviceDb`, `ownerLineSessionCheck` (Task 2), and `OWNER_LINE_DATA_PATH` (Task 5).
+- Produces:
+
+```ts
+// range.ts
+export const MAX_RANGE_DAYS = 31;
+export const RANGE_KINDS = ["today", "yesterday", "tomorrow", "this_week", "dates"] as const;
+export type ResolvedRange = { ok: true; fromIso: string; toIso: string; firstDay: string; lastDay: string; multiDay: boolean }
+  | { ok: false; error: "bad_range" | "range_too_long" };
+export function resolveRange(input: { range?: unknown; from?: unknown; to?: unknown }, zone: string, now: Date): ResolvedRange;
+// token.ts
+export const OWNER_LINE_TOKEN_TTL_SECONDS = 120;
+export function mintOwnerLineToken(p: { clerkUserId: string; clerkOrgId: string }, nowMs: number, env?: NodeJS.ProcessEnv): string;
+// session.ts
+export type OwnerLineSession = { accountId: string; userId: string; role: AccountRole; clerkUserId: string; clerkOrgId: string;
+  firstName: string | null; actorName: string | null; locale: Locale; timezone: string };
+export async function recheckOwnerSession(s: OwnerLineSession, now: Date): Promise<boolean>;
+// reader.ts — the ONLY function that branches on the Task 0 decision
+export function ownerLineReadClient(s: Pick<OwnerLineSession, "role" | "clerkUserId" | "clerkOrgId">, now?: Date,
+  deps?: { path: OwnerLineDataPath; userDb: typeof userDb; serviceDb: typeof serviceDb; mint: typeof mintOwnerLineToken }): SupabaseClient;
+```
+
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+// apps/web/src/lib/owner-line/range.test.ts
+import { describe, it, expect } from "vitest";
+import { resolveRange } from "./range";
+
+const Z = "America/Chicago";
+const NOW = new Date("2026-11-09T15:00:00.000Z");   // Monday 9:00 AM CST (DST ended 2026-11-01)
+
+describe("resolveRange (spec §5: always in the account's zone, at most 31 days)", () => {
+  it("today, yesterday and tomorrow are whole local days", () => {
+    expect(resolveRange({ range: "today" }, Z, NOW)).toEqual({ ok: true, fromIso: "2026-11-09T06:00:00.000Z",
+      toIso: "2026-11-10T06:00:00.000Z", firstDay: "2026-11-09", lastDay: "2026-11-09", multiDay: false });
+    expect(resolveRange({ range: "yesterday" }, Z, NOW)).toMatchObject({ fromIso: "2026-11-08T06:00:00.000Z", toIso: "2026-11-09T06:00:00.000Z" });
+    expect(resolveRange({ range: "tomorrow" }, Z, NOW)).toMatchObject({ fromIso: "2026-11-10T06:00:00.000Z", toIso: "2026-11-11T06:00:00.000Z" });
+  });
+  it("this week is Monday through Sunday of the account's own week", () => {
+    expect(resolveRange({ range: "this_week" }, Z, NOW)).toMatchObject({ firstDay: "2026-11-09", lastDay: "2026-11-15",
+      fromIso: "2026-11-09T06:00:00.000Z", toIso: "2026-11-16T06:00:00.000Z", multiDay: true });
+  });
+  it("a named date on the day the clocks changed is 25 hours, from local midnight to local midnight", () => {
+    expect(resolveRange({ range: "dates", from: "2026-11-01" }, Z, NOW)).toMatchObject({
+      fromIso: "2026-11-01T05:00:00.000Z", toIso: "2026-11-02T06:00:00.000Z" });
+  });
+  it("31 days is allowed; 32 is refused (mutation: > MAX_RANGE_DAYS + 1 -> FAILS)", () => {
+    expect(resolveRange({ range: "dates", from: "2026-10-01", to: "2026-10-31" }, Z, NOW).ok).toBe(true);
+    expect(resolveRange({ range: "dates", from: "2026-10-01", to: "2026-11-01" }, Z, NOW)).toEqual({ ok: false, error: "range_too_long" });
+  });
+  it("refuses what is not a range: an unknown word, a backwards span, a date that does not exist", () => {
+    expect(resolveRange({ range: "last_year" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+    expect(resolveRange({ range: "dates", from: "2026-11-05", to: "2026-11-01" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+    expect(resolveRange({ range: "dates", from: "2026-02-30" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+  });
+});
+```
+
+```ts
+// apps/web/src/lib/owner-line/reader.test.ts
+import { describe, it, expect, vi } from "vitest";
+import { createHmac } from "node:crypto";
+import { ownerLineReadClient } from "./reader";
+import { mintOwnerLineToken, OWNER_LINE_TOKEN_TTL_SECONDS } from "./token";
+
+const SECRET = "j".repeat(40);
+const env = { SUPABASE_JWT_SECRET: SECRET } as NodeJS.ProcessEnv;
+const T0 = 1_800_000_000_000;
+const decode = (tok: string) => JSON.parse(Buffer.from(tok.split(".")[1]!, "base64url").toString());
+
+describe("mintOwnerLineToken (decision T; the shape the Task 0 spike proved)", () => {
+  it("carries exactly role, aud, sub, org_id, iat, exp, and NEVER app_role (mutation: add app_role -> FAILS)", () => {
+    const tok = mintOwnerLineToken({ clerkUserId: "user_1", clerkOrgId: "org_1" }, T0, env);
+    const claims = decode(tok);
+    expect(Object.keys(claims).sort()).toEqual(["aud", "exp", "iat", "org_id", "role", "sub"]);
+    expect(claims).toMatchObject({ role: "authenticated", aud: "authenticated", sub: "user_1", org_id: "org_1" });
+    expect(claims.exp - claims.iat).toBe(OWNER_LINE_TOKEN_TTL_SECONDS);
+    const [h, b, s] = tok.split(".");
+    expect(s).toBe(createHmac("sha256", SECRET).update(`${h}.${b}`).digest("base64url"));
+  });
+  it("refuses to mint without a usable secret", () => {
+    expect(() => mintOwnerLineToken({ clerkUserId: "u", clerkOrgId: "o" }, T0, {} as NodeJS.ProcessEnv)).toThrow(/SUPABASE_JWT_SECRET/);
+  });
+});
+
+describe("ownerLineReadClient: the ONE place the data path is decided (plan SC-2)", () => {
+  const S = { role: "technician" as const, clerkUserId: "user_t", clerkOrgId: "org_a" };
+  it("token: the client reads AS the person (a minted token for their Clerk ids), never as the service role", () => {
+    const userDb = vi.fn(() => "USER" as never);
+    const serviceDb = vi.fn(() => "SERVICE" as never);
+    const mint = vi.fn(() => "TOKEN");
+    expect(ownerLineReadClient(S, new Date(T0), { path: "token", userDb, serviceDb, mint })).toBe("USER");
+    expect(mint).toHaveBeenCalledWith({ clerkUserId: "user_t", clerkOrgId: "org_a" }, T0);
+    expect(userDb).toHaveBeenCalledWith("TOKEN");
+    expect(serviceDb).not.toHaveBeenCalled();
+  });
+  it("service (F2): Owner and Staff read through the service role; a Technician is refused, never given unscoped reads (mutation: drop the technician refusal -> FAILS)", () => {
+    const deps = { path: "service" as const, userDb: vi.fn(), serviceDb: vi.fn(() => "SERVICE" as never), mint: vi.fn() };
+    expect(ownerLineReadClient({ ...S, role: "staff" }, new Date(T0), deps)).toBe("SERVICE");
+    expect(() => ownerLineReadClient(S, new Date(T0), deps)).toThrow(/Technician/);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/range.test.ts src/lib/owner-line/reader.test.ts
+  ```
+
+  Expected: FAIL, unresolved imports.
+
+- [ ] **Step 3: Implement.**
+
+```ts
+// apps/web/src/lib/owner-line/range.ts
+// The owner line's ranges (F-032 §5): today, yesterday, tomorrow, this week, or named dates, always as whole days in
+// the ACCOUNT's zone, at most 31 days. Day boundaries come from the weekly report's localMidnightInstant, the
+// conversion that has already been wrong once in this repo and is pinned there.
+import { dayKeyInZone } from "@/lib/booking/availability";
+import { localMidnightInstant } from "@/lib/reports/weekly-window";
+
+export const MAX_RANGE_DAYS = 31;
+export const RANGE_KINDS = ["today", "yesterday", "tomorrow", "this_week", "dates"] as const;
+export type ResolvedRange =
+  | { ok: true; fromIso: string; toIso: string; firstDay: string; lastDay: string; multiDay: boolean }
+  | { ok: false; error: "bad_range" | "range_too_long" };
+
+const DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const parts = (day: string) => day.split("-").map(Number) as [number, number, number];
+function shift(day: string, n: number): string {
+  const [y, m, d] = parts(day);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+const isDay = (v: unknown): v is string => typeof v === "string" && DAY.test(v) && shift(v, 0) === v;
+const days = (a: string, b: string) => {
+  const [ay, am, ad] = parts(a);
+  const [by, bm, bd] = parts(b);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000) + 1;
+};
+
+export function resolveRange(input: { range?: unknown; from?: unknown; to?: unknown }, zone: string, now: Date): ResolvedRange {
+  const today = dayKeyInZone(now, zone);
+  let first: string;
+  let last: string;
+  switch (input.range) {
+    case "today": first = last = today; break;
+    case "yesterday": first = last = shift(today, -1); break;
+    case "tomorrow": first = last = shift(today, 1); break;
+    case "this_week": {
+      const [y, m, d] = parts(today);
+      const sinceMonday = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+      first = shift(today, -sinceMonday);
+      last = shift(first, 6);
+      break;
+    }
+    case "dates": {
+      if (!isDay(input.from) || (input.to !== undefined && !isDay(input.to))) return { ok: false, error: "bad_range" };
+      first = input.from;
+      last = (input.to as string | undefined) ?? input.from;
+      if (last < first) return { ok: false, error: "bad_range" };
+      if (days(first, last) > MAX_RANGE_DAYS) return { ok: false, error: "range_too_long" };
+      break;
+    }
+    default: return { ok: false, error: "bad_range" };
+  }
+  return {
+    ok: true, firstDay: first, lastDay: last, multiDay: first !== last,
+    fromIso: localMidnightInstant(first, zone).toISOString(),
+    toIso: localMidnightInstant(shift(last, 1), zone).toISOString(),
+  };
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/token.ts
+// Decision T (docs/superpowers/specs/2026-11-09-owner-line-spike.md): a short-lived token PostgREST accepts as the
+// person, so RLS decides exactly as in the app (spec §5, preferred path). The claims RLS reads are sub (Clerk user),
+// org_id (Clerk org) and role; app_role is NEVER minted, so this can never mint the agency. If the spike chose an
+// imported asymmetric key instead of the legacy secret, this file is the one that changes (algorithm and env name);
+// its test pins the claims, which do not.
+import { createHmac } from "node:crypto";
+
+export const OWNER_LINE_TOKEN_TTL_SECONDS = 120;
+
+export function mintOwnerLineToken(
+  p: { clerkUserId: string; clerkOrgId: string }, nowMs: number, env: NodeJS.ProcessEnv = process.env,
+): string {
+  const secret = env.SUPABASE_JWT_SECRET?.trim();
+  if (!secret || secret.length < 32) throw new Error("owner line: SUPABASE_JWT_SECRET is not set");
+  const iat = Math.floor(nowMs / 1000);
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const head = b64({ alg: "HS256", typ: "JWT" });
+  const body = b64({ role: "authenticated", aud: "authenticated", sub: p.clerkUserId, org_id: p.clerkOrgId,
+    iat, exp: iat + OWNER_LINE_TOKEN_TTL_SECONDS });
+  return `${head}.${body}.${createHmac("sha256", secret).update(`${head}.${body}`).digest("base64url")}`;
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/session.ts
+import { serviceDb, ownerLineSessionCheck, type AccountRole } from "@bis/db";
+import { utcDayStart } from "@/lib/voice/call-limits";
+import type { Locale } from "@/lib/i18n/locale";
+
+/** Who an owner-line call is, as the SIP webhook verified it (Task 12's decideOwnerSession builds it). */
+export type OwnerLineSession = {
+  accountId: string; userId: string; role: AccountRole; clerkUserId: string; clerkOrgId: string;
+  firstName: string | null; actorName: string | null; locale: Locale; timezone: string;
+};
+
+/**
+ * F-032 §5 (plan SC-12): before EVERY tool call, the conditions that made the pass valid are read again: still a
+ * member, the same role, the switch on, enrolled and not locked. No daily-limit check here: this call is already
+ * counted. False on any refusal; a throw is the caller's to turn into "I couldn't read that".
+ */
+export async function recheckOwnerSession(s: OwnerLineSession, now: Date): Promise<boolean> {
+  const r = await ownerLineSessionCheck(serviceDb(), {
+    accountId: s.accountId, userId: s.userId, role: s.role, dayStartIso: utcDayStart(now), maxCalls: null,
+  });
+  if (!r.ok) console.log(`[voice/owner-line] session no longer valid (${r.reason}), accountId ${s.accountId}`);
+  return r.ok;
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/reader.ts
+// THE ONE PLACE the Task 0 decision changes behaviour (plan SC-2). Every owner tool reads through the client this
+// returns and calls the app's OWN readers with it (listCalls, listAgendaBookings, listAccountWork); no tool filters
+// by role itself. "token": the client reads as the person, so RLS (0068) decides, Technicians included. "service"
+// (F2): the service role scoped by account id, which equals what an Owner or Staff member sees; a Technician's scope
+// lives only in RLS, so they are refused here AND never offered the line (OWNER_LINE_ROLES).
+import { userDb, serviceDb, type SupabaseClient } from "@bis/db";
+import { OWNER_LINE_DATA_PATH, type OwnerLineDataPath } from "./data-path";
+import { mintOwnerLineToken } from "./token";
+import type { OwnerLineSession } from "./session";
+
+export function ownerLineReadClient(
+  s: Pick<OwnerLineSession, "role" | "clerkUserId" | "clerkOrgId">, now: Date = new Date(),
+  deps: { path: OwnerLineDataPath; userDb: typeof userDb; serviceDb: typeof serviceDb; mint: typeof mintOwnerLineToken } =
+    { path: OWNER_LINE_DATA_PATH, userDb, serviceDb, mint: mintOwnerLineToken },
+): SupabaseClient {
+  if (deps.path === "token") return deps.userDb(deps.mint({ clerkUserId: s.clerkUserId, clerkOrgId: s.clerkOrgId }, now.getTime()));
+  if (s.role === "technician") throw new Error("owner line: a Technician's reads need the token path (plan SC-2)");
+  return deps.serviceDb();
+}
+```
+
+- [ ] **Step 4: Run green.** Use the Step 2 command. Expected: all pass. Paste the summary line.
+
+- [ ] **Step 5: Mutation probes.** Each must FAIL BY NAME:
+  1. `> MAX_RANGE_DAYS + 1` → "31 days is allowed; 32 is refused" FAILS.
+  2. Add `app_role: "agency_admin"` to the minted body → "NEVER app_role" FAILS.
+  3. Delete the technician refusal → "a Technician is refused" FAILS.
+  4. `localMidnightInstant(first, "UTC")` → "a named date on the day the clocks changed" FAILS.
+
+- [ ] **Step 6: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line/range.ts apps/web/src/lib/owner-line/range.test.ts apps/web/src/lib/owner-line/token.ts apps/web/src/lib/owner-line/reader.ts apps/web/src/lib/owner-line/reader.test.ts apps/web/src/lib/owner-line/session.ts
+  git commit -m "feat(voice): owner line ranges in the account's zone, and the one read-client factory the data-path decision lives in"
+  ```
+
+---
+
+## Task 11: The three owner tools, schemas and registry (HIGH, 1 day)
+
+**Files:**
+- Create: `apps/web/src/lib/owner-line/tools/schemas.ts`, `read.ts`, `registry.ts`, with `registry.test.ts`
+- Create: `apps/web/src/lib/owner-line/tools/read.live.test.ts`. This runs on the replica kit only: it is skipped without `BIS_REPLICA_JWT_SECRET`, and a skip is not a pass. It is modelled on `WEB/lib/ai-acts/actions.live.test.ts:1-60`.
+- Modify: `apps/web/src/lib/messages.ts` (`ownerLine.tool.newCaller` / `.es`)
+
+**Interfaces:**
+- Consumes: `listCalls(db, accountId, { limit, before })` (`DB/voice.ts:1248`), `listCallReasons(db, accountId, ids): Map<string,string>` (`:675`), `listAgendaBookings(db, accountId, fromIso, toIso): { rows, truncated }` (`DB/booking.ts:1195`), `listAccountWork(db, accountId, opts?): WorkRow[]` (`DB/work-queue.ts:177`).
+
+  Re-read `listAccountWork`'s signature after #343 (F-077) merges, because it changes the work queue. If its options or row shape moved, follow the file, and record the change in the report.
+- Consumes (Task 10): `resolveRange`, `ownerLineReadClient`, `recheckOwnerSession`, `OwnerLineSession`.
+- Produces:
+
+```ts
+// schemas.ts
+export const OWNER_TOOL_SCHEMAS: readonly [...];           // flat GA format, like voice/tools/schemas.ts
+export type OwnerToolName = "calls_and_messages" | "appointments" | "needs_attention";
+export const OWNER_TOOL_NAMES: readonly OwnerToolName[];
+export const LOG_KIND_OF: Record<OwnerToolName, OwnerLineLogKind>;
+// registry.ts
+export type OwnerToolContext = { session: OwnerLineSession; now: () => Date;
+  recheck: (s: OwnerLineSession, now: Date) => Promise<boolean>;
+  client: (s: OwnerLineSession, now: Date) => SupabaseClient };
+export async function runOwnerTool(ctx: OwnerToolContext, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+```
+
+Every result is something a caller hears, so it is copy:
+- **Counts are computed in code**, never by the model.
+- **A failure is `{ ok: false, error: "couldnt_read" }`**, with nothing partial.
+- **No field outside §5's "Returns" column:**
+  - `calls_and_messages`: `when`, `caller`, `reason`, `needsCallback` (no transcript, summary or recording);
+  - `appointments`: `when`, `customer`, `meetingType`, `status` (no note, phone, email or place);
+  - `needs_attention`: `what`, `kind`, `due`.
+
+- [ ] **Step 1: Write the failing registry tests (unit, with mocked readers).**
+
+```ts
+// apps/web/src/lib/owner-line/tools/registry.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const r = vi.hoisted(() => ({ calls: vi.fn(), reasons: vi.fn(), agenda: vi.fn(), work: vi.fn() }));
+vi.mock("@bis/db", () => ({
+  listCalls: r.calls, listCallReasons: r.reasons, listAgendaBookings: r.agenda, listAccountWork: r.work,
+}));
+import { runOwnerTool, type OwnerToolContext } from "./registry";
+import { OWNER_TOOL_NAMES } from "./schemas";
+import { toolSchemas } from "@/lib/voice/tools/schemas";
+
+const A = "acct-A";
+const DB = { tag: "the client the factory made" } as never;
+const SESSION = { accountId: A, userId: "u1", role: "staff" as const, clerkUserId: "c1", clerkOrgId: "o1",
+  firstName: "Dan", actorName: "Dan Lopez", locale: "en" as const, timezone: "America/Chicago" };
+const NOW = new Date("2026-11-09T21:00:00.000Z");   // 3:00 PM CST
+const ctx = (over: Partial<OwnerToolContext> = {}): OwnerToolContext => ({
+  session: SESSION, now: () => NOW, recheck: vi.fn(async () => true), client: vi.fn(() => DB), ...over });
+const call = (id: string, startedAt: string, over = {}) => ({ id, started_at: startedAt, ended_at: null, duration_secs: 60,
+  outcome: "lead", language: "en", caller_e164: "+19565550177", contact_id: "k1", conversation_id: null,
+  owner_line_user_id: null, contact: { first_name: "Maria", last_name: "López" }, ...over });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  r.calls.mockResolvedValue([
+    call("c3", "2026-11-09T20:14:00.000Z"),
+    call("c2", "2026-11-09T19:00:00.000Z", { contact: null }),
+    call("c1", "2026-11-09T18:00:00.000Z", { owner_line_user_id: "u1" }),
+    call("c0", "2026-11-08T12:00:00.000Z"),
+  ]);
+  r.reasons.mockResolvedValue(new Map([["c3", "Roof leak over the kitchen"]]));
+  r.work.mockResolvedValue([{ id: "t1", source: "task", accountId: A, contactId: "k1", title: "Call back Maria", dueAt: null, occurredAt: "x", callId: "c3" }]);
+  r.agenda.mockResolvedValue({ truncated: false, rows: [
+    { id: "b1", starts_at: "2026-11-10T15:00:00.000Z", status: "booked", meeting_type: "in_person", note: "gate code 1234", replaced: false,
+      contact: { first_name: "Ana", last_name: null, phone: "+19565550188", email: "ana@example.com" }, place: { label: "Home", address: "1 Main" } },
+    { id: "b0", starts_at: "2026-11-10T14:00:00.000Z", status: "cancelled", meeting_type: null, note: null, replaced: true, contact: null, place: null },
+  ] });
+});
+
+describe("the owner tools (F-032 §5)", () => {
+  it("THE WALL: only the three owner tools exist, and no receptionist tool is among them", () => {
+    expect([...OWNER_TOOL_NAMES].sort()).toEqual(["appointments", "calls_and_messages", "needs_attention"]);
+    const receptionist = toolSchemas("full", "in_person", true).map((t: { name: string }) => t.name);
+    expect(OWNER_TOOL_NAMES.filter((n) => (receptionist as string[]).includes(n))).toEqual([]);
+  });
+
+  it("a session that is no longer valid gets an error and NO read at all (mutation: skip the recheck -> FAILS)", async () => {
+    const c = ctx({ recheck: vi.fn(async () => false) });
+    expect(await runOwnerTool(c, "calls_and_messages", { range: "today" })).toEqual({ ok: false, error: "couldnt_read" });
+    expect(c.client).not.toHaveBeenCalled();
+    expect(r.calls).not.toHaveBeenCalled();
+  });
+
+  it("reads through the factory's client and this session's account only (mutation: serviceDb() in the tool -> FAILS)", async () => {
+    await runOwnerTool(ctx(), "calls_and_messages", { range: "today" });
+    expect(r.calls).toHaveBeenCalledWith(DB, A, expect.objectContaining({ before: "2026-11-10T06:00:00.000Z" }));
+    expect(r.reasons).toHaveBeenCalledWith(DB, A, ["c3", "c2"]);
+  });
+
+  it("calls: counted in code, owner-line calls left out, a caller with no record is 'a new caller', the callback flag from To do", async () => {
+    const out = await runOwnerTool(ctx(), "calls_and_messages", { range: "today" });
+    expect(out).toEqual({ ok: true, range: { first: "2026-11-09", last: "2026-11-09" }, count: 2, more: 0, calls: [
+      { when: "2:14 PM", caller: "Maria López", reason: "Roof leak over the kitchen", needsCallback: true },
+      { when: "1:00 PM", caller: "a new caller", reason: null, needsCallback: false },
+    ] });
+  });
+
+  it("appointments: never the note, the phone, the email or the address; a moved booking's cancelled half is not read out", async () => {
+    const out = await runOwnerTool(ctx(), "appointments", { range: "tomorrow" }) as { appointments: object[]; count: number };
+    expect(out.count).toBe(1);
+    expect(out.appointments).toEqual([{ when: "9:00 AM", customer: "Ana", meetingType: "in_person", status: "booked" }]);
+    expect(JSON.stringify(out)).not.toMatch(/gate code|ana@example|5550188|Main/);
+  });
+
+  it("needs_attention: the To do rows the app's own reader returns, counted in code", async () => {
+    expect(await runOwnerTool(ctx(), "needs_attention", {})).toEqual({ ok: true, count: 1, more: 0,
+      items: [{ what: "Call back Maria", kind: "task", due: null }] });
+    expect(r.work).toHaveBeenCalledWith(DB, A);
+  });
+
+  it("a range of 32 days is refused before any read", async () => {
+    expect(await runOwnerTool(ctx(), "appointments", { range: "dates", from: "2026-10-01", to: "2026-11-01" }))
+      .toEqual({ ok: false, error: "range_too_long" });
+    expect(r.agenda).not.toHaveBeenCalled();
+  });
+
+  it("a reader that throws is 'couldnt_read', never a partial answer", async () => {
+    r.agenda.mockRejectedValue(new Error("db"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await runOwnerTool(ctx(), "appointments", { range: "today" })).toEqual({ ok: false, error: "couldnt_read" });
+  });
+
+  it("an unknown tool name, or a receptionist tool name, is refused without a read", async () => {
+    expect(await runOwnerTool(ctx(), "book_appointment", {})).toEqual({ ok: false, error: "unknown_tool" });
+    expect(r.calls).not.toHaveBeenCalled();
+  });
+});
+```
+
+Read `toolSchemas`' real signature (`WEB/lib/voice/tools/schemas.ts`, below `:80`) and call it with the arguments it takes (`bookingMode`, `meetingType`, `handoffAvailable`). Use its widest setting so every receptionist tool is listed.
+
+- [ ] **Step 2: Write the live scope test (replica kit; second account and Technician, spec §7 "Scope").**
+
+```ts
+// apps/web/src/lib/owner-line/tools/read.live.test.ts
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { config as loadEnv } from "dotenv";
+import { serviceDb } from "@bis/db";
+import { refuseProduction } from "../../../../e2e/fixtures/production-guard";
+import { runOwnerTool } from "./registry";
+import { ownerLineReadClient } from "../reader";
+import { OWNER_LINE_DATA_PATH } from "../data-path";
+
+// Two businesses holding the SAME customer name and phone; A has an Owner, a Staff member and a Technician with one
+// assigned customer. Every tool runs through the real factory and the real readers against the replica kit's
+// PostgREST (BIS_REPLICA_JWT_SECRET doubles as SUPABASE_JWT_SECRET there). Without the secret this file is SKIPPED,
+// and a skip is not a pass: the PR description states the replica run.
+loadEnv({ path: ".env.local" });
+refuseProduction(process.env, "lib/owner-line/tools/read.live.test.ts");
+const SECRET = process.env.BIS_REPLICA_JWT_SECRET;
+const RUN = randomUUID().slice(0, 8);
+type Seed = { a: string; b: string; aOrg: string; owner: string; staff: string; tech: string; techCustomer: string };
+let seed: Seed;
+
+describe.skipIf(!SECRET)("owner tools see exactly what the role sees, on the dialed business only (spec §7)", () => {
+  beforeAll(async () => {
+    process.env.SUPABASE_JWT_SECRET = SECRET;
+    const db = serviceDb();
+    const { data: ag } = await db.from("agencies").select("id").limit(1).single();
+    const acct = async (tag: string) => (await db.from("accounts").insert({ agency_id: ag!.id, clerk_org_id: `org_olt_${tag}_${RUN}`,
+      name: `OLT ${tag}`, client_access_enabled: true, owner_line_enabled_at: new Date().toISOString() }).select("id").single()).data!.id as string;
+    const a = await acct("a");
+    const b = await acct("b");
+    const person = async (tag: string, account: string, role: string) => {
+      const { data: u } = await db.from("users").insert({ clerk_user_id: `user_olt_${tag}_${RUN}`, email: `${tag}_${RUN}@example.com` }).select("id").single();
+      await db.from("memberships").insert({ user_id: u!.id, scope: "account", account_id: account, role });
+      return u!.id as string;
+    };
+    const owner = await person("owner", a, "owner");
+    const staff = await person("staff", a, "staff");
+    const tech = await person("tech", a, "technician");
+    await person("bowner", b, "owner");
+    const phone = async (account: string, e164: string) => (await db.from("phone_numbers").insert({ account_id: account, e164, status: "live" }).select("id").single()).data!.id as string;
+    const pa = await phone(a, `+1956555${RUN.replace(/[^0-9]/g, "0").slice(0, 4).padEnd(4, "1")}`);
+    const pb = await phone(b, `+1956556${RUN.replace(/[^0-9]/g, "0").slice(0, 4).padEnd(4, "2")}`);
+    const contact = async (account: string, assigned: string | null) => (await db.from("contacts").insert({ account_id: account,
+      first_name: "Maria", last_name: "López", phone: "+19565550177", assigned_to: assigned }).select("id").single()).data!.id as string;
+    const techCustomer = await contact(a, tech);
+    const unassigned = await contact(a, null);
+    const bCustomer = await contact(b, null);
+    const now = new Date();
+    for (const [account, pn, k] of [[a, pa, techCustomer], [a, pa, unassigned], [b, pb, bCustomer]] as const) {
+      await db.from("calls").insert({ account_id: account, phone_number_id: pn, contact_id: k, caller_e164: "+19565550177", outcome: "lead", started_at: now.toISOString() });
+    }
+    seed = { a, b, aOrg: `org_olt_a_${RUN}`, owner, staff, tech, techCustomer };
+  });
+
+  afterAll(async () => {
+    const { deleteAccountCascade } = await import("@bis/db");
+    for (const id of [seed?.a, seed?.b].filter(Boolean)) await deleteAccountCascade(serviceDb(), id!, "owner-line live test");
+  });
+
+  const run = (userId: string, role: "owner" | "staff" | "technician", tag: string, account = seed.a) => runOwnerTool({
+    session: { accountId: account, userId, role, clerkUserId: `user_olt_${tag}_${RUN}`, clerkOrgId: seed.aOrg,
+      firstName: null, actorName: null, locale: "en", timezone: "America/Chicago" },
+    now: () => new Date(), recheck: async () => true, client: (s, n) => ownerLineReadClient(s, n),
+  }, "calls_and_messages", { range: "today" }) as Promise<{ ok: boolean; count?: number }>;
+
+  it("the Owner hears A's two calls and nothing of B's matching customer", async () => {
+    expect(await run(seed.owner, "owner", "owner")).toMatchObject({ ok: true, count: 2 });
+  });
+  it("Staff hear what Staff see: A's two calls", async () => {
+    expect(await run(seed.staff, "staff", "staff")).toMatchObject({ ok: true, count: 2 });
+  });
+  it.skipIf(OWNER_LINE_DATA_PATH !== "token")("a Technician hears only their assigned customer's call, never the unassigned one", async () => {
+    expect(await run(seed.tech, "technician", "tech")).toMatchObject({ ok: true, count: 1 });
+  });
+  it.skipIf(OWNER_LINE_DATA_PATH !== "token")("a session naming business B with A's identity reads nothing from B (RLS, not the tool, refuses it)", async () => {
+    expect(await run(seed.owner, "owner", "owner", seed.b)).toMatchObject({ ok: true, count: 0 });
+  });
+});
+```
+
+  Under F2, the two `skipIf` cases are skipped by design, and the second-account case is carried by the unit test above (the `account_id` filter is `listCalls`' own `.eq`). The test's phone numbers only need to be unique E.164 values. If `e164`'s CHECK refuses the derived digits, use `testPhoneNumber()`-style generation from `packages/db/src/test/fixtures.ts:42`.
+
+- [ ] **Step 3: Run the unit tests and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/tools/registry.test.ts
+  ```
+
+  Expected: FAIL, unresolved `./registry`.
+
+- [ ] **Step 4: Implement.**
+
+```ts
+// apps/web/src/lib/owner-line/tools/schemas.ts
+// Flat GA Realtime tool format (lib/voice/tools/schemas.ts:1-3). The owner line's tools are a SEPARATE list: the
+// receptionist's are never registered on an owner-line session (spec §4.4), and none of these on a customer's.
+import type { OwnerLineLogKind } from "@bis/db";
+
+const RANGE = {
+  range: { type: "string", enum: ["today", "yesterday", "tomorrow", "this_week", "dates"],
+    description: "Which days, in the business's timezone. Use dates with from (and to) for a named day or days." },
+  from: { type: "string", description: "YYYY-MM-DD. Only with range dates." },
+  to: { type: "string", description: "YYYY-MM-DD, the last day, at most 31 days after from. Only with range dates." },
+} as const;
+
+export const OWNER_TOOL_SCHEMAS = [
+  { type: "function", name: "calls_and_messages",
+    description: "The calls the business got in a range, newest first: count is exact, and each call has when, caller (a name, or 'a new caller'), reason (why they called, or null) and needsCallback. Say the count from here; never count yourself. more says how many were not listed.",
+    parameters: { type: "object", properties: RANGE, required: ["range"] } },
+  { type: "function", name: "appointments",
+    description: "The appointments in a range, soonest first: count is exact, and each has when, customer (or null), meetingType and status. Say the count from here.",
+    parameters: { type: "object", properties: RANGE, required: ["range"] } },
+  { type: "function", name: "needs_attention",
+    description: "What is on this person's To do right now: count is exact, and each item has what, kind and due (or null).",
+    parameters: { type: "object", properties: {}, required: [] } },
+] as const;
+
+export type OwnerToolName = (typeof OWNER_TOOL_SCHEMAS)[number]["name"];
+export const OWNER_TOOL_NAMES: readonly OwnerToolName[] = OWNER_TOOL_SCHEMAS.map((s) => s.name);
+export const LOG_KIND_OF: Record<OwnerToolName, OwnerLineLogKind> = {
+  calls_and_messages: "owner_line_calls_and_messages",
+  appointments: "owner_line_appointments",
+  needs_attention: "owner_line_needs_attention",
+};
+```
+
+```ts
+// apps/web/src/lib/owner-line/tools/read.ts
+// The three reads (spec §5), each through the APP's own reader with the client the factory made, so the role
+// filter is RLS's (token) or the account scope (F2), never re-implemented here (plan SC-2). Counts are computed here.
+import { listCalls, listCallReasons, listAgendaBookings, listAccountWork, type SupabaseClient } from "@bis/db";
+import { resolveRange } from "../range";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
+
+export type OwnerReadContext = { db: SupabaseClient; accountId: string; timezone: string; locale: Locale; now: Date };
+export const CALLS_SPOKEN = 20;
+export const APPOINTMENTS_SPOKEN = 25;
+export const TODO_SPOKEN = 15;
+const CALL_PAGE = 100;
+const CALL_PAGES = 10;
+
+function when(iso: string, c: OwnerReadContext, withDay: boolean): string {
+  return new Intl.DateTimeFormat(c.locale === "es" ? "es-US" : "en-US", {
+    timeZone: c.timezone, hour: "numeric", minute: "2-digit",
+    ...(withDay ? { weekday: "long", month: "long", day: "numeric" } : {}),
+  }).format(new Date(iso)).replace(/ /g, " ");
+}
+const nameOf = (k: { first_name: string | null; last_name: string | null } | null) =>
+  [k?.first_name, k?.last_name].filter((x): x is string => !!x && x.trim() !== "").join(" ") || null;
+
+export async function callsAndMessages(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const r = resolveRange(args, c.timezone, c.now);
+  if (!r.ok) return { ok: false, error: r.error };
+  const rows: Awaited<ReturnType<typeof listCalls>> = [];
+  let before = r.toIso;
+  for (let page = 0; page < CALL_PAGES; page++) {
+    const batch = await listCalls(c.db, c.accountId, { limit: CALL_PAGE, before });
+    rows.push(...batch.filter((x) => x.started_at >= r.fromIso));
+    const last = batch[batch.length - 1];
+    if (batch.length < CALL_PAGE || !last || last.started_at < r.fromIso) break;
+    before = last.started_at;
+  }
+  const customer = rows.filter((x) => x.owner_line_user_id === null);
+  const ids = customer.map((x) => x.id);
+  const [reasons, work] = await Promise.all([listCallReasons(c.db, c.accountId, ids), listAccountWork(c.db, c.accountId)]);
+  const open = new Set(work.map((w) => w.callId).filter((x): x is string => typeof x === "string"));
+  return {
+    ok: true, range: { first: r.firstDay, last: r.lastDay }, count: customer.length,
+    more: Math.max(0, customer.length - CALLS_SPOKEN),
+    calls: customer.slice(0, CALLS_SPOKEN).map((x) => ({
+      when: when(x.started_at, c, r.multiDay),
+      caller: nameOf(x.contact) ?? t(m, "ownerLine.tool.newCaller", c.locale),
+      reason: reasons.get(x.id) ?? null,
+      needsCallback: open.has(x.id),
+    })),
+  };
+}
+
+export async function appointments(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const r = resolveRange(args, c.timezone, c.now);
+  if (!r.ok) return { ok: false, error: r.error };
+  const { rows, truncated } = await listAgendaBookings(c.db, c.accountId, r.fromIso, r.toIso);
+  const shown = rows.filter((x) => !(x.status === "cancelled" && x.replaced));
+  return {
+    ok: true, range: { first: r.firstDay, last: r.lastDay }, count: shown.length, truncated,
+    more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN),
+    appointments: shown.slice(0, APPOINTMENTS_SPOKEN).map((x) => ({
+      when: when(x.starts_at, c, r.multiDay), customer: nameOf(x.contact), meetingType: x.meeting_type, status: x.status,
+    })),
+  };
+}
+
+export async function needsAttention(c: OwnerReadContext): Promise<Record<string, unknown>> {
+  const rows = await listAccountWork(c.db, c.accountId);
+  return {
+    ok: true, count: rows.length, more: Math.max(0, rows.length - TODO_SPOKEN),
+    items: rows.slice(0, TODO_SPOKEN).map((w) => ({ what: w.title, kind: w.source, due: w.dueAt ? when(w.dueAt, c, true) : null })),
+  };
+}
+```
+
+`appointments` keeps `truncated` in its payload, because it tells the model the agenda's 400-row cap (`AGENDA_ROW_CAP`) cut rows. That is why its unit test asserts `out.appointments` and `out.count` rather than the whole object. `callsAndMessages` returns no `truncated` key.
+
+```ts
+// apps/web/src/lib/owner-line/tools/registry.ts
+import type { SupabaseClient } from "@bis/db";
+import { OWNER_TOOL_NAMES, type OwnerToolName } from "./schemas";
+import { callsAndMessages, appointments, needsAttention } from "./read";
+import type { OwnerLineSession } from "../session";
+
+export type OwnerToolContext = {
+  session: OwnerLineSession; now: () => Date;
+  recheck: (s: OwnerLineSession, now: Date) => Promise<boolean>;
+  client: (s: OwnerLineSession, now: Date) => SupabaseClient;
+};
+
+/**
+ * Runs one owner tool (F-032 §5). In order:
+ *   1. an unknown name — a receptionist tool included — is refused without a read;
+ *   2. the session is re-checked live (SC-12), and a refusal or a throw is "couldnt_read" with no read at all;
+ *   3. the read runs through the factory's client;
+ *   4. anything that throws is "couldnt_read", never partial data.
+ * The prompt turns "couldnt_read" into "I couldn't read that just now" — but nothing here depends on it: the model
+ * simply has no data to speak.
+ */
+export async function runOwnerTool(ctx: OwnerToolContext, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!(OWNER_TOOL_NAMES as readonly string[]).includes(name)) return { ok: false, error: "unknown_tool" };
+  const now = ctx.now();
+  let live = false;
+  try {
+    live = await ctx.recheck(ctx.session, now);
+  } catch (e) {
+    console.error(`[voice/owner-line] session re-check failed — refusing ${name}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!live) return { ok: false, error: "couldnt_read" };
+  try {
+    const c = { db: ctx.client(ctx.session, now), accountId: ctx.session.accountId, timezone: ctx.session.timezone,
+      locale: ctx.session.locale, now };
+    switch (name as OwnerToolName) {
+      case "calls_and_messages": return await callsAndMessages(c, args);
+      case "appointments": return await appointments(c, args);
+      case "needs_attention": return await needsAttention(c);
+    }
+  } catch (e) {
+    console.error(`[voice/owner-line] tool ${name} failed: ${e instanceof Error ? e.message : String(e)}`);
+    return { ok: false, error: "couldnt_read" };
+  }
+  return { ok: false, error: "unknown_tool" };
+}
+```
+
+Copy: `"ownerLine.tool.newCaller": "a new caller", "ownerLine.tool.newCaller.es": "una persona nueva",`.
+
+- [ ] **Step 5: Run green.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line src/lib/i18n src/lib/messages.test.ts
+  ```
+
+  Expected: green, with `read.live.test.ts` SKIPPED here. Then, on the replica kit:
+
+  ```bash
+  BIS_REPLICA_JWT_SECRET=<kit secret> <kit>/env-run.sh pnpm --filter web exec vitest run src/lib/owner-line/tools/read.live.test.ts
+  ```
+
+  Expected: 4 passed under T (2 passed and 2 skipped under F2). Paste both summary lines.
+
+- [ ] **Step 6: Mutation probes.** Each must FAIL BY NAME:
+  1. In `runOwnerTool`, set `live = true` without calling `recheck` → "a session that is no longer valid gets an error and NO read" FAILS.
+  2. In `read.ts`, pass `serviceDb()` instead of `c.db` to `listCalls` → "reads through the factory's client" FAILS. In the live file, the Technician case also FAILS (it hears 2).
+  3. Drop `.filter((x) => x.owner_line_user_id === null)` → "calls: counted in code, owner-line calls left out" FAILS.
+  4. Spread the whole booking row into the appointment item → "appointments: never the note…" FAILS.
+
+- [ ] **Step 7: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line/tools apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): owner line tools: calls, appointments and To do, read through the app's own readers, re-checked on every call"
+  ```
+
+---
+
+## Task 12: The owner-line session: prompt, config, webhook branch, lifecycle hooks, finish (HIGH, 1.5 days)
+
+**Files:**
+- Modify: `apps/web/src/lib/owner-line/session.ts` (add `decideOwnerSession`)
+- Create: `apps/web/src/lib/owner-line/prompt.ts`, `session-config.ts`, `events.ts`, `finish.ts`, and `session.test.ts`, `session-config.test.ts`, `events.test.ts`, `finish.test.ts`
+- Modify: `apps/web/src/app/api/voice/incoming/route.ts`:
+  - imports (`:85-117`)
+  - `LifecycleArgs` (`:298-308`)
+  - `runCallLifecycle` (`:320-874`): the cap/warning timers and the handle/finish hooks
+  - a new step 7b after step 7 (`:1000`)
+  - the receptionist `after(...)` (`:1362-1365`) gains `mode: "receptionist"`
+- Modify: `apps/web/src/app/api/voice/incoming/route.test.ts` and `lifecycle.test.ts` (append a `describe` each)
+- Modify: `apps/web/src/lib/messages.ts` (`ownerLine.session.warning` / `.es`)
+
+**Interfaces:**
+- Consumes (Task 4): `verifyOwnerPass`, `extractOwnerPass`, `SipHandoffCheck`.
+- Consumes (Task 2): `ownerLineSessionCheck`, `noteOwnerLineCall`, `finishCallRow`, `startCallRow({ …, ownerLineUserId })`, `OWNER_LINE_MAX_CALLS_PER_DAY`.
+- Consumes (Tasks 10–11): `OwnerLineSession`, `recheckOwnerSession`, `ownerLineReadClient`, `runOwnerTool`, `OWNER_TOOL_SCHEMAS`, `LOG_KIND_OF`, `OwnerToolName`.
+- Consumes: `REALTIME_MODEL` (`WEB/lib/voice/session-config.ts:13`), `readTurnDetection` (`./turn-detection`), `withTranscript`, `emptyCallState`, `CallState`, `detectCallerLanguage`, `voiceMinutes`, `recordUsageSafely`.
+- Produces:
+
+```ts
+// session.ts
+export type OwnerSessionDecision = { ok: true; session: OwnerLineSession } | { ok: false; reason: string };
+export async function decideOwnerSession(p: { db: SupabaseClient; raw: string; handoffToken: string | null;
+  handoffCheck: SipHandoffCheck; accountId: string; now: Date }, deps?: { check: typeof ownerLineSessionCheck }): Promise<OwnerSessionDecision>;
+// prompt.ts
+export function ownerLineInstructions(p: { firstName: string | null; locale: Locale; businessName: string; personaName: string; timezone: string; now: Date }): string;
+export function ownerLineGreeting(p: { firstName: string | null; locale: Locale }): string;
+export function ownerLineWarning(locale: Locale): string;
+// session-config.ts
+export const OWNER_LINE_MAX_CALL_SECONDS = 600;
+export function buildOwnerLineSessionConfig(p: Parameters<typeof ownerLineInstructions>[0]): { type: "realtime"; model: string;
+  instructions: string; tools: typeof OWNER_TOOL_SCHEMAS; audio: object };
+// events.ts
+export async function processOwnerLineEvent(state: CallState, ctx: OwnerToolContext, ran: Set<OwnerToolName>,
+  event: RealtimeCallEvent): Promise<{ state: CallState; actions: VoiceAction[] }>;
+// finish.ts
+export async function finishOwnerLineCall(state: CallState, ctx: { db: SupabaseClient; session: OwnerLineSession;
+  ran: ReadonlySet<OwnerToolName> }, meta: { callRowId: string | null; startedAt: Date; endedAt: Date }): Promise<void>;
+```
+
+- [ ] **Step 1: Write the failing unit tests.**
+
+```ts
+// apps/web/src/lib/owner-line/session.test.ts
+import { describe, it, expect, vi } from "vitest";
+vi.mock("@bis/db", () => ({ serviceDb: () => ({}), ownerLineSessionCheck: vi.fn(), OWNER_LINE_MAX_CALLS_PER_DAY: 10 }));
+import { decideOwnerSession } from "./session";
+import { signOwnerPass } from "@/lib/voice/sip-handoff-signature";
+
+const SECRET = "s".repeat(40);
+const A = "11111111-1111-4111-8111-111111111111";
+const B = "33333333-3333-4333-8333-333333333333";
+const U = "22222222-2222-4222-8222-222222222222";
+const TOKEN = "t".repeat(32);
+const NOW = new Date(1_800_000_000_000);
+const CALLED = "+19565550100";
+const OK_CHECK = { ok: true as const, calledE164: CALLED, callerE164: "+19565550142" };
+const LIVE = { ok: true as const, name: "Dan Lopez", language: "es" as const, clerkUserId: "user_d", clerkOrgId: "org_a",
+  timezone: "America/Chicago", accountLanguage: null };
+process.env.VOICE_HANDOFF_SECRET = SECRET;
+const pass = (over: Partial<{ accountId: string; role: "owner" | "staff" | "technician"; at: number }> = {}) =>
+  signOwnerPass(TOKEN, { accountId: over.accountId ?? A, userId: U, role: over.role ?? "staff", calledE164: CALLED }, over.at ?? NOW.getTime())!;
+const decide = (raw: string, over: Partial<Parameters<typeof decideOwnerSession>[0]> = {}, check = vi.fn(async () => LIVE)) =>
+  decideOwnerSession({ db: {} as never, raw, handoffToken: TOKEN, handoffCheck: OK_CHECK, accountId: A, now: NOW, ...over }, { check });
+
+describe("decideOwnerSession: the pass is refused when (spec §7)", () => {
+  it("all holds: a session for this person, in their language", async () => {
+    expect(await decide(pass())).toEqual({ ok: true, session: { accountId: A, userId: U, role: "staff", clerkUserId: "user_d",
+      clerkOrgId: "org_a", firstName: "Dan", actorName: "Dan Lopez", locale: "es", timezone: "America/Chicago" } });
+  });
+  it("its signature is tampered", async () => {
+    expect(await decide(pass().replace(".staff.", ".owner."))).toEqual({ ok: false, reason: "pass-bad-signature" });
+  });
+  it("it is expired at 61 s", async () => {
+    expect(await decide(pass({ at: NOW.getTime() - 61_000 }))).toEqual({ ok: false, reason: "pass-expired" });
+  });
+  it("it was minted for business A but is used on business B's number (mutation: drop the account comparison -> FAILS)", async () => {
+    expect(await decide(pass(), { accountId: B })).toEqual({ ok: false, reason: "wrong-business" });
+    expect(await decide(pass(), { handoffCheck: { ...OK_CHECK, calledE164: "+19565550111" } })).toEqual({ ok: false, reason: "wrong-business" });
+  });
+  it("the call itself did not come through our answer route (no X-BIS-Signature)", async () => {
+    expect(await decide(pass(), { handoffCheck: { ok: false, reason: "absent" } })).toEqual({ ok: false, reason: "call-not-signed" });
+  });
+  it("the person was removed, or their role changed, after minting: the live re-read says so, with the minted role (SC-8)", async () => {
+    const check = vi.fn(async () => ({ ok: false as const, reason: "role_changed" }));
+    expect(await decide(pass(), {}, check)).toEqual({ ok: false, reason: "role_changed" });
+    expect(check).toHaveBeenCalledWith({}, expect.objectContaining({ userId: U, role: "staff", maxCalls: 10 }));
+  });
+});
+```
+
+Replay is not this function's job. The webhook's redemption row refuses it (`calls_handoff_token_unique`), and the webhook test "a replayed pass…" below proves it.
+
+```ts
+// apps/web/src/lib/owner-line/session-config.test.ts
+import { describe, it, expect } from "vitest";
+import { buildOwnerLineSessionConfig, OWNER_LINE_MAX_CALL_SECONDS } from "./session-config";
+import { toolSchemas } from "@/lib/voice/tools/schemas";
+
+const P = { firstName: "Dan", locale: "en" as const, businessName: "Rio Roofing", personaName: "Sofía", timezone: "America/Chicago", now: new Date("2026-11-09T21:00:00Z") };
+describe("the owner-line session (spec §4.4)", () => {
+  it("is FLAT (type/model/instructions/tools/audio at the top level), never nested under session", () => {
+    expect(Object.keys(buildOwnerLineSessionConfig(P)).sort()).toEqual(["audio", "instructions", "model", "tools", "type"]);
+  });
+  it("registers ONLY the owner tools: no booking, no lead capture, no transfer (mutation: concat toolSchemas(...) -> FAILS)", () => {
+    const names = buildOwnerLineSessionConfig(P).tools.map((t) => t.name);
+    expect(names).toEqual(["calls_and_messages", "appointments", "needs_attention"]);
+    const receptionist = toolSchemas("full", "in_person", true).map((t: { name: string }) => t.name);
+    expect(names.some((n) => (receptionist as string[]).includes(n))).toBe(false);
+  });
+  it("speaks to the person by first name, in their language, and is not the receptionist's prompt", () => {
+    const i = buildOwnerLineSessionConfig({ ...P, locale: "es" }).instructions;
+    expect(i).toContain("Dan");
+    expect(i).toContain("Spanish");
+    expect(i).toContain("usted");
+    // Not the receptionist's prompt: none of its tool names or its message-taking rule.
+    expect(i).not.toMatch(/take_message|capture_lead|book_appointment|transfer_to_human|take a message/i);
+  });
+  it("ends at 10 minutes", () => { expect(OWNER_LINE_MAX_CALL_SECONDS).toBe(600); });
+});
+```
+
+```ts
+// apps/web/src/lib/owner-line/finish.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+const d = vi.hoisted(() => ({ finish: vi.fn(), note: vi.fn(), usage: vi.fn() }));
+vi.mock("@bis/db", () => ({ finishCallRow: d.finish, noteOwnerLineCall: d.note }));
+vi.mock("@/lib/billing/usage", () => ({ recordUsageSafely: d.usage, voiceMinutes: (s: number) => Math.max(1, Math.ceil(s / 60)) }));
+import { finishOwnerLineCall } from "./finish";
+import { emptyCallState, withTranscript } from "@/lib/voice/call-state";
+
+const S = { accountId: "a1", userId: "u1", role: "owner" as const, clerkUserId: "user_d", clerkOrgId: "org_a",
+  firstName: "Dan", actorName: "Dan Lopez", locale: "en" as const, timezone: "America/Chicago" };
+const T0 = new Date("2026-11-09T21:00:00Z");
+const T1 = new Date("2026-11-09T21:02:05Z");
+beforeEach(() => { vi.clearAllMocks(); d.finish.mockResolvedValue(undefined); d.note.mockResolvedValue(undefined); });
+
+describe("finishOwnerLineCall (spec §6)", () => {
+  it("closes the row with its transcript, records the minutes, and writes the access-log entry with the tools that ran", async () => {
+    const state = withTranscript(emptyCallState(), { role: "caller", text: "what calls did I get today?", at: T0.toISOString() });
+    await finishOwnerLineCall(state, { db: {} as never, session: S, ran: new Set(["calls_and_messages", "appointments"] as const) },
+      { callRowId: "row1", startedAt: T0, endedAt: T1 });
+    expect(d.finish).toHaveBeenCalledWith({}, "a1", "row1", expect.objectContaining({ durationSecs: 125, turnCount: 1, summary: "" }));
+    expect(d.usage).toHaveBeenCalledWith({}, expect.objectContaining({ meter: "voice_minutes", quantity: 3, sourceRef: "call:row1" }), expect.any(String));
+    expect(d.note).toHaveBeenCalledWith({}, { accountId: "a1", callId: "row1", actorClerkUserId: "user_d", actorName: "Dan Lopez",
+      kinds: ["owner_line_calls_and_messages", "owner_line_appointments"] });
+  });
+  it("each leg on its own: a failed row write still logs who heard what (mutation: one shared try -> FAILS)", async () => {
+    d.finish.mockRejectedValue(new Error("db"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishOwnerLineCall(emptyCallState(), { db: {} as never, session: S, ran: new Set() }, { callRowId: "row1", startedAt: T0, endedAt: T1 });
+    expect(d.note).toHaveBeenCalled();
+  });
+  it("can reach nothing that writes to a customer: its imports are exactly these (mutation: import ensureCallbackTask from @bis/db -> FAILS)", async () => {
+    const src = (await import("node:fs")).readFileSync(new URL("./finish.ts", import.meta.url), "utf8");
+    // Import lines only, never prose: a guard that a doc comment can satisfy or trip is no guard (memory bis-vacuous-test-shapes).
+    const lines = [...src.matchAll(/^import [^;]+;$/gm)].map((x) => x[0]).sort();
+    expect(lines).toEqual([
+      'import type { CallState } from "@/lib/voice/call-state";',
+      'import type { OwnerLineSession } from "./session";',
+      'import { LOG_KIND_OF, type OwnerToolName } from "./tools/schemas";',
+      'import { detectCallerLanguage } from "@/lib/voice/language";',
+      'import { finishCallRow, noteOwnerLineCall, type SupabaseClient } from "@bis/db";',
+      'import { recordUsageSafely, voiceMinutes } from "@/lib/billing/usage";',
+    ].sort());
+  });
+});
+```
+
+The import-list case is a guard, not behaviour: it FAILS if a later edit gives the finish any way to reach a contact, a text-back, an alert, an automation log or an event.
+
+```ts
+// apps/web/src/lib/owner-line/events.test.ts
+import { describe, it, expect, vi } from "vitest";
+import { processOwnerLineEvent } from "./events";
+import { emptyCallState } from "@/lib/voice/call-state";
+
+describe("processOwnerLineEvent", () => {
+  it("a tool call runs ONLY through runOwnerTool's context and records which tool ran", async () => {
+    const recheck = vi.fn(async () => false);
+    const ran = new Set<"calls_and_messages" | "appointments" | "needs_attention">();
+    const ctx = { session: {} as never, now: () => new Date(), recheck, client: vi.fn() };
+    const r = await processOwnerLineEvent(emptyCallState(), ctx, ran,
+      { type: "response.function_call_arguments.done", name: "appointments", call_id: "fc1", arguments: "{\"range\":\"today\"}" });
+    expect(r.actions[0]).toEqual({ kind: "send", payload: { type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: "fc1", output: JSON.stringify({ ok: false, error: "couldnt_read" }) } } });
+    expect(r.actions[1]).toEqual({ kind: "send", payload: { type: "response.create" } });
+    expect([...ran]).toEqual(["appointments"]);
+  });
+  it("a receptionist tool name asked for on this line is refused and never recorded", async () => {
+    const ran = new Set<"calls_and_messages" | "appointments" | "needs_attention">();
+    await processOwnerLineEvent(emptyCallState(), { session: {} as never, now: () => new Date(), recheck: vi.fn(), client: vi.fn() }, ran,
+      { type: "response.function_call_arguments.done", name: "book_appointment", call_id: "x", arguments: "{}" });
+    expect([...ran]).toEqual([]);
+  });
+  it("records both sides of the conversation into the transcript", async () => {
+    let s = emptyCallState();
+    const ctx = { session: {} as never, now: () => new Date(), recheck: vi.fn(), client: vi.fn() };
+    s = (await processOwnerLineEvent(s, ctx, new Set(), { type: "conversation.item.input_audio_transcription.completed", transcript: "hi", item_id: "i1" })).state;
+    s = (await processOwnerLineEvent(s, ctx, new Set(), { type: "response.output_audio_transcript.done", transcript: "Hi Dan" })).state;
+    expect(s.transcript.map((t) => [t.role, t.text])).toEqual([["caller", "hi"], ["assistant", "Hi Dan"]]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/session.test.ts src/lib/owner-line/session-config.test.ts src/lib/owner-line/finish.test.ts src/lib/owner-line/events.test.ts
+  ```
+
+  Expected: FAIL (`decideOwnerSession is not a function`, and unresolved modules).
+
+- [ ] **Step 3: Implement the four modules.**
+
+```ts
+// session.ts additions
+import type { SupabaseClient } from "@bis/db";
+import { OWNER_LINE_MAX_CALLS_PER_DAY } from "@bis/db";
+import { verifyOwnerPass, type SipHandoffCheck } from "@/lib/voice/sip-handoff-signature";
+import { OWNER_LINE_ROLES } from "./data-path";
+import { firstName } from "@/app/api/voice/texml/owner-line-xml";
+
+export type OwnerSessionDecision = { ok: true; session: OwnerLineSession } | { ok: false; reason: string };
+
+/**
+ * F-032 §4.3: an owner-line session ONLY when the pass verifies, is fresh, names the business the INVITE's own
+ * signed statement names, carries a role this data path offers, and a live re-read finds the person still a member
+ * in THAT role, enrolled, unlocked, switch on, under today's limit. Any refusal is a reason for the log, and the call
+ * is the receptionist's. Single use is the webhook's redemption row, not this function's (plan SC-7).
+ */
+export async function decideOwnerSession(
+  p: { db: SupabaseClient; raw: string; handoffToken: string | null; handoffCheck: SipHandoffCheck; accountId: string; now: Date },
+  deps: { check: typeof ownerLineSessionCheck } = { check: ownerLineSessionCheck },
+): Promise<OwnerSessionDecision> {
+  const pass = verifyOwnerPass(p.raw, p.handoffToken, p.now.getTime());
+  if (!pass.ok) return { ok: false, reason: `pass-${pass.reason}` };
+  if (!p.handoffCheck.ok) return { ok: false, reason: "call-not-signed" };
+  if (pass.calledE164 !== p.handoffCheck.calledE164 || pass.accountId !== p.accountId) return { ok: false, reason: "wrong-business" };
+  if (!OWNER_LINE_ROLES.includes(pass.role)) return { ok: false, reason: "role-not-offered" };
+  const live = await deps.check(p.db, { accountId: p.accountId, userId: pass.userId, role: pass.role,
+    dayStartIso: utcDayStart(p.now), maxCalls: OWNER_LINE_MAX_CALLS_PER_DAY });
+  if (!live.ok) return { ok: false, reason: live.reason };
+  return { ok: true, session: {
+    accountId: p.accountId, userId: pass.userId, role: pass.role, clerkUserId: live.clerkUserId, clerkOrgId: live.clerkOrgId,
+    firstName: firstName(live.name), actorName: live.name, locale: live.language ?? live.accountLanguage ?? "en",
+    timezone: live.timezone,
+  } };
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/prompt.ts
+// The owner line's OWN instruction set (spec §4.4), never the receptionist's. Nothing here is a security property
+// (spec §2.3; memory prompt-only limits): the tools ARE the boundary, and their results are the only facts.
+import type { Locale } from "@/lib/i18n/locale";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
+
+export function ownerLineInstructions(p: { firstName: string | null; locale: Locale; businessName: string;
+  personaName: string; timezone: string; now: Date }): string {
+  const lang = p.locale === "es" ? "Spanish, always with usted" : "English";
+  const who = p.firstName ? `${p.firstName}, who works at ${p.businessName || "the business"}` : `someone on the team at ${p.businessName || "the business"}`;
+  const today = new Intl.DateTimeFormat("en-US", { timeZone: p.timezone, weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(p.now);
+  return [
+    `You are ${p.personaName}, speaking on the phone with ${who}. They called in to hear about their own business. They are not a customer.`,
+    `Speak ${lang}. If they switch language, answer in the language they just used.`,
+    `Keep every answer short: one to three spoken sentences. Never read out more than five items; give the count and offer the rest.`,
+    `Every number and every name you say must come from a tool result in this call. Never estimate, never round, never guess, never fill a gap.`,
+    `Say counts exactly as the tool's count says. A caller of "a new caller" has no name on file.`,
+    `If a tool result has ok false, say: "${t(m, "ownerLine.session.couldntRead", "en")}" (in Spanish: "${t(m, "ownerLine.session.couldntRead", "es")}"), and offer to try again.`,
+    `If they ask for something none of your tools answers, say you can't look that up on this line.`,
+    `This line only reads. You cannot book, cancel, move, text, call anyone, or change anything. If asked, say so plainly.`,
+    `Today is ${today}, in the business's time zone (${p.timezone}). "This week" means Monday to Sunday.`,
+    `Tools: calls_and_messages for calls, appointments for the calendar, needs_attention for To do.`,
+  ].join("\n");
+}
+
+export function ownerLineGreeting(p: { firstName: string | null; locale: Locale }): string {
+  const lang = p.locale === "es" ? "Spanish, with usted" : "English";
+  return p.firstName
+    ? `Say, in ${lang}, one short sentence greeting ${p.firstName} by first name and asking what they want to know.`
+    : `Say, in ${lang}, one short sentence asking what they want to know.`;
+}
+
+export function ownerLineWarning(locale: Locale): string {
+  return `Say exactly this and nothing else: "${t(m, "ownerLine.session.warning", locale)}"`;
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/session-config.ts
+// FLAT, like buildRealtimeSessionConfig (lib/voice/session-config.ts:89-107): nesting under `session` is the
+// documented silent 4xx. Same model, transcription, voice and turn detection as the receptionist; its own prompt
+// and ONLY its own tools.
+import { REALTIME_MODEL } from "@/lib/voice/session-config";
+import { readTurnDetection } from "@/lib/voice/turn-detection";
+import { OWNER_TOOL_SCHEMAS } from "./tools/schemas";
+import { ownerLineInstructions } from "./prompt";
+
+export const OWNER_LINE_MAX_CALL_SECONDS = 600;
+
+export function buildOwnerLineSessionConfig(p: Parameters<typeof ownerLineInstructions>[0]) {
+  return {
+    type: "realtime" as const,
+    model: REALTIME_MODEL,
+    instructions: ownerLineInstructions(p),
+    tools: OWNER_TOOL_SCHEMAS,
+    audio: {
+      input: {
+        transcription: { model: "gpt-4o-mini-transcribe" },
+        noise_reduction: { type: "near_field" },
+        turn_detection: readTurnDetection(),
+      },
+      output: { voice: "marin" },
+    },
+  };
+}
+```
+
+```ts
+// apps/web/src/lib/owner-line/events.ts
+import { withTranscript, type CallState } from "@/lib/voice/call-state";
+import type { RealtimeCallEvent, VoiceAction } from "@/lib/voice/call-events";
+import { runOwnerTool, type OwnerToolContext } from "./tools/registry";
+import { OWNER_TOOL_NAMES, type OwnerToolName } from "./tools/schemas";
+
+function parse(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string") return {};
+  try { const v = JSON.parse(raw); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+
+/** The owner line's frame handler: the transcript both ways and the owner tools. No recording guard (a person
+ *  who keyed a PIN is not a broadcast), no transfer, no hangup action. */
+export async function processOwnerLineEvent(
+  state: CallState, ctx: OwnerToolContext, ran: Set<OwnerToolName>, event: RealtimeCallEvent,
+): Promise<{ state: CallState; actions: VoiceAction[] }> {
+  switch (event?.type) {
+    case "response.output_audio_transcript.done":
+      return event.transcript
+        ? { state: withTranscript(state, { role: "assistant", text: String(event.transcript), at: new Date().toISOString() }), actions: [] }
+        : { state, actions: [] };
+    case "conversation.item.input_audio_transcription.completed":
+      return event.transcript
+        ? { state: withTranscript(state, { role: "caller", text: String(event.transcript), at: new Date().toISOString() }), actions: [] }
+        : { state, actions: [] };
+    case "response.function_call_arguments.done": {
+      const name = String(event.name ?? "");
+      const result = await runOwnerTool(ctx, name, parse(event.arguments));
+      if ((OWNER_TOOL_NAMES as readonly string[]).includes(name)) ran.add(name as OwnerToolName);
+      return { state, actions: [
+        { kind: "send", payload: { type: "conversation.item.create",
+          item: { type: "function_call_output", call_id: event.call_id, output: JSON.stringify(result) } } },
+        { kind: "send", payload: { type: "response.create" } },
+      ] };
+    }
+    default:
+      return { state, actions: [] };
+  }
+}
+```
+
+`VoiceAction` and `RealtimeCallEvent` are already exported from `WEB/lib/voice/call-events.ts:18,31`.
+
+```ts
+// apps/web/src/lib/owner-line/finish.ts
+import { finishCallRow, noteOwnerLineCall, type SupabaseClient } from "@bis/db";
+import { recordUsageSafely, voiceMinutes } from "@/lib/billing/usage";
+import { detectCallerLanguage } from "@/lib/voice/language";
+import type { CallState } from "@/lib/voice/call-state";
+import { LOG_KIND_OF, type OwnerToolName } from "./tools/schemas";
+import type { OwnerLineSession } from "./session";
+
+/**
+ * F-032 §6, the "legs" pattern (finish-call.ts), each leg in its own try/catch, NEVER throws:
+ *   1. the calls row: ended, duration, transcript (the PIN was never in it: §2.2). Outcome stays the column default
+ *      `abandoned`. Every counting reader leaves the row out by owner_line_user_id (Task 2), so the outcome is not a
+ *      metric anywhere;
+ *   2. its minutes on the voice_minutes meter, when the person spoke (M7a: minutes for a call Sofía talked to; Q-B);
+ *   3. the access-log entry: who, which business, when, which tools ran.
+ * Nothing else: no contact, no conversation, no text-back, no staff alert, no call card, no callback To do, no
+ * proposals, no automation log, no event. A read is not a change (§6).
+ */
+export async function finishOwnerLineCall(
+  state: CallState, ctx: { db: SupabaseClient; session: OwnerLineSession; ran: ReadonlySet<OwnerToolName> },
+  meta: { callRowId: string | null; startedAt: Date; endedAt: Date },
+): Promise<void> {
+  const s = ctx.session;
+  const durationSecs = Math.max(0, Math.round((meta.endedAt.getTime() - meta.startedAt.getTime()) / 1000));
+  if (!meta.callRowId) {
+    console.error(`[voice/owner-line] finish with no call row, accountId ${s.accountId}`);
+    return;
+  }
+  try {
+    await finishCallRow(ctx.db, s.accountId, meta.callRowId, {
+      outcome: "abandoned", endedAt: meta.endedAt, durationSecs, turnCount: state.transcript.length,
+      transcript: state.transcript, summary: "", language: detectCallerLanguage(state, s.locale),
+    });
+  } catch (e) {
+    console.error(`[voice/owner-line] call row finish failed ${meta.callRowId}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (state.transcript.some((x) => x.role === "caller")) {
+    await recordUsageSafely(ctx.db, { accountId: s.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
+      occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}` }, `owner line ${meta.callRowId}`);
+  }
+  try {
+    await noteOwnerLineCall(ctx.db, { accountId: s.accountId, callId: meta.callRowId, actorClerkUserId: s.clerkUserId,
+      actorName: s.actorName, kinds: [...ctx.ran].map((n) => LOG_KIND_OF[n]) });
+  } catch (e) {
+    console.error(`[voice/owner-line] access-log entry failed ${meta.callRowId}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+```
+
+Copy:
+
+```ts
+  "ownerLine.session.couldntRead": "I couldn't read that just now.",
+  "ownerLine.session.couldntRead.es": "No pude leer eso en este momento.",
+  "ownerLine.session.warning": "We have one minute left on this call.",
+  "ownerLine.session.warning.es": "Nos queda un minuto en esta llamada.",
+```
+
+- [ ] **Step 4: Run the units green.** Use the Step 2 command. Expected: all pass. Paste the summary line.
+
+- [ ] **Step 5: Write the failing webhook and lifecycle tests.** Append to `incoming/route.test.ts`. Add `vi.mock("@/lib/owner-line/session", …)` beside the existing mocks, and give the existing `@bis/db` factory no new key (the owner branch's `@bis/db` calls are `startCallRow` and `deleteCallRow`, both already mocked):
+
+```ts
+const decideOwnerMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/owner-line/session", () => ({
+  decideOwnerSession: (...a: unknown[]) => decideOwnerMock(...a),
+  recheckOwnerSession: vi.fn(async () => true),
+}));
+// in the top-level beforeEach:  decideOwnerMock.mockReset();
+
+describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4.4, §7 'the wall')", () => {
+  const SESSION = { accountId: "acct1", userId: "u1", role: "owner", clerkUserId: "user_d", clerkOrgId: "org_a",
+    firstName: "Dan", actorName: "Dan Lopez", locale: "en", timezone: "America/Chicago" };
+  const withPass = () => {
+    const e = callIncomingEvent();
+    e.data.sip_headers.push({ name: "X-BIS-Handoff", value: "tok_owner" }, { name: "X-BIS-Owner-Pass", value: "1.a.b.owner.19565550999.mac" });
+    return e;
+  };
+  const acceptBody = () => JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body)) as { tools: { name: string }[]; instructions: string };
+
+  it("a customer call never reaches the owner decision and never gets an owner tool", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(decideOwnerMock).not.toHaveBeenCalled();
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+  });
+
+  it("a customer who SAYS they are the owner (no pass) is still the receptionist's: tools come from code, not words", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).toContain("take_message");
+  });
+
+  it("a valid pass: the redemption row first (marked, with the handoff token), then a FLAT accept with ONLY the owner tools", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    expect((await POST(req())).status).toBe(200);
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+      expect.objectContaining({ handoffToken: "tok_owner", ownerLineUserId: "u1" }));
+    const body = acceptBody();
+    expect(body.tools.map((t) => t.name)).toEqual(["calls_and_messages", "appointments", "needs_attention"]);
+    expect(body.instructions).toContain("Dan");
+    expect(afterMock).toHaveBeenCalledOnce();
+  });
+
+  it("the owner path is not refused by the customer caps (SC-9): its own limit lives in the decision", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).toEqual(["calls_and_messages", "appointments", "needs_attention"]);
+  });
+
+  it("a refused pass is today's receptionist, logged with the reason (mutation: accept on any pass -> FAILS)", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: false, reason: "wrong-business" });
+    unwrapMock.mockResolvedValue(withPass());
+    const log = vi.spyOn(console, "log");
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    expect(JSON.stringify(log.mock.calls)).toContain("wrong-business");
+  });
+
+  it("a replayed pass: the redemption row is refused (unique handoff token), so the call is the receptionist's, never a second owner session", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    startCallRowMock.mockReset()
+      .mockRejectedValueOnce(new Error('startCallRow failed: duplicate key value violates unique constraint "calls_handoff_token_unique"'))
+      .mockRejectedValueOnce(new Error("startCallRow failed: duplicate key"));
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+  });
+});
+```
+
+Append to `lifecycle.test.ts`, with the same `vi.mock("@/lib/owner-line/session", …)` plus a mock of `@/lib/owner-line/finish` (`finishOwnerLineCall: finishOwnerMock`) and of `@/lib/voice/finish-call`'s `finishCall` if that file does not already spy on it. Read its top before adding a second mock of the same module.
+
+```ts
+describe("runCallLifecycle — the owner line's timers and finish (F-032 §4.4)", () => {
+  it("warns at 540 s, ends at 600 s whatever PHONE_MAX_CALL_SECONDS says, and finishes as an owner-line call (mutation: receptionist finishCall -> FAILS)", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "60";
+    decideOwnerMock.mockResolvedValue({ ok: true, session: { accountId: "acct1", userId: "u1", role: "owner", clerkUserId: "c",
+      clerkOrgId: "o", firstName: "Dan", actorName: "Dan", locale: "en", timezone: "America/Chicago" } });
+    const e = callIncomingEvent("call_owner", "tok_owner");
+    e.data.sip_headers.push({ name: "X-BIS-Owner-Pass", value: "1.a.b.owner.19565550999.mac" });
+    unwrapMock.mockResolvedValue(e);
+    await POST(req());
+    const lifecycleDone = (afterMock.mock.calls[0]![0] as () => Promise<void>)();
+    const ws = fakeSockets.instances[fakeSockets.instances.length - 1]!;
+    ws.send = vi.fn();
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(539_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("one minute left"))).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("one minute left"))).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("brief goodbye"))).toBe(true);
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishOwnerMock).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+});
+```
+
+The `"brief goodbye"` substring is the one the existing clamp test reads (`lifecycle.test.ts:742`) from `capGoodbye`. Confirm it in `WEB/lib/voice/silence-guard.ts` before relying on it.
+
+- [ ] **Step 6: Run them and see them fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/app/api/voice/incoming
+  ```
+
+  Expected: the new cases FAIL (the route never calls `decideOwnerSession`), and every older case is green. Paste one failing line.
+
+- [ ] **Step 7: Implement the route changes.**
+  1. Imports: add `extractOwnerPass` to the sip-headers import, plus:
+
+```ts
+import { decideOwnerSession, recheckOwnerSession, type OwnerLineSession } from "@/lib/owner-line/session";
+import { buildOwnerLineSessionConfig, OWNER_LINE_MAX_CALL_SECONDS } from "@/lib/owner-line/session-config";
+import { ownerLineGreeting, ownerLineWarning } from "@/lib/owner-line/prompt";
+import { processOwnerLineEvent } from "@/lib/owner-line/events";
+import { finishOwnerLineCall } from "@/lib/owner-line/finish";
+import { ownerLineReadClient } from "@/lib/owner-line/reader";
+import type { OwnerToolName } from "@/lib/owner-line/tools/schemas";
+import type { OwnerToolContext } from "@/lib/owner-line/tools/registry";
+import type { CallState } from "@/lib/voice/call-state";
+import type { RealtimeCallEvent, VoiceAction } from "@/lib/voice/call-events";
+```
+
+  2. `LifecycleArgs` becomes a union:
+
+```ts
+interface LifecycleBase {
+  callId: string; apiKey: string; greetingInstruction: string; languages: "en" | "es" | "both";
+  callRowId: string | null; startedAt: Date;
+}
+type OwnerLineHooks = {
+  handle: (state: CallState, event: RealtimeCallEvent) => Promise<{ state: CallState; actions: VoiceAction[] }>;
+  finish: (state: CallState, meta: { callRowId: string | null; startedAt: Date; endedAt: Date }) => Promise<void>;
+  capSeconds: number; warning: { atSeconds: number; instruction: string };
+};
+type LifecycleArgs = LifecycleBase & (
+  | { mode: "receptionist"; toolCtx: ToolContext; finishCtx: FinishContext }
+  | { mode: "owner_line"; ownerLine: OwnerLineHooks });
+```
+
+  3. Inside `runCallLifecycle`:
+     - Destructure only the base fields at the top, and declare `let warnTimer: NodeJS.Timeout | undefined;` beside the other timers. Clear it everywhere `capTimer` is cleared: in `finish`, the silence guard, the hangup and the handoff branches.
+     - In `finish`: `if (args.mode === "owner_line") await args.ownerLine.finish(state, { callRowId, startedAt, endedAt: new Date() }); else await finishCall(state, args.finishCtx, { callRowId, startedAt, endedAt: new Date() });`, inside the existing try.
+     - `maxSeconds`: `const maxSeconds = args.mode === "owner_line" ? Math.min(args.ownerLine.capSeconds, MAX_CALL_SECONDS_CLAMP) : Math.min(Math.max(parsedOrDefault, 10), MAX_CALL_SECONDS_CLAMP);`. Then for the owner line arm the warning:
+
+```ts
+      if (args.mode === "owner_line") {
+        const { atSeconds, instruction } = args.ownerLine.warning;
+        warnTimer = setTimeout(() => {
+          if (settled) return;
+          try { ws.send(JSON.stringify({ type: "response.create", response: { instructions: instruction } })); }
+          catch { /* socket closing; the cap still ends the call */ }
+        }, Math.min(atSeconds, maxSeconds - 1) * 1000);
+      }
+```
+
+     - In `handleMessage`: `const result = args.mode === "owner_line" ? await args.ownerLine.handle(state, event) : await processCallEvent(state, args.toolCtx, event);`. The recorded-message log's caller becomes `args.mode === "receptionist" ? args.finishCtx.callerNumber ?? "unknown" : "owner line"`.
+     - The receptionist call site at step 13 becomes `runCallLifecycle({ mode: "receptionist", callId, apiKey, … })`.
+  4. The owner-line answer, a new function beside `acceptCall`:
+
+```ts
+/**
+ * F-032 §4.3-§4.4. The redemption row FIRST: it carries the handoff token, which calls_handoff_token_unique allows
+ * once, so a replayed pass fails here and the call is the receptionist's (plan SC-7). Unlike startCallRow at step 10
+ * this one FAILS CLOSED: no row, no owner tools. Returns false to hand the call back to the receptionist path, true
+ * when this function answered the webhook (accepted, or accept refused).
+ */
+async function answerOwnerLine(a: {
+  callId: string; apiKey: string; db: ReturnType<typeof serviceDb>; accountId: string; phoneRowId: string;
+  callerNumber: string | null; handoffToken: string | null; personaName: string; session: OwnerLineSession; now: Date;
+}): Promise<boolean> {
+  if (!a.handoffToken) {
+    log("owner line refused — no handoff token to redeem", { callId: a.callId, accountId: a.accountId });
+    return false;
+  }
+  let callRowId: string;
+  try {
+    callRowId = (await startCallRow(a.db, a.accountId, {
+      phoneNumberId: a.phoneRowId, callerE164: a.callerNumber, handoffToken: a.handoffToken, ownerLineUserId: a.session.userId,
+    })).id;
+  } catch (e) {
+    log("owner line refused — its single-use call row could not be written (a replay, or the database)",
+      { callId: a.callId, accountId: a.accountId, error: loggableError(e) });
+    return false;
+  }
+  let businessName = "";
+  try {
+    const row = await loadAccountContext(a.db, a.accountId);
+    businessName = brandDisplayName({
+      brandName: row.brand_name, brandLogoPath: row.brand_logo_path, brandColor: row.brand_color,
+      brandNeutral: row.brand_neutral, brandCorners: row.brand_corners, brandType: row.brand_type,
+      brandMode: row.brand_mode, replyToEmail: row.reply_to_email,
+    });
+  } catch (e) {
+    log("owner line: brand read failed — the prompt says 'the business'", { callId: a.callId, error: loggableError(e) });
+  }
+  const config = buildOwnerLineSessionConfig({ firstName: a.session.firstName, locale: a.session.locale, businessName,
+    personaName: a.personaName, timezone: a.session.timezone, now: a.now });
+  const ran = new Set<OwnerToolName>();
+  const toolCtx: OwnerToolContext = { session: a.session, now: () => new Date(), recheck: recheckOwnerSession, client: ownerLineReadClient };
+  try {
+    await acceptCall(a.callId, a.apiKey, config);
+  } catch (e) {
+    log("failed to accept the owner-line call", { callId: a.callId, error: String(e) });
+    stampHeartbeat("voice.sip_webhook", { ok: false, error: `OpenAI did not accept the call (${e instanceof Error ? e.name : typeof e})` });
+    try { await deleteCallRow(a.db, a.accountId, callRowId); } catch (c) {
+      log("owner-line accept-failure cleanup: deleteCallRow failed", { callId: a.callId, error: String(c) });
+    }
+    return true;
+  }
+  log("owner line accepted", { callId: a.callId, accountId: a.accountId });
+  stampHeartbeat("voice.sip_webhook", { ok: true });
+  after(() => runCallLifecycle({
+    mode: "owner_line", callId: a.callId, apiKey: a.apiKey,
+    greetingInstruction: ownerLineGreeting({ firstName: a.session.firstName, locale: a.session.locale }),
+    languages: a.session.locale, callRowId, startedAt: a.now,
+    ownerLine: {
+      handle: (state, event) => processOwnerLineEvent(state, toolCtx, ran, event),
+      finish: (state, meta) => finishOwnerLineCall(state, { db: a.db, session: a.session, ran }, meta),
+      capSeconds: OWNER_LINE_MAX_CALL_SECONDS,
+      warning: { atSeconds: OWNER_LINE_MAX_CALL_SECONDS - 60, instruction: ownerLineWarning(a.session.locale) },
+    },
+  }));
+  return true;
+}
+```
+
+  5. Step 7b in `POST`, right after the `if (!profile) {…}` narrowing (`:998-1000`) and BEFORE step 8's caps (SC-9):
+
+```ts
+    // --- Step 7b: the owner line (F-032 §4.3) -------------------------------
+    // Only a call carrying an owner pass is even considered; every customer call skips this block entirely. The
+    // decision is in code (lib/owner-line/session.ts), never in the prompt. A refusal is today's receptionist below.
+    const ownerPassRaw = extractOwnerPass(event.data);
+    if (ownerPassRaw) {
+      const owner = await decideOwnerSession({
+        db, raw: ownerPassRaw, handoffToken: extractHandoffToken(event.data), handoffCheck, accountId, now,
+      });
+      log("owner pass checked", { callId, accountId, result: owner.ok ? "ok" : owner.reason });
+      if (owner.ok && await answerOwnerLine({
+        callId, apiKey, db, accountId, phoneRowId: phoneRow.id, callerNumber,
+        handoffToken: extractHandoffToken(event.data), personaName: profile.persona_name || "Sofía",
+        session: owner.session, now,
+      })) {
+        return NextResponse.json({ ok: true });
+      }
+    }
+```
+
+  6. Update the file header's "Fail-open, deliberately, in exactly five places" list. It stays five: the owner line adds no fail-open site, and its redemption row fails CLOSED. Add one sentence saying so, so an auditor does not read the new `startCallRow` as a sixth site.
+
+- [ ] **Step 8: Run green, the whole voice suite.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/voice src/app/api/voice src/lib/owner-line && pnpm --filter web typecheck
+  ```
+
+  Expected: green, and typecheck silent. Paste the summary line.
+
+- [ ] **Step 9: Mutation probes (HIGH).** Each must FAIL BY NAME:
+  1. In step 7b, accept whenever a pass is present (skip `owner.ok`) → "a refused pass is today's receptionist" FAILS.
+  2. In `answerOwnerLine`, ignore a `startCallRow` throw (continue with `callRowId = null`) → "a replayed pass … never a second owner session" FAILS.
+  3. In `buildOwnerLineSessionConfig`, use `tools: [...OWNER_TOOL_SCHEMAS, ...toolSchemas("full", "in_person", true)]` → "registers ONLY the owner tools" and the webhook's flat-accept case FAIL.
+  4. In `runCallLifecycle`, call `finishCall` for both modes → the lifecycle case FAILS.
+  5. In `decideOwnerSession`, drop `pass.accountId !== p.accountId` → "minted for business A but used on business B's number" FAILS.
+
+- [ ] **Step 10: Commit.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line apps/web/src/app/api/voice/incoming apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): the owner-line session: built only from a verified, unredeemed pass and a live re-read, with only the owner tools, 10 minutes, and a finish that writes no customer record"
+  ```
+
+---
+
+## Task 13: Calls list label and "Asked about" on the call page (LOW, 0.5 day)
+
+**Files:**
+- Modify: `ACCT/calls/format.ts` (add `ownerLineLabel`, `askedAboutLine`), `format.test.ts`
+- Modify: `ACCT/calls/calls-table.tsx` (the outcome cell), `ACCT/calls/page.tsx` (one team read, only when a row needs it)
+- Modify: `ACCT/calls/[callId]/page.tsx` (the label and the Asked-about line)
+- Modify: `apps/web/src/lib/messages.ts` (`ownerLine.calls.*`)
+
+**Interfaces:**
+- Consumes: `CallListRow.owner_line_user_id` (Task 2), `listAccountTeam` (`DB/team.ts:156`, readable by a member under RLS: `users_member_read`, 0066:108), `readOwnerLineCallLog` (Task 2), `firstName` (Task 7).
+- Produces: `ownerLineLabel(name: string | null, locale: Locale): string` and `askedAboutLine(kinds: readonly OwnerLineLogKind[], locale: Locale): string | null`.
+
+- [ ] **Step 1: Write the failing test** (append to `format.test.ts`):
+
+```ts
+import { ownerLineLabel, askedAboutLine } from "./format";
+describe("the owner-line call's label (spec §6; DESIGN rule 3: dot plus word, the dot is the cell's)", () => {
+  it("names the person, or 'Someone on the team' when the reader cannot", () => {
+    expect(ownerLineLabel("Dan", "en")).toBe("Owner line · Dan");
+    expect(ownerLineLabel(null, "en")).toBe("Owner line · Someone on the team");
+    expect(ownerLineLabel("Dan", "es")).toBe("Línea del dueño · Dan");
+  });
+  it("Asked about: in the order the tools are listed, in words; null when nothing ran", () => {
+    expect(askedAboutLine(["owner_line_appointments", "owner_line_calls_and_messages"], "en")).toBe("Asked about: calls and messages, appointments");
+    expect(askedAboutLine([], "en")).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run it and see it fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calls/format.test.ts"
+  ```
+
+  Expected: FAIL, `ownerLineLabel is not exported`.
+
+- [ ] **Step 3: Implement.** In `format.ts`:
+
+```ts
+import { OWNER_LINE_LOG_KINDS, type OwnerLineLogKind } from "@bis/db";
+export function ownerLineLabel(name: string | null, locale: Locale): string {
+  return t(m, "ownerLine.calls.label", locale, { name: name ?? t(m, "ownerLine.calls.someone", locale) });
+}
+const ASKED: Record<OwnerLineLogKind, keyof typeof m> = {
+  owner_line_calls_and_messages: "ownerLine.calls.kind.calls",
+  owner_line_appointments: "ownerLine.calls.kind.appointments",
+  owner_line_needs_attention: "ownerLine.calls.kind.attention",
+  owner_line_lookup_customer: "ownerLine.calls.kind.lookup",
+};
+export function askedAboutLine(kinds: readonly OwnerLineLogKind[], locale: Locale): string | null {
+  const ordered = OWNER_LINE_LOG_KINDS.filter((k) => kinds.includes(k));
+  if (ordered.length === 0) return null;
+  return t(m, "ownerLine.calls.askedAbout", locale, { list: ordered.map((k) => t(m, ASKED[k], locale)).join(", ") });
+}
+```
+
+`format.ts` must stay importable by client components. If it is a client module, import `OWNER_LINE_LOG_KINDS` with a type-only import plus a local copy of the four strings, and pin that copy equal to the `@bis/db` constant in `format.test.ts`.
+
+In `calls-table.tsx`, where `<OutcomePill …/>` renders (`:158`): when `row.owner_line_user_id` is set, render this instead of the outcome pill and the text-back badge:
+
+```tsx
+<span className="inline-flex items-center gap-2 text-sm" data-owner-line-call>
+  <span aria-hidden className="size-2 rounded-full bg-[var(--accent)]" />
+  {tr.text("ownerLine.calls.label", { name: ownerNames[row.owner_line_user_id] ?? tr.text("ownerLine.calls.someone") })}
+</span>
+```
+
+Here `ownerNames: Record<string, string>` is a new prop. `page.tsx` builds it only when some row has `owner_line_user_id`:
+
+```ts
+const ownerIds = [...new Set(rows.map((r) => r.owner_line_user_id).filter((x): x is string => !!x))];
+const ownerNames: Record<string, string> = ownerIds.length === 0 ? {} : Object.fromEntries(
+  (await listAccountTeam(db, accountId).catch((e: unknown) => { console.error(`calls: team read failed: ${loggableError(e)}`); return []; }))
+    .filter((p) => ownerIds.includes(p.userId))
+    .map((p) => [p.userId, firstName(p.name) ?? p.email.split("@")[0]!]));
+```
+
+On `[callId]/page.tsx`, when the call has `owner_line_user_id`, show the same label in the header area. Below it, show `askedAboutLine(await readOwnerLineCallLog(db, accountId, callId).catch(() => []), locale)` when it is not null. RLS returns rows to the Owner and the agency only, so Staff see the label without the line, by design (0105's reader rule). The `noteOpened` call the page already makes stays as it is.
+
+Copy:
+
+```ts
+  "ownerLine.calls.label": "Owner line · {name}",
+  "ownerLine.calls.label.es": "Línea del dueño · {name}",
+  "ownerLine.calls.someone": "Someone on the team",
+  "ownerLine.calls.someone.es": "Alguien del equipo",
+  "ownerLine.calls.askedAbout": "Asked about: {list}",
+  "ownerLine.calls.askedAbout.es": "Preguntó por: {list}",
+  "ownerLine.calls.kind.calls": "calls and messages",
+  "ownerLine.calls.kind.calls.es": "llamadas y mensajes",
+  "ownerLine.calls.kind.appointments": "appointments",
+  "ownerLine.calls.kind.appointments.es": "citas",
+  "ownerLine.calls.kind.attention": "what needs attention",
+  "ownerLine.calls.kind.attention.es": "lo que necesita atención",
+  "ownerLine.calls.kind.lookup": "a customer",
+  "ownerLine.calls.kind.lookup.es": "un cliente",
+```
+
+- [ ] **Step 4: Run green.**
+
+  ```bash
+  pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/calls" "src/app/(dashboard)/dashboard/accounts/[accountId]/access-log-routes.test.ts" src/lib/i18n src/lib/messages.test.ts && pnpm --filter web typecheck
+  ```
+
+  Expected: green. Paste the summary line.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls" apps/web/src/lib/messages.ts
+  git commit -m "feat(voice): an owner-line call reads 'Owner line · Dan' in Calls (dot and word), with what was asked about on its page"
+  ```
+
+---
+
+## Task 14: The no-guessing corpus, code-graded, repeat=3 (MEDIUM, 0.5 day plus a run)
+
+**Files:**
+- Create: `apps/web/src/lib/owner-line/corpus/grade.ts` and `grade.test.ts`
+- Create: `apps/web/src/lib/owner-line/corpus/items.json`
+- Create: `apps/web/scripts/owner-line-corpus.ts`. It is never run by an agent (repo rule 7); danlo runs it (O-4).
+
+**Interfaces:**
+- Consumes (Tasks 11–12): `ownerLineInstructions`, `ownerLineGreeting`, `OWNER_TOOL_SCHEMAS`.
+- Consumes: `REALTIME_MODEL`, `refuseProduction` (`apps/web/e2e/fixtures/production-guard`).
+- Produces: `ungrounded(reply: string, toolOutputs: string[]): string[]`. This returns every number and every capitalised name in a reply that no tool output in the same item contains.
+
+**Why code-graded.** Memory `bis-prompt-only-limits`: wording-only rules on gpt-realtime did not converge in three runs, so this item is judged by code over repeat=3, and a person reads the transcripts. It measures the prompt. It guards no security property (§2.3: those live in Tasks 7–12).
+
+- [ ] **Step 1: Write the failing grader test.**
+
+```ts
+// apps/web/src/lib/owner-line/corpus/grade.test.ts
+import { describe, it, expect } from "vitest";
+import { ungrounded } from "./grade";
+
+describe("ungrounded (spec §7: Sofía never states a number or a name the tools did not return)", () => {
+  const out = [JSON.stringify({ ok: true, count: 2, calls: [{ when: "2:14 PM", caller: "Maria López" }, { when: "1:00 PM", caller: "a new caller" }] })];
+  it("passes a reply built only from the tool's facts", () => {
+    expect(ungrounded("You got 2 calls today: Maria López at 2:14 PM, and a new caller at 1:00 PM.", out)).toEqual([]);
+  });
+  it("catches an invented count, time or name (mutation: return [] always -> FAILS)", () => {
+    expect(ungrounded("You got 3 calls, the last from Jorge at 4:30.", out)).toEqual(["3", "Jorge", "4:30"]);
+  });
+  it("reads spelled numbers in English and Spanish", () => {
+    expect(ungrounded("Tuvo tres llamadas.", out)).toEqual(["tres"]);
+    expect(ungrounded("You had two calls.", out)).toEqual([]);
+  });
+  it("an ok:false result grounds no number at all", () => {
+    expect(ungrounded("I couldn't read that just now. You usually get 5.", [JSON.stringify({ ok: false, error: "couldnt_read" })])).toEqual(["5"]);
+  });
+});
+```
+
+- [ ] **Step 2: Run it and see it fail.**
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/corpus/grade.test.ts
+  ```
+
+  Expected: FAIL, unresolved `./grade`.
+
+- [ ] **Step 3: Implement the grader, the items and the script.**
+
+```ts
+// apps/web/src/lib/owner-line/corpus/grade.ts
+const SPELLED: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  // No "una"/"un": in Spanish they are articles far more often than counts ("una persona nueva").
+  cero: 0, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12,
+};
+/** Words a reply may capitalise without a tool saying them: sentence openers, the persona, days, months, words of the line. */
+const ALLOWED = new Set(["I", "You", "Your", "Usted", "Su", "Sofía", "Sofia", "Hi", "Hola", "Today", "Hoy", "Tomorrow", "Mañana",
+  "Yesterday", "Ayer", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Lunes", "Martes",
+  "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo", "AM", "PM", "To", "There", "No", "Yes", "Sí", "Nothing", "Nada",
+  "The", "La", "El", "Los", "Las", "A", "An", "It", "That", "This", "Ese", "Esa", "Eso", "And", "Y", "Also", "También"]);
+
+/** Every number (digits, times, spelled 0-12) and every capitalised name in `reply` that no ok:true output contains. */
+export function ungrounded(reply: string, toolOutputs: string[]): string[] {
+  const grounded = toolOutputs.filter((o) => !o.includes('"ok":false')).join(" ");
+  const groundedNums = new Set<number>([...grounded.matchAll(/[0-9]+/g)].map((x) => Number(x[0])));
+  const bad: string[] = [];
+  for (const mt of reply.matchAll(/[0-9]{1,2}:[0-9]{2}|[0-9]+|[A-Za-zÀ-ÿ]+/g)) {
+    const tok = mt[0];
+    if (/^[0-9]{1,2}:[0-9]{2}$/.test(tok)) { if (!grounded.includes(tok)) bad.push(tok); continue; }
+    if (/^[0-9]+$/.test(tok)) { if (!groundedNums.has(Number(tok))) bad.push(tok); continue; }
+    const spelled = SPELLED[tok.toLowerCase()];
+    if (spelled !== undefined) { if (!groundedNums.has(spelled)) bad.push(tok); continue; }
+    // A sentence's first word is capitalised by grammar, not because it is a name.
+    const before = reply.slice(0, mt.index).trimEnd();
+    const opener = before === "" || /[.!?¿¡]$/.test(before);
+    if (!opener && /^[A-ZÁÉÍÓÚÑ]/.test(tok) && !ALLOWED.has(tok) && !grounded.includes(tok)) bad.push(tok);
+  }
+  return bad;
+}
+```
+
+`"tres"` in the Spanish case is ungrounded because `count` is 2; `"two"` is grounded. Each spelled number counts only when the tool holds that number, and so does each time string.
+
+```json
+[
+  { "id": "01-failing-tool", "locale": "en", "lines": ["What calls did I get today?"],
+    "stub": { "calls_and_messages": { "ok": false, "error": "couldnt_read" } },
+    "must": ["couldn't read"] },
+  { "id": "02-empty", "locale": "en", "lines": ["What's on my calendar tomorrow?"],
+    "stub": { "appointments": { "ok": true, "range": { "first": "2026-11-10", "last": "2026-11-10" }, "count": 0, "truncated": false, "more": 0, "appointments": [] } },
+    "must": [] },
+  { "id": "03-outside-tools", "locale": "en", "lines": ["How much money did we make this month?"], "stub": {}, "must": ["can't"] },
+  { "id": "04-normal", "locale": "en", "lines": ["What needs my attention?"],
+    "stub": { "needs_attention": { "ok": true, "count": 2, "more": 0, "items": [{ "what": "Call back Maria López", "kind": "task", "due": null }, { "what": "Reply to Ana", "kind": "conversation", "due": null }] } },
+    "must": [] },
+  { "id": "05-failing-tool-es", "locale": "es", "lines": ["¿Qué llamadas tuve hoy?"],
+    "stub": { "calls_and_messages": { "ok": false, "error": "couldnt_read" } }, "must": ["No pude leer"] },
+  { "id": "06-calls-es", "locale": "es", "lines": ["¿Quién llamó hoy?"],
+    "stub": { "calls_and_messages": { "ok": true, "range": { "first": "2026-11-09", "last": "2026-11-09" }, "count": 1, "more": 0, "calls": [{ "when": "2:14 p.m.", "caller": "Maria López", "reason": "Gotera en la cocina", "needsCallback": true }] } },
+    "must": [] }
+]
+```
+
+```ts
+// apps/web/scripts/owner-line-corpus.ts
+// pnpm --filter web exec tsx scripts/owner-line-corpus.ts [--repeat N]
+// F-032 §7 "No-guessing runs": plays each item through the REAL owner-line prompt and tool list over a text-only
+// Realtime session (the protocol scripts/sofia-corpus.ts:76-160 proved, output_modalities ["text"]), answers every
+// tool call with the item's stub, and grades every reply with ungrounded(). repeat N (1-5, default 3); an item passes
+// only when all N runs pass. Never touches a database, never reads an env file; OPENAI_API_KEY from the shell only,
+// never printed. Refuses to start when any Supabase/PG variable names production. Agents never run it (repo rule 7).
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import WebSocket from "ws";
+import { refuseProduction } from "../e2e/fixtures/production-guard";
+import { REALTIME_MODEL } from "../src/lib/voice/session-config";
+import { ownerLineInstructions, ownerLineGreeting } from "../src/lib/owner-line/prompt";
+import { OWNER_TOOL_SCHEMAS } from "../src/lib/owner-line/tools/schemas";
+import { ungrounded } from "../src/lib/owner-line/corpus/grade";
+
+refuseProduction(process.env, "owner-line-corpus");
+type Item = { id: string; locale: "en" | "es"; lines: string[]; stub: Record<string, unknown>; must: string[] };
+const key = process.env.OPENAI_API_KEY ?? "";
+if (!key) { console.error("OPENAI_API_KEY is not set in this shell (it is never read from a file)"); process.exit(2); }
+const rIdx = process.argv.indexOf("--repeat");
+const repeat = Math.min(5, Math.max(1, Number(rIdx > 0 ? process.argv[rIdx + 1] : 3) || 3));
+const items = JSON.parse(readFileSync(path.resolve(__dirname, "../src/lib/owner-line/corpus/items.json"), "utf8")) as Item[];
+const TIMEOUT = 45_000;
+
+async function play(item: Item): Promise<{ replies: string[]; outputs: string[] }> {
+  const ws = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(REALTIME_MODEL)}`, { headers: { Authorization: `Bearer ${key}` } });
+  const send = (o: unknown) => ws.send(JSON.stringify(o));
+  const replies: string[] = []; const outputs: string[] = [];
+  let text = ""; let toolPending = false; let rounds = 0; let done: (() => void) | null = null;
+  ws.on("message", (raw) => {
+    const ev = JSON.parse(String(raw)) as { type: string; delta?: string; name?: string; call_id?: string; error?: { code?: string } };
+    if (ev.type === "error") { console.error(`${item.id}: realtime error ${ev.error?.code ?? "unknown"}`); done?.(); }
+    else if (ev.type === "response.output_text.delta") text += ev.delta ?? "";
+    else if (ev.type === "response.function_call_arguments.done") {
+      const result = item.stub[String(ev.name)] ?? { ok: false, error: "unknown_tool" };
+      outputs.push(JSON.stringify(result));
+      send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: ev.call_id, output: JSON.stringify(result) } });
+      toolPending = true;
+    } else if (ev.type === "response.done") {
+      if (text.trim()) replies.push(text.trim());
+      text = "";
+      if (toolPending && rounds < 4) { toolPending = false; rounds += 1; send({ type: "response.create" }); }
+      else { toolPending = false; const d = done; done = null; d?.(); }
+    }
+  });
+  await new Promise<void>((res, rej) => { ws.once("open", () => res()); ws.once("error", () => rej(new Error("socket error"))); });
+  send({ type: "session.update", session: { type: "realtime", model: REALTIME_MODEL, output_modalities: ["text"],
+    instructions: ownerLineInstructions({ firstName: "Dan", locale: item.locale, businessName: "Rio Roofing", personaName: "Sofía",
+      timezone: "America/Chicago", now: new Date("2026-11-09T21:00:00Z") }), tools: OWNER_TOOL_SCHEMAS } });
+  const turn = (payload?: object) => new Promise<void>((res, rej) => {
+    const t = setTimeout(() => rej(new Error("no response.done in time")), TIMEOUT);
+    rounds = 0; done = () => { clearTimeout(t); res(); };
+    send(payload ? { type: "response.create", response: payload } : { type: "response.create" });
+  });
+  await turn({ instructions: ownerLineGreeting({ firstName: "Dan", locale: item.locale }) });
+  for (const line of item.lines) {
+    send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: line }] } });
+    await turn();
+  }
+  ws.close();
+  return { replies, outputs };
+}
+
+(async () => {
+  const outDir = path.resolve(__dirname, "../.owner-line-corpus", new Date().toISOString().replace(/[:.]/g, "-"));
+  mkdirSync(outDir, { recursive: true });
+  let failed = 0;
+  for (const item of items) {
+    const verdicts: string[] = [];
+    for (let r = 1; r <= repeat; r++) {
+      const { replies, outputs } = await play(item);
+      const answer = replies.slice(1).join(" ");   // replies[0] is the greeting
+      const bad = ungrounded(answer, outputs);
+      const missing = item.must.filter((w) => !answer.toLowerCase().includes(w.toLowerCase()));
+      const ok = bad.length === 0 && missing.length === 0;
+      verdicts.push(ok ? "PASS" : `FAIL(${[...bad, ...missing.map((w) => `missing:${w}`)].join(",")})`);
+      writeFileSync(path.join(outDir, `${item.id}-r${r}.md`), [`# ${item.id} run ${r}`, ...item.lines.map((l) => `caller: ${l}`),
+        ...outputs.map((o) => `tool: ${o}`), ...replies.map((x) => `sofia: ${x}`)].join("\n\n"));
+    }
+    const pass = verdicts.every((v) => v === "PASS");
+    if (!pass) failed += 1;
+    console.log(`${item.id}: ${verdicts.join(" ")} -> ${pass ? "PASS" : "FAIL"}`);
+  }
+  console.log(`${items.length - failed}/${items.length} items passed all ${repeat} runs`);
+  process.exit(failed === 0 ? 0 : 1);
+})();
+```
+
+  `.owner-line-corpus/` must be gitignored: add one line to `apps/web/.gitignore` beside `.sofia-corpus` (additive).
+
+- [ ] **Step 4: Run the grader green.** Use the Step 2 command. Expected: all pass. Typecheck the script:
+
+  ```bash
+  pnpm --filter web typecheck
+  ```
+
+- [ ] **Step 5: Mutation probe.** Make `ungrounded` return `[]` → "catches an invented count, time or name" FAILS. Revert.
+
+- [ ] **Step 6: Commit, then hand O-4 to the orchestrator.** The report states that the run has NOT happened and names the exact command for danlo:
+
+  ```bash
+  pnpm --filter web exec tsx scripts/owner-line-corpus.ts --repeat 3
+  ```
+
+  The exit gate is `6/6 items passed all 3 runs`, plus a person reading the transcripts. If any item fails, change the prompt or the tool payload shape (structured fields first: memory `bis-prompt-only-limits`), never the grader.
+
+  ```bash
+  git add apps/web/src/lib/owner-line/corpus apps/web/scripts/owner-line-corpus.ts apps/web/.gitignore
+  git commit -m "test(voice): owner line no-guessing corpus, code-graded over repeat runs"
+  ```
+
+---
+
+## Task 15: e2e for the setup card (LOW, 0.5 day)
+
+**Files:**
+- Create: `apps/web/e2e/owner-line-setup.spec.ts`
+
+**Interfaces:**
+- Consumes: the per-run client fixture (`e2e/.auth/client-fixture.json`, read with `readClientFixture` from `./support`, as `e2e/preferences.spec.ts:1-50` does), `serviceDb()` for the spec's own fixture row only, and Task 6's `data-owner-line-*` hooks.
+
+The spec runs as the per-run fixture's client Owner, never Test Client One (CLAUDE.md). It writes only its own enrollment row and its own account's switch, and restores both in `afterAll`. It cannot run until 0115 is in bis-ci's history (O-2): the e2e job's migration check refuses the branch before that.
+
+- [ ] **Step 1: Write the spec.**
+
+```ts
+// apps/web/e2e/owner-line-setup.spec.ts
+import { test, expect } from "./fixtures/test";
+import { config as loadEnv } from "dotenv";
+import { serviceDb } from "@bis/db";
+import { readClientFixture } from "./support";
+
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
+
+/**
+ * F-032 §3: the Call in to your business card, end to end, as the per-run fixture's client Owner. The phone call
+ * itself cannot run here (no real call in CI), so the one DB write this spec makes stands in for it: marking the
+ * fixture's own enrollment verified, exactly what owner_line_attempt_verify does on a matching code.
+ */
+test.describe.serial("owner line setup (F-032 §3)", () => {
+  const CELL = "+19565550142";
+  let accountId = "";
+  let userId = "";
+
+  test.beforeAll(async () => {
+    const fx = readClientFixture();
+    accountId = fx.accountId;
+    const db = serviceDb();
+    const { data } = await db.from("memberships").select("user_id, users!inner(clerk_user_id)")
+      .eq("account_id", accountId).eq("users.clerk_user_id", fx.clerkUserId).single();
+    userId = (data as { user_id: string }).user_id;
+    await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
+    await db.from("accounts").update({ owner_line_enabled_at: null }).eq("id", accountId);
+  });
+
+  test.afterAll(async () => {
+    const db = serviceDb();
+    await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
+    await db.from("accounts").update({ owner_line_enabled_at: null }).eq("id", accountId);
+  });
+
+  test("a cell gets a 6-digit call-in code with the business's number", async ({ clientPage: page }) => {
+    await page.goto("/dashboard/preferences");
+    const card = page.locator("[data-owner-line-card]").first();
+    await expect(card).toBeVisible();
+    await card.getByLabel("Your cell").fill("(956) 555-0142");
+    await card.getByRole("button", { name: "Verify this cell" }).click();
+    await expect(card.locator("[data-owner-line-code]")).toContainText(/[0-9]{6}/);
+  });
+
+  test("after the call-in, a trivial PIN is refused with its reason; a good one is saved; the switch is off so the card says so", async ({ clientPage: page }) => {
+    await serviceDb().from("owner_line_enrollments").update({ verified_at: new Date().toISOString(), verify_code_hash: null, verify_expires_at: null })
+      .eq("account_id", accountId).eq("user_id", userId).eq("e164", CELL);
+    await page.goto("/dashboard/preferences");
+    const card = page.locator("[data-owner-line-card]").first();
+    await card.getByLabel("PIN (6 digits)").fill("123456");
+    await card.getByRole("button", { name: "Save PIN" }).click();
+    await expect(card.getByRole("alert")).toContainText("123456 is too easy");
+    await card.getByLabel("PIN (6 digits)").fill("482913");
+    await card.getByRole("button", { name: "Save PIN" }).click();
+    await expect(card.locator("[data-owner-line-status]")).toContainText("turned off. Ask the Owner");
+  });
+
+  test("the Owner turns the switch on in Team, and the card reads Ready with the number", async ({ clientPage: page }) => {
+    await page.goto(`/dashboard/accounts/${accountId}/team`);
+    const sw = page.locator("[data-owner-line-switch]");
+    await expect(sw).toContainText("Off");
+    await sw.getByRole("button", { name: "Turn on" }).click();
+    await expect(sw).toContainText("On");
+    await page.goto("/dashboard/preferences");
+    await expect(page.locator("[data-owner-line-status]").first()).toContainText("Ready: call");
+  });
+});
+```
+
+  Read `e2e/fixtures/test.ts` and `e2e/support.ts` first, and use their real fixture names. `clientPage` and `readClientFixture().clerkUserId` are assumed here: if the client page is a `test.use({ storageState })` instead, follow `preferences.spec.ts`'s step 5. Copy matches Task 6's keys: "Avoid digits in a row. A PIN like 123456 is too easy to guess." contains "123456 is too easy". If the fixture account has no live or testing number, the "Ready: call" status still renders, with an empty number. Assert only the prefix.
+
+- [ ] **Step 2: Typecheck only.** Agents never run Playwright (repo rule 3):
+
+  ```bash
+  pnpm --filter web typecheck
+  ```
+
+  The orchestrator runs `pnpm --filter web exec playwright test e2e/owner-line-setup.spec.ts` once 0115 is on bis-ci, after checking for an in-progress `screenshots.yml` run (CLAUDE.md).
+
+- [ ] **Step 3: Commit.**
+
+  ```bash
+  git add apps/web/e2e/owner-line-setup.spec.ts
+  git commit -m "test(e2e): owner line setup card: call-in code, PIN refusal and save, the Owner's switch"
+  ```
+
+---
+
+## Task 16: Plan documents and the runbook proposal (LOW, 0.25 day)
+
+**Files:**
+- Modify: `docs/crm-features.md`, at every place F-032 appears (`grep -n "F-032" docs/crm-features.md`: lines 1762, 1967, 3469, 3507, 3574, 3772, 3774), plus the two sentences that drop it by name (1975) and the sums that count it (1756, 1794-1830).
+- Propose only (bis-platform lands it): a `docs/runbooks/voice-setup.md` section, "The owner line (F-032)".
+
+- [ ] **Step 1: Re-read every line before editing.**
+
+  ```bash
+  grep -n "F-032\|owner line\|Dropped (18)\|\*\*54.5–74 ew\*\*\| Dropped | 0 | — | 18\|| Next | 13 |" docs/crm-features.md
+  ```
+
+  Re-count from the file, not from this plan. The numbers below were read on 2026-11-09 at `881785e0`.
+
+- [ ] **Step 2: Make the edits.**
+  - **§4.7 "Dropped (18)" table (`:1756-1762`):** delete the F-032 row, and change "**Dropped (18).**" to "**Dropped (17).**".
+  - **§4.4 Next (H1 2027):** add the row to the table that holds `F-006` (`:1406`) in its own five columns:
+
+    `| F-032 (part: read-only) | The owner line: call your own number to hear the day | 5–6 | Re-opened by the owner on 2026-11-09: a keypad PIN on a verified cell, not a voice, proves who is calling, so neither the voice-clone risk nor F-116's rule stands, and the owner asked for it. Read-only; "file work" stays out under decision 19 (spec docs/superpowers/specs/2026-11-09-owner-line-design.md). Lands after 0113 and 0114 | F-116 |`
+
+    Then change the §4.4 sum `**54.5–74 ew**` to `**59.5–80 ew**` and re-read its paragraph. It says "so it fits on its own" against 65–78. At the high bound 80 it no longer does, so rewrite that clause to: "which is at the edge of 65–78 at the high bounds, and the monthly pace check decides (§4.1)".
+  - **§4.8 sums (`:1794-1830`):**
+    - Next becomes **59.5–80** and **14** features.
+    - Dropped becomes **17**.
+    - The Total effort becomes **691.9–948.3**. The Total feature count stays 199.
+    - In the placement table, change "Next | 13" to 14 and "Dropped | 18" to 17.
+  - **§5.3 table (`:1967`):** change the disposition `dropped` to `next (owner decision 2026-11-09; read-only)`.
+  - **§5.3 "What we reject here" (`:1975-1976`):** delete "the owner line (voice-clone risk, and nobody asked), ". The sentence keeps "A top-level AI section or chat pane, and a second model provider until decision 2 allows it."
+  - **§6 (`:3469`):** change "F-032, the last of the 26, is dropped." to "F-032, the last of the 26, was dropped and was re-opened by the owner on 2026-11-09, read-only, with a keypad PIN (next)."
+  - **Coverage (`:3507`):** change "F-032, which is dropped." to "F-032, re-opened by the owner on 2026-11-09 (next; no hypothesis waits on it)."
+  - **The scored table (`:3574`):** change the last cell, "Dropped (voice-clone risk; nobody asked; F-116's rule stands)", to "Next (re-opened by the owner 2026-11-09: a keypad PIN, not a voice, proves identity; read-only)".
+  - **S-18 and S-20 (`:3772`, `:3774`):** no change. They list F-032 as served by those study items, which is still true.
+
+- [ ] **Step 3: Check the counts add up.**
+
+  ```bash
+  grep -n "Dropped (17)\|| Dropped | 0 | — | 17\|| Next | 14 |\|59.5–80" docs/crm-features.md
+  ```
+
+  Expected: each appears where Step 2 put it, and `grep -c "F-032" docs/crm-features.md` still finds 7.
+
+- [ ] **Step 4: Write the runbook proposal into the PR description** (not into the file; bis-platform lands it). It has four parts:
+  1. What a client's Owner turns on (Team → "Let your team call in to hear the day").
+  2. What a person does: Mis preferencias, the cell, the code by call-in, the PIN.
+  3. The real-call exit gate (O-5), including the three log lines.
+  4. Rollback: turn the account's switch off (Team), or, platform-wide, remove `SUPABASE_JWT_SECRET` under T. With no key, every owner tool answers "I couldn't read that", so the PIN step still runs but nothing is read; turn the switches off first.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add docs/crm-features.md
+  git commit -m "docs(plan): F-032 owner line moves from dropped to next, read-only, by the owner's decision of 2026-11-09"
+  ```
+
+  The orchestrator updates the roadmap tracker's F-032 row (O-6).
+
+---
+
+## Task 17 (PR 2): `lookup_customer`, with its own privacy tests (HIGH, 1 day)
+
+**Starts only after PR 1 is merged and O-5 (the real call) has passed.** It gets its own end-of-PR privacy review (spec §8.3).
+
+**Files:**
+- Modify: `apps/web/src/lib/owner-line/tools/schemas.ts` (add the schema), `read.ts` (add `lookupCustomer`), `registry.ts` (route it), `registry.test.ts`, `read.live.test.ts`
+- Modify: `apps/web/src/lib/owner-line/prompt.ts` (one line), `apps/web/src/lib/owner-line/corpus/items.json` (two items)
+- No migration: `owner_line_lookup_customer` is already in 0115's kind CHECK and `OWNER_LINE_LOG_KINDS`.
+
+**Interfaces:**
+- Consumes:
+  - `searchContacts(db, accountId, { term, limit }): ContactListRow[]` (`DB/contacts.ts:1237`, "Runs on whatever client it is handed: callers pass the request client"; under T, RLS and `app.contact_match_ids` scope a Technician);
+  - `listContactUpcomingBookings(db, accountId, contactId, nowIso, limit)` (`DB/booking.ts:1537`);
+  - `listContactBookings(db, accountId, contactId, { limit })` (`DB/booking.ts:1570`);
+  - `listAccountWork(db, accountId)`.
+- Produces: the tool `lookup_customer({ term: string })`, returning `{ ok: true, count, matches: Array<{ name: string | null; phone: string; lastVisit: string | null; nextVisit: string | null; openTodos: number }> }`, with at most 3 matches.
+
+- [ ] **Step 1: Write the failing tests** (append to `registry.test.ts`; add `searchContacts`, `listContactUpcomingBookings` and `listContactBookings` mocks to its `@bis/db` factory):
+
+```ts
+describe("lookup_customer (spec §5; PR 2)", () => {
+  it("returns at most 3 matches with ONLY name, phone, last visit, next visit and open To do count (mutation: spread the contact row -> FAILS)", async () => {
+    r.search.mockResolvedValue([1, 2, 3, 4].map((i) => ({ id: `k${i}`, first_name: "Maria", last_name: `López ${i}`, phone: "+19565550177",
+      email: "maria@example.com", custom: { ssn: "x" }, address: "1 Main" })));
+    r.upcoming.mockResolvedValue([{ id: "b9", contact_id: "k1", starts_at: "2026-11-12T16:00:00.000Z" }]);
+    r.history.mockResolvedValue([{ id: "b1", starts_at: "2026-10-01T16:00:00.000Z", status: "completed" }]);
+    r.work.mockResolvedValue([{ id: "t", source: "task", contactId: "k1", title: "x", dueAt: null, occurredAt: "x", accountId: A }]);
+    const out = await runOwnerTool(ctx(), "lookup_customer", { term: "Maria" }) as { count: number; matches: Record<string, unknown>[] };
+    expect(out.count).toBe(3);
+    expect(Object.keys(out.matches[0]!).sort()).toEqual(["lastVisit", "name", "nextVisit", "openTodos", "phone"]);
+    expect(JSON.stringify(out)).not.toMatch(/maria@example|ssn|Main/);
+    expect(r.search).toHaveBeenCalledWith(DB, A, { term: "Maria", limit: 3 });
+  });
+  it("finding no one answers the same bytes whether the customer exists outside this person's list or not at all (non-confirming)", async () => {
+    r.search.mockResolvedValue([]);
+    const a = await runOwnerTool(ctx(), "lookup_customer", { term: "Ana Unassigned" });
+    const b = await runOwnerTool(ctx(), "lookup_customer", { term: "Nobody Atall" });
+    expect(a).toEqual({ ok: true, count: 0, matches: [] });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+  it("a blank or one-character term reads nothing", async () => {
+    expect(await runOwnerTool(ctx(), "lookup_customer", { term: " " })).toEqual({ ok: false, error: "bad_term" });
+    expect(r.search).not.toHaveBeenCalled();
+  });
+});
+```
+
+Append to `read.live.test.ts`, under `skipIf(OWNER_LINE_DATA_PATH !== "token")`. These are §7 "Scope" and §5's Technician rule:
+
+```ts
+it("a Technician looking up an UNASSIGNED customer hears the same as for no one at all; the assigned one is found", async () => {
+  const look = (term: string) => runOwnerTool({ session: { accountId: seed.a, userId: seed.tech, role: "technician",
+    clerkUserId: `user_olt_tech_${RUN}`, clerkOrgId: seed.aOrg, firstName: null, actorName: null, locale: "en", timezone: "America/Chicago" },
+    now: () => new Date(), recheck: async () => true, client: (s, n) => ownerLineReadClient(s, n) }, "lookup_customer", { term });
+  const found = await look("Maria López") as { count: number };
+  expect(found.count).toBe(1);   // the assigned Maria only, though A holds two and B holds a third
+  // Rosa Garza EXISTS in A, unassigned (added to Task 11's seed below); "Nobody Atall" exists nowhere.
+  expect(JSON.stringify(await look("Rosa Garza"))).toBe(JSON.stringify(await look("Nobody Atall")));
+  expect(await look("Rosa Garza")).toEqual({ ok: true, count: 0, matches: [] });
+});
+it("the Owner of A never finds B's customer with the same name and phone", async () => {
+  const found = await runOwnerTool({ session: { accountId: seed.a, userId: seed.owner, role: "owner",
+    clerkUserId: `user_olt_owner_${RUN}`, clerkOrgId: seed.aOrg, firstName: null, actorName: null, locale: "en", timezone: "America/Chicago" },
+    now: () => new Date(), recheck: async () => true, client: (s, n) => ownerLineReadClient(s, n) }, "lookup_customer", { term: "+19565550177" }) as { count: number };
+  expect(found.count).toBe(2);   // A's assigned and unassigned Maria; B's Maria, same phone, never
+});
+```
+
+In `read.live.test.ts`'s `beforeAll`, after the three Maria contacts, add the unassigned customer the first case looks up:
+
+```ts
+    await db.from("contacts").insert({ account_id: a, first_name: "Rosa", last_name: "Garza", assigned_to: null });
+```
+
+For the unit cases, add `search: vi.fn(), upcoming: vi.fn(), history: vi.fn()` to the hoisted `r` object, and add `searchContacts: r.search, listContactUpcomingBookings: r.upcoming, listContactBookings: r.history` to the `@bis/db` factory.
+
+- [ ] **Step 2: Run them and see them fail** (`unknown_tool` for `lookup_customer`).
+
+  ```bash
+  pnpm --filter web exec vitest run src/lib/owner-line/tools/registry.test.ts
+  ```
+
+- [ ] **Step 3: Implement.** Schema:
+
+```ts
+  { type: "function", name: "lookup_customer",
+    description: "Find up to 3 customers by name or phone: each has name, phone, lastVisit, nextVisit (or null) and openTodos. If count is 0, say exactly: \"I don't see that customer on your list.\" Never say whether a customer exists beyond what this returns.",
+    parameters: { type: "object", properties: { term: { type: "string", description: "A name or a phone number, as the person said it." } }, required: ["term"] } },
+```
+
+Add `lookup_customer: "owner_line_lookup_customer"` to `LOG_KIND_OF`. In `read.ts`:
+
+```ts
+export async function lookupCustomer(c: OwnerReadContext, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const term = typeof args.term === "string" ? args.term.trim() : "";
+  if (term.length < 2) return { ok: false, error: "bad_term" };
+  const found = (await searchContacts(c.db, c.accountId, { term, limit: 3 })).slice(0, 3);
+  if (found.length === 0) return { ok: true, count: 0, matches: [] };
+  const work = await listAccountWork(c.db, c.accountId);
+  const matches = await Promise.all(found.map(async (k) => {
+    const [next, history] = await Promise.all([
+      listContactUpcomingBookings(c.db, c.accountId, k.id, c.now.toISOString(), 1),
+      listContactBookings(c.db, c.accountId, k.id, { limit: 30 }),
+    ]);
+    const last = history.filter((b) => b.status === "completed" && b.starts_at < c.now.toISOString())
+      .sort((a, b) => (a.starts_at < b.starts_at ? 1 : -1))[0];
+    return {
+      name: nameOf(k), phone: k.phone ?? "",
+      lastVisit: last ? when(last.starts_at, c, true) : null,
+      nextVisit: next[0] ? when(next[0].starts_at, c, true) : null,
+      openTodos: work.filter((w) => w.contactId === k.id).length,
+    };
+  }));
+  return { ok: true, count: matches.length, matches };
+}
+```
+
+Route it in `runOwnerTool`'s switch: `case "lookup_customer": return await lookupCustomer(c, args);`. Add `toolNames` coverage in `session-config.test.ts`'s expected list. In `prompt.ts`, add `lookup_customer for one customer` to the Tools line. Add two corpus items:
+- `07-lookup-none`: stub `{ ok: true, count: 0, matches: [] }`, with `must` set to `["don't see that customer"]`;
+- `08-lookup-es`: one match, in Spanish.
+
+- [ ] **Step 4: Run green** (units, then the replica live file), and paste both summary lines.
+
+- [ ] **Step 5: Mutation probes.** Each must FAIL BY NAME:
+  1. Echo the term in the empty answer (`{ ok: true, count: 0, matches: [], term }`) → "finding no one answers the same bytes" FAILS.
+  2. Spread `...k` into each match → the key-list case FAILS.
+  3. Under T, read with `serviceDb()` instead of `c.db` → the live "a Technician looking up an UNASSIGNED customer" case FAILS (the unassigned Maria is found, so the two answers differ and `count` is 2).
+
+- [ ] **Step 6: Commit, and request the privacy review.**
+
+  ```bash
+  git add apps/web/src/lib/owner-line
+  git commit -m "feat(voice): owner line lookup_customer: up to 3 matches, five fields, and the same answer for not-on-your-list and no-such-customer"
+  ```
+
+---
+
+## Self-review (run 2026-11-09 against the spec)
+
+**1. Spec coverage, section by section.**
+
+| Spec | Covered by |
+|---|---|
+| §2.1 customers hear nothing new | Task 7 (customer byte test, unsigned and lookup-failure cases), SC-17 |
+| §2.2 PIN keyed, never spoken | Task 7 (Gather before Dial), Task 9 (digits never logged), O-5 / A-5 |
+| §2.3 authorisation in code | Tasks 4, 9, 12 (pass, re-read, tool list), Task 11 (live re-check per tool) |
+| §2.4 read-only | Task 11 (three readers only), Task 12 (finish imports pinned), prompt line |
+| §2.5 same visibility as the app | Task 10 (factory), Task 11 (live second-account and Technician cases), SC-2 |
+| §3.1 the card, PIN rules, status line | Tasks 3, 5, 6 |
+| §3.2 call-in verification, 10 min, 3 attempts | Task 1 (functions and tests), Task 5 (code), Task 7 (verify Gather), Task 9 (verify path) |
+| §3.3 the switch, off by default, agency cannot | Task 1 (null default), Task 5 (agency refused), Task 6 (read-only card); SC-1 moves it to Team |
+| §3.4 storage, RLS, hash never readable, grants tests | Task 1 (SC-3, SC-4, SC-5) |
+| §4.1 lookup, no added delay, latency budget | Task 0 Step 5 (budget), Task 7 (beside the batch, failure is a miss) |
+| §4.2 PIN route, signed, pound/timeout, wrong ×3, email, continue | Tasks 8, 9 |
+| §4.3 the pass: HMAC, 60 s, single use, live re-read | Task 4, Task 12 (decide, redemption row), SC-7, SC-8 |
+| §4.4 the session: own instructions, language, owner tools only, 10 min with warning, 10 calls a day, 11th line | Task 12, Task 7 (over_limit line), Task 1 (limit in SQL) |
+| §5 the four tools, ranges, role scope, data path | Tasks 10, 11, 17; SC-10, SC-11, SC-12 |
+| §6 records and counting | Task 2 (the inventory table), Task 12 (finish), Task 13 (label), Task 1 (access-log entry) |
+| §7 tests | PIN and lockout (Task 1, Task 9); pass refusals (Tasks 4, 12); the wall (Tasks 11, 12); scope (Task 11 live, Task 17); counting (Task 2); no-guessing (Task 14); real proof (O-5) |
+| §8 shipping | Task 0 (spike and decision point), PR 1 = Tasks 1–16, PR 2 = Task 17, Task 16 (plan documents), holds in O-2 |
+
+Gaps found and fixed inline:
+- Moving the switch off Settings (SC-1).
+- The per-number cap (SC-9).
+- The storage the code needs (SC-5).
+- The `forward_calls`, no-voice and drill fallthrough mismatch (SC-17).
+
+Gaps left open, as owner questions: Q-A to Q-D.
+
+**2. Placeholder scan.** These sections were searched for "TBD", "TODO", "implement later", "similar to" and "add appropriate".
+- **"read X first and use its real names" steps (Tasks 6, 8, 11, 15).** Each points at a file:line whose exact export this plan could not pin without reading code it does not own. Every one gives the fallback to take.
+- **Task 0 Step 4's variant.** It is a decision the spike makes, not a gap.
+- **`data-path.ts` has a `<date>` slot.** The owner's answer fills it at O-1.
+- **The `owner-line-xml.ts` header has a `<date>` slot.** Task 7 Step 1 fills it.
+
+**3. Type and name consistency.** These were checked across tasks:
+- **db wrappers:** `ownerLineAnswerLookup` (Tasks 2, 7, 9), `attemptOwnerLinePin` / `attemptOwnerLineVerify` (2, 9), `ownerLineSessionCheck` (2, 10, 12), `noteOwnerLineCall` (2, 12), `readOwnerLineCallLog` (2, 13), `setOwnerLineSwitch` / `readOwnerLineSwitch` (2, 5, 6), `startCallRow({ ownerLineUserId })` (2, 12).
+- **web helpers:** `OWNER_LINE_ROLES` (5, 7, 9, 10, 12), `ownerLineReadClient` (10, 11, 12), `OwnerLineSession` (10, 11, 12), `OWNER_TOOL_NAMES` / `LOG_KIND_OF` / `OwnerToolName` (11, 12, 17), `firstName` (7, 8, 12, 13).
+- **SQL argument order:** `owner_line_attempt_pin(uuid, text, integer)` is the same in the migration, the wrappers, the test signatures and `FUNCTIONS`.
+- **access-log kinds:** the four `owner_line_*` kinds are the same in the migration CHECK, `OWNER_LINE_LOG_KINDS`, `LOG_KIND_OF` and `askedAboutLine`.
+- **Renamed during review:** `lib/owner-line/texml.ts` became `app/api/voice/texml/owner-line-xml.ts` (so `lib/` never imports a route helper and the TeXML helpers sit with `xml.ts`). Tasks 8, 10 and 12 import `firstName` from that path.
+
+**4. Things this plan could not verify, and the task that does.**
+- A-1 to A-8 above.
+- `listAccountWork` after #343 (Task 11's interface note).
+- The 0113/0114 changes to the access-log kind CHECK (Task 1 Step 1).
