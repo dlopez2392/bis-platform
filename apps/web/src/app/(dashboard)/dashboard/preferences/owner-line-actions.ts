@@ -59,9 +59,11 @@ export async function startOwnerLineVerificationAction(
   const existing = await readMyOwnerLineEnrollment(db, accountId, mine.userId);
   if (existing?.verifiedAt && existing.e164 === e164) return fail(locale, "ownerLine.error.alreadyVerified");
   const code = newVerifyCode();
-  if (await startOwnerLineVerification(db, accountId, mine.userId, e164, hashVerifyCode(code)) === "taken") {
-    return fail(locale, "ownerLine.error.cellTaken");
-  }
+  const started = await startOwnerLineVerification(db, accountId, mine.userId, e164, hashVerifyCode(code));
+  if (started === "taken") return fail(locale, "ownerLine.error.cellTaken");
+  // Five codes a day per person per business (0115 I-2): past that the database stored NOTHING, so the code minted
+  // above could never verify and is never shown.
+  if (started === "too_many") return fail(locale, "ownerLine.error.tooManyCodes");
   revalidatePath("/dashboard/preferences");
   return { ok: true, value: { code, expiresAt: new Date(Date.now() + OWNER_LINE_VERIFY_MINUTES * 60_000).toISOString() } };
 }

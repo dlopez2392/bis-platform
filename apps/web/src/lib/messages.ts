@@ -7970,6 +7970,8 @@ export const m = {
   "ownerLine.error.pin.run.es": "Evite dígitos seguidos. Un PIN como 123456 es muy fácil de adivinar.",
   "ownerLine.switch.agencyCannot": "Only the business's Owner can turn this on.",
   "ownerLine.switch.agencyCannot.es": "Solo el Dueño del negocio puede encenderlo.",
+  "ownerLine.error.tooManyCodes": "You've asked for too many codes today. Try again tomorrow.",
+  "ownerLine.error.tooManyCodes.es": "Ya pidió demasiados códigos hoy. Inténtelo de nuevo mañana.",
   // F-032 owner line (plan Task 7): what a registered team member hears on the phone before the call reaches
   // Sofía (TeXML <Say>, spec §4.1, §4.2). One line each, in the person's language; Spanish is usted.
   "ownerLine.say.pinPrompt": "Hi {name}. Enter your PIN, or press pound to talk to {persona}.",

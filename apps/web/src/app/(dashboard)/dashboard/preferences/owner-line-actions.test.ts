@@ -183,6 +183,21 @@ describe("the owner line's setup actions (F-032 §3.1, §3.2; SC-4)", () => {
       ok: false, error: "Otra persona de su equipo ya usa ese celular aquí." });
   });
 
+  it("past five codes a day the database stores nothing (too_many), so no code is shown: one that could never verify would only mislead (0115 I-2; mutation: treat too_many as success -> FAILS)", async () => {
+    mocks.start.mockResolvedValue("too_many");
+    const en = await startOwnerLineVerificationAction(A, "en", "+19565550142");
+    expect(en).toEqual({ ok: false, error: "You've asked for too many codes today. Try again tomorrow." });
+    expect(JSON.stringify(en)).not.toMatch(/"code"/);
+    expect(await startOwnerLineVerificationAction(A, "es", "+19565550142")).toEqual({
+      ok: false, error: "Ya pidió demasiados códigos hoy. Inténtelo de nuevo mañana." });
+  });
+
+  it("a cleared enrolment (Stop calling in clears the row; it reads as null) starts afresh", async () => {
+    mocks.read.mockResolvedValue(null);
+    expect(await startOwnerLineVerificationAction(A, "en", "956 555 0142")).toMatchObject({ ok: true });
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
   it("a trivial PIN is refused with its reason, and nothing is hashed or stored (mutation: skip checkPin -> FAILS)", async () => {
     expect(await setOwnerLinePinAction(A, "en", "123456")).toEqual({ ok: false, error: "Avoid digits in a row. A PIN like 123456 is too easy to guess." });
     expect(await setOwnerLinePinAction(A, "es", "000000")).toEqual({ ok: false, error: "Use dígitos distintos. Un PIN como 000000 es muy fácil de adivinar." });
