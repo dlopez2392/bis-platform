@@ -639,9 +639,12 @@ describe("every emitted TeXML document parses", () => {
 describe("the owner line's documents parse (F-032)", () => {
   const DIAL = `<Dial answerOnBridge="true" action="https://x/h?t=a&amp;f=b" method="POST"><Sip>sip:p@sip.api.openai.com;transport=tls?X-BIS-Called=%2B1&amp;X-BIS-Handoff=t</Sip></Dial>`;
   it.each([
-    ownerPinAskXml({ locale: "en", name: "O'Brien & Sons", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
-    ownerVerifyAskXml({ locale: "es", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
-    ownerLimitXml({ locale: "en", persona: "Sofía", bridge: DIAL }),
+    ownerPinAskXml({ locale: "en", name: "O'Brien & Sons", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: true, fallthrough: DIAL }),
+    ownerVerifyAskXml({ locale: "es", action: "https://x/api/voice/texml/owner-pin", retry: true, fallthrough: DIAL }),
+    ownerLimitXml({ locale: "en", persona: "Sofía", fallthrough: DIAL }),
+    // Review C-1: a fallthrough that is today's REFUSAL, not a bridge.
+    ownerPinAskXml({ locale: "es", name: "Dan", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: false,
+      fallthrough: `<Say>We&apos;re sorry — we can&apos;t take more calls today.</Say><Hangup/>` }),
     ownerVerifiedXml("es"),
   ])("parses strictly: %#", (xml) => { expect(() => parseXmlStrict(xml)).not.toThrow(); });
 
