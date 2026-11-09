@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { PageHeader } from "@/components/page-header";
 import { TeamSkeleton } from "@/components/team/team-card";
 import { TeamSection } from "@/components/team/team-section";
+import { OwnerLineSwitchCard } from "@/components/owner-line/owner-line-switch-card";
 import { BisAccessFrame } from "@/components/access-log/bis-access-frame";
 import { BisAccessSection } from "@/components/access-log/bis-access-section";
 import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
@@ -14,6 +15,8 @@ import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { serviceDb, readOwnerLineSwitch, readAccountTimezone } from "@bis/db";
+import { setOwnerLineSwitchAction } from "./owner-line-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +50,15 @@ export const dynamic = "force-dynamic";
  * reading its OWN data (`BisAccessSection`). A failed log read never costs
  * the Team card above it (rule 5 extended to the card). `accessBefore` is
  * this section's OWN cursor, named apart from any other card's `?before=`.
+ *
+ * F-032 Task 6 (spec §3.3; owner ruling Q-A): between TeamSection and BIS
+ * access, the owner line's switch card — "Let your team call in to hear the
+ * day". `requireAccountOwner` above already admits only the agency or this
+ * account's own Owner, so the service-role read of the three switch columns
+ * (server-only, 0115) is scoped to an account this caller may manage before
+ * it ever runs. The card renders the STATE `setOwnerLineSwitchAction`
+ * returns, never a re-fetch: that action does not revalidate (the
+ * billing-pause scanner forbids it while paused).
  */
 export default async function TeamPage({
   params, searchParams,
@@ -76,6 +88,9 @@ export default async function TeamPage({
       }),
     getPersonPrefs(),
   ]);
+  const [ownerLine, zoneRead] = await Promise.all([
+    readOwnerLineSwitch(serviceDb(), accountId), readAccountTimezone(serviceDb(), accountId),
+  ]);
   const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   // S-10 T9a: wired the way billing/branding now are — `pseudo` is a prop
   // every child below takes, never the ambient LocaleProvider.
@@ -88,6 +103,9 @@ export default async function TeamPage({
         <Suspense fallback={<TeamSkeleton locale={locale} pseudo={pseudo} />}>
           <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} pseudo={pseudo} />
         </Suspense>
+        <OwnerLineSwitchCard state={ownerLine} viewer={isAgency ? "agency" : "owner"} locale={locale}
+          zone={zoneRead ?? "America/Chicago"} pseudo={pseudo}
+          setSwitch={setOwnerLineSwitchAction.bind(null, accountId, locale)} />
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
             <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={localeParam} />

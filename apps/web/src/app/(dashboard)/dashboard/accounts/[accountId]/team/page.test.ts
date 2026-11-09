@@ -16,6 +16,12 @@ import { renderToStaticMarkup } from "react-dom/server";
  * Component). `all()`'s `.find()` returns the FIRST Suspense in the tree, so
  * every PRE-EXISTING assertion below still finds TeamSection's own boundary
  * unchanged.
+ *
+ * F-032 Task 6: between TeamSection's Suspense and the BIS access frame, the
+ * owner line's switch card reads `readOwnerLineSwitch`/`readAccountTimezone`
+ * on `serviceDb()` — the same partial-`@bis/db`-mock shape billing/page.test.ts
+ * already uses (`importOriginal` plus the two owner-line reads), so every
+ * other `@bis/db` export (types included) stays real.
  */
 const guard = vi.hoisted(() => ({ allowed: true, isAgency: false, order: [] as string[] }));
 vi.mock("@/lib/auth", () => ({
@@ -24,6 +30,17 @@ vi.mock("@/lib/auth", () => ({
     if (!guard.allowed) throw new Error("NEXT_REDIRECT");
     return { userId: "user_x", isAgency: guard.isAgency };
   },
+}));
+const ownerLineMock = vi.hoisted(() => ({
+  state: { enabledAt: null, changedAt: null, changedByKind: null } as
+    { enabledAt: string | null; changedAt: string | null; changedByKind: "owner" | "agency" | null },
+  zone: null as string | null,
+}));
+vi.mock("@bis/db", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  serviceDb: () => ({ tag: "service" }),
+  readOwnerLineSwitch: async () => ownerLineMock.state,
+  readAccountTimezone: async () => ownerLineMock.zone,
 }));
 const accountRow = vi.hoisted(() => ({
   language: null as "en" | "es" | null,
@@ -64,6 +81,7 @@ const { default: TeamPage } = await import("./page");
 const { TeamSkeleton } = await import("@/components/team/team-card");
 const { BisAccessFrame } = await import("@/components/access-log/bis-access-frame");
 const { BisAccessSkeleton } = await import("@/components/access-log/bis-access-skeleton");
+const { OwnerLineSwitchCard } = await import("@/components/owner-line/owner-line-switch-card");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -81,6 +99,8 @@ beforeEach(() => {
   accountRow.language = null;
   accountRow.error = null;
   prefs.language = null;
+  ownerLineMock.state = { enabledAt: null, changedAt: null, changedByKind: null };
+  ownerLineMock.zone = null;
 });
 
 describe("the Team page", () => {
@@ -168,6 +188,37 @@ describe("the Team page", () => {
     expect(line, lines.join("\n")).toBeDefined();
     expect(line).toContain("XX000");
     err.mockRestore();
+  });
+});
+
+// F-032 Task 6 (spec §3.3): the owner line's switch card, between TeamSection's own Suspense and the BIS access
+// frame, reading `readOwnerLineSwitch`/`readAccountTimezone` after requireAccountOwner.
+describe("the Team page: owner line switch card (F-032 Task 6)", () => {
+  it("renders between TeamSection's Suspense and the BIS access frame, with the state, viewer, locale and a zone fallback, and a bound setSwitch (mutation: drop the America/Chicago fallback -> FAILS)", async () => {
+    ownerLineMock.state = { enabledAt: "2026-11-09T19:00:00Z", changedAt: "2026-11-09T19:00:00Z", changedByKind: "owner" };
+    ownerLineMock.zone = null;
+    const els = all(await page());
+    const suspenseIdx = els.findIndex((e) => e.type === Suspense);
+    const switchIdx = els.findIndex((e) => e.type === OwnerLineSwitchCard);
+    const frameIdx = els.findIndex((e) => e.type === BisAccessFrame);
+    expect(switchIdx, "no OwnerLineSwitchCard element found").toBeGreaterThan(-1);
+    expect(switchIdx).toBeGreaterThan(suspenseIdx);
+    expect(switchIdx).toBeLessThan(frameIdx);
+    const card = els[switchIdx]!;
+    expect(card.props).toMatchObject({ state: ownerLineMock.state, viewer: "owner", locale: "en", zone: "America/Chicago", pseudo: false });
+    expect(typeof card.props.setSwitch).toBe("function");
+  });
+
+  it("threads the agency viewer through, same as TeamSection (mutation: hardcode viewer owner -> FAILS)", async () => {
+    guard.isAgency = true;
+    const card = all(await page()).find((e) => e.type === OwnerLineSwitchCard)!;
+    expect(card.props.viewer).toBe("agency");
+  });
+
+  it("passes through a real account zone when one is stored, instead of the fallback (mutation: ignore zoneRead -> FAILS)", async () => {
+    ownerLineMock.zone = "America/Denver";
+    const card = all(await page()).find((e) => e.type === OwnerLineSwitchCard)!;
+    expect(card.props.zone).toBe("America/Denver");
   });
 });
 

@@ -171,6 +171,11 @@ const ALLOWED: Record<string, Reason> = {
   // F-032 Task 5: the business's owner-line switch, after requireAccountOwner; the three switch columns and BIS's
   // null-account event are server-only writes, and nothing customer-shaped is read.
   "app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts": "owner-only",
+  // F-032 Task 6: the switch card's own read (readOwnerLineSwitch, readAccountTimezone), after
+  // requireAccountOwner above has already admitted only the agency or this account's own Owner; the three switch
+  // columns are server-only (0115), same guard as team/owner-line-actions.ts above, and nothing customer-shaped
+  // is read.
+  "app/(dashboard)/dashboard/accounts/[accountId]/team/page.tsx": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts": "agency-only",
   // "What Sofía knew" (S-47c, spec 5.8): a sub-page of this agency-only section, same guard.
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/knowledge/[version]/page.tsx": "agency-only",
