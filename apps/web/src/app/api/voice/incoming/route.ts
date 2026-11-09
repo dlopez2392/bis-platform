@@ -66,6 +66,12 @@
 //         price line forbids every amount, so nothing left in the prose can
 //         be quoted. Answering is the open half; quoting never is.
 //
+//     The owner line (F-032, step 7b) adds NO site to this list: its
+//     redemption row (`answerOwnerLine`'s `startCallRow`) and every other step
+//     of it fail CLOSED, to today's receptionist session. A failed owner check
+//     grants nothing; the call simply continues as a customer's, every
+//     customer check included.
+//
 //     Signature verification and account resolution are NOT fail-open —
 //     those gate who gets to talk to a tenant's AI at all. Neither is the
 //     TeXML-route signature (step 4) once VOICE_HANDOFF_ENFORCE is on: it is
@@ -91,14 +97,14 @@ import {
 } from "@bis/db";
 import {
   extractCallerNumber, extractCalledNumber, extractHandoffToken, extractSipSignature, sipHeaderNames,
-  sipAttestation,
+  sipAttestation, extractOwnerPass,
 } from "@/lib/voice/sip-headers";
 import { verifySipHandoff, sipHandoffEnforced } from "@/lib/voice/sip-handoff-signature";
 import { resolveHandoffTarget, type HandoffTarget } from "@/lib/voice/handoff";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
-import { processCallEvent, type RealtimeCallEvent } from "@/lib/voice/call-events";
-import { emptyCallState } from "@/lib/voice/call-state";
+import { processCallEvent, type RealtimeCallEvent, type VoiceAction } from "@/lib/voice/call-events";
+import { emptyCallState, type CallState } from "@/lib/voice/call-state";
 import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
@@ -115,6 +121,14 @@ import { effectiveStatusOrUnknown, hoursChain, statusCode, dayKey } from "@/lib/
 import { loggableError } from "@/lib/loggable-error";
 import { SEND_TIMEOUT_MS, RATE_LIMIT_MAX_WAIT_MS } from "@/lib/http/retry-after";
 import type { Locale } from "@/lib/i18n/locale";
+// F-032 (plan Task 12): the owner line. The decision, the accept body and the spoken lines are small and loaded
+// here; the owner runtime (its frame handler and tools, its read client, its finish) is loaded by `answerOwnerLine`
+// on the owner path only, so a customer's call loads none of it.
+import { decideOwnerSession, recheckOwnerSession, type OwnerLineSession } from "@/lib/owner-line/session";
+import { buildOwnerLineSessionConfig, OWNER_LINE_MAX_CALL_SECONDS } from "@/lib/owner-line/session-config";
+import { ownerLineGreeting, ownerLineWarning } from "@/lib/owner-line/prompt";
+import type { OwnerToolName } from "@/lib/owner-line/tools/schemas";
+import type { OwnerToolContext } from "@/lib/owner-line/tools/registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -175,6 +189,112 @@ async function acceptCall(callId: string, apiKey: string, sessionConfig: object)
     const detail = await res.text().catch(() => "");
     throw new Error(`accept failed: ${res.status} ${detail}`);
   }
+}
+
+/** An error as an owner-line log line may name it: its class only (a message can quote a token, a number or a row). */
+const errorClass = (e: unknown) => (e instanceof Error ? e.name : typeof e);
+
+/**
+ * F-032 §4.3-§4.4: the owner-line answer, once `decideOwnerSession` said yes. Every step fails CLOSED, to today's
+ * receptionist (returns false): nothing is granted on a failure. In order:
+ *   1. a handoff token to redeem, or no owner line;
+ *   2. the owner runtime, loaded HERE (a customer's call never loads it); a load failure writes nothing;
+ *   3. the REDEMPTION ROW: it carries the handoff token, which calls_handoff_token_unique allows once, so a replayed
+ *      pass fails here and the call is the receptionist's (plan SC-7). Unlike startCallRow at step 10 this one is not
+ *      fail-open: no row, no owner tools. It also carries owner_line_user_id, which every counting reader excludes;
+ *   4. the brand name for the prompt (`brandDisplayName`, never the agency's internal label); a failed read says
+ *      "the business";
+ *   5. the accept, with ONLY the owner tools (buildOwnerLineSessionConfig). OpenAI refusing it ends here (true): the
+ *      row is removed and no second accept is tried for the same call.
+ * Logs carry the account and the error class only: never the caller's number, the pass or the token.
+ */
+async function answerOwnerLine(a: {
+  callId: string; apiKey: string; db: ReturnType<typeof serviceDb>; accountId: string; phoneRowId: string;
+  callerNumber: string | null; handoffToken: string | null; personaName: string; session: OwnerLineSession; now: Date;
+}): Promise<boolean> {
+  const where = { callId: a.callId, accountId: a.accountId };
+  if (!a.handoffToken) {
+    log("owner line refused — no handoff token to redeem", where);
+    return false;
+  }
+  let runtime: {
+    processOwnerLineEvent: typeof import("@/lib/owner-line/events").processOwnerLineEvent;
+    finishOwnerLineCall: typeof import("@/lib/owner-line/finish").finishOwnerLineCall;
+    ownerLineReadClient: typeof import("@/lib/owner-line/reader").ownerLineReadClient;
+  };
+  try {
+    const [events, finish, reader] = await Promise.all([
+      import("@/lib/owner-line/events"), import("@/lib/owner-line/finish"), import("@/lib/owner-line/reader"),
+    ]);
+    runtime = {
+      processOwnerLineEvent: events.processOwnerLineEvent, finishOwnerLineCall: finish.finishOwnerLineCall,
+      ownerLineReadClient: reader.ownerLineReadClient,
+    };
+  } catch (e) {
+    log("owner line refused — its runtime could not be loaded", { ...where, error: errorClass(e) });
+    return false;
+  }
+  let callRowId: string;
+  try {
+    callRowId = (await startCallRow(a.db, a.accountId, {
+      phoneNumberId: a.phoneRowId, callerE164: a.callerNumber, handoffToken: a.handoffToken, ownerLineUserId: a.session.userId,
+    })).id;
+  } catch (e) {
+    log("owner line refused — its single-use call row could not be written (a replay, or the database)",
+      { ...where, error: errorClass(e) });
+    return false;
+  }
+  let businessName = "";
+  try {
+    const row = await loadAccountContext(a.db, a.accountId);
+    businessName = brandDisplayName({
+      brandName: row.brand_name, brandLogoPath: row.brand_logo_path, brandColor: row.brand_color,
+      brandNeutral: row.brand_neutral, brandCorners: row.brand_corners, brandType: row.brand_type,
+      brandMode: row.brand_mode, replyToEmail: row.reply_to_email,
+    });
+  } catch (e) {
+    log("owner line: brand read failed — the prompt says 'the business'", { ...where, error: errorClass(e) });
+  }
+  let config: ReturnType<typeof buildOwnerLineSessionConfig>;
+  try {
+    config = buildOwnerLineSessionConfig({ firstName: a.session.firstName, locale: a.session.locale, businessName,
+      personaName: a.personaName, timezone: a.session.timezone, now: a.now });
+  } catch (e) {
+    log("owner line refused — its session could not be built", { ...where, error: errorClass(e) });
+    try { await deleteCallRow(a.db, a.accountId, callRowId); } catch (c) {
+      log("owner-line cleanup: deleteCallRow failed", { ...where, error: errorClass(c) });
+    }
+    return false;
+  }
+  const ran = new Set<OwnerToolName>();
+  const toolCtx: OwnerToolContext = {
+    session: a.session, now: () => new Date(), recheck: recheckOwnerSession,
+    client: (s, n) => runtime.ownerLineReadClient(s, n),
+  };
+  try {
+    await acceptCall(a.callId, a.apiKey, config);
+  } catch (e) {
+    log("failed to accept the owner-line call", { ...where, error: errorClass(e) });
+    stampHeartbeat("voice.sip_webhook", { ok: false, error: `OpenAI did not accept the call (${errorClass(e)})` });
+    try { await deleteCallRow(a.db, a.accountId, callRowId); } catch (c) {
+      log("owner-line accept-failure cleanup: deleteCallRow failed", { ...where, error: errorClass(c) });
+    }
+    return true;
+  }
+  log("owner line accepted", where);
+  stampHeartbeat("voice.sip_webhook", { ok: true });
+  after(() => runCallLifecycle({
+    mode: "owner_line", callId: a.callId, apiKey: a.apiKey,
+    greetingInstruction: ownerLineGreeting({ firstName: a.session.firstName, locale: a.session.locale }),
+    languages: a.session.locale, callRowId, startedAt: a.now,
+    ownerLine: {
+      handle: (state, event) => runtime.processOwnerLineEvent(state, toolCtx, ran, event),
+      finish: (state, meta) => runtime.finishOwnerLineCall(state, { db: a.db, session: a.session, ran }, meta),
+      capSeconds: OWNER_LINE_MAX_CALL_SECONDS,
+      warning: { atSeconds: OWNER_LINE_MAX_CALL_SECONDS - 60, instruction: ownerLineWarning(a.session.locale) },
+    },
+  }));
+  return true;
 }
 
 /**
@@ -295,7 +415,7 @@ const CLAMP_MARGIN_S = 10;
 /** 800 - 127 - 20 - 10 = 643. */
 const MAX_CALL_SECONDS_CLAMP = Math.floor(maxDuration - POST_CAP_TAIL_S - CONNECT_LEG_S - CLAMP_MARGIN_S);
 
-interface LifecycleArgs {
+interface LifecycleBase {
   callId: string;
   apiKey: string;
   /** The whole `response.create` instruction for the opening line (`openingGreeting`). */
@@ -303,9 +423,21 @@ interface LifecycleArgs {
   languages: "en" | "es" | "both";
   callRowId: string | null;
   startedAt: Date;
-  toolCtx: ToolContext;
-  finishCtx: FinishContext;
 }
+/**
+ * F-032 §4.4: an owner-line call brings its OWN frame handler (only the owner tools), its own finish (no customer
+ * record), its own cap (10 minutes, not PHONE_MAX_CALL_SECONDS) and a spoken warning before it. Everything else in
+ * the lifecycle, the greeting delay, the silence guard, the cap's goodbye and the close, is shared.
+ */
+type OwnerLineHooks = {
+  handle: (state: CallState, event: RealtimeCallEvent) => Promise<{ state: CallState; actions: VoiceAction[] }>;
+  finish: (state: CallState, meta: { callRowId: string | null; startedAt: Date; endedAt: Date }) => Promise<void>;
+  capSeconds: number;
+  warning: { atSeconds: number; instruction: string };
+};
+type LifecycleArgs = LifecycleBase & (
+  | { mode: "receptionist"; toolCtx: ToolContext; finishCtx: FinishContext }
+  | { mode: "owner_line"; ownerLine: OwnerLineHooks });
 
 /**
  * The call-scoped WebSocket loop — lives for the entire phone call, run in
@@ -318,9 +450,11 @@ interface LifecycleArgs {
  * of the demo's own recorder/store.
  */
 function runCallLifecycle(args: LifecycleArgs): Promise<void> {
-  const { callId, apiKey, greetingInstruction, languages, callRowId, startedAt, toolCtx, finishCtx } = args;
+  const { callId, apiKey, greetingInstruction, languages, callRowId, startedAt } = args;
   let state = emptyCallState();
   let capTimer: NodeJS.Timeout | undefined;
+  /** The owner line's one-minute warning (F-032 §4.4); never armed on a customer's call. Cleared wherever the cap is. */
+  let warnTimer: NodeJS.Timeout | undefined;
   let closeTimer: NodeJS.Timeout | undefined;
   let greetTimer: NodeJS.Timeout | undefined;
   let connectTimer: NodeJS.Timeout | undefined;
@@ -348,6 +482,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       if (settled) return;
       settled = true;
       clearTimeout(capTimer);
+      clearTimeout(warnTimer);
       clearTimeout(closeTimer);
       clearTimeout(greetTimer);
       clearTimeout(connectTimer);
@@ -378,7 +513,10 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // finishCall is documented never-throws; this catch is belt-and-
       // suspenders against that contract changing out from under this route.
       try {
-        await finishCall(state, finishCtx, { callRowId, startedAt, endedAt: new Date() });
+        // F-032: an owner-line call finishes as one (its row, its minutes, its access-log entry, nothing else);
+        // a customer's call exactly as before.
+        if (args.mode === "owner_line") await args.ownerLine.finish(state, { callRowId, startedAt, endedAt: new Date() });
+        else await finishCall(state, args.finishCtx, { callRowId, startedAt, endedAt: new Date() });
       } catch (e) {
         log("finishCall threw unexpectedly", { callId, error: String(e) });
       }
@@ -561,7 +699,24 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // CAP is what makes the half-bound incapable of undercutting the clamp
       // it is applied to. Flooring after the min instead would let the window
       // TIE the cap, and a tie fires the cap first (insertion order).
-      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), MAX_CALL_SECONDS_CLAMP);
+      //
+      // F-032 §4.4: an owner-line call's cap is its own (10 minutes, inside the same clamp; its finish is far
+      // lighter than the receptionist's tail, so the clamp's derivation still covers it), never
+      // PHONE_MAX_CALL_SECONDS, and a spoken warning a minute before it.
+      const maxSeconds = args.mode === "owner_line"
+        ? Math.min(args.ownerLine.capSeconds, MAX_CALL_SECONDS_CLAMP)
+        : Math.min(Math.max(parsedOrDefault, 10), MAX_CALL_SECONDS_CLAMP);
+      if (args.mode === "owner_line") {
+        const { atSeconds, instruction } = args.ownerLine.warning;
+        warnTimer = setTimeout(() => {
+          if (settled) return;
+          try {
+            ws.send(JSON.stringify({ type: "response.create", response: { instructions: instruction } }));
+          } catch {
+            // socket closing; the cap still ends the call.
+          }
+        }, Math.min(atSeconds, maxSeconds - 1) * 1000);
+      }
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -645,6 +800,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         // outright, including the degenerate configurations where the cap
         // would land inside the 5s goodbye playout below.
         clearTimeout(capTimer);
+        clearTimeout(warnTimer);
         log("no caller audio, ending call", { callId, silentSeconds });
         try {
           ws.send(JSON.stringify({
@@ -781,7 +937,11 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           silenceTimer = undefined;
           log("silence guard cancel check threw — guard disarmed, call runs to the cost cap", { callId, error: String(e) });
         }
-        const result = await processCallEvent(state, toolCtx, event);
+        // F-032: an owner-line call's frames go through ITS handler only (the owner tools; no recording guard, no
+        // transfer), a customer's through processCallEvent, exactly as before.
+        const result = args.mode === "owner_line"
+          ? await args.ownerLine.handle(state, event)
+          : await processCallEvent(state, args.toolCtx, event);
         state = result.state;
         for (const action of result.actions) {
           if (action.kind === "send") {
@@ -814,8 +974,9 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
             // the transcript — which is deliberately still written — is the
             // only way anybody finds out.
             log("recorded message detected — ending the call without a reply",
-              { callId, caller: finishCtx.callerNumber ?? "unknown" });
+              { callId, caller: args.mode === "receptionist" ? args.finishCtx.callerNumber ?? "unknown" : "owner line" });
             clearTimeout(capTimer);
+            clearTimeout(warnTimer);
             clearTimeout(closeTimer);
             clearTimeout(silenceTimer);
             silenceTimer = undefined;
@@ -846,6 +1007,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           // cap-window interleaving test in `lifecycle.test.ts`.
           log("transfer requested, closing the AI leg", { callId });
           clearTimeout(capTimer);
+          clearTimeout(warnTimer);
           clearTimeout(closeTimer);
           clearTimeout(silenceTimer);
           silenceTimer = undefined;
@@ -966,7 +1128,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // --- Step 4b: log routing info, header NAMES never VALUES ------------
-    log("incoming call", { callId, callerNumber, calledNumber, sipHeaderNames: sipHeaderNames(event.data), attestation: sipAttestation(event.data) });
+    // F-032: a call carrying an owner pass is a business's own team member on their own cell, and the owner line's
+    // logs never carry that number; every other call's line is unchanged.
+    const ownerPassRaw = extractOwnerPass(event.data);
+    log("incoming call", {
+      callId, callerNumber: ownerPassRaw ? "withheld (owner pass present)" : callerNumber, calledNumber,
+      sipHeaderNames: sipHeaderNames(event.data), attestation: sipAttestation(event.data),
+    });
 
     // --- Step 5: unroutable ------------------------------------------------
     if (!calledNumber) {
@@ -997,6 +1165,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // predicate call, so this narrows `profile` for everything below.
     if (!profile) {
       return NextResponse.json({ ok: true, declined: "disabled" });
+    }
+
+    // --- Step 7b: the owner line (F-032 §4.3) -------------------------------
+    // Only a call carrying an owner pass is even considered; every customer call skips this block entirely. The
+    // decision is in code (lib/owner-line/session.ts), never in the prompt. It runs BEFORE step 8: a registered
+    // person is never refused by the customer caps or the repeat-spam check (SC-9, owner ruling Q-C); their own
+    // limit of calls is inside the decision. A refusal is today's receptionist below, every customer check included.
+    if (ownerPassRaw) {
+      // Its own try (I-1): decideOwnerSession reads the database, and a throw escaping here would reach POST's outer
+      // catch, which acks 200 WITHOUT accepting: dead air. A failed check refuses the OWNER path only; the call
+      // continues to step 8 as a customer's. This is not a fail-open site: nothing is granted on a failure.
+      let owner: Awaited<ReturnType<typeof decideOwnerSession>>;
+      try {
+        owner = await decideOwnerSession({
+          db, raw: ownerPassRaw, handoffToken: extractHandoffToken(event.data), handoffCheck, accountId, now,
+        });
+      } catch (e) {
+        owner = { ok: false, reason: "owner-check-failed" };
+        log("owner pass check threw", { callId, accountId, error: errorClass(e) });
+      }
+      log("owner pass checked", { callId, accountId, result: owner.ok ? "ok" : owner.reason });
+      if (owner.ok && await answerOwnerLine({
+        callId, apiKey, db, accountId, phoneRowId: phoneRow.id, callerNumber,
+        handoffToken: extractHandoffToken(event.data), personaName: profile.persona_name || "Sofía",
+        session: owner.session, now,
+      })) {
+        return NextResponse.json({ ok: true });
+      }
     }
 
     // --- Step 8: abuse caps + caller reputation, fail-open on a counting
@@ -1360,6 +1556,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // fallback's error (texml/handoff) once she is reachable again.
     stampHeartbeat("voice.sip_webhook", { ok: true });
     after(() => runCallLifecycle({
+      mode: "receptionist",
       callId, apiKey, greetingInstruction: opening.instruction, languages: profile.languages,
       callRowId, startedAt: now, toolCtx, finishCtx,
     }));
