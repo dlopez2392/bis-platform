@@ -102,7 +102,7 @@ describe("0105: grants make both tables append-only", () => {
       expect((await c.query("select actor_name from public.agency_visits where account_id = $1", [a.accountId])).rowCount).toBe(1);
     }));
 
-  it("column INSERT: service_role on exactly these ten columns, so started_at and first_opened_at stay the database's clock (mutation: add started_at to the grant -> FAILS)", () =>
+  it("column INSERT: service_role on exactly these eleven columns, actor_kind since 0115 (the owner line's entry), so started_at and first_opened_at stay the database's clock (mutations: add started_at to the grant -> FAILS; revoke insert (actor_kind) on public.agency_visits from service_role -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select r, cl.relname || '.' || a.attname as col
@@ -114,7 +114,7 @@ describe("0105: grants make both tables append-only", () => {
       expect(rows).toEqual([
         "agency_visit_items.account_id", "agency_visit_items.item_count", "agency_visit_items.kind",
         "agency_visit_items.record_id", "agency_visit_items.visit_id",
-        "agency_visits.account_id", "agency_visits.actor_clerk_user_id", "agency_visits.actor_name",
+        "agency_visits.account_id", "agency_visits.actor_clerk_user_id", "agency_visits.actor_kind", "agency_visits.actor_name",
         "agency_visits.clerk_session_id", "agency_visits.reason",
       ].map((col) => ({ r: "service_role", col })));
     }));
