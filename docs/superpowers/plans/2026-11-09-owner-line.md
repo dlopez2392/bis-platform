@@ -83,6 +83,9 @@ Paths below are short: `WEB` = `apps/web/src`, `ACCT` = `WEB/app/(dashboard)/das
 - **A-1.** Hosted Supabase PostgREST accepts a server-minted JWT beside Clerk's third-party issuer. Locally it does: `.github/scripts/ci-local-supabase.sh:21-34` hands PostgREST "those keys plus the stack's own secret as one JWKS". **Verified by Task 0.**
 - **A-2.** bis-ci and production still hold a usable legacy JWT secret, or allow importing a signing key. **Task 0, as a read-only inventory by danlo.**
 - **A-3.** Telnyx `<Gather>` documents `finishOnKey`, and what Telnyx sends for "#" with no digits is unknown. The existing screen's Gather uses only `action`, `numDigits` and `timeout`, and states "nothing undocumented goes in" (`route.ts:171-176`). **Task 7 Step 1** reads https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather (a documentation read, not a provider call). The documents handle all three outcomes: `Digits` "", `Digits` "#", and fall-through. If `finishOnKey` is not documented, the attribute is left out (Task 7 Step 1 says how).
+  - **Read on 2026-11-09 (Task 7 Step 1).** `finishOnKey` IS documented, with default `#`.
+  - **Not documented:** what a bare `#` sends, and whether a timeout posts to `action` or falls through to the next verb.
+  - **The fall-through case is therefore live, and it is the one no route sees.** Telnyx runs the verbs after the Gather without asking us anything. Those verbs must be today's path for that caller: the refusal when the ask skipped one (Q-C), and the cleared, ticketed bridge only when every guard cleared (Task 7 review C-1; Step 5.6 as built).
 - **A-4.** The Gather callback carries `To` and `From`. That is documented but has not been seen on a real call (`WEB/app/api/voice/texml/screen/route.ts:18-23`). owner-pin never acts without both. **O-5 (the real call).**
 - **A-5.** DTMF keyed inside a Gather never reaches the SIP leg. This holds by construction, because `<Dial>` has not run yet. **O-5** checks the transcript holds no digits.
 - **A-6.** OpenAI passes `?X-BIS-Owner-Pass=` into `sip_headers` exactly as it passes the three `X-BIS-*` values already proven (`sip-handoff-signature.ts:13-17`). **Task 12's log line, then O-5.**
@@ -4483,33 +4486,53 @@ The spoken copy goes into `messages.ts`'s F-032 block. This is customer-adjacent
 
      The default body is byte-identical to before, which the existing tests pin.
   5. `answer(..., opts: { skipScreen?: boolean; skipOwnerLine?: boolean } = {})` passes `opts.skipOwnerLine === true` as a sixth argument to `route`. `route(..., skipScreen = false, skipOwnerLine = false)` calls `classify(calledE164, callerE164, !skipOwnerLine && authenticated && sipHandoffSecretConfigured())`.
-  6. In `route`, right after the `cap` return (`:742`) and before the press-1 screen block:
+  6. In `route`, right after the `cap` return (`:742`) and before the press-1 screen block. **AS BUILT after the Task 7 review (C-1, 2026-11-09). The first draft of this step was wrong.**
+     - **The fall-through case.** After the Gather, Telnyx either posts to owner-pin or FALLS THROUGH to the next verb without asking us anything (A-3; the screen's own case A, `route.ts` `screenXml`). So the verbs after the Gather must already be today's path for this caller.
+     - **The draft's defect.** It always followed the ask with the CLEARED bridge. When the ask had skipped a customer refusal (Q-C: repeat-spam, a cap), that bridge carried the model-down ticket `&f=`, which means "every guard cleared" (`fallback-ticket.ts`, `handoff/route.ts` `modelDownFallback`). On a fall-through the webhook declines the over-cap caller, and the handoff route then rang the business's transfer number, wrote a model-down forwarded row and raised a false "Sofía unreachable" alert (reproduced by the reviewer).
+     - **As built.** `classify` always computes the two verdicts. For an ask, a refusal they reach is carried on the result as `ownerSkipped: { kind: "blocked" | "cap"; languages }` instead of being returned, reputation first as today. In `route`, the ask's fallthrough is:
+       - **a skipped refusal:** `refusalVerbs(kind, languages)`, the same `<Say>…<Hangup/>` and language today's path speaks. `refusalXml`, used by today's three refusal returns, wraps the same string, so the two cannot differ by a byte. No bridge is minted at all.
+       - **no refusal skipped:** today's bridge, cleared, because every guard really did clear.
+     - The SC-17 states (forward, no-voice, drill) are checked in `classify`'s offer decision, not here, so the caps are skipped only when the step is actually offered (Task 7 report, deviation 1).
+     - The XML helpers' `bridge` argument is named `fallthrough`, because it is today's path, not always a bridge.
+     - `ownerLineGatherAgain` (step 7) had the same defect: owner-pin's re-ask also falls through. It now re-reads today's verdicts with `classify(..., false)`:
+       - a refusal is followed by its sentence and hang-up;
+       - the ticketed bridge only for the same account with every guard clear and no forward, no-voice or drill;
+       - anything else (a failed read, the number now on another account) gets the UNCLEARED bridge, which the webhook gates.
+     - Tests: `route.test.ts`, "the fallthrough after an ask is exactly today's path" and "ownerLineGatherAgain's fallthrough is today's path too". Each document is compared byte for byte with the `skipOwnerLine` document, with the token and the clock pinned.
 
 ```ts
-    // F-032 §4.1: the owner line. AHEAD of the press-1 screen (SC-16), only on a cleared call whose Gather can fall
-    // through to today's bridge (SC-17: never with the agency's forward on, billing's no-voice, or the drill), and
-    // only on a signed request (the lookup was not even read otherwise; SC-14).
     const ol = result.ownerLine;
-    if (ol && result.cleared && result.accountId && !result.noVoice && !result.forwardCalls
-        && !fallbackDrillActive(calledE164, callerE164)) {
+    if (ol && result.cleared && result.accountId) {
       const locale: Locale = ol.language ?? ol.accountLanguage ?? "en";
       const persona = result.personaName || "Sofía";
-      const cleared = { accountId: result.accountId, callerE164 };
+      const accountId = result.accountId;
       const action = ownerPinUrl(origin);
-      const ask = (wrap: (dial: string) => string) =>
-        done(xmlResponse(dialXml(calledE164, callerE164, origin, authenticated, cleared, false, { wrap }).body));
+      const skipped = result.ownerSkipped;
+      const ask = (doc: (fallthrough: string) => string) => {
+        if (skipped) return done(xmlResponse(doc(refusalVerbs(skipped.kind, skipped.languages))));
+        const d = dialXml(calledE164, callerE164, origin, authenticated,
+          { accountId, callerE164 }, false, { wrap: doc });
+        return done(xmlResponse(d.body), false, d.unsignedBridge);
+      };
       if (ol.status === "verify") {
         console.log(`texml owner line asking for a call-in code, accountId ${result.accountId}`);
-        return ask((dial) => ownerVerifyAskXml({ locale, action, retry: false, bridge: dial }));
+        return ask((fallthrough) => ownerVerifyAskXml({ locale, action, retry: false, fallthrough }));
       }
       if (ol.status === "pin") {
         console.log(`texml owner line asking for a PIN, accountId ${result.accountId}`);
-        return ask((dial) => ownerPinAskXml({ locale, name: ol.name, persona, action, retry: false, bridge: dial }));
+        return ask((fallthrough) => ownerPinAskXml({ locale, name: ol.name, persona, action, retry: false, fallthrough }));
       }
+      // Over their own limit the person is a customer: no refusal was skipped, so the line, then today's bridge.
       console.log(`texml owner line over its daily limit — today's path, accountId ${result.accountId}`);
-      return ask((dial) => ownerLimitXml({ locale, persona, bridge: dial }));
+      return ask((fallthrough) => ownerLimitXml({ locale, persona, fallthrough }));
     }
 ```
+
+     **The same review round also changed:**
+     - **M-1.** The lookup races `OWNER_LINE_LOOKUP_DEADLINE_MS = 300`, then counts as a miss, logged by account. Why 300: spike §5 measured the lookup at p95 171–192 ms from a residential link, about 150 ms of which is the round trip, and 0.16 ms in Postgres.
+     - **M-2.** The ask copy is in `./owner-line-copy.ts`, pinned byte for byte to the catalogue's `ownerLine.say.*` keys by `owner-line-copy.test.ts`. That test also checks that no `texml/` source imports `@/lib/messages`. The route's esbuild bundle went 598 KB → 48 KB (37 KB before Task 7).
+     - **M-5.** The failure line names the error class only. The wrapper's "unexpected answer" message quotes the RPC answer, which includes a name and `pin_params`.
+     - **Spanish (orchestrator decision).** The ES PIN ask names the key: "o oprima la tecla de gato (#) para hablar con {persona}".
 
   7. Append the two exports for Task 9:
 
