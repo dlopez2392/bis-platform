@@ -7484,60 +7484,179 @@ test.describe.serial("owner line setup (F-032 §3)", () => {
 
 ## Task 16: Plan documents and the runbook proposal (LOW, 0.25 day)
 
+**Status (2026-11-09): Steps 1–3 and 5 done as built below; Step 4's proposal is written in this section for bis-platform to land.** The brief overrode two of this section's first draft: the runbook proposal lives HERE, as a fenced block, not only in the PR description; and F-116's rule is not set aside but honoured (the first draft's §4.4 row said "neither the voice-clone risk nor F-116's rule stands"; the owner's reason is "the owner asked; a keypad PIN, not a voice, proves identity", and F-116's rule, "a voice alone never proves who is calling", is exactly what the PIN satisfies).
+
 **Files:**
-- Modify: `docs/crm-features.md`, at every place F-032 appears (`grep -n "F-032" docs/crm-features.md`: lines 1762, 1967, 3469, 3507, 3574, 3772, 3774), plus the two sentences that drop it by name (1975) and the sums that count it (1756, 1794-1830).
-- Propose only (bis-platform lands it): a `docs/runbooks/voice-setup.md` section, "The owner line (F-032)".
-- Propose only (bis-platform lands it): `OWNER_LINE_PIN_PEPPER` in `.env.example`'s Voice Receptionist block (Sensitive, at least 32 random characters, a DIFFERENT value per environment; rotating it invalidates every stored PIN; unset, every PIN step takes today's path and counts no attempt: O-3), and the same facts in the runbook section above. Added at the Task 9 review (2026-11-09); no agent edits `.env.example` itself.
+- Modify: `docs/crm-features.md`, at every place F-032 appears (`grep -n "F-032" docs/crm-features.md`: lines 1762, 1967, 3469, 3507, 3574, 3772, 3774 at `881785e0`), the sentence that drops it by name (1975), and every sum that counted it as dropped (listed in Step 2, each recomputed from the file).
+- Propose only (bis-platform lands it): a `docs/runbooks/voice-setup.md` section, "The owner line (F-032)" (Step 4's block).
+- Propose only (bis-platform lands it): `OWNER_LINE_PIN_PEPPER` in `.env.example`'s Voice Receptionist block, the variable's name only with a comment (inside Step 4's block). No agent edits `.env.example` itself. Added at the Task 9 review (2026-11-09).
 
-- [ ] **Step 1: Re-read every line before editing.**
+- [x] **Step 1: Re-read every line before editing.**
 
   ```bash
-  grep -n "F-032\|owner line\|Dropped (18)\|\*\*54.5–74 ew\*\*\| Dropped | 0 | — | 18\|| Next | 13 |" docs/crm-features.md
+  grep -n "F-032\|owner line\|Dropped (18)\|54\.5–74\|686\.9\|942\.3\|517\.5\|100\.5–141\|135 ew\|719\.8\|Eighteen features\|next 13\|26 rows" docs/crm-features.md
   ```
 
-  Re-count from the file, not from this plan. The numbers below were read on 2026-11-09 at `881785e0`.
+  Re-count from the file, not from this plan. The first draft named only §4.4, §4.7 and §4.8; the re-read found the same numbers in §1, §4.1, §4.8's prose, §8 and §9 too.
 
-- [ ] **Step 2: Make the edits.**
-  - **§4.7 "Dropped (18)" table (`:1756-1762`):** delete the F-032 row, and change "**Dropped (18).**" to "**Dropped (17).**".
-  - **§4.4 Next (H1 2027):** add the row to the table that holds `F-006` (`:1406`) in its own five columns:
+- [x] **Step 2: The edits, as built.** Each number was recomputed from the file:
+  - **§4.4 table:** the row goes in the AI group, after F-020 (part), in the table's own five columns: `F-032 (part: read-only, Owners and Staff first)` · the canonical name · `5–6` (the spec's estimate; a revision inside the canonical M–L 4–7) · the owner decision of 2026-11-09 with the reason quoted, F-116's rule kept and honoured ("the PIN, keyed on a verified cell, proves who is calling, never the voice"), read-only scope, "file work" out under decision 19, Technicians later with T, the spec path, "Lands after 0113 and 0114" · `F-116`. AI subtotal 2.5–4 → **7.5–10**. Horizon total "(26 rows) 54.5–74" → **"(27 rows) 59.5–80"** (the eleven subtotals re-added: 54.5–74 before, +5–6).
+  - **§4.4 paragraph:** "so it fits on its own" → "which is at the edge of 65–78 at the high bounds (80 against 78), and the monthly pace check decides (§4.1)". "That leaves next at about 64–66 ew against 65: at the edge" → "about 70–72 ew against 65. Without F-032 it would be 64–66, at the edge; the owner's re-opening of F-032 on 2026-11-09 (5–6 ew) puts it past the edge". (64–66 reproduced first: 74 + 10.5–12.5 received − 10 − 9.5 − 1, the calendar feed; then 80 in place of 74.)
+  - **§4.7:** the F-032 row deleted; "Dropped (18)" → **"Dropped (17)"**; a one-sentence trace under the table records the re-opening and its reason. "The 31 folded and dropped features carried 100.5–141.5 ew" → **"The 30 … 96.5–134.5 ew"** (the 31 rows' bands re-summed by script to 100.5–141.5, then F-032's 4–7 removed).
+  - **§4.8:** Next row **59.5–80**, **14** features; Dropped **17**; Total **691.9–948.3** (686.9 + 5, 942.3 + 6); the placement table Next 14, Dropped 17; Total stays 199. "Features add 517.5–700 ew" → **522.5–706** (study 160–223.5 + features + defects 9.4–18.8 = the Total, so the features line moves by the same 5–6). "Through 2028 … 525.4–719.8" → **530.4–725.8**; at six a week "about 18 ew over" → **about 24** (725.8 − 702), which the tail covers at its high bound (26); at five a week "about 135 ew over (719.8 against 585)" → **about 141 (725.8 against 585)**, and "all of it landing in later" → "nearly all … The other 5–7 ew stay in next, over its 65, because F-032 was placed there". Later's own "some 135 ew over" (§4.5, 524–526 against 390) is later's alone and does not change. "686.9–942.3 ew would be about 13 to 18 years" → 691.9–948.3, still 13 to 18.
+  - **§1 item 8:** "Eighteen features are dropped" → **"Seventeen"**. **§1 item 10:** "once about 18 ew of later's work slides" → **24**; "through 2028 about 525–720" → **530–726**; "about 135 ew over" → **141**.
+  - **§4.1:** "about 135 ew over" → **141**; the three-to-four-a-week case "on top of its own 54.5–74: 84.5–113 ew, about twice its capacity" → **"59.5–80: 89.5–119 ew, more than twice"** (the 30–39 ew it absorbs is unchanged; 119/52 = 2.3); the capacity table's Next → **59.5–80**.
+  - **§5.3 table:** outcome → "Calling the business number to hear the day, read-only: a keypad PIN on a verified cell, not a voice, proves who is calling (F-116's rule)"; effort → `M–L (5–6)*`; disposition → "next (owner decision 2026-11-09; read-only, Owners and Staff first)". **"What we reject here"**: the owner-line clause deleted.
+  - **§8 risk 1 and §9's unnumbered choice:** 686.9–942.3 → **691.9–948.3**; "about 135 ew over" → **141**.
+  - **§10:** "F-032, the last of the 26, is dropped." → "was dropped and was re-opened by the owner on 2026-11-09, read-only, with a keypad PIN (next): the owner asked, and a keypad PIN, not a voice, proves identity." Coverage → "F-032, re-opened by the owner on 2026-11-09 (next; no hypothesis waits on it)."
+  - **Appendix A:** dispositions "next 13 … dropped 18" → **"next 14 … dropped 17"**; the F-032 row's effort `M–L (5–6)*`, final horizon `next`, disposition "Next (re-opened by the owner 2026-11-09: a keypad PIN, not a voice, proves identity, so F-116's rule stands and is honoured; read-only, Owners and Staff first; split: Technicians later, with the token path T)". The judges' V/F/D/Skeptic cells are copied scores and stay.
+  - **Appendix B, S-18 and S-20:** no change. They list F-032 as served by those study items, which is still true.
 
-    `| F-032 (part: read-only) | The owner line: call your own number to hear the day | 5–6 | Re-opened by the owner on 2026-11-09: a keypad PIN on a verified cell, not a voice, proves who is calling, so neither the voice-clone risk nor F-116's rule stands, and the owner asked for it. Read-only; "file work" stays out under decision 19 (spec docs/superpowers/specs/2026-11-09-owner-line-design.md). Lands after 0113 and 0114 | F-116 |`
-
-    Then change the §4.4 sum `**54.5–74 ew**` to `**59.5–80 ew**` and re-read its paragraph. It says "so it fits on its own" against 65–78. At the high bound 80 it no longer does, so rewrite that clause to: "which is at the edge of 65–78 at the high bounds, and the monthly pace check decides (§4.1)".
-  - **§4.8 sums (`:1794-1830`):**
-    - Next becomes **59.5–80** and **14** features.
-    - Dropped becomes **17**.
-    - The Total effort becomes **691.9–948.3**. The Total feature count stays 199.
-    - In the placement table, change "Next | 13" to 14 and "Dropped | 18" to 17.
-  - **§5.3 table (`:1967`):** change the disposition `dropped` to `next (owner decision 2026-11-09; read-only)`.
-  - **§5.3 "What we reject here" (`:1975-1976`):** delete "the owner line (voice-clone risk, and nobody asked), ". The sentence keeps "A top-level AI section or chat pane, and a second model provider until decision 2 allows it."
-  - **§6 (`:3469`):** change "F-032, the last of the 26, is dropped." to "F-032, the last of the 26, was dropped and was re-opened by the owner on 2026-11-09, read-only, with a keypad PIN (next)."
-  - **Coverage (`:3507`):** change "F-032, which is dropped." to "F-032, re-opened by the owner on 2026-11-09 (next; no hypothesis waits on it)."
-  - **The scored table (`:3574`):** change the last cell, "Dropped (voice-clone risk; nobody asked; F-116's rule stands)", to "Next (re-opened by the owner 2026-11-09: a keypad PIN, not a voice, proves identity; read-only)".
-  - **S-18 and S-20 (`:3772`, `:3774`):** no change. They list F-032 as served by those study items, which is still true.
-
-- [ ] **Step 3: Check the counts add up.**
+- [x] **Step 3: Check the counts add up.**
 
   ```bash
-  grep -n "Dropped (17)\|| Dropped | 0 | — | 17\|| Next | 14 |\|59.5–80" docs/crm-features.md
+  grep -n "Dropped (17)\|| Dropped | 0 | — | 17\|| Next | 14 |\|59.5–80\|691.9–948.3" docs/crm-features.md
+  grep -n "54\.5–74\|686\.9\|942\.3\|517\.5\|100\.5–141\|719\.8\|525\.4\|Dropped (18)\|Eighteen features\|next 13\|26 rows\|84\.5–113" docs/crm-features.md
   ```
 
-  Expected: each appears where Step 2 put it, and `grep -c "F-032" docs/crm-features.md` still finds 7.
+  Expected: the first finds each place Step 2 put it; the second finds nothing. `grep "135 ew"` finds only §4.5's later-alone line. `grep -c "F-032"` finds 11: the §4.4 row and two lines of its paragraph (3), the §4.7 trace, §4.8's prose, §5.3, §10 (2), Appendix A, Appendix B (2).
 
-- [ ] **Step 4: Write the runbook proposal into the PR description** (not into the file; bis-platform lands it). It has four parts:
-  1. What a client's Owner turns on (Team → "Let your team call in to hear the day").
-  2. What a person does: Mis preferencias, the cell, the code by call-in, the PIN.
-  3. The real-call exit gate (O-5), including the three log lines.
-  4. Rollback: turn the account's switch off (Team), or, platform-wide, remove `SUPABASE_JWT_SECRET` under T. With no key, every owner tool answers "I couldn't read that", so the PIN step still runs but nothing is read; turn the switches off first.
+- [ ] **Step 4: The runbook proposal (bis-platform lands it; this text is the proposal, and the PR description copies it).** The section goes after "Step 8 — Identity checks" in `docs/runbooks/voice-setup.md`, and the `.env.example` entry beside `VOICE_HANDOFF_SECRET`. Log lines are quoted from the code as built (`texml/route.ts:1022`, `owner-pin/route.ts:137,142,148`, `incoming/route.ts:284,1188`).
 
-- [ ] **Step 5: Commit.**
+  ````markdown
+  ## The owner line (F-032)
+
+  A person on a client's team, the Owner or Staff, calls the business's own
+  number from their verified cell, keys a 6-digit PIN, and Sofía answers
+  read-only questions about the day: calls and messages, appointments, and
+  what needs attention (customer lookup follows in a second PR). Technicians
+  are not offered it yet. Every other caller hears exactly what they hear
+  today. Spec: `docs/superpowers/specs/2026-11-09-owner-line-design.md`.
+
+  ### Deploy order: 0115 on production BEFORE the app (the caps fail open)
+
+  Never let the F-032 build go live on a project whose migration history
+  lacks 0115. The app filters `calls.owner_line_user_id` when it counts calls
+  for the caps (`countCallsSince`, `countCallsByCallerSince`), and BOTH voice
+  routes fail open when a cap read errors (`texml/route.ts`'s "fail open"
+  catch; `incoming/route.ts`'s "call-limit counts failed - failing open").
+  An app deployed before 0115 therefore answers every call with BOTH call
+  caps, the 5 a day per caller and the 50 a day per account, silently off,
+  with no visible error; the Calls list, the dashboard and the weekly report
+  fail outright. The order is: bis-ci (`ci-project-setup.yml`), then
+  production (once), then the parity check, then the merge, which deploys.
+  Before merging, read production's migration history and see 0115 in it.
+  The same holds for Preview: a Preview build reads bis-ci, so 0115 must be
+  in bis-ci's history first (the `e2e` job already refuses the branch until
+  it is).
+
+  ### OWNER_LINE_PIN_PEPPER
+
+  Every PIN is stored as scrypt over an HMAC of the PIN, keyed by this
+  pepper. It lives only in the server's environment, never in the database,
+  so a database-only leak cannot be cracked offline.
+
+  - **Sensitive** in Vercel. At least **32** random characters:
+    `openssl rand -base64 48`. Shorter counts as unset.
+  - **Three DIFFERENT values:** one in Production; one in Preview (never
+    production's, `docs/runbooks/production-isolation.md`); and a fixed,
+    non-secret test value in CI's `e2e` job env (`ci.yml`). Never copy one
+    environment's value into another.
+  - **Set it before the first PIN is saved.**
+  - **Rotating it invalidates every stored PIN.** The right PIN then reads
+    as wrong, so three tries lock the person out for 30 minutes and email
+    them and the Owner. Before rotating, tell every enrolled person to set a
+    new PIN on Mis preferencias afterwards.
+  - **Unset:** the card refuses to save a PIN, with words, and every PIN
+    step on a call takes today's path and counts no attempt. The owner-pin
+    log reads `texml owner-pin: OWNER_LINE_PIN_PEPPER is not set — today's
+    path, nothing checked`.
+
+  `.env.example`, in the Voice Receptionist block beside
+  `VOICE_HANDOFF_SECRET` (the name only, never a value):
+
+  ```
+  # Owner line (F-032; docs/runbooks/voice-setup.md, "The owner line"). Keys every PIN hash; never in the database.
+  # At least 32 random characters: `openssl rand -base64 48`. Sensitive in Vercel. A DIFFERENT value per
+  # environment (Production, Preview, CI's fixed test value). Rotating it invalidates every stored PIN.
+  # Unset: no PIN can be saved, and every PIN step takes today's path and counts no attempt.
+  OWNER_LINE_PIN_PEPPER=
+  ```
+
+  ### The switch: off by default
+
+  Team → **"Let your team call in to hear the day"**. It is OFF for every
+  business until that business's Owner turns it on. BIS can turn it OFF
+  (a lost phone, a person let go) but never ON, and the card then reads
+  "Turned off by BIS" with the time. While it is off, nobody's PIN step
+  runs; people may still verify a cell and set a PIN, and their card says
+  nothing works until the Owner turns it on. BIS staff signed in as a client
+  cannot set any of it up.
+
+  ### What a person does
+
+  Mis preferencias → **"Call in to your business"**, one card per business:
+  1. Enter the cell. The card shows a 6-digit code: call the business number
+     from that cell and key it (10 minutes, 3 tries). Nothing is texted.
+  2. Set a 6-digit PIN. Trivial PINs (000000, 123456, one repeated digit, a
+     run) are refused with a reason. It is never shown again.
+
+  ### The real-call proof (O-5): the exit gate
+
+  Before ANY client's switch is turned on: on the BIS account, switch on,
+  from danlo's verified cell, to the BIS account's live number.
+
+  1. **Call 1, the right PIN.** Sofía greets by first name. Ask the
+     questions (three in PR 1: "what calls did I get today?", "what's on my
+     calendar tomorrow?", "what needs my attention?"; the fourth, a customer
+     lookup, after PR 2). Each answer matches the dashboard (the same count
+     as the "Calls answered" tile, "plus N calls that looked like spam").
+  2. **Call 2, a wrong PIN three times.** "That PIN didn't match. Try again."
+     twice, then the call continues as a normal customer call; the lockout
+     email reaches danlo and the account's Owner.
+  3. **Call 3, pound**, after the 30-minute lock has ended (a locked cell is
+     not asked for a PIN at all): today's normal receptionist.
+
+  **Read the Vercel logs at once** (runtime logs age out; Step 6's warning):
+  - `/api/voice/texml`, calls 1–3: `texml owner line asking for a PIN,
+    accountId …`.
+  - `/api/voice/texml/owner-pin`: call 1 `texml owner-pin: PIN ok`; call 2
+    `PIN wrong` twice, then `PIN locked_now`; call 3 `texml owner-pin: pound
+    or no PIN — today's path`.
+  - `/api/voice/incoming`, call 1 only: `owner pass checked` with
+    `result: "ok"`, then `owner line accepted`. Neither call 2 nor call 3
+    may log `owner line accepted`.
+
+  **Then read the rows:** call 1 is on the Calls list labelled "Owner line ·
+  Dan"; **no transcript of the three calls holds the PIN or any keyed
+  digits**; and the dashboard's "Calls answered" did not move for call 1. In
+  the Telnyx portal, read one call's detail record and note in the ledger
+  whether the gathered digits appear there (provider side; this app never
+  logs or stores them).
+
+  Do not turn on a client's switch until every item above is walked.
+
+  ### Rollback
+
+  - **One business:** its Owner, or BIS, turns the Team switch off. It takes
+    effect on the next call.
+  - **Every business:** remove `OWNER_LINE_PIN_PEPPER` from Production and
+    redeploy: every PIN step takes today's path and nothing is read.
+    Re-adding the SAME value restores every PIN; a new value invalidates
+    them all.
+  - **The whole feature:** revert the app FIRST, then 0115's hand rollback
+    (its header), which destroys every enrollment and every owner-line
+    access-log entry. Never the other order: see the deploy order above.
+  ````
+
+- [x] **Step 5: Commit** (explicit paths only).
 
   ```bash
-  git add docs/crm-features.md
+  git add docs/crm-features.md docs/superpowers/plans/2026-11-09-owner-line.md
   git commit -m "docs(plan): F-032 owner line moves from dropped to next, read-only, by the owner's decision of 2026-11-09"
   ```
 
-  The orchestrator updates the roadmap tracker's F-032 row (O-6).
+  The orchestrator updates the roadmap tracker's F-032 row (O-6), and bis-platform lands Step 4's block and the `.env.example` entry.
 
 ---
 

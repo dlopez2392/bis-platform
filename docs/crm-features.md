@@ -143,7 +143,7 @@ monday: item 13.
    confirm counts as an "AI write" is the owner's decision 19; the plan recommends the narrow
    reading, meant to cover only their own booking or record and a link or code texted to their own
    number, as the identity checks (F-116) establish them. *See §3 and §9.*
-8. **Do not build what nobody asked for.** Eighteen features are dropped, among them outbound AI
+8. **Do not build what nobody asked for.** Seventeen features are dropped, among them outbound AI
    callbacks, payment by consumer agents and a generic lens framework; the design pass also rejects
    a native app now, a notification bell and a monday-style layout editor. The rule builder stays
    deferred; four fixed trigger primitives replace it (proposal, decision 30). *See §4.7 and §6.7.*
@@ -159,13 +159,13 @@ monday: item 13.
    promise of a local bilingual person behind the product (F-195) is a smaller bet, in later's
    tail. *See §5.*
 10. **The capacity holds, just: at five a week on the low bounds, and at six on the high once about
-    18 ew of later's work slides into 2029.** At 5–6 conventional ew a week, now holds about 112–154
-    ew against 130–156, and the plan through 2028 about 525–720 ew against 585–702. That is five to
+    24 ew of later's work slides into 2029.** At 5–6 conventional ew a week, now holds about 112–154
+    ew against 130–156, and the plan through 2028 about 530–726 ew against 585–702. That is five to
     six times what one engineer produces working conventionally (about 52 ew a year, the study's
     unit); at that conventional pace the whole plan would take 13 to 18 years. It rests on the pace
     this repository has shown since July (about 5.5–8 ew a week, costed by us), re-measured monthly;
     at three to four a week the owner re-scopes the plan, or adds capacity to one named track,
-    rather than re-ordering it. At five a week on the high bounds, through 2028 runs about 135 ew
+    rather than re-ordering it. At five a week on the high bounds, through 2028 runs about 141 ew
     over, roughly half a year, far more than the 18.5–26 ew of later's work first in line for 2029;
     the pace check then puts the same choice to the owner at its end-of-March 2027 read. A written
     cut order spares the legal chain, the hardening sprint and the first release's eight study
@@ -998,7 +998,7 @@ items that shipped to a real client, against the weeks elapsed. If two consecuti
 three to four ew a week, re-ordering alone does not rescue the plan, and the owner chooses between
 two responses: re-scope it, or add capacity to one named track, such as a second engineer or a
 contracted track for money or the packs (proposal). The same choice arises if the pace holds at five
-a week but the work tracks its high bounds, because through 2028 that runs about 135 ew over, far
+a week but the work tracks its high bounds, because through 2028 that runs about 141 ew over, far
 more than later's named tail covers (§4.5, §4.8): the end-of-March 2027 read below tests it, and if
 now's items have shipped at or near their high bounds, the owner makes the choice then (proposal).
 At three to four a week now holds 78–104 ew. Keeping only the legal chain, the hardening sprint, the
@@ -1008,7 +1008,7 @@ vault's kit and inbound email, 6.5–9 ew) slide into next: still over. At three
 bound is over (81.9 against 78), and at four a week the high bound is (114.8 against 104). Next,
 39–52 ew at that pace, would then absorb those items, the riders (10–13.5 ew) and the rest of the
 parallel work (13.5–16.5 ew, Sofía's insurance and events modules included) on top of its
-own 54.5–74: 84.5–113 ew, about twice its capacity. So the first step moves that work, and the second is
+own 59.5–80: 89.5–119 ew, more than twice its capacity. So the first step moves that work, and the second is
 the owner's: which of next's own items slide to later (F-046 part 1, F-077 part 1 and F-175 part 1
 first, then F-092 part 1, F-095 part 1 and F-107 part 2), and how much of later then slides
 into 2029.
@@ -1016,7 +1016,7 @@ into 2029.
 | Horizon | Calendar | Weeks | Capacity at 5–6 ew a week | This plan (ew) |
 |---|---|---|---|---|
 | Now | 1 October 2026 to 31 March 2027 | 26 | 130–156 | 111.9–153.8 |
-| Next | H1 2027; April to June once now ends | 13 | 65–78 | 54.5–74 |
+| Next | H1 2027; April to June once now ends | 13 | 65–78 | 59.5–80 |
 | Later | July 2027 to December 2028 | 78 | 390–468 | 359–492 |
 | Future | 2029–2030 | 104 | 520–624 | 161.5–222.5 |
 
@@ -1387,16 +1387,17 @@ private calendar feed of BIS bookings for any phone calendar (F-048 part 2) and 
 import (F-150 part 1). Clerk's own sign-in emails and widgets stay English until F-117's part in
 later (§3.1).
 
-**54.5–74 ew** against 65–78, so it fits on its own. If the pace is five a week and the high bounds
-hold, next also receives what now could not finish (§4.1): 7–9 ew of the first release's last items,
+**59.5–80 ew** against 65–78, which is at the edge of 65–78 at the high bounds (80 against 78), and
+the monthly pace check decides (§4.1). If the pace is five a week and the high bounds hold, next also receives what now could not finish (§4.1): 7–9 ew of the first release's last items,
 and three items cut from now that next needs, namely the inbox increments (up to 2 ew), the Opinion
 680/705 sheet (1 ew, before the law module) and Microsoft sign-in (0.5 ew, before S-22). That
 is 10.5–12.5 ew in all. Next's cut then has two steps, both to the head of later: first F-046 part 1,
 F-077 part 1 and F-175 part 1 (10 ew at the high bounds); then F-092 part 1, F-095 part 1 and F-107
 part 2 (9.5 ew), so the phone shell waits too. The riders cut from now go to the head of later as
 well, and the calendar feed (F-048 part 2, 1 ew), which builds on F-048's rider, goes with them.
-That leaves next at about 64–66 ew against 65: at the edge, and the monthly pace check decides the
-rest (§4.1).
+That leaves next at about 70–72 ew against 65. Without F-032 it would be 64–66, at the edge; the
+owner's re-opening of F-032 on 2026-11-09 (5–6 ew) puts it past the edge, and the monthly pace check
+decides the rest (§4.1).
 
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
@@ -1413,7 +1414,8 @@ rest (§4.1).
 | **AI** | | | | |
 | S-19 | Document intake | 2–3 | The AI half of 'all their documents': a photo or PDF becomes proposed fields | S-07, S-14, decision 6 |
 | F-020 (part: budgets per plan) | One door for every model call: gateway, budgets, registry | 0.5–1 | Needs entitlements | S-13 |
-| | *AI subtotal* | *2.5–4* | | |
+| F-032 (part: read-only, Owners and Staff first) | The owner line: call your own number to hear the day and file work | 5–6 | Owner decision, 2026-11-09: re-opened from dropped because "the owner asked; a keypad PIN, not a voice, proves identity". F-116's rule stands ("a voice alone never proves who is calling"), and F-032 honours it: the PIN, keyed on a verified cell, proves who is calling, never the voice. Read-only: calls and messages, appointments, what needs attention and customer lookup, within what the person's role sees in the app; "file work" stays out under decision 19. Owners and Staff first; Technicians later, once the line reads as the person (the plan's token path, T). Spec docs/superpowers/specs/2026-11-09-owner-line-design.md. Lands after 0113 and 0114 | F-116 |
+| | *AI subtotal* | *7.5–10* | | |
 | **Calendar** | | | | |
 | F-048 (part: the owner's calendar feed) | Manage my appointment: move in place, cancel with a way back, add to calendar | 1 | Proposal. A private, revocable link per person, in both languages, that Apple, Google and Outlook calendars subscribe to: every BIS booking on the owner's own phone, with the time, the service and the customer's first name only. It needs no Google review and no Microsoft admin, and it is the only route for an owner whose calendar is the iPhone's own. One-way: the owner's own events do not block Sofía's slots until S-22. It can refresh fastest on Apple devices: as often as every 15 minutes when the iPhone's fetch setting is an interval, though only while it charges on Wi-Fi when the setting is Automatic, and only by hand when it is Manual; Outlook refreshes a subscribed feed about every 3 hours on Outlook.com and 6 on Outlook on the web, though it can take more than 24 hours (Microsoft), and Google publishes no interval, with users reporting 8 to 24 hours; a Google user adds the feed once from a computer, not the phone app. So the booking alert email, and the text once A2P clears, stays the prompt channel, and S-22 is the real-time answer | F-048 (part 1), S-01 |
 | S-22 | Owner's calendar on Outlook and Google, with Meet, Teams and attendee matching | 6–8 | The owner's own ask; Outlook first; Google's calendar scopes submitted for review alone, a Testing-mode pilot until the review is submitted | S-27, S-28, F-196, decision 34 (the Google review) |
@@ -1448,7 +1450,7 @@ rest (§4.1).
 | F-174 (part: the law module, after the 680/705 sheet, and home services) | Sofía industry modules | 2 | Decision 15: sell Sofía to law firms once the sheet exists; this plan also places this module's never-say lines here, a move from the study's step 1 (decision 34), so Sofía's sales to law firms start here | F-124 (part 1) |
 | F-175 (part: intake for home services, insurance and events, through one proposal) | Intake schemas: a pack-shaped intake that opens a deal through one proposal | 2–3 | Only packs without restricted fields | F-174, F-019 |
 | | *Packs subtotal* | *4–5* | | |
-| | **Horizon total (26 rows)** | **54.5–74** | | |
+| | **Horizon total (27 rows)** | **59.5–80** | | |
 
 ### 4.5 Later (H2 2027 to 2028)
 
@@ -1753,13 +1755,12 @@ includes it.
 | F-166 | Menus, packages and price sheets machines can read | M (2–3) | F-037 | packages and menus as sections, with the allergen rule |
 | F-178 | Pack reports: four numbers per industry and a pack-aware hero | M (2–3) | F-100 | pack numbers from the one catalogue |
 
-**Dropped (18).** Every one scored 1 or 2 on value. Each also has no segment asking for it, rides a
+**Dropped (17).** Every one scored 1 or 2 on value. Each also has no segment asking for it, rides a
 platform BIS does not control, or reopens a position the study settled.
 
 | ID | Feature | Canonical effort | Why dropped |
 |---|---|---|---|
 | F-016 | Winter Texans: a seasonal-resident profile | S–M (2–3) | unvalidated; a "Temporada" tag and two F-071 recipes if a trade client asks |
-| F-032 | The owner line: call your own number to hear the day and file work | M–L (4–7) | voice-clone risk; nobody asked; F-116's rule stands |
 | F-044 | Sofía interprets: on transfers and at the door | L–XL | phones will ship live call translation |
 | F-045 | Callbacks the customer asked for, placed by Sofía | M (4–5) | study §5.3 stands: no outbound AI calls; F-033's callback rows go to people |
 | F-054 | One record card in Gmail, Outlook, AI chats and on the lock screen | L (6–8) | no inbox-sync demand; revisit if customers ask |
@@ -1777,7 +1778,10 @@ platform BIS does not control, or reopens a position the study settled.
 | F-169 | Business-to-business agents: work orders from managers' systems | L (6–8) | no demand from Valley property managers; a bet on other companies' systems |
 | F-192 | Seat, date and season forecasting per pack | L (6–8) | needs a season of data nobody asked for |
 
-The 31 folded and dropped features carried **100.5–141.5 ew** in the canonical list, plus F-044's
+F-032, the owner line, was on this list until 2026-11-09, when the owner re-opened it, read-only,
+because "the owner asked; a keypad PIN, not a voice, proves identity" (§4.4).
+
+The 30 folded and dropped features carried **96.5–134.5 ew** in the canonical list, plus F-044's
 uncosted L–XL. About 8–10 ew of that moved into the targets.
 
 **Also cut from features that stay:** F-115's hash chain witnessed in the owner's inbox (the history
@@ -1800,12 +1804,12 @@ F-109's field outbox and F-155's cross-account network are placed in future but 
 | The study's parallel work | 17–21.5 | 5 | 7 | |
 | Riders | 10–13.5 | — | 6 | |
 | **Now** (Q4 2026 to March 2027, 26 weeks) | **111.9–153.8** | **14** | **45** | 130–156 |
-| **Next (H1 2027; April to June in practice)**, 13 weeks | **54.5–74** | **6** | **13** | 65–78 |
+| **Next (H1 2027; April to June in practice)**, 13 weeks | **59.5–80** | **6** | **14** | 65–78 |
 | **Later (H2 2027 to 2028)**, 78 weeks | **359–492** | **39** | **68** | 390–468 |
 | **Future bets (2029–2030)**, 104 weeks | **161.5–222.5** | **3** | **42** | 520–624 |
 | Folded into another feature | 0 (effort moved to the target) | — | 13 | |
-| Dropped | 0 | — | 18 | |
-| **Total** | **686.9–942.3** | **62** | **199** | |
+| Dropped | 0 | — | 17 | |
+| **Total** | **691.9–948.3** | **62** | **199** | |
 
 **Every feature has exactly one disposition.** All 199 features (192 canonical and seven additions)
 are placed once. A split counts once, under its first horizon; within now, it counts under its
@@ -1817,11 +1821,11 @@ disposition.
 | First release | 16 |
 | The study's parallel work | 7 |
 | Riders | 6 |
-| Next | 13 |
+| Next | 14 |
 | Later | 68 |
 | Future | 42 |
 | Folded | 13 |
-| Dropped | 18 |
+| Dropped | 17 |
 | **Total** | **199** |
 
 **Every study item has exactly one horizon.** All 62 are placed: 9 in the first release, 5 in the
@@ -1836,18 +1840,19 @@ parallel work, 6 next, 39 later and 3 future.
 **Against the study.**
 - The study's items re-cost from 147–207 to **160–223.5 ew**: S-01 +3–5, S-07 +2, S-47 +7–8,
   S-53 +0.5 and S-62 +0.5–1.
-- Features add **517.5–700 ew** on top, against the canonical list's 660–910. The folds, drops,
+- Features add **522.5–706 ew** on top, against the canonical list's 660–910. The folds, drops,
   splits and trims above account for the difference.
 - The defects add 9.4–18.8 ew: §2.3's 13.9–23.3 ew less the 4.5 ew that sits in six feature slices,
   which the features line above already counts.
 
-**Through 2028** (now, next and later), the plan is **525.4–719.8 ew**. The capacity for those 117
-weeks is 585–702. The low bound fits. At six a week the high bound runs about 18 ew over, which
-later's named tail (18.5–26 ew) covers. At five a week it runs about 135 ew over (719.8 against 585,
-roughly half a year at that pace), all of it landing in later: later's own 102 ew over, plus the
-32–34 ew that now's and next's cuts send it (§4.1, §4.4). The named tail covers less than a fifth of
+**Through 2028** (now, next and later), the plan is **530.4–725.8 ew**. The capacity for those 117
+weeks is 585–702. The low bound fits. At six a week the high bound runs about 24 ew over, which
+later's named tail (18.5–26 ew) covers at its high bound. At five a week it runs about 141 ew over
+(725.8 against 585, roughly half a year at that pace), nearly all of it landing in later: later's own
+102 ew over, plus the 32–34 ew that now's and next's cuts send it (§4.1, §4.4). The other 5–7 ew stay
+in next, over its 65, because F-032 was placed there on 2026-11-09 (§4.4). The named tail covers less than a fifth of
 that, so §4.1's pace check puts the choice to re-scope or add capacity to the owner instead. At the
-study's conventional reading (one engineer, about 52 ew a year), the whole plan's 686.9–942.3 ew
+study's conventional reading (one engineer, about 52 ew a year), the whole plan's 691.9–948.3 ew
 would be about 13 to 18 years of work; calendar time is read off the observed pace instead (§4.1).
 
 **No horizon inversion.** A script checked every "Depends on" cell in the next, later and future
@@ -1964,7 +1969,7 @@ suggestions are up to three per call, which a person accepts.
 | F-029 | A weekly report that reads the week | A short "what stood out" paragraph under the Monday numbers | S (1–2) | folded into F-100 |
 | F-030 | Opportunity finder: revenue BIS spots and drafts for approval | One to three seasonal campaigns, drafted from the record for approval | M (2–3) | future |
 | F-031 | Ask BIS off the screen: by text and by WhatsApp voice note | Questions to BIS by text from the owner's phone | M (3–4) | folded into F-095 |
-| F-032 | The owner line: call your own number to hear the day and file work | Calling the business number to hear the day and file work | M–L (4–7) | dropped |
+| F-032 | The owner line: call your own number to hear the day and file work | Calling the business number to hear the day, read-only: a keypad PIN on a verified cell, not a voice, proves who is calling (F-116's rule) | M–L (5–6)* | next (owner decision 2026-11-09; read-only, Owners and Staff first) |
 
 **Design notes.**
 - AI appears where the work is (the record's summary, the tray, the box), marked "Generado por IA".
@@ -1972,8 +1977,8 @@ suggestions are up to three per call, which a person accepts.
 - A weekly line, "Aceptó el 82% de las sugerencias", keeps approval honest rather than a rubber
   stamp.
 
-**What we reject here.** A top-level AI section or chat pane, the owner line (voice-clone risk, and
-nobody asked), and a second model provider until decision 2 allows it.
+**What we reject here.** A top-level AI section or chat pane, and a second model provider until
+decision 2 allows it.
 
 ### 5.4 Sofía and the web chat
 
@@ -3027,7 +3032,7 @@ costed in this plan; the study marks them "Later", and they return as proposals 
 
 | # | Risk | Mitigation |
 |---|---|---|
-| 1 | **Scope outruns capacity.** The plan totals 686.9–942.3 ew, and the study notes that Appendix D's estimates assume a team of two or three | Plan at 5–6 ew a week, re-measured monthly; at a pace of three to four, or at five with the high bounds holding, the owner re-scopes, or adds capacity to one named track, rather than re-orders (§4.1); a written cut order for now; slices of 4 ew or less, each shipped to a real client; a named tail in later that slides to 2029 first (§4) |
+| 1 | **Scope outruns capacity.** The plan totals 691.9–948.3 ew, and the study notes that Appendix D's estimates assume a team of two or three | Plan at 5–6 ew a week, re-measured monthly; at a pace of three to four, or at five with the high bounds holding, the owner re-scopes, or adds capacity to one named track, rather than re-orders (§4.1); a written cut order for now; slices of 4 ew or less, each shipped to a real client; a named tail in later that slides to 2029 first (§4) |
 | 2 | **The revocation rules change under a live texting programme.** The FCC's draft order, to be voted on 30 September, may change revocation scope from November or December 2026; the duty in force since April 2025 already binds from the first text | The chain is live by 1 December 2026; no account texts before its gate; counsel reads the order after the vote and the adopted text in the week it is published (§4.2) |
 | 3 | **AI writes without a person.** Sofía and the web chat already write some records live, against constraint 5 | One review tray for every new AI write; Sofía's blank-fills of what the caller said stay live, stamped and undoable (decision 19, amended 2026-10-19), and what she infers beyond that becomes a proposal; author stamps and undo on the caller-confirmed acts that stay live; no new live path before decision 19 is dated (§3.2 rule 4) |
 | 4 | **Sensitive data before permissions.** Custody, gate codes, immigration status and children's health details need roles that do not exist yet | No restricted field before F-004 enforces restriction; no new path sends a health-marked document or field to a model before decision 6's terms, and the zero-retention request goes out now (§3.2 rules 3 and 14) |
@@ -3076,7 +3081,7 @@ them. In one line each, those October decisions are:
 
 One choice is not numbered, because it arises only when the pace check calls for it: if two
 consecutive months come in at three to four ew a week, or if the pace holds at five a week while the
-work tracks its high bounds, which through 2028 runs about 135 ew over (§4.1, §4.5, §4.8). The
+work tracks its high bounds, which through 2028 runs about 141 ew over (§4.1, §4.5, §4.8). The
 choice is to re-scope the plan, or add capacity to one named track (§4.1). The numbering continues
 from 19. Each decision below gives today's position, the options, the recommendation with its
 reason, and what it blocks.
@@ -3466,7 +3471,8 @@ ask. Features whose flag is really an owner decision point to it instead:
 - F-147 (decision 31, and H21);
 - F-161 (decision 32, and H20).
 
-F-032, the last of the 26, is dropped. None of the others is built beyond its cheapest part until
+F-032, the last of the 26, was dropped and was re-opened by the owner on 2026-11-09, read-only, with
+a keypad PIN (next): the owner asked, and a keypad PIN, not a voice, proves identity. None of the others is built beyond its cheapest part until
 its answer is in: F-003's relationship labels and F-018's source question ship now because they cost
 almost nothing, and F-034's disclosure runs first as a measured one-account trial (H22). **The Expo
 on 27 September starts H1 to H4, part of H7 and H21; the October and November calls finish them**
@@ -3504,7 +3510,7 @@ before any events work is built.
 - F-089 (decision 35), F-109 (H12), F-125 (H16), F-137 (H15), F-142 (H11 and study decision 14);
 - F-147 (H21 and decision 31), F-155 (H6), F-156 (H13), F-160 (H19), F-161 (H20 and decision 32);
 - F-183 (H1 to H4), F-184 (H1), F-185 (H9);
-- F-032, which is dropped.
+- F-032, re-opened by the owner on 2026-11-09 (next; no hypothesis waits on it).
 
 **The order to ask them in.**
 - The Expo starts H1 to H4, the first half of H7, and H21 with the vendors met there.
@@ -3535,7 +3541,7 @@ additions (F-193 to F-199).
 - The reasons, the effort sums and the dependencies are in section 4.
 
 **Dispositions:** before the first release 16; first release 16; the study's parallel work 7; riders
-6; next 13; later 68; future 42; folded 13; dropped 18. That is **199** features, each placed
+6; next 14; later 68; future 42; folded 13; dropped 17. That is **199** features, each placed
 exactly once.
 
 | ID | Feature | Area | Effort | Final horizon | V | F | D | Skeptic | Disposition |
@@ -3571,7 +3577,7 @@ exactly once.
 | F-029 | A weekly report that reads the week | AI | S (1–2) | — | 3 | 5 | 3 | minor | Folded into F-100 (one report engine) |
 | F-030 | Opportunity finder: revenue BIS spots and drafts for approval | AI | M (2–3) | future | 3 · FLAG-L | 2 · med | 2 |  | Future |
 | F-031 | Ask BIS off the screen: by text and by WhatsApp voice note | AI | M (3–4) | — | 2 | 2 | 3 · FLAG-M |  | Folded into F-095 (the SMS channel of Ask, with S-18; the WhatsApp leg waits on H7) |
-| F-032 | The owner line: call your own number to hear the day and file work | AI | M–L (4–7) | — | 2 · FLAG-M | 2 · HIGH | 3 · FLAG-M | minor | Dropped (voice-clone risk; nobody asked; F-116's rule stands) |
+| F-032 | The owner line: call your own number to hear the day and file work | AI | M–L (5–6)* | next | 2 · FLAG-M | 2 · HIGH | 3 · FLAG-M | minor | Next (re-opened by the owner 2026-11-09: a keypad PIN, not a voice, proves identity, so F-116's rule stands and is honoured; read-only, Owners and Staff first; split: Technicians later, with the token path T) |
 | F-033 | Every call leaves a card: reason, callback number, the caller's words | Sofía | S–M (2–3)* | now | 5 | 5 | 3 |  | Rider |
 | F-034 | Honest by design: disclosure, a way to a person, the transcription notice | Sofía | S (1.5–2) | now | 4 · FLAG-M | 5 | 3 · FLAG-M |  | Parallel work (S-47); waits on decision 20 |
 | F-035 | Warm handoff: transfers that never fail silently | Sofía | M (3–5)* | later | 4 | 3 · med | 3 |  | Later |
