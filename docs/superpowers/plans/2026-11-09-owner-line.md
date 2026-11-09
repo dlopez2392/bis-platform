@@ -6967,6 +6967,31 @@ async function answerOwnerLine(a: {
   4. In `runCallLifecycle`, call `finishCall` for both modes → the lifecycle case FAILS.
   5. In `decideOwnerSession`, drop `pass.accountId !== p.accountId` → "minted for business A but used on business B's number" FAILS.
 
+**As built (2026-11-09, commit `3120c8bc`).** What differs from the steps above, and why:
+- **The owner runtime is loaded on the owner path only.** `answerOwnerLine` does `await import()` of `events`, `finish` and `reader` before it writes anything. The incoming route already loads the catalogue eagerly (922 KB measured), but the tools' read path (`weekly-metrics`, `row-label`, `record/copy`) is new weight, and a customer's call should load none of it. A failed load is a refusal: the receptionist, with no row written.
+- **Every `answerOwnerLine` step fails closed.** A session that cannot be built deletes its redemption row and goes to the receptionist. Its logs name the error class only: a duplicate-key message can quote the handoff token, which is a credential.
+- **Step 4b's "incoming call" line logs `withheld (owner pass present)` instead of the caller's number when an owner pass rides the call.** Every other call's line is unchanged, and a test pins that.
+- **The receptionist-side wall test sits in `lib/voice/tools/registry.test.ts`, not `call-events.test.ts`.** That file mocks `runTool` wholesale, so the planned case would only have exercised the mock. The new cases drive the real `runTool` for every owner tool name, and the real `processCallEvent` once.
+- **`events.ts` records a caller turn once, by item id (`callerItemIds`), as the receptionist's handler does.**
+- **`finish.ts` logs the error class and the account only.** Its import list is exactly the pinned one.
+- **`prompt.ts` gives the couldn't-read sentence in the person's language first and the other language second.** It reads the catalogue through `t(m, key, locale)` with a computed locale: the i18n ratchet (G3) counts a hard-coded `"en"`/`"es"` as a direct read.
+- **The owner session also refuses a Technician pass (`role-not-offered`) before any read, and a missing handoff token.**
+- **Review m-3 (Tasks 10/11), carried here because it edits `session.ts`.**
+  - `recheckOwnerSession` refuses a session whose `clerkUserId` or `clerkOrgId` is not the re-checked row's.
+  - A scan in `session.test.ts` fails on any non-test source that annotates, casts to, satisfies or returns an `OwnerLineSession`, so `decideOwnerSession` stays the only builder.
+  - Branding the type would be stronger, but it breaks every test that builds a session literal (several are the db agent's files). Recommended before the T flip.
+- **Probes, each failing its named case and reverted byte-identical:** the six above (1, 1b, 2, 3, 4, 5), plus:
+  - the called-number comparison, the role check and the handoff-signature check;
+  - owner frames sent to `processCallEvent`;
+  - no warning timer, and the owner line on `PHONE_MAX_CALL_SECONDS`;
+  - the caller's number in step 4b's line;
+  - an owner accept failure falling through to a second accept;
+  - no handoff-token check, and no brand name;
+  - the finish's row leg sharing one catch, and a customer-writing import in the finish;
+  - a refused tool name recorded;
+  - an owner tool registered in the receptionist's registry;
+  - m-3's three probes: the user-id comparison, the org-id comparison, and a second builder.
+
 - [ ] **Step 10: Commit.**
 
   ```bash
