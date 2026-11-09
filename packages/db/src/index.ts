@@ -1,7 +1,7 @@
 export { serviceDb } from "./service";
 export { userDb } from "./user-client";
 export type { SupabaseClient } from "@supabase/supabase-js";
-export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
+export { emit, emitAgencyEvent, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm, searchTermLength } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
          setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete,

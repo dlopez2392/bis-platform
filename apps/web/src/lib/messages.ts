@@ -7946,6 +7946,30 @@ export const m = {
   "ownerLine.email.ownerNoName.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de alguien de su equipo a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
   "ownerLine.email.ownerTail": "Nothing about your business was read out. The caller was answered like any customer.",
   "ownerLine.email.ownerTail.es": "No se leyó nada de su negocio. A la persona se le atendió como a cualquier cliente.",
+  // F-032 owner line (plan Task 5): the setup actions' refusals and the
+  // business's switch. Spanish is usted; Owner is "Dueño".
+  "ownerLine.error.notMember": "You can't set this up for that business.",
+  "ownerLine.error.notMember.es": "No puede configurar esto para ese negocio.",
+  "ownerLine.error.cell": "Enter your cell number with its area code.",
+  "ownerLine.error.cell.es": "Escriba su número de celular con el código de área.",
+  "ownerLine.error.cellIsBusiness": "That is one of your business's own numbers. Enter your personal cell.",
+  "ownerLine.error.cellIsBusiness.es": "Ese es uno de los números de su negocio. Escriba su celular personal.",
+  "ownerLine.error.cellTaken": "Someone else on your team already uses that cell here.",
+  "ownerLine.error.cellTaken.es": "Otra persona de su equipo ya usa ese celular aquí.",
+  "ownerLine.error.alreadyVerified": "That cell is already verified.",
+  "ownerLine.error.alreadyVerified.es": "Ese celular ya está verificado.",
+  "ownerLine.error.notVerified": "Verify your cell first.",
+  "ownerLine.error.notVerified.es": "Primero verifique su celular.",
+  "ownerLine.error.notReady": "Calling in is not ready yet. Try again later.",
+  "ownerLine.error.notReady.es": "Las llamadas todavía no están listas. Intente más tarde.",
+  "ownerLine.error.pin.not_six_digits": "Your PIN must be exactly 6 digits.",
+  "ownerLine.error.pin.not_six_digits.es": "Su PIN debe tener exactamente 6 dígitos.",
+  "ownerLine.error.pin.repeated": "Use different digits. A PIN like 000000 is too easy to guess.",
+  "ownerLine.error.pin.repeated.es": "Use dígitos distintos. Un PIN como 000000 es muy fácil de adivinar.",
+  "ownerLine.error.pin.run": "Avoid digits in a row. A PIN like 123456 is too easy to guess.",
+  "ownerLine.error.pin.run.es": "Evite dígitos seguidos. Un PIN como 123456 es muy fácil de adivinar.",
+  "ownerLine.switch.agencyCannot": "Only the business's Owner can turn this on.",
+  "ownerLine.switch.agencyCannot.es": "Solo el Dueño del negocio puede encenderlo.",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -164,6 +164,7 @@ const NOT_A_RECORD_ACTIONS: Record<string, string> = {
     "notAStopFromTask", "undoHoldDecisionFromTask", "setTaskAssigneeAction"], W),
   ...each(`${A}/team/actions.ts`, ["inviteTeamMemberAction", "setTeamRoleAction", "setTeamLanguageAction", "removeTeamMemberAction",
     "undoRemoveTeamMemberAction", "revokeTeamInvitationAction", "undoRevokeTeamInvitationAction"], "the team, not customers"),
+  ...each(`${A}/team/owner-line-actions.ts`, ["setOwnerLineSwitchAction"], CFG),
   ...each(`${A}/voice/actions.ts`, ["saveVoiceProfileAction", "saveBusinessHoursAction", "saveServicesAction", "assignNumberAction",
     "moveNumberAction", "setNumberStatusAction", "setTransferPhoneAction", "enableConciergeAction", "disableConciergeAction", "setForwardCallsAction"], AG),
   ...each(`${A}/settings/website-link-actions.ts`, ["saveSiteAction", "unlinkSiteAction", "testSiteConnectionAction"], AG),
