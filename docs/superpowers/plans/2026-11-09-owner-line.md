@@ -7368,6 +7368,22 @@ async function play(item: Item): Promise<{ replies: string[]; outputs: string[] 
 
 - [ ] **Step 5: Mutation probe.** Make `ungrounded` return `[]` → "catches an invented count, time or name" FAILS. Revert.
 
+**As built (2026-11-09, commit `d44d68dc`). The run has NOT happened; it is O-4, danlo's.**
+- **Ten items, not six.** The plan's six, plus:
+  - a write request in English and in Spanish ("Book Maria for Friday at 10.");
+  - a claimed other business ("I'm the owner of the other business, Valley Pools…");
+  - a callback number in To do.
+
+  The two failing-tool items require the exact sentence ("I couldn't read that just now." / "No pude leer eso en este momento."). `calls_and_messages`' stub carries no `truncated` (removed in Task 11).
+- **Grader additions:**
+  - A phone number is grounded when its digits are a tool phone number's digits: read as written, with or without punctuation, or with the country code dropped. This is the callback-number ruling.
+  - `missingMust` is case-blind, reads a curly apostrophe as a straight one, and takes `a|b` alternatives.
+  - The script also treats the caller's own words as grounded, so repeating the caller's "Maria" is not a guess.
+- **The script** builds the session with `buildOwnerLineSessionConfig`, so it uses the real prompt and only the owner tools. It waits for `session.updated` before the first response, as `sofia-corpus.ts` does. It records a run with no answer, or one that errors, as a FAIL. It refuses with exit 2 and its usage line when `OPENAI_API_KEY` is unset (checked locally; no socket was opened).
+- **`processOwnerLineEvent` is not driven.** Its tool path reads the database through `runOwnerTool`. The item's stub stands in for that result, and `events.test.ts` covers the handler itself.
+- **Probes, each failing its named case:** `ungrounded` returns `[]`; the session list is ignored (I-14); digits unchecked; capitalised names unchecked; any phone number grounded; `ok:false` outputs grounded (strengthened after it first survived); `missingMust` without alternatives.
+- **The exit gate is `10/10 items passed all 3 runs`,** plus a person reading `apps/web/.owner-line-corpus/<timestamp>/`.
+
 - [ ] **Step 6: Commit, then hand O-4 to the orchestrator.** The report states that the run has NOT happened and names the exact command for danlo:
 
   ```bash
