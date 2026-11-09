@@ -436,7 +436,7 @@ describe("0115: the switch's guard and its record (owner rulings Q-A, spec 3.3)"
       expect(a).toEqual({ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null });
     }));
 
-  it("accounts stores WHO-KIND and WHEN only, never a person's id: exactly three owner_line columns (owner ruling 2026-11-09, 'Say BIS, keep names private'; probe: add owner_line_changed_by text -> FAILS)", () =>
+  it("accounts stores WHO-KIND and WHEN only, never a person's id: exactly three owner_line columns (owner ruling 2026-11-09, 'Say BIS, keep names private'; probe: add a person-id column, owner_line_changed_by_user text -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select column_name, data_type, is_nullable from information_schema.columns
