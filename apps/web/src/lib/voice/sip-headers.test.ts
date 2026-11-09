@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCallerNumber, extractCalledNumber, extractSipSignature, sipHeaderNames, sipAttestation } from "./sip-headers";
+import { extractCallerNumber, extractCalledNumber, extractSipSignature, extractOwnerPass, sipHeaderNames, sipAttestation } from "./sip-headers";
 
 const ev = (headers: { name: unknown; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
 
@@ -124,4 +124,9 @@ describe("sipAttestation", () => {
   it("a header name that could forge a log line is counted, not printed", () => {
     expect(sipAttestation(ev([{ name: "bad\nname", value: "x" }]))).toBe("none (+1 unprintable)");
   });
+});
+
+it("extractOwnerPass reads X-BIS-Owner-Pass verbatim, case-insensitively, and null when absent", () => {
+  expect(extractOwnerPass({ sip_headers: [{ name: "x-bis-owner-pass", value: " 1.a.b.owner.19565550100.mac " }] })).toBe("1.a.b.owner.19565550100.mac");
+  expect(extractOwnerPass({ sip_headers: [{ name: "X-BIS-Signature", value: "v" }] })).toBeNull();
 });

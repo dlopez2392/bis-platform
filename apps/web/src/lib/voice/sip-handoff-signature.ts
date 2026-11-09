@@ -38,10 +38,14 @@ export const SIP_HANDOFF_MAX_AGE_MS = 2 * 60_000;
 
 export const SIP_HANDOFF_MIN_SECRET_LENGTH = 32;
 
-function key(env: NodeJS.ProcessEnv): Buffer | null {
+function derivedKey(domain: string, env: NodeJS.ProcessEnv): Buffer | null {
   const secret = env.VOICE_HANDOFF_SECRET?.trim();
   if (!secret || secret.length < SIP_HANDOFF_MIN_SECRET_LENGTH) return null;
-  return createHash("sha256").update(`bis-voice-sip-handoff:${secret}`).digest();
+  return createHash("sha256").update(`${domain}:${secret}`).digest();
+}
+
+function key(env: NodeJS.ProcessEnv): Buffer | null {
+  return derivedKey("bis-voice-sip-handoff", env);
 }
 
 /** True when `VOICE_HANDOFF_SECRET` is usable (set, at least the minimum length). */
@@ -127,4 +131,59 @@ export function verifySipHandoff(
 export function sipHandoffEnforced(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = env.VOICE_HANDOFF_ENFORCE?.trim().toLowerCase();
   return v === "1" || v === "true";
+}
+
+// ---------------------------------------------------------------------------
+// THE OWNER PASS (F-032 §4.3). Minted by /api/voice/texml/owner-pin after a correct PIN and carried on the same
+// <Sip> URI as X-BIS-Owner-Pass. It says: this call, on this business's number, is this person, in this role. Bound
+// to the call's handoff token (the one identifier both legs see; plan SC-7) and to the role at mint (SC-8: the
+// webhook requires the live role to EQUAL it). Its own key domain, so a handoff signature can never pass for one.
+// Single use is not this file's job: the owner-line calls row the webhook inserts carries the handoff token, and
+// calls_handoff_token_unique (0037) refuses a second redemption.
+export const OWNER_PASS_HEADER = "X-BIS-Owner-Pass";
+export const OWNER_PASS_MAX_AGE_MS = 60_000;
+export type OwnerPassRole = "owner" | "staff" | "technician";
+const PASS_ROLES: readonly string[] = ["owner", "staff", "technician"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function ownerKey(env: NodeJS.ProcessEnv): Buffer | null {
+  return derivedKey("bis-voice-owner-pass", env);
+}
+
+export function signOwnerPass(
+  handoffToken: string, p: { accountId: string; userId: string; role: OwnerPassRole; calledE164: string },
+  nowMs: number, env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const k = ownerKey(env);
+  const called = digitsOf(p.calledE164);
+  if (!k || !handoffToken || !UUID.test(p.accountId) || !UUID.test(p.userId)
+      || !PASS_ROLES.includes(p.role) || !DIGITS.test(called)) return null;
+  const payload = `${Math.trunc(nowMs)}.${p.accountId}.${p.userId}.${p.role}.${called}`;
+  return `${payload}.${mac(k, handoffToken, payload)}`;
+}
+
+export type OwnerPassCheck =
+  | { ok: true; accountId: string; userId: string; role: OwnerPassRole; calledE164: string; issuedAtMs: number }
+  | { ok: false; reason: "no-key" | "absent" | "malformed" | "bad-signature" | "expired" };
+
+export function verifyOwnerPass(
+  value: string | null | undefined, handoffToken: string | null, nowMs: number,
+  env: NodeJS.ProcessEnv = process.env, maxAgeMs: number = OWNER_PASS_MAX_AGE_MS,
+): OwnerPassCheck {
+  const k = ownerKey(env);
+  if (!k) return { ok: false, reason: "no-key" };
+  if (!value) return { ok: false, reason: "absent" };
+  const parts = value.split(".");
+  if (parts.length !== 6) return { ok: false, reason: "malformed" };
+  const [issuedRaw, accountId, userId, role, called, given] = parts as [string, string, string, string, string, string];
+  const issued = Number(issuedRaw);
+  if (!/^[0-9]{1,16}$/.test(issuedRaw) || !Number.isFinite(issued) || !UUID.test(accountId) || !UUID.test(userId)
+      || !PASS_ROLES.includes(role) || !DIGITS.test(called)) {
+    return { ok: false, reason: "malformed" };
+  }
+  const expected = Buffer.from(mac(k, handoffToken ?? "", `${issuedRaw}.${accountId}.${userId}.${role}.${called}`));
+  const actual = Buffer.from(given);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return { ok: false, reason: "bad-signature" };
+  if (Math.abs(nowMs - issued) > maxAgeMs) return { ok: false, reason: "expired" };
+  return { ok: true, accountId, userId, role: role as OwnerPassRole, calledE164: `+${called}`, issuedAtMs: issued };
 }
