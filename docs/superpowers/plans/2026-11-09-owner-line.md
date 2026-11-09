@@ -6985,6 +6985,12 @@ async function answerOwnerLine(a: {
   3. In `buildOwnerLineSessionConfig`, use `tools: [...OWNER_TOOL_SCHEMAS, ...toolSchemas("full", "in_person", true)]` → "registers ONLY the owner tools" and the webhook's flat-accept case FAIL.
   4. In `runCallLifecycle`, call `finishCall` for both modes → the lifecycle case FAILS.
   5. In `decideOwnerSession`, drop `pass.accountId !== p.accountId` → "minted for business A but used on business B's number" FAILS.
+  6. **Review round (2026-11-09), each failing its named case:**
+     - M-1: record the tool in `ran` after `await runOwnerTool` → "the tool is recorded BEFORE it runs" FAILS.
+     - M-3: the runtime-load catch answers true → "the owner runtime failing to load" FAILS. The config catch skips its delete, or answers true → "the owner session failing to build" FAILS.
+     - M-4: step 7b passes a forged `{ ok: true }` handoffCheck → "a valid pass" FAILS.
+     - M-5: a dynamic `import("@bis/db")` in `finish.ts` → the import guard FAILS.
+     - M-6: the receptionist registry learns `appointments` → both wall cases for `appointments` FAIL.
 
 **As built (2026-11-09, commit `3120c8bc`).** What differs from the steps above, and why:
 - **The owner runtime is loaded on the owner path only.** `answerOwnerLine` does `await import()` of `events`, `finish` and `reader` before it writes anything. The incoming route already loads the catalogue eagerly (922 KB measured), but the tools' read path (`weekly-metrics`, `row-label`, `record/copy`) is new weight, and a customer's call should load none of it. A failed load is a refusal: the receptionist, with no row written.
@@ -7010,6 +7016,14 @@ async function answerOwnerLine(a: {
   - a refused tool name recorded;
   - an owner tool registered in the receptionist's registry;
   - m-3's three probes: the user-id comparison, the org-id comparison, and a second builder.
+
+**Task 12 review round (2026-11-09, commit `b707db48`), all six minors taken:**
+- **M-1.** `events.ts` adds a known tool name to `ran` BEFORE `await runOwnerTool`. The finish reads `ran` after a bounded 3 s drain, so a hang-up mid-read used to leave the tool out of the access log.
+- **M-2.** The single-builder scan catches `: OwnerLineSession =`, `as`, `satisfies` and a declared return type. It does NOT catch an `OwnerSessionDecision` literal, a generic `mk<OwnerLineSession>(…)`, an `OwnerToolContext` with an inline session, or `OwnerLineSession | null`. `session.ts`'s comment now says exactly that. **Branding `OwnerLineSession` is a recorded condition on the T flip**, not done now: it would change session literals in other tasks' test files.
+- **M-3.** Two forced-failure cases, each on a fresh copy of the route: the owner runtime failing to load, and `buildOwnerLineSessionConfig` throwing. Each gives exactly one accept, the receptionist's; the second also deletes its owner row first.
+- **M-4.** "A valid pass" pins step 7b's call to `decideOwnerSession` with the INVITE's own `handoffCheck`, exactly as step 4 computed it.
+- **M-5.** The finish's import guard also refuses a dynamic `import(`.
+- **M-6.** The receptionist-side wall case through the real `processCallEvent` runs over every name in `OWNER_TOOL_NAMES`.
 
 - [ ] **Step 10: Commit.**
 
