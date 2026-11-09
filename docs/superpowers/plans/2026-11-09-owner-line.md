@@ -5674,3 +5674,13 @@ Gaps left open, as owner questions: Q-A to Q-D.
 - A-1 to A-8 above.
 - `listAccountWork` after #343 (Task 11's interface note).
 - The 0113/0114 changes to the access-log kind CHECK (Task 1 Step 1).
+
+## Owner rulings on Q-A to Q-D (2026-11-09, binding)
+
+- **Q-A: YES, the agency may turn a client's switch OFF, never ON.** This CHANGES the plan's default. Turning it off is protective and only reduces exposure: a lost phone, or a team member let go while the Owner is unreachable. The switch card must:
+  - show who turned it off and when;
+  - leave turning it back ON to the client's Owner only;
+  - be covered by a test that the agency's ON is refused.
+- **Q-B: same `voice_minutes` meter, no separate price** (the plan's default). Owner-line calls are still never counted as answered calls.
+- **Q-C: YES** (the plan's default). Owner-line calls are excluded from the 5-a-day per-caller cap and from the per-account cap, and are bounded by their own 10 per person, per business, per day.
+- **Q-D: YES** (the plan's default). A person may verify their cell and set a PIN while the switch is off, and the card says that nothing works until the Owner turns it on.
