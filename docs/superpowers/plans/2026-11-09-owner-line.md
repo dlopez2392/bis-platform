@@ -31,14 +31,14 @@ Paths below are short: `WEB` = `apps/web/src`, `ACCT` = `WEB/app/(dashboard)/das
 - **SC-3. The PIN check is SECURITY INVOKER, not DEFINER.** `MIG/0104_calendar_feeds.sql:22-28` gives the reason: "only service_role may execute them, and it already holds what they touch … so a definer would add privilege and nothing else (0057's reasoning)". 0105:20-24 says the same. `EXPECTED_DEFINERS` (`DB/test/definer-search-path.test.ts:33`) does not change. The search-path pin still covers every new function: that file says "Scope is every function that SETS a search_path" (lines 12-15), and the new schema test asserts `prosecdef = false` with `search_path=pg_catalog, pg_temp`.
 - **SC-4. The enrollment table is server-only, with no client grant and no client RLS read.** `MIG/0104_calendar_feeds.sql:19-20` sets the pattern: "Server code only (0053's pattern): RLS on with no policy, every client privilege revoked. The card reads its own person's row through serviceDb()". A client write grant would let a person set their own `verified_at`, `failed_attempts` or `locked_until`, which §3.2 and §4.2 forbid, and §3.4 already requires that `pin_hash` is never readable. "A person reads and writes only their own enrollment" is enforced by the server actions, which key on Clerk's `userId` (the `WEB/app/(dashboard)/dashboard/preferences/actions.ts:13-18` pattern).
 - **SC-5. §3.4 stores nothing for the call-in code that §3.2 requires.** §3.2 needs a code, a 10-minute expiry and three attempts, and §3.4 lists no column for any of them. **Path:** add `verify_code_hash`, `verify_expires_at` and `verify_attempts`, plus the `id`, `account_id` and `user_id` columns.
-- **SC-6. Neither argon2 nor bcrypt is in the dependency tree.** See the `dependencies` of `apps/web/package.json:17-38` and `packages/db/package.json`. Node's argon2 (`crypto.argon2`) is experimental and needs Node 24.7 or later; `package.json` engines only require 22 or later. **Path:** `node:crypto` scrypt with N=2^15, r=8, p=1, a 16-byte salt and a 32-byte key. scrypt is memory-hard and built in, so no native dependency is added. **The comparison stays in SQL:** Node derives the candidate with the stored salt, and `owner_line_attempt_pin` compares under a row lock and owns the counter and the lock. This is the same Node-hashes, SQL-checks split as `MIG/0036_alert_phone_verifications.sql:153` ("SQL never computes it"). pgcrypto would add a dependency no migration has yet.
+- **SC-6. Neither argon2 nor bcrypt is in the dependency tree.** See the `dependencies` of `apps/web/package.json:17-38` and `packages/db/package.json`. Node's argon2 (`crypto.argon2`) is experimental and needs Node 24.7 or later; `package.json` engines only require 22 or later. **Path:** `node:crypto` scrypt with N=2^17, r=8, p=1 (OWASP's floor; 128 x N x r = 128 MiB, so `maxmem` is 256 MiB), a 16-byte salt and a 32-byte key. scrypt is memory-hard and built in, so no native dependency is added. Its password is HMAC-SHA256(PIN), keyed by `sha256("bis-owner-line-pin:" + OWNER_LINE_PIN_PEPPER)`: a pepper in its own key domain that lives only in the server's env, so a database-only leak cannot be cracked offline (Task 3). The stored string's prefix `scrypt:17:8:1:` is built from N, r and p, never a separate literal. **The comparison stays in SQL:** Node derives the candidate with the stored salt, and `owner_line_attempt_pin` compares under a row lock and owns the counter and the lock. This is the same Node-hashes, SQL-checks split as `MIG/0036_alert_phone_verifications.sql:153` ("SQL never computes it"). pgcrypto would add a dependency no migration has yet.
 - **SC-7. The pass cannot bind a Telnyx "call control id".** The OpenAI webhook never sees that id. The one identifier both legs share is the handoff token:
   - it is minted at `WEB/app/api/voice/texml/route.ts:502`;
   - it rides the SIP URI as `X-BIS-Handoff` (`:521`);
   - it is covered by `X-BIS-Signature`'s MAC (`WEB/lib/voice/sip-handoff-signature.ts:58-59,81`).
 
-  **Path:** the pass's MAC covers the handoff token. Single use is enforced by the owner-line `calls` row insert, which `calls_handoff_token_unique` (`MIG/0037_call_handoff.sql:176-178`) refuses a second time.
-- **SC-8. The role must be in the pass, and the live role must EQUAL it.** §4.3's HMAC payload carries no role. §7 requires refusal when "their role was downgraded after minting", while §4.3's "the same role or one inside it" would ACCEPT a downgrade. **Path:** the pass carries the role at mint time, and the webhook and every tool call require the live role to equal it.
+  **Path:** the pass's MAC covers the handoff token. Single use is enforced by the owner-line `calls` row insert, which `calls_handoff_token_unique` (`MIG/0037_call_handoff.sql:176-178`) refuses a second time. (Spec §4.3 amended to match, 2026-11-09.)
+- **SC-8. The role must be in the pass, and the live role must EQUAL it.** §4.3's HMAC payload carries no role. §7 requires refusal when "their role was downgraded after minting", while §4.3's "the same role or one inside it" would ACCEPT a downgrade. **Path:** the pass carries the role at mint time, and the webhook and every tool call require the live role to equal it. (Spec §4.3 amended to match, 2026-11-09.)
 - **SC-9. Today's customer caps would refuse the owner's 6th call of the day.** Three facts combine:
   - `countCallsByCallerSince` (`DB/voice.ts:1010`) counts every call from the cell;
   - `PHONE_MAX_CALLS_PER_NUMBER_PER_DAY` defaults to 5 (`WEB/lib/voice/call-limits.ts:13`);
@@ -1757,15 +1757,23 @@ import { describe, it, expect } from "vitest";
 import { checkPin, hashPin, candidateFor, newVerifyCode, hashVerifyCode, pinPepperConfigured, PIN_PARAMS_PREFIX } from "./secrets";
 
 const SHAPE = /^scrypt:17:8:1:[A-Za-z0-9_-]{22}:[A-Za-z0-9_-]{43}$/;
-const ENV = { OWNER_LINE_PIN_PEPPER: "p".repeat(40) } as NodeJS.ProcessEnv;
-const OTHER = { OWNER_LINE_PIN_PEPPER: "q".repeat(40) } as NodeJS.ProcessEnv;
+const ENV = { OWNER_LINE_PIN_PEPPER: "p".repeat(40) } as unknown as NodeJS.ProcessEnv;
+const OTHER = { OWNER_LINE_PIN_PEPPER: "q".repeat(40) } as unknown as NodeJS.ProcessEnv;
 
 describe("checkPin (spec §3.1: exactly 6 digits; 000000, 123456, a repeated digit, a run refused with a reason)", () => {
-  it.each([["000000", "repeated"], ["777777", "repeated"], ["123456", "run"], ["654321", "run"], ["345678", "run"],
-    ["12345", "not_six_digits"], ["1234567", "not_six_digits"], ["12a456", "not_six_digits"], [" 48291", "not_six_digits"]])(
-    "%s is refused as %s (mutation: drop the descending run -> 654321 passes, FAILS)", (pin, reason) => {
-      expect(checkPin(pin)).toEqual({ ok: false, reason });
-    });
+  it.each([
+    ["000000", "repeated", "all zeros"],
+    ["777777", "repeated", "one digit six times"],
+    ["123456", "run", "the ascending run from 1"],
+    ["654321", "run", "a descending run (mutation: drop the descending run -> FAILS)"],
+    ["345678", "run", "an ascending run that does not start at 1"],
+    ["12345", "not_six_digits", "five digits"],
+    ["1234567", "not_six_digits", "seven digits"],
+    ["12a456", "not_six_digits", "a letter among the digits"],
+    [" 48291", "not_six_digits", "a leading space"],
+  ])("%s is refused as %s: %s", (pin, reason) => {
+    expect(checkPin(pin)).toEqual({ ok: false, reason });
+  });
   it.each(["482913", "135790", "112358", "090807"])("%s is accepted", (pin) => {
     expect(checkPin(pin)).toEqual({ ok: true });
   });
@@ -1790,11 +1798,26 @@ describe("hashPin / candidateFor (SC-6: peppered scrypt; SQL compares the string
     const h = await hashPin("482913", ENV);
     expect(await candidateFor("482913", h.slice(0, 36), OTHER)).not.toBe(h);
   });
+  it("a known answer, computed outside this file with scryptSync(HMAC-SHA256(PIN) keyed by sha256(\"bis-owner-line-pin:\" + pepper), salt, 32, {N: 2**17, r: 8, p: 1}) (mutations: N = 2**16; N = 2**10 with r = 1; the handoff key domain; the raw pepper as the HMAC key -> each FAILS)", async () => {
+    expect(PIN_PARAMS_PREFIX).toBe("scrypt:17:8:1:");
+    expect(await candidateFor("482913", PIN_PARAMS_PREFIX + "AAAAAAAAAAAAAAAAAAAAAA", ENV))
+      .toBe("scrypt:17:8:1:AAAAAAAAAAAAAAAAAAAAAA:ShB19WHKMzNMK8TkJhYrbry-KQiFxCfEK5dcl71dz4E");
+  });
   it("no pepper, or a short one, refuses to hash or check at all, rather than silently hashing without it", async () => {
     expect(pinPepperConfigured({} as NodeJS.ProcessEnv)).toBe(false);
-    expect(pinPepperConfigured({ OWNER_LINE_PIN_PEPPER: "short" } as NodeJS.ProcessEnv)).toBe(false);
+    expect(pinPepperConfigured({ OWNER_LINE_PIN_PEPPER: "short" } as unknown as NodeJS.ProcessEnv)).toBe(false);
     await expect(hashPin("482913", {} as NodeJS.ProcessEnv)).rejects.toThrow(/OWNER_LINE_PIN_PEPPER/);
     await expect(candidateFor("482913", PIN_PARAMS_PREFIX + "A".repeat(22), {} as NodeJS.ProcessEnv)).rejects.toThrow(/OWNER_LINE_PIN_PEPPER/);
+  });
+  it("names an unset pepper and a short one as different problems, and never prints the value or its length", async () => {
+    const SHORT = "shortpepper-xyz";   // 15 characters
+    await expect(hashPin("482913", {} as NodeJS.ProcessEnv)).rejects.toThrow("owner line: OWNER_LINE_PIN_PEPPER is not set");
+    await expect(hashPin("482913", { OWNER_LINE_PIN_PEPPER: "   " } as unknown as NodeJS.ProcessEnv))
+      .rejects.toThrow("owner line: OWNER_LINE_PIN_PEPPER is not set");
+    const err = await hashPin("482913", { OWNER_LINE_PIN_PEPPER: SHORT } as unknown as NodeJS.ProcessEnv).then(() => null, (e: Error) => e);
+    expect(err?.message).toBe("owner line: OWNER_LINE_PIN_PEPPER is too short (it needs at least 32 characters)");
+    expect(err?.message).not.toContain(SHORT);
+    expect(err?.message).not.toMatch(/\b15\b/);
   });
   it("a malformed prefix or a non-6-digit entry has no candidate (it can never match)", async () => {
     const h = await hashPin("482913", ENV);
@@ -1820,13 +1843,15 @@ describe("the call-in code", () => {
 
 The digest literal is the one Postgres produced, already pinned in `packages/db/src/test/alert-phone-verification-grants.test.ts:36-37`.
 
+The known-answer literal (`…:ShB19WHKMzNMK8TkJhYrbry-KQiFxCfEK5dcl71dz4E`) was computed ONCE, outside the code under test, with `scryptSync(HMAC-SHA256(pin) keyed by sha256("bis-owner-line-pin:" + "p".repeat(40)), "A".repeat(22), 32, { N: 2 ** 17, r: 8, p: 1, maxmem: 256 MiB })`. It pins the cost and the pepper's key domain: without it, a global N = 2**16, N = 2**10 with r = 1, the handoff key domain, or the raw pepper as the HMAC key each left the suite green (review round, 2026-11-09). The test env casts are `as unknown as NodeJS.ProcessEnv` wherever the object carries a property: this repo's `ProcessEnv` requires `NODE_ENV`, so a bare `as NodeJS.ProcessEnv` is TS2352 (the existing `sip-handoff-signature.test.ts` does the same).
+
 - [ ] **Step 2: Run it and see it fail.**
 
   ```bash
   pnpm --filter web exec vitest run src/lib/owner-line/secrets.test.ts
   ```
 
-  Expected: FAIL, `Failed to resolve import "./secrets"`. Paste the line.
+  Expected: FAIL, `Cannot find module './secrets'` (vitest 4.1 wording; older versions say `Failed to resolve import "./secrets"`). Paste the line.
 
 - [ ] **Step 3: Implement.**
 
@@ -1848,10 +1873,12 @@ The digest literal is the one Postgres produced, already pinned in `packages/db/
 // because a 10-minute, 3-attempt code is defended by its limits.
 import { createHash, createHmac, randomBytes, randomInt, scrypt } from "node:crypto";
 
-export const PIN_PARAMS_PREFIX = "scrypt:17:8:1:";
 const N = 2 ** 17;
 const R = 8;
 const P = 1;
+/** "scrypt:17:8:1:", built from the parameters it names, so the stored string can never claim a cost it was not
+ *  derived at. */
+export const PIN_PARAMS_PREFIX = `scrypt:${Math.log2(N)}:${R}:${P}:`;
 const KEYLEN = 32;
 /** 128 * N * r = 128 MiB; node refuses at its default maxmem, so 256 MiB. */
 const MAXMEM = 256 * 1024 * 1024;
@@ -1874,8 +1901,12 @@ export function pinPepperConfigured(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 function peppered(pin: string, env: NodeJS.ProcessEnv): string {
+  // Two messages, neither carrying the value or its length.
   const pepper = env.OWNER_LINE_PIN_PEPPER?.trim();
-  if (!pepper || pepper.length < PEPPER_MIN) throw new Error("owner line: OWNER_LINE_PIN_PEPPER is not set");
+  if (!pepper) throw new Error("owner line: OWNER_LINE_PIN_PEPPER is not set");
+  if (pepper.length < PEPPER_MIN) {
+    throw new Error(`owner line: OWNER_LINE_PIN_PEPPER is too short (it needs at least ${PEPPER_MIN} characters)`);
+  }
   const key = createHash("sha256").update(`bis-owner-line-pin:${pepper}`).digest();
   return createHmac("sha256", key).update(pin, "utf8").digest("base64url");
 }
@@ -1916,6 +1947,12 @@ export function hashVerifyCode(code: string): string {
 - [ ] **Step 5: Mutation probes.** Each must FAIL BY NAME, then revert:
   1. In `candidateFor`, derive at `N = 2 ** 16` → "the candidate for the right PIN … IS the stored hash" FAILS.
   2. In both functions, pass the bare `pin` to `derive` instead of `peppered(...)` → "useless without the pepper" FAILS.
+  3. Global `N = 2 ** 16` → "a known answer" and "is the exact shape" FAIL (the prefix is built from N, r and p).
+  4. `N = 2 ** 10` with `R = 1` → "a known answer" and "is the exact shape" FAIL.
+  5. The pepper domain `bis-owner-line-pin:` → `bis-voice-sip-handoff:` → "a known answer" FAILS.
+  6. The raw pepper as the HMAC key instead of its sha256 → "a known answer" FAILS.
+  7. `if (up || down)` → `if (up)` → "654321 is refused as run: a descending run" FAILS.
+  8. One message for an unset and a short pepper → "names an unset pepper and a short one as different problems" FAILS.
 
 - [ ] **Step 6: Commit.**
 
@@ -1955,15 +1992,16 @@ export function extractOwnerPass(eventData: unknown): string | null;
 
 The format is `<issuedAtMs>.<accountId>.<userId>.<role>.<calledDigits>.<hmac>`, six dot-separated parts. Every character is in `[0-9A-Za-z._-]`, so URI encoding leaves it byte-identical, the same property as `X-BIS-Signature` (`:13-17`). The MAC covers `${handoffToken}|${payload}`, keyed by `sha256("bis-voice-owner-pass:" + VOICE_HANDOFF_SECRET)`. That is a separate domain from the handoff key, so neither value can stand in for the other.
 
-- [ ] **Step 1: Write the failing tests** (append to `sip-handoff-signature.test.ts`).
+- [ ] **Step 1: Write the failing tests** (append to `sip-handoff-signature.test.ts`). Merge the imports into the file's EXISTING import lines: it already imports `signSipHandoff` and `verifySipHandoff`, so a second import statement naming them is a duplicate-binding SyntaxError. The env cast is `as unknown as NodeJS.ProcessEnv`: this repo's `ProcessEnv` requires `NODE_ENV`, so a bare `as NodeJS.ProcessEnv` on an object with a property is TS2352.
 
 ```ts
+// merged into the existing imports at the top of the file:
 import { createHash, createHmac } from "node:crypto";
-import { signOwnerPass, verifyOwnerPass, OWNER_PASS_MAX_AGE_MS, signSipHandoff, verifySipHandoff } from "./sip-handoff-signature";
+//   ..., signOwnerPass, verifyOwnerPass, OWNER_PASS_MAX_AGE_MS, } from "./sip-handoff-signature";
 
 describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
   const SECRET = "s".repeat(40);
-  const env = { VOICE_HANDOFF_SECRET: SECRET } as NodeJS.ProcessEnv;
+  const env = { VOICE_HANDOFF_SECRET: SECRET } as unknown as NodeJS.ProcessEnv;
   const TOKEN = "a".repeat(32);
   const A = "11111111-1111-4111-8111-111111111111";
   const U = "22222222-2222-4222-8222-222222222222";
@@ -1979,6 +2017,37 @@ describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
   it("is refused when tampered: another account swapped in keeps the MAC of the first (mutation: MAC over the token only -> FAILS)", () => {
     expect(verifyOwnerPass(mint().replace(A, B), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
     expect(verifyOwnerPass(mint().replace(".staff.", ".owner."), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when another person is swapped in under the original MAC (mutation: leave userId out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`.${U}.`, `.${B}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when another called number is swapped in under the original MAC (mutation: leave the called digits out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(".19565550100.", ".19565550199.");
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when the issue time is shifted under the original MAC, so the window cannot be moved (mutation: leave issued-at out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`${T0}.`, `${T0 + 30_000}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0 + 30_000, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("a pass dated 60 s ahead of the clock is valid and 61 s ahead is expired (mutation: drop Math.abs -> FAILS)", () => {
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 60_000, env).ok).toBe(true);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 61_000, env)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("a clock or window that is not a finite number never verifies (mutation: the plain `Math.abs(nowMs - issued) > maxAgeMs` check -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(verifyOwnerPass(mint(), TOKEN, now, env)).toEqual({ ok: false, reason: "expired" });
+    }
+    expect(verifyOwnerPass(mint(), TOKEN, T0, env, Number.NaN)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("is never minted on a clock that is not a finite, non-negative number (mutation: drop the clock guard in signOwnerPass -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, now, env)).toBeNull();
+    }
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, 0, env)).not.toBeNull();
   });
   it("is bound to this call's handoff token", () => {
     expect(verifyOwnerPass(mint(), "b".repeat(32), T0, env)).toEqual({ ok: false, reason: "bad-signature" });
@@ -2014,13 +2083,23 @@ describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
 });
 ```
 
-Append to `sip-headers.test.ts`:
+Append to `sip-headers.test.ts`, adding `extractOwnerPass` to the file's existing import line:
 
 ```ts
-import { extractOwnerPass } from "./sip-headers";
-it("extractOwnerPass reads X-BIS-Owner-Pass verbatim, case-insensitively, and null when absent", () => {
-  expect(extractOwnerPass({ sip_headers: [{ name: "x-bis-owner-pass", value: " 1.a.b.owner.19565550100.mac " }] })).toBe("1.a.b.owner.19565550100.mac");
-  expect(extractOwnerPass({ sip_headers: [{ name: "X-BIS-Signature", value: "v" }] })).toBeNull();
+describe("extractOwnerPass", () => {
+  it("reads X-BIS-Owner-Pass verbatim and trimmed, in our own casing and any other (mutation: a case-sensitive name match -> FAILS)", () => {
+    const value = "1.a.b.owner.19565550100.mac";
+    for (const name of ["X-BIS-Owner-Pass", "x-bis-owner-pass", "X-Bis-Owner-Pass"]) {
+      expect(extractOwnerPass(ev([{ name, value: ` ${value} ` }]))).toBe(value);
+    }
+  });
+  it("absent, blank and degenerate inputs -> null", () => {
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Signature", value: "v" }]))).toBeNull();
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Owner-Pass", value: "  " }]))).toBeNull();
+    for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
+      expect(extractOwnerPass(bad)).toBeNull();
+    }
+  });
 });
 ```
 
@@ -2072,7 +2151,7 @@ export function signOwnerPass(
 ): string | null {
   const k = ownerKey(env);
   const called = digitsOf(p.calledE164);
-  if (!k || !handoffToken || !UUID.test(p.accountId) || !UUID.test(p.userId)
+  if (!k || !handoffToken || !Number.isFinite(nowMs) || nowMs < 0 || !UUID.test(p.accountId) || !UUID.test(p.userId)
       || !PASS_ROLES.includes(p.role) || !DIGITS.test(called)) return null;
   const payload = `${Math.trunc(nowMs)}.${p.accountId}.${p.userId}.${p.role}.${called}`;
   return `${payload}.${mac(k, handoffToken, payload)}`;
@@ -2100,7 +2179,9 @@ export function verifyOwnerPass(
   const expected = Buffer.from(mac(k, handoffToken ?? "", `${issuedRaw}.${accountId}.${userId}.${role}.${called}`));
   const actual = Buffer.from(given);
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return { ok: false, reason: "bad-signature" };
-  if (Math.abs(nowMs - issued) > maxAgeMs) return { ok: false, reason: "expired" };
+  // Both directions (a pass from the future is a clock problem or a forgery), and written so that a NaN clock or
+  // window can only fail: every comparison with NaN is false.
+  if (!Number.isFinite(nowMs) || !(Math.abs(nowMs - issued) <= maxAgeMs)) return { ok: false, reason: "expired" };
   return { ok: true, accountId, userId, role: role as OwnerPassRole, calledE164: `+${called}`, issuedAtMs: issued };
 }
 ```
@@ -2129,6 +2210,15 @@ export function extractOwnerPass(eventData: unknown): string | null {
   1. `OWNER_PASS_MAX_AGE_MS = 2 * 60_000` → "is valid at 60 s and expired at 61 s" FAILS.
   2. `ownerKey` returns `derivedKey("bis-voice-sip-handoff", env)` → "is its own key domain" FAILS.
   3. Make the MAC cover the handoff token ONLY, on BOTH sides: pass `""` as the payload to `mac(...)` in `signOwnerPass` AND in `verifyOwnerPass` → "is refused when tampered" FAILS, because a swapped account or role now verifies. (Mutating only the signer would fail the round-trip case instead and leave the tamper case green, so the probe changes both.)
+  4. Leave userId out of the MAC on both sides → "is refused when another person is swapped in" FAILS.
+  5. Leave the called digits out of the MAC on both sides → "is refused when another called number is swapped in" FAILS.
+  6. Leave issued-at out of the MAC on both sides → "is refused when the issue time is shifted" FAILS.
+  7. `Math.abs(nowMs - issued)` → `nowMs - issued` → "a pass dated 60 s ahead of the clock …" FAILS.
+  8. The plain `Math.abs(nowMs - issued) > maxAgeMs` check (no finite guard) → "a clock or window that is not a finite number never verifies" FAILS.
+  9. Drop `!Number.isFinite(nowMs) || nowMs < 0` from `signOwnerPass` → "is never minted on a clock that is not a finite, non-negative number" FAILS.
+  10. A case-sensitive name match in `extractOwnerPass` → "reads X-BIS-Owner-Pass verbatim and trimmed, in our own casing and any other" FAILS.
+
+  Several mutated lines also occur, verbatim, in the handoff signature's own code (`mac(k, handoffToken, payload)`, `derivedKey("bis-voice-sip-handoff", env)`, `Math.abs(nowMs - issued) > maxAgeMs`). Scope each edit and each revert to the owner functions, and byte-check the file afterwards. `verifySipHandoff` keeps its inherited `Math.abs(nowMs - issued) > maxAgeMs`, which a NaN clock passes; that is out of this PR's scope and is recorded as a finding.
 
 - [ ] **Step 6: Commit.**
 

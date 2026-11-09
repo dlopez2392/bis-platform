@@ -63,8 +63,13 @@ membership, so a person on two businesses sets each separately.
 - **Cell number.** It is verified before it counts (§3.2).
 - **PIN.** Exactly 6 digits. Trivial PINs (000000, 123456, a repeated
   digit, a run) are refused with a reason. The PIN is stored only as a slow
-  salted hash (argon2id, or bcrypt if the runtime lacks it; the plan
-  decides), never shown again, and changeable or removable at any time.
+  salted hash, never shown again, and changeable or removable at any time.
+  The hash is scrypt (N=2^17, r=8, p=1, a 16-byte salt) over an HMAC of
+  the PIN keyed by a server-only pepper, `OWNER_LINE_PIN_PEPPER`, in its
+  own key domain. The pepper lives only in the server's environment, never
+  in the database, so a database-only leak cannot be cracked offline.
+  (Amended 2026-11-09, plan SC-6: neither argon2 nor bcrypt is in the
+  dependency tree, and Node's scrypt is built in and memory-hard.)
 - **Status line in words:** "Ready: call 956-555-0100 from your cell", or
   "Your business has the owner line off; ask the Owner".
 
@@ -155,10 +160,18 @@ The request must carry a valid Telnyx signature, like every TeXML route.
 ### 4.3 The signed pass
 
 It reuses the existing SIP handoff signing (`lib/voice/sip-handoff-signature.ts`):
-an HMAC over (call control id, account id, user id, called e164, issued
-at), carried as an X-header on the SIP URI. It is valid for 60 seconds
-from issue, and single use: the webhook records the call control id it
-redeemed.
+an HMAC over (the call's handoff token, issued at, account id, user id, the
+role at the time of minting, called e164), carried as an X-header on the SIP
+URI. Its key comes from the same secret as the handoff signature, but in its
+own key domain, so neither signature can stand in for the other. It is valid
+for 60 seconds either side of its issue time, and single use: the owner-line
+`calls` row the webhook inserts carries the handoff token, and the existing
+unique constraint on that token refuses a second redemption.
+
+(Amended 2026-11-09, plan SC-7 and SC-8. The pass binds the handoff token,
+not a Telnyx call control id, because the OpenAI webhook never sees that id;
+the handoff token is the one identifier both legs carry. The role is in the
+pass because a downgrade after minting must be refused.)
 
 The Realtime SIP webhook builds an owner-line session **only** when:
 - the pass verifies;
@@ -166,7 +179,8 @@ The Realtime SIP webhook builds an owner-line session **only** when:
 - its called number and account match the INVITE's own signed statement of
   the called number;
 - a **live re-read** shows the user is still a member of that account, with
-  the same role or one inside it, and the enrollment is not locked.
+  exactly the role the pass was minted with (a changed role, a downgrade
+  included, is refused), and the enrollment is not locked.
 
 Any failure means today's receptionist session, logged with the reason.
 
