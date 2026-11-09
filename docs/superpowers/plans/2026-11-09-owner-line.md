@@ -59,7 +59,7 @@ Paths below are short: `WEB` = `apps/web/src`, `ACCT` = `WEB/app/(dashboard)/das
   - one item per tool that ran (four new item kinds, `record_id` = the call).
 
   `access_log_page` gains `actor_kind = 'agency'`, so the BIS access section is byte-for-byte unchanged. The Owner sees "Asked about …" on the owner-line call's own page.
-- **SC-14. Signed TeXML is live in production, so the owner line requires it.** `TELNYX_PUBLIC_KEY` has been set in production since 2026-09-29 (`docs/runbooks/voice-setup.md:715-716`), and `VOICE_HANDOFF_SECRET` with `VOICE_HANDOFF_ENFORCE=1` since 2026-10-08 (ledger `.superpowers/sdd/progress.md:13459`). The voice agent's standing brief still says the key is unset; the runbook wins. **Path:** the branch runs only on a Telnyx-signed request with a usable `VOICE_HANDOFF_SECRET`. Anything else gets today's path.
+- **SC-14. Signed TeXML is live in production, so the owner line requires it.** `TELNYX_PUBLIC_KEY` has been set in production since 2026-09-29 (`docs/runbooks/voice-setup.md:715-716`), and `VOICE_HANDOFF_SECRET` with `VOICE_HANDOFF_ENFORCE=1` since 2026-10-08 (ledger `.superpowers/sdd/progress.md:13459`). The voice agent's standing brief still says the key is unset; the runbook wins. **Path:** the branch runs only on a Telnyx-signed request with a usable `VOICE_HANDOFF_SECRET`. Anything else gets today's path. **owner-pin holds the same line (Task 9 review m-3):** an unsigned request, or a signed one with no usable `VOICE_HANDOFF_SECRET`, checks nothing, counts no attempt and gets today's path, because no owner pass could be signed.
 - **SC-15. The migration is 0115.** `origin/main` ends at `0112_record_changes_q1.sql` (`git ls-tree`). `0114_work_queue_actions.sql` is on `feat/f077-work-queue`. 0113 is on no branch yet: it is F-115 PR D, due 2026-11-11 (memory `bis-next-work`). The spec's "after 0114" holds.
 - **SC-16. The press-1 screen still exists behind `VOICE_SCREEN_NUMBERS`** (`route.ts:39-44,748-772`). **Path:** the owner-line branch runs ahead of it, so an enrolled person is never asked to press 1. The customer path is unchanged.
 - **SC-17. The owner-line branch is skipped in three states, because in each the Gather's fallthrough would not be today's path:**
@@ -69,7 +69,7 @@ Paths below are short: `WEB` = `apps/web/src`, `ACCT` = `WEB/app/(dashboard)/das
 
   This keeps "On a miss, follow today's path exactly" true, and keeps the PIN step's fallthrough identical to today's bridge.
 
-- **SC-18. No TeXML route may reach `@bis/db` at module scope** (`route.ts:219-226`; Global Constraints). The lockout email module reaches it through `WEB/lib/consent/email-gate.ts:1-5` and `WEB/lib/email/templates/shell.ts:1`, so owner-pin imports it dynamically, inside the `locked_now` branch (Task 9). Every helper the TeXML routes import statically (`owner-line-xml.ts`, `secrets.ts`, `data-path.ts`, `lib/owner-line/names.ts`) imports `@bis/db` for types only.
+- **SC-18. No TeXML route may reach `@bis/db` at module scope** (`route.ts:219-226`; Global Constraints). The lockout email module reaches it through `WEB/lib/consent/email-gate.ts:1-5` and `WEB/lib/email/templates/shell.ts:1`, so owner-pin imports it dynamically, and only inside `after()`: on `locked_now` it captures the lock instant (`at`) BEFORE calling `after()`, and the deferred callback imports the module and calls `sendOwnerLineLockoutEmails({ ..., at })` (Task 9 decision point, 2026-11-09). The module's chunk is about 613 KB with the catalogue, so none of it may load on Telnyx's answer deadline, and `scheduleOwnerLineLockoutEmails` no longer exists. Every helper the TeXML routes import statically (`owner-line-xml.ts`, `secrets.ts`, `data-path.ts`, `lib/owner-line/names.ts`) imports `@bis/db` for types only.
 - **SC-19. Day boundaries.** `localMidnightInstant` (`WEB/lib/reports/weekly-window.ts:95-98`) is documented safe only where no clock change falls at midnight. Owner ruling Q-F needs every zone, so:
   - the 10-a-day limit computes the account's local day start in SQL (`app.owner_line_day_start`);
   - ranges use a bounded-correction `localDayStart` (Task 10).
@@ -4624,7 +4624,8 @@ export function ownerLineLockoutEmail(i: { brand: EmailBrand; locale: Locale; fo
   time: string; until: string }): { subject: string; text: string; html: string };
 export async function sendOwnerLineLockoutEmails(p: { accountId: string; userId: string; lockedUntil: string;
   at: Date; accountLanguage: "en" | "es" | null }, deps?: { send: typeof sendEmailOrThrow }): Promise<void>;
-export function scheduleOwnerLineLockoutEmails(p: Omit<Parameters<typeof sendOwnerLineLockoutEmails>[0], "at">): void;
+// scheduleOwnerLineLockoutEmails was REMOVED at Task 9's decision point (2026-11-09): owner-pin captures `at` before
+// after() and calls sendOwnerLineLockoutEmails inside it, so the module never loads before the response.
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -4747,13 +4748,15 @@ export function ownerLineLockoutEmail(i: {
 }
 ```
 
+**As built (2026-11-09), after Task 9's decision point and review m-1: the committed file.** The scheduler is gone (owner-pin calls `sendOwnerLineLockoutEmails` inside `after()`), and both failure lines log through `loggableError`, because a provider's rejection can quote the recipient ("550 <ana@example.com>: recipient rejected").
+
 ```ts
 // apps/web/src/lib/owner-line/lockout.ts
-import { after } from "next/server";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { ownerLineLockoutEmail } from "@/lib/email/templates/owner-line";
 import { firstName } from "@/lib/owner-line/names";
+import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
 /**
@@ -4761,8 +4764,10 @@ import type { Locale } from "@/lib/i18n/locale";
  * 2:14 PM')". Each recipient in their own language (users.language, then the account's, then English), deduplicated
  * by address, each send in its own try/catch so one failure never costs the other. Never throws.
  * THIS MODULE REACHES @bis/db AT MODULE SCOPE, through email-gate.ts:1-5 and templates/shell.ts:1, so a TeXML route
- * must never import it statically (route.ts:219-226; SC-18). owner-pin imports it with await import() inside its
- * locked_now branch only. The await import("@bis/db") below is for this file's own reads.
+ * must never import it statically (route.ts:219-226; SC-18). owner-pin imports it with await import() INSIDE after(),
+ * once the caller has been answered, and captures the lock instant (`at`) before calling after()
+ * (owner-pin/route.ts lockoutEmailsAfterResponse; the module's chunk is about 613 KB with the catalogue, which must
+ * never load on Telnyx's answer deadline). The await import("@bis/db") below is for this file's own reads.
  */
 export async function sendOwnerLineLockoutEmails(
   p: { accountId: string; userId: string; lockedUntil: string; at: Date; accountLanguage: "en" | "es" | null },
@@ -4787,7 +4792,7 @@ export async function sendOwnerLineLockoutEmails(
     }
     // ICU writes a narrow no-break space before AM/PM; a plain space reads the same and matches every other email.
     const at = (iso: Date | string, locale: Locale) => new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US",
-      { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(iso)).replace(/\u202f/g, " ");
+      { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(iso)).replace(/\u202F/g, " ");
     for (const r of recipients.values()) {
       const to = r.to;
       const locale: Locale = r.language ?? p.accountLanguage ?? "en";
@@ -4799,31 +4804,19 @@ export async function sendOwnerLineLockoutEmails(
         await deps.send({ accountId: p.accountId, kind: "operator.owner_line_lockout", to, fromName: brand.name,
           subject: email.subject, body: email.text, html: email.html });
       } catch (e) {
-        console.error(`owner line lockout email failed for one recipient, accountId ${p.accountId}: ${e instanceof Error ? e.message : String(e)}`);
+        // loggableError (review m-1): a provider's rejection can quote the recipient ("550 <ana@…>: recipient rejected").
+        console.error(`owner line lockout email failed for one recipient, accountId ${p.accountId}: ${loggableError(e)}`);
       }
     }
   } catch (e) {
-    console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${String(e)}`);
-  }
-}
-
-/** Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path. */
-export function scheduleOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
-): void {
-  // The time the PIN was keyed is NOW, not when after() gets round to running: capture it first.
-  const at = new Date();
-  try {
-    after(() => sendOwnerLineLockoutEmails({ ...p, at }));
-  } catch (e) {
-    console.error(`owner line: could not schedule the lockout emails, accountId ${p.accountId}: ${String(e)}`);
+    console.error(`owner line lockout emails could not be prepared, accountId ${p.accountId}: ${loggableError(e)}`);
   }
 }
 ```
 
 **Corrections from the Task 8 review (2026-11-09), binding on the code above:**
 - `lockedUntil` is a `string`, never null: Task 2's `attemptOwnerLinePin` returns it on every `locked_now` (the same UPDATE's RETURNING) and throws otherwise, so the email never prints an empty "until".
-- `scheduleOwnerLineLockoutEmails` captures `new Date()` BEFORE `after()`: the email states when the PIN was keyed, not when the deferred work ran.
+- The lock instant is captured BEFORE `after()`: the email states when the PIN was keyed, not when the deferred work ran. **Since Task 9's decision point that capture lives in owner-pin (`lockoutEmailsAfterResponse`), which also imports this module inside `after()`; `scheduleOwnerLineLockoutEmails` is removed, and the capture is pinned in `owner-pin/route.test.ts`.**
 - The narrow no-break space is matched by the six-character escape `\u202f` in both regexes. Keep it an escape: the Write and Edit tools turn it into the literal character, which no reviewer can see.
 - The tail names the page as the app does: "Preferences" / "Preferencias", never "Mis preferencias".
 - **No test that merely imports `lockout.ts` through `import()` and checks that its exports are functions.** Static and dynamic imports resolve the same module, so that case cannot fail on the import FORM, which is the only thing SC-18 is about. The real guard is Task 9's source scan (`texml-no-static-db.test.ts`): no file under `app/api/voice/texml/` imports `lib/owner-line/lockout` (or anything else that reaches `@bis/db`) statically.
@@ -4872,7 +4865,8 @@ Add the `classes.ts` line `"operator.owner_line_lockout": { class: "operator", h
 - Consumes (Task 7): `answer`, `ownerLineBridge`, `ownerLineGatherAgain`, `bridgeAfterFailure`, `actionOrigin`, `xmlResponse` (`../route`), plus `ownerVerifiedXml` (`../owner-line-xml`).
 - Consumes (Task 2): `readTelnyxForm` and `logFormFields` (`../telnyx-request`), `ownerLineAnswerLookup`, `attemptOwnerLineVerify`, `attemptOwnerLinePin`, `getPhoneNumberByE164`, `OWNER_LINE_MAX_CALLS_PER_DAY`.
 - Consumes (Task 3): `candidateFor`, `hashVerifyCode`.
-- Consumes (Task 8): `scheduleOwnerLineLockoutEmails`.
+- Consumes (Task 8): `sendOwnerLineLockoutEmails`, imported inside `after()` with `at` captured before it (decision point, 2026-11-09).
+- Consumes (Task 7, review m-4): `ownerLineStillOffered` (`../route`), which re-reads today's states before a pass.
 - Produces: `GET` (always 405) and `POST` at `/api/voice/texml/owner-pin`.
 
 - [ ] **Step 1: Write the failing tests.** These isolate the decision: `../route`, `../telnyx-request`, `@bis/db` and the lockout scheduler are mocked.
@@ -4902,7 +4896,7 @@ vi.mock("@bis/db", () => ({
   getPhoneNumberByE164: h.phone, ownerLineAnswerLookup: h.look,
   attemptOwnerLineVerify: h.verify, attemptOwnerLinePin: h.pin,
 }));
-vi.mock("@/lib/owner-line/lockout", () => ({ scheduleOwnerLineLockoutEmails: h.lockout }));
+vi.mock("@/lib/owner-line/lockout", () => ({ sendOwnerLineLockoutEmails: h.lockout }));   // as built: also next/server's after() recorded
 
 import { GET, POST } from "./route";
 import { hashPin } from "@/lib/owner-line/secrets";
@@ -5078,7 +5072,7 @@ describe("no TeXML route reaches @bis/db at module scope (SC-18; reviews I-8 and
       "lib/owner-line/lockout.ts -> lib/consent/email-gate.ts -> @bis/db");
   });
 
-  it("no source under app/api/voice/texml/ reaches @bis/db at module scope, directly or through anything it imports (mutation: import scheduleOwnerLineLockoutEmails statically in owner-pin/route.ts -> FAILS naming the chain)", () => {
+  it("no source under app/api/voice/texml/ reaches @bis/db at module scope, directly or through anything it imports (mutation: import sendOwnerLineLockoutEmails statically in owner-pin/route.ts -> FAILS naming the chain)", () => {
     const files = entries(TEXML);
     expect(files.some((f) => f.endsWith(join("owner-pin", "route.ts")))).toBe(true);   // the walk sees owner-pin
     expect(files.flatMap((f) => forbiddenChains(f))).toEqual([]);
@@ -5096,36 +5090,97 @@ describe("no TeXML route reaches @bis/db at module scope (SC-18; reviews I-8 and
 
 - [ ] **Step 3: Implement.**
 
+**As built (2026-11-09), after the Task 9 review and its decision point: the committed file.** What changed from the first draft of this step:
+- **m-2 (orchestrator decision, fail closed):** anything that throws tries TODAY'S PATH first (`answer(..., { skipScreen: true, skipOwnerLine: true })`), so an over-cap caller still hears the cap sentence and the `screened_calls` row is written; only if that also throws is it `bridgeAfterFailure`. Proven end to end in `owner-pin/today-path.test.ts`.
+- **m-3 (SC-14):** the entry guard also requires `sipHandoffSecretConfigured()`; without it, today's path with nothing checked.
+- **m-4:** a correct PIN mints the pass only after `ownerLineStillOffered` re-reads VOICE_FORWARD_TO, the drill, the profile's `forward_calls` and billing's no-voice with the answer route's own reads; otherwise today's path, no pass.
+- **m-6:** `readTelnyxForm(req, "texml owner-pin", { logCaller: false })`: the shared reader's refusal line names the claimed called number only.
+- **Decision point:** the lockout emails are prepared and sent inside `after()`, `at` captured before (`lockoutEmailsAfterResponse`).
+- **Logs:** an error's CLASS, never `String(e)` (a message can quote the caller, the digits or the hash). The phone-number row's local is `line`, not `phone`: `phone` tripped the consent scan's F-009 phone-binding rule.
+
 ```ts
 // apps/web/src/app/api/voice/texml/owner-pin/route.ts
 // The owner line's PIN and call-in code step (F-032 §3.2, §4.2). /api/voice/texml asked a registered cell for a
 // PIN (or for the code shown on their screen) with <Gather>; Telnyx posts the keys here.
 //
-// TELNYX-SIGNED OR NOTHING. An unsigned request checks nothing and gets today's path: this route would otherwise be
-// an oracle anyone could feed a caller ID and guesses (spec §4.2: "must carry a valid Telnyx signature"). GET is 405
-// always, because a GET carries no signed body.
+// TELNYX-SIGNED OR NOTHING. A request whose signature fails is refused 403 by the shared reader before this file
+// reads a thing (../telnyx-request.ts). An UNSIGNED request (TELNYX_PUBLIC_KEY unset) checks nothing and gets today's
+// path, unsigned: this route would otherwise be an oracle anyone could feed a caller ID and guesses (spec §4.2:
+// "must carry a valid Telnyx signature"), and its one bridge that carries an owner pass (../route.ts
+// ownerLineBridge) is minted as Telnyx-signed by construction. That guard is what makes the construction true.
+// GET is 405 always, because a GET carries no signed body.
 //
 // The account and the person are re-derived from the SIGNED To/From on every request; nothing on the query string is
-// trusted. A PIN check happens only in SQL (owner_line_attempt_pin), under a row lock that owns the counter and the
-// lock. The digits are never logged.
+// trusted. The role is re-checked against OWNER_LINE_ROLES here (O-1 = F2: Owner and Staff), because the two SQL
+// attempt functions check no role at all. A PIN check happens only in SQL (owner_line_attempt_pin), under a row lock
+// that owns the counter and the lock.
 //
-// WHAT THE CALLER GETS:
+// LOGS carry statuses and the account id only: never the caller's number, the digits, the code or its hash, and
+// for a failure the error's CLASS, never its message (a message can quote any of those).
+//
+// WHAT THE CALLER GETS. Every path that is not the owner's own ends in TODAY'S PATH: answer() with the screen and the
+// owner line skipped, which re-runs every customer check (a refusal is spoken and recorded in screened_calls, a
+// clear call gets the cleared bridge). Never a hang-up of this route's own (plan I-3, spec §2.1).
 //   - pound, a timeout, or no digits: today's path, and NOT an attempt;
-//   - the right PIN: today's bridge with the owner pass (route.ts ownerLineBridge);
-//   - a wrong PIN, 1st or 2nd: asked again;
-//   - the 3rd wrong PIN: the lock, the two emails, and today's path, as a customer;
-//   - a call-in code: verified (a goodbye), wrong (asked again), or spent (start again on the screen);
-//   - anything that throws: the last-resort bridge, never a 500 (screen/route.ts's posture).
-import { NextResponse } from "next/server";
+//   - the right PIN: today's bridge with the owner pass, bound to THAT dial's handoff token (ownerLineBridge),
+//     once today's states are re-read (ownerLineStillOffered);
+//   - a wrong PIN, 1st or 2nd: asked again; the re-ask re-reads today's verdicts for its own fallthrough;
+//   - the 3rd wrong PIN: the lock, today's path as a customer, and the two emails, prepared and sent after the response;
+//   - no OWNER_LINE_PIN_PEPPER (plan O-3): today's path, and no attempt is counted against the person;
+//   - a call-in code: verified (a goodbye), wrong (asked again), spent or unknown (today's path; the card tells the
+//     person to make a new code);
+//   - the right PIN while today's path no longer reaches Sofía (the forward, billing, the drill): today's path;
+//   - no usable VOICE_HANDOFF_SECRET: today's path, nothing checked (SC-14);
+//   - anything that throws: today's path (fail closed); only if that throws too, the last-resort bridge, never a 500.
+//
+// No module-scope @bis/db, directly or through anything imported here (plan SC-18; ../texml-no-static-db.test.ts):
+// the database is imported inside the handler, and the lockout module (which reaches it through the email gate)
+// only inside after(), once the caller has been answered (lockoutEmailsAfterResponse).
+import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
-import { actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, xmlResponse } from "../route";
+import {
+  actionOrigin, answer, bridgeAfterFailure, ownerLineBridge, ownerLineGatherAgain, ownerLineStillOffered, xmlResponse,
+} from "../route";
 import { logFormFields, readTelnyxForm } from "../telnyx-request";
 import { ownerVerifiedXml } from "../owner-line-xml";
 import { candidateFor, hashVerifyCode, pinPepperConfigured } from "@/lib/owner-line/secrets";
 import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { sipHandoffSecretConfigured } from "@/lib/voice/sip-handoff-signature";
 
 export const runtime = "nodejs";
 const SIX = /^[0-9]{6}$/;
+
+/** An error as a log line may name it: its class only. */
+const errorClass = (e: unknown) => (e instanceof Error ? e.name : typeof e);
+
+/**
+ * The third wrong PIN's two emails (spec §4.2), entirely OFF Telnyx's answer deadline.
+ *   - The lock instant is captured HERE, before after() defers anything, so the email's "at 2:14 PM" is when the PIN
+ *     was wrong a third time, not whenever the deferred work runs (Task 8's m-7).
+ *   - The lockout module is imported INSIDE after(), never before the response: it reaches @bis/db through the email
+ *     gate (SC-18; ../texml-no-static-db.test.ts), and its chunk is about 613 KB with the catalogue, which a cold
+ *     load would otherwise spend on the carrier's clock.
+ *   - after() itself throws synchronously outside a request scope; that throw is caught here, so it can never turn
+ *     this caller's today's path into the last-resort bridge. The deferred work has its own catch, so nothing it
+ *     does can reject unseen. Both log the error's class and the account only.
+ */
+function lockoutEmailsAfterResponse(
+  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
+): void {
+  const at = new Date();
+  try {
+    after(async () => {
+      try {
+        const { sendOwnerLineLockoutEmails } = await import("@/lib/owner-line/lockout");
+        await sendOwnerLineLockoutEmails({ ...p, at });
+      } catch (e) {
+        console.error(`texml owner-pin: lockout emails failed (${errorClass(e)}), accountId ${p.accountId}`);
+      }
+    });
+  } catch (e) {
+    console.error(`texml owner-pin: lockout emails could not be scheduled (${errorClass(e)}), accountId ${p.accountId}`);
+  }
+}
 
 async function decide(form: URLSearchParams, origin: string, authenticated: boolean): Promise<NextResponse> {
   const called = e164Of(form.get("To") || null);
@@ -5134,6 +5189,12 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
   try {
     if (!authenticated) {
       console.error("texml owner-pin: request not Telnyx-signed — today's path, nothing checked");
+      return await today();
+    }
+    // Review m-3 (SC-14): with no usable VOICE_HANDOFF_SECRET no owner pass can be signed, so no PIN is checked and no
+    // attempt is counted against anyone: today's path.
+    if (!sipHandoffSecretConfigured()) {
+      console.error("texml owner-pin: VOICE_HANDOFF_SECRET is not usable — today's path, nothing checked");
       return await today();
     }
     if (!called || !caller) {
@@ -5145,12 +5206,19 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
       OWNER_LINE_MAX_CALLS_PER_DAY,
     } = await import("@bis/db");
     const db = serviceDb();
-    const phone = await getPhoneNumberByE164(db, called);
-    if (!phone || (phone.status !== "testing" && phone.status !== "live")) return await today();
-    const look = await ownerLineAnswerLookup(db, phone.account_id, caller, OWNER_LINE_MAX_CALLS_PER_DAY);
-    if ((look.status !== "verify" && look.status !== "pin") || !OWNER_LINE_ROLES.includes(look.role)) return await today();
-    const who = `accountId ${phone.account_id}`;
+    const line = await getPhoneNumberByE164(db, called);
+    if (!line || (line.status !== "testing" && line.status !== "live")) {
+      console.log("texml owner-pin: the called number is not live — today's path");
+      return await today();
+    }
+    const who = `accountId ${line.account_id}`;
+    const look = await ownerLineAnswerLookup(db, line.account_id, caller, OWNER_LINE_MAX_CALLS_PER_DAY);
+    if ((look.status !== "verify" && look.status !== "pin") || !OWNER_LINE_ROLES.includes(look.role)) {
+      console.log(`texml owner-pin: not asked here (${look.status}) — today's path, ${who}`);
+      return await today();
+    }
     const locale = look.language ?? look.accountLanguage ?? "en";
+    // The finish key ends the entry; Telnyx may or may not include it (owner-line-xml.ts header, (b)).
     const digits = (form.get("Digits") ?? "").trim().replace(/#+$/, "");
 
     if (look.status === "verify") {
@@ -5158,12 +5226,11 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
         console.log(`texml owner-pin: no call-in code entered — today's path, ${who}`);
         return await today();
       }
-      const r = await attemptOwnerLineVerify(db, phone.account_id, caller, hashVerifyCode(digits));
+      const r = await attemptOwnerLineVerify(db, line.account_id, caller, hashVerifyCode(digits));
       console.log(`texml owner-pin: call-in code ${r}, ${who}`);
       if (r === "verified") return xmlResponse(ownerVerifiedXml(locale));
-      if (r === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "verify", locale, accountId: phone.account_id, name: look.name });
-      // spent (expired, or the third wrong code) and none: TODAY'S PATH, never a hang-up. Spec 2.1: no caller this
-      // route cannot vouch for is ever ended; the card tells the person to make a new code.
+      if (r === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "verify", locale, accountId: line.account_id, name: look.name });
+      // spent (expired, or the third wrong code) and none: TODAY'S PATH, never a hang-up (plan I-3, spec §2.1).
       return await today();
     }
 
@@ -5176,24 +5243,33 @@ async function decide(form: URLSearchParams, origin: string, authenticated: bool
       console.error(`texml owner-pin: OWNER_LINE_PIN_PEPPER is not set — today's path, nothing checked, ${who}`);
       return await today();
     }
+    // A short or malformed entry is still an attempt: it is a wrong PIN, counted like one.
     const candidate = (await candidateFor(digits, look.pinParams ?? "")) ?? "invalid";
     const r = await attemptOwnerLinePin(db, look.enrollmentId, candidate);
     console.log(`texml owner-pin: PIN ${r.status}, ${who}`);
-    if (r.status === "ok") return ownerLineBridge(called, caller, origin, { accountId: phone.account_id, userId: look.userId, role: look.role });
-    if (r.status === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "pin", locale, accountId: phone.account_id, name: look.name });
-    if (r.status === "locked_now") {
-      // Imported HERE, never at module scope: the lockout module reaches @bis/db through the email gate (SC-18).
-      try {
-        const { scheduleOwnerLineLockoutEmails } = await import("@/lib/owner-line/lockout");
-        scheduleOwnerLineLockoutEmails({ accountId: phone.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
-      } catch (e) {
-        console.error(`texml owner-pin: lockout emails could not be scheduled, ${who}: ${String(e)}`);
-      }
+    if (r.status === "ok") {
+      // Review m-4: the pass only while today's path still reaches Sofía (the forward, billing's no-voice, the drill,
+      // VOICE_FORWARD_TO, each re-read; ../route.ts ownerLineStillOffered). Otherwise today's path, with no pass.
+      if (!(await ownerLineStillOffered(called, caller, line.account_id))) return await today();
+      return ownerLineBridge(called, caller, origin, { accountId: line.account_id, userId: look.userId, role: look.role });
     }
+    if (r.status === "wrong") return await ownerLineGatherAgain(called, caller, origin, { kind: "pin", locale, accountId: line.account_id, name: look.name });
+    if (r.status === "locked_now") {
+      lockoutEmailsAfterResponse({ accountId: line.account_id, userId: look.userId, lockedUntil: r.lockedUntil, accountLanguage: look.accountLanguage });
+    }
+    // locked_now, locked (another call locked it first) and none: today's path, as a customer.
     return await today();
   } catch (e) {
-    console.error(`texml owner-pin failed — bridging for ${called ?? "unknown"}: ${String(e)}`);
-    return bridgeAfterFailure(called, caller, origin, authenticated);
+    // Review m-2 (orchestrator decision): FAIL CLOSED to today's path, which re-runs every customer check, so an
+    // over-cap caller still hears the cap sentence and the screened_calls row is still written. Only if today's
+    // path ALSO throws is it the last-resort bridge, never a 500.
+    console.error(`texml owner-pin failed (${errorClass(e)}) — today's path for ${called ?? "unknown"}`);
+    try {
+      return await today();
+    } catch (e2) {
+      console.error(`texml owner-pin: today's path failed too (${errorClass(e2)}) — the last-resort bridge, for ${called ?? "unknown"}`);
+      return bridgeAfterFailure(called, caller, origin, authenticated);
+    }
   }
 }
 
@@ -5202,8 +5278,9 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  const read = await readTelnyxForm(req, "texml owner-pin");
+  const read = await readTelnyxForm(req, "texml owner-pin", { logCaller: false });
   if (!read.ok) return read.response;
+  // Field NAMES only (telnyx-request.ts): `Digits` appears as a name, and its value is never printed.
   logFormFields("texml owner-pin", read.form);
   return decide(read.form, actionOrigin(req), read.authenticated);
 }
@@ -7366,6 +7443,7 @@ test.describe.serial("owner line setup (F-032 §3)", () => {
 **Files:**
 - Modify: `docs/crm-features.md`, at every place F-032 appears (`grep -n "F-032" docs/crm-features.md`: lines 1762, 1967, 3469, 3507, 3574, 3772, 3774), plus the two sentences that drop it by name (1975) and the sums that count it (1756, 1794-1830).
 - Propose only (bis-platform lands it): a `docs/runbooks/voice-setup.md` section, "The owner line (F-032)".
+- Propose only (bis-platform lands it): `OWNER_LINE_PIN_PEPPER` in `.env.example`'s Voice Receptionist block (Sensitive, at least 32 random characters, a DIFFERENT value per environment; rotating it invalidates every stored PIN; unset, every PIN step takes today's path and counts no attempt: O-3), and the same facts in the runbook section above. Added at the Task 9 review (2026-11-09); no agent edits `.env.example` itself.
 
 - [ ] **Step 1: Re-read every line before editing.**
 
