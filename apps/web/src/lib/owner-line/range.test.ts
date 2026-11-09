@@ -53,4 +53,21 @@ describe("resolveRange (spec §5: always in the account's zone, at most 31 days)
     expect(resolveRange({ range: "dates", from: "2026-11-05", to: "2026-11-01" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
     expect(resolveRange({ range: "dates", from: "2026-02-30" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
   });
+  // Review m-1 (Tasks 10/11): a model-supplied date can be any string the DAY pattern lets through, and a session's
+  // zone is stored text. Neither may throw out of resolveRange: a throw there is a tool failure, not a refusal.
+  it("a year past 9998 is refused, never thrown: the day after 9999-12-31 has no ISO form (mutations: drop the year check -> 9999-01-01 accepted, FAILS; drop it AND the try -> throws, FAILS)", () => {
+    expect(() => resolveRange({ range: "dates", from: "9999-12-31" }, Z, NOW)).not.toThrow();
+    expect(resolveRange({ range: "dates", from: "9999-12-31" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+    expect(resolveRange({ range: "dates", from: "9999-01-01" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+    expect(resolveRange({ range: "dates", from: "9998-12-30", to: "9999-01-02" }, Z, NOW)).toEqual({ ok: false, error: "bad_range" });
+    // The last day still allowed: 9998-12-31, whose next day (9999-01-01) is still an ordinary ISO instant.
+    expect(resolveRange({ range: "dates", from: "9998-12-31" }, Z, NOW)).toMatchObject({ ok: true,
+      fromIso: "9998-12-31T06:00:00.000Z", toIso: "9999-01-01T06:00:00.000Z" });
+  });
+  it("an unusable zone is bad_range, never a throw, for every range kind (mutation: drop the try around the zone conversion -> throws, FAILS)", () => {
+    for (const input of [{ range: "today" }, { range: "this_week" }, { range: "dates", from: "2026-11-09" }]) {
+      expect(resolveRange(input, "Not/AZone", NOW), JSON.stringify(input)).toEqual({ ok: false, error: "bad_range" });
+      expect(resolveRange(input, "", NOW), JSON.stringify(input)).toEqual({ ok: false, error: "bad_range" });
+    }
+  });
 });

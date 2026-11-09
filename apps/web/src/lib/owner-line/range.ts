@@ -24,19 +24,35 @@ export type ResolvedRange =
   | { ok: false; error: "bad_range" | "range_too_long" };
 
 const DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+/** The last year a named date may fall in: a range's end is the NEXT day's first instant, and the day after
+ *  9999-12-31 has no four-digit ISO form (Date#toISOString answers "+010000-…", and the zone lookup throws). */
+const LAST_YEAR = 9998;
 const parts = (day: string) => day.split("-").map(Number) as [number, number, number];
 function shift(day: string, n: number): string {
   const [y, m, d] = parts(day);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
-const isDay = (v: unknown): v is string => typeof v === "string" && DAY.test(v) && shift(v, 0) === v;
+const isDay = (v: unknown): v is string =>
+  typeof v === "string" && DAY.test(v) && parts(v)[0] <= LAST_YEAR && shift(v, 0) === v;
 const days = (a: string, b: string) => {
   const [ay, am, ad] = parts(a);
   const [by, bm, bd] = parts(b);
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000) + 1;
 };
 
+/**
+ * Never throws (review m-1): the dates come from the model and the zone is stored text, so a value the zone
+ * conversion cannot use is "bad_range", a refusal the model can say, not a tool failure.
+ */
 export function resolveRange(input: { range?: unknown; from?: unknown; to?: unknown }, zone: string, now: Date): ResolvedRange {
+  try {
+    return resolve(input, zone, now);
+  } catch {
+    return { ok: false, error: "bad_range" };
+  }
+}
+
+function resolve(input: { range?: unknown; from?: unknown; to?: unknown }, zone: string, now: Date): ResolvedRange {
   const today = dayKeyInZone(now, zone);
   let first: string;
   let last: string;

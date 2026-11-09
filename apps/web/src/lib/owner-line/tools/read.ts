@@ -9,7 +9,9 @@ import {
 import { listAnsweredCallStartsBetween, listSpamCallStartsBetween } from "@/lib/reports/weekly-metrics";
 import { agencyHandsets } from "@/lib/voice/caller-reputation";
 import { workRowLabel } from "@/lib/work/row-label";
-import { makeTr } from "@/lib/record/copy";
+import { makeTr, type Tr } from "@/lib/record/copy";
+// The agenda's own words for how a job meets and where it stands (review m-5): one source, never a second map.
+import { meetingWord, statusWord } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calendar/agenda-view";
 import { resolveRange } from "../range";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
@@ -31,13 +33,17 @@ function when(iso: string, c: OwnerReadContext, withDay: boolean): string {
 const nameOf = (k: { first_name: string | null; last_name: string | null } | null) =>
   [k?.first_name, k?.last_name].filter((x): x is string => !!x && x.trim() !== "").join(" ") || null;
 
-const OUTCOME_WORDS: Record<string, keyof typeof m> = {
+/** Keyed on the tile's own outcome list (review m-4): an outcome added to ANSWERED_CALL_OUTCOMES has no words here
+ *  until someone writes them, and the typecheck says so. */
+type AnsweredOutcome = (typeof ANSWERED_CALL_OUTCOMES)[number];
+const OUTCOME_WORDS: Record<AnsweredOutcome, keyof typeof m> = {
   booked: "ownerLine.tool.outcome.booked", lead: "ownerLine.tool.outcome.lead",
   message: "ownerLine.tool.outcome.message", transferred: "ownerLine.tool.outcome.transferred",
 };
 
 /** The calls the "Calls answered" tile counts, decided by the tile's own two constants, never a copy of them. */
-function tileCall(x: CallListRow, handsets: readonly string[]): boolean {
+type TileCall = CallListRow & { outcome: AnsweredOutcome };
+function tileCall(x: CallListRow, handsets: readonly string[]): x is TileCall {
   return x.owner_line_user_id === null && (ANSWERED_CALL_OUTCOMES as readonly string[]).includes(x.outcome)
     && !(x.caller_e164 !== null && handsets.includes(x.caller_e164));
 }
@@ -50,14 +56,20 @@ export async function callsAndMessages(c: OwnerReadContext, args: Record<string,
     listSpamCallStartsBetween(c.db, c.accountId, r.fromIso, r.toIso),
   ]);
   const handsets = agencyHandsets();
-  const rows: CallListRow[] = [];
+  // The calls to DESCRIBE, newest first: read until CALLS_SPOKEN are held (review m-2), never more than CALL_PAGES
+  // pages. Instants are compared, never strings (review m-6): PostgREST writes "…T06:00:00+00:00" and the range's
+  // edge is "…T06:00:00.000Z", and as strings a call on the range's first instant sorted before it.
+  // No "truncated" here (m-2): the count is the tile's, which pages to the end and is never capped; a flag that the
+  // DESCRIBED list stopped early is already said by "more". listCalls' "before" is strict, so a page whose last row
+  // is on or before the range's first instant is the last one that can hold a call in range.
+  const fromMs = Date.parse(r.fromIso);
+  const rows: TileCall[] = [];
   let before = r.toIso;
-  let truncated = true;
-  for (let page = 0; page < CALL_PAGES; page++) {
+  for (let page = 0; page < CALL_PAGES && rows.length < CALLS_SPOKEN; page++) {
     const batch = await listCalls(c.db, c.accountId, { limit: CALL_PAGE, before });
-    rows.push(...batch.filter((x) => x.started_at >= r.fromIso && tileCall(x, handsets)));
+    rows.push(...batch.filter((x): x is TileCall => Date.parse(x.started_at) >= fromMs && tileCall(x, handsets)));
     const last = batch[batch.length - 1];
-    if (batch.length < CALL_PAGE || !last || last.started_at < r.fromIso) { truncated = false; break; }
+    if (batch.length < CALL_PAGE || !last || Date.parse(last.started_at) <= fromMs) break;
     before = last.started_at;
   }
   const spoken = rows.slice(0, CALLS_SPOKEN);
@@ -68,11 +80,11 @@ export async function callsAndMessages(c: OwnerReadContext, args: Record<string,
   return {
     ok: true, range: { first: r.firstDay, last: r.lastDay },
     count: answered.length, spam: spam.length,
-    more: Math.max(0, answered.length - spoken.length), truncated,
+    more: Math.max(0, answered.length - spoken.length),
     calls: spoken.map((x) => ({
       when: when(x.started_at, c, r.multiDay),
       caller: nameOf(x.contact) ?? t(m, "ownerLine.tool.newCaller", c.locale),
-      outcome: t(m, OUTCOME_WORDS[x.outcome]!, c.locale),
+      outcome: t(m, OUTCOME_WORDS[x.outcome], c.locale),
       reason: reasons.get(x.id) ?? null,
       needsCallback: open.has(x.id),
     })),
@@ -84,11 +96,13 @@ export async function appointments(c: OwnerReadContext, args: Record<string, unk
   if (!r.ok) return { ok: false, error: r.error };
   const { rows, truncated } = await listAgendaBookings(c.db, c.accountId, r.fromIso, r.toIso);
   const shown = rows.filter((x) => !(x.status === "cancelled" && x.replaced));
+  const tr: Tr = makeTr(c.locale);
   return {
     ok: true, range: { first: r.firstDay, last: r.lastDay }, count: shown.length, truncated,
     more: Math.max(0, shown.length - APPOINTMENTS_SPOKEN),
     appointments: shown.slice(0, APPOINTMENTS_SPOKEN).map((x) => ({
-      when: when(x.starts_at, c, r.multiDay), customer: nameOf(x.contact), meetingType: x.meeting_type, status: x.status,
+      when: when(x.starts_at, c, r.multiDay), customer: nameOf(x.contact),
+      meetingType: x.meeting_type ? meetingWord(tr, x.meeting_type) : null, status: statusWord(tr, x.status),
     })),
   };
 }

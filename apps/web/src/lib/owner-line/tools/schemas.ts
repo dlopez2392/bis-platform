@@ -12,10 +12,10 @@ const RANGE = {
 
 export const OWNER_TOOL_SCHEMAS = [
   { type: "function", name: "calls_and_messages",
-    description: "The calls Sofía answered in a range, the same calls the dashboard counts as 'Calls answered', newest first. count is exact; spam is how many calls looked like spam, said separately and only when above zero. Each call has when, caller (a name, or 'a new caller'), outcome (what came of it, in words), reason (or null) and needsCallback. more says how many were not listed; truncated means the list stopped early. Say counts from here; never count yourself.",
+    description: "The calls Sofía answered in a range, the same calls the dashboard counts as 'Calls answered', newest first. count is exact; spam is how many calls looked like spam, said separately and only when above zero. Each call has when, caller (a name, or 'a new caller'), outcome (what came of it, in words), reason (or null) and needsCallback. more says how many were not listed. Say counts from here; never count yourself.",
     parameters: { type: "object", properties: RANGE, required: ["range"] } },
   { type: "function", name: "appointments",
-    description: "The appointments in a range, soonest first: count is exact, and each has when, customer (or null), meetingType and status. Say the count from here.",
+    description: "The appointments in a range, soonest first: count is exact unless truncated is true, which means there were even more than count. Each has when, customer (or null), meetingType (how they meet, in words, or null) and status (in words). Say the count from here.",
     parameters: { type: "object", properties: RANGE, required: ["range"] } },
   { type: "function", name: "needs_attention",
     description: "What is on this person's To do right now, in the same words the To do page uses: count is exact, and each item has what, customer (or null) and due (or null).",

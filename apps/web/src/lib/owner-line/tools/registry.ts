@@ -4,6 +4,10 @@ import { OWNER_TOOL_NAMES, type OwnerToolName } from "./schemas";
 import { callsAndMessages, appointments, needsAttention } from "./read";
 import type { OwnerLineSession } from "../session";
 
+/** What a failure logs: its class, never its message, which can quote a customer's words or number (Task 9's and
+ *  Task 12's pattern, lib/owner-line/finish.ts). */
+const errorClass = (e: unknown) => (e instanceof Error ? e.name : typeof e);
+
 export type OwnerToolContext = {
   session: OwnerLineSession; now: () => Date;
   recheck: (s: OwnerLineSession, now: Date) => Promise<boolean>;
@@ -26,7 +30,7 @@ export async function runOwnerTool(ctx: OwnerToolContext, name: string, args: Re
   try {
     live = await ctx.recheck(ctx.session, now);
   } catch (e) {
-    console.error(`[voice/owner-line] session re-check failed — refusing ${name}: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`[voice/owner-line] session re-check failed — refusing ${name} for account ${ctx.session.accountId}: ${errorClass(e)}`);
   }
   if (!live) return { ok: false, error: "couldnt_read" };
   try {
@@ -38,7 +42,7 @@ export async function runOwnerTool(ctx: OwnerToolContext, name: string, args: Re
       case "needs_attention": return await needsAttention(c);
     }
   } catch (e) {
-    console.error(`[voice/owner-line] tool ${name} failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`[voice/owner-line] tool ${name} failed for account ${ctx.session.accountId}: ${errorClass(e)}`);
     return { ok: false, error: "couldnt_read" };
   }
   return { ok: false, error: "unknown_tool" };
