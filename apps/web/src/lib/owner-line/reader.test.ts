@@ -4,7 +4,8 @@ import { ownerLineReadClient } from "./reader";
 import { mintOwnerLineToken, OWNER_LINE_TOKEN_TTL_SECONDS } from "./token";
 
 const SECRET = "j".repeat(40);
-const env = { SUPABASE_JWT_SECRET: SECRET } as NodeJS.ProcessEnv;
+// unknown first: Next types NODE_ENV as required on ProcessEnv, so a one-key object is not a direct cast (TS2352).
+const env = { SUPABASE_JWT_SECRET: SECRET } as unknown as NodeJS.ProcessEnv;
 const T0 = 1_800_000_000_000;
 const decode = (tok: string) => JSON.parse(Buffer.from(tok.split(".")[1]!, "base64url").toString());
 
