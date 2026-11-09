@@ -7932,6 +7932,20 @@ export const m = {
   "accessLog.reason.fix.es": "Arreglar un problema",
   "accessLog.reason.billing": "Billing",
   "accessLog.reason.billing.es": "Facturación",
+  // F-032 (owner line) Task 8: three wrong PINs email the person and the
+  // account's Owner (spec §4.2), each in their own language.
+  "ownerLine.email.subject": "Someone entered the wrong PIN 3 times",
+  "ownerLine.email.subject.es": "Alguien marcó el PIN incorrecto 3 veces",
+  "ownerLine.email.self": "Someone entered the wrong PIN 3 times from your phone at {time}. Calling in from your phone is paused until {until}.",
+  "ownerLine.email.self.es": "Alguien marcó el PIN incorrecto 3 veces desde su teléfono a las {time}. Las llamadas desde su teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.selfTail": "If it was you, wait and try again. If it was not you, change your PIN in Mis preferencias.",
+  "ownerLine.email.selfTail.es": "Si fue usted, espere e intente de nuevo. Si no fue usted, cambie su PIN en Mis preferencias.",
+  "ownerLine.email.owner": "Someone entered the wrong PIN 3 times from {name}'s phone at {time}. Calling in from that phone is paused until {until}.",
+  "ownerLine.email.owner.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de {name} a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.ownerNoName": "Someone entered the wrong PIN 3 times from a team member's phone at {time}. Calling in from that phone is paused until {until}.",
+  "ownerLine.email.ownerNoName.es": "Alguien marcó el PIN incorrecto 3 veces desde el teléfono de alguien de su equipo a las {time}. Las llamadas desde ese teléfono están en pausa hasta las {until}.",
+  "ownerLine.email.ownerTail": "Nothing about your business was read out. The caller was answered like any customer.",
+  "ownerLine.email.ownerTail.es": "No se leyó nada de su negocio. A la persona se le atendió como a cualquier cliente.",
 } as const;
 
 export type MessageKey = keyof typeof m;
