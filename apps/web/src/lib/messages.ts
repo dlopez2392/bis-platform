@@ -7970,6 +7970,22 @@ export const m = {
   "ownerLine.error.pin.run.es": "Evite dígitos seguidos. Un PIN como 123456 es muy fácil de adivinar.",
   "ownerLine.switch.agencyCannot": "Only the business's Owner can turn this on.",
   "ownerLine.switch.agencyCannot.es": "Solo el Dueño del negocio puede encenderlo.",
+  // F-032 owner line (plan Task 7): what a registered team member hears on the phone before the call reaches
+  // Sofía (TeXML <Say>, spec §4.1, §4.2). One line each, in the person's language; Spanish is usted.
+  "ownerLine.say.pinPrompt": "Hi {name}. Enter your PIN, or press pound to talk to {persona}.",
+  "ownerLine.say.pinPrompt.es": "Hola, {name}. Marque su PIN, o oprima la tecla de número para hablar con {persona}.",
+  "ownerLine.say.pinPromptNoName": "Hi. Enter your PIN, or press pound to talk to {persona}.",
+  "ownerLine.say.pinPromptNoName.es": "Hola. Marque su PIN, o oprima la tecla de número para hablar con {persona}.",
+  "ownerLine.say.pinWrong": "That PIN didn't match. Try again.",
+  "ownerLine.say.pinWrong.es": "Ese PIN no coincide. Intente de nuevo.",
+  "ownerLine.say.limit": "You've reached today's limit for calling in. Here is {persona}.",
+  "ownerLine.say.limit.es": "Ya llegó al límite de llamadas de hoy. Le comunico con {persona}.",
+  "ownerLine.say.verifyPrompt": "Enter the 6-digit code shown on your screen.",
+  "ownerLine.say.verifyPrompt.es": "Marque el código de 6 dígitos que aparece en su pantalla.",
+  "ownerLine.say.verifyWrong": "That code didn't match. Try again.",
+  "ownerLine.say.verifyWrong.es": "Ese código no coincide. Intente de nuevo.",
+  "ownerLine.say.verifyDone": "Thank you. This phone is verified. You can hang up now.",
+  "ownerLine.say.verifyDone.es": "Gracias. Este teléfono quedó verificado. Ya puede colgar.",
 } as const;
 
 export type MessageKey = keyof typeof m;

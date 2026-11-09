@@ -32,6 +32,7 @@ import { GET as texmlGET, POST as texmlPOST } from "./route";
 import { POST as handoffPOST } from "./handoff/route";
 import { POST as handoffResultPOST } from "./handoff-result/route";
 import { POST as screenPOST } from "./screen/route";
+import { ownerPinAskXml, ownerVerifyAskXml, ownerLimitXml, ownerVerifiedXml } from "./owner-line-xml";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -225,6 +226,8 @@ const afterMock = vi.hoisted(() => vi.fn());
 const countForwardedMock = vi.hoisted(() => vi.fn());
 // M7a PR-4: read only while BILLING_ENFORCE is "1".
 const readBillingStandingMock = vi.hoisted(() => vi.fn());
+// F-032 Task 7: read only on a Telnyx-signed request with a usable VOICE_HANDOFF_SECRET. A miss unless a case says.
+const ownerLookupMock = vi.hoisted(() => vi.fn(async () => ({ status: "none" }) as Record<string, unknown>));
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -247,6 +250,8 @@ vi.mock("@bis/db", () => ({
   // reach that branch with a status this suite exercises against it.
   recordAutomationLog: async () => undefined,
   readBillingStanding: (...a: unknown[]) => readBillingStandingMock(...a),
+  ownerLineAnswerLookup: (...a: unknown[]) => ownerLookupMock(...(a as [])),
+  OWNER_LINE_MAX_CALLS_PER_DAY: 10,
 }));
 vi.mock("next/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("next/server")>();
@@ -628,5 +633,44 @@ describe("every emitted TeXML document parses", () => {
       expect(xml).toContain("<Sip>");
       parseXmlStrict(xml);
     });
+  });
+});
+
+describe("the owner line's documents parse (F-032)", () => {
+  const DIAL = `<Dial answerOnBridge="true" action="https://x/h?t=a&amp;f=b" method="POST"><Sip>sip:p@sip.api.openai.com;transport=tls?X-BIS-Called=%2B1&amp;X-BIS-Handoff=t</Sip></Dial>`;
+  it.each([
+    ownerPinAskXml({ locale: "en", name: "O'Brien & Sons", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
+    ownerVerifyAskXml({ locale: "es", action: "https://x/api/voice/texml/owner-pin", retry: true, bridge: DIAL }),
+    ownerLimitXml({ locale: "en", persona: "Sofía", bridge: DIAL }),
+    ownerVerifiedXml("es"),
+  ])("parses strictly: %#", (xml) => { expect(() => parseXmlStrict(xml)).not.toThrow(); });
+
+  it("the answer route's own PIN ask, as emitted for a registered cell on a Telnyx-signed POST, parses", async () => {
+    process.env.VOICE_HANDOFF_SECRET = "h".repeat(48);
+    process.env.APP_ORIGIN = 'https://x.example?a=1&b=2&c="3"';
+    ownerLookupMock.mockResolvedValueOnce({ status: "pin", enrollmentId: "e1", userId: "22222222-2222-4222-8222-222222222222",
+      role: "owner", name: "O'Brien & <Sons>", language: "en", accountLanguage: null, pinParams: null });
+    const raw = new URLSearchParams({ To: LIVE_TO, From: CALLER }).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    try {
+      const xml = await (await texmlPOST(new Request("https://x.example/api/voice/texml", {
+        method: "POST", body: raw,
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "telnyx-timestamp": ts,
+          "telnyx-signature-ed25519": cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey).toString("base64"),
+        },
+      }))).text();
+      expect(xml).toContain("<Gather");
+      expect(xml).toContain("&amp;X-BIS-Signature=");
+      parseXmlStrict(xml);
+    } finally {
+      delete process.env.VOICE_HANDOFF_SECRET;
+      delete process.env.TELNYX_PUBLIC_KEY;
+      delete process.env.APP_ORIGIN;
+    }
   });
 });
