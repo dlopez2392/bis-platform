@@ -14,7 +14,7 @@ import type { Locale } from "@/lib/i18n/locale";
  * locked_now branch only. The await import("@bis/db") below is for this file's own reads.
  */
 export async function sendOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string | null; at: Date; accountLanguage: "en" | "es" | null },
+  p: { accountId: string; userId: string; lockedUntil: string; at: Date; accountLanguage: "en" | "es" | null },
   deps: { send: typeof sendEmailOrThrow } = { send: sendEmailOrThrow },
 ): Promise<void> {
   try {
@@ -36,13 +36,13 @@ export async function sendOwnerLineLockoutEmails(
     }
     // ICU writes a narrow no-break space before AM/PM; a plain space reads the same and matches every other email.
     const at = (iso: Date | string, locale: Locale) => new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US",
-      { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(iso)).replace(/ /g, " ");
+      { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(iso)).replace(/\u202F/g, " ");
     for (const r of recipients.values()) {
       const to = r.to;
       const locale: Locale = r.language ?? p.accountLanguage ?? "en";
       const email = ownerLineLockoutEmail({
         brand, locale, forSelf: r.forSelf, personName: firstName(person?.name ?? null),
-        time: at(p.at, locale), until: p.lockedUntil ? at(p.lockedUntil, locale) : "",
+        time: at(p.at, locale), until: at(p.lockedUntil, locale),
       });
       try {
         await deps.send({ accountId: p.accountId, kind: "operator.owner_line_lockout", to, fromName: brand.name,
@@ -56,12 +56,18 @@ export async function sendOwnerLineLockoutEmails(
   }
 }
 
-/** Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path. */
+/**
+ * Off the carrier's clock (route.ts:617-649's reason): the caller is already back on today's path.
+ *
+ * The lock instant is captured HERE, before after() defers the send past the response, so the email's "at 2:14 PM"
+ * is when the PIN was wrong a third time — not whenever the deferred send happens to run.
+ */
 export function scheduleOwnerLineLockoutEmails(
-  p: { accountId: string; userId: string; lockedUntil: string | null; accountLanguage: "en" | "es" | null },
+  p: { accountId: string; userId: string; lockedUntil: string; accountLanguage: "en" | "es" | null },
 ): void {
+  const lockedAt = new Date();
   try {
-    after(() => sendOwnerLineLockoutEmails({ ...p, at: new Date() }));
+    after(() => sendOwnerLineLockoutEmails({ ...p, at: lockedAt }));
   } catch (e) {
     console.error(`owner line: could not schedule the lockout emails, accountId ${p.accountId}: ${String(e)}`);
   }
