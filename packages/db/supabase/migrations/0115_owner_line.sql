@@ -21,12 +21,14 @@
 --     APP computes), the PIN as an scrypt string the APP computes (pin_hash; SQL only compares, 0036's split), the
 --     wrong-PIN counter and the lock. The composite FK to memberships cascades: a person removed from the team, a
 --     deleted user and a deleted account take the row with them.
---   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default. owner_line_changed_at,
---     owner_line_changed_by (a Clerk user id, not an FK: 0091's reason for undone_by) and
---     owner_line_changed_by_agency: who last turned it on or off, and whether that was BIS (owner ruling Q-A: the
---     agency may turn it OFF, never ON; the app enforces the direction). All three set together or none
---     (accounts_owner_line_change_check). No account is born with the switch on or with a change record: a trigger
---     refuses either on INSERT, for every role.
+--   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default. owner_line_changed_at and
+--     owner_line_changed_by_kind ('owner' or 'agency'): WHEN it last changed and WHAT KIND of person changed it, never
+--     WHO. Owner ruling 2026-11-09, "Say BIS, keep names private": every member reads accounts (authenticated holds
+--     table-level SELECT), so no person's id is stored here; the card says "Turned on by the Owner" or "Turned off by
+--     BIS". Which BIS person did it is BIS's own record, written by the app outside this table (plan Task 5).
+--     Both set together or neither (accounts_owner_line_change_check). Owner ruling Q-A in the database: the agency
+--     may turn it OFF, never ON, so a row whose last change was BIS's is off (accounts_owner_line_agency_off_check).
+--     No account is born with any of the three set: a trigger refuses each on INSERT, for every role.
 --   public.calls.owner_line_user_id: the person an owner-line call was for; null on every customer call. No foreign
 --     key on purpose: the mark must outlive a deleted user, or the call would start counting as a customer's.
 --   app.owner_line_day_start(zone, instant): the first instant of the instant's local date in that zone (owner
@@ -36,6 +38,10 @@
 --     service_role may insert actor_kind. access_log_page reads actor_kind = 'agency' only, so the Team page's BIS
 --     access section is unchanged (its parser, parseVisit in packages/db/src/access-log.ts, refuses any reason
 --     outside setup, support, fix and billing, so an unfiltered page would break that section outright).
+--     agency_visit_live (0105) is NOT changed and does not filter on actor_kind. It finds a visit by actor, account
+--     AND clerk_session_id, and it stays agency-only because the two session shapes never meet: an owner-line visit's
+--     is 'call:<calls.id>', a Clerk session id is 'sess_...'. Anything that ever writes another session shape into
+--     agency_visits must add actor_kind = 'agency' to agency_visit_live first.
 -- FUNCTIONS. Seven callable, all SECURITY INVOKER with set search_path = pg_catalog, pg_temp (0096's rule), EXECUTE
 --   to service_role only: app.owner_line_day_start, owner_line_answer_lookup, owner_line_start_verification,
 --   owner_line_attempt_verify, owner_line_attempt_pin, owner_line_session_check, note_owner_line_call. Plus one
@@ -85,8 +91,9 @@
 --   drop function public.owner_line_answer_lookup(uuid, text, integer);
 --   drop function app.owner_line_day_start(text, timestamptz);
 --   drop trigger accounts_owner_line_insert_guard on public.accounts; drop function app.owner_line_insert_guard();
---   alter table public.accounts drop constraint accounts_owner_line_change_check, drop column owner_line_changed_at,
---     drop column owner_line_changed_by, drop column owner_line_changed_by_agency;
+--   alter table public.accounts drop constraint accounts_owner_line_agency_off_check,
+--     drop constraint accounts_owner_line_change_check, drop column owner_line_changed_by_kind,
+--     drop column owner_line_changed_at;
 --   re-run 0112's access_log_page (its section 6) as create or replace;
 --   by OWNER DECISION ONLY (it deletes access-log rows): delete from public.agency_visits where actor_kind = 'owner_line';
 --   restore 0112's agency_visit_items_kind_check, 0105's agency_visits_actor_kind_check and agency_visits_reason_check;
@@ -163,30 +170,31 @@ alter table public.owner_line_enrollments enable row level security;
 revoke all on public.owner_line_enrollments from anon, authenticated, service_role;
 grant select, insert, update, delete on public.owner_line_enrollments to service_role;
 
--- 2. The switch and its record.
+-- 2. The switch and its record: when, and what kind of person, never who (owner ruling 2026-11-09).
 alter table public.accounts
   add column owner_line_enabled_at timestamptz,
   add column owner_line_changed_at timestamptz,
-  add column owner_line_changed_by text,
-  add column owner_line_changed_by_agency boolean,
-  add constraint accounts_owner_line_change_check check (
-    (owner_line_changed_at is null) = (owner_line_changed_by is null)
-    and (owner_line_changed_at is null) = (owner_line_changed_by_agency is null)
-    and (owner_line_changed_by is null or btrim(owner_line_changed_by) <> ''));
+  add column owner_line_changed_by_kind text constraint accounts_owner_line_changed_by_kind_check
+    check (owner_line_changed_by_kind in ('owner', 'agency')),
+  add constraint accounts_owner_line_change_check
+    check ((owner_line_changed_at is null) = (owner_line_changed_by_kind is null)),
+  add constraint accounts_owner_line_agency_off_check
+    check (owner_line_changed_by_kind is distinct from 'agency' or owner_line_enabled_at is null);
 comment on column public.accounts.owner_line_enabled_at is
   'F-032 (0115): when the Owner let the team call in to hear the day; null = off (the default). Only the client''s Owner turns it on; the agency may turn it off (owner ruling Q-A).';
-comment on column public.accounts.owner_line_changed_by is
-  'F-032 (0115): the Clerk user id of whoever last turned the switch on or off; owner_line_changed_by_agency says whether that was BIS.';
+comment on column public.accounts.owner_line_changed_by_kind is
+  'F-032 (0115): who last turned the switch on or off, as a kind only: owner (the client''s Owner) or agency (BIS). Never a person''s id (owner ruling 2026-11-09: every member reads accounts). BIS may only turn it off (accounts_owner_line_agency_off_check).';
 
 -- The switch is never ON at birth (spec 3.3: the client's Owner decides), and no account is born carrying a record of
 -- a change nobody made. authenticated holds a TABLE-level INSERT on accounts (schema-grants-guard.test.ts
 -- EXPECTED_WRITES), so a column grant cannot express this; a trigger can, for every role, service_role's
--- createAccount included (it never sets these columns). The change check pairs the three record columns, so testing
--- owner_line_changed_at covers all three.
+-- createAccount included (it never sets these columns). It tests each of the three columns by name, so its own
+-- refusal (this message, no constraint name) comes before any CHECK could refuse the same row.
 create function app.owner_line_insert_guard() returns trigger
 language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
 begin
-  if new.owner_line_enabled_at is not null or new.owner_line_changed_at is not null then
+  if new.owner_line_enabled_at is not null or new.owner_line_changed_at is not null
+     or new.owner_line_changed_by_kind is not null then
     raise exception 'accounts: the owner line starts off; only the client''s Owner turns it on' using errcode = '23514';
   end if;
   return new;

@@ -361,37 +361,91 @@ describe("0115: the account's local day (owner ruling Q-F)", () => {
 });
 
 describe("0115: the switch's guard and its record (owner rulings Q-A, spec 3.3)", () => {
+  // The guard's own refusal carries its message and no constraint name, so each case below fails if the guard stops
+  // testing its column, even where a CHECK would still refuse the same row with another message.
+  const GUARD = { code: "23514", message: expect.stringMatching(/the owner line starts off/) };
+  const newAccount = async (c: Client, tag: string, cols: string, vals: string) => {
+    const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
+    return c.query(`insert into accounts (agency_id, clerk_org_id, name${cols}) values ($1, $2, 'OL guard'${vals})`,
+      [ag!.id, `org_ol_${tag}_${RUN}`]);
+  };
+
   it("no account can be CREATED with the switch on, by any role (probe: drop trigger accounts_owner_line_insert_guard -> FAILS)", () =>
     withRollback(async (c) => {
-      const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
-      await expect(c.query(
-        "insert into accounts (agency_id, clerk_org_id, name, owner_line_enabled_at) values ($1, $2, 'OL guard', now())",
-        [ag!.id, `org_ol_guard_${RUN}`])).rejects.toMatchObject({ code: "23514" });
+      await expect(newAccount(c, "guard", ", owner_line_enabled_at", ", now()")).rejects.toMatchObject(GUARD);
     }));
 
-  it("no account can be created carrying a record of a change that never happened (probe: test only owner_line_enabled_at in the guard -> FAILS)", () =>
+  // One column per case: a row that sets two guarded columns is still refused by the other one when the guard forgets
+  // either, so it cannot catch that probe (it survived on the replica, 2026-11-09).
+  it("no account can be created carrying a record of a change that never happened (no CHECK reaches this row: both record columns set; probe: drop trigger -> FAILS)", () =>
     withRollback(async (c) => {
-      const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
-      await expect(c.query(
-        `insert into accounts (agency_id, clerk_org_id, name, owner_line_changed_at, owner_line_changed_by, owner_line_changed_by_agency)
-         values ($1, $2, 'OL guard', now(), 'user_forged', false)`,
-        [ag!.id, `org_ol_guard3_${RUN}`])).rejects.toMatchObject({ code: "23514" });
+      await expect(newAccount(c, "guard3", ", owner_line_changed_at, owner_line_changed_by_kind", ", now(), 'owner'")).rejects.toMatchObject(GUARD);
+    }));
+
+  it("no account can be created with only a change time set (probe: drop owner_line_changed_at from the guard -> the pair CHECK refuses instead, FAILS)", () =>
+    withRollback(async (c) => {
+      await expect(newAccount(c, "guard5", ", owner_line_changed_at", ", now()")).rejects.toMatchObject(GUARD);
+    }));
+
+  it("no account can be created with only a who-kind set (probe: drop owner_line_changed_by_kind from the guard -> the pair CHECK refuses instead, FAILS)", () =>
+    withRollback(async (c) => {
+      await expect(newAccount(c, "guard4", ", owner_line_changed_by_kind", ", 'agency'")).rejects.toMatchObject(GUARD);
     }));
 
   it("an account created with it off is fine, and the record columns start empty", () =>
     withRollback(async (c) => {
-      const { rows: [ag] } = await c.query<{ id: string }>("insert into agencies (name) values ('OL guard') returning id");
+      await newAccount(c, "guard2", "", "");
       const { rows: [a] } = await c.query(
-        "insert into accounts (agency_id, clerk_org_id, name) values ($1, $2, 'OL guard') returning owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by, owner_line_changed_by_agency",
-        [ag!.id, `org_ol_guard2_${RUN}`]);
-      expect(a).toEqual({ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by: null, owner_line_changed_by_agency: null });
+        "select owner_line_enabled_at, owner_line_changed_at, owner_line_changed_by_kind from accounts where clerk_org_id = $1",
+        [`org_ol_guard2_${RUN}`]);
+      expect(a).toEqual({ owner_line_enabled_at: null, owner_line_changed_at: null, owner_line_changed_by_kind: null });
     }));
 
-  it("the record travels with the switch: a change names who and whether it was the agency (probe: drop accounts_owner_line_change_check -> FAILS)", () =>
+  it("accounts stores WHO-KIND and WHEN only, never a person's id: exactly three owner_line columns (owner ruling 2026-11-09, 'Say BIS, keep names private'; probe: add owner_line_changed_by text -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select column_name, data_type, is_nullable from information_schema.columns
+          where table_schema = 'public' and table_name = 'accounts' and column_name like 'owner_line%' order by column_name`);
+      expect(rows).toEqual([
+        { column_name: "owner_line_changed_at", data_type: "timestamp with time zone", is_nullable: "YES" },
+        { column_name: "owner_line_changed_by_kind", data_type: "text", is_nullable: "YES" },
+        { column_name: "owner_line_enabled_at", data_type: "timestamp with time zone", is_nullable: "YES" },
+      ]);
+    }));
+
+  it("the record travels with the switch: a change says when AND who-kind (probe: drop accounts_owner_line_change_check -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await expect(c.query("update accounts set owner_line_changed_at = now() where id = $1", [s.a]))
         .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_change_check" });
+    }));
+
+  it("the who-kind is the Owner or BIS, nothing else (probe: drop accounts_owner_line_changed_by_kind_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("update accounts set owner_line_changed_at = now(), owner_line_changed_by_kind = 'user_2abc' where id = $1", [s.a]))
+        .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_changed_by_kind_check" });
+    }));
+
+  it("the Owner may leave it on or off; BIS may leave it off", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const set = (on: boolean, kind: string) => c.query(
+        `update accounts set owner_line_enabled_at = case when $2 then now() end, owner_line_changed_at = now(),
+                owner_line_changed_by_kind = $3 where id = $1`, [s.a, on, kind]);
+      await set(true, "owner");
+      await set(false, "owner");
+      await set(false, "agency");
+      const { rows } = await c.query("select owner_line_enabled_at, owner_line_changed_by_kind from accounts where id = $1", [s.a]);
+      expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_by_kind: "agency" }]);
+    }));
+
+  it("BIS's last word can only be OFF: on with who-kind agency is refused (owner ruling Q-A; probe: drop accounts_owner_line_agency_off_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query(
+        "update accounts set owner_line_enabled_at = now(), owner_line_changed_at = now(), owner_line_changed_by_kind = 'agency' where id = $1", [s.a]))
+        .rejects.toMatchObject({ code: "23514", constraint: "accounts_owner_line_agency_off_check" });
     }));
 });
 
