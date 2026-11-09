@@ -109,8 +109,11 @@ Nov 9, 2:14 PM" or "Turned off by BIS, Nov 9, 2:14 PM". Every member of the
 business can read the account's row, so it stores only that kind ("owner"
 or "agency") and the time, never a person's id. Which BIS person turned it
 off is kept in BIS's own record, which only BIS can read. The database
-holds the rule too: a business whose last change was BIS's is always off,
-and the switch never moves without a fresh record of who-kind and when.)
+holds part of the rule too: a business whose last change was BIS's is
+always off, a switch that is on always has its record, and the switch
+never moves without a fresh TIME on that record. It does not check that the
+who-kind is current: the app always writes the kind with the time, and
+asking for the state the switch is already in writes nothing.)
 
 ### 3.4 Storage (one migration, numbered after 0114)
 
@@ -127,7 +130,9 @@ and the switch never moves without a fresh record of who-kind and when.)
 - `accounts.owner_line_enabled_at` (timestamptz, null = off), so the switch
   records when it was turned on, with `owner_line_changed_at` and
   `owner_line_changed_by_kind` ('owner' or 'agency') for the last change
-  (§3.3's 2026-11-09 amendment: never a person's id).
+  (§3.3's 2026-11-09 amendment: never a person's id; the database
+  guarantees a fresh time and an ON switch's record, the app keeps the kind
+  current).
 - `calls.owner_line_user_id` (uuid, null for every customer call), which
   marks an owner-line call.
 - RLS: a person reads and writes only their own enrollment, and never sees
