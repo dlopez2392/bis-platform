@@ -45,7 +45,10 @@ export async function getVoicePresence(
   // report's own answered-calls helper, so "handled" means what "calls
   // answered" means there: robocalls and the agency's test calls never count.
   // `countCallsSince` stays what the call CAPS read — those must count every
-  // call that cost money, which is a different question.
+  // customer call that cost money, which is a different question. An
+  // owner-line call (F-032, 0115) is in neither: it is bounded by its own
+  // per-person limit (owner_line_answer_lookup, owner_line_session_check),
+  // and the answered-calls helper leaves it out (owner ruling Q-E).
   //
   // Until 2026-10-26 this counted from Monday 00:00 local (the calendar
   // week), which read "✓ 0 calls handled this week" on every Monday morning

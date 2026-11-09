@@ -91,6 +91,7 @@ const ROW: CallListRow = {
   id: "c1",
   started_at: "2026-08-25T19:15:00.123456+00:00",
   ended_at: "2026-08-25T19:15:48.000000+00:00",
+  owner_line_user_id: null,
   duration_secs: null,
   outcome: "abandoned",
   language: "en",

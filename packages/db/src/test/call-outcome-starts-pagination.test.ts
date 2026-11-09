@@ -24,6 +24,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
   const gteCalls: Array<[string, unknown]> = [];
   const ltCalls: Array<[string, unknown]> = [];
   const orCalls: string[] = [];
+  const isCalls: Array<[string, unknown]> = [];
   let call = 0;
   const builder: Record<string, unknown> = {
     eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return builder; },
@@ -33,6 +34,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
     order: (col: string, opts: unknown) => { orderCalls.push([col, opts]); return builder; },
     gt: (col: string, val: unknown) => { gtCalls.push([col, val]); return builder; },
     or: (filter: string) => { orCalls.push(filter); return builder; },
+    is: (col: string, val: unknown) => { isCalls.push([col, val]); return builder; },
     limit: async (n: number) => {
       limitCalls.push(n);
       const data = pages[call] ?? [];
@@ -41,7 +43,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
     },
   };
   const db = { from: () => ({ select: () => builder }) } as unknown as SupabaseClient;
-  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls, gteCalls, ltCalls, orCalls };
+  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls, gteCalls, ltCalls, orCalls, isCalls };
 }
 
 describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercount)", () => {
@@ -130,6 +132,21 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
 
     expect(limitCalls.length).toBe(3);
     expect(eqCalls).toEqual(limitCalls.map(() => ["account_id", "acct_1"]));
+  });
+
+  // F-032 (0115): the ONE choke point for "calls answered", leads, spam and hang-ups never returns an owner-line call
+  // (owner ruling Q-E). Pinned here without a database; owner-line-counting.test.ts proves PostgREST reads it so.
+  it("leaves owner-line calls out on EVERY page, not just the first (mutation: drop .is(owner_line_user_id, null) -> FAILS)", async () => {
+    const { db, isCalls, limitCalls } = fakeCallsDb([
+      [{ id: "a", started_at: "2027-01-01T00:00:00.000Z" }],
+      [{ id: "b", started_at: "2027-01-02T00:00:00.000Z" }],
+      [],
+    ]);
+
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 1 });
+
+    expect(limitCalls.length).toBe(3);
+    expect(isCalls).toEqual(limitCalls.map(() => ["owner_line_user_id", null]));
   });
 
   // The agency's own test handsets (`agencyHandsets()` in apps/web). The
