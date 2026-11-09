@@ -7,11 +7,19 @@ const ENV = { OWNER_LINE_PIN_PEPPER: "p".repeat(40) } as unknown as NodeJS.Proce
 const OTHER = { OWNER_LINE_PIN_PEPPER: "q".repeat(40) } as unknown as NodeJS.ProcessEnv;
 
 describe("checkPin (spec §3.1: exactly 6 digits; 000000, 123456, a repeated digit, a run refused with a reason)", () => {
-  it.each([["000000", "repeated"], ["777777", "repeated"], ["123456", "run"], ["654321", "run"], ["345678", "run"],
-    ["12345", "not_six_digits"], ["1234567", "not_six_digits"], ["12a456", "not_six_digits"], [" 48291", "not_six_digits"]])(
-    "%s is refused as %s (mutation: drop the descending run -> 654321 passes, FAILS)", (pin, reason) => {
-      expect(checkPin(pin)).toEqual({ ok: false, reason });
-    });
+  it.each([
+    ["000000", "repeated", "all zeros"],
+    ["777777", "repeated", "one digit six times"],
+    ["123456", "run", "the ascending run from 1"],
+    ["654321", "run", "a descending run (mutation: drop the descending run -> FAILS)"],
+    ["345678", "run", "an ascending run that does not start at 1"],
+    ["12345", "not_six_digits", "five digits"],
+    ["1234567", "not_six_digits", "seven digits"],
+    ["12a456", "not_six_digits", "a letter among the digits"],
+    [" 48291", "not_six_digits", "a leading space"],
+  ])("%s is refused as %s: %s", (pin, reason) => {
+    expect(checkPin(pin)).toEqual({ ok: false, reason });
+  });
   it.each(["482913", "135790", "112358", "090807"])("%s is accepted", (pin) => {
     expect(checkPin(pin)).toEqual({ ok: true });
   });
@@ -36,11 +44,26 @@ describe("hashPin / candidateFor (SC-6: peppered scrypt; SQL compares the string
     const h = await hashPin("482913", ENV);
     expect(await candidateFor("482913", h.slice(0, 36), OTHER)).not.toBe(h);
   });
+  it("a known answer, computed outside this file with scryptSync(HMAC-SHA256(PIN) keyed by sha256(\"bis-owner-line-pin:\" + pepper), salt, 32, {N: 2**17, r: 8, p: 1}) (mutations: N = 2**16; N = 2**10 with r = 1; the handoff key domain; the raw pepper as the HMAC key -> each FAILS)", async () => {
+    expect(PIN_PARAMS_PREFIX).toBe("scrypt:17:8:1:");
+    expect(await candidateFor("482913", PIN_PARAMS_PREFIX + "AAAAAAAAAAAAAAAAAAAAAA", ENV))
+      .toBe("scrypt:17:8:1:AAAAAAAAAAAAAAAAAAAAAA:ShB19WHKMzNMK8TkJhYrbry-KQiFxCfEK5dcl71dz4E");
+  });
   it("no pepper, or a short one, refuses to hash or check at all, rather than silently hashing without it", async () => {
     expect(pinPepperConfigured({} as NodeJS.ProcessEnv)).toBe(false);
     expect(pinPepperConfigured({ OWNER_LINE_PIN_PEPPER: "short" } as unknown as NodeJS.ProcessEnv)).toBe(false);
     await expect(hashPin("482913", {} as NodeJS.ProcessEnv)).rejects.toThrow(/OWNER_LINE_PIN_PEPPER/);
     await expect(candidateFor("482913", PIN_PARAMS_PREFIX + "A".repeat(22), {} as NodeJS.ProcessEnv)).rejects.toThrow(/OWNER_LINE_PIN_PEPPER/);
+  });
+  it("names an unset pepper and a short one as different problems, and never prints the value or its length", async () => {
+    const SHORT = "shortpepper-xyz";   // 15 characters
+    await expect(hashPin("482913", {} as NodeJS.ProcessEnv)).rejects.toThrow("owner line: OWNER_LINE_PIN_PEPPER is not set");
+    await expect(hashPin("482913", { OWNER_LINE_PIN_PEPPER: "   " } as unknown as NodeJS.ProcessEnv))
+      .rejects.toThrow("owner line: OWNER_LINE_PIN_PEPPER is not set");
+    const err = await hashPin("482913", { OWNER_LINE_PIN_PEPPER: SHORT } as unknown as NodeJS.ProcessEnv).then(() => null, (e: Error) => e);
+    expect(err?.message).toBe("owner line: OWNER_LINE_PIN_PEPPER is too short (it needs at least 32 characters)");
+    expect(err?.message).not.toContain(SHORT);
+    expect(err?.message).not.toMatch(/\b15\b/);
   });
   it("a malformed prefix or a non-6-digit entry has no candidate (it can never match)", async () => {
     const h = await hashPin("482913", ENV);

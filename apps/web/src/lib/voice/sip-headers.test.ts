@@ -126,7 +126,18 @@ describe("sipAttestation", () => {
   });
 });
 
-it("extractOwnerPass reads X-BIS-Owner-Pass verbatim, case-insensitively, and null when absent", () => {
-  expect(extractOwnerPass({ sip_headers: [{ name: "x-bis-owner-pass", value: " 1.a.b.owner.19565550100.mac " }] })).toBe("1.a.b.owner.19565550100.mac");
-  expect(extractOwnerPass({ sip_headers: [{ name: "X-BIS-Signature", value: "v" }] })).toBeNull();
+describe("extractOwnerPass", () => {
+  it("reads X-BIS-Owner-Pass verbatim and trimmed, in our own casing and any other (mutation: a case-sensitive name match -> FAILS)", () => {
+    const value = "1.a.b.owner.19565550100.mac";
+    for (const name of ["X-BIS-Owner-Pass", "x-bis-owner-pass", "X-Bis-Owner-Pass"]) {
+      expect(extractOwnerPass(ev([{ name, value: ` ${value} ` }]))).toBe(value);
+    }
+  });
+  it("absent, blank and degenerate inputs -> null", () => {
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Signature", value: "v" }]))).toBeNull();
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Owner-Pass", value: "  " }]))).toBeNull();
+    for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
+      expect(extractOwnerPass(bad)).toBeNull();
+    }
+  });
 });

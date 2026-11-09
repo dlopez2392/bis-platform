@@ -168,6 +168,37 @@ describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
     expect(verifyOwnerPass(mint().replace(A, B), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
     expect(verifyOwnerPass(mint().replace(".staff.", ".owner."), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
   });
+  it("is refused when another person is swapped in under the original MAC (mutation: leave userId out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`.${U}.`, `.${B}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when another called number is swapped in under the original MAC (mutation: leave the called digits out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(".19565550100.", ".19565550199.");
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when the issue time is shifted under the original MAC, so the window cannot be moved (mutation: leave issued-at out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`${T0}.`, `${T0 + 30_000}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0 + 30_000, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("a pass dated 60 s ahead of the clock is valid and 61 s ahead is expired (mutation: drop Math.abs -> FAILS)", () => {
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 60_000, env).ok).toBe(true);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 61_000, env)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("a clock or window that is not a finite number never verifies (mutation: the plain `Math.abs(nowMs - issued) > maxAgeMs` check -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(verifyOwnerPass(mint(), TOKEN, now, env)).toEqual({ ok: false, reason: "expired" });
+    }
+    expect(verifyOwnerPass(mint(), TOKEN, T0, env, Number.NaN)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("is never minted on a clock that is not a finite, non-negative number (mutation: drop the clock guard in signOwnerPass -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, now, env)).toBeNull();
+    }
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, 0, env)).not.toBeNull();
+  });
   it("is bound to this call's handoff token", () => {
     expect(verifyOwnerPass(mint(), "b".repeat(32), T0, env)).toEqual({ ok: false, reason: "bad-signature" });
   });

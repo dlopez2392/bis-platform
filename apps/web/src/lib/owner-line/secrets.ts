@@ -15,10 +15,12 @@
 // because a 10-minute, 3-attempt code is defended by its limits.
 import { createHash, createHmac, randomBytes, randomInt, scrypt } from "node:crypto";
 
-export const PIN_PARAMS_PREFIX = "scrypt:17:8:1:";
 const N = 2 ** 17;
 const R = 8;
 const P = 1;
+/** "scrypt:17:8:1:", built from the parameters it names, so the stored string can never claim a cost it was not
+ *  derived at. */
+export const PIN_PARAMS_PREFIX = `scrypt:${Math.log2(N)}:${R}:${P}:`;
 const KEYLEN = 32;
 /** 128 * N * r = 128 MiB; node refuses at its default maxmem, so 256 MiB. */
 const MAXMEM = 256 * 1024 * 1024;
@@ -41,8 +43,12 @@ export function pinPepperConfigured(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 function peppered(pin: string, env: NodeJS.ProcessEnv): string {
+  // Two messages, neither carrying the value or its length.
   const pepper = env.OWNER_LINE_PIN_PEPPER?.trim();
-  if (!pepper || pepper.length < PEPPER_MIN) throw new Error("owner line: OWNER_LINE_PIN_PEPPER is not set");
+  if (!pepper) throw new Error("owner line: OWNER_LINE_PIN_PEPPER is not set");
+  if (pepper.length < PEPPER_MIN) {
+    throw new Error(`owner line: OWNER_LINE_PIN_PEPPER is too short (it needs at least ${PEPPER_MIN} characters)`);
+  }
   const key = createHash("sha256").update(`bis-owner-line-pin:${pepper}`).digest();
   return createHmac("sha256", key).update(pin, "utf8").digest("base64url");
 }

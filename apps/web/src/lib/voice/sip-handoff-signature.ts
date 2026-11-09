@@ -156,7 +156,7 @@ export function signOwnerPass(
 ): string | null {
   const k = ownerKey(env);
   const called = digitsOf(p.calledE164);
-  if (!k || !handoffToken || !UUID.test(p.accountId) || !UUID.test(p.userId)
+  if (!k || !handoffToken || !Number.isFinite(nowMs) || nowMs < 0 || !UUID.test(p.accountId) || !UUID.test(p.userId)
       || !PASS_ROLES.includes(p.role) || !DIGITS.test(called)) return null;
   const payload = `${Math.trunc(nowMs)}.${p.accountId}.${p.userId}.${p.role}.${called}`;
   return `${payload}.${mac(k, handoffToken, payload)}`;
@@ -184,6 +184,8 @@ export function verifyOwnerPass(
   const expected = Buffer.from(mac(k, handoffToken ?? "", `${issuedRaw}.${accountId}.${userId}.${role}.${called}`));
   const actual = Buffer.from(given);
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return { ok: false, reason: "bad-signature" };
-  if (Math.abs(nowMs - issued) > maxAgeMs) return { ok: false, reason: "expired" };
+  // Both directions (a pass from the future is a clock problem or a forgery), and written so that a NaN clock or
+  // window can only fail: every comparison with NaN is false.
+  if (!Number.isFinite(nowMs) || !(Math.abs(nowMs - issued) <= maxAgeMs)) return { ok: false, reason: "expired" };
   return { ok: true, accountId, userId, role: role as OwnerPassRole, calledE164: `+${called}`, issuedAtMs: issued };
 }
