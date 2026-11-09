@@ -8056,6 +8056,19 @@ export const m = {
   "ownerLine.switch.byBis.es": "BIS",
   "ownerLine.switch.byOwner": "the Owner",
   "ownerLine.switch.byOwner.es": "el Dueño",
+  // F-032 Task 11: the words the owner line's tools hand Sofía to say (lib/owner-line/tools/read.ts).
+  "ownerLine.tool.newCaller": "a new caller",
+  "ownerLine.tool.newCaller.es": "una persona nueva",
+  "ownerLine.tool.aCustomer": "a customer",
+  "ownerLine.tool.aCustomer.es": "un cliente",
+  "ownerLine.tool.outcome.booked": "booked an appointment",
+  "ownerLine.tool.outcome.booked.es": "agendó una cita",
+  "ownerLine.tool.outcome.lead": "left their details",
+  "ownerLine.tool.outcome.lead.es": "dejó sus datos",
+  "ownerLine.tool.outcome.message": "left a message",
+  "ownerLine.tool.outcome.message.es": "dejó un mensaje",
+  "ownerLine.tool.outcome.transferred": "was put through to a person",
+  "ownerLine.tool.outcome.transferred.es": "se le comunicó con una persona",
 } as const;
 
 export type MessageKey = keyof typeof m;
