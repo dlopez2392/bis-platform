@@ -185,3 +185,44 @@ describe("the owner-line wrappers reach their functions (F-032 Task 2)", () => {
       await expect(setOwnerLineSwitch(db, gone, false, "agency")).rejects.toThrow(`setOwnerLineSwitch: no such account ${gone}`);
     }));
 });
+
+/** A person on the account, through the service client; the users row is not account-owned, so `done` deletes it. */
+async function seedPerson(db: SupabaseClient, accountId: string, role: "owner" | "staff") {
+  const clerk = `user_ol_p_${randomBytes(4).toString("hex")}`;
+  const { data: u, error: uErr } = await db.from("users").insert({ clerk_user_id: clerk, email: `${clerk}@example.com` }).select("id").single();
+  if (uErr || !u) throw new Error(`seed user: ${uErr?.message}`);
+  const userId = (u as { id: string }).id;
+  const { error: mErr } = await db.from("memberships").insert({ user_id: userId, scope: "account", account_id: accountId, role });
+  if (mErr) throw new Error(`seed membership: ${mErr.message}`);
+  return {
+    userId,
+    done: async () => {
+      const { error } = await db.from("users").delete().eq("id", userId);
+      if (error) throw new Error(`owner-line test cleanup (users) failed: ${error.message}`);
+    },
+  };
+}
+
+describe("the owner-line wrappers: an unverified cell and the restart cap (Task 5 review m-1, I-2)", () => {
+  it("setting a PIN on a cell that is not verified answers false and stores nothing, never a database error (mutation: drop the verified-only filter -> the CHECK throws, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const p = await seedPerson(db, accountId, "staff");
+      try {
+        expect(await startOwnerLineVerification(db, accountId, p.userId, CELL, randomBytes(32).toString("hex"))).toBe("ok");
+        expect(await setOwnerLinePin(db, accountId, p.userId, `scrypt:17:8:1:${"A".repeat(22)}:${"B".repeat(43)}`)).toBe(false);
+        expect(await readMyOwnerLineEnrollment(db, accountId, p.userId)).toMatchObject({ e164: CELL, verifiedAt: null, pinSetAt: null });
+      } finally { await p.done(); }
+    }));
+
+  it("five starts a day; removing the cell reads as no enrollment but does NOT reset the count (mutations: removal deletes the row -> 'ok'; the wrapper drops too_many -> throws; FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const p = await seedPerson(db, accountId, "staff");
+      try {
+        const code = () => randomBytes(32).toString("hex");
+        for (let i = 1; i <= 5; i++) expect(await startOwnerLineVerification(db, accountId, p.userId, `+1956555040${i}`, code())).toBe("ok");
+        await removeOwnerLineEnrollment(db, accountId, p.userId);
+        expect(await readMyOwnerLineEnrollment(db, accountId, p.userId)).toBeNull();
+        expect(await startOwnerLineVerification(db, accountId, p.userId, "+19565550499", code())).toBe("too_many");
+      } finally { await p.done(); }
+    }));
+});

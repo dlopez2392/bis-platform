@@ -33,12 +33,16 @@ export type OwnerLineSessionFacts = {
 const ROLES: readonly string[] = ["owner", "staff", "technician"];
 const lang = (v: unknown): "en" | "es" | null => (v === "en" || v === "es" ? v : null);
 
+/**
+ * This person's cell on this business, or null when they have none. A row whose cell was displaced or removed stays
+ * (its restart count must survive: 0115, Task 5 review I-2) with e164 null, and reads as null here, exactly as no row.
+ */
 export async function readMyOwnerLineEnrollment(
   db: SupabaseClient, accountId: string, userId: string,
 ): Promise<OwnerLineEnrollment | null> {
   const { data, error } = await db.from("owner_line_enrollments")
     .select("id, e164, verified_at, verify_expires_at, pin_set_at, locked_until")
-    .eq("account_id", accountId).eq("user_id", userId).maybeSingle();
+    .eq("account_id", accountId).eq("user_id", userId).not("e164", "is", null).maybeSingle();
   if (error) throw new Error(`readMyOwnerLineEnrollment failed: ${error.message}`);
   if (!data) return null;
   const r = data as { id: string; e164: string; verified_at: string | null; verify_expires_at: string | null;
@@ -47,14 +51,21 @@ export async function readMyOwnerLineEnrollment(
     pinSetAt: r.pin_set_at, lockedUntil: r.locked_until };
 }
 
+/**
+ * Start (or restart) a call-in code for this person's cell on this business.
+ *   - "ok": stored. A lapsed or spent unverified claim on the cell by someone else was displaced first.
+ *   - "taken": another person on this business holds the cell (verified, or with a live code).
+ *   - "too_many": this person has started five codes on this business in the last 24 hours. NOTHING was stored, so the
+ *     caller must not show a code (Task 5 review I-2; the bound and its reason are in 0115's header).
+ */
 export async function startOwnerLineVerification(
   db: SupabaseClient, accountId: string, userId: string, e164: string, codeHash: string,
-): Promise<"ok" | "taken"> {
+): Promise<"ok" | "taken" | "too_many"> {
   const { data, error } = await db.rpc("owner_line_start_verification", {
     p_account_id: accountId, p_user_id: userId, p_e164: e164, p_code_hash: codeHash, p_minutes: OWNER_LINE_VERIFY_MINUTES,
   });
   if (error) throw new Error(`startOwnerLineVerification failed: ${error.message}`);
-  if (data === "ok" || data === "taken") return data;
+  if (data === "ok" || data === "taken" || data === "too_many") return data;
   throw new Error(`startOwnerLineVerification: unexpected answer ${JSON.stringify(data)}`);
 }
 
@@ -87,8 +98,16 @@ export async function removeOwnerLinePin(db: SupabaseClient, accountId: string, 
   if (error) throw new Error(`removeOwnerLinePin failed: ${error.message}`);
 }
 
+/**
+ * The person removes their cell: no cell, no code, no PIN, no lock. The row is CLEARED, never deleted, so its restart
+ * count survives (Task 5 review I-2): deleting it would let anyone reset the five-a-day bound by removing and re-adding.
+ * readMyOwnerLineEnrollment then answers null, as for someone who never had a cell.
+ */
 export async function removeOwnerLineEnrollment(db: SupabaseClient, accountId: string, userId: string): Promise<void> {
-  const { error } = await db.from("owner_line_enrollments").delete().eq("account_id", accountId).eq("user_id", userId);
+  const { error } = await db.from("owner_line_enrollments")
+    .update({ e164: null, verified_at: null, verify_code_hash: null, verify_expires_at: null, verify_attempts: 0,
+      pin_hash: null, pin_set_at: null, failed_attempts: 0, locked_until: null })
+    .eq("account_id", accountId).eq("user_id", userId);
   if (error) throw new Error(`removeOwnerLineEnrollment failed: ${error.message}`);
 }
 

@@ -180,7 +180,7 @@ describe("0115 owner_line_enrollments: grants, RLS, function privileges", () => 
 });
 
 describe("0115: one cell is one person per business", () => {
-  it("a second person cannot claim the same cell on the same business; another business can (probe: drop owner_line_enrollments_one_cell -> FAILS)", () =>
+  it("a second person cannot claim the same cell on the same business while the first holds a live code; another business can (probe: displace a live code -> ok, FAILS; the unique key itself is pinned in the I-2 block)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await asService(c);
@@ -748,4 +748,113 @@ describe("0115: teardown", () => {
     expect((ACCOUNT_OWNED_TABLES as readonly string[]).includes("owner_line_enrollments")).toBe(true);
     expect(ACCOUNT_OWNED_TABLES.slice(0, 2)).toEqual(["ai_ledger", "account_ai_settings"]);
   });
+});
+
+// Task 5 review I-2 (2026-11-09): an unverified claim whose code has lapsed or been spent no longer holds a cell. A new
+// claim on that cell DISPLACES it (the displaced person is left with no cell, no code and no PIN); a verified holder or a
+// live code still answers `taken`. And a person may start at most five codes per business in any 24 hours, so nobody
+// can keep a number they do not hold in the call-in prompt for long (spec 2.1).
+describe("0115: a lapsed claim never holds a cell (review I-2)", () => {
+  const CELL = "+19565550123";
+  const start = async (c: Client, account: string, user: string, cell = CELL) => (await c.query(
+    "select public.owner_line_start_verification($1, $2, $3, $4, 10) as r", [account, user, cell, hex64()])).rows[0].r;
+  const rowOf = async (c: Client, user: string) => (await c.query(
+    `select e164, verified_at, verify_code_hash, pin_hash from owner_line_enrollments where user_id = $1`, [user])).rows;
+  const CLEARED = [{ e164: null, verified_at: null, verify_code_hash: null, pin_hash: null }];
+
+  it("an expired claim is displaced: the real holder gets the cell, the other person keeps no cell, code or PIN (probe: never displace -> 'taken', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      expect(await start(c, s.a, s.staff)).toBe("ok");
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.owner)).toBe("ok");
+      expect([(await rowOf(c, s.owner))[0].e164, await rowOf(c, s.staff)]).toEqual([CELL, CLEARED]);
+    }));
+
+  it("a spent claim (three wrong codes) is displaced too (probe: displace only an expired code -> 'taken', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      for (let i = 0; i < 3; i++) await c.query("select public.owner_line_attempt_verify($1, $2, $3)", [s.a, CELL, hex64()]);
+      expect(await start(c, s.a, s.owner)).toBe("ok");
+      expect(await rowOf(c, s.staff)).toEqual(CLEARED);
+    }));
+
+  it("a live code is not displaced: the newcomer is told taken and the holder keeps the cell and the code (probe: displace a live code -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      expect(await start(c, s.a, s.owner)).toBe("taken");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verify_code_hash: expect.any(String) });
+    }));
+
+  it("a verified holder is never displaced, PIN and all (probe: displace a verified row -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect(await start(c, s.a, s.owner)).toBe("taken");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verified_at: expect.anything(), pin_hash: expect.any(String) });
+    }));
+
+  it("another business's claim never displaces this one's, even a lapsed one (probe: drop account_id from the holder read -> A's row cleared, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await start(c, s.a, s.staff);
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.b, s.bOwner)).toBe("ok");
+      expect((await rowOf(c, s.staff))[0]).toMatchObject({ e164: CELL, verify_code_hash: expect.any(String) });
+    }));
+
+  it("five starts per person per business in 24 hours; the sixth is too_many and stores nothing; a day later it is allowed again (probe: no cap -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      const answers = [];
+      for (let i = 1; i <= 6; i++) answers.push(await start(c, s.a, s.staff, `+1956555020${i}`));
+      expect(answers).toEqual(["ok", "ok", "ok", "ok", "ok", "too_many"]);
+      expect((await rowOf(c, s.staff))[0].e164).toBe("+19565550205");
+      expect(await start(c, s.b, s.bOwner, "+19565550206")).toBe("ok");   // another person, another business: their own budget
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_window_started_at = now() - interval '24 hours' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.staff, "+19565550207")).toBe("ok");
+    }));
+
+  it("a displaced or removed row keeps its restart count, so clearing a cell never resets the cap (probe: reset verify_starts when a row is displaced -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      for (let i = 1; i <= 5; i++) await start(c, s.a, s.staff, `+1956555030${i}`);
+      await c.query("reset role");
+      await c.query("update owner_line_enrollments set verify_expires_at = now() - interval '1 second' where user_id = $1", [s.staff]);
+      await asService(c);
+      expect(await start(c, s.a, s.owner, "+19565550305")).toBe("ok");   // displaces the staff member's lapsed claim
+      expect(await start(c, s.a, s.staff, "+19565550399")).toBe("too_many");
+    }));
+
+  // Since I-2 the function answers taken BEFORE it writes, so the unique key is a backstop no function case reaches
+  // (the old "second person" case survived dropping it). Pinned here, on the table itself.
+  it("the table itself refuses a second person on the same cell of the same business (probe: drop owner_line_enrollments_one_cell -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query("insert into owner_line_enrollments (account_id, user_id, e164) values ($1, $2, $3)", [s.a, s.owner, CELL]);
+      await expect(c.query("insert into owner_line_enrollments (account_id, user_id, e164) values ($1, $2, $3)", [s.a, s.staff, CELL]))
+        .rejects.toMatchObject({ code: "23505", constraint: "owner_line_enrollments_one_cell" });
+    }));
+
+  it("a row with no cell can hold no verification, code or PIN (probe: drop owner_line_enrollments_no_cell_check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("insert into owner_line_enrollments (account_id, user_id, e164, verified_at) values ($1, $2, null, now())", [s.a, s.owner]))
+        .rejects.toMatchObject({ code: "23514", constraint: "owner_line_enrollments_no_cell_check" });
+    }));
 });

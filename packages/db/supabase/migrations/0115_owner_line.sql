@@ -23,6 +23,15 @@
 --     APP computes), the PIN as an scrypt string the APP computes (pin_hash; SQL only compares, 0036's split), the
 --     wrong-PIN counter and the lock. The composite FK to memberships cascades: a person removed from the team, a
 --     deleted user and a deleted account take the row with them.
+--     Only a VERIFIED cell, or one with a LIVE code, holds a cell (Task 5 review I-2): a new claim on a cell whose
+--     holder is unverified and whose code has lapsed or been spent displaces that holder, who is left with no cell,
+--     no code and no PIN (e164 is null then; owner_line_enrollments_no_cell_check). Without that, a typo held a
+--     teammate's cell forever and a requester could keep any number, a customer's included, in the call-in prompt.
+--     A row is CLEARED, never deleted, when its cell goes (displaced, or removed by its person), so its restart
+--     counter survives: at most five codes per person per business in any 24 hours (verify_window_started_at,
+--     verify_starts). Why five a day and not five an hour: each start keeps a number in the prompt for at most ten
+--     minutes, so a day bound caps it at 50 minutes a day, where an hour bound would allow most of the day; a
+--     person who mistypes or misses the call still has several tries.
 --   public.accounts.owner_line_enabled_at: the business's switch; null = off, the default. owner_line_changed_at and
 --     owner_line_changed_by_kind ('owner' or 'agency'): WHEN it last changed and WHAT KIND of person changed it, never
 --     WHO. Owner ruling 2026-11-09, "Say BIS, keep names private": every member reads accounts (authenticated holds
@@ -167,7 +176,7 @@ create table public.owner_line_enrollments (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null,
   user_id uuid not null,
-  e164 text not null constraint owner_line_enrollments_e164_check
+  e164 text constraint owner_line_enrollments_e164_check
     check (substr(e164, 1, 1) = '+' and substr(e164, 2, 1) <> '0' and substr(e164, 2) !~ '[^0-9]'
            and char_length(e164) between 9 and 16),
   verified_at timestamptz,
@@ -176,6 +185,9 @@ create table public.owner_line_enrollments (
   verify_expires_at timestamptz,
   verify_attempts integer not null default 0 constraint owner_line_enrollments_verify_attempts_check
     check (verify_attempts between 0 and 3),
+  verify_window_started_at timestamptz,
+  verify_starts integer not null default 0 constraint owner_line_enrollments_verify_starts_check
+    check (verify_starts between 0 and 5),
   pin_hash text constraint owner_line_enrollments_pin_hash_check
     check (pin_hash is null or (char_length(pin_hash) = 80 and substr(pin_hash, 1, 14) = 'scrypt:17:8:1:'
            and substr(pin_hash, 15) !~ '[^A-Za-z0-9_:-]')),
@@ -190,7 +202,9 @@ create table public.owner_line_enrollments (
   constraint owner_line_enrollments_one_cell unique (account_id, e164),
   constraint owner_line_enrollments_pin_pair_check check ((pin_hash is null) = (pin_set_at is null)),
   constraint owner_line_enrollments_code_pair_check check ((verify_code_hash is null) = (verify_expires_at is null)),
-  constraint owner_line_enrollments_pin_needs_cell_check check (pin_hash is null or verified_at is not null)
+  constraint owner_line_enrollments_pin_needs_cell_check check (pin_hash is null or verified_at is not null),
+  constraint owner_line_enrollments_no_cell_check
+    check (e164 is not null or (verified_at is null and verify_code_hash is null and pin_hash is null))
 );
 comment on table public.owner_line_enrollments is
   'F-032 (0115): a person''s registered cell and PIN for calling in to hear the day. Server-written and server-read only.';
@@ -422,17 +436,43 @@ begin
   return v_base || jsonb_build_object('status', 'pin', 'pin_params', substr(e.pin_hash, 1, 36));
 end $$;
 
--- 5. (Re)start a call-in code. A new cell clears the verification, the PIN, the counter and the lock.
+-- 5. (Re)start a call-in code. A new cell clears the verification, the PIN, the counter and the lock. Answers 'ok',
+--    'taken' (another person on this business holds the cell: verified, or with a live code) or 'too_many' (this
+--    person has started five codes on this business in the last 24 hours; nothing is stored). A lapsed or spent
+--    unverified claim on the cell is displaced first (review I-2). One cell at a time on one business: the advisory
+--    lock below serializes two claims racing for the same cell, so only one of them can displace.
 create function public.owner_line_start_verification(
   p_account_id uuid, p_user_id uuid, p_e164 text, p_code_hash text, p_minutes integer)
 returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare mine public.owner_line_enrollments%rowtype; holder public.owner_line_enrollments%rowtype;
+        v_fresh boolean;
 begin
   if p_account_id is null or p_user_id is null or p_e164 is null or p_code_hash is null or p_minutes is null then
     raise exception 'owner_line_start_verification: a required argument is null' using errcode = '22004';
   end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('owner_line_cell|' || p_account_id::text || '|' || p_e164, 0));
+  select * into mine from public.owner_line_enrollments
+   where account_id = p_account_id and user_id = p_user_id for update;
+  v_fresh := not found or mine.verify_window_started_at is null
+    or mine.verify_window_started_at <= now() - interval '24 hours';
+  if not v_fresh and mine.verify_starts >= 5 then return 'too_many'; end if;
+  select * into holder from public.owner_line_enrollments
+   where account_id = p_account_id and e164 = p_e164 and user_id <> p_user_id for update;
+  if found then
+    if holder.verified_at is not null
+       or (holder.verify_code_hash is not null and holder.verify_expires_at > now() and holder.verify_attempts < 3) then
+      return 'taken';
+    end if;
+    update public.owner_line_enrollments
+       set e164 = null, verified_at = null, verify_code_hash = null, verify_expires_at = null, verify_attempts = 0,
+           pin_hash = null, pin_set_at = null, failed_attempts = 0, locked_until = null
+     where id = holder.id;
+  end if;
   begin
-    insert into public.owner_line_enrollments as e (account_id, user_id, e164, verify_code_hash, verify_expires_at)
-    values (p_account_id, p_user_id, p_e164, p_code_hash, now() + make_interval(mins => p_minutes))
+    insert into public.owner_line_enrollments as e
+      (account_id, user_id, e164, verify_code_hash, verify_expires_at, verify_window_started_at, verify_starts)
+    values (p_account_id, p_user_id, p_e164, p_code_hash, now() + make_interval(mins => p_minutes), now(), 1)
     on conflict (account_id, user_id) do update
        set e164 = excluded.e164,
            verify_code_hash = excluded.verify_code_hash,
@@ -442,7 +482,9 @@ begin
            pin_hash = case when e.e164 = excluded.e164 then e.pin_hash end,
            pin_set_at = case when e.e164 = excluded.e164 then e.pin_set_at end,
            failed_attempts = case when e.e164 = excluded.e164 then e.failed_attempts else 0 end,
-           locked_until = case when e.e164 = excluded.e164 then e.locked_until end;
+           locked_until = case when e.e164 = excluded.e164 then e.locked_until end,
+           verify_window_started_at = case when v_fresh then now() else e.verify_window_started_at end,
+           verify_starts = case when v_fresh then 1 else e.verify_starts + 1 end;
   exception when unique_violation then
     return 'taken';
   end;
