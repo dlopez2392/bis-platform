@@ -39,7 +39,10 @@ see in the app. Every other caller hears exactly what they hear today.
    robotic, and that decision stands for everyone else.
 2. **The PIN is keyed, never spoken.** The phone system collects the DTMF
    digits (TeXML `<Gather>`) **before** the call is bridged to OpenAI, so the
-   digits never reach the model, its audio or our transcripts.
+   digits never reach the model, its audio or our transcripts. **Assumption
+   (provider side, outside this app):** Telnyx's own call records and debugging
+   tools may keep the digits a `<Gather>` collected; this app never logs or
+   stores them, and the real-call proof (§7) checks the Telnyx portal.
 3. **Authorisation lives in code, not in the prompt.** Owner tools exist
    only on a session built from a valid signed pass (§4.3). A caller saying
    "I'm the owner" changes nothing. Wording-only guardrails did not converge
@@ -79,7 +82,11 @@ This proves two things at once:
 - that handset's caller ID reaches us intact through the carrier, which is
   the very thing the owner line relies on.
 
-A pending code expires in 10 minutes, with three attempts.
+A pending code expires in 10 minutes, with three attempts. A code that is
+wrong (below three) is asked for again; a code that is spent, expired or
+unknown sends the call on to Sofía as a normal call. **The verification step
+never hangs up on a caller** (§2.1): only a matching code ends with "This
+phone is verified" and a goodbye.
 
 ### 3.3 The business's switch
 
