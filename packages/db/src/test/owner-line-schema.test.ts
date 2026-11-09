@@ -56,19 +56,52 @@ async function seed(c: Client): Promise<Seed> {
   };
 }
 
+/**
+ * Turn the business's switch on or off the way the app must (0115's record trigger): the switch, a NEW change time
+ * and the who-kind, in one statement. clock_timestamp(), not now(): now() is fixed for the whole transaction, so a
+ * second change inside one withRollback would carry the same time and read as a stale record.
+ */
+async function switchTo(c: Client, account: string, on: boolean, kind: "owner" | "agency" = "owner") {
+  await c.query(
+    `update accounts set owner_line_enabled_at = case when $2 then clock_timestamp() end,
+            owner_line_changed_at = clock_timestamp(), owner_line_changed_by_kind = $3 where id = $1`, [account, on, kind]);
+}
+
 /** A verified enrollment with a PIN, switch on. Inserted as the table owner (seeding, not the code under test). */
 async function enrolled(c: Client, account: string, user: string, e164: string) {
-  await c.query("update accounts set owner_line_enabled_at = now() where id = $1", [account]);
+  const { rows: [on] } = await c.query<{ on: boolean }>(
+    "select owner_line_enabled_at is not null as on from accounts where id = $1", [account]);
+  if (!on!.on) await switchTo(c, account, true);
   const { rows: [e] } = await c.query<{ id: string }>(
     `insert into owner_line_enrollments (account_id, user_id, e164, verified_at, pin_hash, pin_set_at)
      values ($1, $2, $3, now(), $4, now()) returning id`, [account, user, e164, pinHash()]);
   return e!.id;
 }
 
+/** A verified cell with NO PIN yet (Q-D: a person may verify before setting one). */
+async function verifiedNoPin(c: Client, account: string, user: string, e164: string) {
+  await c.query("insert into owner_line_enrollments (account_id, user_id, e164, verified_at) values ($1, $2, $3, now())",
+    [account, user, e164]);
+}
+
+/** The same person on a second business (the I-1 cases): a membership at `account`, as the table owner. */
+async function memberOf(c: Client, user: string, account: string, role: "owner" | "staff" | "technician") {
+  await c.query("insert into memberships (user_id, scope, account_id, role) values ($1, 'account', $2, $3)", [user, account, role]);
+}
+
 async function liveNumber(c: Client, account: string): Promise<string> {
   const { rows: [pn] } = await c.query<{ id: string }>(
     "insert into phone_numbers (account_id, e164, status) values ($1, $2, 'live') returning id", [account, businessNumber()]);
   return pn!.id;
+}
+
+/** n owner-line calls for `user` on `account`, started now (this local day), as the table owner. */
+async function ownerLineCalls(c: Client, account: string, user: string, n: number) {
+  const pn = await liveNumber(c, account);
+  for (let i = 0; i < n; i++) {
+    await c.query("insert into calls (account_id, phone_number_id, caller_e164, owner_line_user_id) values ($1, $2, '+19565550101', $3)",
+      [account, pn, user]);
+  }
 }
 
 const asService = (c: Client) => c.query("set local role service_role");
@@ -287,7 +320,7 @@ describe("0115: the PIN and the lock", () => {
       await asService(c);
       expect(await look("+19565550101")).toEqual({ status: "locked" });
       await c.query("reset role");
-      await c.query("update accounts set owner_line_enabled_at = null where id = $1", [s.a]);
+      await switchTo(c, s.a, false);
       await asService(c);
       expect(await look("+19565550101")).toEqual({ status: "off" });
     }));
@@ -326,7 +359,9 @@ describe("0115: the account's local day (owner ruling Q-F)", () => {
       expect(await dayStart(c, "America/Chicago", "2026-11-02T05:59:00Z")).toBe("2026-11-01T05:00:00.000Z");  // 23:59 CST
     }));
 
-  it("a zone whose clocks jump AT midnight (America/Santiago, 2026-09-06 00:00 -> 01:00): the day starts at the first instant that exists (probe: drop the existence correction -> FAILS)", () =>
+  // A pinned VALUE, not a probe: PostgreSQL already reads this missing midnight as the instant the clocks jump, so no
+  // mutation of owner_line_day_start's loops can fail it (replica, 2026-11-09). The Havana case below carries the probe.
+  it("a zone whose clocks jump AT midnight (America/Santiago, 2026-09-06 00:00 -> 01:00): the day starts at the first instant that exists, 04:00Z", () =>
     withRollback(async (c) => {
       // Confirmed with node's ICU (77.1, tz 2025b): 2026-09-06T03:59Z is Sept 5 23:59 and 04:00Z is Sept 6 01:00 in Santiago.
       expect(await dayStart(c, "America/Santiago", "2026-09-06T15:00:00Z")).toBe("2026-09-06T04:00:00.000Z");
@@ -430,12 +465,9 @@ describe("0115: the switch's guard and its record (owner rulings Q-A, spec 3.3)"
   it("the Owner may leave it on or off; BIS may leave it off", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      const set = (on: boolean, kind: string) => c.query(
-        `update accounts set owner_line_enabled_at = case when $2 then now() end, owner_line_changed_at = now(),
-                owner_line_changed_by_kind = $3 where id = $1`, [s.a, on, kind]);
-      await set(true, "owner");
-      await set(false, "owner");
-      await set(false, "agency");
+      await switchTo(c, s.a, true, "owner");
+      await switchTo(c, s.a, false, "owner");
+      await switchTo(c, s.a, false, "agency");
       const { rows } = await c.query("select owner_line_enabled_at, owner_line_changed_by_kind from accounts where id = $1", [s.a]);
       expect(rows).toEqual([{ owner_line_enabled_at: null, owner_line_changed_by_kind: "agency" }]);
     }));
@@ -475,5 +507,211 @@ describe("0115: the access log learns owner_line_call", () => {
       await asService(c);
       await expect(c.query("select public.note_owner_line_call($1, gen_random_uuid(), 'user_x', null, array['contact'])", [s.a]))
         .rejects.toMatchObject({ code: "22023" });
+    }));
+});
+
+// Review I-1 (2026-11-09): every read is THIS business's. Each case puts the same cell or the same person at business
+// B, so a read that loses its account filter answers from B's row and fails here by name.
+describe("0115: every read is the dialed business's only (review I-1)", () => {
+  const CELL = "+19565550101";
+  const look = async (c: Client, account: string) => (await c.query(
+    "select public.owner_line_answer_lookup($1, $2, 10) as r", [account, CELL])).rows[0].r;
+  const check = async (c: Client, account: string, user: string, role: string, max: number | null) => (await c.query(
+    "select public.owner_line_session_check($1, $2, $3, $4) as r", [account, user, role, max])).rows[0].r;
+
+  it("the lookup on A's line answers none for a cell enrolled only at B, the same person on both (probe t1: drop account_id from the lookup's enrollment read -> B's 'pin', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await switchTo(c, s.a, true);
+      await enrolled(c, s.b, s.owner, CELL);
+      await asService(c);
+      expect(await look(c, s.a)).toEqual({ status: "none" });
+      expect((await look(c, s.b)).status).toBe("pin");   // control: the row is live where it belongs
+    }));
+
+  it("B's owner-line calls never count toward A's ten a day, for the same person and the same cell (probe t2: drop c.account_id from the lookup's count -> 'over_limit', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await enrolled(c, s.a, s.owner, CELL);
+      await enrolled(c, s.b, s.owner, CELL);
+      await ownerLineCalls(c, s.b, s.owner, 10);
+      await asService(c);
+      expect((await look(c, s.a)).status).toBe("pin");
+      expect((await look(c, s.b)).status).toBe("over_limit");   // control: they count at B
+    }));
+
+  it("a code attempt on A's line never touches B's pending code for the same cell, even with B's right code (probe t3: drop account_id from attempt_verify's read -> 'verified', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const codeB = hex64();
+      await asService(c);
+      await c.query("select public.owner_line_start_verification($1, $2, $3, $4, 10)", [s.b, s.bOwner, CELL, codeB]);
+      const r = (await c.query("select public.owner_line_attempt_verify($1, $2, $3) as r", [s.a, CELL, codeB])).rows[0].r;
+      const { rows } = await c.query(
+        "select verified_at, verify_attempts, verify_code_hash from owner_line_enrollments where account_id = $1", [s.b]);
+      expect([r, rows]).toEqual(["none", [{ verified_at: null, verify_attempts: 0, verify_code_hash: codeB }]]);
+    }));
+
+  it("the session check on A refuses a person enrolled only at B (probe t4: drop account_id from session_check's enrollment read -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await switchTo(c, s.a, true);
+      await enrolled(c, s.b, s.owner, CELL);
+      await asService(c);
+      expect(await check(c, s.a, s.owner, "owner", null)).toEqual({ ok: false, reason: "not_enrolled" });
+      expect(await check(c, s.b, s.owner, "staff", null)).toMatchObject({ ok: true });   // control
+    }));
+
+  it("the session check counts A's calls only (probe t5: drop c.account_id from session_check's count -> 'over_limit', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await memberOf(c, s.owner, s.b, "staff");
+      await enrolled(c, s.a, s.owner, CELL);
+      await enrolled(c, s.b, s.owner, CELL);
+      await ownerLineCalls(c, s.b, s.owner, 10);
+      await asService(c);
+      expect(await check(c, s.a, s.owner, "owner", 10)).toMatchObject({ ok: true });
+      expect(await check(c, s.b, s.owner, "staff", 10)).toEqual({ ok: false, reason: "over_limit" });   // control
+    }));
+});
+
+// Review I-2 (2026-11-09): every refusal branch, by name. Each case reaches exactly one branch with everything else
+// holding, so deleting that branch lets the call through ('pin' or ok: true) and the case fails by name.
+describe("0115: every refusal answers by name (review I-2)", () => {
+  const CELL = "+19565550102";
+  const check = async (c: Client, s: Seed, max: number | null = null) => (await c.query(
+    "select public.owner_line_session_check($1, $2, 'staff', $3) as r", [s.a, s.staff, max])).rows[0].r;
+  const look = async (c: Client, s: Seed) => (await c.query(
+    "select public.owner_line_answer_lookup($1, $2, 10) as r", [s.a, CELL])).rows[0].r;
+
+  it("session check: client access off, or the business archived, is no_client_access (probe u1: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update accounts set client_access_enabled = false where id = $1", [s.a]);
+      await asService(c);
+      const off = await check(c, s);
+      await c.query("reset role");
+      await c.query("update accounts set client_access_enabled = true, status = 'archived' where id = $1", [s.a]);
+      await asService(c);
+      expect([off, await check(c, s)]).toEqual([
+        { ok: false, reason: "no_client_access" }, { ok: false, reason: "no_client_access" }]);
+    }));
+
+  it("session check: the switch off is switch_off (probe u2: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await switchTo(c, s.a, false, "agency");
+      await asService(c);
+      expect(await check(c, s)).toEqual({ ok: false, reason: "switch_off" });
+    }));
+
+  it("session check: no enrollment, or a verified cell with no PIN, is not_enrolled (probe u3: delete that branch -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await asService(c);
+      const none = await check(c, s);
+      await c.query("reset role");
+      await verifiedNoPin(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect([none, await check(c, s)]).toEqual([
+        { ok: false, reason: "not_enrolled" }, { ok: false, reason: "not_enrolled" }]);
+    }));
+
+  it("session check: a locked enrollment is locked (probe u4: delete that line -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update owner_line_enrollments set locked_until = now() + interval '5 minutes' where id = $1", [id]);
+      await asService(c);
+      expect(await check(c, s)).toEqual({ ok: false, reason: "locked" });
+    }));
+
+  it("session check: the tenth call today is over_limit at the webhook (p_max 10), never on a tool call (p_max null) (probe u5: delete the over_limit block -> ok, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await ownerLineCalls(c, s.a, s.staff, 10);
+      await asService(c);
+      expect([await check(c, s, 10), (await check(c, s, null)).ok]).toEqual([{ ok: false, reason: "over_limit" }, true]);
+    }));
+
+  it("lookup: client access off, or the business archived, answers none, never asks for a PIN (probe u6: delete the client-access gate -> 'pin', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await enrolled(c, s.a, s.staff, CELL);
+      await c.query("update accounts set client_access_enabled = false where id = $1", [s.a]);
+      await asService(c);
+      const off = await look(c, s);
+      await c.query("reset role");
+      await c.query("update accounts set client_access_enabled = true, status = 'archived' where id = $1", [s.a]);
+      await asService(c);
+      expect([off, await look(c, s)]).toEqual([{ status: "none" }, { status: "none" }]);
+    }));
+
+  it("lookup: a verified cell with no PIN answers none (probe u7: delete the no-PIN line -> 'pin' with no pin_params, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await verifiedNoPin(c, s.a, s.staff, CELL);
+      await asService(c);
+      expect(await look(c, s)).toEqual({ status: "none" });
+    }));
+});
+
+// Review m-2 (2026-11-09): the switch never moves without its record. Each refusal is the trigger's own (its message,
+// no constraint name), so a case cannot pass on a CHECK refusing the same row.
+describe("0115: the switch moves only with a fresh record (review m-2)", () => {
+  const RECORD = { code: "23514", message: expect.stringMatching(/must record when and who-kind/) };
+
+  it("turning it on with no record is refused (probe: drop trigger accounts_owner_line_switch_record -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(c.query("update accounts set owner_line_enabled_at = now() where id = $1", [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("turning it on over a stale 'owner' record is refused (probe: drop the 'is not distinct from old' test -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, false, "owner");
+      await expect(c.query("update accounts set owner_line_enabled_at = now() where id = $1", [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("turning it on while clearing the record is refused (probe: drop the 'is null' test -> the change goes through, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, false, "owner");
+      await expect(c.query(
+        "update accounts set owner_line_enabled_at = now(), owner_line_changed_at = null, owner_line_changed_by_kind = null where id = $1",
+        [s.a])).rejects.toMatchObject(RECORD);
+    }));
+
+  it("a write that does not move the switch needs no record (probe: drop the trigger WHEN clause -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await switchTo(c, s.a, true);
+      await c.query("update accounts set name = 'OL renamed', owner_line_enabled_at = owner_line_enabled_at where id = $1", [s.a]);
+      const { rows } = await c.query("select name from accounts where id = $1", [s.a]);
+      expect(rows).toEqual([{ name: "OL renamed" }]);
+    }));
+});
+
+// Review m-3 (2026-11-09): an agency visit never carries an owner-line item. parseVisit (packages/db/src/access-log.ts)
+// accepts only ACCESS_LOG_KINDS, so one such item on an agency visit would make the Team page's BIS access section throw.
+describe("0115: note_agency_open refuses the owner-line kinds (review m-3)", () => {
+  it("an agency note with an owner_line_ kind is refused 22023, while a contact note on the same live visit is ok (probe: drop the guard -> 'ok', FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await asService(c);
+      await c.query("select public.start_agency_visit($1, 'user_bis_ol', 'Dan', 'sess_ol', 'support')", [s.a]);
+      const note = (kind: string) => c.query(
+        "select public.note_agency_open($1, 'user_bis_ol', 'sess_ol', $2, gen_random_uuid(), null) as r", [s.a, kind]);
+      expect((await note("contact")).rows[0].r).toBe("ok");
+      await expect(note("owner_line_appointments")).rejects.toMatchObject({ code: "22023" });
     }));
 });

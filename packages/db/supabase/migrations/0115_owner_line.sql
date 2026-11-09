@@ -14,6 +14,8 @@
 --   e. section 0's lock order: if 0113 locks any of agency_visit_items, calls, agency_visits, memberships or
 --      accounts, keep this file's children-first order consistent with it.
 --   f. the number: if the highest migration is not 0114, renumber to the next free one.
+--   g. section 3's note_agency_open: 0105's text plus the owner_line_ guard (0112 left it unchanged). If 0113
+--      replaces it, re-copy 0113's body and re-add the guard.
 --
 -- WHAT.
 --   public.owner_line_enrollments: one row per (account, person) who calls in to hear the day. The cell (e164) is
@@ -28,7 +30,10 @@
 --     BIS". Which BIS person did it is BIS's own record, written by the app outside this table (plan Task 5).
 --     Both set together or neither (accounts_owner_line_change_check). Owner ruling Q-A in the database: the agency
 --     may turn it OFF, never ON, so a row whose last change was BIS's is off (accounts_owner_line_agency_off_check).
---     No account is born with any of the three set: a trigger refuses each on INSERT, for every role.
+--     No account is born with any of the three set: a trigger refuses each on INSERT, for every role. And the switch
+--     never moves without its record (review m-2): a second trigger refuses any UPDATE that changes
+--     owner_line_enabled_at unless owner_line_changed_at changes with it to a non-null value (the pair CHECK then
+--     needs the who-kind). A writer that forgets the record, or leaves a stale one, is refused.
 --   public.calls.owner_line_user_id: the person an owner-line call was for; null on every customer call. No foreign
 --     key on purpose: the mark must outlive a deleted user, or the call would start counting as a customer's.
 --   app.owner_line_day_start(zone, instant): the first instant of the instant's local date in that zone (owner
@@ -42,11 +47,15 @@
 --     AND clerk_session_id, and it stays agency-only because the two session shapes never meet: an owner-line visit's
 --     is 'call:<calls.id>', a Clerk session id is 'sess_...'. Anything that ever writes another session shape into
 --     agency_visits must add actor_kind = 'agency' to agency_visit_live first.
+--     note_agency_open (0105) is re-created with one guard (review m-3): it refuses every owner_line_ kind (22023).
+--     Those kinds now pass the items CHECK, and parseVisit accepts only ACCESS_LOG_KINDS, so an agency visit carrying
+--     one would make the Team page's BIS access section throw. Owner-line items come only from note_owner_line_call.
 -- FUNCTIONS. Seven callable, all SECURITY INVOKER with set search_path = pg_catalog, pg_temp (0096's rule), EXECUTE
 --   to service_role only: app.owner_line_day_start, owner_line_answer_lookup, owner_line_start_verification,
---   owner_line_attempt_verify, owner_line_attempt_pin, owner_line_session_check, note_owner_line_call. Plus one
---   trigger function, app.owner_line_insert_guard, executable by no role (a trigger's function is checked for
---   EXECUTE only when the trigger is created). Only service_role runs them and it already holds what they touch,
+--   owner_line_attempt_verify, owner_line_attempt_pin, owner_line_session_check, note_owner_line_call. Plus two
+--   trigger functions, app.owner_line_insert_guard and app.owner_line_switch_record_guard, executable by no role (a
+--   trigger's function is checked for EXECUTE only when the trigger is created). note_agency_open (0105) is
+--   re-created, still an invoker, with 0105's grants restated. Only service_role runs them and it already holds what they touch,
 --   so a definer would add privilege and nothing else (0104's reasoning). EXPECTED_DEFINERS does not change (39).
 --   Every policy-like NULL is coalesced to a refusal (the plpgsql NULL-guard lesson).
 -- GRANTS. The default ACL hands ALL on a new table to anon, authenticated and service_role by name: revoked from all
@@ -73,7 +82,13 @@
 --   Residual risk, named: public.set_account_member_role (0066) locks the account row and then updates memberships.
 --   If an Owner changes a role in the milliseconds between this file's memberships lock and its accounts lock, one
 --   side fails 40P01. If the file is the victim it applies nothing and is re-run; if the role change is, the Owner
---   presses Save again. Apply outside business hours.
+--   presses Save again.
+--   Residual risk, named (review m-4): deleting an account takes accounts first and then cascades into its
+--   children (memberships, agency_visits and agency_visit_items; calls by its own statement first, through
+--   deleteAccountCascade's ACCOUNT_OWNED_TABLES). A delete that has locked its accounts row when this file reaches
+--   accounts holds what the file waits for while waiting on a child the file holds: one side fails 40P01. If the
+--   file is the victim it applies nothing and is re-run; if the delete is, the agency runs it again. Account
+--   deletion is agency-only and rare. Apply outside business hours, and not during an account deletion.
 --   An added column with no default and no NOT NULL is a catalog change only: no table rewrite. The new CHECKs on
 --   accounts, agency_visits and agency_visit_items are added valid, so each scans its table once under the lock
 --   already held.
@@ -90,7 +105,9 @@
 --   drop function public.owner_line_start_verification(uuid, uuid, text, text, integer);
 --   drop function public.owner_line_answer_lookup(uuid, text, integer);
 --   drop function app.owner_line_day_start(text, timestamptz);
+--   drop trigger accounts_owner_line_switch_record on public.accounts; drop function app.owner_line_switch_record_guard();
 --   drop trigger accounts_owner_line_insert_guard on public.accounts; drop function app.owner_line_insert_guard();
+--   re-run 0105's note_agency_open as create or replace, with its revoke and grant lines;
 --   alter table public.accounts drop constraint accounts_owner_line_agency_off_check,
 --     drop constraint accounts_owner_line_change_check, drop column owner_line_changed_by_kind,
 --     drop column owner_line_changed_at;
@@ -203,6 +220,24 @@ revoke all on function app.owner_line_insert_guard() from public, anon, authenti
 create trigger accounts_owner_line_insert_guard before insert on public.accounts
   for each row execute function app.owner_line_insert_guard();
 
+-- The switch never moves without a fresh record (review m-2). When owner_line_enabled_at changes, the same UPDATE must
+-- move owner_line_changed_at to a new, non-null value; the pair CHECK then requires the who-kind, and the agency-off
+-- CHECK holds BIS to off. A stale record (the time unchanged) or a cleared one is refused. A write that does not move
+-- the switch is not touched (the WHEN clause), so every other accounts UPDATE costs nothing.
+create function app.owner_line_switch_record_guard() returns trigger
+language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+begin
+  if new.owner_line_changed_at is null
+     or new.owner_line_changed_at is not distinct from old.owner_line_changed_at then
+    raise exception 'accounts: turning the owner line on or off must record when and who-kind' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+revoke all on function app.owner_line_switch_record_guard() from public, anon, authenticated, service_role;
+create trigger accounts_owner_line_switch_record before update on public.accounts
+  for each row when (old.owner_line_enabled_at is distinct from new.owner_line_enabled_at)
+  execute function app.owner_line_switch_record_guard();
+
 -- The ACCOUNT's local day (owner ruling Q-F): the first instant whose local date, in p_zone, is p_at's local date.
 -- The local midnight, back to an instant; then two bounded corrections, 15 minutes at a time (no zone moves its
 -- clocks by more than 2 hours, and every transition falls on a quarter hour):
@@ -253,6 +288,35 @@ alter table public.agency_visit_items add constraint agency_visit_items_kind_che
   'form_answers', 'customer_list_export', 'record_history_export',
   'owner_line_calls_and_messages', 'owner_line_appointments', 'owner_line_needs_attention', 'owner_line_lookup_customer'));
 grant insert (actor_kind) on public.agency_visits to service_role;
+
+-- note_agency_open: 0105's text with one guard (review m-3; DRAFT note g). An owner_line_ kind is
+-- note_owner_line_call's alone; on an agency visit it would blank the BIS access section (parseVisit).
+create or replace function public.note_agency_open(
+  p_account_id uuid, p_actor text, p_session text, p_kind text, p_record_id uuid, p_item_count integer)
+returns text language plpgsql security invoker set search_path = pg_catalog, pg_temp as $$
+declare v_visit uuid;
+begin
+  if p_account_id is null or p_actor is null or p_session is null or p_kind is null then
+    raise exception 'note_agency_open: a required argument is null' using errcode = '22004';
+  end if;
+  if left(p_kind, 11) = 'owner_line_' then
+    raise exception 'note_agency_open: owner_line_ kinds belong to note_owner_line_call' using errcode = '22023';
+  end if;
+  -- The live visit for THIS person, session and account: a caller can never name another visit.
+  v_visit := public.agency_visit_live(p_account_id, p_actor, p_session);
+  if v_visit is null then return 'no_visit'; end if;
+  if p_kind = 'customer_list_export' then
+    insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count)
+    values (v_visit, p_account_id, p_kind, null, p_item_count);
+  else
+    insert into public.agency_visit_items (visit_id, account_id, kind, record_id, item_count)
+    values (v_visit, p_account_id, p_kind, p_record_id, null)
+    on conflict (visit_id, kind, record_id) where record_id is not null do nothing;
+  end if;
+  return 'ok';
+end $$;
+revoke all on function public.note_agency_open(uuid, text, text, text, uuid, integer) from public, anon, authenticated, service_role;
+grant execute on function public.note_agency_open(uuid, text, text, text, uuid, integer) to service_role;
 
 -- access_log_page: 0112's text with one change, actor_kind = 'agency' on the count and on the page.
 create or replace function public.access_log_page(
