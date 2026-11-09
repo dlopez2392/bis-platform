@@ -19,6 +19,15 @@ describe("processOwnerLineEvent", () => {
     expect(r.actions[1]).toEqual({ kind: "send", payload: { type: "response.create" } });
     expect([...ran]).toEqual(["appointments"]);
   });
+  it("the tool is recorded BEFORE it runs: a hang-up while a slow tool is still reading still logs it (review M-1; mutation: record after the await -> FAILS)", async () => {
+    const ran: Ran = new Set();
+    // A re-check that never answers: the tool is still running when the caller hangs up and the finish reads `ran`.
+    const pending = processOwnerLineEvent(emptyCallState(), ctx(vi.fn(() => new Promise<boolean>(() => {}))), ran,
+      { type: "response.function_call_arguments.done", name: "needs_attention", call_id: "slow", arguments: "{}" });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect([...ran]).toEqual(["needs_attention"]);
+    void pending;
+  });
   it("a receptionist tool name asked for on this line is refused and never recorded (spec §7 'the wall')", async () => {
     const ran: Ran = new Set();
     const recheck = vi.fn(async () => true);

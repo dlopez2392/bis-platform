@@ -1335,7 +1335,10 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     expect(body.tools.map((t) => t.name)).toEqual(OWNER_TOOLS);
     expect(body.instructions).toContain("Dan");
     expect(afterMock).toHaveBeenCalledOnce();
-    expect(decideOwnerMock).toHaveBeenCalledWith(expect.objectContaining({ raw: PASS, handoffToken: "tok_owner", accountId: "acct1" }));
+    // Review M-4: the INVITE's OWN signed statement, exactly as step 4 computed it (no secret in this file: no-key), and
+    // never a value of the route's making.
+    expect(decideOwnerMock).toHaveBeenCalledWith({ db: expect.anything(), raw: PASS, handoffToken: "tok_owner", accountId: "acct1",
+      handoffCheck: { ok: false, reason: "no-key" }, now: expect.any(Date) });
   });
 
   it("the owner prompt names the business by its BRAND name, never the agency's internal label", async () => {
@@ -1413,6 +1416,46 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     expect(logged()).not.toContain("19562921696");
     expect(logged()).not.toContain(PASS);
     expect(logged()).toContain("owner line accepted");
+  });
+
+  // Review M-3: the two forced failures, each on a fresh copy of the route with ONE module made to fail.
+  it("the owner runtime failing to load: exactly one accept, the receptionist's, and no owner row is written (mutation: answer true from that catch -> FAILS)", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/owner-line/events", () => { throw new Error("chunk load failed"); });
+    try {
+      const { POST: freshPost } = await import("./route");
+      decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+      unwrapMock.mockResolvedValue(withPass());
+      expect((await freshPost(req())).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+      expect(startCallRowMock).not.toHaveBeenCalledWith(expect.anything(), "acct1", expect.objectContaining({ ownerLineUserId: expect.anything() }));
+      expect(logged()).toContain("owner line refused — its runtime could not be loaded");
+    } finally {
+      vi.doUnmock("@/lib/owner-line/events");
+      vi.resetModules();
+    }
+  });
+
+  it("the owner session failing to build: its owner row is deleted, then exactly one accept, the receptionist's (mutation: skip the delete -> FAILS; answer true -> FAILS)", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/owner-line/session-config", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@/lib/owner-line/session-config")>()),
+      buildOwnerLineSessionConfig: () => { throw new Error("config"); },
+    }));
+    try {
+      const { POST: freshPost } = await import("./route");
+      decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+      startCallRowMock.mockReset().mockResolvedValueOnce({ id: "owner-row-1" }).mockResolvedValue({ id: "call-row-1" });
+      unwrapMock.mockResolvedValue(withPass());
+      expect((await freshPost(req())).status).toBe(200);
+      expect(deleteCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", "owner-row-1");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    } finally {
+      vi.doUnmock("@/lib/owner-line/session-config");
+      vi.resetModules();
+    }
   });
 
   it("a customer call's incoming-call line is unchanged: it still carries the caller's number", async () => {

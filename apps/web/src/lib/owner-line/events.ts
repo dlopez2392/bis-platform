@@ -40,8 +40,10 @@ export async function processOwnerLineEvent(
       };
     case "response.function_call_arguments.done": {
       const name = String(event.name ?? "");
-      const result = await runOwnerTool(ctx, name, parse(event.arguments));
+      // Recorded BEFORE the read (review M-1): the finish reads `ran` after a bounded 3 s drain, so a tool still
+      // reading when the caller hangs up would otherwise be missing from the access log.
       if ((OWNER_TOOL_NAMES as readonly string[]).includes(name)) ran.add(name as OwnerToolName);
+      const result = await runOwnerTool(ctx, name, parse(event.arguments));
       return { state, actions: [
         { kind: "send", payload: { type: "conversation.item.create",
           item: { type: "function_call_output", call_id: event.call_id, output: JSON.stringify(result) } } },

@@ -60,6 +60,8 @@ describe("finishOwnerLineCall (spec §6)", () => {
   it("can reach nothing that writes to a customer, an automation log or an event: its imports are exactly these (mutation: import ensureCallbackTask from @bis/db -> FAILS)", async () => {
     const src = (await import("node:fs")).readFileSync(new URL("./finish.ts", import.meta.url), "utf8");
     // Import lines only, never prose: a guard that a doc comment can satisfy or trip is no guard (memory bis-vacuous-test-shapes).
+    // Review M-5: a dynamic import is a way in too, and the static list cannot see it.
+    expect(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")).not.toMatch(/\bimport\s*\(/);
     const lines = [...src.matchAll(/^import [^;]+;$/gm)].map((x) => x[0]).sort();
     expect(lines).toEqual([
       'import type { CallState } from "@/lib/voice/call-state";',

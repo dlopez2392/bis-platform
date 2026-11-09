@@ -6,9 +6,13 @@ import { OWNER_LINE_ROLES } from "./data-path";
 import { firstName } from "./names";
 
 /**
- * Who an owner-line call is, as the SIP webhook verified it. `decideOwnerSession` below is the ONLY place one is
- * built (Task 10/11 review m-3): a non-test source that types a value as an OwnerLineSession by annotation, `as`,
- * `satisfies` or a declared return type fails the scan in session.test.ts. Consuming one as a parameter is fine.
+ * Who an owner-line call is, as the SIP webhook verified it. `decideOwnerSession` below is meant to be the ONLY place
+ * one is built (Task 10/11 review m-3). What the scan in session.test.ts actually catches, in a non-test source: a
+ * `: OwnerLineSession =` annotation, `as OwnerLineSession`, `satisfies OwnerLineSession`, and a declared return type
+ * of `OwnerLineSession` or `Promise<OwnerLineSession>`. It does NOT catch an `OwnerSessionDecision` literal, a
+ * generic `mk<OwnerLineSession>(…)`, an `OwnerToolContext` with an inline session, or `OwnerLineSession | null`
+ * (Task 12 review M-2). The type is not branded yet: branding it is a recorded condition on the T flip (plan Task 12
+ * as built), when a session's Clerk ids start choosing whose RLS scope a read gets.
  */
 export type OwnerLineSession = {
   accountId: string; userId: string; role: AccountRole; clerkUserId: string; clerkOrgId: string;

@@ -2899,11 +2899,11 @@ describe("the wall (F-032 §7): a receptionist session cannot run an owner tool,
     await expect(runTool(emptyCallState(), ctx, name as unknown as ToolName, { range: "today" })).rejects.toThrow(`Unknown tool: ${name}`);
     for (const m of Object.values(dbMocks)) expect(m).not.toHaveBeenCalled();
   });
-  it("and the model is answered 'unknown tool', through the real processCallEvent", async () => {
+  it.each([...OWNER_TOOL_NAMES])("and the model is answered 'unknown tool' for %s, through the real processCallEvent (review M-6: every owner tool)", async (name) => {
     const { processCallEvent } = await import("../call-events");
     vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await processCallEvent(emptyCallState(), ctx,
-      { type: "response.function_call_arguments.done", name: "calls_and_messages", call_id: "x", arguments: "{\"range\":\"today\"}" });
+      { type: "response.function_call_arguments.done", name, call_id: "x", arguments: "{\"range\":\"today\"}" });
     expect(r.actions[0]).toEqual({ kind: "send", payload: { type: "conversation.item.create",
       item: { type: "function_call_output", call_id: "x", output: JSON.stringify({ ok: false, error: "unknown tool" }) } } });
   });
