@@ -6551,3 +6551,13 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
 - **Q-G (OPEN, for the owner):** Q-E's wording was "spam calls I BLOCKED". The dashboard's spam line counts calls Sofía answered and flagged as likely spam (`listSpamCallStartsBetween`). Calls refused BEFORE Sofía (repeat-spam callers, over-cap callers and not-live numbers, recorded in `screened_calls`, 0039) are not on the dashboard at all. **The plan's default:** the tile's definition only, worded "looked like spam", never "blocked", so the line and the dashboard agree. **The alternative:** add the `screened_calls` count as a second number, "and N more I didn't put through". That needs a new reader, and the dashboard would then disagree with the line until it shows the same number.
 
 - **Q-G (2026-11-09): the dashboard's spam number only** (the plan's default). The phone says "plus N calls that looked like spam", using the same read as the dashboard. Calls refused before Sofía answered (`screened_calls`) are not counted, so the phone and the dashboard always agree.
+
+- **O-1 DECIDED (2026-11-09, owner): F2 now, T later.**
+  - Task 10 writes `OWNER_LINE_DATA_PATH = "service"` with roles `["owner","staff"]`.
+  - Technicians are not offered the owner line: the card does not render for them, and the enrolment action refuses them.
+  - T comes later, as its own step:
+    1. danlo's dashboard inventory (the spike record §4 question);
+    2. the ES256 import-then-rotate on bis-ci, until the probe prints six PASS lines;
+    3. then production;
+    4. then a one-line flip to `"token"` with all three roles.
+  - No new production secret is added for PR 1, beyond `OWNER_LINE_PIN_PEPPER`.
