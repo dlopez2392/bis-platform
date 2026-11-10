@@ -975,7 +975,10 @@ export async function finishCall(
   // `spam`: a robocall's minutes are BIS's cost, never the client's. On
   // production 162 of 202 metered minutes were spam-classed calls. A spam
   // call can never be booked/lead/message (classifyOutcome ranks those
-  // first), so a real caller who got something done always bills. Minutes
+  // first), so a real caller who got something done always bills. Accepted
+  // gap: handoff-result can later rewrite a spam call to `transferred` (a
+  // real caller the robocall check misfired on, whose transfer connected);
+  // that call stays unbilled, which costs BIS, never the client. Minutes
   // are the stored duration rounded UP, at least one (`voiceMinutes`).
   //
   // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg

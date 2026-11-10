@@ -9,7 +9,7 @@ build on this and get their own specs.
 | Question | Decision |
 |---|---|
 | Pricing model | **Fixed tiers + usage**: 2–3 plans at fixed monthly prices, each with included allowances; usage above the allowance billed as overage |
-| Metered usage | **Voice minutes** (Sofía answered calls), **SMS** (outbound segments), **AI chat conversations** (web concierge). Email is not metered |
+| Metered usage | **Voice minutes** (Sofía answered calls; robocalls excluded, owner 2026-11-10), **SMS** (outbound segments), **AI chat conversations** (web concierge). Email is not metered |
 | Non-payment | **Grace, then soft pause**: Stripe retries ~7 days with a banner; then automations + outbound texts stop, dashboard read-only, calls forwarded to the business instead of answered by Sofía; lifts on payment or by hand |
 | Payment flow | **Stripe-hosted**: Checkout link emailed from the agency dashboard; Customer Portal from the client's Billing page |
 | Tier shape | **Allowances + premium features**: every plan has CRM, booking, forms, texting; higher plans add Sofía voice receptionist and the web chat assistant and bigger allowances |
