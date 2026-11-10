@@ -16,7 +16,8 @@ import { buildSystemPrompt } from "../src/lib/voice/system-prompt";
 import { REALTIME_MODEL, type VoicePromptInput } from "../src/lib/voice/session-config";
 import { openingGreeting } from "../src/lib/voice/greeting";
 import { budgetNotice } from "../src/lib/concierge/prompt";
-import { CONCIERGE_MAX_TURNS, CONCIERGE_MAX_REPLY_TOKENS, CONCIERGE_MODEL } from "../src/lib/concierge/guards";
+import { CONCIERGE_MAX_TURNS, CONCIERGE_MAX_REPLY_TOKENS } from "../src/lib/concierge/guards";
+import { TEXT_MODEL, textModelParams } from "../src/lib/ai/models";
 import { TRADE_MODULES } from "../src/lib/voice/modules";
 import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
 import {
@@ -55,7 +56,7 @@ const mod = TRADE_MODULES[moduleId];
 const date = new Date().toISOString().slice(0, 10);
 const meta: RunMeta = {
   moduleId, slug, version: mod.version, sha256: moduleTextSha256(mod), date, phoneEngine,
-  phoneModel: phoneEngine === "realtime" ? REALTIME_MODEL : PHONE_FALLBACK_MODEL, chatModel: CONCIERGE_MODEL,
+  phoneModel: phoneEngine === "realtime" ? REALTIME_MODEL : PHONE_FALLBACK_MODEL, chatModel: TEXT_MODEL,
 };
 const outDir = path.resolve(__dirname, "../.sofia-corpus", slug, new Date().toISOString().replace(/[:.]/g, "-"));
 mkdirSync(outDir, { recursive: true });
@@ -163,11 +164,13 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
 
 type ChatMsg = { role: string; content: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>; tool_call_id?: string };
 
-async function complete(model: string, messages: ChatMsg[], tools: unknown[], maxTokens?: number): Promise<ChatMsg> {
+/** `params` are the body fields beside model, messages and tools: the web chat's are the turn route's own
+ *  (textModelParams); the phone fallback sends none. */
+async function complete(model: string, messages: ChatMsg[], tools: unknown[], params: Record<string, unknown> = {}): Promise<ChatMsg> {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, tools, ...(maxTokens ? { max_tokens: maxTokens } : {}) }),
+    body: JSON.stringify({ model, messages, tools, ...params }),
     signal: AbortSignal.timeout(RESPONSE_TIMEOUT_MS),
   });
   if (!r.ok) throw new Error(`openai ${r.status}`);
@@ -179,17 +182,17 @@ async function complete(model: string, messages: ChatMsg[], tools: unknown[], ma
  *  route builds them), or the phone fallback (gpt-4o, the phone prompt and tools, the greeting as a system
  *  instruction). */
 async function runChat(model: string, system: (turn: number) => string, tools: unknown[], lines: string[], stub: Stub,
-  opts: { greeting?: string; maxTokens?: number }): Promise<TranscriptTurn[]> {
+  opts: { greeting?: string; params?: Record<string, unknown> }): Promise<TranscriptTurn[]> {
   const turns: TranscriptTurn[] = []; const history: ChatMsg[] = [];
   if (opts.greeting) {
-    const g = await complete(model, [{ role: "system", content: system(0) }, { role: "system", content: opts.greeting }], tools, opts.maxTokens);
+    const g = await complete(model, [{ role: "system", content: system(0) }, { role: "system", content: opts.greeting }], tools, opts.params);
     if (g.content) { turns.push({ role: "sofia", text: g.content }); history.push({ role: "assistant", content: g.content }); }
   }
   for (const [i, line] of lines.entries()) {
     turns.push({ role: "caller", text: line });
     history.push({ role: "user", content: line });
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
-      const msg = await complete(model, [{ role: "system", content: system(i + 1) }, ...history], tools, opts.maxTokens);
+      const msg = await complete(model, [{ role: "system", content: system(i + 1) }, ...history], tools, opts.params);
       if (msg.tool_calls?.length) {
         history.push({ role: "assistant", content: msg.content ?? null, tool_calls: msg.tool_calls });
         for (const c of msg.tool_calls) {
@@ -218,8 +221,8 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
   }
   if (item.medium === "web") {
     // The chat route's system prompt per turn: the prompt plus budgetNotice(MAX - claimed + 1), claimed = turn.
-    return runChat(CONCIERGE_MODEL, (turn) => buildSystemPrompt(input, new Date()) + budgetNotice(CONCIERGE_MAX_TURNS - Math.max(turn, 1) + 1),
-      tools.map((t) => t.schema), item.caller, stub, { maxTokens: CONCIERGE_MAX_REPLY_TOKENS });
+    return runChat(TEXT_MODEL, (turn) => buildSystemPrompt(input, new Date()) + budgetNotice(CONCIERGE_MAX_TURNS - Math.max(turn, 1) + 1),
+      tools.map((t) => t.schema), item.caller, stub, { params: textModelParams(CONCIERGE_MAX_REPLY_TOKENS) });
   }
   const greeting = openingGreeting({ languages: f.languages, greeting_en: f.greetingEn, greeting_es: f.greetingEs },
     f.businessName, { disclose: item.disclosure, personaName: f.personaName }).instruction;

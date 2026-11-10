@@ -24,14 +24,14 @@ function callerSpoke() {
 }
 
 describe("generateSummary", () => {
-  it("sends gpt-4o-mini with the authoritative-records system rules and composes", async () => {
+  it("sends gpt-6-luna with the authoritative-records system rules and composes", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "Caller asked about hours. No appointment was recorded." } }] }),
     });
     const s = withTranscript(emptyCallState(), { role: "caller", text: "what are your hours?", at: "t" });
     const out = await generateSummary(s, { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
-    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.messages[0].content).toContain("authoritative");
     expect(out).toContain("RECORDED");
     expect(out).toContain("Caller asked about hours.");

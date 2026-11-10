@@ -17,7 +17,8 @@ import { periodKeys } from "@/lib/ai/period";
 import { safeZone } from "@/lib/billing/billing-view";
 import { billingVerdictFor } from "@/lib/billing/standing-read";
 import { buildSummaryInputs, hasSomethingToSay, type SummaryContact } from "@/lib/record/ai-summary-inputs";
-import { SUMMARY_MAX_TOKENS, SUMMARY_MODEL, SUMMARY_TIMEOUT_MS } from "@/lib/record/ai-summary-prompt";
+import { TEXT_MODEL } from "@/lib/ai/models";
+import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS } from "@/lib/record/ai-summary-prompt";
 import { serveRecordSummary } from "@/lib/record/ai-summary-service";
 import { aiSummaryStamp, type AiSummaryResponse } from "@/lib/record/ai-summary-view";
 
@@ -94,10 +95,10 @@ async function answer(req: Request, { params }: Params, force: boolean): Promise
       cached: () => getRecordSummary(db, key),
       claim: (digest, f) => claimRecordSummary(svc, { ...key, digest, force: f }),
       complete: (messages) => aiComplete(svc, {
-        accountId, feature: "record_summary", model: SUMMARY_MODEL, messages, maxTokens: SUMMARY_MAX_TOKENS,
+        accountId, feature: "record_summary", model: TEXT_MODEL, messages, maxTokens: SUMMARY_MAX_TOKENS,
         timeoutMs: SUMMARY_TIMEOUT_MS, timezone: zone, language: locale, ref: `contact ${contactId}`,
       }),
-      save: (s) => saveRecordSummary(svc, { ...key, ...s, model: SUMMARY_MODEL }),
+      save: (s) => saveRecordSummary(svc, { ...key, ...s, model: TEXT_MODEL }),
       release: (leaseId) => releaseRecordSummaryLease(svc, { ...key, leaseId }),
       now: () => new Date(),
       log: (line) => console.error(`record summary: account ${accountId} contact ${contactId}: ${line}`),

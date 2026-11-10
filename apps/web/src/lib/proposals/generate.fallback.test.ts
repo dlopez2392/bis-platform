@@ -44,12 +44,12 @@ describe("generateProposals on the gateway (spec 3.2)", () => {
     expect(gw.aiComplete).not.toHaveBeenCalled();
   });
 
-  it("asks for call_proposals on gpt-4o-mini in JSON mode, 2000 tokens, 10 s, the account's zone, naming the call (mutation: maxTokens 4000 -> FAILS)", async () => {
+  it("asks for call_proposals on gpt-6-luna in JSON mode, 2000 tokens, 10 s, the account's zone, naming the call (mutation: maxTokens 4000 -> FAILS)", async () => {
     gw.aiComplete.mockResolvedValue({ ok: true, text: JSON.stringify({ proposals: [] }), usage: { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 } });
     const { db } = recordingDb();
     await generateProposals({ ...base, db });
     expect(gw.aiComplete).toHaveBeenCalledWith(db, expect.objectContaining({
-      accountId: "acct", feature: "call_proposals", model: "gpt-4o-mini", responseFormat: { type: "json_object" },
+      accountId: "acct", feature: "call_proposals", model: "gpt-6-luna", responseFormat: { type: "json_object" },
       maxTokens: 2000, timeoutMs: 10_000, timezone: "America/Chicago", ref: "call call1",
     }));
   });

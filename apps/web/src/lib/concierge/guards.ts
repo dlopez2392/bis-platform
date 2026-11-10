@@ -30,13 +30,13 @@ export const CONCIERGE_MAX_MESSAGE_CHARS = 2_000;
 
 /**
  * Caps the model's OWN completion (I2, whole-branch review). Nothing bounded
- * this before: gpt-4o-mini can emit up to 16,384 output tokens, and every
+ * this before: gpt-4o-mini (the model then) could emit up to 16,384 output tokens, and every
  * reply is replayed back into the transcript on every later turn — over
  * CONCIERGE_MAX_TURNS (24) turns that is up to ~24 * 16,384 ≈ 393k tokens of
  * ASSISTANT text alone replayed cumulatively, which multiplies out to
  * roughly 4.4M input tokens across one conversation's 24 calls instead of
  * ~140k. `proposals/generate.ts` already answered this question for its own
- * OpenAI call (`max_tokens: 2000`, and its own comment on why); 500 suits a
+ * OpenAI call (a 2000-token cap, and its own comment on why); 500 suits a
  * receptionist's reply — a few sentences plus a possible tool call — where
  * 2000 suits a JSON proposal list.
  *
@@ -46,10 +46,7 @@ export const CONCIERGE_MAX_MESSAGE_CHARS = 2_000;
  * but a model that calls the tool on every turn makes up to
  * 2 * CONCIERGE_MAX_TURNS = 48 calls. Still bounded: each follow-up carries
  * the same transcript plus one tool exchange, is capped by this same
- * `max_tokens`, and is skipped when the invocation is near `maxDuration`.
+ * cap (`max_completion_tokens`), and is skipped when the invocation is near `maxDuration`.
  */
 export const CONCIERGE_MAX_REPLY_TOKENS = 500;
 
-/** The website chat's model (SD6): the turn route and the corpus runner read this ONE constant, so the
- *  corpus always plays the model the chat really uses. */
-export const CONCIERGE_MODEL = "gpt-4o-mini";

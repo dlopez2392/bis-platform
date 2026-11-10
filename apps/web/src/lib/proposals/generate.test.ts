@@ -886,7 +886,7 @@ describe("generateProposals", () => {
     const [url, init] = (fetchImpl as any).mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     const body = requestBodyOf(fetchImpl);
-    expect(body.model).toBe("gpt-4o-mini");
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
@@ -1087,13 +1087,14 @@ describe("generateProposals", () => {
   // flood of UNGROUNDED proposals still costs a full `groundedEvidence` scan
   // each. Bounding the completion's own token budget bounds the array that
   // can come back at all.
-  it("bounds the model's own completion so a runaway proposals array cannot be returned (mutation: drop max_tokens from the request body -> FAILS)", async () => {
+  it("bounds the model's own completion so a runaway proposals array cannot be returned (mutation: drop max_completion_tokens from the request body -> FAILS)", async () => {
     const db = fakeDb();
     const fetchImpl = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db, fetchImpl });
     const body = requestBodyOf(fetchImpl);
-    expect(typeof body.max_tokens).toBe("number");
-    expect(body.max_tokens).toBeGreaterThan(0);
+    expect(typeof body.max_completion_tokens).toBe("number");
+    expect(body.max_completion_tokens).toBeGreaterThan(0);
+    expect(body).not.toHaveProperty("max_tokens");
   });
 
   it("a model answer that does not parse logs no word of it (plan deviation 6; mutation: log String(e) in the catch -> FAILS)", async () => {

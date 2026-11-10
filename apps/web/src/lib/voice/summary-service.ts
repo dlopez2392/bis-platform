@@ -3,6 +3,7 @@ import type { CallState } from "./call-state";
 import { classifyOutcome } from "./call-state";
 import { buildSummaryInput, composeSummary } from "./summarize";
 import { aiComplete } from "@/lib/ai/gateway";
+import { TEXT_MODEL } from "@/lib/ai/models";
 import { ID_RULE, maskIdNumbers } from "./id-mask";
 
 /**
@@ -78,7 +79,7 @@ export async function generateSummary(
   const answer = await aiComplete(opts.db, {
     accountId: opts.accountId,
     feature: "call_summary",
-    model: "gpt-4o-mini",
+    model: TEXT_MODEL,
     messages: [
       { role: "system", content: systemRules.join(" ") },
       { role: "user", content: opts.protectIds ? maskIdNumbers(input) : input },

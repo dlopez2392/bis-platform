@@ -262,6 +262,8 @@ function sentToModel(call = 0) {
     messages: { role: string; content: string }[];
     tools: { function: { name: string } }[];
     max_tokens?: number;
+    max_completion_tokens?: number;
+    reasoning_effort?: string;
   };
 }
 
@@ -480,19 +482,22 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     expect(last.content).toHaveLength(CONCIERGE_MAX_MESSAGE_CHARS);
   });
 
-  // I2 (whole-branch review): nothing bounded the model's OWN completion.
-  // gpt-4o-mini can emit up to 16,384 output tokens, and every reply is
-  // replayed into every later turn's transcript — `proposals/generate.ts`
-  // already answered this exact question for its own OpenAI call
-  // (`max_tokens: 2000`; see its test titled "bounds the model's own
-  // completion so a runaway proposals array cannot be returned").
-  it("bounds the model's own completion so a runaway reply cannot be returned (mutation: drop max_tokens from the request body -> FAILS)", async () => {
+  // I2 (whole-branch review): nothing bounded the model's OWN completion,
+  // and every reply is replayed into every later turn's transcript —
+  // `proposals/generate.ts` already answered this exact question for its own
+  // OpenAI call (see its test titled "bounds the model's own completion so a
+  // runaway proposals array cannot be returned"). The text model is a
+  // reasoning model: the cap travels as `max_completion_tokens`, and effort
+  // "none" is what lets it call capture_lead on Chat Completions (models.ts).
+  it("bounds the model's own completion as max_completion_tokens at effort none, never max_tokens (mutations: drop the cap; send max_tokens; drop reasoning_effort -> FAILS)", async () => {
     await firstTurn();
     const body = sentToModel();
-    expect(body.max_tokens).toBe(CONCIERGE_MAX_REPLY_TOKENS);
+    expect(body.max_completion_tokens).toBe(CONCIERGE_MAX_REPLY_TOKENS);
+    expect(body.reasoning_effort).toBe("none");
+    expect(body).not.toHaveProperty("max_tokens");
   });
 
-  // I2, second half: max_tokens bounds the completion's TOKEN count, but 500
+  // I2, second half: the completion cap bounds the TOKEN count, but 500
   // tokens of English can still print more than CONCIERGE_MAX_MESSAGE_CHARS
   // (2000) characters — the same bound already applied to the visitor's own
   // message must apply to what gets WRITTEN DOWN as Sofía's reply too, or the
@@ -1041,6 +1046,16 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
     expect((sentToModel(1) as unknown as Sent).tool_choice).toBe("none");
   });
 
+  it("the follow-up call carries the same model, effort none and completion cap, never max_tokens (mutation: pass max_tokens in the follow-up's extra -> FAILS)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Done."));
+    await laterTurn();
+    const second = sentToModel(1);
+    expect([second.model, second.reasoning_effort, second.max_completion_tokens]).toEqual(["gpt-6-luna", "none", CONCIERGE_MAX_REPLY_TOKENS]);
+    expect(second).not.toHaveProperty("max_tokens");
+  });
+
   it("a capture with no name tells the model what is missing", async () => {
     fetchMock
       .mockResolvedValueOnce(modelCallsCaptureLead({ email: "ana@x.co", need: "a table" }, PRE_RESULT))
@@ -1537,9 +1552,9 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     expect(sentToModel().messages[0]!.content).not.toContain("TRADE RULES —");
   });
 
-  it("the model is CONCIERGE_MODEL, gpt-4o-mini (SD6)", async () => {
+  it("the model is TEXT_MODEL, gpt-6-luna (SD6)", async () => {
     await firstTurn();
-    expect(sentToModel().model).toBe("gpt-4o-mini");
+    expect(sentToModel().model).toBe("gpt-6-luna");
   });
 });
 
