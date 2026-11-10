@@ -23,6 +23,11 @@ describe("ungrounded (spec §7: Sofía never states a number or a name the tools
     expect(ungrounded("Tuvo tres llamadas.", out)).toEqual(["tres"]);
     expect(ungrounded("You had two calls.", out)).toEqual([]);
   });
+  it("'one' after either/each/no and 'cada uno' are pronouns, not counts; a bare 'one' still is (O-4 2026-11-10; mutation: drop PRONOUN_ONE -> first FAILS; skip every 'one' -> second FAILS)", () => {
+    const two = [JSON.stringify({ ok: true, count: 2, items: [{ what: "Reply to Ana", due: null }] })];   // no 1 anywhere
+    expect(ungrounded("Nothing shows a due date for either one. No one else called. Cada uno espera.", two)).toEqual([]);
+    expect(ungrounded("You had one call today.", two)).toEqual(["one"]);
+  });
   it("the session's own words are grounded: the person's first name and the business's name (I-14; mutation: ignore the session list -> FAILS)", () => {
     expect(ungrounded("Sure, Dan. Rio Roofing got 2 calls today.", out, ["Dan", "Rio", "Roofing"])).toEqual([]);
     expect(ungrounded("Sure, Dan.", out)).toEqual(["Dan"]);
