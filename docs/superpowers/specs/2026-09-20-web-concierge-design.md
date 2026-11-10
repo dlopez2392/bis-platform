@@ -633,3 +633,5 @@ full conversation to a filed lead — on the **per-run fixture account**, never
 
 Steps 1–4 are the product. 5 is what makes anyone use it. 6 is what makes it
 standard rather than a one-off.
+
+**Amended 2026-11-10 (model migration):** every text call named here as `gpt-4o-mini` now uses `gpt-6-luna` through `TEXT_MODEL` in `apps/web/src/lib/ai/models.ts`, with `reasoning_effort: "none"` and `max_completion_tokens` in place of `max_tokens`. OpenAI shuts gpt-4o-mini down on 2027-01-14. Price read 2026-11-10: $0.10 input / $0.50 output per million tokens (`lib/ai/prices.ts`).
