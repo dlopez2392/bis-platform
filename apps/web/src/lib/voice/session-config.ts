@@ -11,6 +11,8 @@ import type { ClosedDayLine } from "./knowledge/closure-lines";
 import type { EffectiveStatus } from "../business-status/status";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
+/** The caller-speech transcriber the session runs; finishCall records its usage under this name (0116). */
+export const TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
 
 export type VoicePromptInput = {
   // No `greeting`: the prompt never embeds one. The phone line's opening is
@@ -97,7 +99,7 @@ export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
     tools: toolSchemas(bookingMode(input), input.meetingType, input.handoffAvailable === true),
     audio: {
       input: {
-        transcription: { model: "gpt-4o-mini-transcribe" },
+        transcription: { model: TRANSCRIBE_MODEL },
         noise_reduction: { type: "near_field" },
         turn_detection: readTurnDetection(),
       },

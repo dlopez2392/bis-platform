@@ -26,6 +26,8 @@ const dbMocks = vi.hoisted(() => ({
   listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),
   // Contact archive, plan Task 8: a meaningful call brings an archived contact back.
   restoreContactOnSign: vi.fn(),
+  // 0116: the call's OpenAI usage, BIS's own cost record.
+  recordCallUsage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -97,8 +99,10 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { finishCall, isMeaningful, computeBlankFields, type FinishContext } from "./finish-call";
 import {
   emptyCallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled, withServed,
-  withTransferred, withRecordedCaller,
+  withTransferred, withRecordedCaller, withResponseUsage, withTranscriptionUsage,
 } from "./call-state";
+import { REALTIME_MODEL, TRANSCRIBE_MODEL } from "./session-config";
+import { estimateCallCostMicroUsd } from "./call-usage";
 import { defaultTextbackBody } from "./textback-body";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { HoldingContactUnavailable } from "@bis/db";
@@ -243,6 +247,7 @@ beforeEach(() => {
   dbMocks.getAlertPhone.mockResolvedValue(null);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   dbMocks.recordUsage.mockResolvedValue("recorded");
+  dbMocks.recordCallUsage.mockResolvedValue("recorded");
   dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
@@ -1802,6 +1807,72 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     expect(smsRefs.send).toHaveBeenCalledTimes(1);
     expect(dbMocks.emit).toHaveBeenCalledWith(
       expect.anything(), "a1", "call.recorded", "voice", { callId: "call1", outcome: "abandoned" }, "ai");
+  });
+});
+
+describe("finishCall — the call's OpenAI usage (BIS's cost record, 0116)", () => {
+  const reply = (text: number, audio: number, cText: number, cAudio: number, oText: number, oAudio: number) => ({
+    input_token_details: { text_tokens: text, audio_tokens: audio,
+      cached_tokens_details: { text_tokens: cText, audio_tokens: cAudio } },
+    output_token_details: { text_tokens: oText, audio_tokens: oAudio },
+  });
+  /** A caller who spoke, two responses and two transcribed turns' worth of usage. */
+  const spent = () => withTranscriptionUsage(withTranscriptionUsage(
+    withResponseUsage(withResponseUsage(abandonedState(), reply(1000, 200, 700, 100, 30, 120)), reply(1500, 300, 1200, 0, 20, 200)),
+    "i1", { type: "tokens", input_tokens: 40, output_tokens: 8 }), "i2", { type: "tokens", input_tokens: 25, output_tokens: 5 });
+  const summed = {
+    inputTextTokens: 2500, inputAudioTokens: 500, inputCachedTextTokens: 1900, inputCachedAudioTokens: 100,
+    outputTextTokens: 50, outputAudioTokens: 320,
+  };
+
+  it("writes once, after the durable row and the minutes, with the call's own account, the session's models and the summed numbers (mutation: drop a summed field → FAILS; move above finishCallRow → order FAILS)", async () => {
+    await finishCall(spent(), ctx, meta);
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledWith(ctx.db, {
+      callId: "call1", accountId: "a1", model: REALTIME_MODEL, responses: 2, ...summed,
+      transcribeModel: TRANSCRIBE_MODEL, transcribeInputTokens: 65, transcribeOutputTokens: 13, transcribeSeconds: null,
+      estCostMicrousd: estimateCallCostMicroUsd(REALTIME_MODEL, summed),
+    });
+    expect(dbMocks.recordCallUsage.mock.calls[0]![1].estCostMicrousd).toBeGreaterThan(0);
+    expect(dbMocks.finishCallRow.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordCallUsage.mock.invocationCallOrder[0]!);
+    expect(dbMocks.recordUsage.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordCallUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("a failing or throwing usage write changes nothing about finishCall: same result, the text-back sent, the activity event emitted (mutation: call recordCallUsage bare → finishCall rejects, FAILS)", async () => {
+    const baseline = await finishCall(spent(), textbackCtx, meta);
+    smsRefs.send.mockClear(); dbMocks.emit.mockClear();
+    dbMocks.recordCallUsage.mockRejectedValue(new Error("call_usage is down"));
+    const r = await finishCall(spent(), textbackCtx, meta);
+    expect(r).toEqual(baseline);
+    expect(r).toEqual({ stored: true, notified: false, outcome: "abandoned" });
+    expect(smsRefs.send).toHaveBeenCalledTimes(1);
+    expect(dbMocks.emit).toHaveBeenCalledWith(
+      expect.anything(), "a1", "call.recorded", "voice", { callId: "call1", outcome: "abandoned" }, "ai");
+    dbMocks.recordCallUsage.mockImplementation(() => { throw new Error("sync throw"); });
+    expect(await finishCall(spent(), textbackCtx, meta)).toEqual(baseline);
+  });
+
+  it("with no call row there is nothing to key it on, so nothing is written (mutation: drop the callRowId gate → FAILS)", async () => {
+    await finishCall(spent(), ctx, { ...meta, callRowId: null });
+    expect(dbMocks.recordCallUsage).not.toHaveBeenCalled();
+  });
+
+  it("is written for a spam call too, a silent ring and a recording alike: BIS paid for those tokens though the client is not billed (mutation: gate on callerSpoke or the billing gate → FAILS)", async () => {
+    const silent = withResponseUsage(emptyCallState(), reply(900, 0, 0, 0, 0, 80));
+    expect((await finishCall(silent, ctx, meta)).outcome).toBe("spam");
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
+      callId: "call1", accountId: "a1", responses: 1, inputTextTokens: 900, outputAudioTokens: 80,
+      transcribeInputTokens: null, transcribeOutputTokens: null, transcribeSeconds: null,
+    }));
+    dbMocks.recordCallUsage.mockClear();
+    const robot = withRecordedCaller(withTranscriptionUsage(withTranscript(emptyCallState(),
+      { role: "caller", text: "Press 1 to renew your vehicle warranty", at: "t" }), "i1", { type: "duration", seconds: 4.25 }));
+    expect((await finishCall(robot, ctx, meta)).outcome).toBe("spam");
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
+      responses: 0, transcribeSeconds: 4.25, transcribeInputTokens: null,
+    }));
   });
 });
 
