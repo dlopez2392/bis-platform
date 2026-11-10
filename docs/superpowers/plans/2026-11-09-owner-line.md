@@ -3632,6 +3632,7 @@ export async function setOwnerLineSwitchAction(
 - Create: `apps/web/src/components/owner-line/owner-line-view.ts` and `owner-line-view.test.ts` (the pure status logic, tested)
 - Create: `apps/web/src/components/owner-line/owner-line-card.tsx` and `owner-line-switch-card.tsx` (client)
 - Modify: `apps/web/src/app/(dashboard)/dashboard/preferences/page.tsx` (render one card per membership)
+- Create: `apps/web/src/app/(dashboard)/dashboard/preferences/page.test.ts` (final review I-3, added in the fix round 2026-11-09): a demoted Technician who still holds an enrolment gets a stop-only card; a Technician with no enrolment gets none; an agency viewer gets no cards and no reads; an `actor` session gets no reads; one membership's failed read costs only that card. It kills the review's survivors P13 (`if (!offered) return null`) and P14 (`false ? []`).
 - Modify: `ACCT/team/page.tsx` (render the switch card under `TeamSection`, above `BisAccessFrame`)
 - Modify: `apps/web/src/lib/messages.ts` (the `ownerLine.card.*` keys)
 - Modify: `apps/web/src/lib/palette/registry.ts:113` and `:101` (append keywords to the existing arrays, never reorder)
@@ -7514,7 +7515,7 @@ test.describe.serial("owner line setup (F-032 §3)", () => {
 
 ## Task 16: Plan documents and the runbook proposal (LOW, 0.25 day)
 
-**Status (2026-11-09): Steps 1–3 and 5 done as built below; Step 4's proposal is written in this section for bis-platform to land.** The brief overrode two of this section's first draft: the runbook proposal lives HERE, as a fenced block, not only in the PR description; and F-116's rule is not set aside but honoured (the first draft's §4.4 row said "neither the voice-clone risk nor F-116's rule stands"; the owner's reason is "the owner asked; a keypad PIN, not a voice, proves identity", and F-116's rule, "a voice alone never proves who is calling", is exactly what the PIN satisfies).
+**Status (2026-11-09): Steps 1–5 done as built below; Step 4's block landed in `docs/runbooks/voice-setup.md` and `.env.example` in the fix round (2026-11-09).** The brief overrode two of this section's first draft: the runbook proposal lives HERE, as a fenced block, not only in the PR description; and F-116's rule is not set aside but honoured (the first draft's §4.4 row said "neither the voice-clone risk nor F-116's rule stands"; the owner's reason is "the owner asked; a keypad PIN, not a voice, proves identity", and F-116's rule, "a voice alone never proves who is calling", is exactly what the PIN satisfies).
 
 **Files:**
 - Modify: `docs/crm-features.md`, at every place F-032 appears (`grep -n "F-032" docs/crm-features.md`: lines 1762, 1967, 3469, 3507, 3574, 3772, 3774 at `881785e0`), the sentence that drops it by name (1975), and every sum that counted it as dropped (listed in Step 2, each recomputed from the file).
@@ -7551,7 +7552,7 @@ test.describe.serial("owner line setup (F-032 §3)", () => {
 
   Expected: the first finds each place Step 2 put it; the second finds nothing. `grep "135 ew"` finds only §4.5's later-alone line. `grep -c "F-032"` finds 11: the §4.4 row and two lines of its paragraph (3), the §4.7 trace, §4.8's prose, §5.3, §10 (2), Appendix A, Appendix B (2).
 
-- [ ] **Step 4: The runbook proposal (bis-platform lands it; this text is the proposal, and the PR description copies it).** The section goes after "Step 8 — Identity checks" in `docs/runbooks/voice-setup.md`, and the `.env.example` entry beside `VOICE_HANDOFF_SECRET`. Log lines are quoted from the code as built (`texml/route.ts:1022`, `owner-pin/route.ts:137,142,148`, `incoming/route.ts:284,1188`).
+- [x] **Step 4: The runbook proposal (LANDED in the fix round, 2026-11-09, with final review M-3's rotation consequence added to the pepper's rotation bullet; bis-platform lands it; this text is the proposal, and the PR description copies it).** The section goes after "Step 8 — Identity checks" in `docs/runbooks/voice-setup.md`, and the `.env.example` entry beside `VOICE_HANDOFF_SECRET`. Log lines are quoted from the code as built (`texml/route.ts:1022`, `owner-pin/route.ts:137,142,148`, `incoming/route.ts:284,1188`).
 
   ````markdown
   ## The owner line (F-032)
@@ -7918,7 +7919,7 @@ Gaps left open, as owner questions: Q-G only (Q-A to Q-F are ruled).
        - the live re-check binds the session's Clerk ids, the ones the minted token carries, to the person it re-reads (review m-3, `session.ts`), so a token can never name a person other than the one re-checked.
   - No new production secret is added for PR 1, beyond `OWNER_LINE_PIN_PEPPER`.
 
-- **Impersonation (2026-11-09, owner): REFUSED.** A Clerk session carrying `actor` (BIS staff signed in as a client) is redirected before any owner-line read or write, on every setup action (Task 5 `member()`, b8ec379e). The Team switch is already refused through `lib/auth.ts:69`. This matches the access-log rule that BIS enters a client account only through the logged agency path.
+- **Impersonation (2026-11-09, owner): REFUSED.** A Clerk session carrying `actor` (BIS staff signed in as a client) is refused before any owner-line read or write, on the Preferences page and every setup action: each setup action redirects it (Task 5 `member()`, b8ec379e), and the Preferences page renders no owner-line section and makes no owner-line read at all, not even the memberships (fix round 2026-11-09, pinned in `preferences/page.test.ts`). The Team switch is already refused through `lib/auth.ts:69`. This matches the access-log rule that BIS enters a client account only through the logged agency path.
 - **Orchestrator decisions (2026-11-09), owner-protective, inside the rulings above:**
   - the Owner's and the agency's OFF are allowed during a billing pause; ON is not;
   - "Stop calling in" is open to any current member, Technicians included;
