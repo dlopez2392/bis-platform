@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { PageHeader } from "@/components/page-header";
 import { TeamSkeleton } from "@/components/team/team-card";
 import { TeamSection } from "@/components/team/team-section";
-import { OwnerLineSwitchCard } from "@/components/owner-line/owner-line-switch-card";
+import { OwnerLineSwitchCard, OwnerLineSwitchCardError } from "@/components/owner-line/owner-line-switch-card";
 import { BisAccessFrame } from "@/components/access-log/bis-access-frame";
 import { BisAccessSection } from "@/components/access-log/bis-access-section";
 import { BisAccessSkeleton } from "@/components/access-log/bis-access-skeleton";
@@ -59,6 +59,10 @@ export const dynamic = "force-dynamic";
  * it ever runs. The card renders the STATE `setOwnerLineSwitchAction`
  * returns, never a re-fetch: that action does not revalidate (the
  * billing-pause scanner forbids it while paused).
+ *
+ * Those two reads fail SOFT, like the language read above (design review Critical 2): a failure is logged by
+ * account and costs only the switch card, whose place shows its own error state. The zone is read with the switch
+ * because it dates the card's "Turned off by BIS, Nov 9, 2:14 PM" line; a guessed zone would misstate that time.
  */
 export default async function TeamPage({
   params, searchParams,
@@ -88,9 +92,12 @@ export default async function TeamPage({
       }),
     getPersonPrefs(),
   ]);
-  const [ownerLine, zoneRead] = await Promise.all([
+  const ownerLine = await Promise.all([
     readOwnerLineSwitch(serviceDb(), accountId), readAccountTimezone(serviceDb(), accountId),
-  ]);
+  ]).then(([state, zoneRead]) => ({ state, zone: zoneRead ?? "America/Chicago" }), (e: unknown) => {
+    console.error(`team page: account ${accountId} owner-line switch read failed: ${loggableError(e)}`);
+    return null;
+  });
   const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   // S-10 T9a: wired the way billing/branding now are — `pseudo` is a prop
   // every child below takes, never the ambient LocaleProvider.
@@ -103,9 +110,13 @@ export default async function TeamPage({
         <Suspense fallback={<TeamSkeleton locale={locale} pseudo={pseudo} />}>
           <TeamSection accountId={accountId} viewer={isAgency ? "agency" : "owner"} locale={locale} pseudo={pseudo} />
         </Suspense>
-        <OwnerLineSwitchCard state={ownerLine} viewer={isAgency ? "agency" : "owner"} locale={locale}
-          zone={zoneRead ?? "America/Chicago"} pseudo={pseudo}
-          setSwitch={setOwnerLineSwitchAction.bind(null, accountId, locale)} />
+        {ownerLine ? (
+          <OwnerLineSwitchCard state={ownerLine.state} viewer={isAgency ? "agency" : "owner"} locale={locale}
+            zone={ownerLine.zone} pseudo={pseudo}
+            setSwitch={setOwnerLineSwitchAction.bind(null, accountId, locale)} />
+        ) : (
+          <OwnerLineSwitchCardError locale={locale} pseudo={pseudo} />
+        )}
         <BisAccessFrame>
           <Suspense fallback={<BisAccessSkeleton />}>
             <BisAccessSection accountId={accountId} isAgency={isAgency} before={accessBefore} qaLocale={localeParam} />

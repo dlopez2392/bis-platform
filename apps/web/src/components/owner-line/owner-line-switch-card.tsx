@@ -22,6 +22,25 @@ type Result = { ok: true; value: OwnerLineSwitchState } | { ok: false; error: st
  * revalidate (the billing-pause scanner forbids it while the account is paused), so the only honest state this
  * card can show after a write is the write's own answer.
  */
+/**
+ * The switch card's error state (DESIGN rule 5 extended to the card; design review Critical 2): a failed read of the
+ * switch costs this card only, never the Team page. No control is offered, because nobody may flip a switch whose
+ * state could not be read; reloading the page is the retry.
+ */
+export function OwnerLineSwitchCardError(props: { locale: Locale; pseudo: boolean }) {
+  const tr = makeTr(props.locale, props.pseudo);
+  return (
+    <Card lang={props.locale} data-owner-line-switch-error className="mt-6">
+      <CardHeader>
+        <CardTitle>{tr.text("ownerLine.switch.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p role="status" className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.switch.loadError")}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function OwnerLineSwitchCard(props: {
   state: OwnerLineSwitchState; viewer: "owner" | "agency"; locale: Locale; zone: string; pseudo: boolean;
   setSwitch: (on: boolean) => Promise<Result>;
@@ -44,7 +63,7 @@ export function OwnerLineSwitchCard(props: {
     .format(new Date(state.changedAt)).replace(/ /g, " ") : null;
   const who = tr.text(state.changedByKind === "agency" ? "ownerLine.switch.byBis" : "ownerLine.switch.byOwner");
   return (
-    <Card data-owner-line-switch className="mt-6">
+    <Card lang={props.locale} data-owner-line-switch className="mt-6">
       <CardHeader>
         <CardTitle>{tr.text("ownerLine.switch.title")}</CardTitle>
         <p className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.switch.body")}</p>

@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 import type { OwnerLineCardView } from "./owner-line-view";
+import { OwnerLineCode } from "./owner-line-code";
+import { deferredRemoval, STOP_CALLING_IN_UNDO_MS } from "./stop-calling-in";
 
 type Result<T = null> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -29,10 +31,15 @@ type Result<T = null> = { ok: true; value: T } | { ok: false; error: string };
  * may have leaked. "Stop calling in" IS reversible in practice, so it gets the deferred-commit shape: the
  * controls hide at once and a 10-second toast offers Undo; the removal runs only when that toast closes WITHOUT
  * Undo (sonner's own `onAutoClose`/`onDismiss` — a swipe or the close button reads the same as letting it time
- * out: both mean "did not undo").
+ * out: both mean "did not undo"). A tab closed inside those 10 seconds never closes the toast, so the removal is also
+ * forced through on `pagehide` (design review Important 3; `deferredRemoval`, stop-calling-in.ts), at most once.
+ *
+ * `lang` on the card root (design minors), as sibling sections do (bis-access-frame.tsx).
  */
 export function OwnerLineCard(props: {
   accountId: string; businessName: string; number: string; view: OwnerLineCardView; locale: Locale; pseudo: boolean;
+  /** How long a call-in code works (OWNER_LINE_VERIFY_MINUTES, from the server page), for the copy. */
+  verifyMinutes: number;
   startVerification: (cell: string) => Promise<Result<{ code: string; expiresAt: string }>>;
   setPin: (pin: string) => Promise<Result>; removePin: () => Promise<Result>; removeCell: () => Promise<Result>;
 }) {
@@ -51,17 +58,19 @@ export function OwnerLineCard(props: {
   });
   function stopCallingIn() {
     setLeaving(true);
-    let undone = false;
+    const removal = deferredRemoval(() => run(props.removeCell, () => toast.success(tr.text("ownerLine.card.removed"))), window);
     toast(tr.text("ownerLine.card.removing"), {
-      duration: 10_000,
-      action: { label: tr.text("common.undo"), onClick: () => { undone = true; setLeaving(false); } },
-      onAutoClose: () => { if (!undone) run(props.removeCell, () => toast.success(tr.text("ownerLine.card.removed"))); },
-      onDismiss: () => { if (!undone) run(props.removeCell, () => toast.success(tr.text("ownerLine.card.removed"))); },
+      duration: STOP_CALLING_IN_UNDO_MS,
+      // An Undo after a pagehide already sent the removal changes nothing: the controls stay hidden and the refresh
+      // that follows the removal shows the cell gone.
+      action: { label: tr.text("common.undo"), onClick: () => { if (removal.undo()) setLeaving(false); } },
+      onAutoClose: removal.settle,
+      onDismiss: removal.settle,
     });
   }
   const v = props.view;
   return (
-    <Card data-owner-line-card={props.accountId}>
+    <Card lang={props.locale} data-owner-line-card={props.accountId}>
       <CardHeader>
         <CardTitle>{tr.text("ownerLine.card.title")}</CardTitle>
         <p className="text-sm text-[var(--text-2)]">{tr.text("ownerLine.card.body", { business: props.businessName })}</p>
@@ -81,8 +90,8 @@ export function OwnerLineCard(props: {
         ) : null}
         {v.step === "cell" && code ? (
           <div data-owner-line-code className="space-y-2">
-            <p className="text-sm">{tr.text("ownerLine.card.verify.instructions", { number: props.number })}</p>
-            <p className="font-mono text-2xl tabular-nums tracking-[0.3em]" aria-label={tr.text("ownerLine.card.verify.codeLabel")}>{code}</p>
+            <OwnerLineCode accountId={props.accountId} code={code} number={props.number} minutes={props.verifyMinutes}
+              locale={props.locale} pseudo={props.pseudo} />
             <Button type="button" variant="ghost" onClick={() => router.refresh()}>{tr.text("ownerLine.card.verify.check")}</Button>
           </div>
         ) : null}

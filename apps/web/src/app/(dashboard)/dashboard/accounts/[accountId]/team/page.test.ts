@@ -35,12 +35,19 @@ const ownerLineMock = vi.hoisted(() => ({
   state: { enabledAt: null, changedAt: null, changedByKind: null } as
     { enabledAt: string | null; changedAt: string | null; changedByKind: "owner" | "agency" | null },
   zone: null as string | null,
+  fail: null as "switch" | "zone" | null,
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   serviceDb: () => ({ tag: "service" }),
-  readOwnerLineSwitch: async () => ownerLineMock.state,
-  readAccountTimezone: async () => ownerLineMock.zone,
+  readOwnerLineSwitch: async () => {
+    if (ownerLineMock.fail === "switch") throw new Error("readOwnerLineSwitch failed: permission denied");
+    return ownerLineMock.state;
+  },
+  readAccountTimezone: async () => {
+    if (ownerLineMock.fail === "zone") throw new Error("readAccountTimezone failed: timeout");
+    return ownerLineMock.zone;
+  },
 }));
 const accountRow = vi.hoisted(() => ({
   language: null as "en" | "es" | null,
@@ -81,7 +88,7 @@ const { default: TeamPage } = await import("./page");
 const { TeamSkeleton } = await import("@/components/team/team-card");
 const { BisAccessFrame } = await import("@/components/access-log/bis-access-frame");
 const { BisAccessSkeleton } = await import("@/components/access-log/bis-access-skeleton");
-const { OwnerLineSwitchCard } = await import("@/components/owner-line/owner-line-switch-card");
+const { OwnerLineSwitchCard, OwnerLineSwitchCardError } = await import("@/components/owner-line/owner-line-switch-card");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -101,6 +108,7 @@ beforeEach(() => {
   prefs.language = null;
   ownerLineMock.state = { enabledAt: null, changedAt: null, changedByKind: null };
   ownerLineMock.zone = null;
+  ownerLineMock.fail = null;
 });
 
 describe("the Team page", () => {
@@ -219,6 +227,27 @@ describe("the Team page: owner line switch card (F-032 Task 6)", () => {
     ownerLineMock.zone = "America/Denver";
     const card = all(await page()).find((e) => e.type === OwnerLineSwitchCard)!;
     expect(card.props.zone).toBe("America/Denver");
+  });
+
+  // Design review Critical 2: the two switch reads were awaited unguarded, against this page's own fail-soft rule
+  // (its comment on the language read). A failed read costs the switch card only: the header, the Team card and the
+  // BIS access frame still render, and the switch card's place shows its own error state.
+  it.each([["switch"], ["zone"]] as const)("a failed %s read costs only the switch card: its error state in its place, the rest of the page intact, logged by account (mutation: await the reads unguarded -> FAILS)", async (which) => {
+    ownerLineMock.fail = which;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const els = all(await page());
+    const { PageHeader } = await import("@/components/page-header");
+    expect(els.find((e) => e.type === PageHeader)).toBeTruthy();
+    expect((els.find((e) => e.type === Suspense)!.props.children as ReactElement).type).toBe(section.TeamSection);
+    expect(els.find((e) => e.type === BisAccessFrame)).toBeTruthy();
+    expect(els.find((e) => e.type === OwnerLineSwitchCard)).toBeUndefined();
+    const errorIdx = els.findIndex((e) => e.type === OwnerLineSwitchCardError);
+    expect(errorIdx).toBeGreaterThan(els.findIndex((e) => e.type === Suspense));
+    expect(errorIdx).toBeLessThan(els.findIndex((e) => e.type === BisAccessFrame));
+    expect(els[errorIdx]!.props).toMatchObject({ locale: "en", pseudo: false });
+    const lines = err.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.startsWith("team page: account a1 owner-line switch read failed:")), lines.join("\n")).toBe(true);
+    err.mockRestore();
   });
 });
 
