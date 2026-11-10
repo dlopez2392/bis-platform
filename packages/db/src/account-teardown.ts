@@ -143,6 +143,11 @@ export const ACCOUNT_OWNED_TABLES = [
  * to the visit, so the `accounts` delete at the end of this function carries both away.
  * `access-log-schema.test.ts` pins their absence from the list (a pure case) and proves the cascade;
  * `access-log-live.test.ts` proves a real teardown leaves nothing.
+ *
+ * `call_usage` (0116) is off this list for booking_cancel_notices' reason: a row is derived cost state about
+ * one call, and both its FKs cascade (call_id and account_id). `calls` is on the list, so each row leaves with
+ * its call; `call-usage-schema.test.ts` proves both cascades. Listing it would also make every teardown and
+ * demo re-seed throw on a database where 0116 is not applied yet.
  */
 
 /**
