@@ -1838,6 +1838,14 @@ describe("finishCall — the call's OpenAI usage (BIS's cost record, 0116)", () 
     expect(dbMocks.recordUsage.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordCallUsage.mock.invocationCallOrder[0]!);
   });
 
+  it("the cost record is written even when the call row could not be finished: the tokens were spent (review 2026-11-10; mutation: gate on `stored` → FAILS)", async () => {
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    const r = await finishCall(spent(), ctx, meta);
+    expect(r.stored).toBe(false);
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordCallUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({ callId: "call1", responses: 2 }));
+  });
+
   it("a failing or throwing usage write changes nothing about finishCall: same result, the text-back sent, the activity event emitted (mutation: call recordCallUsage bare → finishCall rejects, FAILS)", async () => {
     const baseline = await finishCall(spent(), textbackCtx, meta);
     smsRefs.send.mockClear(); dbMocks.emit.mockClear();

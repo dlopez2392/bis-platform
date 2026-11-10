@@ -219,7 +219,9 @@ export function withResponseUsage(state: CallState, usage: unknown): CallState {
  * output_tokens, total_tokens, input_token_details? }` or `{ type: "duration", seconds }`. Any other type, or no
  * usage at all, changes nothing; a bad number in a known type counts 0. Once per item id.
  */
-export function withTranscriptionUsage(state: CallState, itemId: string | undefined, usage: unknown): CallState {
+export function withTranscriptionUsage(state: CallState, rawItemId: string | undefined, usage: unknown): CallState {
+  // A null or empty id is no id: storing it would make a second id-less turn look like a re-delivery and drop it.
+  const itemId = typeof rawItemId === "string" && rawItemId !== "" ? rawItemId : undefined;
   const kind = field(usage, "type");
   if (kind !== "tokens" && kind !== "duration") return state;
   const u = state.usage;

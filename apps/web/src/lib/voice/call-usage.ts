@@ -16,17 +16,20 @@ type RealtimePrice = {
   textIn: number; audioIn: number; cachedTextIn: number; cachedAudioIn: number; textOut: number; audioOut: number;
 };
 
+// gpt-realtime's text output is $16 per 1M; gpt-realtime-2.1's is $24 (both pages read 2026-11-10). Everything
+// else is the same price on both.
 const GPT_REALTIME: RealtimePrice = {
   textIn: 4_000_000, audioIn: 32_000_000, cachedTextIn: 400_000, cachedAudioIn: 400_000,
-  textOut: 24_000_000, audioOut: 64_000_000,
+  textOut: 16_000_000, audioOut: 64_000_000,
 };
+const GPT_REALTIME_2_1: RealtimePrice = { ...GPT_REALTIME, textOut: 24_000_000 };
 
 export const REALTIME_PRICES: Readonly<Record<string, RealtimePrice>> = {
   "gpt-realtime": GPT_REALTIME,
-  "gpt-realtime-2.1": GPT_REALTIME,
+  "gpt-realtime-2.1": GPT_REALTIME_2_1,
   // Only the audio prices were published for the mini model when this was read. Its text and cached prices
   // are UNKNOWN and estimated at the full-size model's, so the estimate errs high rather than reading as free.
-  "gpt-realtime-2.1-mini": { ...GPT_REALTIME, audioIn: 10_000_000, audioOut: 20_000_000 },
+  "gpt-realtime-2.1-mini": { ...GPT_REALTIME_2_1, audioIn: 10_000_000, audioOut: 20_000_000 },
 };
 
 // The caller-speech transcriber (gpt-4o-mini-transcribe) is NOT priced: no price for it is recorded in this repo,

@@ -554,6 +554,15 @@ describe("processCallEvent — token usage", () => {
     expect(s.transcript.map((t) => t.text)).toEqual(["hi, I need a quote", "for my roof", "this week"]);
   });
 
+  it("two transcription frames with no item id both count: a missing id is not a re-delivery (review 2026-11-10; mutation: store the null id → the second is dropped, FAILS)", async () => {
+    let s = emptyCallState();
+    for (const t of ["first", "second"]) {
+      s = (await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",
+        item_id: null, transcript: t, usage: { type: "tokens", input_tokens: 10, output_tokens: 1 } } as unknown as Parameters<typeof processCallEvent>[2])).state;
+    }
+    expect(s.usage).toMatchObject({ transcribeInputTokens: 20, transcribeOutputTokens: 2 });
+  });
+
   it("transcription is counted on frames the transcript ignores: an empty turn, and a turn after a recording was hung up on (mutation: count only on the recorded-turn path → FAILS)", async () => {
     let s = emptyCallState();
     s = (await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",

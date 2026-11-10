@@ -19,11 +19,12 @@ describe("estimateCallCostMicroUsd", () => {
   beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => {}); });
   afterEach(() => { warn.mockRestore(); });
 
-  it("prices gpt-realtime per token, cached input at the cached price and the rest at full (mutation: cost cached at the full price → FAILS)", () => {
+  it("prices gpt-realtime per token, cached input at the cached price and the rest at full; 2.1's text out is $24, the older model's $16 (mutation: cost cached at the full price → FAILS; one shared row for both → FAILS)", () => {
     // $ per 1M tokens is micro-dollars per token:
-    // text 300x4 + cached text 700x0.4 + audio 100x32 + cached audio 100x0.4 + text out 30x24 + audio out 120x64
-    // = 1200 + 280 + 3200 + 40 + 720 + 7680
-    expect(estimateCallCostMicroUsd("gpt-realtime", call)).toBe(13_120);
+    // text 300x4 + cached text 700x0.4 + audio 100x32 + cached audio 100x0.4 + text out 30x16 + audio out 120x64
+    // = 1200 + 280 + 3200 + 40 + 480 + 7680
+    expect(estimateCallCostMicroUsd("gpt-realtime", call)).toBe(12_880);
+    // gpt-realtime-2.1: text out 30x24 = 720
     expect(estimateCallCostMicroUsd("gpt-realtime-2.1", call)).toBe(13_120);
   });
 
