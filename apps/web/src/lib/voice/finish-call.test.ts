@@ -1773,14 +1773,20 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     });
   });
 
-  it("a robocall that reached Sofía is billed although it records as spam: its minutes were spent (mutation: skip usage when the outcome is 'spam' → FAILS)", async () => {
+  it("a robocall that reached Sofía is NOT billed: it records as spam and a robocall's minutes are BIS's cost (owner decision 2026-11-10; mutation: drop the outcome !== 'spam' clause → recorded, FAILS)", async () => {
     const s = withRecordedCaller(withTranscript(emptyCallState(),
       { role: "caller", text: "This is an important message about your vehicle's extended warranty", at: "t" }));
     const r = await finishCall(s, ctx, meta);
     expect(r.outcome).toBe("spam");
-    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
-      meter: "voice_minutes", quantity: 2, sourceRef: "call:call1",
-    }));
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a real caller the robocall check misfires on still bills for what got done: a booking outranks the spam marker (mutation: gate on `!state.recordedCaller` instead of the outcome → this booked call records nothing, FAILS)", async () => {
+    const s = withBooking(withRecordedCaller(withTranscript(emptyCallState(),
+      { role: "caller", text: "I'd like Friday at ten", at: "t" })), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("booked");
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(ctx.db, expect.objectContaining({ meter: "voice_minutes", sourceRef: "call:call1" }));
   });
 
   it("records the minutes even when the call row could not be written: the call still happened (mutation: gate the leg on `stored` → FAILS)", async () => {

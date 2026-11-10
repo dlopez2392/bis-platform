@@ -970,10 +970,13 @@ export async function finishCall(
   // to (danlo): the caller said something (`callerSpoke`), OR the outcome
   // is booked/lead/message (`meaningful`, computed at the top), because
   // those mean the caller interacted even when no caller turn was
-  // transcribed. That includes a robocall that reached her (its words are a
-  // caller turn, and its minutes were spent) and excludes a silent ring or a
-  // connect-timeout. Minutes are the stored duration rounded UP, at least
-  // one (`voiceMinutes`).
+  // transcribed. It excludes a silent ring or a connect-timeout, and (owner
+  // decision 2026-11-10, reversing 2026-09-25) every call that records as
+  // `spam`: a robocall's minutes are BIS's cost, never the client's. On
+  // production 162 of 202 metered minutes were spam-classed calls. A spam
+  // call can never be booked/lead/message (classifyOutcome ranks those
+  // first), so a real caller who got something done always bills. Minutes
+  // are the stored duration rounded UP, at least one (`voiceMinutes`).
   //
   // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
   // above: the carrier and model minutes were spent whether or not
@@ -987,7 +990,7 @@ export async function finishCall(
   // carry their own time limits, so this leg still runs. `recordUsageSafely`
   // never throws, so it cannot cost the call this function's never-throws
   // contract either.
-  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
+  if (meta.callRowId && outcome !== "spam" && (callerSpoke(state) || meaningful)) {
     await recordUsageSafely(ctx.db, {
       accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
       occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
