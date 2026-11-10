@@ -67,6 +67,7 @@ import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
 import { ownerLimitXml, ownerPinAskXml, ownerPinUrl, ownerVerifyAskXml } from "./owner-line-xml";
 import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { pinPepperConfigured } from "@/lib/owner-line/secrets";
 import { billingEnforced } from "@/lib/billing/enforce";
 import type { Locale } from "@/lib/i18n/locale";
 // Types only: erased at build time, so no module-scope @bis/db import (plan SC-18).
@@ -478,8 +479,13 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
       // Gather's fallthrough IS today's path (SC-17): not with the agency's
       // forward on, the fallback drill engaged, or billing's no-voice. In those
       // states the person is a customer here, refusals and all.
+      // Final review M-3: no PIN ask without a pepper. owner-pin could check no PIN at all (it would take today's path
+      // anyway), so asking for one only costs the caller the ask. Same check owner-pin makes (pinPepperConfigured);
+      // the call-in code is sha256 (secrets.ts) and needs none, so a `verify` hit is still asked.
       const looked = await ownerRead;
-      const hit = looked && (looked.status === "verify" || looked.status === "pin" || looked.status === "over_limit")
+      const pepperless = looked?.status === "pin" && !pinPepperConfigured();
+      if (pepperless) console.error(`texml owner line: OWNER_LINE_PIN_PEPPER is not set — no PIN ask, today's path, accountId ${row.account_id}`);
+      const hit = looked && !pepperless && (looked.status === "verify" || looked.status === "pin" || looked.status === "over_limit")
         && OWNER_LINE_ROLES.includes(looked.role) ? looked : undefined;
       ownerLine = hit && profile.forward_calls !== true && !fallbackDrillActive(calledE164, callerE164)
         && !(await billingRead) ? hit : undefined;

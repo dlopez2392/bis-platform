@@ -159,7 +159,9 @@ export default async function CallsPage({
       return [];
     }))
       .filter((p) => ownerIds.includes(p.userId))
-      .map((p) => [p.userId, firstName(p.name) ?? p.email.split("@")[0]!]),
+      // A member with no name is left out, so the row reads "Someone on the team" (the provenance rule), never
+      // their email handle (final review M-2).
+      .flatMap((p) => { const n = firstName(p.name); return n ? [[p.userId, n] as const] : []; }),
   );
 
   const last = rows[rows.length - 1];

@@ -651,6 +651,7 @@ describe("the owner line's documents parse (F-032)", () => {
   it("the answer route's own PIN ask, as emitted for a registered cell on a Telnyx-signed POST, parses", async () => {
     process.env.VOICE_HANDOFF_SECRET = "h".repeat(48);
     process.env.APP_ORIGIN = 'https://x.example?a=1&b=2&c="3"';
+    process.env.OWNER_LINE_PIN_PEPPER = "p".repeat(40);   // the PIN ask is offered only with a pepper (final review M-3)
     ownerLookupMock.mockResolvedValueOnce({ status: "pin", enrollmentId: "e1", userId: "22222222-2222-4222-8222-222222222222",
       role: "owner", name: "O'Brien & <Sons>", language: "en", accountLanguage: null, pinParams: null });
     const raw = new URLSearchParams({ To: LIVE_TO, From: CALLER }).toString();
@@ -674,6 +675,7 @@ describe("the owner line's documents parse (F-032)", () => {
       delete process.env.VOICE_HANDOFF_SECRET;
       delete process.env.TELNYX_PUBLIC_KEY;
       delete process.env.APP_ORIGIN;
+      delete process.env.OWNER_LINE_PIN_PEPPER;
     }
   });
 });

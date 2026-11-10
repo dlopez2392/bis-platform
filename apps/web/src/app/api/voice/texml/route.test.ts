@@ -1819,6 +1819,8 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
   let errSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     process.env.VOICE_HANDOFF_SECRET = SECRET;
+    // Final review M-3: the PIN ask is offered only with a pepper configured, so every PIN-ask case below runs with one.
+    process.env.OWNER_LINE_PIN_PEPPER = "p".repeat(40);
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -1827,7 +1829,8 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     vi.useRealTimers();
     tokenPin.value = null;
     for (const k of ["VOICE_HANDOFF_SECRET", "TELNYX_PUBLIC_KEY", "SUPABASE_SERVICE_ROLE_KEY", "BILLING_ENFORCE",
-      "VOICE_FALLBACK_DRILL_TO", "VOICE_FALLBACK_DRILL_FROM", "VOICE_SCREEN_NUMBERS", "PHONE_SPAM_BLOCK_THRESHOLD"]) delete process.env[k];
+      "VOICE_FALLBACK_DRILL_TO", "VOICE_FALLBACK_DRILL_FROM", "VOICE_SCREEN_NUMBERS", "PHONE_SPAM_BLOCK_THRESHOLD",
+      "OWNER_LINE_PIN_PEPPER"]) delete process.env[k];
   });
 
   /** Pins the per-call token and the clock, so two documents minted in one test are comparable byte for byte. */
@@ -2109,6 +2112,41 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     const xml = await (await answer(TO, CELL, "https://x.example", true, { skipScreen: true, skipOwnerLine: true })).text();
     expect(xml).not.toContain("<Gather");
     expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  describe("no PIN ask without a pepper (final review M-3; owner-pin's own pinPepperConfigured)", () => {
+    it("a PIN hit with OWNER_LINE_PIN_PEPPER unset is exactly today's path: no Gather, and the reason is logged without the number (mutation: drop the pepper check -> FAILS)", async () => {
+      delete process.env.OWNER_LINE_PIN_PEPPER;
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      pinTokenAndClock();
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+      expect(xml).toBe(await today(CELL));
+      const lines = logged(logSpy, errSpy);
+      expect(lines).toContain("OWNER_LINE_PIN_PEPPER is not set");
+      expect(lines).not.toContain(CELL);
+    });
+    it("a pepper shorter than 32 characters reads as unset (mutation: check only that it is present -> FAILS)", async () => {
+      process.env.OWNER_LINE_PIN_PEPPER = "short";
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+    });
+    it("the call-in code ask needs no pepper (sha256, secrets.ts): a verify hit is still asked (control)", async () => {
+      delete process.env.OWNER_LINE_PIN_PEPPER;
+      clearedLine();
+      ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify" });
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).toContain(CODE_ASK);
+    });
+    it("with the pepper set, the PIN ask is offered (control)", async () => {
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).toContain(PIN_ASK);
+    });
   });
 
   describe("a role the data path does not offer is not asked (O-1 = F2: a Technician)", () => {

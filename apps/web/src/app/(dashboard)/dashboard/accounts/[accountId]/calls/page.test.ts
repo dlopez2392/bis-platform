@@ -322,6 +322,13 @@ describe("CallsPage — the owner line (F-032 Task 13)", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("team read failed"));
     spy.mockRestore();
   });
+  it("a team member with no name reads 'Someone on the team', never their email handle (final review M-2; mutation: fall back to p.email.split('@')[0] -> FAILS)", async () => {
+    listCallsMock.mockResolvedValue([{ ...ROW, owner_line_user_id: "u1", outcome: "abandoned" }]);
+    listAccountTeamMock.mockResolvedValue([{ userId: "u1", email: "dan.private@example.com", name: null }]);
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain("Owner line · Someone on the team");
+    expect(html).not.toContain("dan.private");
+  });
 });
 
 /**

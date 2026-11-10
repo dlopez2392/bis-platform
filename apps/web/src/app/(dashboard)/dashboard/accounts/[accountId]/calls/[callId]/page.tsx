@@ -152,7 +152,8 @@ export default async function CallDetailPage({
     try {
       const team = await listAccountTeam(db, accountId);
       const person = team.find((p) => p.userId === call.owner_line_user_id);
-      ownerLineName = person ? firstName(person.name) ?? person.email.split("@")[0]! : null;
+      // No name reads "Someone on the team" (the provenance rule), never the email handle (final review M-2).
+      ownerLineName = person ? firstName(person.name) : null;
     } catch (e) {
       console.error(`call detail ${callId}: owner-line team read failed, rendering 'Someone on the team': ${loggableError(e)}`);
       ownerLineName = null;
