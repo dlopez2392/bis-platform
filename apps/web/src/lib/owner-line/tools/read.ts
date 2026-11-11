@@ -127,7 +127,7 @@ export async function needsAttention(c: OwnerReadContext): Promise<Record<string
     items: shown.map((w) => {
       const customer = w.contactId ? names.get(w.contactId) ?? null : null;
       return {
-        what: workRowLabel(w, customer ?? t(m, "ownerLine.tool.aCustomer", c.locale), tr),
+        what: workRowLabel(w, customer ?? t(m, "ownerLine.tool.aCustomer", c.locale), tr, c.timezone),
         customer, due: w.dueAt ? when(w.dueAt, c, true) : null,
       };
     }),

@@ -25,6 +25,10 @@ import { serviceDb } from "../service";
  * 0092 they pass for the wrong reason; after it they are the mutation guards for the new clause), the grants pin
  * (a non-regression pin: create or replace must keep it) and the FK-pair guard (no FK changes).
  *
+ * 0114 (F-077 part 1) adds accepted_at/accepted_by, which move as freely as the undo columns. RED BEFORE 0114,
+ * legitimately: the column-list case (it now names the two) and the accept-columns case. Their pair CHECK and the
+ * accepted-then-undone case live in work-queue-actions-schema.test.ts.
+ *
  * ONE REFUSED STATEMENT PER withRollback, or a savepoint around it (`attempt`): a refusal otherwise aborts the
  * transaction (25P02). Every function call runs as service_role (`svc`), as the app calls them, unless a case
  * says it runs as the client role.
@@ -261,11 +265,12 @@ describe("0091: what was acted on never changes, from the service role too (plan
     { col: "after", set: `after = '{"value":"x"}'::jsonb` },
     { col: "created_at", set: "created_at = created_at - interval '1 day'" },
   ];
-  it("the list is every column but the three undo columns (guards the cases below from a forgotten column)", () =>
+  it("the list is every column but the three undo columns and 0114's two accept columns (guards the cases below from a forgotten column)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ n: string }>(
         "select attname as n from pg_attribute where attrelid = 'public.ai_acts'::regclass and attnum > 0 and not attisdropped order by 1");
-      expect(rows.map((r) => r.n).sort()).toEqual([...FIXED.map((f) => f.col), "undo_notified", "undone_at", "undone_by"].sort());
+      expect(rows.map((r) => r.n).sort()).toEqual(
+        [...FIXED.map((f) => f.col), "undo_notified", "undone_at", "undone_by", "accepted_at", "accepted_by"].sort());
     }));
   it.each(FIXED)("refuses a change to $col (mutation: drop the $col comparison from the trigger -> this case FAILS)", ({ set, arg }) =>
     withRollback(async (c) => {
@@ -283,6 +288,15 @@ describe("0091: what was acted on never changes, from the service role too (plan
         expect((await c.query("update ai_acts set undone_at = now(), undone_by = 'u' where id = $1", [id])).rowCount).toBe(1);
         expect((await c.query("update ai_acts set undo_notified = true where id = $1", [id])).rowCount).toBe(1);
         expect((await c.query("update ai_acts set undone_at = null, undone_by = null, undo_notified = false where id = $1", [id])).rowCount).toBe(1);
+      });
+    }));
+  it("the accept columns (0114) move freely, together (mutation: add accepted_at to the trigger's comparisons -> FAILS; one without the other is work-queue-actions-schema.test.ts's ai_acts_accepted_pair case, not this one)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await insAct(c, actRow(s));
+      await svc(c, async () => {
+        expect((await c.query("update ai_acts set accepted_at = now(), accepted_by = 'u' where id = $1", [id])).rowCount).toBe(1);
+        expect((await c.query("update ai_acts set accepted_at = null, accepted_by = null where id = $1", [id])).rowCount).toBe(1);
       });
     }));
 });

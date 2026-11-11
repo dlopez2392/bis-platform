@@ -725,7 +725,7 @@ Vercel. The gates are strong; operations are thin.
 | One cron, 14 passes, each failure isolated | **Live** | `apps/web/src/app/api/cron/reminders/route.ts:39-68` |
 | Rate limits and bot guards on public forms, booking and chat | **Partial** | `apps/web/src/lib/forms/guards.ts:9-19` |
 | Fake email and texts outside production; per-account send switch | **Partial** (the fakes are live; the send switch binds only scheduled sends, §2.2.1) | `apps/web/src/lib/email/index.ts:20-44` |
-| Audit log of business events | **Partial** (event-level only; no before-and-after values) | `packages/db/src/events.ts:14-21` |
+| Audit log of business events | **Live** (events, plus one `record_changes` row per changed field with who, when, before and after: migrations 0111–0113, F-115 #333–#336) | `packages/db/src/events.ts:14-21`; `packages/db/supabase/migrations/0111_record_changes.sql` |
 | Banner for phone numbers turning callers away | **Live** (on page load only; nobody is notified) | `apps/web/src/components/line-down-banner.tsx:5-45` |
 | Error boundaries | See §2.2.9 (error and not-found screens) | — |
 | Five owner runbooks: CI database, Clerk, voice, website, A2P | **Live** (several statements stale) | `docs/runbooks/voice-setup.md` |
@@ -1403,7 +1403,7 @@ decides the rest (§4.1).
 | ID | Feature | Effort (ew) | Why in this horizon | Depends on |
 |---|---|---|---|---|
 | **Record** | | | | |
-| S-04 | `record_changes` audit log and trash | 2–3 | History must exist before law firms are sold the pack; when it lands, the merge also writes one change row per overwritten field (spec 2026-10-29-dedupe-merge §8) | F-115 (part 1), S-02 |
+| S-04 | `record_changes` audit log and trash | 2–3 | History must exist before law firms are sold the pack; when it lands, the merge also writes one change row per overwritten field (spec 2026-10-29-dedupe-merge §8). Shipped #333, #334, #335, #336 and 0113. | F-115 (part 1), S-02 |
 | S-12 | Merge with history | 2–3 | Imports and new channels create duplicates; the import already flags them with nowhere to go. Owner ruling D10 (2026-10-29): ships before S-04, with its own merge log and 30-day Undo | none |
 | F-006 | Duplicates found the Valley way, and a merge that keeps everything | 2–3 | The merge UI and phone-key surfacing, with S-12; the nickname scorer waits for F-092 part 2 | S-12 |
 | F-150 (part: a phone-contacts import) | Switch kit: move in from GoHighLevel, Jobber or HoneyBook in a day | 0.5–1 | Proposal. A Valley business keeps its customers in a phone, and phones share contacts as vCard (`.vcf`) files, not CSV. A vCard step on today's import wizard, parsed in the browser as DESIGN.md's CSV rule requires, with the existing duplicate check | none |
@@ -1440,7 +1440,7 @@ decides the rest (§4.1).
 | F-107 (part: the bottom-tab shell) | Phone first: a bottom-tab shell and content that fits its container | 5–6 | Owners run the business from a phone | F-089, decision 35 (phone) |
 | | *Design subtotal* | *5–6* | | |
 | **Trust** | | | | |
-| F-115 (part: the history tab on S-04) | Evidence-grade records | 1–2 | With S-04 | S-04 |
+| F-115 (part: the history tab on S-04) | Evidence-grade records | 1–2 | With S-04. Shipped as the record timeline's change rows (#336), not a separate tab | S-04 |
 | | *Trust subtotal* | *1–2* | | |
 | **Growth** | | | | |
 | S-13 | Entitlements on plans | 2–3 | Follows M7a's checkout; storage, logins and higher-plan features need enforcement | S-62, decision 25 (its scope) |

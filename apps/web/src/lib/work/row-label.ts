@@ -2,6 +2,7 @@
 // (F-032 Task 11, review I-10) so the owner line's needs_attention says exactly what the page says. Both import it.
 import type { WorkRow } from "@bis/db";
 import type { Tr } from "@/lib/record/copy";
+import { describeAct } from "@/lib/ai-acts/kinds";
 
 /**
  * The row's own primary sentence. A task's title is already human-written (`WorkRow.title`'s own doc comment in
@@ -11,14 +12,19 @@ import type { Tr } from "@/lib/record/copy";
  * conversation case: a contact's own name is untrusted input that could contain a `$&`/`$1` pattern `String.replace`
  * would treat specially.
  *
- * Exhaustive by type: F-077 #343 adds the `failed_transfer` and `booking_act` sources, and until each has its words
- * here the `never` below stops the typecheck (plan Task 11, "after #343 merges"). Its page's version, with the extra
- * `zone` argument `describeAct` needs, is the one to move.
+ * Exhaustive by type: a new To do source stops the typecheck at the `never` below until it has its words here.
+ * F-077 #343's `failed_transfer` and `booking_act` words moved in at the 2026-11-11 merge, from that page's own
+ * primaryLabel, with the `zone` its `describeAct` needs (the account's time zone).
  */
-export function workRowLabel(row: WorkRow, contactName: string, tr: Tr): string {
+export function workRowLabel(row: WorkRow, contactName: string, tr: Tr, zone: string): string {
   switch (row.source) {
     case "task": return row.title;
     case "conversation": return tr.text("work.conversation", { name: contactName });
+    case "failed_transfer":
+      return row.callbackNumber
+        ? tr.text("work.failedTransfer", { number: row.callbackNumber })
+        : tr.text("work.failedTransfer.bare");
+    case "booking_act": return describeAct(row.bookingAct!, { tr, zone }).verb;
     case "booking": return tr.text("work.booking");
     default: {
       const unhandled: never = row.source;

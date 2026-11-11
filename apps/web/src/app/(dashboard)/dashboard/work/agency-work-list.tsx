@@ -42,6 +42,8 @@ import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { workRowHref } from "@/lib/documents/card-focus";
 import type { Tr } from "@/lib/record/copy";
+import { makeTr } from "@/lib/record/copy";
+import { describeAct } from "@/lib/ai-acts/kinds";
 import type { SuggestionGroup } from "@/lib/proposals/group";
 import {
   acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
@@ -80,11 +82,28 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
 function primaryLabel(row: AgencyWorkRow, contactName: string): string {
   if (row.source === "task") return row.title;
   if (row.source === "conversation") return m["work.conversation"].replace("{name}", () => contactName);
+  if (row.source === "failed_transfer") {
+    return row.callbackNumber
+      ? m["work.failedTransfer"].replace("{number}", () => row.callbackNumber!)
+      : m["work.failedTransfer.bare"];
+  }
+  // F-077 part 1 (deviation note): this screen's bucketed rows are English-only today (unlike the
+  // suggestion tray below them, which does take `tr`) -- `makeTr("en")` matches that existing
+  // posture rather than introducing new localization plumbing this task was not asked to add.
+  if (row.source === "booking_act") return describeAct(row.bookingAct!, { tr: makeTr("en"), zone: row.timezone }).verb;
   return m["work.booking"];
 }
 
+/** Same branch as the per-account screen's own secondaryLine (R7, fix round): a booking-act row
+ *  whose describeAct carries a DETAIL (today, only booking_rescheduled's "From {when}") shows that
+ *  instead of the contact's name — the one fact the bare verb alone cannot say. This screen's own
+ *  posture (header comment above): English only, makeTr("en"). */
 function secondaryLine(row: AgencyWorkRow, contactName: string): string | null {
   if (row.source === "conversation") return row.title || null;
+  if (row.source === "booking_act") {
+    const detail = describeAct(row.bookingAct!, { tr: makeTr("en"), zone: row.timezone }).detail;
+    if (detail) return detail;
+  }
   return row.contactId ? contactName : null;
 }
 
@@ -131,6 +150,9 @@ function AgencyWorkRowItem({
   // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
   // the receptionist's, marked as on the account's own To do page.
   const fromCall = row.source === "task" && Boolean(row.callId);
+  // F-077 part 1 fix round (D1): a booking-change row is ALWAYS Sofía's, the same reasoning the
+  // per-account screen's own `fromAi` carries (author-mark.ts:78's "aiAct" case).
+  const fromAi = row.source === "booking_act";
   const dateText = rowDateText(row);
 
   const body = (
@@ -162,10 +184,10 @@ function AgencyWorkRowItem({
           ) : null}
         </span>
         <span className="truncate text-sm font-medium text-card-foreground">{primary}</span>
-        {secondary || fromCall ? (
+        {secondary || fromCall || fromAi ? (
           <span className="flex min-w-0 items-center gap-2">
             {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
-            {fromCall ? <AiAuthorMark /> : null}
+            {fromCall || fromAi ? <AiAuthorMark /> : null}
           </span>
         ) : null}
       </span>

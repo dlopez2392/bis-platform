@@ -8,7 +8,7 @@ import { dbForRequest } from "@/lib/db";
  * the proof fails with no role branching. Throws on a read error: "could not
  * tell" is never "allowed".
  */
-export type ProvableTable = "bookings" | "conversations";
+export type ProvableTable = "bookings" | "conversations" | "calls" | "ai_acts";
 
 /** True when the CALLER's own client (RLS + 0068) can see this row in this account. */
 export async function callerCanSee(table: ProvableTable, accountId: string, id: string): Promise<boolean> {

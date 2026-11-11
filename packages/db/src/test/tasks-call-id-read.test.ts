@@ -31,7 +31,7 @@ function fakeDb() {
   };
   const chain = (table: string, cols: string) => {
     const b: Record<string, unknown> = {
-      eq: () => b, is: () => b, in: () => b, gt: () => b, lt: () => b, not: () => b,
+      eq: () => b, is: () => b, in: () => b, gt: () => b, lt: () => b, not: () => b, neq: () => b,
       order: () => b,
       limit: async () => answer(table, cols),
       then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>

@@ -185,9 +185,11 @@ export default async function AccountDashboardPage({
     // selectable by `authenticated` (only UPDATE is withheld), and
     // accounts_member_read already scopes the row.
     getA2pRegistration(db, accountId),
-    // Task 5's dashboard row — the same three-source read tasks/page.tsx
-    // already uses, bucketed below with the same `bucketWork` rather than a
-    // second way to compute what's waiting. Both audiences: `listAccountWork`
+    // Task 5's dashboard row — the same five-source read tasks/page.tsx
+    // already uses (F-077 part 1 added failed_transfer and booking_act to
+    // the three this comment used to name), bucketed below with the same
+    // `bucketWork` rather than a second way to compute what's waiting. Both
+    // audiences: `listAccountWork`
     // is the exact call tasks/page.tsx makes under `dbForRequest()` for
     // either role, and the /tasks nav entry itself is ungated
     // (nav-groups.ts) — this compact row must not be gated behind `isAgency`

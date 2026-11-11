@@ -57,8 +57,13 @@ function toWrites(rows: readonly ChangeRow[]): Write[] {
   return [...byKey.values()];
 }
 
+/** F-115 PR E fix (review I2): same author is not enough — a person's own manual edit immediately
+ *  before or after their own merge/restore/accepted-suggestion write must never fold with it (the
+ *  fold would otherwise either hide the manual edit under `foldVia`'s drop of the merge's own `via`,
+ *  or blend the manual edit's `via: null` onto rows that belong to the merge). `via` compares by
+ *  `===`, so `null === null` still folds two plain edits together exactly as before. */
 function sameAuthor(a: Write, b: Write): boolean {
-  return a.authorKind === b.authorKind && a.authorId === b.authorId;
+  return a.authorKind === b.authorKind && a.authorId === b.authorId && a.via === b.via;
 }
 
 function toGroup(steps: readonly Write[]): ChangeGroup {
@@ -81,9 +86,26 @@ function toGroup(steps: readonly Write[]): ChangeGroup {
  * input's own order does not matter; the writes are re-sorted per record, oldest first, before the
  * collapse walk, and the groups come back in that same (record, then time) order — the caller
  * (record.ts) re-sorts every source's items together by `at` before slicing a page.
+ *
+ * F-115 PR E fix round 2 (review I1): folding two writes is no longer ONLY an author/time-window
+ * question — a group must occupy a CONTIGUOUS run of the merged timeline, or two pages can disagree
+ * about where it starts and ends (duplicating or skipping a row at the boundary; see record.ts's own
+ * comment on the cursor this produces). `foreignAtMs` is every OTHER entry's own instant this page
+ * already read — from every non-"changes" source AND from every OTHER record's own writes (a
+ * household page merges several contacts' writes into one list; "foreign" means "not this record",
+ * not "not a change row") — sorted once by the caller. Two adjacent writes of the SAME record fold
+ * only when NOTHING in that combined set falls STRICTLY between their two instants; anything that
+ * does splits them into two groups instead, each still correct on its own. This is necessarily
+ * best-effort against what this ONE page actually read (bounded, like every other source here), never
+ * a guarantee against an entry this page's own per-source limits left unread.
  */
-export function groupChanges(rows: readonly ChangeRow[]): ChangeGroup[] {
+export function groupChanges(rows: readonly ChangeRow[], foreignAtMs: readonly number[] = []): ChangeGroup[] {
   const writes = toWrites(rows);
+  // Every write's own instant counts as a "foreign" blocker for every OTHER record's adjacent pair
+  // (never for its own: two writes of the SAME record that are ADJACENT in that record's own
+  // time-sorted list can have nothing of their OWN record between them, by definition of adjacent).
+  const blockers = [...foreignAtMs, ...writes.map((w) => w.atMs)].sort((a, b) => a - b);
+  const hasBetween = (lo: number, hi: number): boolean => blockers.some((t) => t > lo && t < hi);
   const byRecord = new Map<string, Write[]>();
   for (const w of writes) {
     const key = `${w.recordType}:${w.recordId}`;
@@ -96,7 +118,7 @@ export function groupChanges(rows: readonly ChangeRow[]): ChangeGroup[] {
     let current: Write[] = [];
     for (const w of list) {
       const last = current[current.length - 1];
-      if (last && sameAuthor(last, w) && w.atMs - last.atMs <= COLLAPSE_MINUTES * 60_000) {
+      if (last && sameAuthor(last, w) && w.atMs - last.atMs <= COLLAPSE_MINUTES * 60_000 && !hasBetween(last.atMs, w.atMs)) {
         current.push(w);
       } else {
         if (current.length > 0) groups.push(toGroup(current));
@@ -180,6 +202,10 @@ export type ChangeRowCursor = { createdAt: string; id?: number };
  * `timelineBeforeFilter` (timeline-cursor.ts) uses for a UUID id, except `id` here is a plain bigint:
  * never quoted or case-folded, just checked as a safe positive integer, so a value this module did not
  * itself produce can never reach the PostgREST filter grammar.
+ *
+ * F-115 PR E fix (review I1), briefly unused, restored in round 2 (re-review I1) once `listChangeRows`
+ * (its own doc comment) and record.ts's cursor construction both went back to a REAL row's own
+ * consistent `(created_at, id)` pair rather than a group-level pair that could mismatch two rows.
  */
 export function changeRowBeforeFilter(column: string, before: { createdAt: string; id: number }): string {
   if (!Number.isSafeInteger(before.id) || before.id <= 0) {
@@ -233,6 +259,21 @@ export function decodeChangeCursorId(v: string): number | null {
  * filtering on the timestamp alone would drop whichever of that write's rows did not make the
  * PREVIOUS page, forever (the next page's `created_at < before` excludes them too, since they share
  * that exact value). `before` is undefined for a cold start, exactly as before.
+ *
+ * F-115 PR E fix (review I1), REVERTED in round 2 (re-review I1): `id < before.id` ALONE briefly
+ * replaced this (`record_changes.id` is `generated always as identity`, a monotonic insert-order
+ * sequence) because the group-level cursor record.ts built had paired a MISMATCHED `(createdAt, id)` —
+ * the group's NEWEST step's time with its OLDEST step's row id — and `id` alone sidesteps a mismatch
+ * that `(created_at, id)` cannot. But `id` is assigned at INSERT time, while `created_at` is the
+ * capture trigger's `now()` at TRANSACTION START (0111 section 4); a long-running transaction can
+ * start before, and insert after, a short one that starts later — id order and created_at order then
+ * disagree, and since the OUTER merged timeline sorts and pages by `at` (created_at), filtering
+ * `record_changes` by `id` alone can SKIP a row whose id is smaller but whose created_at is actually
+ * newer than the cursor (review round 2, case e). record.ts no longer builds a mismatched pair (its
+ * own comment on `changesEntries` explains the fix: the group's own OLDEST STEP's `createdAt`, paired
+ * with the SMALLEST id among THAT step's own rows — always one real write's own consistent pair), so
+ * `changeRowBeforeFilter`'s `(created_at, id)` idiom is safe again, and — because created_at is the
+ * PRIMARY bound, id only a same-instant tie-break — no longer vulnerable to id/time divergence either.
  */
 export async function listChangeRows(
   db: SupabaseClient, accountId: string, scope: { contactIds: string[] } | { groupId: string },

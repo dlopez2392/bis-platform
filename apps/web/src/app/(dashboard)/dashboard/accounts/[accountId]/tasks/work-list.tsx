@@ -23,8 +23,10 @@ import { cn } from "@/lib/utils";
 import {
   completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking,
   confirmStopFromTask, notAStopFromTask, undoHoldDecisionFromTask,
-  type ActionResult, type DismissResult,
+  completeFailedTransfer, reopenFailedTransfer, acceptBookingAct, unacceptBookingAct,
+  type ActionResult, type DismissResult, type FailedTransferDoneResult, type AcceptBookingActResult,
 } from "./actions";
+import { describeAct } from "@/lib/ai-acts/kinds";
 import { WorkRowActions } from "./work-row-actions";
 import { ConsentHoldActions } from "./consent-hold-actions";
 import type { TextsActionResult } from "@/lib/consent/staff-actions";
@@ -51,6 +53,10 @@ type WorkActionProps = {
   confirmStopFromTask: (taskId: string) => Promise<TextsActionResult>;
   notAStopFromTask: (taskId: string) => Promise<TextsActionResult>;
   undoHoldDecisionFromTask: (contactId: string, eventId: string, reopenTaskIds: string[]) => Promise<TextsActionResult>;
+  completeFailedTransfer: (callId: string) => Promise<FailedTransferDoneResult>;
+  reopenFailedTransfer: (callId: string, at: string) => Promise<ActionResult>;
+  acceptBookingAct: (actId: string) => Promise<AcceptBookingActResult>;
+  unacceptBookingAct: (actId: string, at: string) => Promise<ActionResult>;
 };
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
@@ -99,9 +105,21 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
  * bare question carries no {name} of its own, so task and booking rows show
  * the contact here instead — the copy rule behind this whole namespace is
  * that a row names the person somewhere, and this is where task/booking do.
+ *
+ * F-077 part 1 fix round (R7): a booking-act row whose own `describeAct`
+ * carries a DETAIL (today, only `booking_rescheduled`'s "From {when}" — see
+ * `ai-acts/kinds/booking-rescheduled.ts`) shows that detail here instead —
+ * it is the one fact the bare verb alone cannot say (which booking moved).
+ * `booking_created`/`booking_cancelled` have no detail (`describeAct`
+ * returns `null`), so those rows still fall through to the contact's name
+ * below, unchanged.
  */
-function secondaryLine(row: WorkRow, contactName: string): string | null {
+function secondaryLine(row: WorkRow, contactName: string, tr: Tr, zone: string): string | null {
   if (row.source === "conversation") return row.title || null;
+  if (row.source === "booking_act") {
+    const detail = describeAct(row.bookingAct!, { tr, zone }).detail;
+    if (detail) return detail;
+  }
   return row.contactId ? contactName : null;
 }
 
@@ -204,12 +222,16 @@ function WorkRowItem({
   tr: Tr;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
-  const primary = workRowLabel(row, contactName, tr);
-  const secondary = secondaryLine(row, contactName);
+  const primary = workRowLabel(row, contactName, tr, timezone);
+  const secondary = secondaryLine(row, contactName, tr, timezone);
   // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
   // the receptionist's, and says so beside the person it is about, as its
   // own mark. A To do a person typed carries no mark here, as before.
   const fromCall = row.source === "task" && Boolean(row.callId);
+  // F-077 part 1 fix round (D1): a booking-change row is ALWAYS Sofía's — a live act has no person
+  // approving it (author-mark.ts:78's own "aiAct" case) — so it carries the same mark, never only the
+  // bare verb (DESIGN.md Provenance: a row with no author mark is a defect).
+  const fromAi = row.source === "booking_act";
   const dateText = rowDateText(row, timezone, tr.locale);
 
   const body = (
@@ -221,10 +243,10 @@ function WorkRowItem({
           itself and would fight `basis-full`. */}
       <span data-work-row-text className="flex min-w-0 grow basis-full flex-col gap-0.5 md:basis-0">
         <span data-work-row-title className="break-words text-sm font-medium text-card-foreground md:truncate">{primary}</span>
-        {secondary || fromCall ? (
+        {secondary || fromCall || fromAi ? (
           <span className="flex min-w-0 items-center gap-2">
             {secondary ? <span className="min-w-0 break-words text-xs text-muted-foreground md:truncate">{secondary}</span> : null}
-            {fromCall ? <AiAuthorMark locale={tr.locale} /> : null}
+            {fromCall || fromAi ? <AiAuthorMark locale={tr.locale} /> : null}
           </span>
         ) : null}
       </span>
@@ -325,6 +347,10 @@ function WorkRowItem({
               reopenWorkTask={actions.reopenWorkTask}
               dismissToTask={actions.dismissToTask}
               closeOutBooking={actions.closeOutBooking}
+              completeFailedTransfer={actions.completeFailedTransfer}
+              reopenFailedTransfer={actions.reopenFailedTransfer}
+              acceptBookingAct={actions.acceptBookingAct}
+              unacceptBookingAct={actions.unacceptBookingAct}
             />
           )}
         </div>
@@ -429,6 +455,10 @@ export function WorkList({
     confirmStopFromTask: confirmStopFromTask.bind(null, accountId),
     notAStopFromTask: notAStopFromTask.bind(null, accountId),
     undoHoldDecisionFromTask: undoHoldDecisionFromTask.bind(null, accountId),
+    completeFailedTransfer: completeFailedTransfer.bind(null, accountId),
+    reopenFailedTransfer: reopenFailedTransfer.bind(null, accountId),
+    acceptBookingAct: acceptBookingAct.bind(null, accountId),
+    unacceptBookingAct: unacceptBookingAct.bind(null, accountId),
   };
 
   return (

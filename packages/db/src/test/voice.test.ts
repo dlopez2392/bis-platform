@@ -18,6 +18,7 @@ import {
   listCalls, getCall, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
+  markTransferFailed, setTransferFollowedUp, clearTransferFollowup,
   callerInTouchSince,
   goLive, getPhoneNumberById,
   setCallCard, getCallCard, listCallReasons, ensureCallbackTask,
@@ -1415,5 +1416,141 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 
   it("the barrel exports emailKey, the twin of 0034's email_key (spec O1; mutation: drop the index.ts line -> FAILS)", () => {
     expect(barrelEmailKey("  Dan+BIS@Example.com ")).toBe("dan@example.com");
+  });
+});
+
+/**
+ * Shared helper for the F-077 part 1 blocks below: a bare call row, no outcome or handoff fields --
+ * round 2 (spec section 10) derives nothing from those any more, only from the two stamps themselves.
+ */
+async function insertBareCall(db: SupabaseClient, accountId: string): Promise<string> {
+  const { data: pn } = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+  const { data: call } = await db.from("calls").insert({ account_id: accountId, phone_number_id: pn!.id }).select("id").single();
+  return call!.id as string;
+}
+
+/**
+ * F-077 part 1, round 2 (spec section 10; migration 0114's calls.transfer_failed_at/reason): the
+ * handoff routes' own stamp of a transfer that reached nobody -- the thing the queue's predicate
+ * (failedTransfers, work-queue.ts) is keyed on, replacing the old abandoned/handoff-requested guess.
+ */
+describe("markTransferFailed (F-077 part 1, round 2)", () => {
+  it("is a real compare-and-swap: a second call with a different reason returns false, the first reason sticks (mutation: drop .is('transfer_failed_at', null) -> the second call also returns true -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      const at = new Date("2026-11-06T15:00:00Z");
+      expect(await markTransferFailed(db, accountId, callId, "no_answer", at)).toBe(true);
+      const { data: row } = await db.from("calls").select("transfer_failed_at, transfer_failed_reason").eq("id", callId).single();
+      expect(new Date(row!.transfer_failed_at as string).toISOString()).toBe(at.toISOString()); // PostgREST answers "+00:00" text: compare instants
+      expect(row!.transfer_failed_reason).toBe("no_answer");
+
+      expect(await markTransferFailed(db, accountId, callId, "refused", new Date())).toBe(false);
+      const { data: unchanged } = await db.from("calls").select("transfer_failed_reason").eq("id", callId).single();
+      expect(unchanged!.transfer_failed_reason).toBe("no_answer");
+    });
+  });
+
+  it("is account-scoped: another account's call id matches nothing (mutation: drop .eq('account_id', accountId) -> cross-account write succeeds -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await insertBareCall(dbB, accountB);
+        expect(await markTransferFailed(dbA, accountA, callId, "no_answer", new Date())).toBe(false);
+        const { data: row } = await dbB.from("calls").select("transfer_failed_at").eq("id", callId).single();
+        expect(row!.transfer_failed_at).toBeNull();
+      });
+    });
+  });
+
+  // R4 (fix round): belt-and-braces against a race between the two handoff routes -- a call the
+  // queue would show as a REAL transfer must never also pick up a failed-transfer stamp.
+  it("never marks a transfer failed once the outcome is already 'transferred' (R4; mutation: drop .neq('outcome', 'transferred') -> succeeds anyway -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      const { error } = await db.from("calls").update({ outcome: "transferred" }).eq("id", callId);
+      expect(error).toBeNull();
+      expect(await markTransferFailed(db, accountId, callId, "no_answer", new Date())).toBe(false);
+      const { data: row } = await db.from("calls").select("transfer_failed_at").eq("id", callId).single();
+      expect(row!.transfer_failed_at).toBeNull();
+    });
+  });
+});
+
+/**
+ * F-077 part 1, round 2 (migration 0114's calls.transfer_followup_at/by): the To do queue's own
+ * "Called back" / Undo for a failed transfer. Both return a boolean for "no row matched" (review
+ * M3) rather than throwing -- throwing is reserved for an actual database error -- made consistent
+ * with stampAiActAccepted/unstampAiActAccepted's own shape (ai-acts.ts) below.
+ */
+describe("setTransferFollowedUp / clearTransferFollowup (F-077 part 1, round 2)", () => {
+  it("requires a recorded failure: a call the queue never showed is refused (review M1; mutation: drop .not('transfer_failed_at', 'is', null) -> succeeds on a call still being handled -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      expect(await setTransferFollowedUp(db, accountId, callId, "user_test", new Date())).toBe(false);
+      const { data: row } = await db.from("calls").select("transfer_followup_at").eq("id", callId).single();
+      expect(row!.transfer_followup_at).toBeNull();
+    });
+  });
+
+  it("stamps a failed transfer, recording who; a second stamp returns false (mutation: drop .is('transfer_followup_at', null) -> the second call also returns true -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      await markTransferFailed(db, accountId, callId, "no_answer", new Date());
+      const at = new Date("2026-11-06T15:00:00Z");
+      expect(await setTransferFollowedUp(db, accountId, callId, "user_a", at)).toBe(true);
+      const { data: row } = await db.from("calls").select("transfer_followup_at, transfer_followup_by").eq("id", callId).single();
+      expect(new Date(row!.transfer_followup_at as string).toISOString()).toBe(at.toISOString());
+      expect(row!.transfer_followup_by).toBe("user_a");
+
+      expect(await setTransferFollowedUp(db, accountId, callId, "user_b", new Date())).toBe(false);
+      const { data: unchanged } = await db.from("calls").select("transfer_followup_by").eq("id", callId).single();
+      expect(unchanged!.transfer_followup_by).toBe("user_a");
+    });
+  });
+
+  it("is account-scoped: another account's call id matches nothing (mutation: drop .eq('account_id', accountId) -> cross-account write succeeds -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await insertBareCall(dbB, accountB);
+        await markTransferFailed(dbB, accountB, callId, "refused", new Date());
+        expect(await setTransferFollowedUp(dbA, accountA, callId, "user_test", new Date())).toBe(false);
+      });
+    });
+  });
+
+  it("clearTransferFollowup requires the SAME PERSON and the exact instant: right person/wrong instant and wrong person/right instant each return false, only the true pair clears it (review I3's shape, review M3; mutation: drop .eq('transfer_followup_by', by) -> a different person's Undo succeeds -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await insertBareCall(db, accountId);
+      await markTransferFailed(db, accountId, callId, "no_answer", new Date());
+      const at1 = new Date("2026-11-06T15:00:00Z");
+      await setTransferFollowedUp(db, accountId, callId, "user_a", at1);
+
+      // right person, wrong instant
+      expect(await clearTransferFollowup(db, accountId, callId, "user_a", new Date("2026-11-06T16:00:00Z"))).toBe(false);
+      // wrong person, right instant
+      expect(await clearTransferFollowup(db, accountId, callId, "user_b", at1)).toBe(false);
+      const { data: still } = await db.from("calls").select("transfer_followup_at, transfer_followup_by").eq("id", callId).single();
+      expect(new Date(still!.transfer_followup_at as string).toISOString()).toBe(at1.toISOString());
+      expect(still!.transfer_followup_by).toBe("user_a");
+
+      // the true pair
+      expect(await clearTransferFollowup(db, accountId, callId, "user_a", at1)).toBe(true);
+      const { data: cleared } = await db.from("calls").select("transfer_followup_at, transfer_followup_by").eq("id", callId).single();
+      expect(cleared!.transfer_followup_at).toBeNull();
+      expect(cleared!.transfer_followup_by).toBeNull();
+    });
+  });
+
+  it("clearTransferFollowup is account-scoped: another account's call id matches nothing (review M9; mutation: drop .eq('account_id', accountId) -> cross-account clear succeeds -> FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const callId = await insertBareCall(dbB, accountB);
+        await markTransferFailed(dbB, accountB, callId, "no_answer", new Date());
+        const at = new Date("2026-11-06T15:00:00Z");
+        await setTransferFollowedUp(dbB, accountB, callId, "user_a", at);
+        expect(await clearTransferFollowup(dbA, accountA, callId, "user_a", at)).toBe(false);
+        const { data: row } = await dbB.from("calls").select("transfer_followup_at").eq("id", callId).single();
+        expect(row!.transfer_followup_at).not.toBeNull();
+      });
+    });
   });
 });
