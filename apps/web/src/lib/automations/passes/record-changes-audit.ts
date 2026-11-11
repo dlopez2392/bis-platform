@@ -3,7 +3,9 @@ import type { Pass } from "../context";
 /**
  * F-115: the daily proof that every server write names its author (0111's observe mode still
  * writes an unattributed row rather than refusing it; this is what turns a missed conversion into
- * a red heartbeat instead of a silent gap). Reads `ctx.db` directly, as every other pass does
+ * a red heartbeat instead of a silent gap). Since 0113 author_kind is NOT NULL and enforce is on, so this count is
+ * always 0 (PostgreSQL 17 plans the IS NULL filter as a constant false: no scan); it stays as the tripwire for
+ * 0113's ROLLBACK, which puts observe mode back. Reads `ctx.db` directly, as every other pass does
  * (documents-sweep.ts's own pattern) — `ctx.db` is already the service client the cron route hands
  * every pass (harness.ts's `buildPassContext`), so there is no separate service client to reach for.
  * `ctx.now` is the ONE "now" this tick uses, per PassContext's own rule.

@@ -568,6 +568,13 @@ test("9. Take photo: hidden on a desktop; on a phone it is shown and opens the c
   await page.goto(contactUrl());
   // On a phone the card is closed until tapped (DESIGN.md: what they have, closed until tapped).
   const toggle = recordPage(page).locator('[data-record-card="documents"] h2 > button[aria-expanded]');
+  // A closed phone card mounts no body and fetches nothing (use-phone.ts), so the FIRST documents read after
+  // this point is the card's own mount read: not background traffic. Registered before the tap so it cannot
+  // be missed. Flake history (CI runs 41501272684 and 42383483125, same step, 10s of "element(s) not found"
+  // after aria-expanded was already true): the single wait on the count line could not say whether the read
+  // never started, answered an error, or was merely slow. Waiting on the read itself names which.
+  const mountRead = page.waitForResponse((r) => r.request().method() === "GET" && r.url().endsWith(documentsRoute()), { timeout: 30_000 });
+  mountRead.catch(() => undefined); // reported where it is awaited; never an unhandled rejection if an earlier line fails first
   await toggle.click();
   // The click can race hydration on a fresh hard navigation (the button is
   // server-rendered and clickable before React attaches its handler); confirm
@@ -577,6 +584,7 @@ test("9. Take photo: hidden on a desktop; on a phone it is shown and opens the c
   // mounts no body at all, so without this the "N files" wait below would
   // report "element(s) not found" for either reason and tell a reader nothing.
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect((await mountRead).status(), "the card's mount read on a phone").toBe(200);
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
   const takePhoto = card(page).locator("[data-take-photo]");
   await expect(takePhoto).toBeVisible();

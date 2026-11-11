@@ -33,6 +33,7 @@ import { AccountSwitcher, type AccountOption } from "@/components/account-switch
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
+import { surfaceById } from "@/lib/surfaces/manifest";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import { useLocale } from "@/components/locale-provider";
 import { t } from "@/lib/i18n/t";
@@ -45,6 +46,23 @@ import { t } from "@/lib/i18n/t";
 import { useShellData } from "@/components/shell-data";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
+
+// F-087 fix round, Minor 4: hoisted to MODULE scope, not read inside the
+// component body on every render — a renamed/dropped manifest id now
+// throws at IMPORT time (module evaluation), the loudest possible failure,
+// rather than only when a session first reaches the branch that reads it
+// (the agency footer, in or out of an account; the client-Owner footer).
+// `surfaceById` itself throws with the id in its message (manifest.ts).
+// app-sidebar.test.ts never imports this module (a text-only source scan —
+// see its own doc comment), so it cannot see this; app-sidebar-nav-
+// geometry.test.ts DOES import real exports from this file, which runs the
+// whole module body on import — that test (and `next build`) are what
+// actually exercise this throw (mutation: rename "nav:/dashboard" in the
+// manifest → app-sidebar-nav-geometry.test.ts fails at import, not at a
+// specific assertion).
+const settingsEntry = surfaceById("nav:settings");
+const teamEntry = surfaceById("nav:team");
+const topLevelEntry = surfaceById("nav:/dashboard");
 
 // Task 11 (Spanish-runtime lane), fix round 1: consumed by the styleguide's
 // pseudo-locale overflow demo (locale-nav-demo.tsx) so its container can
@@ -213,12 +231,19 @@ export function AppSidebar({
   // instead (DESIGN.md rule 10's pinned footer cluster), the same self-
   // service entry point the palette's nav:team registers. A client Staff,
   // like the old unconditional client case, gets no footer item at all.
+  //
+  // F-087 part 1 (owner ruling Q1): these three links now read their own
+  // href/labelKey from the SAME manifest entries the palette registers
+  // (nav:settings, nav:team, and the agency's own top-level nav:/dashboard)
+  // instead of each being written a third time, independently of both
+  // buildNavGroups and the palette's own extra pushes. The three lookups
+  // themselves are hoisted to module scope above (fix round, Minor 4).
   const footer: NavItem | null = isAgency
     ? (base
-        ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }
-        : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard })
+        ? { href: settingsEntry.route(base), label: t(m, settingsEntry.labelKey, locale), icon: Settings }
+        : { href: topLevelEntry.route(base), label: t(m, topLevelEntry.labelKey, locale), icon: LayoutDashboard })
     : (base && isOwner
-        ? { href: `${base}/team`, label: t(m, "nav.team", locale), icon: Users }
+        ? { href: teamEntry.route(base), label: t(m, teamEntry.labelKey, locale), icon: Users }
         : null);
 
   // Only shown inside an account, and only for the agency — a client has
@@ -296,7 +321,11 @@ export function AppSidebar({
             no-overlay reason the toggle button beside it is hidden too. */}
         {collapsed || !isAgency ? null : (
           <Link
-            href="/dashboard"
+            // F-087 fix round, Minor 10: reads the same manifest entry the
+            // footer and ⌘K do (topLevelEntry, hoisted to module scope
+            // above), rather than a fourth independent "/dashboard" literal
+            // — the exact duplication this manifest exists to end.
+            href={topLevelEntry.route(base)}
             className="hidden px-1 text-sm font-semibold text-[var(--sidebar-text-strong)] sm:inline-block"
           >
             {t(m, "shell.brand", locale)}

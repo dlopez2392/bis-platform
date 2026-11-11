@@ -26,7 +26,8 @@ specifics are tracked outside this public repository.
 **Binding constraints** (section 3 gives the reasons):
 1. Adult day care is out (owner decision, 2026-09-25), and home health with it.
 2. HIPAA verticals (medical, dental, therapy, chiropractic, medical spa, Medicare and group health)
-   stay behind study decision 5. Nothing here reopens it.
+   are out (owner decision, 2026-11-09, which settles study decision 5 for now). Nothing here
+   reopens it.
 3. M7a billing is two or three fixed plans. Every plan has the CRM; higher plans add Sofía, the
    voice receptionist, and the web chat. Priced per business, never per seat.
 4. DESIGN.md is the UI contract. Where a feature needs it changed, the amendment is flagged for the

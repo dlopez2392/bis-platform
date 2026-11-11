@@ -162,12 +162,23 @@ describe("AppSidebar — footer: Settings for the agency, Team for a client Owne
     expect(src).toContain(
       "const footer: NavItem | null = isAgency\n"
       + "    ? (base\n"
-      + '        ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }\n'
-      + '        : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard })\n'
+      + "        ? { href: settingsEntry.route(base), label: t(m, settingsEntry.labelKey, locale), icon: Settings }\n"
+      + "        : { href: topLevelEntry.route(base), label: t(m, topLevelEntry.labelKey, locale), icon: LayoutDashboard })\n"
       + "    : (base && isOwner\n"
-      + '        ? { href: `${base}/team`, label: t(m, "nav.team", locale), icon: Users }\n'
+      + "        ? { href: teamEntry.route(base), label: t(m, teamEntry.labelKey, locale), icon: Users }\n"
       + "        : null);",
     );
+  });
+
+  // F-087 part 1 (owner ruling Q1): the three footer links now read their
+  // own href/labelKey from the SAME manifest entries the palette registers
+  // — closing the "written a third time" duplication (spec §2.2, §1 row 5)
+  // — rather than each being a hand-written literal independent of both
+  // buildNavGroups and the palette's own extra pushes.
+  it("the three footer links read their href/labelKey from the manifest's own nav:settings, nav:team and nav:/dashboard entries (mutation: hard-code a literal href/labelKey back in → FAILS)", () => {
+    expect(src).toContain('const settingsEntry = surfaceById("nav:settings");');
+    expect(src).toContain('const teamEntry = surfaceById("nav:team");');
+    expect(src).toContain('const topLevelEntry = surfaceById("nav:/dashboard");');
   });
 
   // A client Staff never gets the Team footer item: this is the exact
@@ -213,5 +224,17 @@ describe("AppSidebar — the setup meter's lang (S-10 review I-3)", () => {
 describe("AppSidebar — AccountSwitcher is gated on isAgency (the RUNTIME_AGENCY_ONLY_FILES premise)", () => {
   it("renders AccountSwitcher only when isAgency, never unconditionally (mutation: change `isAgency ?` to `true ?` → FAILS)", () => {
     expect(src).toContain("isAgency ? (\n        <AccountSwitcher");
+  });
+});
+
+// F-087 fix round, Minor 10: the wordmark used to carry its own fourth,
+// independent "/dashboard" literal — the footer and ⌘K already read the
+// manifest's own nav:/dashboard entry (surfaceById, hoisted to module
+// scope), and the wordmark now does too, closing the exact duplication
+// this manifest exists to end.
+describe("AppSidebar — the wordmark reads the same manifest entry as the footer and ⌘K (F-087 fix round, Minor 10)", () => {
+  it("the wordmark's href is topLevelEntry.route(base), not a hard-coded \"/dashboard\" literal (mutation: revert to href=\"/dashboard\" → FAILS)", () => {
+    expect(src).toContain("href={topLevelEntry.route(base)}");
+    expect(src).not.toContain('href="/dashboard"');
   });
 });

@@ -1,34 +1,12 @@
+import { audienceIncludes, navCandidates, type NavIconKey } from "./surfaces/manifest";
 import type { MessageKey } from "./messages";
 
-/**
- * Named rather than the icon itself: this module is pure (no React, no
- * lucide-react) so it can be unit-tested without a DOM, per the Task 2
- * brief. app-sidebar.tsx owns the actual icon components and maps this key
- * to one when rendering.
- */
-export type NavIconKey =
-  | "dashboard"
-  | "tasks"
-  | "website"
-  | "contacts"
-  | "documents"
-  | "opportunities"
-  | "conversations"
-  | "calls"
-  | "activity"
-  | "forms"
-  | "calendar"
-  | "branding"
-  | "voice"
-  | "automations"
-  | "accounts"
-  | "blueprints"
-  | "numbers"
-  | "checklist"
-  | "work"
-  | "screened"
-  | "plans"
-  | "billing";
+// F-087 part 1: NavIconKey now lives in surfaces/manifest.ts (the lower
+// module in the dependency direction — this file reads SURFACE_MANIFEST
+// via navCandidates, so a type this file needed could not live here without
+// a circular import). Re-exported so every existing import of it from
+// "@/lib/nav-groups" (app-sidebar.tsx) keeps working unchanged.
+export type { NavIconKey } from "./surfaces/manifest";
 
 export type NavItemSpec = {
   href: string;
@@ -44,178 +22,51 @@ export type NavGroupSpec = {
   items: NavItemSpec[];
 };
 
+/** Render order of the four in-account groups (DESIGN.md's sidebar pattern:
+ *  OVERVIEW / CRM / COMMUNICATIONS / GROWTH). */
+const GROUP_ORDER: MessageKey[] = [
+  "nav.group.overview", "nav.group.crm", "nav.group.communications", "nav.group.growth",
+];
+
 /**
  * The in-account/top-level nav structure, grouped per DESIGN.md's sidebar
- * pattern (OVERVIEW / CRM / COMMUNICATIONS / GROWTH) and the Task 2 brief's
- * grouping map. Pure and framework-free by design — see NavIconKey above.
+ * pattern and F-087 part 1's own SURFACE_MANIFEST (surfaces/manifest.ts) —
+ * a filter-and-group over the manifest's `iconKey`-bearing entries, rather
+ * than inlined literals. Pure and framework-free by design — see
+ * NavIconKey above.
  *
  * Setup is deliberately absent: it leaves the nav entirely (Task 3 re-homes
  * it in the footer as a setup-progress meter, per DESIGN.md's "Setup" key
- * pattern). Removing it here now, ahead of that footer work landing, is
- * still correct — a stale in-progress link is worse than a temporarily
- * missing one.
+ * pattern). The manifest's own `nav:setup` entry carries no `iconKey` for
+ * exactly this reason — it never becomes a `navCandidates` row.
+ *
+ * A Technician (F-085 part 1, spec §9) needs no special-cased branch here
+ * any more: every one of the 16 in-account entries already carries its own
+ * `audience.technician` flag (manifest.ts), and filtering the SAME
+ * group-ordered candidates by that flag reproduces their exact six-item,
+ * four-group subset — the group each item keeps is the one it already had.
  */
 export function buildNavGroups(
   base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false,
 ): NavGroupSpec[] {
+  const scope = base === null ? "agency-top" : "account";
+  const candidates = navCandidates(scope).filter(
+    (entry) => audienceIncludes(entry.audience, isAgency, isOwner, isTechnician),
+  );
+
   if (base === null) {
-    return [
-      {
-        label: null,
-        items: [
-          { href: "/dashboard/accounts", labelKey: "nav.accounts", iconKey: "accounts" },
-          { href: "/dashboard/blueprints", labelKey: "nav.blueprints", iconKey: "blueprints" },
-          // Work Queue Task 6 — /dashboard/work, agency-only by construction
-          // (requireAgency, first line, before any read; hiding this link
-          // for a client is convenience only, never the boundary). Appended
-          // rather than leading the list: this registry's own convention is
-          // "add a line, never reorder" — the design spec's own placement
-          // ("Top level, beside Accounts and Blueprints") does not require
-          // a particular side.
-          { href: "/dashboard/work", labelKey: "nav.work", iconKey: "work" },
-          // The numbers inventory — /dashboard/numbers, agency-only by
-          // construction (requireAgency, first line). Appended rather than
-          // slotted beside Companies: this registry's convention is "add a
-          // line, never reorder", and nothing about this destination needs a
-          // particular position.
-          { href: "/dashboard/numbers", labelKey: "nav.numbers", iconKey: "numbers" },
-          // The screened-call log — /dashboard/screened, agency-only by
-          // construction (requireAgency, first line) and unreadable by
-          // `authenticated` at the grant level besides.
-          { href: "/dashboard/screened", labelKey: "nav.screened", iconKey: "screened" },
-          // Client billing plans — /dashboard/plans, agency-only by
-          // construction: requireAgency, first line of the page and of every
-          // action, is the ONLY gate. The page and actions read and write
-          // through serviceDb(), which bypasses RLS, so 0051's
-          // plans_agency_read policy does not stand behind them (it binds
-          // only a user-token client). Appended: "add a line, never reorder".
-          { href: "/dashboard/plans", labelKey: "nav.plans", iconKey: "plans" },
-        ],
-      },
-    ];
+    return [{ label: null, items: candidates.map((entry) => toNavItem(entry, base)) }];
   }
 
-  // A Technician (F-085 part 1, spec §9) works their own customers: To do
-  // (their landing, accountHome), Contacts, Documents, Conversations, Calls
-  // and Calendar, in the groups' usual order. Hiding the rest is convenience
-  // only; requireNotTechnician on every refused page and action is the
-  // boundary, and RLS (0068) bounds what the six they keep can read.
-  if (isTechnician) {
-    return [
-      { label: "nav.group.overview", items: [{ href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" }] },
-      { label: "nav.group.crm", items: [
-        { href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" },
-        // S-07 3a (spec 3.1, decision E2): a Technician keeps Documents too —
-        // RLS (0077 + 0068) bounds their rows to assigned customers; the page
-        // itself calls requireAccountAccess only.
-        { href: `${base}/documents`, labelKey: "nav.documents", iconKey: "documents" },
-      ] },
-      { label: "nav.group.communications", items: [
-        { href: `${base}/conversations`, labelKey: "nav.conversations", iconKey: "conversations" },
-        { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
-      ] },
-      { label: "nav.group.growth", items: [{ href: `${base}/calendar`, labelKey: "nav.calendar", iconKey: "calendar" }] },
-    ];
-  }
+  return GROUP_ORDER.map((label) => ({
+    label,
+    items: candidates.filter((entry) => entry.group === label).map((entry) => toNavItem(entry, base)),
+  }));
+}
 
-  return [
-    {
-      label: "nav.group.overview",
-      items: [
-        { href: `${base}/dashboard`, labelKey: "nav.dashboard", iconKey: "dashboard" },
-        // Both audiences, directly under Dashboard (Task 3 spec, Step 4):
-        // open tasks, contacts owed a reply, jobs nobody confirmed — the
-        // one place both a client and the agency see what needs a human
-        // TODAY, ahead of Website's own longer-horizon numbers.
-        { href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" },
-        // Both audiences: the section exists for the client even before a site
-        // is linked (it sells the feature, spec §The screen); the agency sees
-        // the same page inside any account.
-        { href: `${base}/website`, labelKey: "nav.website", iconKey: "website" },
-        // Agency only, matching the route's own requireAgencyOnlyAccountAccess.
-        //
-        // Added 2026-09-05 because the page was genuinely unreachable: the
-        // dashboard's checklist CARD links here, but nothing in the nav did,
-        // and the A2P registration panel — the record that gates the entire
-        // SMS feature — lives on this page and nowhere else. danlo failed to
-        // find it twice, which is the only evidence that matters.
-        //
-        // Setup stays absent from the nav (see the note above); this is the
-        // opposite case. Setup is a wizard you finish and leave behind, while
-        // the checklist is a record you return to, and after Setup drops out
-        // of the footer meter there is no path back to it at all.
-        ...(isAgency
-          ? ([{ href: `${base}/checklist`, labelKey: "nav.checklist", iconKey: "checklist" }] satisfies NavItemSpec[])
-          : []),
-        // Clients only (G20), like Branding: the agency sees billing on the
-        // account's Settings card. Shown before billing starts too (DECISION
-        // 4; the page says what will appear). The route itself works for the
-        // agency; hiding a link is not authorization (requireAccountAccess is).
-        //
-        // Staff and roles (spec §4): a client Staff does not see Billing
-        // either — hiding it here is convenience only, same as every other
-        // gate in this file; the real boundary is requireAccountOwner on the
-        // Billing page and its server action.
-        ...(isAgency || !isOwner
-          ? []
-          : ([{ href: `${base}/billing`, labelKey: "nav.billing", iconKey: "billing" }] satisfies NavItemSpec[])),
-      ],
-    },
-    {
-      label: "nav.group.crm",
-      items: [
-        { href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" },
-        // S-07 3a (spec 3.1, decision E2; DESIGN.md's sidebar pattern
-        // amended 2026-10-17): every file on a customer or household,
-        // Expiring soon first. Every role, a Technician too (RLS, 0077 +
-        // 0068, bounds their rows to assigned customers); the page itself
-        // calls requireAccountAccess only.
-        { href: `${base}/documents`, labelKey: "nav.documents", iconKey: "documents" },
-        { href: `${base}/pipeline`, labelKey: "nav.opportunities", iconKey: "opportunities" },
-      ],
-    },
-    {
-      label: "nav.group.communications",
-      items: [
-        { href: `${base}/conversations`, labelKey: "nav.conversations", iconKey: "conversations" },
-        // BOTH audiences, unlike the agency-only Voice item directly below:
-        // Voice is the settings that configure the receptionist, this is
-        // the log of what it actually did — the client's own business
-        // data, and one of the screens where they see what they are paying
-        // for, same class of surface as Calls right after it.
-        { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
-        // BOTH audiences, like Calls beside it: the record of what the
-        // system sent, held and skipped on the client's behalf — the first
-        // place to look when an automation misfires (part C, A9).
-        { href: `${base}/activity`, labelKey: "nav.activity", iconKey: "activity" },
-        // Agency only. The route itself is still gated independently by
-        // requireAgencyOnlyAccountAccess and by the isAgency check inside
-        // every action in ./voice/actions.ts — hiding the link here is
-        // convenience, not the boundary.
-        ...(isAgency
-          ? ([{ href: `${base}/voice`, labelKey: "nav.voice", iconKey: "voice" }] satisfies NavItemSpec[])
-          : []),
-      ],
-    },
-    {
-      label: "nav.group.growth",
-      items: [
-        { href: `${base}/forms`, labelKey: "nav.forms", iconKey: "forms" },
-        { href: `${base}/calendar`, labelKey: "nav.calendar", iconKey: "calendar" },
-        // Agency only, like Voice: every recipe here spends the client's
-        // money and messages their customers, so v1 is agency-configured
-        // (spec Section 2). The route is gated independently by
-        // requireAgencyOnlyAccountAccess and every action re-checks isAgency.
-        ...(isAgency
-          ? ([{ href: `${base}/automations`, labelKey: "nav.automations", iconKey: "automations" }] satisfies NavItemSpec[])
-          : []),
-        // Clients only — the agency reaches the same panel from Settings.
-        // The route itself still works for the agency; hiding a link is
-        // not authorization.
-        ...(isAgency
-          ? []
-          : ([{ href: `${base}/branding`, labelKey: "nav.branding", iconKey: "branding" }] satisfies NavItemSpec[])),
-      ],
-    },
-  ];
+function toNavItem(
+  entry: { route: (base: string | null) => string; labelKey: MessageKey; iconKey: NavIconKey },
+  base: string | null,
+): NavItemSpec {
+  return { href: entry.route(base), labelKey: entry.labelKey, iconKey: entry.iconKey };
 }

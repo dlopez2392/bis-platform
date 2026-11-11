@@ -136,8 +136,10 @@ export function relativeKey(baseDir: string, absPath: string): string {
 // entirely from the scan, not frozen-but-included — DESIGN.md's bilingual
 // DoD line is itself qualified ("once a surface carries bilingual copy at
 // all"), and these routes are internal tooling with no bilingual intent.
-// Exactly the six top-level agency routes lib/nav-groups.ts names (plan-
-// review I1) — NOT dashboard/billing, which is the CLIENT's own account-
+// Exactly the six top-level agency routes lib/nav-groups.ts names, which
+// since F-087 part 1 reads them off lib/surfaces/manifest.ts's own
+// agency-top-scoped entries rather than inlining them (plan-review I1) —
+// NOT dashboard/billing, which is the CLIENT's own account-
 // scoped billing page (`${base}/billing`) and must stay scanned. Matched
 // against `relativeKey`'s output, which is already "/"-separated, so a
 // plain "/" in each pattern is correct on every OS — no [\\/] needed.
@@ -525,10 +527,6 @@ export const ENGLISH_ONLY_READERS: readonly { file: string; reason: string }[] =
   {
     file: "src/lib/email/templates/followup.ts",
     reason: "DEFAULT_FOLLOWUP_BODY is a byte-identity anchor, not only a displayed string: calendar/actions.ts's own doc comment compares a raw submission against this EXACT English text to collapse it back to an empty column, and calendar-settings.tsx imports the same constant as its textarea's placeholder so the preview can never drift from what that comparison, and bookingFollowupEmail's own fallback, actually use. Localizing the placeholder without updating the comparison in lockstep would let a Spanish-reading operator's verbatim placeholder text be stored as a REAL body instead of collapsing to empty — a cross-file behavior change outside this gate-closing task's scope, flagged for the calendar lane",
-  },
-  {
-    file: "src/lib/palette/registry.ts",
-    reason: "words()'s own doc comment: in Spanish, an entry's ENGLISH twin joins its search keywords on purpose (\"a bilingual owner who types 'contacts' still finds Contactos\") — the displayed label a few lines above already reads through t(); this read is a second, deliberately-English SEARCH term, never shown as copy",
   },
   {
     file: "src/lib/record/ai-summary-prompt.ts",

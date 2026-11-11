@@ -40,6 +40,7 @@ import { recordUsageSafely } from "@/lib/billing/usage";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import { planAct, underPlannedId, SOFIA_AUTHOR } from "./act-id";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
+import { loggableError } from "@/lib/loggable-error";
 
 /** The service-role client every voice write goes through, named the way
  *  finish-call.ts names it rather than reaching for @supabase/supabase-js,
@@ -202,7 +203,7 @@ export async function contactForCallerId(
       const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, SOFIA_AUTHOR, fillAct?.via);
       acts.push(...underPlannedId(fieldFillActs(source, created.id, filled), fillAct));
     } catch (e) {
-      console.error(`textback fillContactBlanks failed for ${created.id}: ${String(e)}`);
+      console.error(`textback fillContactBlanks failed for ${created.id}: ${loggableError(e)}`);
     }
   }
   await recordActs(db, accountId, acts);
@@ -213,7 +214,7 @@ async function record(db: VoiceDb, w: Parameters<typeof recordAutomationLog>[1],
   try {
     await recordAutomationLog(db, w);
   } catch (e) {
-    console.error(`${label}: text-back log write failed (${w.status}): ${String(e)}`);
+    console.error(`${label}: text-back log write failed (${w.status}): ${loggableError(e)}`);
   }
 }
 
@@ -316,7 +317,7 @@ export async function prepareTextback(
       else if (paused) await writeHeld({ db }, subject, pauseHoldUntil(r.now), "UTC", REASONS.heldBillingPaused);
       else await writeHeld({ db }, subject, new Date(r.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
     } catch (e) {
-      console.error(`${r.label}: text-back NOT held, the hold write failed: ${String(e)}`);
+      console.error(`${r.label}: text-back NOT held, the hold write failed: ${loggableError(e)}`);
       return { contactId, conversationId, pending: null, notSent: "unheld", holding };
     }
     return { contactId, conversationId, pending: null, notSent: "held", holding };
@@ -433,7 +434,7 @@ export async function deliverTextback(
     if (subject) await record(db, { ...subject, status: "sent", reason: "" }, label);
     return "sent";
   } catch (e) {
-    console.error(`${label}: text-back failed: ${String(e)}`);
+    console.error(`${label}: text-back failed: ${loggableError(e)}`);
     return "failed";
   }
 }
@@ -482,7 +483,7 @@ export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
     inTouch = await callerInTouchSince(db, row.account_id, payload.callerNumber, payload.conversationId, missedAt);
   } catch (e) {
     // An outage, not an answer: try again in LEDGER_RETRY_MS (review R2-I4).
-    console.error(`${label}: could not check whether the caller has been in touch; held again: ${String(e)}`);
+    console.error(`${label}: could not check whether the caller has been in touch; held again: ${loggableError(e)}`);
     await writeHeld(ctx, subjectOf(row), new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
     return "held";
   }
