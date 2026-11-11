@@ -581,6 +581,136 @@ as an ordinary "Caller" contact on that number, with its thread.
 
 ---
 
+## The owner line (F-032)
+
+A person on a client's team, the Owner or Staff, calls the business's own
+number from their verified cell, keys a 6-digit PIN, and Sofía answers
+read-only questions about the day: calls and messages, appointments, and
+what needs attention (customer lookup follows in a second PR). Technicians
+are not offered it yet. Every other caller hears exactly what they hear
+today. Spec: `docs/superpowers/specs/2026-11-09-owner-line-design.md`.
+
+### Deploy order: 0115 on production BEFORE the app (the caps fail open)
+
+Never let the F-032 build go live on a project whose migration history
+lacks 0115. The app filters `calls.owner_line_user_id` when it counts calls
+for the caps (`countCallsSince`, `countCallsByCallerSince`), and BOTH voice
+routes fail open when a cap read errors (`texml/route.ts`'s "fail open"
+catch; `incoming/route.ts`'s "call-limit counts failed - failing open").
+An app deployed before 0115 therefore answers every call with BOTH call
+caps, the 5 a day per caller and the 50 a day per account, silently off,
+with no visible error; the Calls list, the dashboard and the weekly report
+fail outright. The order is: bis-ci (`ci-project-setup.yml`), then
+production (once), then the parity check, then the merge, which deploys.
+Before merging, read production's migration history and see 0115 in it.
+The same holds for Preview: a Preview build reads bis-ci, so 0115 must be
+in bis-ci's history first (the `e2e` job already refuses the branch until
+it is).
+
+### OWNER_LINE_PIN_PEPPER
+
+Every PIN is stored as scrypt over an HMAC of the PIN, keyed by this
+pepper. It lives only in the server's environment, never in the database,
+so a database-only leak cannot be cracked offline.
+
+- **Sensitive** in Vercel. At least **32** random characters:
+  `openssl rand -base64 48`. Shorter counts as unset.
+- **Three DIFFERENT values:** one in Production; one in Preview (never
+  production's, `docs/runbooks/production-isolation.md`); and a fixed,
+  non-secret test value in CI's `e2e` job env (`ci.yml`). Never copy one
+  environment's value into another.
+- **Set it before the first PIN is saved.**
+- **Rotating it invalidates every stored PIN.** The right PIN then reads
+  as wrong: after a rotation, each person's next calls count as wrong
+  attempts, so three of them lock that person out for 30 minutes and send
+  the lockout emails to them and the Owner. So tell every enrolled person
+  FIRST, before you rotate: right after the rotation, open Mis preferencias,
+  press **Change PIN** and set a new one, and do not call in until they
+  have. (Resetting before the rotation does not help: that PIN would be
+  keyed by the old pepper.)
+- **Unset:** the card refuses to save a PIN, with words, and every PIN
+  step on a call takes today's path and counts no attempt. The owner-pin
+  log reads `texml owner-pin: OWNER_LINE_PIN_PEPPER is not set — today's
+  path, nothing checked`.
+
+`.env.example`, in the Voice Receptionist block beside
+`VOICE_HANDOFF_SECRET` (the name only, never a value):
+
+```
+# Owner line (F-032; docs/runbooks/voice-setup.md, "The owner line"). Keys every PIN hash; never in the database.
+# At least 32 random characters: `openssl rand -base64 48`. Sensitive in Vercel. A DIFFERENT value per
+# environment (Production, Preview, CI's fixed test value). Rotating it invalidates every stored PIN.
+# Unset: no PIN can be saved, and every PIN step takes today's path and counts no attempt.
+OWNER_LINE_PIN_PEPPER=
+```
+
+### The switch: off by default
+
+Team → **"Let your team call in to hear the day"**. It is OFF for every
+business until that business's Owner turns it on. BIS can turn it OFF
+(a lost phone, a person let go) but never ON, and the card then reads
+"Turned off by BIS" with the time. While it is off, nobody's PIN step
+runs; people may still verify a cell and set a PIN, and their card says
+nothing works until the Owner turns it on. BIS staff signed in as a client
+cannot set any of it up.
+
+### What a person does
+
+Mis preferencias → **"Call in to your business"**, one card per business:
+1. Enter the cell. The card shows a 6-digit code: call the business number
+   from that cell and key it (10 minutes, 3 tries). Nothing is texted.
+2. Set a 6-digit PIN. Trivial PINs (000000, 123456, one repeated digit, a
+   run) are refused with a reason. It is never shown again.
+
+### The real-call proof (O-5): the exit gate
+
+Before ANY client's switch is turned on: on the BIS account, switch on,
+from danlo's verified cell, to the BIS account's live number.
+
+1. **Call 1, the right PIN.** Sofía greets by first name. Ask the
+   questions (three in PR 1: "what calls did I get today?", "what's on my
+   calendar tomorrow?", "what needs my attention?"; the fourth, a customer
+   lookup, after PR 2). Each answer matches the dashboard (the same count
+   as the "Calls answered" tile, "plus N calls that looked like spam").
+2. **Call 2, a wrong PIN three times.** "That PIN didn't match. Try again."
+   twice, then the call continues as a normal customer call; the lockout
+   email reaches danlo and the account's Owner.
+3. **Call 3, pound**, after the 30-minute lock has ended (a locked cell is
+   not asked for a PIN at all): today's normal receptionist.
+
+**Read the Vercel logs at once** (runtime logs age out; Step 6's warning):
+- `/api/voice/texml`, calls 1–3: `texml owner line asking for a PIN,
+  accountId …`.
+- `/api/voice/texml/owner-pin`: call 1 `texml owner-pin: PIN ok`; call 2
+  `PIN wrong` twice, then `PIN locked_now`; call 3 `texml owner-pin: pound
+  or no PIN — today's path`.
+- `/api/voice/incoming`, call 1 only: `owner pass checked` with
+  `result: "ok"`, then `owner line accepted`. Neither call 2 nor call 3
+  may log `owner line accepted`.
+
+**Then read the rows:** call 1 is on the Calls list labelled "Owner line ·
+Dan"; **no transcript of the three calls holds the PIN or any keyed
+digits**; and the dashboard's "Calls answered" did not move for call 1. In
+the Telnyx portal, read one call's detail record and note in the ledger
+whether the gathered digits appear there (provider side; this app never
+logs or stores them).
+
+Do not turn on a client's switch until every item above is walked.
+
+### Rollback
+
+- **One business:** its Owner, or BIS, turns the Team switch off. It takes
+  effect on the next call.
+- **Every business:** remove `OWNER_LINE_PIN_PEPPER` from Production and
+  redeploy: every PIN step takes today's path and nothing is read.
+  Re-adding the SAME value restores every PIN; a new value invalidates
+  them all.
+- **The whole feature:** revert the app FIRST, then 0115's hand rollback
+  (its header), which destroys every enrollment and every owner-line
+  access-log entry. Never the other order: see the deploy order above.
+
+---
+
 ## Video meetings (Daily.co)
 
 Optional, per-company, off by default in the sense that it's entirely

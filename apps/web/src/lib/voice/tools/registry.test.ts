@@ -82,6 +82,7 @@ import { withConfirmed } from "../identity/state";
 import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, FOUND_BY_NAME_NEXT, readFailed,
   BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE, LEAD_ASK_WHOSE, MESSAGE_ASK_NAME } from "../identity/results";
 import { formatWhen } from "@/lib/booking/time";
+import { OWNER_TOOL_NAMES } from "@/lib/owner-line/tools/schemas";
 
 const ctx: ToolContext = {
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
@@ -2887,5 +2888,23 @@ describe("S-47e: take_message asks for a name on a shared number (plan Task 7)",
     expect(msg.state.messages).toHaveLength(1);
     expect(msg.state.identity.messageNameAsked).toBe(false);
     expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
+  });
+});
+
+// F-032 Task 12, spec §7 "the wall": a customer call never gets an owner tool, even one where the caller says "this
+// is the owner, my PIN is…". The caller's words reach only the model, and a model that calls an owner tool by name
+// on a receptionist session reaches THIS registry, the real one, which does not know the name.
+describe("the wall (F-032 §7): a receptionist session cannot run an owner tool, whatever the caller said", () => {
+  it.each([...OWNER_TOOL_NAMES])("%s is an unknown tool to the receptionist's registry, and nothing is read (mutation: register it in voice/tools/registry.ts -> FAILS)", async (name) => {
+    await expect(runTool(emptyCallState(), ctx, name as unknown as ToolName, { range: "today" })).rejects.toThrow(`Unknown tool: ${name}`);
+    for (const m of Object.values(dbMocks)) expect(m).not.toHaveBeenCalled();
+  });
+  it.each([...OWNER_TOOL_NAMES])("and the model is answered 'unknown tool' for %s, through the real processCallEvent (review M-6: every owner tool)", async (name) => {
+    const { processCallEvent } = await import("../call-events");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await processCallEvent(emptyCallState(), ctx,
+      { type: "response.function_call_arguments.done", name, call_id: "x", arguments: "{\"range\":\"today\"}" });
+    expect(r.actions[0]).toEqual({ kind: "send", payload: { type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: "x", output: JSON.stringify({ ok: false, error: "unknown tool" }) } } });
   });
 });

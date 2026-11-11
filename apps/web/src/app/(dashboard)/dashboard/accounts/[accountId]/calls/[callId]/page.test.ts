@@ -89,6 +89,9 @@ const getCallCardMock = vi.fn();
 const getVoiceProfileMock = vi.fn();
 /** Decider names on decided suggestions (`users`, not account-scoped, capped at the ids asked). */
 const listPeopleNamesMock = vi.fn<(...a: unknown[]) => Promise<Record<string, string>>>(async () => ({}));
+/** F-032 Task 13: the owner line's own team lookup and access-log read. */
+const listAccountTeamMock = vi.fn<(...a: unknown[]) => Promise<{ userId: string; email: string; name: string | null }[]>>(async () => []);
+const readOwnerLineCallLogMock = vi.fn<(...a: unknown[]) => Promise<string[]>>(async () => []);
 vi.mock("@bis/db", () => ({
   listPeopleNames: (...args: unknown[]) => listPeopleNamesMock(...args),
   getCallCard: (...args: unknown[]) => getCallCardMock(...args),
@@ -97,6 +100,11 @@ vi.mock("@bis/db", () => ({
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
   listProposalsForCall: (...args: unknown[]) => listProposalsForCallMock(...args),
   getContact: (...args: unknown[]) => getContactMock(...args),
+  listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
+  readOwnerLineCallLog: (...args: unknown[]) => readOwnerLineCallLogMock(...args),
+  // `../format.ts` imports this directly from `@bis/db` (format.ts is a server module, so no
+  // client-boundary copy was needed) to order "Asked about…" — same four kinds the real export has.
+  OWNER_LINE_LOG_KINDS: ["owner_line_calls_and_messages", "owner_line_appointments", "owner_line_needs_attention", "owner_line_lookup_customer"],
 }));
 // Review R3-M8: the resend reads the same recipient state as the composer.
 const recipientStateMock = vi.fn();
@@ -146,6 +154,7 @@ const CALL: CallDetailRow = {
   id: "call1",
   started_at: "2026-08-25T19:15:00.123456+00:00",
   ended_at: "2026-08-25T19:18:42.000000+00:00",
+  owner_line_user_id: null,
   duration_secs: 222,
   outcome: "booked",
   language: "en",
@@ -238,6 +247,8 @@ describe("CallDetailPage", () => {
     recipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
     getCallCardMock.mockReset().mockResolvedValue({ reason: null, callbackNumber: null, callerWords: null });
     getVoiceProfileMock.mockReset().mockResolvedValue(null);
+    listAccountTeamMock.mockReset().mockResolvedValue([]);
+    readOwnerLineCallLogMock.mockReset().mockResolvedValue([]);
   });
 
   it("renders the header, the summary and both sides of the conversation", async () => {
@@ -1174,5 +1185,74 @@ describe("CallDetailPage — the Knowledge link (S-47c)", () => {
     const html = await render({ ...CALL, knowledge_version: 3 });
     expect(html).not.toContain("data-knowledge");
     expect(renderedText(html)).not.toContain("Knowledge");
+  });
+});
+
+/**
+ * F-032 Task 13: an owner-line call's row is stored with outcome "abandoned" (Task 12's finish) —
+ * "Abandoned" would be a false word on it, so the call page's label REPLACES the outcome pill, and
+ * "Asked about…" sits below it with its own loaded / empty / error states (DESIGN.md rule 5).
+ */
+describe("CallDetailPage — the owner line (F-032 Task 13)", () => {
+  // This describe is a SIBLING of `describe("CallDetailPage", ...)` above, not nested inside it, so
+  // that block's own `beforeEach` (which resets these two mocks) never runs for these tests — its own
+  // reset, every time, so one test's rejection cannot leak into the next.
+  beforeEach(() => {
+    listAccountTeamMock.mockReset().mockResolvedValue([]);
+    readOwnerLineCallLogMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("names the person in place of the outcome pill (mutation: render OutcomePill unconditionally -> FAILS)", async () => {
+    listAccountTeamMock.mockResolvedValue([{ userId: "u1", email: "dan@example.com", name: "Dan Lopez" }]);
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(html).toContain("Owner line · Dan");
+    expect(html).not.toContain(">Booked<");
+    expect(html).not.toContain(">Abandoned<");
+  });
+
+  it("falls back to 'Someone on the team' when the team read fails, and still renders the call (mutation: drop the .catch -> the page throws, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listAccountTeamMock.mockRejectedValue(new Error("permission denied for table users"));
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(html).toContain("Owner line · Someone on the team");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("owner-line team read failed"));
+    spy.mockRestore();
+  });
+
+  it("a team member with no name reads 'Someone on the team', never their email handle (final review M-2; mutation: fall back to person.email.split('@')[0] -> FAILS)", async () => {
+    listAccountTeamMock.mockResolvedValue([{ userId: "u1", email: "dan.private@example.com", name: null }]);
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(html).toContain("Owner line · Someone on the team");
+    expect(html).not.toContain("dan.private");
+  });
+
+  it("shows what was asked, in the tools' own order, in words (mutation: read kinds in log order -> FAILS)", async () => {
+    readOwnerLineCallLogMock.mockResolvedValue(["owner_line_appointments", "owner_line_calls_and_messages"]);
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(renderedText(html)).toContain("Asked about: calls and messages, appointments");
+  });
+
+  it("renders no Asked-about section when nothing ran — or when this reader's RLS returns no rows (mutation: render the section unconditionally -> FAILS)", async () => {
+    readOwnerLineCallLogMock.mockResolvedValue([]);
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(html).not.toContain("data-asked-about");
+    expect(renderedText(html)).not.toContain("Asked about");
+  });
+
+  it("the log read failing is NOT swallowed: it is logged and the section says so, never read as 'nothing was asked' (mutation: drop the catch -> the page throws, FAILS; mutation: swallow silently -> no error logged, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    readOwnerLineCallLogMock.mockRejectedValue(new Error("permission denied for table agency_visit_items"));
+    const html = await render({ ...CALL, owner_line_user_id: "u1", outcome: "abandoned" });
+    expect(renderedText(html)).toContain(m["ownerLine.calls.askedAboutError"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("owner-line log read failed"));
+    spy.mockRestore();
+  });
+
+  it("an ordinary customer call reads neither the team nor the log at all (mutation: always read both -> FAILS)", async () => {
+    const html = await render({ ...CALL, owner_line_user_id: null, outcome: "booked" });
+    expect(html).toContain(">Booked<");
+    expect(html).not.toContain("Owner line");
+    expect(listAccountTeamMock).not.toHaveBeenCalled();
+    expect(readOwnerLineCallLogMock).not.toHaveBeenCalled();
   });
 });

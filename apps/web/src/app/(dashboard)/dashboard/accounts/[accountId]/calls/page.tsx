@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 import { PhoneIncoming } from "lucide-react";
-import { listCalls, countCallsSince, listFailedOutboundSms, listCallReasons, type TextbackWindow } from "@bis/db";
+import {
+  listCalls, countCallsSince, listFailedOutboundSms, listCallReasons, listAccountTeam, type TextbackWindow,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
@@ -18,6 +20,8 @@ import type { Locale } from "@/lib/i18n/locale";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { parseTimeCursor } from "@/lib/cursor";
+import { loggableError } from "@/lib/loggable-error";
+import { firstName } from "@/lib/owner-line/names";
 import { CallsTable } from "./calls-table";
 import { textbackWindow } from "./textback-window";
 
@@ -143,6 +147,23 @@ export default async function CallsPage({
     console.error(`calls ${accountId}: reasons read failed, rendering none: ${String(e)}`);
   }
 
+  // F-032 Task 13: the owner line's own label ("Owner line · Dan") names the team member an
+  // owner-line row was for — ONE read for the whole page, like the two above, and only when some
+  // row actually needs it (most pages have none). Swallowed the same way: this is a decoration on
+  // the log (the row still renders, falling back to "Someone on the team"), never a reason to blank
+  // the Calls page.
+  const ownerIds = [...new Set(rows.map((r) => r.owner_line_user_id).filter((x): x is string => !!x))];
+  const ownerNames: Record<string, string> = ownerIds.length === 0 ? {} : Object.fromEntries(
+    (await listAccountTeam(db, accountId).catch((e: unknown) => {
+      console.error(`calls ${accountId}: team read failed: ${loggableError(e)}`);
+      return [];
+    }))
+      .filter((p) => ownerIds.includes(p.userId))
+      // A member with no name is left out, so the row reads "Someone on the team" (the provenance rule), never
+      // their email handle (final review M-2).
+      .flatMap((p) => { const n = firstName(p.name); return n ? [[p.userId, n] as const] : []; }),
+  );
+
   const last = rows[rows.length - 1];
   const olderHref =
     rows.length === PAGE_SIZE && last
@@ -188,6 +209,7 @@ export default async function CallsPage({
               reasons={reasons}
               locale={locale}
               pseudo={pseudo}
+              ownerNames={ownerNames}
             />
           )}
         </div>

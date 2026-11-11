@@ -42,6 +42,13 @@
 // press 1 (`<Gather>`), and only the keypress, at `./screen`, builds the
 // bridge — through this file's own `answer()` with the screen skipped, so
 // there is one copy of the dial markup, not two. Unlisted, nothing changes.
+// The owner line (F-032 §4.1) sits AHEAD of the screen: on a Telnyx-signed
+// request with a usable VOICE_HANDOFF_SECRET, one more read (beside the count
+// batch, never inside it) asks whether the caller is a registered, verified
+// team member of the dialed business. A hit hears ONE `<Gather>` for their
+// PIN (or their call-in code) whose fallthrough is today's path for them: the
+// bridge when every guard cleared, the refusal when one did not; a miss, a
+// failed or late read, or any other caller gets exactly today's document.
 import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { callAnswerable } from "@/lib/voice/accept-gate";
@@ -50,13 +57,21 @@ import { decideScreen, readScreenConfig } from "@/lib/voice/call-screen";
 import { logFormFields, readTelnyxForm } from "./telnyx-request";
 import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
 import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
-import { SIP_HANDOFF_HEADER, signSipHandoff, sipHandoffSecretConfigured } from "@/lib/voice/sip-handoff-signature";
+import {
+  OWNER_PASS_HEADER, SIP_HANDOFF_HEADER, signOwnerPass, signSipHandoff, sipHandoffSecretConfigured,
+  type OwnerPassRole,
+} from "@/lib/voice/sip-handoff-signature";
 import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallback-drill";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
+import { ownerLimitXml, ownerPinAskXml, ownerPinUrl, ownerVerifyAskXml } from "./owner-line-xml";
+import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
+import { pinPepperConfigured } from "@/lib/owner-line/secrets";
 import { billingEnforced } from "@/lib/billing/enforce";
-import type { ScreenedCallInput, ForwardedCallInput } from "@bis/db";
+import type { Locale } from "@/lib/i18n/locale";
+// Types only: erased at build time, so no module-scope @bis/db import (plan SC-18).
+import type { ScreenedCallInput, ForwardedCallInput, OwnerLineLookup } from "@bis/db";
 
 export const runtime = "nodejs";
 
@@ -84,23 +99,37 @@ export type Languages = "en" | "es" | "both";
  *     the account's verdict has no Sofía (paused, or a plan without the
  *     receptionist), with whether the call may still ring the business.
  *     Absent when the billing read failed (fail open: today's path).
+ *   - `ownerLine` (F-032 §4.1): the caller is a registered, verified team
+ *     member in a role the data path offers, and the step may be OFFERED on
+ *     this call. Only ever on a cleared call, and never when the agency's
+ *     forward is on, billing has no voice, or the fallback drill is engaged
+ *     (SC-17: there the Gather's fallthrough would not be today's path).
+ *     `personaName` is the profile's, for the ask's words.
+ *   - `ownerSkipped` (Task 7 review C-1): the customer refusal an offered PIN
+ *     or code ask skipped (owner ruling Q-C), and therefore the verbs that
+ *     follow that ask. The call is still `cleared` for the ask itself, but the
+ *     fallthrough is THIS refusal, never a ticketed bridge: the fallback
+ *     ticket means every guard cleared, and one did not.
  */
 type NoVoice = { reason: "billing-paused" | "plan-no-voice"; forward: boolean };
+type OfferedOwnerLine = Extract<OwnerLineLookup, { status: "verify" | "pin" | "over_limit" }>;
+type SkippedRefusal = { kind: "blocked" | "cap"; languages: Languages };
 type Routability =
   | {
     kind: "dial"; accountId?: string; phoneNumberId?: string; forwardCalls?: boolean;
     cleared?: boolean; lookupFailed?: boolean;
     languages?: Languages; firstTimeCaller?: boolean;
     noVoice?: NoVoice;
+    ownerLine?: OfferedOwnerLine; personaName?: string; ownerSkipped?: SkippedRefusal;
   }
   | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
-  | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
+  | { kind: "cap"; languages: Languages; screened: ScreenedCallInput; personaName?: string }
   // A caller whose whole recent history on this account is silent calls.
   // Speaks the SAME sentence as `refuse` on purpose — a robot learns nothing
   // from a distinct message, and a human who has somehow been caught by this
   // is told to try again later, which the rolling window makes true. Only the
   // log line distinguishes the reason.
-  | { kind: "blocked"; languages: Languages; screened: ScreenedCallInput };
+  | { kind: "blocked"; languages: Languages; screened: ScreenedCallInput; personaName?: string };
 
 // COPY.refuse.en is byte-identical to the old REFUSAL constant's sentence —
 // an existing test pins it, and a caller who's heard it before should hear
@@ -133,6 +162,19 @@ function says(languages: Languages, copy: { en: string; es: string }): string {
 
 function sayXml(languages: Languages, copy: { en: string; es: string }): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${says(languages, copy)}<Hangup/></Response>`;
+}
+
+/** Which sentence each refusal speaks: `blocked` says `refuse`'s on purpose (see `Routability`). */
+const REFUSAL_COPY = { refuse: COPY.refuse, blocked: COPY.refuse, cap: COPY.cap } as const;
+
+/** A refusal's verbs, without the document around them: what follows an owner-line ask whose caller today's path
+ *  would refuse (review C-1). `refusalXml` wraps the same string, so the two can never differ by a byte. */
+function refusalVerbs(kind: keyof typeof REFUSAL_COPY, languages: Languages): string {
+  return `${says(languages, REFUSAL_COPY[kind])}<Hangup/>`;
+}
+
+function refusalXml(kind: keyof typeof REFUSAL_COPY, languages: Languages): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${refusalVerbs(kind, languages)}</Response>`;
 }
 
 // The press-1 screen's words. A caller who hears these has done nothing
@@ -215,7 +257,52 @@ export function screenGoodbyeXml(languages: Languages): string {
   return sayXml(languages, SCREEN_COPY.goodbye);
 }
 
-async function classify(calledE164: string, callerE164: string | null): Promise<Routability> {
+/**
+ * The most the owner-line read may add to ANY signed call (review M-1; spec
+ * §4.1: "This branch adds no audio and no delay to a customer's call").
+ * Why 300 ms: the spike measured the read alone at p95 171-192 ms from a
+ * residential link, about 150 ms of which is one round trip to us-east-1
+ * (spike record §5), and 0.16 ms inside Postgres. On Vercel, a few
+ * milliseconds from Supabase, a healthy read lands far inside this, so it
+ * never trips on a working day. A read that hangs costs a caller at most
+ * 0.3 s on top of the count batch it runs beside, well inside Telnyx's
+ * answer deadline. Past it, the read is a miss: today's path, logged.
+ */
+export const OWNER_LINE_LOOKUP_DEADLINE_MS = 300;
+
+/** `p`, or null once `ms` pass first (calling `onLate` then). The timer is cleared as soon as `p` settles. */
+function withDeadline<T>(p: Promise<T>, ms: number, onLate: () => void): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => { onLate(); resolve(null); }, ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
+/** The database module, as a type only: the value is always the lazy `await import("@bis/db")` (SC-18). */
+type DbModule = typeof import("@bis/db");
+
+/**
+ * Billing's verdict on whether this account has a voice at all (M7a PR-4, plan G9): `NoVoice` when it does not, null
+ * when it does. ONE read, shared by `classify` and `ownerLineStillOffered`, so the owner line re-reads exactly what
+ * the answer route reads. Async, so a synchronous throw becomes a rejection the caller's own catch sees. Call it only
+ * with BILLING_ENFORCE on (`billingEnforced()`), as both callers do.
+ */
+async function readNoVoice(
+  dbModule: DbModule, db: ReturnType<DbModule["serviceDb"]>, accountId: string,
+): Promise<NoVoice | null> {
+  const standing = await dbModule.readBillingStanding(db, accountId);
+  const { billingVerdict, voiceBlock } = await import("@/lib/billing/standing");
+  return voiceBlock(billingVerdict(standing, true, new Date()));
+}
+
+/**
+ * `ownerLineEligible` is true only on a Telnyx-signed request with a usable
+ * VOICE_HANDOFF_SECRET that is not the press-1 re-run (`route`): the only
+ * requests whose owner-pin action could ever be trusted (SC-14). False, the
+ * owner line is not even read.
+ */
+async function classify(calledE164: string, callerE164: string | null, ownerLineEligible = false): Promise<Routability> {
   // Lazy import: a module-scope DB import here breaks `next build` during
   // page-data collection (the demo's documented trap). Any failure anywhere
   // in this try (lookup, profile read) falls to the outer catch and fails
@@ -308,15 +395,14 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     // path (fail open, logged) and never marks the call uncleared. An async
     // IIFE so the read STARTS before the counts below (its body runs
     // synchronously to the first await) and a synchronous throw becomes a
-    // rejection the catch sees. Only `dial` returns wait for it; a refusal
-    // or a cap never does.
+    // rejection the catch sees. `dial` returns wait for it, and so does ONE
+    // other read: an owner-line hit's offer check (F-032 SC-17: is there
+    // voice at all?), which runs after the counts, so it waits on a read that
+    // has been in flight the whole time. A customer's refusal or cap never
+    // waits for it.
     const accountId = row.account_id;
     const billingRead: Promise<NoVoice | null> = billingEnforced()
-      ? (async () => {
-        const standing = await dbModule.readBillingStanding(db, accountId);
-        const { billingVerdict, voiceBlock } = await import("@/lib/billing/standing");
-        return voiceBlock(billingVerdict(standing, true, new Date()));
-      })().catch((e: unknown) => {
+      ? readNoVoice(dbModule, db, accountId).catch((e: unknown) => {
         console.error(`texml billing read failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
         return null;
       })
@@ -325,6 +411,41 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       const noVoice = await billingRead;
       return noVoice ? { noVoice } : {};
     };
+    // F-032 (§4.1): started BESIDE the count batch, never inside it. Inside a
+    // Promise.all its rejection would reject the whole batch and fail the call
+    // UNCLEARED (plan I-7; a test pins that it does not). An async IIFE, as
+    // the billing read above, so even a synchronous throw becomes a rejection
+    // its own catch sees, and a throw is a miss: today's path. A stranger's
+    // call waits for max(), not +, and never for more than the deadline: a
+    // read that hangs is a miss at OWNER_LINE_LOOKUP_DEADLINE_MS (review M-1;
+    // spec §4.1, "no delay"). The account's local day is SQL's (Q-F).
+    // Logged by account and error CLASS only (review M-5): never the caller's
+    // number, and never the error's message, because the wrapper's
+    // "unexpected answer" message quotes the RPC's answer (a name, the PIN
+    // hash's parameters).
+    // `ownerReadLate`: once the deadline has fired, the call has already taken
+    // today's path and said so; a failure arriving after that is not news,
+    // and a second "lookup failed" line would misdescribe the call (re-review
+    // M-B), so the catch stays silent.
+    let ownerReadLate = false;
+    const ownerRead: Promise<OwnerLineLookup | null> = ownerLineEligible && callerE164
+      ? withDeadline(
+        (async () => dbModule.ownerLineAnswerLookup(db, accountId, callerE164, dbModule.OWNER_LINE_MAX_CALLS_PER_DAY))()
+          .catch((e: unknown) => {
+            if (!ownerReadLate) {
+              console.error(`texml owner-line lookup failed (${e instanceof Error ? e.name : typeof e}) — today's path, accountId ${accountId}`);
+            }
+            return null;
+          }),
+        OWNER_LINE_LOOKUP_DEADLINE_MS,
+        () => {
+          ownerReadLate = true;
+          console.error(`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId ${accountId}`);
+        },
+      )
+      : Promise.resolve(null);
+    let ownerLine: OfferedOwnerLine | undefined;
+    let ownerSkipped: SkippedRefusal | undefined;
     let firstTimeCaller = false;
     try {
       const now = new Date();
@@ -353,6 +474,35 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // outcome to judge (0059's header).
       const forAccount = callsForAccount + forwarded.forAccount;
       const forNumber = callsForNumber + forwarded.forCaller;
+      // F-032: only a role the data path offers (O-1 = F2: Owner and Staff;
+      // the SQL lookup also answers for a Technician), and only where the
+      // Gather's fallthrough IS today's path (SC-17): not with the agency's
+      // forward on, the fallback drill engaged, or billing's no-voice. In those
+      // states the person is a customer here, refusals and all.
+      // Final review M-3: no PIN ask without a pepper. owner-pin could check no PIN at all (it would take today's path
+      // anyway), so asking for one only costs the caller the ask. Same check owner-pin makes (pinPepperConfigured);
+      // the call-in code is sha256 (secrets.ts) and needs none, so a `verify` hit is still asked.
+      const looked = await ownerRead;
+      const pepperless = looked?.status === "pin" && !pinPepperConfigured();
+      if (pepperless) console.error(`texml owner line: OWNER_LINE_PIN_PEPPER is not set — no PIN ask, today's path, accountId ${row.account_id}`);
+      const hit = looked && !pepperless && (looked.status === "verify" || looked.status === "pin" || looked.status === "over_limit")
+        && OWNER_LINE_ROLES.includes(looked.role) ? looked : undefined;
+      ownerLine = hit && profile.forward_calls !== true && !fallbackDrillActive(calledE164, callerE164)
+        && !(await billingRead) ? hit : undefined;
+      // Owner ruling Q-C: a registered, verified person about to be asked for
+      // a PIN or a call-in code is never refused by the CUSTOMER checks
+      // (repeat-spam, the per-caller cap, the per-account cap of 50). Their
+      // own limit is the lookup's. Over that limit they are a customer again,
+      // so every customer check applies.
+      // The checks still RUN for an ask, and a refusal they reach becomes the
+      // ask's fallthrough (`ownerSkipped`, review C-1). After the Gather,
+      // Telnyx either posts to owner-pin, whose "today's path" re-runs this
+      // function with the owner line skipped, or FALLS THROUGH to the next
+      // verb without asking us (the screen's case A; Telnyx documents
+      // neither). That next verb must therefore already be today's path:
+      // the refusal a customer would hear, never a bridge carrying a fallback
+      // ticket that says every guard cleared.
+      const ownerAsk = ownerLine?.status === "verify" || ownerLine?.status === "pin";
       // Reputation first: a caller we already know to be a robot should not
       // be described by the day's volume. It is also the more actionable log
       // line of the two. Note the two verdicts read OPPOSITE senses —
@@ -365,26 +515,36 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       // invites it back, and the `blocked (repeat-spam)` line — the only
       // telemetry Guard 2 produces — is never written.
       const reputation = decideReputation(history, repCfg, callerE164);
-      if (reputation.blocked) {
-        console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
-        return {
-          kind: "blocked", languages: profile.languages,
-          screened: {
-            accountId: row.account_id, phoneNumberId: row.id,
-            calledE164, callerE164, reason: "repeat-spam",
-          },
-        };
-      }
       const verdict = decideLimit({ forNumber, forAccount }, readLimitConfig());
-      if (!verdict.allowed) {
-        console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
-        return {
-          kind: "cap", languages: profile.languages,
-          screened: {
-            accountId: row.account_id, phoneNumberId: row.id,
-            calledE164, callerE164, reason: "over-cap",
-          },
-        };
+      if (ownerAsk) {
+        // Reputation first here too: the refusal that follows the ask is the
+        // one today's path would speak.
+        const skipped: SkippedRefusal["kind"] | null = reputation.blocked ? "blocked" : !verdict.allowed ? "cap" : null;
+        if (skipped) {
+          console.log(`texml owner line: today's ${skipped} refusal follows the ask, accountId ${row.account_id}`);
+          ownerSkipped = { kind: skipped, languages: profile.languages };
+        }
+      } else {
+        if (reputation.blocked) {
+          console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+          return {
+            kind: "blocked", languages: profile.languages, personaName: profile.persona_name,
+            screened: {
+              accountId: row.account_id, phoneNumberId: row.id,
+              calledE164, callerE164, reason: "repeat-spam",
+            },
+          };
+        }
+        if (!verdict.allowed) {
+          console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+          return {
+            kind: "cap", languages: profile.languages, personaName: profile.persona_name,
+            screened: {
+              accountId: row.account_id, phoneNumberId: row.id,
+              calledE164, callerE164, reason: "over-cap",
+            },
+          };
+        }
       }
       // Strictly `=== 0`: a history that did not say (undefined) is NOT a
       // first-time caller. Unknown means bridge, never the question.
@@ -397,10 +557,13 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
         languages: profile.languages, ...(await withBilling()),
       };
     }
+    // The fail-open return above carries no `ownerLine`: an UNCLEARED call is
+    // never offered the owner line.
     return {
       kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
       forwardCalls: profile.forward_calls === true, cleared: true,
-      languages: profile.languages, firstTimeCaller, ...(await withBilling()),
+      languages: profile.languages, firstTimeCaller, personaName: profile.persona_name,
+      ...(ownerLine ? { ownerLine } : {}), ...(ownerSkipped ? { ownerSkipped } : {}), ...(await withBilling()),
     };
   } catch (e) {
     console.error(`texml lookup failed for ${calledE164}: ${String(e)}`);
@@ -475,10 +638,16 @@ export function forwardXml(to: string, callerId: string | null): string {
  * `unsignedBridge` is true when the secret is set but this request was not
  * Telnyx-signed, so the bridge goes out with no signature: the gap that
  * silently turns enforcement into "decline every call" (see below).
+ *
+ * `extra` (F-032): `ownerLine` adds the owner pass (a correct PIN only, via
+ * `ownerLineBridge`); `wrap` puts the SAME `<Dial>` inside another document
+ * (the owner line's asks, whose fallthrough it is). With neither, the body is
+ * byte-identical to before.
  */
 function dialXml(
   calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
   cleared?: { accountId: string; callerE164: string | null }, drill = false,
+  extra: { ownerLine?: { accountId: string; userId: string; role: OwnerPassRole }; wrap?: (dial: string) => string } = {},
 ): { body: string; unsignedBridge: boolean } {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
@@ -516,10 +685,21 @@ function dialXml(
   const signature = authenticated && calledE164
     ? signSipHandoff(token, calledE164, callerE164, Date.now())
     : null;
+  // F-032 §4.3: the owner pass, bound to THIS dial's handoff token, only for a
+  // Telnyx-signed request (owner-pin refuses any other) and only with a usable
+  // secret. A pass that cannot be signed is logged and the call reaches the
+  // receptionist as a customer, never an error.
+  const ownerPass = extra.ownerLine && authenticated && calledE164
+    ? signOwnerPass(token, { ...extra.ownerLine, calledE164 }, Date.now())
+    : null;
+  if (extra.ownerLine && !ownerPass) {
+    console.error(`texml: an owner pass could not be signed — this call reaches the receptionist, accountId ${extra.ownerLine.accountId}`);
+  }
   const params = [
     ...(calledE164 ? [`X-BIS-Called=${encodeURIComponent(calledE164)}`] : []),
     `X-BIS-Handoff=${encodeURIComponent(token)}`,
     ...(signature ? [`${SIP_HANDOFF_HEADER}=${encodeURIComponent(signature)}`] : []),
+    ...(ownerPass ? [`${OWNER_PASS_HEADER}=${encodeURIComponent(ownerPass)}`] : []),
   ];
   const uri = `${base}?${params.join("&")}`;
   // The model-down fallback's ticket rides the same URL, and only for a call
@@ -533,8 +713,9 @@ function dialXml(
     + (ticket ? `&f=${encodeURIComponent(ticket)}` : "");
   // xmlText on BOTH: the URI's `&` separators are the live bug, and the
   // action URL is one appended query parameter away from the same one.
+  const dial = `<Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial>`;
   return {
-    body: `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial></Response>`,
+    body: extra.wrap ? extra.wrap(dial) : `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${dial}</Response>`,
     unsignedBridge,
   };
 }
@@ -680,12 +861,18 @@ function recordForwardedCallLater(input: ForwardedCallInput): void {
  * re-runs, the forward is honoured, and the bridge is minted here with its own
  * token, signature and ticket — the same document this route would have sent
  * had the screen not been asked.
+ *
+ * `skipOwnerLine` (F-032): the press-1 re-run and owner-pin's "today's path"
+ * pass it, so a re-run never asks anyone for a PIN and every customer check
+ * re-runs with the owner line out of the way.
  */
 export async function answer(
   calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
-  opts: { skipScreen?: boolean } = {},
+  opts: { skipScreen?: boolean; skipOwnerLine?: boolean } = {},
 ): Promise<NextResponse> {
-  const result = await route(calledE164, callerE164, origin, authenticated, opts.skipScreen === true);
+  const result = await route(
+    calledE164, callerE164, origin, authenticated, opts.skipScreen === true, opts.skipOwnerLine === true,
+  );
   // One stamp per answered request (lib/ops/stamp.ts). The route is down for
   // everyone only when it cannot look a number up; a refusal, a forward and a
   // bridge are all the route working. The second error is a bridge sent
@@ -712,9 +899,78 @@ export function bridgeAfterFailure(
   return xmlResponse(dialXml(calledE164, callerE164, origin, authenticated).body);
 }
 
+/** F-032 §4.2: a correct PIN. The bridge every call gets, plus the owner pass. Only owner-pin calls this, and only
+ *  for a Telnyx-signed request, so `authenticated` is true by construction. Logged by account only. */
+export function ownerLineBridge(
+  calledE164: string, callerE164: string, origin: string,
+  owner: { accountId: string; userId: string; role: OwnerPassRole },
+): NextResponse {
+  console.log(`texml owner line PIN ok — bridging with an owner pass, accountId ${owner.accountId}`);
+  return xmlResponse(dialXml(calledE164, callerE164, origin, true,
+    { accountId: owner.accountId, callerE164 }, false, { ownerLine: owner }).body);
+}
+
+/**
+ * F-032 Task 9 review m-4: a correct PIN mints an owner pass only while today's path for this call still reaches
+ * Sofía. The ask was offered only when it did (SC-17, decided in `classify`), but the PIN arrives seconds later, and
+ * in between the agency may have turned its forward on, billing may have paused the account, a drill may be set, or
+ * VOICE_FORWARD_TO may be set. Each is re-read here with the reads the answer route itself makes: the two env checks
+ * (`forwardTarget`, `fallbackDrillActive`), `getVoiceProfile`'s `forward_calls`, and `readNoVoice`. False sends the
+ * caller to today's path with no pass. A read that fails is false too, logged by error class: FAIL CLOSED to today's
+ * path (the orchestrator's decision for owner-pin, review m-2). Never throws. Logged by account only.
+ */
+export async function ownerLineStillOffered(calledE164: string, callerE164: string, accountId: string): Promise<boolean> {
+  const no = (why: string) => {
+    console.log(`texml owner line PIN ok but ${why} — today's path, no owner pass, accountId ${accountId}`);
+    return false;
+  };
+  if (forwardTarget()) return no("VOICE_FORWARD_TO");
+  if (fallbackDrillActive(calledE164, callerE164)) return no("the fallback drill");
+  try {
+    const dbModule = await import("@bis/db");
+    const db = dbModule.serviceDb();
+    const [profile, noVoice] = await Promise.all([
+      dbModule.getVoiceProfile(db, accountId),
+      billingEnforced() ? readNoVoice(dbModule, db, accountId) : Promise.resolve(null),
+    ]);
+    if (profile?.forward_calls === true) return no("forward_calls");
+    if (noVoice) return no("billing has no voice");
+    return true;
+  } catch (e) {
+    console.error(`texml owner line PIN ok but today's states could not be read (${e instanceof Error ? e.name : typeof e}) — today's path, no owner pass, accountId ${accountId}`);
+    return false;
+  }
+}
+
+/** F-032 §4.2: a wrong PIN (below 3) or a wrong code. Asks again, falling through to today's bridge with no pass.
+ *  The persona is read for the words only: a failed read says "Sofía", never an error. */
+export async function ownerLineGatherAgain(
+  calledE164: string, callerE164: string, origin: string,
+  p: { kind: "pin" | "verify"; locale: Locale; accountId: string; name: string | null },
+): Promise<NextResponse> {
+  // The re-ask's fallthrough must be today's path too (review C-1): Telnyx may run it without asking us. So today's
+  // verdicts are read again, with the owner line out of the way, and the persona comes from the same read.
+  //   - A refusal (an unknown or not-live number, a disabled line, repeat spam, a cap): its sentence and hang-up.
+  //   - A call every guard cleared, for THIS account, where Sofía is where today's path goes (no forward, no
+  //     billing message, no drill): today's cleared bridge, fallback ticket included.
+  //   - Anything else (a read failed, the number moved, or a state the first ask was never offered in): the
+  //     UNCLEARED bridge, so no ticket vouches for it, and the SIP webhook gates the call as it does today.
+  const today = await classify(calledE164, callerE164, false);
+  const persona = (today.kind !== "refuse" && today.personaName) || "Sofía";
+  const action = ownerPinUrl(origin);
+  const doc = (fallthrough: string) => p.kind === "pin"
+    ? ownerPinAskXml({ locale: p.locale, name: p.name, persona, action, retry: true, fallthrough })
+    : ownerVerifyAskXml({ locale: p.locale, action, retry: true, fallthrough });
+  if (today.kind !== "dial") return xmlResponse(doc(refusalVerbs(today.kind, today.languages)));
+  const vouched = today.cleared === true && today.accountId === p.accountId && !today.noVoice && !today.forwardCalls
+    && !fallbackDrillActive(calledE164, callerE164);
+  return xmlResponse(dialXml(calledE164, callerE164, origin, true,
+    vouched ? { accountId: p.accountId, callerE164 } : undefined, false, { wrap: doc }).body);
+}
+
 async function route(
   calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
-  skipScreen = false,
+  skipScreen = false, skipOwnerLine = false,
 ): Promise<{ response: NextResponse; lookupFailed: boolean; unsignedBridge: boolean }> {
   const done = (response: NextResponse, lookupFailed = false, unsignedBridge = false) =>
     ({ response, lookupFailed, unsignedBridge });
@@ -728,18 +984,55 @@ async function route(
     return done(xmlResponse(forwardXml(forward, calledE164)));
   }
   if (calledE164) {
-    const result = await classify(calledE164, callerE164);
+    const result = await classify(
+      calledE164, callerE164, !skipOwnerLine && authenticated && sipHandoffSecretConfigured(),
+    );
     if (result.kind !== "dial") {
       // ONE write site for all six refusals, not one per branch — six call
       // sites would be six chances for the next reason to forget one. (The
       // billing message below is the one other caller, with its own reason.)
       recordScreenedCallLater(result.screened);
     }
-    if (result.kind === "refuse") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
+    if (result.kind === "refuse") return done(xmlResponse(refusalXml("refuse", result.languages)));
     // Deliberately the same sentence as `refuse`, and deliberately ABOVE the
     // bridge: a refusal costs nothing, a bridge starts billing.
-    if (result.kind === "blocked") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
-    if (result.kind === "cap") return done(xmlResponse(sayXml(result.languages, COPY.cap)));
+    if (result.kind === "blocked") return done(xmlResponse(refusalXml("blocked", result.languages)));
+    if (result.kind === "cap") return done(xmlResponse(refusalXml("cap", result.languages)));
+    // F-032 §4.1: the owner line. AHEAD of the press-1 screen (SC-16), so a
+    // registered person is never asked to press 1. `classify` offers it only
+    // on a cleared call whose Gather can fall through to today's bridge (SC-17:
+    // never with the agency's forward on, billing's no-voice, or the drill),
+    // only to a role the data path offers, and only on a signed request (the
+    // lookup is not even read otherwise; SC-14). Logged by account only.
+    const ol = result.ownerLine;
+    if (ol && result.cleared && result.accountId) {
+      const locale: Locale = ol.language ?? ol.accountLanguage ?? "en";
+      const persona = result.personaName || "Sofía";
+      const accountId = result.accountId;
+      const action = ownerPinUrl(origin);
+      // What follows the ask is today's path (review C-1): the refusal the ask
+      // skipped, when it skipped one, and no bridge is minted at all; otherwise
+      // today's bridge, cleared because every guard really did clear.
+      const skipped = result.ownerSkipped;
+      const ask = (doc: (fallthrough: string) => string) => {
+        if (skipped) return done(xmlResponse(doc(refusalVerbs(skipped.kind, skipped.languages))));
+        const d = dialXml(calledE164, callerE164, origin, authenticated,
+          { accountId, callerE164 }, false, { wrap: doc });
+        return done(xmlResponse(d.body), false, d.unsignedBridge);
+      };
+      if (ol.status === "verify") {
+        console.log(`texml owner line asking for a call-in code, accountId ${result.accountId}`);
+        return ask((fallthrough) => ownerVerifyAskXml({ locale, action, retry: false, fallthrough }));
+      }
+      if (ol.status === "pin") {
+        console.log(`texml owner line asking for a PIN, accountId ${result.accountId}`);
+        return ask((fallthrough) => ownerPinAskXml({ locale, name: ol.name, persona, action, retry: false, fallthrough }));
+      }
+      // Over their own limit the person is a customer, so no refusal was
+      // skipped and `skipped` is unset here: the line, then today's bridge.
+      console.log(`texml owner line over its daily limit — today's path, accountId ${result.accountId}`);
+      return ask((fallthrough) => ownerLimitXml({ locale, persona, fallthrough }));
+    }
     // kind === "dial". The press-1 screen comes FIRST, ahead of the
     // per-account forward: a recording the screen exists to stop must not be
     // rung through to somebody's personal phone either. Only on a cleared

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { createHash, createHmac } from "node:crypto";
 import {
   signSipHandoff, verifySipHandoff, sipHandoffEnforced,
   SIP_HANDOFF_MAX_AGE_MS, SIP_HANDOFF_MIN_SECRET_LENGTH,
+  signOwnerPass, verifyOwnerPass, OWNER_PASS_MAX_AGE_MS,
 } from "./sip-handoff-signature";
 
 const SECRET = "s".repeat(SIP_HANDOFF_MIN_SECRET_LENGTH);
@@ -144,5 +146,88 @@ describe("sipHandoffEnforced", () => {
 
   it("does not depend on the secret: enforcing with no secret stays enforcing (fail closed)", () => {
     expect(sipHandoffEnforced({ VOICE_HANDOFF_ENFORCE: "1" } as unknown as NodeJS.ProcessEnv)).toBe(true);
+  });
+});
+
+describe("the owner pass (F-032 §4.3; plan SC-7, SC-8)", () => {
+  const SECRET = "s".repeat(40);
+  const env = { VOICE_HANDOFF_SECRET: SECRET } as unknown as NodeJS.ProcessEnv;
+  const TOKEN = "a".repeat(32);
+  const A = "11111111-1111-4111-8111-111111111111";
+  const U = "22222222-2222-4222-8222-222222222222";
+  const B = "33333333-3333-4333-8333-333333333333";
+  const T0 = 1_800_000_000_000;
+  const mint = (over: Partial<{ accountId: string; userId: string; role: "owner" | "staff" | "technician"; calledE164: string }> = {}) =>
+    signOwnerPass(TOKEN, { accountId: A, userId: U, role: "staff", calledE164: "+19565550100", ...over }, T0, env)!;
+
+  it("round-trips account, person, role and called number", () => {
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 1000, env)).toEqual({
+      ok: true, accountId: A, userId: U, role: "staff", calledE164: "+19565550100", issuedAtMs: T0 });
+  });
+  it("is refused when tampered: another account swapped in keeps the MAC of the first (mutation: MAC over the token only -> FAILS)", () => {
+    expect(verifyOwnerPass(mint().replace(A, B), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+    expect(verifyOwnerPass(mint().replace(".staff.", ".owner."), TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when another person is swapped in under the original MAC (mutation: leave userId out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`.${U}.`, `.${B}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when another called number is swapped in under the original MAC (mutation: leave the called digits out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(".19565550100.", ".19565550199.");
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is refused when the issue time is shifted under the original MAC, so the window cannot be moved (mutation: leave issued-at out of the MAC on both sides -> FAILS)", () => {
+    const forged = mint().replace(`${T0}.`, `${T0 + 30_000}.`);
+    expect(forged).not.toBe(mint());
+    expect(verifyOwnerPass(forged, TOKEN, T0 + 30_000, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("a pass dated 60 s ahead of the clock is valid and 61 s ahead is expired (mutation: drop Math.abs -> FAILS)", () => {
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 60_000, env).ok).toBe(true);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 - 61_000, env)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("a clock or window that is not a finite number never verifies (mutation: the plain `Math.abs(nowMs - issued) > maxAgeMs` check -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(verifyOwnerPass(mint(), TOKEN, now, env)).toEqual({ ok: false, reason: "expired" });
+    }
+    expect(verifyOwnerPass(mint(), TOKEN, T0, env, Number.NaN)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("is never minted on a clock that is not a finite, non-negative number (mutation: drop the clock guard in signOwnerPass -> FAILS)", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, now, env)).toBeNull();
+    }
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, 0, env)).not.toBeNull();
+  });
+  it("is bound to this call's handoff token", () => {
+    expect(verifyOwnerPass(mint(), "b".repeat(32), T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("is valid at 60 s and expired at 61 s (mutation: OWNER_PASS_MAX_AGE_MS = 2 * 60_000 -> FAILS)", () => {
+    expect(OWNER_PASS_MAX_AGE_MS).toBe(60_000);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 60_000, env).ok).toBe(true);
+    expect(verifyOwnerPass(mint(), TOKEN, T0 + 61_000, env)).toEqual({ ok: false, reason: "expired" });
+  });
+  it("is its own key domain: a MAC made with the handoff key is refused (mutation: owner domain = handoff domain -> FAILS)", () => {
+    const value = mint();
+    const payload = value.slice(0, value.lastIndexOf("."));
+    const handoffKey = createHash("sha256").update(`bis-voice-sip-handoff:${SECRET}`).digest();
+    const forged = `${payload}.${createHmac("sha256", handoffKey).update(`${TOKEN}|${payload}`).digest("base64url")}`;
+    expect(verifyOwnerPass(forged, TOKEN, T0, env)).toEqual({ ok: false, reason: "bad-signature" });
+  });
+  it("the handoff signature is byte-identical to before the refactor (the existing key derivation is untouched)", () => {
+    const sig = signSipHandoff(TOKEN, "+19565550100", "+19565550142", T0, env)!;
+    const key = createHash("sha256").update(`bis-voice-sip-handoff:${SECRET}`).digest();
+    const payload = `${T0}.19565550100.19565550142`;
+    expect(sig).toBe(`${payload}.${createHmac("sha256", key).update(`${TOKEN}|${payload}`).digest("base64url")}`);
+    expect(verifySipHandoff(sig, TOKEN, T0, env).ok).toBe(true);
+  });
+  it("is null with no usable secret, and verify says no-key first", () => {
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "owner", calledE164: "+19565550100" }, T0, {} as NodeJS.ProcessEnv)).toBeNull();
+    expect(verifyOwnerPass("x", TOKEN, T0, {} as NodeJS.ProcessEnv)).toEqual({ ok: false, reason: "no-key" });
+  });
+  it("refuses a role outside the three and a malformed value", () => {
+    expect(signOwnerPass(TOKEN, { accountId: A, userId: U, role: "agency" as never, calledE164: "+19565550100" }, T0, env)).toBeNull();
+    expect(verifyOwnerPass("1.2.3", TOKEN, T0, env)).toEqual({ ok: false, reason: "malformed" });
+    expect(verifyOwnerPass(null, TOKEN, T0, env)).toEqual({ ok: false, reason: "absent" });
   });
 });

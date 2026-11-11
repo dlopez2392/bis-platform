@@ -1,7 +1,7 @@
 export { serviceDb } from "./service";
 export { userDb } from "./user-client";
 export type { SupabaseClient } from "@supabase/supabase-js";
-export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
+export { emit, emitAgencyEvent, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm, searchTermLength } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
          setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete,
@@ -178,6 +178,7 @@ export * from "./voice-knowledge";
 export * from "./business-status";
 export * from "./screened-calls";
 export * from "./forwarded-calls";
+export * from "./owner-line";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";

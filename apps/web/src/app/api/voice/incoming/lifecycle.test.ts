@@ -191,6 +191,16 @@ vi.mock("@bis/db", () => ({
   deleteCallRow: vi.fn(),
 }));
 
+// F-032 Task 12: the owner-session decision and the owner finish are mocked here; the lifecycle's own timers and
+// its choice of finish are what these cases pin. The owner frame handler is the real one.
+const decideOwnerMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/owner-line/session", () => ({
+  decideOwnerSession: (...a: unknown[]) => decideOwnerMock(...a),
+  recheckOwnerSession: vi.fn(async () => false),
+}));
+const finishOwnerMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/owner-line/finish", () => ({ finishOwnerLineCall: (...a: unknown[]) => finishOwnerMock(...a) }));
+
 import { POST, maxDuration } from "./route";
 // The carrier send's bound (F-196 Q4), imported rather than restated: the
 // cap's clamp is derived from it, and the coupling test below exists so that
@@ -297,6 +307,8 @@ beforeEach(() => {
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
   vi.stubGlobal("fetch", fetchMock);
   fakeSockets.instances.length = 0;
+  decideOwnerMock.mockReset();
+  finishOwnerMock.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -1990,5 +2002,98 @@ describe("the handoff target reaches the call", () => {
     const { ws } = await startLifecycle();
     expect(ws).toBeTruthy();
     expect(acceptedTools().map((t) => t.name)).not.toContain("transfer_to_human");
+  });
+});
+
+describe("runCallLifecycle — the owner line's timers, frames and finish (F-032 §4.4)", () => {
+  const SESSION = { accountId: "acct1", userId: "u1", role: "owner", clerkUserId: "c", clerkOrgId: "o",
+    firstName: "Dan", actorName: "Dan", locale: "en", timezone: "America/Chicago" };
+  async function startOwnerLifecycle() {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    const e = callIncomingEvent("call_owner", "tok_owner");
+    e.data.sip_headers.push({ name: "X-BIS-Owner-Pass", value: "1.a.b.owner.19565550999.mac" });
+    unwrapMock.mockResolvedValue(e);
+    await POST(req());
+    expect(afterMock).toHaveBeenCalledOnce();
+    const lifecycleDone = (afterMock.mock.calls[0]![0] as () => Promise<void>)();
+    const ws = fakeSockets.instances[fakeSockets.instances.length - 1]!;
+    ws.send = vi.fn();
+    return { lifecycleDone, ws };
+  }
+
+  it("warns at 540 s, ends at 600 s whatever PHONE_MAX_CALL_SECONDS says, and finishes as an owner-line call (mutation: receptionist finishCall -> FAILS)", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "60";
+    const { lifecycleDone, ws } = await startOwnerLifecycle();
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(539_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("one minute left"))).toBe(false);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("brief goodbye"))).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("one minute left"))).toBe(true);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("brief goodbye"))).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("brief goodbye"))).toBe(true);
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishOwnerMock).toHaveBeenCalledOnce();
+    expect(finishCallMock).not.toHaveBeenCalled();
+    expect(finishOwnerMock.mock.calls[0]![2]).toMatchObject({ callRowId: "call-row-1" });
+  });
+
+  it("the warning is spoken in the person's language", async () => {
+    vi.useFakeTimers();
+    decideOwnerMock.mockResolvedValue({ ok: true, session: { ...SESSION, locale: "es" } });
+    const e = callIncomingEvent("call_owner", "tok_owner");
+    e.data.sip_headers.push({ name: "X-BIS-Owner-Pass", value: "1.a.b.owner.19565550999.mac" });
+    unwrapMock.mockResolvedValue(e);
+    await POST(req());
+    const lifecycleDone = (afterMock.mock.calls[0]![0] as () => Promise<void>)();
+    const ws = fakeSockets.instances[fakeSockets.instances.length - 1]!;
+    ws.send = vi.fn();
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(541_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("Nos queda un minuto en esta llamada."))).toBe(true);
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+  });
+
+  it("an owner-line call's frames go through the owner handler only: a tool asked for by name never reaches the receptionist's runTool (mutation: route owner frames to processCallEvent -> FAILS)", async () => {
+    vi.useFakeTimers();
+    const { lifecycleDone, ws } = await startOwnerLifecycle();
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ type: "response.function_call_arguments.done", name: "book_appointment", call_id: "c1", arguments: "{}" }));
+    ws.emit("message", JSON.stringify({ type: "response.function_call_arguments.done", name: "appointments", call_id: "c2", arguments: "{\"range\":\"today\"}" }));
+    await flushMicrotasks(60);
+    expect(runToolMock).not.toHaveBeenCalled();
+    const outputs = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => JSON.parse(String(c[0])))
+      .filter((p) => p.type === "conversation.item.create").map((p) => [p.item.call_id, JSON.parse(p.item.output).error]);
+    // The recheck is mocked to refuse here, so a known owner tool answers couldnt_read with no read at all.
+    expect(outputs).toEqual([["c1", "unknown_tool"], ["c2", "couldnt_read"]]);
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect([...(finishOwnerMock.mock.calls[0]![0] as unknown as { transcript: unknown[] }).transcript]).toEqual([]);
+  });
+
+  it("a customer's call keeps its own cap and its own finish (mutation: owner timers for every call -> FAILS)", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "60";
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("brief goodbye"))).toBe(true);
+    expect(instructionsSent(ws.send as ReturnType<typeof vi.fn>).some((i) => i.includes("one minute left"))).toBe(false);
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledOnce();
+    expect(finishOwnerMock).not.toHaveBeenCalled();
+    expect(decideOwnerMock).not.toHaveBeenCalled();
   });
 });

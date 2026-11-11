@@ -38,6 +38,20 @@ export async function emit(
   if (error) throw new Error(`event emit failed: ${error.message}`);
 }
 
+/**
+ * An AGENCY-ONLY record (account_id null): events_read (0109) shows it to the agency and to service_role, never to a
+ * client member. For what BIS did that the client must not see by name (F-032: which BIS person turned a switch off).
+ * The service client only: a user client cannot write events at all (0053), and record_event would stamp its sub.
+ * These rows outlive deleteAccountCascade (it deletes events by account_id): a test that writes one removes it itself.
+ */
+export async function emitAgencyEvent(
+  db: SupabaseClient, type: string, actorClerkUserId: string, payload: object,
+): Promise<void> {
+  if (isUserClient(db)) throw new Error(`event emit failed: an agency-only event needs the service client (${type})`);
+  const { error } = await db.from("events").insert({ account_id: null, type, actor_type: "user", actor_id: actorClerkUserId, payload });
+  if (error) throw new Error(`event emit failed: ${error.message}`);
+}
+
 export type EventRow = {
   id: string;
   type: string;

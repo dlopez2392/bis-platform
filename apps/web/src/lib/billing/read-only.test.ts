@@ -173,6 +173,10 @@ const READ_ONLY_ALLOWED: Record<string, string> = {
     "replacing the person's own calendar link: protective, it ends a leaked link and issues its successor",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/feed-actions.ts#undoFeedLinkAction":
     "the Undo of a turn-off or a replace, inside 30 seconds: restores exactly the link the person just had",
+  // F-032 Task 5: the business's owner-line switch. Only its OFF passes the option (a lost phone or a person let go
+  // must be shut out while paused); its ON calls the guard with no option and stays refused.
+  "app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts#setOwnerLineSwitchAction":
+    "turning the owner line OFF: protective, it shuts phone access to the business's data; ON stays refused while paused",
 };
 
 /** The non-GET handlers under app/api/accounts, each with how a paused account is answered. */

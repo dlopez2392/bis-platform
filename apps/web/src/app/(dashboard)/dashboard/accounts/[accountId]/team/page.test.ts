@@ -16,6 +16,12 @@ import { renderToStaticMarkup } from "react-dom/server";
  * Component). `all()`'s `.find()` returns the FIRST Suspense in the tree, so
  * every PRE-EXISTING assertion below still finds TeamSection's own boundary
  * unchanged.
+ *
+ * F-032 Task 6: between TeamSection's Suspense and the BIS access frame, the
+ * owner line's switch card reads `readOwnerLineSwitch`/`readAccountTimezone`
+ * on `serviceDb()` — the same partial-`@bis/db`-mock shape billing/page.test.ts
+ * already uses (`importOriginal` plus the two owner-line reads), so every
+ * other `@bis/db` export (types included) stays real.
  */
 const guard = vi.hoisted(() => ({ allowed: true, isAgency: false, order: [] as string[] }));
 vi.mock("@/lib/auth", () => ({
@@ -23,6 +29,24 @@ vi.mock("@/lib/auth", () => ({
     guard.order.push(`guard:${id}`);
     if (!guard.allowed) throw new Error("NEXT_REDIRECT");
     return { userId: "user_x", isAgency: guard.isAgency };
+  },
+}));
+const ownerLineMock = vi.hoisted(() => ({
+  state: { enabledAt: null, changedAt: null, changedByKind: null } as
+    { enabledAt: string | null; changedAt: string | null; changedByKind: "owner" | "agency" | null },
+  zone: null as string | null,
+  fail: null as "switch" | "zone" | null,
+}));
+vi.mock("@bis/db", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  serviceDb: () => ({ tag: "service" }),
+  readOwnerLineSwitch: async () => {
+    if (ownerLineMock.fail === "switch") throw new Error("readOwnerLineSwitch failed: permission denied");
+    return ownerLineMock.state;
+  },
+  readAccountTimezone: async () => {
+    if (ownerLineMock.fail === "zone") throw new Error("readAccountTimezone failed: timeout");
+    return ownerLineMock.zone;
   },
 }));
 const accountRow = vi.hoisted(() => ({
@@ -64,6 +88,7 @@ const { default: TeamPage } = await import("./page");
 const { TeamSkeleton } = await import("@/components/team/team-card");
 const { BisAccessFrame } = await import("@/components/access-log/bis-access-frame");
 const { BisAccessSkeleton } = await import("@/components/access-log/bis-access-skeleton");
+const { OwnerLineSwitchCard, OwnerLineSwitchCardError } = await import("@/components/owner-line/owner-line-switch-card");
 
 function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(all);
@@ -81,6 +106,9 @@ beforeEach(() => {
   accountRow.language = null;
   accountRow.error = null;
   prefs.language = null;
+  ownerLineMock.state = { enabledAt: null, changedAt: null, changedByKind: null };
+  ownerLineMock.zone = null;
+  ownerLineMock.fail = null;
 });
 
 describe("the Team page", () => {
@@ -167,6 +195,58 @@ describe("the Team page", () => {
     const line = lines.find((l) => l.startsWith("team page: account a1 language read failed:"));
     expect(line, lines.join("\n")).toBeDefined();
     expect(line).toContain("XX000");
+    err.mockRestore();
+  });
+});
+
+// F-032 Task 6 (spec §3.3): the owner line's switch card, between TeamSection's own Suspense and the BIS access
+// frame, reading `readOwnerLineSwitch`/`readAccountTimezone` after requireAccountOwner.
+describe("the Team page: owner line switch card (F-032 Task 6)", () => {
+  it("renders between TeamSection's Suspense and the BIS access frame, with the state, viewer, locale and a zone fallback, and a bound setSwitch (mutation: drop the America/Chicago fallback -> FAILS)", async () => {
+    ownerLineMock.state = { enabledAt: "2026-11-09T19:00:00Z", changedAt: "2026-11-09T19:00:00Z", changedByKind: "owner" };
+    ownerLineMock.zone = null;
+    const els = all(await page());
+    const suspenseIdx = els.findIndex((e) => e.type === Suspense);
+    const switchIdx = els.findIndex((e) => e.type === OwnerLineSwitchCard);
+    const frameIdx = els.findIndex((e) => e.type === BisAccessFrame);
+    expect(switchIdx, "no OwnerLineSwitchCard element found").toBeGreaterThan(-1);
+    expect(switchIdx).toBeGreaterThan(suspenseIdx);
+    expect(switchIdx).toBeLessThan(frameIdx);
+    const card = els[switchIdx]!;
+    expect(card.props).toMatchObject({ state: ownerLineMock.state, viewer: "owner", locale: "en", zone: "America/Chicago", pseudo: false });
+    expect(typeof card.props.setSwitch).toBe("function");
+  });
+
+  it("threads the agency viewer through, same as TeamSection (mutation: hardcode viewer owner -> FAILS)", async () => {
+    guard.isAgency = true;
+    const card = all(await page()).find((e) => e.type === OwnerLineSwitchCard)!;
+    expect(card.props.viewer).toBe("agency");
+  });
+
+  it("passes through a real account zone when one is stored, instead of the fallback (mutation: ignore zoneRead -> FAILS)", async () => {
+    ownerLineMock.zone = "America/Denver";
+    const card = all(await page()).find((e) => e.type === OwnerLineSwitchCard)!;
+    expect(card.props.zone).toBe("America/Denver");
+  });
+
+  // Design review Critical 2: the two switch reads were awaited unguarded, against this page's own fail-soft rule
+  // (its comment on the language read). A failed read costs the switch card only: the header, the Team card and the
+  // BIS access frame still render, and the switch card's place shows its own error state.
+  it.each([["switch"], ["zone"]] as const)("a failed %s read costs only the switch card: its error state in its place, the rest of the page intact, logged by account (mutation: await the reads unguarded -> FAILS)", async (which) => {
+    ownerLineMock.fail = which;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const els = all(await page());
+    const { PageHeader } = await import("@/components/page-header");
+    expect(els.find((e) => e.type === PageHeader)).toBeTruthy();
+    expect((els.find((e) => e.type === Suspense)!.props.children as ReactElement).type).toBe(section.TeamSection);
+    expect(els.find((e) => e.type === BisAccessFrame)).toBeTruthy();
+    expect(els.find((e) => e.type === OwnerLineSwitchCard)).toBeUndefined();
+    const errorIdx = els.findIndex((e) => e.type === OwnerLineSwitchCardError);
+    expect(errorIdx).toBeGreaterThan(els.findIndex((e) => e.type === Suspense));
+    expect(errorIdx).toBeLessThan(els.findIndex((e) => e.type === BisAccessFrame));
+    expect(els[errorIdx]!.props).toMatchObject({ locale: "en", pseudo: false });
+    const lines = err.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.startsWith("team page: account a1 owner-line switch read failed:")), lines.join("\n")).toBe(true);
     err.mockRestore();
   });
 });

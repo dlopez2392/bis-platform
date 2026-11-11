@@ -97,6 +97,8 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "operator.ops_alert": ["operator", "any", "none"],
   // S-06 part 1: the owner's copy of a customer's reply; operator mail, as the lead alert is.
   "operator.reply_forward": ["operator", "any", "none"],
+  // F-032 (owner line) Task 8: three wrong PINs email the person and the account's Owner (spec §4.2).
+  "operator.owner_line_lockout": ["operator", "any", "none"],
   // item 8c (owner Q2): the customer's notice when staff undo one of Sofía's booking changes. A correction
   // about their own appointment: an unsubscribe does not stop it, any hour, the unsubscribe footer.
   "booking.undo_notice": ["transactional", "any", "unsubscribe"],
@@ -107,9 +109,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the thirty-one send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, S-06's reply forward, item 8c's undo notice, and F-046's staff confirmation and moved email) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the thirty-two send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, S-06's reply forward, item 8c's undo notice, F-046's staff confirmation and moved email, and F-032's owner-line lockout) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(31);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(32);
   });
 
   it("the transactional class (item 8c, owner Q2) holds exactly three kinds: the undo notice and F-046's two (mutation: classify automation.reminder as transactional → FAILS)", () => {
@@ -212,6 +214,7 @@ const EMAIL_STOPS_WHILE_PAUSED: Record<EmailKind, boolean> = {
   "operator.sender_check": false,
   "operator.ops_alert": false,
   "operator.reply_forward": false,
+  "operator.owner_line_lockout": false,
   "booking.undo_notice": false,
   "staff.booking_confirmation": false,
   "staff.booking_moved": false,

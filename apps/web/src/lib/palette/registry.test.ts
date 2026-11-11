@@ -758,6 +758,27 @@ describe("buildPaletteEntries — the ex-hand-pushed entries are findable by the
 // set of five (nav:preferences first, then nav:bis-access, nav:settings,
 // nav:setup, settings:team). Pins the restored order directly, not through
 // an intermediate "same ids, any order" check.
+// F-032 Task 6: the "Call in to your business" card (Preferences) and the switch card (Team).
+describe("F-032 Task 6: owner-line keywords on Preferences and Team", () => {
+  it("finds Preferences by owner line, call in, pin and llamar (mutation: drop one of the four -> FAILS by name)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const prefs = entries.find((e) => e.id === "nav:preferences")!;
+    for (const word of ["owner line", "call in", "pin", "llamar"]) {
+      expect(prefs.keywords, word).toContain(word);
+      expect(filterEntries(entries, word).map((e) => e.id), word).toContain("nav:preferences");
+    }
+  });
+
+  it("finds Team (the agency's settings:team) by call in and owner line (mutation: drop either -> FAILS by name)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const team = entries.find((e) => e.id === "settings:team")!;
+    for (const word of ["call in", "owner line"]) {
+      expect(team.keywords, word).toContain(word);
+      expect(filterEntries(entries, word).map((e) => e.id), word).toContain("settings:team");
+    }
+  });
+});
+
 describe("buildPaletteEntries — the agency's in-account ⌘K order matches origin/main (F-087 fix round, finding 3b)", () => {
   it("nav:preferences, nav:bis-access, nav:settings, nav:setup, settings:team, in that order (mutation: move the settings:team manifest row back above nav:required-documents → FAILS)", () => {
     const entries = buildPaletteEntries("/dashboard/accounts/acc_1", true, false);

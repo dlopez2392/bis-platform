@@ -118,6 +118,16 @@ they re-resolve against the accent each element inherits.
    the feature: one sentence of what appears here + the action that causes it.
 6. Reversible actions run immediately with an undo toast; destructive actions
    confirm by typing the name. No reflexive "Are you sure?" dialogs.
+   **Amended 2026-11-09 (F-032 part 1, owner approved):** a reversible action
+   that revokes someone's access, where an Undo run afterwards would have to
+   restore a credential, may commit on a delay instead of at once. The
+   control hides immediately and the Undo toast shows. The write runs when
+   the toast closes without Undo, however it closes. The page's `pagehide`
+   forces the write through, so closing the tab never silently cancels a
+   revocation. It runs at most once, and an Undo that arrives after it ran
+   changes nothing. "Stop calling in from this cell" on Mis preferencias is
+   the first such action. An action whose Undo would need the OLD secret kept
+   ("Change PIN") carries no Undo and runs immediately.
 7. Loading = skeletons shaped like the content. No spinners.
 8. One primary button per view; everything else is ghost. (amended 2026-09-23)
    A view here is one decision. A settings page made of independent cards —

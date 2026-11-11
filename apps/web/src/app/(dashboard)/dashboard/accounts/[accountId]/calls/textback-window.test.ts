@@ -12,6 +12,7 @@ const CALL: CallListRow = {
   // Deliberately microsecond-precision, as Postgres returns it.
   started_at: "2026-09-04T14:00:00.123456+00:00",
   ended_at: "2026-09-04T14:00:38.000000+00:00",
+  owner_line_user_id: null,
   duration_secs: 38,
   outcome: "abandoned",
   language: "en",

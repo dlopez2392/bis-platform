@@ -168,6 +168,14 @@ const ALLOWED: Record<string, Reason> = {
   // completeWorkTask's hold check: ledgerDb, beside a task write on the request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/team/actions.ts": "owner-only",
+  // F-032 Task 5: the business's owner-line switch, after requireAccountOwner; the three switch columns and BIS's
+  // null-account event are server-only writes, and nothing customer-shaped is read.
+  "app/(dashboard)/dashboard/accounts/[accountId]/team/owner-line-actions.ts": "owner-only",
+  // F-032 Task 6: the switch card's own read (readOwnerLineSwitch, readAccountTimezone), after
+  // requireAccountOwner above has already admitted only the agency or this account's own Owner; the three switch
+  // columns are server-only (0115), same guard as team/owner-line-actions.ts above, and nothing customer-shaped
+  // is read.
+  "app/(dashboard)/dashboard/accounts/[accountId]/team/page.tsx": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts": "agency-only",
   // "What Sofía knew" (S-47c, spec 5.8): a sub-page of this agency-only section, same guard.
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/knowledge/[version]/page.tsx": "agency-only",
@@ -225,6 +233,17 @@ const ALLOWED: Record<string, Reason> = {
   "lib/contacts/add-contact-by-hand.ts": "proven-target",
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
   "lib/ops/stamp.ts": "public-or-cron",
+  // F-032 Task 8 (classified in Task 5): the lockout email, imported only by the signed TeXML owner-pin route after
+  // the SQL lock; it reads the account's team and branding to email the person and the Owner, never customer data.
+  "lib/owner-line/lockout.ts": "public-or-cron",
+  // F-032 Task 10: the owner tools' read client, built only inside the SIP voice webhook's owner branch, which has no
+  // request user. Scoped by the signed owner pass (decideOwnerSession) plus the live re-check before every tool call;
+  // under "service" (F2) it refuses a Technician outright, and every read names the session's own account id.
+  "lib/owner-line/reader.ts": "public-or-cron",
+  // F-032 Task 12: recheckOwnerSession's live re-read (ownerLineSessionCheck), called from the voice webhook's owner
+  // branch only, after the signed pass verified; it reads the caller's own membership, enrolment and the switch,
+  // never customer data, and refuses on any identity mismatch.
+  "lib/owner-line/session.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",
   // The suggestion actions (item 8b-1): decide.ts writes proposals on the service client only after getProposal
   // on the request client (0088's RLS) found the row; every CRM write and its inverse stays on the request client.
