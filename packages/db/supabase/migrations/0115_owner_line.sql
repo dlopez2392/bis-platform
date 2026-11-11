@@ -2,20 +2,9 @@
 -- (docs/superpowers/specs/2026-11-09-owner-line-design.md sections 3.4, 4 and 6;
 --  docs/superpowers/plans/2026-11-09-owner-line.md, Task 1, spec corrections SC-3 to SC-9 and SC-13)
 --
--- DRAFT (2026-11-09). Written and replica-tested against 0112 plus 0114 (read from feat/f077-work-queue with git
--- show), because 0113 (F-115 PR D) does not exist yet. RE-READ AFTER 0113 IS MERGED (plan O-2, Task 1 Step 1), and
--- delete this paragraph when the file is final:
---   a. section 3's agency_visit_items_kind_check list: copied from 0112 section 6. If 0113 replaces it, copy 0113's.
---   b. section 3's agency_visits_actor_kind_check and agency_visits_reason_check: copied from 0105. Same rule.
---   c. section 3's access_log_page: 0112 section 6's text plus the two actor_kind filters. If 0113 replaces the
---      function, re-copy 0113's body and re-add the two filters.
---   d. section 3's grant insert (actor_kind) on agency_visits: if 0113 changes agency_visits' column grants, the
---      eleven-column pin in access-log-schema.test.ts moves with it.
---   e. section 0's lock order: if 0113 locks any of agency_visit_items, calls, agency_visits, memberships or
---      accounts, keep this file's children-first order consistent with it.
---   f. the number: if the highest migration is not 0114, renumber to the next free one.
---   g. section 3's note_agency_open: 0105's text plus the owner_line_ guard (0112 left it unchanged). If 0113
---      replaces it, re-copy 0113's body and re-add the guard.
+-- RE-READ 2026-11-11 (plan O-2) after 0113 (F-115 PR D, record_changes) and 0114 (F-077, calls and ai_acts) landed:
+-- neither touches agency_visit_items, agency_visits, access_log_page, note_agency_open, memberships or accounts,
+-- and 0113 locks only record_changes, so sections 0 and 3 stand as written against 0112.
 --
 -- WHAT.
 --   public.owner_line_enrollments: one row per (account, person) who calls in to hear the day. The cell (e164) is
@@ -305,7 +294,7 @@ comment on column public.calls.owner_line_user_id is
 create index calls_owner_line_idx on public.calls (account_id, owner_line_user_id, started_at desc)
   where owner_line_user_id is not null;
 
--- 3. The access log learns owner_line_call (SC-13). The kind list is 0112 section 6's, plus four (DRAFT note a).
+-- 3. The access log learns owner_line_call (SC-13). The kind list is 0112 section 6's, plus four.
 alter table public.agency_visits drop constraint agency_visits_actor_kind_check;
 alter table public.agency_visits add constraint agency_visits_actor_kind_check check (actor_kind in ('agency', 'owner_line'));
 alter table public.agency_visits drop constraint agency_visits_reason_check;
@@ -320,7 +309,7 @@ alter table public.agency_visit_items add constraint agency_visit_items_kind_che
   'owner_line_calls_and_messages', 'owner_line_appointments', 'owner_line_needs_attention', 'owner_line_lookup_customer'));
 grant insert (actor_kind) on public.agency_visits to service_role;
 
--- note_agency_open: 0105's text with one guard (review m-3; DRAFT note g). An owner_line_ kind is
+-- note_agency_open: 0105's text with one guard (review m-3). An owner_line_ kind is
 -- note_owner_line_call's alone; on an agency visit it would blank the BIS access section (parseVisit).
 create or replace function public.note_agency_open(
   p_account_id uuid, p_actor text, p_session text, p_kind text, p_record_id uuid, p_item_count integer)
