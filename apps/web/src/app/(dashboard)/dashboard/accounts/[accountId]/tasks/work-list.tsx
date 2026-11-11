@@ -37,6 +37,8 @@ import {
   acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
 } from "@/lib/proposals/actions";
 import type { Tr } from "@/lib/record/copy";
+// The row's primary words live in lib/work/row-label.ts since F-032 Task 11: the owner line says the same.
+import { workRowLabel } from "@/lib/work/row-label";
 import type { AssignMember } from "@/lib/assign/view";
 import type { Who } from "@/lib/assign/who";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
@@ -95,27 +97,6 @@ const BUCKET_TREATMENT: Record<Bucket, { dot: string; chip: string; labelKey: Me
   },
 };
 
-/**
- * The row's own primary sentence. A task's title is already human-written
- * (`WorkRow.title`'s own doc comment in packages/db/src/work-queue.ts) — shown
- * verbatim, never re-templated. A derived row has no author, so its sentence
- * comes from the copy catalogue, in the reader's own language (`tr`, F-085
- * follow-up Task B) — `tr.text`'s own interpolate() already uses a replacer
- * FUNCTION, never a plain string second argument to `.replace`, for the
- * conversation case: a contact's own name is untrusted input that could
- * contain a `$&`/`$1` pattern `String.replace` would treat specially.
- */
-function primaryLabel(row: WorkRow, contactName: string, tr: Tr, zone: string): string {
-  if (row.source === "task") return row.title;
-  if (row.source === "conversation") return tr.text("work.conversation", { name: contactName });
-  if (row.source === "failed_transfer") {
-    return row.callbackNumber
-      ? tr.text("work.failedTransfer", { number: row.callbackNumber })
-      : tr.text("work.failedTransfer.bare");
-  }
-  if (row.source === "booking_act") return describeAct(row.bookingAct!, { tr, zone }).verb;
-  return tr.text("work.booking");
-}
 
 /**
  * The row's secondary line. A conversation's own title IS the latest call's
@@ -241,7 +222,7 @@ function WorkRowItem({
   tr: Tr;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
-  const primary = primaryLabel(row, contactName, tr, timezone);
+  const primary = workRowLabel(row, contactName, tr, timezone);
   const secondary = secondaryLine(row, contactName, tr, timezone);
   // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
   // the receptionist's, and says so beside the person it is about, as its

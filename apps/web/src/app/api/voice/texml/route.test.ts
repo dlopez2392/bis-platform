@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { GET, POST } from "./route";
+import { GET, POST, OWNER_LINE_LOOKUP_DEADLINE_MS } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
 import type { BillingStanding } from "@bis/db";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
@@ -8,6 +8,13 @@ import type { BillingStanding } from "@bis/db";
 // (lib/ops/stamp.ts).
 const stampMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
+// F-032 Task 7 review M-3: a test may pin the per-call handoff token, to compare two documents byte for byte.
+// Unpinned (the default, reset after every owner-line test) it is the real token.
+const tokenPin = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("@/lib/voice/handoff", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/voice/handoff")>();
+  return { ...actual, newHandoffToken: () => tokenPin.value ?? actual.newHandoffToken() };
+});
 
 const lookupMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
@@ -21,6 +28,8 @@ const countForwardedMock = vi.hoisted(() => vi.fn());
 const recordForwardedCallMock = vi.hoisted(() => vi.fn());
 // M7a PR-4 (plan G9): read only while BILLING_ENFORCE is "1".
 const readBillingStandingMock = vi.hoisted(() => vi.fn());
+// F-032 Task 7: the owner line's one extra read (a Telnyx-signed request with a usable VOICE_HANDOFF_SECRET only).
+const ownerLookupMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   getTransferPhone: (...a: unknown[]) => transferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => ownedNumbersMock(...a),
@@ -34,6 +43,8 @@ vi.mock("@bis/db", () => ({
   countForwardedCallsSince: (...a: unknown[]) => countForwardedMock(...a),
   recordForwardedCall: (...a: unknown[]) => recordForwardedCallMock(...a),
   readBillingStanding: (...a: unknown[]) => readBillingStandingMock(...a),
+  ownerLineAnswerLookup: (...a: unknown[]) => ownerLookupMock(...a),
+  OWNER_LINE_MAX_CALLS_PER_DAY: 10,
 }));
 
 // `after()` becomes a recorder we invoke ourselves — same pattern as
@@ -102,6 +113,8 @@ beforeEach(() => {
   // test above the billing block predates it. Unbilled by default.
   delete process.env.BILLING_ENFORCE;
   readBillingStandingMock.mockReset().mockResolvedValue(null);
+  // No enrollment for any caller unless a test says so (F-032 Task 7).
+  ownerLookupMock.mockReset().mockResolvedValue({ status: "none" });
 });
 
 describe("texml route", () => {
@@ -1771,5 +1784,571 @@ describe("billing: a paused or receptionist-less account (BILLING_ENFORCE)", () 
     transferPhoneMock.mockRejectedValue(new Error("db down"));
     expect(await (await call()).text()).toContain("<Sip>");
     expect(err).toHaveBeenCalledWith(`texml forward lookup failed — Sofía answers, accountId ${ACCOUNT}: Error: db down`);
+  });
+});
+
+describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, SC-17; owner rulings Q-C, O-1 = F2)", () => {
+  const SECRET = "h".repeat(48);
+  const TO = "+19565550999";
+  const CELL = "+19565550142";
+  const UUID_ACCOUNT = "11111111-1111-4111-8111-111111111111";
+  const HIT = { status: "pin", enrollmentId: "e1", userId: "22222222-2222-4222-8222-222222222222", role: "owner",
+    name: "Dan Lopez", language: "en", accountLanguage: "es", pinParams: "scrypt:17:8:1:" + "A".repeat(22) };
+  const CAP_SENTENCE = "call back tomorrow";
+
+  function telnyxSigned(params: Record<string, string>) {
+    const raw = new URLSearchParams(params).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const sig = cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey);
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    return POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw,
+      headers: { "content-type": "application/x-www-form-urlencoded", "telnyx-timestamp": ts, "telnyx-signature-ed25519": sig.toString("base64") },
+    }));
+  }
+  const sipParams = (xml: string) => {
+    const uri = /<Sip>([^<]*)<\/Sip>/.exec(xml)![1]!.replaceAll("&amp;", "&");
+    return new URLSearchParams(uri.slice(uri.indexOf("?") + 1));
+  };
+  /** Every line a spy saw, joined: what the "never log the caller's number" checks read. */
+  const logged = (...spies: ReturnType<typeof vi.spyOn>[]) => spies.flatMap((s) => s.mock.calls.flat()).map(String).join("\n");
+
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    process.env.VOICE_HANDOFF_SECRET = SECRET;
+    // Final review M-3: the PIN ask is offered only with a pepper configured, so every PIN-ask case below runs with one.
+    process.env.OWNER_LINE_PIN_PEPPER = "p".repeat(40);
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    tokenPin.value = null;
+    for (const k of ["VOICE_HANDOFF_SECRET", "TELNYX_PUBLIC_KEY", "SUPABASE_SERVICE_ROLE_KEY", "BILLING_ENFORCE",
+      "VOICE_FALLBACK_DRILL_TO", "VOICE_FALLBACK_DRILL_FROM", "VOICE_SCREEN_NUMBERS", "PHONE_SPAM_BLOCK_THRESHOLD",
+      "OWNER_LINE_PIN_PEPPER"]) delete process.env[k];
+  });
+
+  /** Pins the per-call token and the clock, so two documents minted in one test are comparable byte for byte. */
+  function pinTokenAndClock(): void {
+    tokenPin.value = "pinned-token";
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+  }
+  /** Today's path for this caller: the document the route sends with the owner line skipped. */
+  const today = async (from: string) =>
+    (await (await import("./route")).answer(TO, from, "https://x.example", true, { skipOwnerLine: true })).text();
+  /** `doc` with `ask` as the first verb: what an ask whose fallthrough is exactly `doc` must look like. */
+  const withAsk = (doc: string, ask: string) => doc.replace("<Response>", `<Response>${ask}`);
+  const PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
+  const CODE_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Enter the 6-digit code shown on your screen.</Say></Gather>`;
+  const clearedLine = () => lookupMock.mockResolvedValue({ id: "pn1", account_id: UUID_ACCOUNT, e164: TO, telnyx_id: null, status: "live" });
+
+  describe("the fallthrough after an ask is exactly today's path (review C-1: the fallback ticket means EVERY guard cleared)", () => {
+    beforeEach(() => {
+      // A ticket is signed only with this key and a UUID account (fallback-ticket.ts), so a cleared bridge shows &f=.
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+      clearedLine();
+      pinTokenAndClock();
+    });
+
+    it("an over-cap PIN hit: after the Gather comes today's cap sentence and hang-up, byte for byte, never a bridge and never a fallback ticket (mutation: mint the cleared bridge after every ask -> FAILS)", async () => {
+      ownerLookupMock.mockResolvedValue(HIT);
+      countCallsByCallerSinceMock.mockResolvedValue(99);
+      const asked = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      const t = await today(CELL);
+      expect(t).toContain(CAP_SENTENCE);
+      expect(asked).toBe(withAsk(t, PIN_ASK));
+      expect(asked).not.toContain("<Dial");
+      expect(asked).not.toContain("&amp;f=");
+    });
+
+    it("a repeat-spam PIN hit on a line that speaks both languages: today's refusal, in both, byte for byte (mutation: mint the cleared bridge after every ask -> FAILS)", async () => {
+      profileMock.mockResolvedValue({ ...ENABLED_PROFILE, languages: "both" });
+      process.env.PHONE_SPAM_BLOCK_THRESHOLD = "1";
+      countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0, answeredCalls: 0 });
+      ownerLookupMock.mockResolvedValue(HIT);
+      const asked = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      const t = await today(CELL);
+      expect(t).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+      expect(t).toContain(`<Say language="es-MX">`);
+      expect(asked).toBe(withAsk(t, PIN_ASK));
+      expect(asked).not.toContain("&amp;f=");
+    });
+
+    it("an over-cap call-in-code hit: today's cap sentence after the code ask (mutation: mint the cleared bridge after every ask -> FAILS)", async () => {
+      ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify", pinParams: null });
+      countCallsSinceMock.mockResolvedValue(999);
+      const asked = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(asked).toBe(withAsk(await today(CELL), CODE_ASK));
+      expect(asked).toContain(CAP_SENTENCE);
+      expect(asked).not.toContain("&amp;f=");
+    });
+
+    it("a clean PIN hit: after the Gather comes today's CLEARED bridge, fallback ticket included, byte for byte", async () => {
+      ownerLookupMock.mockResolvedValue(HIT);
+      const asked = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      const t = await today(CELL);
+      expect(t).toContain("&amp;f=");
+      expect(asked).toBe(withAsk(t, PIN_ASK));
+    });
+  });
+
+  it("a registered, verified cell with a PIN hears the PIN step, and the fallthrough is today's bridge with no owner pass", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial`);
+    expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
+    expect(sipParams(xml).get("X-BIS-Signature")).toBeTruthy();
+    expect(ownerLookupMock).toHaveBeenCalledWith({}, "a1", CELL, 10);
+    expect(logSpy).toHaveBeenCalledWith("texml owner line asking for a PIN, accountId a1");
+  });
+
+  it("a pending call-in code hears the code ask in the person's language (none stored: the account's), falling through to today's bridge", async () => {
+    ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify", language: null, accountLanguage: "es", pinParams: null });
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say language="es-MX">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial answerOnBridge="true"`);
+    expect(xml).not.toContain("<Hangup");
+    expect(logSpy).toHaveBeenCalledWith("texml owner line asking for a call-in code, accountId a1");
+  });
+
+  it("the owner line's own log lines never carry the caller's number", async () => {
+    for (const hit of [HIT, { ...HIT, status: "verify" }, { ...HIT, status: "over_limit" }]) {
+      ownerLookupMock.mockResolvedValue(hit);
+      await (await telnyxSigned({ To: TO, From: CELL })).text();
+    }
+    ownerLookupMock.mockRejectedValue(new Error("db blip"));
+    await (await telnyxSigned({ To: TO, From: CELL })).text();
+    const ownerLines = logged(logSpy, errSpy).split("\n").filter((l) => /owner[- ]line/.test(l));
+    expect(ownerLines.length).toBeGreaterThanOrEqual(4);
+    for (const l of ownerLines) expect(l).not.toContain(CELL.slice(2));
+  });
+
+  it("a customer (no enrollment) gets today's document byte for byte: with the token and the clock pinned it IS the skipOwnerLine document (review M-3; mutation: let a 'none' answer reach the ask -> FAILS)", async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+    clearedLine();
+    pinTokenAndClock();
+    const asked = await (await telnyxSigned({ To: TO, From: "+19565550177" })).text();
+    expect(ownerLookupMock).toHaveBeenCalledTimes(1);
+    const t = await today("+19565550177");
+    expect(ownerLookupMock).toHaveBeenCalledTimes(1);
+    expect(t).toContain("&amp;f=");
+    expect(t).toContain("X-BIS-Signature=");
+    expect(asked).toBe(t);
+  });
+
+  it("an UNSIGNED request never looks the owner up, so it can never offer the step (mutation: drop authenticated from the eligibility -> FAILS)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: new URLSearchParams({ To: TO, From: CELL }),
+      headers: { "content-type": "application/x-www-form-urlencoded" } }))).text();
+    expect(xml).not.toContain("<Gather");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  it("a signed request with no usable VOICE_HANDOFF_SECRET never looks the owner up either: no pass could be signed (SC-14; mutation: drop sipHandoffSecretConfigured from the eligibility -> FAILS)", async () => {
+    process.env.VOICE_HANDOFF_SECRET = "short";
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  it("a withheld caller is never looked up", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    expect(await (await telnyxSigned({ To: TO })).text()).not.toContain("<Gather");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["rejects", () => ownerLookupMock.mockRejectedValue(new Error("db blip"))],
+    ["throws before it returns a promise", () => ownerLookupMock.mockImplementation(() => { throw new Error("db blip"); })],
+  ])("a lookup that %s is a miss AND the call stays CLEARED: today's bridge with its fallback ticket (plan I-7; mutation: put the lookup inside the count batch without its catch -> uncleared, no &f=, FAILS)", async (_how, arrange) => {
+    // Only a cleared call's action URL carries the fallback ticket `&f=` (route.ts dialXml). The ticket is signed only
+    // with SUPABASE_SERVICE_ROLE_KEY set and a UUID account id (fallback-ticket.ts), so this case sets both.
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: UUID_ACCOUNT, e164: TO, telnyx_id: null, status: "live" });
+    arrange();
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toMatch(/<Dial answerOnBridge="true" action="[^"]*&amp;f=[^"]+"/);
+    expect(logged(errSpy)).toContain(`texml owner-line lookup failed (Error) — today's path, accountId ${UUID_ACCOUNT}`);
+  });
+
+  it("a malformed answer's log line names the error class and the account, never the answer: no name, no PIN parameters (review M-5; mutation: log String(e) -> FAILS)", async () => {
+    // The wrapper's own words for a malformed answer (packages/db/src/owner-line.ts): it JSON-stringifies the RPC's answer.
+    ownerLookupMock.mockRejectedValue(new Error(`ownerLineAnswerLookup: unexpected answer ${JSON.stringify({
+      status: "pin", name: "Dan Lopez", pin_params: "scrypt:17:8:1:SALTSALTSALTSALT" })}`));
+    await (await telnyxSigned({ To: TO, From: CELL })).text();
+    const lines = logged(logSpy, errSpy);
+    expect(lines).toContain(`texml owner-line lookup failed (Error) — today's path, accountId a1`);
+    expect(lines).not.toContain("Dan Lopez");
+    expect(lines).not.toContain("SALTSALT");
+    expect(lines).not.toContain("unexpected answer");
+  });
+
+  it("a lookup that never answers costs a caller at most the deadline: past it the call takes today's path, logged by account (review M-1; spec §4.1 'no delay'; mutation: drop the race -> FAILS)", async () => {
+    const { OWNER_LINE_LOOKUP_DEADLINE_MS } = await import("./route");
+    expect(OWNER_LINE_LOOKUP_DEADLINE_MS).toBe(300);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    ownerLookupMock.mockImplementation(() => new Promise(() => {}));
+    let settled = false;
+    const pending = telnyxSigned({ To: TO, From: CELL }).then((r) => { settled = true; return r.text(); });
+    const drain = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
+    await drain();
+    expect(ownerLookupMock).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(OWNER_LINE_LOOKUP_DEADLINE_MS - 1);
+    await drain();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await drain();
+    expect(settled).toBe(true);
+    const xml = await pending;
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toContain("<Dial answerOnBridge=\"true\"");
+    expect(logged(errSpy)).toContain(`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId a1`);
+  });
+
+  it("a registered person is never refused by the CUSTOMER caps: over the per-caller and per-account caps, still asked for the PIN (owner ruling Q-C; mutation: drop the !ownerAsk wrapper -> the cap sentence, FAILS)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    countCallsSinceMock.mockResolvedValue(999);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).toContain("<Gather");
+  });
+
+  it("nor by the repeat-spam check, and neither is a person with a pending call-in code (owner ruling Q-C)", async () => {
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "1";
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0, answeredCalls: 0 });
+    ownerLookupMock.mockResolvedValue(HIT);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).toContain("<Gather");
+    ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify" });
+    countCallsSinceMock.mockResolvedValue(999);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).toContain("<Gather");
+  });
+
+  it("over its own limit the person is a customer again: the customer caps apply", async () => {
+    ownerLookupMock.mockResolvedValue({ ...HIT, status: "over_limit" });
+    countCallsSinceMock.mockResolvedValue(999);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Dial");
+    expect(xml).toContain(CAP_SENTENCE);
+  });
+
+  it.each([["off"], ["locked"], ["none"]])("status %s is today's path (a locked person continues as a customer)", async (status) => {
+    ownerLookupMock.mockResolvedValue({ status });
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).not.toContain("<Gather");
+  });
+
+  it("status locked over the caps is refused like any customer: the customer checks apply", async () => {
+    ownerLookupMock.mockResolvedValue({ status: "locked" });
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).toContain(CAP_SENTENCE);
+  });
+
+  it("over the daily limit: a short line in their language, then today's bridge", async () => {
+    ownerLookupMock.mockResolvedValue({ ...HIT, status: "over_limit", language: "es" });
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain(`<Response><Say language="es-MX">Ya llegó al límite de llamadas de hoy. Le comunico con Sofía.</Say><Dial`);
+    expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
+  });
+
+  it("the agency's forward is on: not offered, so the fallthrough can never differ from today's path (SC-17)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true });
+    transferPhoneMock.mockResolvedValue(null);
+    ownedNumbersMock.mockResolvedValue([]);
+    expect(await (await telnyxSigned({ To: TO, From: CELL })).text()).not.toContain("<Gather");
+  });
+
+  it("the agency's forward is on and the person is over the customer caps: today's path is the cap sentence, never a forward to a person (SC-17 with Q-C: the caps are skipped only when the step is OFFERED; mutation: decide ownerAsk before the SC-17 states -> forwarded, FAILS)", async () => {
+    ownerLookupMock.mockResolvedValue(HIT);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true });
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).not.toContain("+19565550123");
+    expect(xml).toContain(CAP_SENTENCE);
+  });
+
+  it("the fallback drill is engaged for this call: not offered (SC-17)", async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: UUID_ACCOUNT, e164: TO, telnyx_id: null, status: "live" });
+    process.env.VOICE_FALLBACK_DRILL_TO = TO;
+    process.env.VOICE_FALLBACK_DRILL_FROM = CELL;
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toContain("fallback-drill.invalid");
+  });
+
+  it("billing has no voice for the account: not offered, and the call hears today's unavailable sentence (SC-17)", async () => {
+    process.env.BILLING_ENFORCE = "1";
+    readBillingStandingMock.mockResolvedValue({
+      complimentary: false, pausedAt: new Date(Date.now() - 31 * 86_400_000).toISOString(), subscriptionStatus: "past_due",
+      features: { voice_receptionist: true, web_concierge: true },
+    });
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toContain("No one can take your call right now.");
+  });
+
+  it("the owner line runs AHEAD of the press-1 screen: a registered person is never asked to press 1 (SC-16)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = TO;
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+    expect(xml).toContain('numDigits="6"');
+    expect(xml).not.toContain("press 1");
+  });
+
+  it("answer() with skipOwnerLine never looks the owner up (what the press-1 re-run passes)", async () => {
+    const { answer } = await import("./route");
+    ownerLookupMock.mockResolvedValue(HIT);
+    const xml = await (await answer(TO, CELL, "https://x.example", true, { skipScreen: true, skipOwnerLine: true })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
+  });
+
+  describe("no PIN ask without a pepper (final review M-3; owner-pin's own pinPepperConfigured)", () => {
+    it("a PIN hit with OWNER_LINE_PIN_PEPPER unset is exactly today's path: no Gather, and the reason is logged without the number (mutation: drop the pepper check -> FAILS)", async () => {
+      delete process.env.OWNER_LINE_PIN_PEPPER;
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      pinTokenAndClock();
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+      expect(xml).toBe(await today(CELL));
+      const lines = logged(logSpy, errSpy);
+      expect(lines).toContain("OWNER_LINE_PIN_PEPPER is not set");
+      expect(lines).not.toContain(CELL);
+    });
+    it("a pepper shorter than 32 characters reads as unset (mutation: check only that it is present -> FAILS)", async () => {
+      process.env.OWNER_LINE_PIN_PEPPER = "short";
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+    });
+    it("the call-in code ask needs no pepper (sha256, secrets.ts): a verify hit is still asked (control)", async () => {
+      delete process.env.OWNER_LINE_PIN_PEPPER;
+      clearedLine();
+      ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify" });
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).toContain(CODE_ASK);
+    });
+    it("with the pepper set, the PIN ask is offered (control)", async () => {
+      clearedLine();
+      ownerLookupMock.mockResolvedValue(HIT);
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).toContain(PIN_ASK);
+    });
+  });
+
+  describe("a role the data path does not offer is not asked (O-1 = F2: a Technician)", () => {
+    it("F2 is the decided data path: Owner and Staff only", async () => {
+      const { OWNER_LINE_ROLES } = await import("@/lib/owner-line/data-path");
+      expect([...OWNER_LINE_ROLES]).toEqual(["owner", "staff"]);
+    });
+    it.each([["pin"], ["verify"], ["over_limit"]])("a Technician's %s hit is today's path, with no PIN or code step and no limit line (mutation: drop the OWNER_LINE_ROLES check -> FAILS)", async (status) => {
+      ownerLookupMock.mockResolvedValue({ ...HIT, status, role: "technician" });
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+      expect(xml).not.toContain("límite");
+      expect(xml).not.toContain("limit for calling in");
+      expect(xml).toMatch(/^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Dial /);
+    });
+    it("and the customer caps apply to a Technician: over them, the cap sentence (mutation: decide ownerAsk before the role filter -> FAILS)", async () => {
+      ownerLookupMock.mockResolvedValue({ ...HIT, role: "technician" });
+      countCallsByCallerSinceMock.mockResolvedValue(99);
+      const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
+      expect(xml).not.toContain("<Gather");
+      expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>
+<Response><Say>We're sorry — we can't take more calls today. Please call back tomorrow.</Say><Hangup/></Response>`);
+    });
+  });
+
+  it("ownerLineBridge carries an owner pass that verifies against THIS dial's handoff token (mutation: sign with a fresh token -> FAILS)", async () => {
+    const { ownerLineBridge } = await import("./route");
+    const { verifyOwnerPass } = await import("@/lib/voice/sip-handoff-signature");
+    const xml = await ownerLineBridge(TO, CELL, "https://x.example", { accountId: UUID_ACCOUNT, userId: HIT.userId, role: "staff" }).text();
+    const p = sipParams(xml);
+    expect(verifyOwnerPass(p.get("X-BIS-Owner-Pass"), p.get("X-BIS-Handoff"), Date.now())).toMatchObject({
+      ok: true, accountId: UUID_ACCOUNT, userId: HIT.userId, role: "staff", calledE164: TO });
+    expect(p.get("X-BIS-Signature")).toBeTruthy();
+    expect(xml).not.toContain("<Gather");
+    expect(logSpy).toHaveBeenCalledWith(`texml owner line PIN ok — bridging with an owner pass, accountId ${UUID_ACCOUNT}`);
+  });
+
+  it("ownerLineBridge with no usable secret: no pass, logged, and the call still reaches the receptionist", async () => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    const { ownerLineBridge } = await import("./route");
+    const xml = await ownerLineBridge(TO, CELL, "https://x.example", { accountId: UUID_ACCOUNT, userId: HIT.userId, role: "owner" }).text();
+    expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
+    expect(xml).toContain(`<Dial answerOnBridge="true"`);
+    expect(logged(errSpy)).toContain(`texml: an owner pass could not be signed — this call reaches the receptionist, accountId ${UUID_ACCOUNT}`);
+  });
+
+  it("ownerLineGatherAgain asks again in the person's language with the profile's persona, falling through to today's bridge with no pass", async () => {
+    const { ownerLineGatherAgain } = await import("./route");
+    clearedLine();
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, persona_name: "Ana" });
+    const pin = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+      { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
+    expect(pin).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>That PIN didn&apos;t match. Try again.</Say><Say>Hi Dan. Enter your PIN, or press pound to talk to Ana.</Say></Gather><Dial answerOnBridge="true"`);
+    expect(sipParams(pin).get("X-BIS-Owner-Pass")).toBeNull();
+    expect(profileMock).toHaveBeenCalledWith({}, UUID_ACCOUNT);
+    const code = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+      { kind: "verify", locale: "es", accountId: UUID_ACCOUNT, name: null })).text();
+    expect(code).toContain(`<Say language="es-MX">Ese código no coincide. Intente de nuevo.</Say><Say language="es-MX">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial`);
+    expect(code).not.toContain("<Hangup");
+  });
+
+  it("ownerLineGatherAgain says Sofía when the read fails, never an error, and its bridge is UNCLEARED: no fallback ticket for a caller nothing vouched for", async () => {
+    const { ownerLineGatherAgain } = await import("./route");
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+    clearedLine();
+    profileMock.mockRejectedValue(new Error("db blip"));
+    const res = await ownerLineGatherAgain(TO, CELL, "https://x.example", { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: null });
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("<Say>Hi. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial");
+    expect(xml).not.toContain("&amp;f=");
+    expect(logged(errSpy)).toContain(`texml lookup failed for ${TO}: Error: db blip`);
+  });
+
+  describe("ownerLineGatherAgain's fallthrough is today's path too (review C-1, the re-ask after a wrong PIN or code)", () => {
+    beforeEach(() => {
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "k".repeat(64);
+      clearedLine();
+      pinTokenAndClock();
+    });
+    const RETRY_PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>That PIN didn&apos;t match. Try again.</Say><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
+
+    it("over the customer caps: after the re-ask comes today's cap sentence and hang-up, never a ticketed bridge (mutation: mint the cleared bridge in ownerLineGatherAgain -> FAILS)", async () => {
+      const { ownerLineGatherAgain } = await import("./route");
+      countCallsByCallerSinceMock.mockResolvedValue(99);
+      const asked = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+        { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
+      const t = await today(CELL);
+      expect(t).toContain(CAP_SENTENCE);
+      expect(asked).toBe(withAsk(t, RETRY_PIN_ASK));
+      expect(asked).not.toContain("&amp;f=");
+    });
+
+    it("every guard clear: today's cleared bridge, byte for byte", async () => {
+      const { ownerLineGatherAgain } = await import("./route");
+      const asked = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+        { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
+      const t = await today(CELL);
+      expect(t).toContain("&amp;f=");
+      expect(asked).toBe(withAsk(t, RETRY_PIN_ASK));
+    });
+
+    it("a dialed number that now resolves to ANOTHER account is not vouched for: no ticket", async () => {
+      const { ownerLineGatherAgain } = await import("./route");
+      const asked = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+        { kind: "pin", locale: "en", accountId: "33333333-3333-4333-8333-333333333333", name: "Dan Lopez" })).text();
+      expect(asked).toContain("<Dial answerOnBridge=\"true\"");
+      expect(asked).not.toContain("&amp;f=");
+    });
+
+    // Re-review M-A: one case per state the first ask is never offered in (SC-17). In each, today's path is not
+    // Sofía's bridge, so nothing vouches for a ticketed one: the re-ask falls through to the UNCLEARED bridge.
+    it.each([
+      ["the agency's forward is on", () => { profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true }); }],
+      ["billing has no voice", () => {
+        process.env.BILLING_ENFORCE = "1";
+        readBillingStandingMock.mockResolvedValue({
+          complimentary: false, pausedAt: new Date(Date.now() - 31 * 86_400_000).toISOString(), subscriptionStatus: "past_due",
+          features: { voice_receptionist: true, web_concierge: true },
+        });
+      }],
+      ["the fallback drill is engaged", () => { process.env.VOICE_FALLBACK_DRILL_TO = TO; process.env.VOICE_FALLBACK_DRILL_FROM = CELL; }],
+    ])("%s: the re-ask's bridge carries NO fallback ticket (re-review M-A; mutation C1f: drop the three state checks from the vouch -> FAILS)", async (_state, arrange) => {
+      const { ownerLineGatherAgain } = await import("./route");
+      arrange();
+      const asked = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
+        { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
+      expect(asked).toContain("<Dial answerOnBridge=\"true\"");
+      expect(asked).not.toContain("&amp;f=");
+    });
+  });
+
+  it("once the deadline has fired, a lookup that fails LATE logs nothing more: one line, the timeout, never a second 'lookup failed' (re-review M-B; mutation: drop the late flag -> FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    ownerLookupMock.mockImplementation(() => new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error("db blip")), OWNER_LINE_LOOKUP_DEADLINE_MS + 200);
+    }));
+    let settled = false;
+    const pending = telnyxSigned({ To: TO, From: CELL }).then((r) => { settled = true; return r.text(); });
+    const drain = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
+    await drain();
+    await vi.advanceTimersByTimeAsync(OWNER_LINE_LOOKUP_DEADLINE_MS);
+    await drain();
+    expect(settled).toBe(true);
+    expect(await pending).not.toContain("<Gather");
+    await vi.advanceTimersByTimeAsync(200);
+    await drain();
+    const ownerLines = logged(errSpy).split("\n").filter((l) => l.includes("owner-line lookup"));
+    expect(ownerLines).toEqual([`texml owner-line lookup timed out after ${OWNER_LINE_LOOKUP_DEADLINE_MS} ms — today's path, accountId a1`]);
+  });
+});
+
+describe("ownerLineStillOffered: today's states re-read before an owner pass is minted (F-032 Task 9 review m-4)", () => {
+  const TO = "+19565550999";
+  const CELL = "+19565550142";
+  const ACCOUNT = "11111111-1111-4111-8111-111111111111";
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  const logged = () => [...logSpy.mock.calls, ...errSpy.mock.calls].flat().map(String).join("\n");
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const k of ["VOICE_FORWARD_TO", "VOICE_FALLBACK_DRILL_TO", "VOICE_FALLBACK_DRILL_FROM", "BILLING_ENFORCE"]) delete process.env[k];
+  });
+  const offered = async () => (await import("./route")).ownerLineStillOffered(TO, CELL, ACCOUNT);
+
+  it("every state clear: still offered, through the SAME profile read the answer route makes", async () => {
+    expect(await offered()).toBe(true);
+    expect(profileMock).toHaveBeenCalledWith({}, ACCOUNT);
+  });
+
+  it.each([
+    ["the agency's forward is on (mutation: drop the forward_calls check -> FAILS)", "forward_calls",
+      () => { profileMock.mockResolvedValue({ ...ENABLED_PROFILE, forward_calls: true }); }],
+    ["VOICE_FORWARD_TO is set (mutation: drop the VOICE_FORWARD_TO check -> FAILS)", "VOICE_FORWARD_TO",
+      () => { process.env.VOICE_FORWARD_TO = "+19565550777"; }],
+    ["the fallback drill is engaged for this call (mutation: drop the drill check -> FAILS)", "the fallback drill",
+      () => { process.env.VOICE_FALLBACK_DRILL_TO = TO; process.env.VOICE_FALLBACK_DRILL_FROM = CELL; }],
+    ["billing has no voice for the account (mutation: drop the billing check -> FAILS)", "billing has no voice",
+      () => {
+        process.env.BILLING_ENFORCE = "1";
+        readBillingStandingMock.mockResolvedValue({
+          complimentary: false, pausedAt: new Date(Date.now() - 31 * 86_400_000).toISOString(), subscriptionStatus: "past_due",
+          features: { voice_receptionist: true, web_concierge: true },
+        });
+      }],
+  ])("%s: not offered, logged by account", async (_name, why, arrange) => {
+    arrange();
+    expect(await offered()).toBe(false);
+    expect(logged()).toContain(`texml owner line PIN ok but ${why} — today's path, no owner pass, accountId ${ACCOUNT}`);
+  });
+
+  it.each([
+    ["the profile read", () => profileMock.mockRejectedValue(new Error(`profile read failed for ${CELL}`))],
+    ["the billing read", () => { process.env.BILLING_ENFORCE = "1"; readBillingStandingMock.mockRejectedValue(new Error(`billing read failed for ${CELL}`)); }],
+  ])("%s failing: not offered (fail closed to today's path), logged by error class only", async (_what, arrange) => {
+    arrange();
+    expect(await offered()).toBe(false);
+    expect(logged()).toContain(`texml owner line PIN ok but today's states could not be read (Error) — today's path, no owner pass, accountId ${ACCOUNT}`);
+    expect(logged()).not.toContain(CELL.slice(2));
   });
 });

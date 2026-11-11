@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCallerNumber, extractCalledNumber, extractSipSignature, sipHeaderNames, sipAttestation } from "./sip-headers";
+import { extractCallerNumber, extractCalledNumber, extractSipSignature, extractOwnerPass, sipHeaderNames, sipAttestation } from "./sip-headers";
 
 const ev = (headers: { name: unknown; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
 
@@ -123,5 +123,21 @@ describe("sipAttestation", () => {
 
   it("a header name that could forge a log line is counted, not printed", () => {
     expect(sipAttestation(ev([{ name: "bad\nname", value: "x" }]))).toBe("none (+1 unprintable)");
+  });
+});
+
+describe("extractOwnerPass", () => {
+  it("reads X-BIS-Owner-Pass verbatim and trimmed, in our own casing and any other (mutation: a case-sensitive name match -> FAILS)", () => {
+    const value = "1.a.b.owner.19565550100.mac";
+    for (const name of ["X-BIS-Owner-Pass", "x-bis-owner-pass", "X-Bis-Owner-Pass"]) {
+      expect(extractOwnerPass(ev([{ name, value: ` ${value} ` }]))).toBe(value);
+    }
+  });
+  it("absent, blank and degenerate inputs -> null", () => {
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Signature", value: "v" }]))).toBeNull();
+    expect(extractOwnerPass(ev([{ name: "X-BIS-Owner-Pass", value: "  " }]))).toBeNull();
+    for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
+      expect(extractOwnerPass(bad)).toBeNull();
+    }
   });
 });

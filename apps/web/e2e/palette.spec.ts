@@ -80,8 +80,10 @@ test.describe("the command palette, as the agency", () => {
     const combobox = palette.getByRole("combobox");
     const options = palette.getByRole("option");
 
-    // "cal" matches exactly two destinations — Calls, then Calendar in nav
-    // order — so ArrowDown has somewhere to go and Enter lands deterministically.
+    // "cal" matches exactly four destinations: Calls, then Calendar in nav
+    // order, then Preferences and Team, whose "call in" keyword (F-032, the
+    // owner line's cards) contains "cal". Calls and Calendar stay first, so
+    // ArrowDown has somewhere to go and Enter lands deterministically.
     await combobox.fill("cal");
     // Asserted, never re-filled: the failing trace shows the value held, and
     // a palette that dropped typed input would be a product bug for a human
@@ -93,8 +95,9 @@ test.describe("the command palette, as the agency", () => {
     // still-unfiltered list silently act on whatever was second OVERALL
     // (Contacts) rather than second among the matches — which is exactly how
     // this test failed once before this guard existed.
-    await expect(options).toHaveCount(2);
+    await expect(options).toHaveCount(4);
     await expect(options.nth(0)).toHaveAccessibleName("Calls");
+    await expect(options.nth(1)).toHaveAccessibleName("Calendar");
     await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
 
     await page.keyboard.press("ArrowDown");

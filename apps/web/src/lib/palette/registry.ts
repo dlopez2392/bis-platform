@@ -98,7 +98,8 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
   // Spanish label, the word itself was missing before so an English-locale
   // session could not find this entry by it.
   "nav:team": ["team", "staff", "people", "invite", "users", "logins", "employees", "equipo"],
-  "settings:team": ["team", "staff", "invite", "logins", "people", "equipo"],
+  // F-032 Task 6: the owner line's switch card lives on this page ("Let your team call in to hear the day").
+  "settings:team": ["team", "staff", "invite", "logins", "people", "equipo", "call in", "owner line"],
   "nav:required-documents": ["documents", "checklist", "required", "missing", "documentos", "requeridos"],
   "nav:bis-access": ["bis", "access", "log", "visits", "who looked", "acceso", "registro", "visitas"],
   // "ajustes" (F-095 part 1): nav.settings' own Spanish label. Never
@@ -110,7 +111,8 @@ export const ENTRY_KEYWORDS: Record<string, string[]> = {
   // brief's own worked example, corrected against the shipped glossary —
   // "Configuración" is nav.setup's Spanish label (not Settings').
   "nav:setup": ["wizard", "activation", "onboarding", "go live", "configuración", "configuracion"],
-  "nav:preferences": ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my"],
+  // F-032 Task 6: the "Call in to your business" card lives on this page, one per membership.
+  "nav:preferences": ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my", "owner line", "call in", "pin", "llamar"],
   // F-095 part 1 (spec §4.2): "acceso"/"invitación" added — "portal" is
   // already shared between the two languages, so it is not repeated.
   "settings:client-access": ["login", "invite", "portal", "acceso", "invitación"],

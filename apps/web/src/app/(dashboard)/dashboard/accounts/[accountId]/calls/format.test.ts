@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, callerLabel, DURATION_UNKNOWN, OUTCOMES, outcomeLabel, formatCallTime } from "./format";
+import {
+  formatDuration, callerLabel, DURATION_UNKNOWN, OUTCOMES, outcomeLabel, formatCallTime,
+  ownerLineLabel, askedAboutLine,
+} from "./format";
 import { m } from "@/lib/messages";
 
 describe("formatDuration", () => {
@@ -167,5 +170,21 @@ describe("outcomeLabel (S-10 T5)", () => {
       // "spam" is a legitimate identical twin (section 0 of the design spec); every other outcome differs.
       if (outcome !== "spam") expect(outcomeLabel(outcome, "es")).not.toBe(outcomeLabel(outcome, "en"));
     }
+  });
+});
+
+// F-032 Task 13: an owner-line call's row is stored with outcome "abandoned" and an empty summary
+// (Task 12's finish) — "Abandoned" on that row would be a false word, so this label REPLACES the
+// outcome pill wherever the list and the call page show the outcome.
+describe("the owner-line call's label (spec §6; DESIGN rule 3: dot plus word, the dot is the cell's)", () => {
+  it("names the person, or 'Someone on the team' when the reader cannot (mutation: drop the fallback -> FAILS)", () => {
+    expect(ownerLineLabel("Dan", "en")).toBe("Owner line · Dan");
+    expect(ownerLineLabel(null, "en")).toBe("Owner line · Someone on the team");
+    expect(ownerLineLabel("Dan", "es")).toBe("Línea del dueño · Dan");
+  });
+  it("Asked about: in the order the tools are listed, in words; null when nothing ran (mutation: list in the order given -> FAILS)", () => {
+    expect(askedAboutLine(["owner_line_appointments", "owner_line_calls_and_messages"], "en"))
+      .toBe("Asked about: calls and messages, appointments");
+    expect(askedAboutLine([], "en")).toBeNull();
   });
 });

@@ -25,6 +25,7 @@ const ROW: CallListRow = {
   // Deliberately microsecond-precision, as Postgres returns it.
   started_at: "2026-08-25T19:15:00.123456+00:00",
   ended_at: "2026-08-25T19:16:02.000000+00:00",
+  owner_line_user_id: null,
   duration_secs: 62,
   outcome: "booked",
   language: "es",
@@ -36,7 +37,10 @@ const ROW: CallListRow = {
 
 function render(
   rows: CallListRow[],
-  opts: { olderHref?: string; timezone?: string; textbackFailed?: Set<string>; reasons?: Map<string, string> } = {},
+  opts: {
+    olderHref?: string; timezone?: string; textbackFailed?: Set<string>; reasons?: Map<string, string>;
+    ownerNames?: Record<string, string>;
+  } = {},
 ) {
   return renderToStaticMarkup(
     createElement(CallsTable, {
@@ -46,6 +50,7 @@ function render(
       olderHref: opts.olderHref,
       textbackFailed: opts.textbackFailed,
       reasons: opts.reasons,
+      ownerNames: opts.ownerNames,
     }),
   );
 }
@@ -206,6 +211,37 @@ describe("CallsTable", () => {
     expect(html).toContain("When");
     expect(html).toContain("Outcome");
     expect(html).not.toContain("Older calls");
+  });
+});
+
+// F-032 Task 13: an owner-line call's row (outcome "abandoned" from Task 12's finish) renders the
+// "Owner line · <name>" label instead of the outcome pill and the text-back badge.
+describe("CallsTable — the owner line (F-032 Task 13)", () => {
+  it("names the person, dot plus word, in place of the outcome pill (mutation: render OutcomePill unconditionally -> FAILS)", () => {
+    const row: CallListRow = { ...ROW, id: "c-owner", outcome: "abandoned", owner_line_user_id: "u1" };
+    const html = render([row], { ownerNames: { u1: "Dan" } });
+    expect(html).toContain("Owner line · Dan");
+    expect(html).not.toContain("Abandoned");
+    // Dot plus word (DESIGN.md rule 3), from the cell's own span.
+    expect(html).toMatch(/data-owner-line-call[^>]*>\s*<span aria-hidden="true" class="[^"]*rounded-full[^"]*"/);
+  });
+
+  it("falls back to 'Someone on the team' when the name is missing from ownerNames (mutation: drop the ?? fallback -> FAILS)", () => {
+    const row: CallListRow = { ...ROW, id: "c-owner2", outcome: "abandoned", owner_line_user_id: "u-gone" };
+    const html = render([row]);
+    expect(html).toContain("Owner line · Someone on the team");
+  });
+
+  it("never shows the text-back badge on an owner-line row even when the call id is in the failed set (mutation: check only row.outcome -> FAILS)", () => {
+    const row: CallListRow = { ...ROW, id: "c-owner3", outcome: "abandoned", owner_line_user_id: "u1" };
+    const html = render([row], { ownerNames: { u1: "Dan" }, textbackFailed: new Set(["c-owner3"]) });
+    expect(html).not.toContain("Text-back");
+  });
+
+  it("renders the ordinary outcome pill for a customer call (owner_line_user_id null)", () => {
+    const html = render([{ ...ROW, outcome: "abandoned", owner_line_user_id: null }]);
+    expect(html).toContain("Abandoned");
+    expect(html).not.toContain("Owner line");
   });
 });
 

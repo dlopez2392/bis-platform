@@ -343,6 +343,9 @@ export async function setForwardCalls(
  * open, closed today, running late by how much, storm, or a closed day). Named only when given, for the same
  * deployment-ordering reason as the token and the other stamps; 0097's `calls_business_status_check` refuses any
  * other code.
+ *
+ * `ownerLineUserId` (0115, F-032) marks an owner-line call: the person on the business's team it was for. Named only
+ * when given. Every customer counter below excludes such a row (caps, answered, starts); the Calls list keeps it.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
@@ -352,6 +355,7 @@ export async function startCallRow(
     tradeModule?: { module: TradeModuleSetting; version: number };
     knowledgeVersion?: number;
     businessStatus?: BusinessStatusCode;
+    ownerLineUserId?: string;
   },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
@@ -366,6 +370,7 @@ export async function startCallRow(
         : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
       ...(input.knowledgeVersion === undefined ? {} : { knowledge_version: input.knowledgeVersion }),
       ...(input.businessStatus === undefined ? {} : { business_status: input.businessStatus }),
+      ...(input.ownerLineUserId === undefined ? {} : { owner_line_user_id: input.ownerLineUserId }),
     })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);
@@ -1035,12 +1040,21 @@ export async function moveHoldingThread(
   throw new Error("moveHoldingThread: unexpected answer");
 }
 
+/**
+ * The account's CUSTOMER calls since `sinceIso`: the per-account cap and the Calls page's meter. An owner-line call
+ * (0115) is not counted (owner ruling Q-C): it is bounded by its own per-person limit instead.
+ *
+ * owner_line_user_id (0115): LOAD-BEARING, and SILENTLY so. Here and in countCallsByCallerSince, a project without
+ * 0115 makes the read fail, and both voice routes FAIL OPEN on a cap-read error (texml/route.ts and incoming/route.ts
+ * log and carry on), so a build deployed before 0115 turns BOTH call caps off without a visible error. 0115 must be
+ * on a project before this build reaches it (0115's APPLY ORDER).
+ */
 export async function countCallsSince(
   db: SupabaseClient, accountId: string, sinceIso: string,
 ): Promise<number> {
   const { count, error } = await db.from("calls")
     .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).gte("started_at", sinceIso);
+    .eq("account_id", accountId).gte("started_at", sinceIso).is("owner_line_user_id", null);
   if (error) throw new Error(`countCallsSince failed: ${error.message}`);
   if (count === null) throw new Error("countCallsSince failed: no count returned");
   return count;
@@ -1052,7 +1066,8 @@ export async function countCallsSince(
  * wizard's "Test call" step reads this (D-091): `countCallsSince` above counts
  * every row, so a robocall (`spam`), a hang-up (`abandoned`) or a call still
  * in flight (the column default `abandoned`) turned the step green. Never use
- * it for the call caps, which must count every call that cost money.
+ * it for the call caps, which must count every customer call that cost money.
+ * An owner-line call (0115) is not a customer's answered call and is not counted.
  */
 export async function countAnsweredCallsSince(
   db: SupabaseClient, accountId: string, sinceIso: string,
@@ -1060,7 +1075,7 @@ export async function countAnsweredCallsSince(
   const { count, error } = await db.from("calls")
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).gte("started_at", sinceIso)
-    .in("outcome", [...ANSWERED_CALL_OUTCOMES]);
+    .in("outcome", [...ANSWERED_CALL_OUTCOMES]).is("owner_line_user_id", null);
   if (error) throw new Error(`countAnsweredCallsSince failed: ${error.message}`);
   if (count === null) throw new Error("countAnsweredCallsSince failed: no count returned");
   return count;
@@ -1088,12 +1103,17 @@ export async function hasActiveCallSince(
   return count > 0;
 }
 
+/**
+ * The per-number cap's count: this caller's CUSTOMER calls since `sinceIso`. Owner-line calls (0115) are not counted (Q-C).
+ * LOAD-BEARING on 0115, failing open: see countCallsSince.
+ */
 export async function countCallsByCallerSince(
   db: SupabaseClient, accountId: string, callerE164: string, sinceIso: string,
 ): Promise<number> {
   const { count, error } = await db.from("calls")
     .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).eq("caller_e164", callerE164).gte("started_at", sinceIso);
+    .eq("account_id", accountId).eq("caller_e164", callerE164).gte("started_at", sinceIso)
+    .is("owner_line_user_id", null);
   if (error) throw new Error(`countCallsByCallerSince failed: ${error.message}`);
   if (count === null) throw new Error("countCallsByCallerSince failed: no count returned");
   return count;
@@ -1209,8 +1229,15 @@ function excludeCallersFilter(callers: readonly string[]): string | null {
  * (apps/web/src/lib/voice/caller-reputation.ts). A parameter for the same
  * reason `outcomes` is: this layer reads no environment and decides no
  * policy. It belongs on METRICS only — never on the call caps
- * (`countCallsSince`/`countCallsByCallerSince`), which must count every call
- * that cost money, and never on the Calls log, which is a record.
+ * (`countCallsSince`/`countCallsByCallerSince`), which must count every customer
+ * call that cost money, and never on the Calls log, which is a record.
+ *
+ * An owner-line call (0115, F-032) is never returned: it is bounded by its own
+ * per-person limit (owner_line_answer_lookup, owner_line_session_check), never
+ * by these, and it is not a customer's call. This is the ONE choke point for
+ * "calls answered", leads, spam and hang-ups: the dashboard tiles and
+ * conversion, the weekly report and the agency roll-up, and the AI-presence
+ * count all read through it (owner ruling Q-E).
  */
 export async function listCallStartsByOutcomeBetween(
   db: SupabaseClient, accountId: string, outcomes: readonly string[],
@@ -1226,6 +1253,7 @@ export async function listCallStartsByOutcomeBetween(
       .select("id, started_at")
       .eq("account_id", accountId).in("outcome", outcomes as string[])
       .gte("started_at", fromIso).lt("started_at", toIso)
+      .is("owner_line_user_id", null)
       .order("id", { ascending: true });
     if (exclude) query = query.or(exclude);
     if (lastId !== undefined) query = query.gt("id", lastId);
@@ -1305,6 +1333,8 @@ export type CallListRow = {
   // `calls/textback-window.ts`). Written by the same single `finishCallRow`
   // UPDATE that stamps `conversation_id`, so the two are set or unset together.
   ended_at: string | null;
+  /** F-032 (0115): the person an owner-line call was for; null on every customer call. */
+  owner_line_user_id: string | null;
   contact: { first_name: string | null; last_name: string | null } | null;
 };
 export type CallDetailRow = CallListRow & {
@@ -1317,23 +1347,29 @@ export type CallDetailRow = CallListRow & {
   business_status: BusinessStatusCode | null;
 };
 
+// owner_line_user_id (0115): LOAD-BEARING like 0094's columns, so 0115 must be on a project before this build reads it.
 const CALL_LIST_COLS =
   "id, started_at, ended_at, duration_secs, outcome, language, caller_e164, contact_id, " +
-  "conversation_id, contact:contacts(first_name, last_name)";
+  "conversation_id, owner_line_user_id, contact:contacts(first_name, last_name)";
 // trade_module, trade_module_version (0094): LOAD-BEARING, so 0094 must be on a project before this build reads it.
 // knowledge_version (0095): LOAD-BEARING the same way; the call page reads it for the "What Sofía knew" link.
 // business_status (0097): LOAD-BEARING the same way; the call page reads it for the status the call started under.
 const CALL_DETAIL_COLS =
   CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version, knowledge_version, business_status";
 
+/**
+ * The account's calls, newest first. The Calls list is a record and keeps owner-line calls (labelled by the page);
+ * `excludeOwnerLine` drops them for a surface that shows customer calls only (the dashboard's recent calls).
+ */
 export async function listCalls(
-  db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},
+  db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string; excludeOwnerLine?: boolean } = {},
 ): Promise<CallListRow[]> {
   let q = db.from("calls").select(CALL_LIST_COLS)
     .eq("account_id", accountId)
     .order("started_at", { ascending: false })
     .limit(opts.limit ?? 50);
   if (opts.before) q = q.lt("started_at", opts.before);
+  if (opts.excludeOwnerLine) q = q.is("owner_line_user_id", null);
   const { data, error } = await q;
   if (error) throw new Error(`listCalls failed: ${error.message}`);
   return (data ?? []) as unknown as CallListRow[];

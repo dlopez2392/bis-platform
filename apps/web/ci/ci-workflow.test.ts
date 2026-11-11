@@ -292,6 +292,16 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciEnv.BILLING_ENFORCE).toBeUndefined();
   });
 
+  it("gives the e2e job — and only it — a fixed OWNER_LINE_PIN_PEPPER literal of at least 32 characters, never a secrets reference, so the owner-line setup spec can save a PIN (F-032 Task 15; mutation: drop it, shorten it, read it from secrets, or add it to verify or the top-level env → FAILS)", () => {
+    const value = jobEnv(job("e2e")).OWNER_LINE_PIN_PEPPER;
+    expect(value).toBe("bis_ci_e2e_owner_line_pin_pepper_fixture_only");
+    // pinPepperConfigured's own floor (lib/owner-line/secrets.ts PEPPER_MIN): a shorter value reads as unset.
+    expect(value!.length).toBeGreaterThanOrEqual(32);
+    expect(jobEnv(job("verify")).OWNER_LINE_PIN_PEPPER).toBeUndefined();
+    expect(ciEnv.OWNER_LINE_PIN_PEPPER).toBeUndefined();
+    expect(ciLines.filter((l) => l.includes("OWNER_LINE_PIN_PEPPER") && !l.trim().startsWith("#"))).toHaveLength(1);
+  });
+
   it("the migration check names the same CI project as the setup workflow that builds it, as a literal ref", () => {
     // The project ci-project-setup.yml bootstraps and pushes is the one whose
     // history the branch is checked against. A rebuilt project changes both

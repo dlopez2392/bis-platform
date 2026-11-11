@@ -123,6 +123,8 @@ export const EMAIL_KINDS = {
   "operator.move_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.lead_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.call_alert": { class: "operator", hours: "any", footer: "none" },
+  // F-032 (owner line) Task 8: three wrong PINs email the person and the account's Owner (spec §4.2).
+  "operator.owner_line_lockout": { class: "operator", hours: "any", footer: "none" },
   "operator.phone_change_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.weekly_report": { class: "operator", hours: "any", footer: "none" },
   "operator.agency_report": { class: "operator", hours: "any", footer: "none" },

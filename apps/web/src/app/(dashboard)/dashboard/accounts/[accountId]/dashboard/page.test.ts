@@ -431,6 +431,13 @@ describe("AccountDashboardPage — the calls chart card's spam/abandoned counts 
 
     expect(callsChartCardProps.current).toEqual({ spamCount: 2, abandonedCount: 1 });
   });
+
+  it("the card's recent calls are customer calls only: listCalls is asked to leave owner-line calls out (F-032, owner ruling Q-E; mutation: drop excludeOwnerLine from page.tsx -> FAILS)", async () => {
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(dbMocks.listCalls).toHaveBeenCalledTimes(1);
+    expect(dbMocks.listCalls).toHaveBeenCalledWith(expect.anything(), expect.any(String), { limit: 3, excludeOwnerLine: true });
+  });
 });
 
 /**

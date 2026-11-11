@@ -139,6 +139,14 @@ vi.mock("@bis/db", () => ({
   listClosedDaysFrom: (...a: unknown[]) => listClosedDaysFromMock(...a),
 }));
 
+// F-032 Task 12: the owner-session decision is mocked, so each case says which way it went; the owner runtime
+// (events, finish, reader) is the real code, loaded by the route itself on the owner path only.
+const decideOwnerMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/owner-line/session", () => ({
+  decideOwnerSession: (...a: unknown[]) => decideOwnerMock(...a),
+  recheckOwnerSession: vi.fn(async () => true),
+}));
+
 import { POST } from "./route";
 
 const PHONE_ROW = { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "live" as const };
@@ -224,6 +232,7 @@ beforeEach(() => {
 
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
   vi.stubGlobal("fetch", fetchMock);
+  decideOwnerMock.mockReset();
 });
 
 describe("POST /api/voice/incoming — step 1: server config", () => {
@@ -1277,5 +1286,182 @@ describe("POST /api/voice/incoming — the SIP leg's caller-ID attestation, obse
 
     expect(JSON.parse(withIdentityBody)).toEqual(JSON.parse(withoutIdentityBody));
     logSpy.mockRestore();
+  });
+});
+
+describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4.4, §7 'the wall')", () => {
+  const SESSION = { accountId: "acct1", userId: "u1", role: "owner", clerkUserId: "user_d", clerkOrgId: "org_a",
+    firstName: "Dan", actorName: "Dan Lopez", locale: "en", timezone: "America/Chicago" };
+  const PASS = "1.a.b.owner.19565550999.mac";
+  const withPass = (o: { handoff?: boolean } = {}) => {
+    const e = callIncomingEvent();
+    if (o.handoff !== false) e.data.sip_headers.push({ name: "X-BIS-Handoff", value: "tok_owner" });
+    e.data.sip_headers.push({ name: "X-BIS-Owner-Pass", value: PASS });
+    return e;
+  };
+  const acceptBody = (i = 0) => JSON.parse(String((fetchMock.mock.calls[i]![1] as RequestInit).body)) as { tools: { name: string }[]; instructions: string };
+  const OWNER_TOOLS = ["calls_and_messages", "appointments", "needs_attention"];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { logSpy = vi.spyOn(console, "log").mockImplementation(() => {}); });
+  afterEach(() => { logSpy.mockRestore(); });
+  const logged = () => JSON.stringify(logSpy.mock.calls);
+
+  it("a customer call never reaches the owner decision and never gets an owner tool", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(decideOwnerMock).not.toHaveBeenCalled();
+    expect(acceptBody().tools.map((t) => t.name).filter((n) => OWNER_TOOLS.includes(n))).toEqual([]);
+  });
+
+  it("an owner check that THROWS is the receptionist's call, never an unaccepted one (I-1; mutation: drop the try/catch -> the outer catch acks without accepting, FAILS)", async () => {
+    decideOwnerMock.mockRejectedValue(new Error("db blip"));
+    unwrapMock.mockResolvedValue(withPass());
+    expect((await POST(req())).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    expect(logged()).toContain("owner-check-failed");
+  });
+
+  it("a valid pass: the redemption row first (marked, with the handoff token), then a FLAT accept with ONLY the owner tools", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    expect((await POST(req())).status).toBe(200);
+    expect(startCallRowMock).toHaveBeenCalledOnce();
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+      expect.objectContaining({ handoffToken: "tok_owner", ownerLineUserId: "u1", phoneNumberId: "pn1" }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const body = acceptBody();
+    expect(Object.keys(body).sort()).toEqual(["audio", "instructions", "model", "tools", "type"]);
+    expect(body.tools.map((t) => t.name)).toEqual(OWNER_TOOLS);
+    expect(body.instructions).toContain("Dan");
+    expect(afterMock).toHaveBeenCalledOnce();
+    // Review M-4: the INVITE's OWN signed statement, exactly as step 4 computed it (no secret in this file: no-key), and
+    // never a value of the route's making.
+    expect(decideOwnerMock).toHaveBeenCalledWith({ db: expect.anything(), raw: PASS, handoffToken: "tok_owner", accountId: "acct1",
+      handoffCheck: { ok: false, reason: "no-key" }, now: expect.any(Date) });
+  });
+
+  it("the owner prompt names the business by its BRAND name, never the agency's internal label", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(acceptBody().instructions).toContain("Rio Roofing Co");
+    expect(acceptBody().instructions).not.toContain("trial");
+  });
+
+  it("the owner path is not refused by the customer caps or the repeat-spam check (SC-9, Q-C): its own limit lives in the decision", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    countCallsSinceMock.mockResolvedValue(999);
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "1";
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0 });
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).toEqual(OWNER_TOOLS);
+  });
+
+  it("a refused pass is today's receptionist, logged with the reason and never the pass (mutation: accept on any pass -> FAILS)", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: false, reason: "wrong-business" });
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    expect(startCallRowMock).not.toHaveBeenCalledWith(expect.anything(), "acct1", expect.objectContaining({ ownerLineUserId: expect.anything() }));
+    expect(logged()).toContain("wrong-business");
+    expect(logged()).not.toContain(PASS);
+  });
+
+  it("a refused pass is still a customer's call: the customer caps apply to it (SC-9)", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    decideOwnerMock.mockResolvedValue({ ok: false, reason: "role_changed" });
+    unwrapMock.mockResolvedValue(withPass());
+    const res = await (await POST(req())).json();
+    expect(res).toMatchObject({ declined: "per-number" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a replayed pass: the redemption row is refused (unique handoff token), so the call is the receptionist's, never a second owner session (SC-7; mutation: carry on with no row -> FAILS)", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    startCallRowMock.mockReset()
+      .mockRejectedValueOnce(new Error('startCallRow failed: duplicate key value violates unique constraint "calls_handoff_token_unique"'))
+      .mockRejectedValueOnce(new Error("startCallRow failed: duplicate key"));
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+  });
+
+  it("no handoff token to redeem: the receptionist, and no owner row is written", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass({ handoff: false }));
+    await POST(req());
+    expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    expect(startCallRowMock).not.toHaveBeenCalledWith(expect.anything(), "acct1", expect.objectContaining({ ownerLineUserId: expect.anything() }));
+  });
+
+  it("OpenAI refusing the owner accept removes the redemption row and does NOT fall through to a second accept", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    startCallRowMock.mockResolvedValue({ id: "owner-row-1" });
+    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
+    unwrapMock.mockResolvedValue(withPass());
+    expect((await POST(req())).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(deleteCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", "owner-row-1");
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it("an owner-line call's logs never carry the caller's number or the pass (the incoming-call line drops the number when a pass rides the call)", async () => {
+    decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+    unwrapMock.mockResolvedValue(withPass());
+    await POST(req());
+    expect(logged()).not.toContain("19562921696");
+    expect(logged()).not.toContain(PASS);
+    expect(logged()).toContain("owner line accepted");
+  });
+
+  // Review M-3: the two forced failures, each on a fresh copy of the route with ONE module made to fail.
+  it("the owner runtime failing to load: exactly one accept, the receptionist's, and no owner row is written (mutation: answer true from that catch -> FAILS)", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/owner-line/events", () => { throw new Error("chunk load failed"); });
+    try {
+      const { POST: freshPost } = await import("./route");
+      decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+      unwrapMock.mockResolvedValue(withPass());
+      expect((await freshPost(req())).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+      expect(startCallRowMock).not.toHaveBeenCalledWith(expect.anything(), "acct1", expect.objectContaining({ ownerLineUserId: expect.anything() }));
+      expect(logged()).toContain("owner line refused — its runtime could not be loaded");
+    } finally {
+      vi.doUnmock("@/lib/owner-line/events");
+      vi.resetModules();
+    }
+  });
+
+  it("the owner session failing to build: its owner row is deleted, then exactly one accept, the receptionist's (mutation: skip the delete -> FAILS; answer true -> FAILS)", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/owner-line/session-config", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@/lib/owner-line/session-config")>()),
+      buildOwnerLineSessionConfig: () => { throw new Error("config"); },
+    }));
+    try {
+      const { POST: freshPost } = await import("./route");
+      decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
+      startCallRowMock.mockReset().mockResolvedValueOnce({ id: "owner-row-1" }).mockResolvedValue({ id: "call-row-1" });
+      unwrapMock.mockResolvedValue(withPass());
+      expect((await freshPost(req())).status).toBe(200);
+      expect(deleteCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", "owner-row-1");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(acceptBody().tools.map((t) => t.name)).not.toContain("calls_and_messages");
+    } finally {
+      vi.doUnmock("@/lib/owner-line/session-config");
+      vi.resetModules();
+    }
+  });
+
+  it("a customer call's incoming-call line is unchanged: it still carries the caller's number", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    const line = logSpy.mock.calls.find((c: unknown[]) => c[1] === "incoming call");
+    expect(line![2]).toMatchObject({ callerNumber: "+19562921696" });
   });
 });

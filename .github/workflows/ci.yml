@@ -347,6 +347,13 @@ jobs:
       # Production's CONSENT_TOKEN_SECRET is set on Vercel Production only
       # (consent PR-3 plan, Task 15) and is a different value.
       CONSENT_TOKEN_SECRET: bis_ci_e2e_consent_token_fixture_only
+      # NOT a secret: a fixed literal (at least 32 characters, the floor of
+      # pinPepperConfigured in apps/web/src/lib/owner-line/secrets.ts) the e2e
+      # server peppers owner-line PINs with, so the setup card's spec can save
+      # a PIN on this job's throwaway stack (F-032 Task 15). Production and
+      # Preview each hold their own OWNER_LINE_PIN_PEPPER on Vercel, Sensitive,
+      # and different from this and from each other.
+      OWNER_LINE_PIN_PEPPER: bis_ci_e2e_owner_line_pin_pepper_fixture_only
       # test-only; must never be set on a Vercel deployment. Gates
       # `requestPseudoMode`'s `?locale=pseudo` override (apps/web/src/lib/
       # i18n/request-locale.ts) so e2e/i18n-overflow.spec.ts's two specs can

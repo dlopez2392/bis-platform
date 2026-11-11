@@ -18,6 +18,9 @@ const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const transferPhoneMock = vi.hoisted(() => vi.fn());
 const ownedNumbersMock = vi.hoisted(() => vi.fn());
 const countForwardedMock = vi.hoisted(() => vi.fn());
+// F-032 Task 7: every caller here is a REGISTERED cell with a PIN (beforeEach), so any re-run that forgot
+// skipOwnerLine would ask a customer who pressed 1 for a PIN.
+const ownerLookupMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   getPhoneNumberByE164: (...a: unknown[]) => lookupMock(...a),
@@ -30,6 +33,8 @@ vi.mock("@bis/db", () => ({
   listPhoneNumbersForAccount: (...a: unknown[]) => ownedNumbersMock(...a),
   recordScreenedCall: async () => undefined,
   recordForwardedCall: async () => undefined,
+  ownerLineAnswerLookup: (...a: unknown[]) => ownerLookupMock(...a),
+  OWNER_LINE_MAX_CALLS_PER_DAY: 10,
 }));
 const afterMock = vi.hoisted(() => vi.fn());
 vi.mock("next/server", async (importOriginal) => {
@@ -73,6 +78,10 @@ beforeEach(() => {
   countForwardedMock.mockReset().mockResolvedValue({ forAccount: 0, forCaller: 0 });
   transferPhoneMock.mockReset().mockResolvedValue("+19565550123");
   ownedNumbersMock.mockReset().mockResolvedValue([{ id: "pn1", account_id: ACCOUNT, e164: LINE, telnyx_id: null, status: "live" }]);
+  ownerLookupMock.mockReset().mockResolvedValue({
+    status: "pin", enrollmentId: "e1", userId: "22222222-2222-4222-8222-222222222222", role: "owner",
+    name: "Dan", language: "en", accountLanguage: null, pinParams: "scrypt:17:8:1:" + "A".repeat(22),
+  });
   stampMock.mockReset();
   afterMock.mockReset();
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -382,5 +391,19 @@ describe("asked exactly twice under EITHER carrier behaviour on a timeout", () =
     expect(gathers(last)).toHaveLength(0);
     expect(last).toContain(GOODBYE_EN);
     expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+  });
+});
+
+describe("the press-1 re-run never asks for a PIN (F-032 Task 7, SC-16)", () => {
+  it.each([
+    ["pressed 1", "1"],
+    ["sent a value that is not one key", "12"],
+  ])("a caller who %s on a Telnyx-signed request is bridged, never asked for a PIN, and the owner line is never looked up (mutation: drop skipOwnerLine from that re-run -> FAILS)", async (_what, digits) => {
+    process.env.VOICE_HANDOFF_SECRET = "h".repeat(48);
+    const xml = await (await telnyxSigned({ Digits: digits, To: LINE, From: STRANGER })).text();
+    expect(xml).not.toContain("<Gather");
+    expect(xml).toContain("<Dial");
+    expect(xml).toContain("X-BIS-Signature");
+    expect(ownerLookupMock).not.toHaveBeenCalled();
   });
 });

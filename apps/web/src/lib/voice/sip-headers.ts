@@ -123,3 +123,11 @@ function identityAttest(token: string): string {
     return "(present)";
   }
 }
+
+/**
+ * The owner pass our owner-pin route put on the SIP URI as `X-BIS-Owner-Pass` (sip-handoff-signature.ts), verbatim.
+ * Null when absent, which is every customer call. Never logged: it is a credential.
+ */
+export function extractOwnerPass(eventData: unknown): string | null {
+  return rawHeader(headers(eventData), "x-bis-owner-pass");
+}

@@ -167,8 +167,9 @@ export default async function AccountDashboardPage({
     // cost latency for nothing.
     listLeadInstantsBetween(db, accountId, window14.fromIso, window14.toIso),
     // The calls chart card's (Task 6) mini table — the 3 most recent calls
-    // ever, not scoped to the 14-day window above.
-    listCalls(db, accountId, { limit: 3 }),
+    // ever, not scoped to the 14-day window above. Customer calls only: an
+    // owner-line call (F-032, 0115) is not one (owner ruling Q-E).
+    listCalls(db, accountId, { limit: 3, excludeOwnerLine: true }),
     // The activity card's (Task 7) raw feed — both audiences: `events`'
     // RLS policy (0001_tenancy.sql, events_read) grants SELECT to the
     // agency AND to `account_id = app.current_account_id()`, the same

@@ -4,7 +4,9 @@
 //
 // THREE ANSWERS, and which failures land on which is the whole design:
 //   - "1": the bridge to Sofía, built by the main route's own `answer()` with
-//     the screen skipped — every guard re-checked, the per-account forward
+//     the screen AND the owner line skipped (F-032: a caller who reached the
+//     screen was not an owner-line hit, because that branch runs ahead of the
+//     screen, so a re-run never asks for a PIN) — every guard re-checked, the per-account forward
 //     honoured, a fresh handoff token, the SIP signature and the fallback
 //     ticket minted exactly as on any other call. One copy of the markup.
 //   - Nothing, or another key, on an otherwise clean request: the goodbye and
@@ -63,12 +65,12 @@ async function decide(
     const who = `for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${accountLabel}`;
     if (!calledE164) {
       console.log("texml screen: no called number on the keypress request — bridging");
-      return await answer(null, callerE164, origin, authenticated, { skipScreen: true });
+      return await answer(null, callerE164, origin, authenticated, { skipScreen: true, skipOwnerLine: true });
     }
     const digits = (fields.get("Digits") ?? "").trim();
     if (digits === "1") {
       console.log(`texml screen passed ${who}`);
-      return await answer(calledE164, callerE164, origin, authenticated, { skipScreen: true });
+      return await answer(calledE164, callerE164, origin, authenticated, { skipScreen: true, skipOwnerLine: true });
     }
     if (digits === "" || ONE_KEY.test(digits)) {
       const why = digits === "" ? "no-keypress" : "wrong-key";
@@ -94,7 +96,7 @@ async function decide(
     }
     // Not a key at all. Never echoed: it is request input.
     console.log(`texml screen: the keypress value is not a key — bridging ${who}`);
-    return await answer(calledE164, callerE164, origin, authenticated, { skipScreen: true });
+    return await answer(calledE164, callerE164, origin, authenticated, { skipScreen: true, skipOwnerLine: true });
   } catch (e) {
     console.error(`texml screen failed — bridging for ${calledE164 ?? "unknown"}: ${String(e)}`);
     return bridgeAfterFailure(calledE164, callerE164, origin, authenticated);
