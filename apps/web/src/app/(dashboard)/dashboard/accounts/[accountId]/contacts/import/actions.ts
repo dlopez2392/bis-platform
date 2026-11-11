@@ -83,7 +83,11 @@ export async function importContactsBatchAction(
       ...(businessLinkFailed ? { businessLinkFailed: true } : {}),
       ...(businessTooLong ? { businessTooLong } : {}),
     };
-  } catch {
+  } catch (e) {
+    // Never log row contents (names, phones, emails): only the account id and the
+    // error itself, through loggableError (history-actions.ts's own pattern), so a
+    // failed batch still leaves a trail without putting a customer's data in a log.
+    console.error(`importContactsBatchAction (account ${accountId}): ${loggableError(e)}`);
     return { ok: false, error: t(m, "contacts.import.failed", locale) };
   }
 }

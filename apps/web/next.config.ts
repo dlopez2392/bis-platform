@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // @bis/db ships TypeScript source (no build step); Next must compile it.
   transpilePackages: ["@bis/db"],
+  // Next 16.3's `next dev` writes AGENTS.md + CLAUDE.md into apps/web when it detects an AI agent; the repo keeps its own.
+  agentRules: false,
   experimental: {
     serverActions: {
       // The logo upload is a Server Action, and Next caps action bodies at 1 MB

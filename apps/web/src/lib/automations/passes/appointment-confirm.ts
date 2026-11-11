@@ -16,6 +16,7 @@ import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
+import { loggableError } from "@/lib/loggable-error";
 
 /**
  * The confirmation ask, two days before the appointment — part B's first
@@ -135,7 +136,7 @@ export async function processAppointmentConfirms(
         // A gate READ failure is this row's failure, not the pass's: letting
         // it escape would discard the counters for every row already sent.
         c.failed++;
-        console.error(`appointment confirm: sms gate read failed for account ${row.accountId}: ${String(e)}`);
+        console.error(`appointment confirm: sms gate read failed for account ${row.accountId}: ${loggableError(e)}`);
         continue;
       }
       smsGates.set(row.accountId, gate);
@@ -192,7 +193,7 @@ export async function processAppointmentConfirms(
       c.sent++;
     } catch (e) {
       c.failed++;
-      console.error(`appointment confirm send failed for booking ${row.bookingId}: ${String(e)}`);
+      console.error(`appointment confirm send failed for booking ${row.bookingId}: ${loggableError(e)}`);
     }
   }
 

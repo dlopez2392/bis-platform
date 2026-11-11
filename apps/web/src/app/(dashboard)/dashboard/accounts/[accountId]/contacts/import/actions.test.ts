@@ -140,6 +140,28 @@ describe("importContactsBatchAction in the reader's language (S-10 T3)", () => {
     expect(r).toEqual({ ok: false, error: "Esa importación no se completó. No se cambió nada. Inténtelo de nuevo." });
   });
 
+  // Nov-5 follow-ups item 3: the bare catch used to return ok:false with no log at all — a failed
+  // batch left no trail. Logged with the account id (mutation: a bare `catch { return ... }` with no
+  // console.error -> FAILS), through loggableError so an email in the thrown message is redacted
+  // (same shape as the emit-failure tests above), and never the row values themselves.
+  it("a thrown write is logged with the account id, through loggableError, and never the row's own values (mutation: swallow silently -> FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.applyImportBatch.mockRejectedValue(new Error("insert failed for dan@example.com"));
+
+    const r = await importContactsBatchAction("acct_42",
+      [{ line: 2, values: { email: "dan@example.com", first_name: "Dan", phone: "555-0100" } }],
+      { mapping: { email: "email" }, createTags: false });
+
+    expect(r).toEqual({ ok: false, error: "That import didn't go through. Nothing was changed. Please try again." });
+    expect(err).toHaveBeenCalledTimes(1);
+    const [line] = err.mock.calls[0] as [string];
+    expect(line).toContain("acct_42");
+    expect(line).not.toContain("dan@example.com");
+    expect(line).not.toContain("Dan");
+    expect(line).not.toContain("555-0100");
+    err.mockRestore();
+  });
+
   it("defaults to English when no locale is passed", async () => {
     const rows = Array.from({ length: 501 }, (_, i) => ({ line: i + 2, values: { email: `a${i}@b.com` } }));
     const r = await importContactsBatchAction("acct_9", rows, { mapping: { email: "email" }, createTags: false });

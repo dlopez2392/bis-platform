@@ -194,6 +194,19 @@ describe("CommandPalette — sends the trimmed raw query, never a sanitized one 
   });
 });
 
+// F-095 part 1 (spec §4.1, §6.4.9): display is never folded. The matcher
+// (registry.ts's filterEntries) folds the QUERY and a copy of the
+// label/keywords internally to compare them, but the row the reader SEES
+// must stay the literal `t()`-produced string — folding it would strip
+// "Configuración" down to "configuracion" on screen.
+describe("CommandPalette — a static entry's label is rendered literally, never folded (F-095 part 1)", () => {
+  it("renders {entry.label} directly, never foldWords(entry.label) or nameFold(entry.label) (mutation: render foldWords(entry.label) instead → FAILS)", () => {
+    expect(src).toContain("{entry.label}");
+    expect(src).not.toMatch(/foldWords\(entry\.label\)/);
+    expect(src).not.toMatch(/nameFold\(entry\.label\)/);
+  });
+});
+
 // S-10 review I-3: the palette's dialog portals into <body>, under
 // <html lang="en">, so it carries the reader's language itself; so do both
 // triggers. CommandDialog passes `lang` to its DialogContent.

@@ -72,3 +72,28 @@
   (2026-10-08). How it was done, how to verify it and how to roll it back:
   `docs/runbooks/production-isolation.md`. Never describe Preview as sharing
   production's database, and never add a production credential to Preview.
+- **How much process a change gets (owner decision, 2026-11-09; this
+  replaces the habit of full ceremony on everything).** Tier each TASK,
+  not the PR, and write the tier where the task is dispatched.
+  - HIGH — migrations, RLS and grants, auth and tenancy, consent and
+    customer-facing sends, voice call routing, billing, CI secrets: a
+    brief, one implementer, a review with mutation probes, a re-review
+    only when the fix changes logic.
+  - MEDIUM — server logic and `packages/db` code with no migration: one
+    implementer and one review.
+  - LOW — UI, copy, tests, docs, styleguide: one implementer, NO per-task
+    review, no mutation probes.
+  - Per PR: ONE end-of-PR review, a design review only when visible
+    layout or tokens change, ONE fix round. Aim for under about 800
+    changed lines; split a larger change into PRs that each ship.
+  - A plan is at most 300 lines, and only HIGH work gets a separate plan
+    document; everything else is a short brief. The code is the record.
+  - Do not write a test that reads source files as text when a behaviour
+    test or a lint rule can make the same point.
+  - A hold on finished work (a waiting period, a merge order) needs the
+    owner's dated decision; say what it blocks when proposing it.
+- **Scope (owner decision, 2026-11-09): healthcare is out.** No medical,
+  dental, therapy or other HIPAA-covered client is onboarded and nothing
+  is built for one; the trade check in `lib/vetting/trades.ts` stays as
+  the gate. Reopening this is the owner's call, with the vendor
+  agreements priced first.

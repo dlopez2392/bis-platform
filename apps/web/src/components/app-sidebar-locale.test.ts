@@ -21,14 +21,29 @@ describe("app-sidebar nav labels resolve through the locale helper", () => {
 // still reading m[...] directly, so their .es twins (added this round) were
 // unreachable even once LocaleProvider mounted correctly. Same source-scan
 // convention as the describe block above.
+//
+// F-087 fix round (finding 1, CI red): the footer's Settings/Dashboard
+// links no longer carry the literal "nav.settings"/"nav.dashboard" keys at
+// all — they read `settingsEntry.labelKey`/`topLevelEntry.labelKey` off the
+// surface manifest (app-sidebar.tsx, F-087 part 1, owner ruling Q1), so the
+// OLD literal-key assertions below could never pass again. Repinned to the
+// labelKey read; the `not.toMatch(/m\["nav\./)` half still holds (and still
+// matters — the mutation it guards against, reverting to a raw m[...]
+// lookup, is unrelated to which read style resolves the KEY itself).
 describe("app-sidebar's remaining shell.*/nav.* labels also resolve through t() (fix round 1, Minor)", () => {
   it("no longer looks up m[\"nav.settings\"], m[\"nav.dashboard\"], m[\"shell.backToAgency\"] or m[\"shell.brand\"] directly (mutation: revert any one back to the raw m[...] lookup → FAILS)", () => {
     expect(src).not.toMatch(/m\["nav\.settings"\]/);
     expect(src).not.toMatch(/m\["nav\.dashboard"\]/);
     expect(src).not.toMatch(/m\["shell\.backToAgency"\]/);
     expect(src).not.toMatch(/m\["shell\.brand"\]/);
-    expect(src).toMatch(/t\(m, "nav\.settings", locale\)/);
-    expect(src).toMatch(/t\(m, "nav\.dashboard", locale\)/);
+    // F-087 part 1: the footer's Settings/Dashboard labelKeys are read off
+    // the manifest entries (settingsEntry/topLevelEntry), not the literal
+    // "nav.settings"/"nav.dashboard" strings — mutation: revert either read
+    // back to a hard-coded key string → FAILS (the manifest indirection is
+    // gone, which is exactly the "written a third time" duplication F-087
+    // closed).
+    expect(src).toMatch(/t\(m, settingsEntry\.labelKey, locale\)/);
+    expect(src).toMatch(/t\(m, topLevelEntry\.labelKey, locale\)/);
     expect(src).toMatch(/t\(m, "shell\.backToAgency", locale\)/);
     expect(src).toMatch(/t\(m, "shell\.brand", locale\)/);
   });
