@@ -12,6 +12,10 @@ import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
  * Who made a write is decided from the SESSION's role (current_setting('role'), which a definer does not change;
  * 0110's rule: a claim is never trusted for the role) and, for a person, the sub claim. A direct session (no API
  * role: migrations, psql, a fixture seeding as postgres) is automation/sql and never refused (plan correction 4).
+ *
+ * Since 0113 (record-changes-enforce-schema.test.ts) observe mode is gone: author_kind is NOT NULL and enforce is on in
+ * every environment. The cases here that pinned an unattributed write landing with a NULL author now pin its refusal
+ * (42501, or 23502 when a case switches enforce off), so each mutation they name still FAILS: it would write a row.
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 type Acct = { accountId: string; orgId: string };
@@ -61,12 +65,6 @@ async function header(c: Client, author?: object | string): Promise<void> {
 async function clearGucs(c: Client) {
   await c.query("select set_config('bis.author', '', true), set_config('bis.author_id', '', true), set_config('bis.via', '', true)");
 }
-/** Observe mode for this transaction (the migration's default). CI's stacks run with enforce on (plan Task 2, Step 9), so a
- *  case that asserts an unattributed NULL says which mode it is in rather than inheriting the stack's. */
-async function observe(c: Client) {
-  await actAsOwner(c);
-  await c.query("update app.record_changes_settings set enforce = false");
-}
 /** As the owner, every change row of one record, oldest first. */
 const changes = async (c: Client, id: string, op?: string): Promise<Row[]> => {
   await actAsOwner(c);
@@ -110,7 +108,7 @@ const EXCLUDED: Record<string, string> = {
 };
 
 describe("0111: the record_changes table", () => {
-  it("0111: columns, CHECKs and the four indexes (mutation: drop the unattributed index's where -> FAILS; mutation: drop record_changes_author_id -> an ai row with an id inserts -> FAILS)", () =>
+  it("0111: columns, CHECKs and the three indexes; 0113: author_kind NOT NULL and the unattributed index dropped (mutation: drop record_changes_author_id -> an ai row with an id inserts -> FAILS; mutation: 0113 keeps author_kind nullable -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "shape");
       const { rows: cols } = await c.query(
@@ -128,7 +126,7 @@ describe("0111: the record_changes table", () => {
         { column_name: "before", data_type: "jsonb", is_nullable: "YES" },
         { column_name: "after", data_type: "jsonb", is_nullable: "YES" },
         { column_name: "xact", data_type: "bigint", is_nullable: "NO" },
-        { column_name: "author_kind", data_type: "text", is_nullable: "YES" },
+        { column_name: "author_kind", data_type: "text", is_nullable: "NO" },   // 0113
         { column_name: "author_id", data_type: "text", is_nullable: "YES" },
         { column_name: "via", data_type: "text", is_nullable: "YES" },
         { column_name: "created_at", data_type: "timestamp with time zone", is_nullable: "NO" },
@@ -146,17 +144,17 @@ describe("0111: the record_changes table", () => {
       for (const t of ["contact", "client_group", "client_group_member", "place", "equipment", "opportunity", "contact_relationship", "contact_tag"]) {
         expect(await ins(t, "insert", null, "import", "user_x"), t).toBeNull();
       }
-      expect(await ins("contact", "update", "phone", null, null)).toBeNull();
+      // 0113: a row with no author cannot exist.
+      expect(await ins("contact", "update", "phone", null, null)).toMatchObject({ code: "23502", message: expect.stringContaining("author_kind") });
       const { rows: idx } = await c.query<{ indexname: string; indexdef: string }>(
         "select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'record_changes' order by indexname");
+      // 0111 also built record_changes_unattributed_idx for the daily audit's count of NULL rows; 0113 dropped it with
+      // the NOT NULL (record-changes-enforce-schema.test.ts).
       expect(idx.map((r) => r.indexname)).toEqual(["record_changes_contact_idx", "record_changes_group_idx", "record_changes_pkey",
-        "record_changes_record_idx", "record_changes_unattributed_idx"]);
+        "record_changes_record_idx"]);
       expect(idx.find((r) => r.indexname === "record_changes_contact_idx")!.indexdef).toContain("(account_id, contact_id, created_at DESC, id DESC)");
       expect(idx.find((r) => r.indexname === "record_changes_group_idx")!.indexdef).toContain("(account_id, client_group_id, created_at DESC, id DESC) WHERE (client_group_id IS NOT NULL)");
       expect(idx.find((r) => r.indexname === "record_changes_record_idx")!.indexdef).toContain("(account_id, record_type, record_id, created_at DESC)");
-      // The daily audit's count (record-changes-audit.ts): unattributed rows of the last 24 hours, across accounts.
-      // The predicate is the point: without it the index would hold every row. 0113 drops it with the NOT NULL.
-      expect(idx.find((r) => r.indexname === "record_changes_unattributed_idx")?.indexdef).toContain("(created_at) WHERE (author_kind IS NULL)");
     }));
 
   it("grants: anon none; authenticated and service_role SELECT only; nobody UPDATE/DELETE/TRUNCATE; nothing on the sequence (mutation: grant insert to service_role -> FAILS; grant usage on the sequence to service_role -> FAILS)", () =>
@@ -255,7 +253,6 @@ describe("0111: what the capture writes", () => {
   it("precedence: a GUC beats the header; a person-called definer is the person whatever the header; the client path keeps only import and restore: (mutation: read the header before bis.author -> (a) FAILS; mutation: honour any client kind -> (d) FAILS; mutation: no restore length bound -> (d) FAILS; mutation: drop the sub's btrim -> (g) FAILS; mutation: drop 'person needs an id' -> (f) FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "prec");
-      await observe(c);
       // (a) A GUC beats the header.
       const ia = await contact(c, a.accountId);
       await asServiceWith(c, { kind: "ai" });
@@ -320,12 +317,13 @@ describe("0111: what the capture writes", () => {
         expect(await authors(c, id), JSON.stringify(raw)).toEqual([{ field: "first_name", author_kind: "person", author_id: want, via: null }]);
       }
 
-      // (f) A header that is not an author is no author (observe mode: NULL).
+      // (f) A header that is not an author is no author: the write is refused (0113: enforce on).
       for (const bad of [{ kind: "person" }, { kind: "person", id: "" }, { kind: "robot" }, "not json", JSON.stringify("ai"), "[1]"]) {
         const id = await contact(c, a.accountId);
         await asServiceWith(c, bad);
-        await c.query("update public.contacts set first_name = 'F' where id = $1", [id]);
-        expect(await authors(c, id), JSON.stringify(bad)).toEqual([{ field: "first_name", author_kind: null, author_id: null, via: null }]);
+        expect(await refusal(c, "update public.contacts set first_name = 'F' where id = $1", [id]), JSON.stringify(bad))
+          .toEqual({ code: "42501", message: "record_changes: a server write must say who made it" });
+        expect(await authors(c, id), JSON.stringify(bad)).toEqual([]);
       }
     }));
 
@@ -357,12 +355,14 @@ describe("0111: what the capture writes", () => {
       await c.query("update public.contacts set first_name = 'Fixture' where id = $1", [id2]);
       expect(await authors(c, id2)).toEqual([{ field: "first_name", author_kind: "automation", author_id: null, via: "sql" }]);
 
-      // 7c: enforce OFF, the same service request: observed, author NULL.
+      // 7c: enforce OFF (half of 0113's ROLLBACK), the same service request: the capture's observe branch writes a NULL
+      // author, and 0113's NOT NULL refuses it. The whole rollback is proven in record-changes-enforce-schema.test.ts.
       await c.query("update app.record_changes_settings set enforce = false");
       const id3 = await contact(c, a.accountId);
       await asServiceWith(c);
-      await c.query("update public.contacts set first_name = 'Observed' where id = $1", [id3]);
-      expect(await authors(c, id3)).toEqual([{ field: "first_name", author_kind: null, author_id: null, via: null }]);
+      expect(await refusal(c, "update public.contacts set first_name = 'Observed' where id = $1", [id3]))
+        .toMatchObject({ code: "23502", message: expect.stringContaining("author_kind") });
+      expect(await authors(c, id3)).toEqual([]);
     }));
 
   it("a client cannot write the log or claim ai through bis.author (mutation: read the GUC on the client path -> FAILS)", () =>
@@ -444,7 +444,6 @@ describe("0111: what the capture writes", () => {
   it("headers: only x-bis-author is read, and nothing else in request.headers reaches a row (mutations: the client path takes the header's id -> FAILS; via falls back to authorization -> FAILS; the author is read from another key -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "headers");
-      await observe(c);
       const SECRET = "Bearer SECRET_X";
       const noise = { authorization: SECRET, "x-author": JSON.stringify({ kind: "ai" }) };
       const leaks = async (id: string) => {
@@ -469,19 +468,19 @@ describe("0111: what the capture writes", () => {
       await c.query("update public.contacts set first_name = 'B' where id = $1", [ib]);
       expect(await authors(c, ib)).toEqual([{ field: "first_name", author_kind: "automation", author_id: null, via: null }]);
       expect(await leaks(ib)).toBe(0);
-      // (c) The service path with no x-bis-author: another key is no author (observe: NULL), and leaks nothing.
+      // (c) The service path with no x-bis-author: another key is no author, so the write is refused (0113: enforce
+      //     on). Nothing is written, so there is no row to leak from.
       const ic = await contact(c, a.accountId);
       await asService(c);
       await c.query("select set_config('request.headers', $1, true)", [JSON.stringify(noise)]);
-      await c.query("update public.contacts set first_name = 'C' where id = $1", [ic]);
-      expect(await authors(c, ic)).toEqual([{ field: "first_name", author_kind: null, author_id: null, via: null }]);
-      expect(await leaks(ic)).toBe(0);
+      expect(await refusal(c, "update public.contacts set first_name = 'C' where id = $1", [ic])).toEqual({ code: "42501", message: "record_changes: a server write must say who made it" });
+      expect(await authors(c, ic)).toEqual([]);
     }));
 
   it("the settings row is one row (mutation: drop the check (id) -> a second insert succeeds -> FAILS)", () =>
     withRollback(async (c) => {
       await actAsOwner(c);
-      // One row, and the migration ships it in observe mode (the column default; CI turns the live value on).
+      // One row. The column default is still 0111's false; 0113 set the row's value on (record-changes-enforce-schema.test.ts).
       const { rows } = await c.query<{ id: boolean }>("select id from app.record_changes_settings");
       expect(rows).toEqual([{ id: true }]);
       const { rows: [d] } = await c.query<{ d: string }>(
@@ -494,7 +493,6 @@ describe("0111: what the capture writes", () => {
   it("an authenticated token calling a definer with header {kind:automation} is marked person + sub (mutation: swap the bis.author / authenticated-claims branches -> FAILS; mutation: drop the service_role check in the header branch -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "definer");
-      await observe(c);
       await definer(c, "t_rc_upd_11");
       await definer(c, "t_rc_upd_11_auto", "automation");
       const automation = { "x-bis-author": JSON.stringify({ kind: "automation" }) };
@@ -513,13 +511,14 @@ describe("0111: what the capture writes", () => {
       await c.query("select public.t_rc_upd_11_auto($1)", [ib]);
       expect(await authors(c, ib)).toEqual([{ field: "first_name", author_kind: "automation", author_id: null, via: null }]);
 
-      // (c) The header is honoured for service_role only: an anon session's rpc with the same header is no author.
+      // (c) The header is honoured for service_role only: an anon session's rpc with the same header is no author, so
+      //     the write is refused (0113: enforce on).
       const ic = await contact(c, a.accountId);
       await actAsOwner(c);
       await c.query(`select set_config('request.jwt.claims', '{"role":"anon"}', true)`);
       await c.query("set local role anon");
       await c.query("select set_config('request.headers', $1, true)", [JSON.stringify(automation)]);
-      await c.query("select public.t_rc_upd_11($1)", [ic]);
-      expect(await authors(c, ic)).toEqual([{ field: "first_name", author_kind: null, author_id: null, via: null }]);
+      expect(await refusal(c, "select public.t_rc_upd_11($1)", [ic])).toEqual({ code: "42501", message: "record_changes: a server write must say who made it" });
+      expect(await authors(c, ic)).toEqual([]);
     }));
 });
