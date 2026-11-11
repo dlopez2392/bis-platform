@@ -4814,6 +4814,20 @@ export const m = {
   "work.actionFailed": "Couldn't update that just now. Try again in a moment.",
   // The To do's actions return this by key (errorKey); the client renders it in the reader's language.
   "work.actionFailed.es": "No se pudo actualizar ahora. Inténtelo de nuevo en un momento.",
+  // F-077 part 1: a failed transfer (a caller who asked for a person and never reached one) and a
+  // booking change Sofía made live, as derived "Waiting" rows on the same To do queue. `.bare` is the
+  // callback_number-less fallback (unidentified caller — Correction 3); Accept's own reversal reuses
+  // common.undo rather than a new key.
+  "work.failedTransfer": "Call back at {number} — they asked for a person",
+  "work.failedTransfer.es": "Devuelva la llamada al {number} — pidió hablar con alguien",
+  "work.failedTransfer.bare": "A caller asked for a person and couldn't reach one",
+  "work.failedTransfer.bare.es": "Alguien que llamó pidió hablar con una persona y no pudo comunicarse",
+  "work.failedTransfer.done": "Called back",
+  "work.failedTransfer.done.es": "Llamada devuelta",
+  "work.act.accept": "Accept",
+  "work.act.accept.es": "Aceptar",
+  "work.act.accept.toast": "Accepted.",
+  "work.act.accept.toast.es": "Aceptado.",
   // Task 5's dashboard row — a compact link into /tasks. `work.empty` above
   // (Task 3) already carries the zero-queue sentence, reused rather than
   // duplicated. The two below compose the non-empty count: "{count} things

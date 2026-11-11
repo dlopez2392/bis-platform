@@ -1,11 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 
-const { failureText } = await import("./work-row-actions");
+const { failureText, WorkRowActions } = await import("./work-row-actions");
 const SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "work-row-actions.tsx"), "utf8");
 const cat = m as Record<string, string>;
 
@@ -38,10 +40,10 @@ describe("failureText", () => {
     expect(failureText(forwarded, "es")).toBe("Could not update this booking.");
   });
 
-  it("every failure toast in the file goes through it (mutation: toast.error(result.error) on any path -> FAILS)", () => {
+  it("every failure toast in the file goes through it (F-077 part 1 adds runFailedTransferDone's and runAcceptBookingAct's own main-plus-undo pairs, 5 -> 9; mutation: toast.error(result.error) on any path -> FAILS)", () => {
     const all = SRC.match(/toast\.error\(/g) ?? [];
     const routed = SRC.match(/toast\.error\(failureText\(/g) ?? [];
-    expect(all.length).toBe(5);
+    expect(all.length).toBe(9);
     expect(routed.length).toBe(all.length);
   });
 });
@@ -71,5 +73,19 @@ describe("the To do's close-out speaks the Calendar's words", () => {
     expect(done).toBe("Terminada");
     expect(t(m, "work.booking.completed.toast", "es")).toBe(`La cita quedó como “${done}”. Es posible que se envíe una solicitud de reseña.`);
     expect(t(m, "work.booking.noShow.toast", "es")).toBe(`La cita quedó como “${noShow}”. Es posible que se envíe un mensaje de seguimiento.`);
+  });
+});
+
+// F-077 part 1, hand-off (c): every WorkSource literal gets its own explicit branch; the booking
+// buttons are no longer the silent fallback for a source this file doesn't name.
+describe("the exhaustiveness guard (hand-off c, review M5)", () => {
+  it("throws for an unrecognized work source instead of silently rendering the booking buttons (mutation: revert to the pre-fix shape, where the final branch is an unconditional `return` for anything but task/conversation -> this render no longer throws, and instead returns the booking buttons -> FAILS)", () => {
+    const props = {
+      source: "not_a_real_source", rawId: "x1", contactId: null, label: "x",
+      completeWorkTask: vi.fn(), reopenWorkTask: vi.fn(), dismissToTask: vi.fn(), closeOutBooking: vi.fn(),
+      completeFailedTransfer: vi.fn(), reopenFailedTransfer: vi.fn(), acceptBookingAct: vi.fn(), unacceptBookingAct: vi.fn(),
+    } as unknown as Parameters<typeof WorkRowActions>[0];
+    expect(() => renderToStaticMarkup(createElement(WorkRowActions, props)))
+      .toThrow(/no action branch for work source/);
   });
 });

@@ -9,6 +9,7 @@ import type { WorkRow } from "@bis/db";
 vi.mock("./actions", () => ({
   completeWorkTask: vi.fn(), reopenWorkTask: vi.fn(), dismissToTask: vi.fn(), closeOutBooking: vi.fn(),
   confirmStopFromTask: vi.fn(), notAStopFromTask: vi.fn(), undoHoldDecisionFromTask: vi.fn(),
+  completeFailedTransfer: vi.fn(), reopenFailedTransfer: vi.fn(), acceptBookingAct: vi.fn(), unacceptBookingAct: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 

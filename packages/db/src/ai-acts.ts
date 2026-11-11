@@ -5,6 +5,9 @@ import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline
 import { parseAiAct, type AiAct, type NewAiAct } from "./ai-act-rules";
 import type { RowAuthor } from "./provenance";
 import { requireAuthor, withAuthor } from "./row-author";
+import type { AssigneeFilter } from "./assignment";
+import { withAssigneeOn } from "./contacts";
+import type { WorkRow } from "./work-queue";
 
 /**
  * One table for every act Sofia or the web chat takes live (0091, item 8c). Every read and write is
@@ -174,4 +177,66 @@ export async function markAiActNotified(db: SupabaseClient, accountId: string, a
   const { error } = await db.from("ai_acts").update({ undo_notified: true })
     .eq("account_id", accountId).eq("id", actId);
   if (error) throw new Error(`markAiActNotified failed: ${error.message}`);
+}
+
+/** The three `control: "booking"` kinds (spec 4.2, D5). Exported (review M6) so a parity test living
+ *  where both are importable -- `@bis/db` cannot import the web registry, so that test lives in
+ *  apps/web -- can assert this list equals `ACT_KINDS`'s own `control: "booking"` entries
+ *  (`apps/web/src/lib/ai-acts/kinds/index.ts`). */
+export const BOOKING_ACT_KINDS = ["booking_created", "booking_rescheduled", "booking_cancelled"] as const;
+
+/** F-077 part 1: Sofia's booking changes, un-undone and un-accepted, for the To do queue. No stillSafe
+ *  computation (that answers "may the record page still OFFER Undo"; this row never offers Undo
+ *  itself -- Accept only means "I saw this"). THROWS on a database error; an unparseable row is
+ *  skipped and logged, never thrown, matching listContactAiActs's own rule. */
+export async function listPendingBookingActs(
+  db: SupabaseClient, accountId: string, assignee?: AssigneeFilter,
+): Promise<WorkRow[]> {
+  const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  let q = db.from("ai_acts")
+    .select(`${COLS}${embed}`)
+    .eq("account_id", accountId).in("kind", BOOKING_ACT_KINDS)
+    .is("undone_at", null).is("accepted_at", null);
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
+  const { data, error } = await q.order("created_at", { ascending: true }).limit(200);
+  if (error) throw new Error(`listPendingBookingActs failed: ${error.message}`);
+  const out: WorkRow[] = [];
+  for (const r of (data ?? []) as unknown as Row[]) {
+    const act = parseAiAct(r);
+    if (!act) { console.error(`listPendingBookingActs: skipped ai_act ${(r as { id?: string }).id}: payload does not fit kind`); continue; }
+    out.push({
+      id: `booking_act:${act.id}`, source: "booking_act" as const, accountId,
+      contactId: act.contactId, title: "",
+      dueAt: null, occurredAt: act.createdAt,
+      bookingAct: act,
+    });
+  }
+  return out;
+}
+
+/** Stamps an act "seen" on the To do queue -- the exact shape of stampAiActUndone, with its own
+ *  column. Compare-and-swap on `accepted_at is null`: true when THIS call moved it. Also refuses an
+ *  act already undone on the record (`.is("undone_at", null)`) -- an act undone on the record can't
+ *  be accepted on the queue (plan review C1) -- and, round 2 (review M1), refuses an act whose kind
+ *  the queue never showed at all (`.in("kind", BOOKING_ACT_KINDS)`): Accept means "I saw this on the
+ *  queue," and the queue shows booking acts only. THROWS on a database error. No emit(): matches
+ *  stampAiActUndone's own silence. */
+export async function stampAiActAccepted(db: SupabaseClient, accountId: string, actId: string, by: string, at: Date): Promise<boolean> {
+  const { data, error } = await db.from("ai_acts")
+    .update({ accepted_at: at.toISOString(), accepted_by: by })
+    .eq("account_id", accountId).eq("id", actId).in("kind", BOOKING_ACT_KINDS)
+    .is("accepted_at", null).is("undone_at", null)
+    .select("id");
+  if (error) throw new Error(`stampAiActAccepted failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/** Undo of stampAiActAccepted -- the exact shape of clearAiActUndone. THROWS on a database error. */
+export async function unstampAiActAccepted(db: SupabaseClient, accountId: string, actId: string, by: string, at: Date): Promise<boolean> {
+  const { data, error } = await db.from("ai_acts")
+    .update({ accepted_at: null, accepted_by: null })
+    .eq("account_id", accountId).eq("id", actId).eq("accepted_by", by).eq("accepted_at", at.toISOString())
+    .select("id");
+  if (error) throw new Error(`unstampAiActAccepted failed: ${error.message}`);
+  return (data ?? []).length > 0;
 }
