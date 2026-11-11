@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TimelineEntry } from "@bis/db";
-import { authorOf, authorMark, personIdsOf, type AuthorCtx } from "./author-mark";
+import { authorOf, authorMark, personIdsOf, changeGroupsOf, type AuthorCtx } from "./author-mark";
 import { makeTr } from "./copy";
 
 const AT = "2026-10-09T16:12:00+00:00";
@@ -244,6 +244,51 @@ describe("a merge/mergeUndone row's mark (F-006 part 1, plan Task 9)", () => {
     expect(authorOf(merge)).toEqual({ kind: "person", personId: "user_dan" });
     expect(authorOf(mergeUndone)).toEqual({ kind: "person", personId: "user_ana" });
     expect(personIdsOf([merge, mergeUndone])).toEqual(["user_dan", "user_ana"]);
+  });
+});
+
+// F-115 PR E fix (review I5): a "change" row's own assigned_to before/after value is a staff id,
+// named by the SAME listPeopleNames read as every author mark — personIdsOf is where both loaders
+// (the contact page's and the group page's) collect it.
+describe("personIdsOf: a \"change\" row's own assigned_to value, not just its author (review I5)", () => {
+  const changeEntry = (rows: { field: string | null; before: unknown; after: unknown }[]): TimelineEntry => ({
+    kind: "change", id: "ch1", at: AT, contactId: "c1",
+    group: {
+      key: "contact:c1:1", recordType: "contact", recordId: "c1", authorKind: "person", authorId: "user_dan",
+      via: null, at: AT, firstAt: AT,
+      steps: [rows.map((r, i) => ({ id: i + 1, recordType: "contact", recordId: "c1", contactId: "c1", clientGroupId: null,
+        op: "update", field: r.field, before: r.before, after: r.after, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: AT }))],
+      rows: rows.map((r, i) => ({ id: i + 1, recordType: "contact", recordId: "c1", contactId: "c1", clientGroupId: null,
+        op: "update", field: r.field, before: r.before, after: r.after, xact: "1", authorKind: "person", authorId: "user_dan", via: null, createdAt: AT })),
+    },
+  }) as unknown as TimelineEntry;
+
+  it("collects both the author (Dan) and the assigned_to before/after ids (Ana, Bea), never a field that is not assigned_to (mutation: drop the `row.field !== \"assigned_to\"` guard -> a phone value string would be added too, FAILS)", () => {
+    const entry = changeEntry([
+      { field: "assigned_to", before: "user_ana", after: "user_bea" },
+      { field: "phone", before: "+19565550111", after: "+19565550112" },
+    ]);
+    expect(personIdsOf([entry]).sort()).toEqual(["user_ana", "user_bea", "user_dan"]);
+  });
+
+  it("a null assigned_to (Unassigned) adds nothing for that side (mutation: drop the `typeof === \"string\"` check -> \"null\" the string, FAILS)", () => {
+    const entry = changeEntry([{ field: "assigned_to", before: null, after: "user_bea" }]);
+    expect(personIdsOf([entry]).sort()).toEqual(["user_bea", "user_dan"]);
+  });
+});
+
+describe("changeGroupsOf: the \"change\" entries' own groups, for the one bounded names read (review I4)", () => {
+  it("picks out only the \"change\" entries' groups, in order, dropping every other kind (mutation: return entries as-is -> a note entry has no .group, FAILS)", () => {
+    const note: TimelineEntry = { kind: "note", id: "n1", at: AT, contactId: "c1", note: { id: "n1", body: "x", author_id: null, created_at: AT } };
+    const groupA = { key: "a", recordType: "contact_tag", recordId: "t1", authorKind: "person", authorId: "user_dan", via: null, at: AT, firstAt: AT, steps: [], rows: [] };
+    const groupB = { key: "b", recordType: "place", recordId: "p1", authorKind: "person", authorId: "user_dan", via: null, at: AT, firstAt: AT, steps: [], rows: [] };
+    const changeA: TimelineEntry = { kind: "change", id: "ch1", at: AT, contactId: "c1", group: groupA } as unknown as TimelineEntry;
+    const changeB: TimelineEntry = { kind: "change", id: "ch2", at: AT, contactId: "c1", group: groupB } as unknown as TimelineEntry;
+    expect(changeGroupsOf([note, changeA, note, changeB])).toEqual([groupA, groupB]);
+  });
+
+  it("is empty when there is no \"change\" entry at all (mutation: return [entries[0]] unconditionally -> FAILS on an empty page)", () => {
+    expect(changeGroupsOf([])).toEqual([]);
   });
 });
 

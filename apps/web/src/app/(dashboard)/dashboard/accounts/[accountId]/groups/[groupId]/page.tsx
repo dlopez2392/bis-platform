@@ -12,7 +12,7 @@ import { RecordHeader } from "@/components/record/record-header";
 import { RecordCard, type RecordCardState } from "@/components/record/record-card";
 import { GROUP_RECORD_CARDS, columnRuns, type GroupRecordCardId } from "@/lib/record/record-cards";
 import { makeTr } from "@/lib/record/copy";
-import { softSmsGate, loadHeaderPlaces } from "@/lib/record/loaders";
+import { softSmsGate, loadHeaderPlaces, loadFieldDefs } from "@/lib/record/loaders";
 import { groupHeaderActions, firstGroupMapUrl, memberName, memberFirstName, peoplePagerHrefs } from "@/lib/record/group-header";
 import {
   loadGroupPeople, loadGroupDeals, loadGroupHeaderPlaces, loadPrimaryText,
@@ -31,6 +31,7 @@ import { renderZone } from "@/lib/zone";
 import { noteOpened } from "@/lib/access-log/note";
 import { PlacesCard } from "../../contacts/places-card";
 import { DocumentsCard } from "../../contacts/documents-card";
+import { putBackAction, restoreAction } from "../../contacts/history-actions";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { DealsBody } from "../../contacts/[contactId]/deals-card";
 import { SummaryBody } from "../../contacts/[contactId]/summary-card";
@@ -102,7 +103,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const ids = set ? set.people.map((p) => p.contactId) : null;
   const now = new Date();
   const noSet = { status: "error" } as const;
-  const [prefs, account, smsGate, people, places, deals, summary, nextUp, timeline] = await Promise.all([
+  const [prefs, account, smsGate, people, places, deals, summary, nextUp, timeline, fieldDefs] = await Promise.all([
     getPersonPrefs(),
     // The account's zone (dates; the composer's consent line) and language (a client's default locale).
     db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
@@ -116,6 +117,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
     ids ? loadGroupSummary(db, accountId, ids) : noSet,
     ids ? loadGroupNextUp(db, accountId, ids, now) : noSet,
     ids ? loadGroupTimeline(db, accountId, ids, before, group.id) : noSet,
+    // F-115 PR E fix (review m6): the account's own custom field labels, the contact page's own
+    // read (loaders.ts's loadFieldDefs) — a member's custom field change named by its label, never
+    // its raw key.
+    loadFieldDefs(db, accountId),
   ]);
   // Not a throw: a cosmetic zone and a default language must not 500 the page.
   if (account.error) console.error(`group page: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -124,7 +129,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // F-115 PR E fix round 2 (review C1): named so the SAME value reaches both `makeTr` here and the
+  // `pseudo` prop `GroupTimeline` must pass to `ChangeItem` ("use client") in place of `tr` itself.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // The header (spec §8.1): Call, Text and Email go to the call-first member; with none visible
   // (none chosen, someone else's customer for a Technician, or People's read failed) they hide (D4).
@@ -192,7 +200,21 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
       zone: zone.zone, tr, subjects,
-      author: { viewerId: access.userId, names: timeline.names, personaName: timeline.personaName, tr },
+      // F-115 PR E fix (review I4): a removed member's/relationship's own name is a CONTACT id, not
+      // the author-id space `timeline.names` covers — merged in here (never collides: a clerk id's
+      // own "user_…" shape and a plain contact uuid are never the same string), so a removed member
+      // reads by name exactly when any OTHER row on this page already would have had to know it
+      // anyway, OR when `timeline.names` already resolved it itself (`readChangeNames`,
+      // group-loaders.ts's own twin of the contact page's read).
+      author: { viewerId: access.userId, names: { ...timeline.names, ...Object.fromEntries(names) }, personaName: timeline.personaName, tr },
+      // F-115 PR E fix (review m6): the account's own custom field labels, never `{}` — a member's
+      // custom field change now reads its label, as the contact page's own change rows already do.
+      // The group's own kind is always exactly known here (`group.kind`); `timeline.changeGroupKinds`
+      // adds any OTHER group a membership or a place row might reference.
+      changeFields: {
+        customFieldLabels: Object.fromEntries((fieldDefs.status === "ready" ? fieldDefs.fieldDefs : []).map((d) => [d.field_key, d.name])),
+        groupKinds: { ...timeline.changeGroupKinds, [group.id]: group.kind },
+      },
     }))
     : null;
   // D7, plan deviation 12: ONE line, only past the cap, at the top of the middle column, outside
@@ -211,8 +233,15 @@ export default async function GroupRecordPage({ params, searchParams }: {
     timeline: timeline.status === "ready" && timelineView
       ? {
         node: (
-          <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr}
+          <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr} pseudo={pseudo}
             customerLangs={Object.fromEntries((set?.people ?? []).flatMap((p) => (p.language ? [[p.contactId, p.language]] : [])))}
+            nowMs={now.getTime()}
+            // F-115 part 1 (S-04), plan Task 5: Put back/Restore (Owners, Staff, the agency); the
+            // Owner-only download link (Q5: narrower — never Staff).
+            canWriteHistory={manager}
+            putBackHistory={putBackAction.bind(null, accountId, locale)}
+            restoreHistory={restoreAction.bind(null, accountId, locale)}
+            historyDownloadHref={access.canManage ? `/dashboard/accounts/${accountId}/groups/${group.id}/history` : null}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("groupPage.timeline.empty") : null}

@@ -1,9 +1,10 @@
 import {
   listGroupMembers, listOpenDealsFor, listGroupPlaces, getContact,
   groupActivityMembers, groupFacts, groupNextUp, listTimelinePage, listPeopleNames, getVoiceProfile,
+  changeNameRefs, readChangeNames,
   type GroupMembersPage, type GroupMember, type GroupPerson, type OpenDealRow, type ContactPlaces,
   type GroupActivity, type GroupFacts, type GroupNextUp, type TimelinePage,
-  type SupabaseClient, type TimelineCursor,
+  type SupabaseClient, type TimelineCursor, type ChangeNames,
 } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
 import type { Locale } from "@/lib/i18n/locale";
@@ -12,7 +13,7 @@ import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { loggableError } from "@/lib/loggable-error";
 import { canTextFrom } from "./header-actions";
-import { personIdsOf } from "./author-mark";
+import { personIdsOf, changeGroupsOf } from "./author-mark";
 
 /**
  * One loader per group card (S-03 part 2; part 1 C5): each returns a load and NEVER throws, so one
@@ -127,7 +128,15 @@ export async function loadGroupNextUp(
 }
 
 export type GroupTimelineLoad =
-  | { status: "ready"; page: TimelinePage; names: Record<string, string>; personaName: string | null }
+  | {
+    status: "ready"; page: TimelinePage; names: Record<string, string>; personaName: string | null;
+    /** F-115 PR E fix (review I4): a `client_group`'s own kind, by id, for every group a page's own
+     *  "change" rows reference — the SAME read the contact page's loader makes (`readChangeNames`),
+     *  soft; `{}` on a failed read. The page itself always knows ITS OWN group's kind directly
+     *  (`group.kind`) and merges that in too, so this only adds OTHER groups a membership or a
+     *  place row might reference. */
+    changeGroupKinds: Readonly<Record<string, "household" | "business">>;
+  }
   | { status: "error" };
 /**
  * The group timeline (S-03 part 2b, C6, C7): loaders.ts's loadTimeline across the set, read-only, so
@@ -141,8 +150,9 @@ export async function loadGroupTimeline(
   try {
     page = await listTimelinePage(db, accountId, contactIds, before, {
       onError: (source, e) => log(`activity (${source})`, accountId, e), groupId,
-      // F-115 PR C fix (review I2, orchestrator ruling): OFF until PR E ships the renderer. PR E turns this on.
-      changes: false,
+      // F-115 part 1 (S-04), plan Task 5: ON — the household's/business's own timeline now shows its
+      // "change" rows too (a removed member, a place's own edits), same source as the contact page.
+      changes: true,
     });
   } catch (e) {
     log("activity", accountId, e);
@@ -151,7 +161,7 @@ export async function loadGroupTimeline(
   // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
   // which reads nothing, an empty timeline rather than the error state.
   if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
-  const [names, personaName] = await Promise.all([
+  const [names, personaName, { names: changeNames, groupKinds: changeGroupKinds }] = await Promise.all([
     listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
       log("activity names", accountId, e);
       return {} as Record<string, string>;
@@ -160,6 +170,13 @@ export async function loadGroupTimeline(
       log("activity persona", accountId, e);
       return null;
     }),
+    // F-115 PR E fix (review I4): the SAME one bounded, account-scoped read the contact page's
+    // loader makes, for a removed member/relationship/tag/place this group's own activity set no
+    // longer carries. Soft; a failed read costs only those names, never the card.
+    readChangeNames(db, accountId, changeNameRefs(changeGroupsOf(page.items))).catch((e: unknown) => {
+      log("activity change names", accountId, e);
+      return { names: {}, groupKinds: {} } as ChangeNames;
+    }),
   ]);
-  return { status: "ready", page, names, personaName };
+  return { status: "ready", page, names: { ...names, ...changeNames }, personaName, changeGroupKinds };
 }
