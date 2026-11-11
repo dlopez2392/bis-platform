@@ -19,7 +19,7 @@ function fakeDb(rows: Record<string, Record<string, unknown>[]>) {
   const chain = (table: string, cols: string) => {
     const answer = () => ({ data: rows[table] ?? [], error: null });
     const b: Record<string, unknown> = {
-      eq: () => b, is: () => b, in: () => b, gt: () => b, lt: () => b, not: () => b, or: () => b,
+      eq: () => b, is: () => b, in: () => b, gt: () => b, lt: () => b, not: () => b, neq: () => b, or: () => b,
       order: () => b,
       limit: () => b,
       maybeSingle: async () => ({ data: (rows[table] ?? [])[0] ?? null, error: null }),

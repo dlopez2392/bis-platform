@@ -1,9 +1,10 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
+import { ChangeItem, type ChangeAction } from "@/components/record/change-item";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { formatDateInZone } from "@/lib/format";
@@ -26,8 +27,24 @@ export type GroupTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** F-115 PR E fix round 2 (review C1): the SAME pseudo-locale flag the page built `tr` with —
+   *  carried separately because `tr` itself can never cross into `ChangeItem` ("use client"); this
+   *  plain boolean can, and `ChangeItem` rebuilds its own `tr` from `tr.locale` + this. */
+  pseudo: boolean;
   /** S-09 §9: each member's language, by contact id; a member without one is absent. */
   customerLangs: Record<string, "en" | "es">;
+  /** F-115 part 1 (S-04), plan Task 5: the page's own clock, for a change row's 30-day Restore
+   *  window (`activity-timeline.tsx`'s own `nowMs`, never `Date.now()` here). */
+  nowMs?: number;
+  /** May this caller Put back/Restore (`seesWholeAccount`: Owners, Staff, the agency). */
+  canWriteHistory?: boolean;
+  /** F-115 PR E fix (review m2): REQUIRED, never optional — see `activity-timeline.tsx`'s own
+   *  `ActivityTimelineProps` doc comment for why (a locally-built "no action" closure can never cross
+   *  the Server-to-Client boundary `ChangeItem` sits on; required makes that path unreachable). */
+  putBackHistory: ChangeAction;
+  restoreHistory: ChangeAction;
+  /** The Owner-only (`access.canManage`) link to T8's CSV download route; null hides it. */
+  historyDownloadHref?: string | null;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -63,6 +80,17 @@ export function GroupTimeline(p: GroupTimelineProps) {
 
       {p.emptyText ? <p data-timeline-empty className="text-sm text-muted-foreground">{p.emptyText}</p> : null}
 
+      {p.historyDownloadHref ? (
+        // F-115 PR E fix (review m1): a plain anchor with `download`, never a Next <Link> — see
+        // activity-timeline.tsx's own comment (the F-118 export link's precedent). Its own line,
+        // OUTSIDE the "Pages" nav below.
+        <div className="flex justify-end">
+          <a href={p.historyDownloadHref} download data-history-download className={pagerLink}>
+            {tr.text("history.download")}
+          </a>
+        </div>
+      ) : null}
+
       {p.rows.length > 0 ? (
         <ol className="flex flex-col">
           {p.rows.map((row, i) => (
@@ -76,7 +104,9 @@ export function GroupTimeline(p: GroupTimelineProps) {
                   <Separator className="flex-1" />
                 </div>
               ) : null}
-              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} customerLangs={p.customerLangs} />
+              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} pseudo={p.pseudo} customerLangs={p.customerLangs}
+                nowMs={p.nowMs} canWriteHistory={p.canWriteHistory ?? false}
+                putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
           ))}
         </ol>
@@ -92,8 +122,10 @@ export function GroupTimeline(p: GroupTimelineProps) {
   );
 }
 
-function Row({ row, timezone, accountId, tr, customerLangs }: {
-  row: TimelineRow; timezone: string; accountId: string; tr: Tr; customerLangs: Record<string, "en" | "es">;
+function Row({ row, timezone, accountId, tr, pseudo, customerLangs, nowMs, canWriteHistory, putBackHistory, restoreHistory }: {
+  row: TimelineRow; timezone: string; accountId: string; tr: Tr; pseudo: boolean; customerLangs: Record<string, "en" | "es">;
+  nowMs: number | undefined; canWriteHistory: boolean;
+  putBackHistory: ChangeAction; restoreHistory: ChangeAction;
 }) {
   const e = row.entry;
   const customerLang = customerLangs[e.contactId] ?? "";
@@ -229,11 +261,15 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
       return <TimelineItem {...head} icon={Merge} />;
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
-    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
-    // stays OFF in group-loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships
-    // the real row. Renders NOTHING here, on purpose — not even a placeholder icon row.
+    // F-115 part 1 (S-04), plan Task 5: the real row — a removed member reads "quitó a {name} del
+    // hogar/negocio" here exactly as it does on the member's own page (the same `ChangeGroup`).
     case "change":
-      return null;
+      // Review round 2 (C1): `tr` itself must never cross into `ChangeItem` ("use client") — only
+      // `locale`/`pseudo`, which it rebuilds its own `tr` from (see activity-timeline.tsx's own comment).
+      return row.change && nowMs !== undefined ? (
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} pseudo={pseudo} canWrite={canWriteHistory}
+          nowMs={nowMs} putBack={putBackHistory} restore={restoreHistory} />
+      ) : <TimelineItem {...head} icon={History} />;
     default:
       return unknownKind(e);
   }

@@ -23,6 +23,7 @@ import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { verifyFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
+import { recordTransferFailed } from "@/lib/voice/transfer-failed";
 import { xmlText } from "../xml";
 
 export const runtime = "nodejs";
@@ -115,9 +116,12 @@ const MAX_TRANSFER_SECONDS = 3600;
  * places the `X-BIS-Handoff` SIP-header copy never reaches. A holder of a
  * logged token can fetch this route and read back the account's private
  * transfer number and one of its owned numbers. They cannot place a call:
- * nothing IN THIS ROUTE writes, and only Telnyx executes the TeXML we return.
- * So the loss here is DISCLOSURE OF A PRIVATE BUSINESS LINE, and until this
- * check it was unbounded in time.
+ * only Telnyx executes the TeXML we return. So the loss here is DISCLOSURE OF
+ * A PRIVATE BUSINESS LINE, and until this check it was unbounded in time.
+ * (Since F-077 part 1 a refusal past this gate also writes ONE stamp, the
+ * call's `transfer_failed_at`/`_reason` = `refused`, compare-and-swap on a
+ * null stamp: a replay of a stale token can mark a call that asked as a
+ * failed transfer once, and never change it after that.)
  *
  * THE SAME TOKEN DOES WRITE, one field, in the sibling this route points at,
  * and this comment claimed otherwise until 2026-09-16.
@@ -332,9 +336,17 @@ async function decide(
   //    between the writer and this reader) is treated as fresh — negative age
   //    is under the ceiling — because the alternative punishes the caller for
   //    our own clocks.
+  //
+  //    F-077 part 1: from here on, every refusal hangs up on a caller who
+  //    ASKED for a person and is never dialled, so each is recorded
+  //    `refused` (0114) for the To do queue, at this one clock reading. A
+  //    side-write in after(), never awaited: the TeXML goes out unchanged and
+  //    undelayed (lib/voice/transfer-failed.ts).
+  const now = Date.now();
   const askedAt = Date.parse(call.handoff_requested_at);
-  if (!Number.isFinite(askedAt) || Date.now() - askedAt > MAX_TOKEN_AGE_MS) {
+  if (!Number.isFinite(askedAt) || now - askedAt > MAX_TOKEN_AGE_MS) {
     console.log(`handoff: call ${call.id}'s request is too old to act on — hanging up, accountId ${accountId}`);
+    recordTransferFailed(db, accountId, call.id, "refused", new Date(now), "handoff");
     return null;
   }
 
@@ -348,15 +360,29 @@ async function decide(
   //    own-number loop guard would then silently not run for precisely the
   //    accounts this feature is first tried on. `incoming/route.ts:799-813`
   //    makes the same choice for the same reason.
-  const [transferPhone, ownedRows] = await Promise.all([
-    getTransferPhone(db, accountId),
-    listPhoneNumbersForAccount(db, accountId),
-  ]);
+  //
+  //    R5 (fix round): a THROW here (not just the ordinary "no target" refusal below) means the
+  //    caller still asked and is still never dialled, so it must still be stamped refused -- without
+  //    this wrapper a thrown read skipped the stamp entirely, reaching only the route's own outer
+  //    catch. Rethrown unchanged: this wrapper only ADDS the stamp, it does not change what the
+  //    caller ultimately hears (the same outer catch still answers the same <Hangup/>).
+  let targets: [string | null, Awaited<ReturnType<typeof listPhoneNumbersForAccount>>];
+  try {
+    targets = await Promise.all([
+      getTransferPhone(db, accountId),
+      listPhoneNumbersForAccount(db, accountId),
+    ]);
+  } catch (e) {
+    recordTransferFailed(db, accountId, call.id, "refused", new Date(now), "handoff");
+    throw e;
+  }
+  const [transferPhone, ownedRows] = targets;
   const usable = ownedRows.filter((n) => n.status === "testing" || n.status === "live");
   const owned = usable.map((n) => n.e164);
   const target = resolveHandoffTarget(transferPhone, owned);
   if (!target.available) {
     console.log(`handoff: no target for call ${call.id} (${target.reason}) — hanging up, accountId ${accountId}`);
+    recordTransferFailed(db, accountId, call.id, "refused", new Date(now), "handoff");
     return null;
   }
 

@@ -9,6 +9,7 @@ import { LocaleProvider } from "@/components/locale-provider";
 vi.mock("./actions", () => ({
   completeWorkTask: vi.fn(), reopenWorkTask: vi.fn(), dismissToTask: vi.fn(), closeOutBooking: vi.fn(),
   confirmStopFromTask: vi.fn(), notAStopFromTask: vi.fn(), undoHoldDecisionFromTask: vi.fn(),
+  completeFailedTransfer: vi.fn(), reopenFailedTransfer: vi.fn(), acceptBookingAct: vi.fn(), unacceptBookingAct: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
@@ -75,5 +76,18 @@ describe("a Spanish To do row's date and AI mark (F-085 follow-ups)", () => {
   it("the callback's author mark reads \"Sofía · IA\" in Spanish, \"Sofía · AI\" in English (mutation: render <AiAuthorMark /> with no locale -> FAILS)", () => {
     expect(render("es")).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · IA<\/span>/);
     expect(render("en")).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
+  });
+});
+
+// F-077 part 1, Task 5 Step 3: the two new sources (failed_transfer, booking_act) must not change a
+// callback TASK row's own action -- the generic "Done" button with its own reopen-task undo.
+describe("a callback task row keeps its generic Done, never the new failed-transfer branch (F-077 part 1)", () => {
+  it("a callId-bearing TASK row's action is the generic task Done button, never the failed-transfer branch (mutation: route callId-bearing task rows through the failed_transfer branch by mistake -> this row's Undo would be missing, since that branch has none -> FAILS)", () => {
+    const out = renderToStaticMarkup(createElement(WorkList, {
+      buckets: { overdue: [], today: [task("t1", "Call back at 9565061545: Roof leak", "call1")], waiting: [] },
+      accountId: "a1", contactNames: { c1: "Ana Reyes" }, timezone: "America/Chicago", tr: makeTr("en"),
+    }));
+    expect(out).toContain(`>${m["work.done"]}<`);
+    expect(out).not.toContain(m["work.failedTransfer.done"]);
   });
 });

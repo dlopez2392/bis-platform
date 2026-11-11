@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Archive, ArchiveRestore, Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, History, Link2, ListChecks, Mail, Merge, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote, Undo2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -8,6 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
 import { ActRow } from "@/components/ai-acts/act-row";
+import { ChangeItem, type ChangeAction } from "@/components/record/change-item";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
@@ -55,6 +56,11 @@ export type ActivityTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** F-115 PR E fix round 2 (review C1): the SAME pseudo-locale flag the page built `tr` with
+   *  (`requestPseudoMode`) — carried separately because `tr` itself can never cross into
+   *  `ChangeItem` ("use client"); this plain boolean can, and `ChangeItem` rebuilds its own `tr`
+   *  from `tr.locale` + this. */
+  pseudo: boolean;
   /** S-09 §9: the contact's language for what the CUSTOMER typed; "" when not set (C10). */
   customerLang: "" | "en" | "es";
   /** F-006 part 1 (plan Task 11): may this caller undo a merge (seesWholeAccount: Owners, Staff, the
@@ -66,8 +72,27 @@ export type ActivityTimelineProps = {
    *  adding arrivals to, never a second read. */
   contactName: string;
   /** The page's own clock (epoch ms), so a merge row's Undo window is judged without an impure call
-   *  during render; with none, no merge row offers Undo (the action re-checks the window anyway). */
+   *  during render; with none, no merge row offers Undo (the action re-checks the window anyway).
+   *  F-115 part 1 (S-04), plan Task 5: the SAME clock judges whether a change row's removal is still
+   *  within its 30-day Restore window; with none, a change row offers no Restore either. */
   nowMs?: number;
+  /** F-115 part 1 (S-04), plan Task 5: may this caller Put back a value or Restore a removed unit
+   *  (`seesWholeAccount`: Owners, Staff, the agency; never a Technician). False by default — `ChangeItem`'s
+   *  own `canWrite` gate is what actually hides the buttons; this is the SCREEN's fence over the SERVER's
+   *  (`history-actions.ts`'s own role refusal). */
+  canWriteHistory?: boolean;
+  /** F-115 PR E fix (review m2): REQUIRED, never optional — the page ALWAYS binds
+   *  `putBackAction`/`restoreAction` (`contacts/history-actions.ts`, `.bind(null, accountId, locale)`-ed),
+   *  for every role, since binding costs nothing and `canWriteHistory`/`ChangeItem`'s own `canWrite` are
+   *  what actually gate the buttons. The earlier optional shape let a caller fall back to a locally-built
+   *  closure standing in for "no action" — a plain closure (not a bound Server Action reference) can
+   *  never cross the Server-to-Client-Component boundary `ChangeItem` sits on, so that fallback would
+   *  have thrown the moment it was ever actually used. Required makes that path impossible to reach. */
+  putBackHistory: ChangeAction;
+  restoreHistory: ChangeAction;
+  /** The Owner-only (`access.canManage`) link to T8's CSV download route; null hides it (Staff, a
+   *  Technician, or the agency reading as neither — Q5: Owners only). */
+  historyDownloadHref?: string | null;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -120,6 +145,19 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
         </div>
       ) : null}
 
+      {p.historyDownloadHref ? (
+        // F-115 PR E fix (review m1): a plain anchor with `download`, never a Next <Link> — a Link
+        // prefetches and its RSC fetch would run the download ROUTE itself (the F-118 export link's
+        // own precedent, contacts/page.tsx), which here would also wrongly log an agency "opened"
+        // note on a mere hover/prefetch, never an actual click. Its own line, OUTSIDE the "Pages" nav
+        // below: downloading history is not a page of this timeline.
+        <div className="flex justify-end">
+          <a href={p.historyDownloadHref} download data-history-download className={pagerLink}>
+            {tr.text("history.download")}
+          </a>
+        </div>
+      ) : null}
+
       {p.emptyText ? <p data-timeline-empty className="text-sm text-muted-foreground">{p.emptyText}</p> : null}
 
       {p.rows.length > 0 ? (
@@ -137,7 +175,8 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
                 holdOpen={p.holdOpenTaskIds} accountId={p.accountId} contactId={p.contactId} contactName={p.contactName}
-                tr={tr} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs} />
+                tr={tr} pseudo={p.pseudo} customerLang={p.customerLang} canMerge={p.canMerge ?? false} nowMs={p.nowMs}
+                canWriteHistory={p.canWriteHistory ?? false} putBackHistory={p.putBackHistory} restoreHistory={p.restoreHistory} />
             </li>
           ))}
         </ol>
@@ -153,10 +192,14 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, customerLang, canMerge, nowMs }: {
+function Row({
+  row, hidden, completeAction, timezone, assign, holdOpen, accountId, contactId, contactName, tr, pseudo, customerLang,
+  canMerge, nowMs, canWriteHistory, putBackHistory, restoreHistory,
+}: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; contactId: string;
-  contactName: string; tr: Tr; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
+  contactName: string; tr: Tr; pseudo: boolean; customerLang: "" | "en" | "es"; canMerge: boolean; nowMs: number | undefined;
+  canWriteHistory: boolean; putBackHistory: ChangeAction; restoreHistory: ChangeAction;
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -326,14 +369,18 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "mergeUndone":
       return <TimelineItem {...head} icon={Undo2} />;
-    // F-115 part 1 (S-04), plan Task 4: `TimelineEntry` carries a "change" variant, but the source
-    // stays OFF in loaders.ts (review I2, orchestrator ruling) until PR E (bis-frontend) ships the
-    // real row: field list, the "Was"/"Now" disclosure, and Put back. Renders NOTHING here, on
-    // purpose — not even a placeholder icon row — so this switch stays exhaustive without implying a
-    // row the design has not reviewed; a loader that ever asked for `changes` before PR E lands would
-    // otherwise show an unfinished row to a real reader.
+    // F-115 part 1 (S-04), plan Task 5: the real row. `nowMs` undefined (a caller that never supplies
+    // the page's clock) falls back to a plain row with no Restore, the SAME defensive shape the merge
+    // row's own Undo already uses (`canUndo = canMerge && nowMs !== undefined && …`).
     case "change":
-      return null;
+      // Review m2: `putBackHistory`/`restoreHistory` are now REQUIRED props (the page always binds
+      // them), so there is no "no action" fallback left to construct here. Review round 2 (C1):
+      // `tr` itself (`text`/`count` are FUNCTIONS) must never be the prop that crosses to `ChangeItem`
+      // ("use client") — only `locale`/`pseudo`, plain values `ChangeItem` rebuilds its own `tr` from.
+      return row.change && nowMs !== undefined ? (
+        <ChangeItem head={head} group={e.group} view={row.change} locale={tr.locale} pseudo={pseudo} canWrite={canWriteHistory}
+          nowMs={nowMs} putBack={putBackHistory} restore={restoreHistory} />
+      ) : <TimelineItem {...head} icon={History} />;
     default:
       return unknownKind(e);
   }

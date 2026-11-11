@@ -22,6 +22,7 @@ import {
   addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
   completeTasksForConsentEvents, HoldUndecidedError, setTaskAssignee, listAccountTeam,
   readPersonId, taskAssigneeFor,
+  serviceDb, setTransferFollowedUp, clearTransferFollowup, stampAiActAccepted, unstampAiActAccepted,
   type WorkSource, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -29,6 +30,7 @@ import { seesWholeAccount } from "@/lib/auth-role";
 import { isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import type { AssignError } from "../contacts/actions";
 import { dbForRequest } from "@/lib/db";
+import { callerCanSee } from "@/lib/auth/visible";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { requestLocale } from "@/lib/i18n/request-locale";
@@ -192,6 +194,86 @@ export async function closeOutBooking(
 }
 
 const CALENDAR_CLOSE_OUT_KEYS = ["calendar.bookings.statusUpdateFailed", "calendar.bookings.notStartedYet"] as const;
+
+export type FailedTransferDoneResult = { ok: true; at: string } | { ok: false; error: string; errorKey?: WorkActionErrorKey };
+export type AcceptBookingActResult = { ok: true; at: string } | { ok: false; error: string; errorKey?: WorkActionErrorKey };
+
+/**
+ * "Called back" -- the failed-transfer row's own Done (F-077 part 1). `calls` grants `authenticated`
+ * no write at all (0020) and `ai_acts` grants it no write either (0091), the SAME shape `bookings`
+ * has -- so this writes through `serviceDb()`, behind a request-client proof that the caller may
+ * see this call (`callerCanSee`, widened), exactly as `setBookingStatusAction` -> `proveBooking`
+ * already does for bookings.
+ *
+ * Round 2 (coordinator fix, spec §10): `setTransferFollowedUp` returns `false`, rather than
+ * throwing, when no row matched -- already followed up, or the call no longer qualifies as a
+ * failed transfer. That is an ORDINARY double-click/race, not a bug, so it is worded the same
+ * generic failure and never logged; only a genuinely thrown error (a real database failure) reaches
+ * the catch block and `loggableError`.
+ */
+export async function completeFailedTransfer(accountId: string, callId: string): Promise<FailedTransferDoneResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("calls", accountId, callId))) return { ...ACTION_FAILED };
+    const at = new Date();
+    if (!(await setTransferFollowedUp(serviceDb(), accountId, callId, userId, at))) return { ...ACTION_FAILED };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true, at: at.toISOString() };
+  } catch (e) {
+    console.error(`completeFailedTransfer: call ${callId} (account ${accountId}): ${loggableError(e)}`);
+    return { ...ACTION_FAILED };
+  }
+}
+
+/**
+ * Undo of completeFailedTransfer. Round 2: `clearTransferFollowup` now takes `by` and requires BOTH
+ * the same person AND the exact instant written -- the same shape `unaccept BookingAct` already
+ * uses for `unstampAiActAccepted` -- so the caller's own id is captured here too.
+ */
+export async function reopenFailedTransfer(accountId: string, callId: string, at: string): Promise<ActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("calls", accountId, callId))) return { ...ACTION_FAILED };
+    if (!(await clearTransferFollowup(serviceDb(), accountId, callId, userId, new Date(at)))) return { ...ACTION_FAILED };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true };
+  } catch (e) {
+    console.error(`reopenFailedTransfer: call ${callId} (account ${accountId}): ${loggableError(e)}`);
+    return { ...ACTION_FAILED };
+  }
+}
+
+/** "Accept" -- a booking-act row's own queue-only "I saw this" (F-077 part 1). Same serviceDb-behind-
+ *  callerCanSee shape as completeFailedTransfer, for the same grant reason (ai_acts grants
+ *  authenticated no write either, 0091_ai_acts.sql:117-119). */
+export async function acceptBookingAct(accountId: string, actId: string): Promise<AcceptBookingActResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("ai_acts", accountId, actId))) return { ...ACTION_FAILED };
+    const at = new Date();
+    if (!(await stampAiActAccepted(serviceDb(), accountId, actId, userId, at))) return { ...ACTION_FAILED };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true, at: at.toISOString() };
+  } catch (e) {
+    console.error(`acceptBookingAct: act ${actId} (account ${accountId}): ${loggableError(e)}`);
+    return { ...ACTION_FAILED };
+  }
+}
+
+/** Undo of acceptBookingAct. Never confused with the booking's OWN Undo (the record page's button,
+ *  untouched by this action) -- the two never share a screen. */
+export async function unacceptBookingAct(accountId: string, actId: string, at: string): Promise<ActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("ai_acts", accountId, actId))) return { ...ACTION_FAILED };
+    if (!(await unstampAiActAccepted(serviceDb(), accountId, actId, userId, new Date(at)))) return { ...ACTION_FAILED };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true };
+  } catch (e) {
+    console.error(`unacceptBookingAct: act ${actId} (account ${accountId}): ${loggableError(e)}`);
+    return { ...ACTION_FAILED };
+  }
+}
 
 /**
  * The stale-hold path (review R3-I1, and fix round 1 item 1): a hold's To-do

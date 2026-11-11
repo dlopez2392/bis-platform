@@ -549,6 +549,87 @@ export async function setCallOutcome(
 }
 
 /**
+ * The TypeScript twin of 0114's `calls_transfer_failed_reason_check`: `no_answer` is the second dial
+ * ringing and nobody picking up (the handoff-result route's "reached nobody" branch), `refused` is
+ * the caller asking but never being dialled at all (the handoff route's own refusal branches -- too
+ * old to act on, or no usable transfer number).
+ */
+export type TransferFailedReason = "no_answer" | "refused";
+
+/**
+ * Records that a caller who asked for a person reached nobody (F-077 part 1, round 2; spec section
+ * 10; migration 0114's `calls.transfer_failed_at`/`transfer_failed_reason`). Called by the handoff
+ * routes, not by the queue, which only ever READS this stamp -- it is the thing the queue's own
+ * predicate (`failedTransfers`, work-queue.ts) is keyed on, so a call still being handled or whose
+ * transfer SUCCEEDED never gets one.
+ *
+ * Compare-and-swap on `transfer_failed_at is null`, so a call already marked failed is never
+ * re-stamped with a different reason by a retry or a race between the two routes. Returns false, not
+ * a throw, on no match -- unlike `setTransferFollowedUp` below, whose caller (a person on the queue)
+ * can only ever be looking at a row the queue already showed, "already recorded" here is the ordinary
+ * outcome of two routes that may legitimately race or retry themselves, not a bug to raise loudly
+ * about. Account-scoped. No emit(): no write on `calls` emits an event anywhere in this codebase
+ * today.
+ *
+ * R4 (fix round, voice r2): `.neq("outcome", "transferred")` -- belt-and-braces against a race
+ * between the two handoff routes (one route's `refused`/`no_answer` stamp landing just after the
+ * OTHER leg's own `transferred` write): a call the queue would show as a real transfer must never
+ * also pick up a failed-transfer stamp, however that race resolves. `failedTransfers` (work-queue.ts)
+ * carries the same exclusion on its own read, as a second, independent layer.
+ */
+export async function markTransferFailed(
+  db: SupabaseClient, accountId: string, callId: string, reason: TransferFailedReason, at: Date,
+): Promise<boolean> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_failed_at: at.toISOString(), transfer_failed_reason: reason })
+    .eq("id", callId).eq("account_id", accountId).is("transfer_failed_at", null)
+    .neq("outcome", "transferred")
+    .select("id");
+  if (error) throw new Error(`markTransferFailed failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Marks a failed transfer handled (F-077 part 1: a caller who asked for a person and never reached
+ * one, To do queue). Round 2 (review M1): requires `transfer_failed_at is not null` -- the EXACT
+ * column the queue's own predicate reads, so this can never stamp a call the queue never showed.
+ * Compare-and-swap on `transfer_followup_at is null`, recording `by` in the paired
+ * `transfer_followup_by` column (0114's `calls_transfer_followup_pair`). Returns false, not a throw,
+ * on no match (review M3: made consistent with `stampAiActAccepted`'s own shape below) -- throws only
+ * on a database error.
+ */
+export async function setTransferFollowedUp(
+  db: SupabaseClient, accountId: string, callId: string, by: string, at: Date,
+): Promise<boolean> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_followup_at: at.toISOString(), transfer_followup_by: by })
+    .eq("id", callId).eq("account_id", accountId)
+    .not("transfer_failed_at", "is", null).is("transfer_followup_at", null)
+    .select("id");
+  if (error) throw new Error(`setTransferFollowedUp failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Undo of setTransferFollowedUp. Round 2 (review M3): takes `by` and requires BOTH the same person
+ * AND the exact instant written -- the same shape as `unstampAiActAccepted` (ai-acts.ts) -- so a
+ * second "Called back" by someone else, or a stale Undo racing a later one, is never silently
+ * clobbered. Returns false, not a throw, when stale: an Undo toast's own failure path already
+ * handles a false result.
+ */
+export async function clearTransferFollowup(
+  db: SupabaseClient, accountId: string, callId: string, by: string, at: Date,
+): Promise<boolean> {
+  const { data, error } = await db.from("calls")
+    .update({ transfer_followup_at: null, transfer_followup_by: null })
+    .eq("id", callId).eq("account_id", accountId)
+    .eq("transfer_followup_by", by).eq("transfer_followup_at", at.toISOString())
+    .select("id");
+  if (error) throw new Error(`clearTransferFollowup failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
  * Records what the carrier's answering-machine detection thought picked up
  * the transferred leg (Telnyx's `AnsweredBy`).
  *

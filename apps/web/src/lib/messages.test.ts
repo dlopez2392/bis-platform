@@ -3102,3 +3102,29 @@ describe("F-115 PR C fix (review m6): history.restore.done.es is gender-neutral"
     expect(m["history.restore.failed.es"]).toBe("Esto no se pudo restaurar.");
   });
 });
+
+describe("work.failedTransfer / work.act.accept (F-077 part 1)", () => {
+  const WANT: Record<string, string> = {
+    "work.failedTransfer": "Call back at {number} — they asked for a person",
+    "work.failedTransfer.es": "Devuelva la llamada al {number} — pidió hablar con alguien",
+    "work.failedTransfer.bare": "A caller asked for a person and couldn't reach one",
+    "work.failedTransfer.bare.es": "Alguien que llamó pidió hablar con una persona y no pudo comunicarse",
+    "work.failedTransfer.done": "Called back",
+    "work.failedTransfer.done.es": "Llamada devuelta",
+    "work.act.accept": "Accept",
+    "work.act.accept.es": "Aceptar",
+    "work.act.accept.toast": "Accepted.",
+    "work.act.accept.toast.es": "Aceptado.",
+  };
+  it("has every key with exactly this text (mutation: change any .es string -> FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+  it("every English key has its .es twin on the very next line (mutation: move a twin -> FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+});

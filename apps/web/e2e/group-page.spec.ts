@@ -161,11 +161,21 @@ test("the merged timeline names the right member on every row, each keeping its 
   await page.goto(url());
   const rec = recordPage(page);
   const tl = rec.locator('[data-record-card="timeline"]');
-  const items = tl.locator("[data-timeline-item]");
+  // F-115: every member's own creation, their household membership and the household's OWN creation
+  // now show here too as "change" rows (change-item.tsx) — correct product behaviour, but not what
+  // this test is about, and this serial file's FIRST test leaves one more (Ana's primary-contact
+  // toggle and its Undo, folded into one "changed main contact" row). Scoped to the three CONTENT
+  // rows this test seeded (call/booking/note), so a leftover or a future change row never changes
+  // this count. The household's own "change" row names no single member (`subject: null` — its row is
+  // about the GROUP, not one of them) and correctly carries no `data-timeline-subject`; scoping here,
+  // rather than loosening the "every row has a subject" check, keeps that check meaningful for the
+  // rows it was written for.
+  const CONTENT_ITEM = '[data-timeline-item]:not([data-timeline-item="change"])';
+  const items = tl.locator(CONTENT_ITEM);
   await expect(items).toHaveCount(3);
   // DESIGN.md, Provenance: a row with no mark is a defect; C6: a row with no member subject is too.
-  await expect(tl.locator("[data-timeline-item]:not(:has([data-author-mark]))")).toHaveCount(0);
-  await expect(tl.locator("[data-timeline-item]:not(:has([data-timeline-subject]))")).toHaveCount(0);
+  await expect(tl.locator(`${CONTENT_ITEM}:not(:has([data-author-mark]))`)).toHaveCount(0);
+  await expect(tl.locator(`${CONTENT_ITEM}:not(:has([data-timeline-subject]))`)).toHaveCount(0);
 
   const call = tl.locator('[data-timeline-item="call"]');
   await expect(call).toHaveCount(1);

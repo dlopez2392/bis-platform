@@ -3,8 +3,9 @@
 // The account's "To do" screen. Task 3 built it read-only; Task 4 wired the
 // Not now / Done / booking-outcome buttons (`work-list.tsx` → `actions.ts` →
 // `WorkRowActions`). This page itself still only reads and buckets
-// `listAccountWork`'s three sources and renders them — the writes live in
-// the files below it, not here.
+// `listAccountWork`'s five sources (task, conversation, booking,
+// failed_transfer, booking_act — F-077 part 1 added the last two) and
+// renders them — the writes live in the files below it, not here.
 import Link from "next/link";
 import {
   listAccountWork, listPendingProposals, countHeldInboundEmails, countDuplicatePairs, getVoiceProfile, type Proposal,

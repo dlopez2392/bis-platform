@@ -24,6 +24,7 @@
 import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { transferFailedLine } from "@/lib/voice/handoff";
+import { recordTransferFailed } from "@/lib/voice/transfer-failed";
 
 export const runtime = "nodejs";
 
@@ -276,6 +277,14 @@ async function decide(token: string, status: string): Promise<string> {
   // asking: before the handoff shipped they got the text-back, and afterwards
   // they got an apology and silence. Observed on a real call, 2026-09-17.
   console.log(`handoff-result: call ${call.id} reached nobody (${status}), accountId ${accountId}`);
+
+  // F-077 part 1 (spec section 10, ruling 1; 0114): the failure is RECORDED
+  // here, when it happens, so the To do queue shows only real failures and
+  // never a transfer still in progress. A side-write in after(), never
+  // awaited: it cannot delay or change the words below
+  // (lib/voice/transfer-failed.ts). Compare-and-swap, so a carrier retry of
+  // this callback writes nothing the second time.
+  recordTransferFailed(db, accountId, call.id, "no_answer", new Date(), "handoff-result");
 
   // D-065 follow-up (design/code review round 2): `finishCall` already wrote
   // this call's automation_log row "sent" at socket close — `wasServed`'s

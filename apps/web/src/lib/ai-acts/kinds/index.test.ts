@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AI_ACT_KINDS, type AiAct } from "@bis/db/ai-act-rules";
+import { BOOKING_ACT_KINDS } from "@bis/db";
 import { makeTr } from "@/lib/record/copy";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { ACT_KINDS, describeAct, stillSafeOf } from "./index";
@@ -46,6 +47,15 @@ describe("the registry", () => {
       booking_created: "booking", booking_rescheduled: "booking", booking_cancelled: "booking",
       contact_created: "contact", contact_field_filled: "field",
     });
+  });
+
+  // F-077 part 1, hand-off (a): @bis/db's own work-queue predicate (`listPendingBookingActs`'s
+  // `.in("kind", BOOKING_ACT_KINDS)`) and this registry's `control: "booking"` kinds name the SAME
+  // set. `@bis/db` cannot import this web registry (ai-acts.ts's own doc comment on BOOKING_ACT_KINDS),
+  // so this parity test lives here, where both are importable, rather than in packages/db.
+  it("BOOKING_ACT_KINDS (packages/db/src/ai-acts.ts) equals this registry's own control:\"booking\" kinds, sorted (mutation: drop booking_rescheduled from either list -> FAILS)", () => {
+    const fromRegistry = AI_ACT_KINDS.filter((k) => ACT_KINDS[k].control === "booking").sort();
+    expect([...BOOKING_ACT_KINDS].sort()).toEqual(fromRegistry);
   });
 });
 

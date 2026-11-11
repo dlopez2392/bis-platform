@@ -5,8 +5,10 @@ import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
 import type { DocumentCategory } from "./document-rules";
 import type { ClosureKind } from "./business-status";
+import type { AiAct } from "./ai-act-rules";
+import { listPendingBookingActs } from "./ai-acts";
 
-export type WorkSource = "task" | "conversation" | "booking";
+export type WorkSource = "task" | "conversation" | "booking" | "failed_transfer" | "booking_act";
 
 export type WorkRow = {
   id: string;
@@ -35,6 +37,12 @@ export type WorkRow = {
   /** S-47d (0097): a closure To-do (tasks.closure_kind / closure_on), for the row's link to the appointments the
    *  closure covers. Present ONLY on such a task. */
   closureFocus?: { kind: ClosureKind; on: string };
+  /** F-077 part 1: a failed-transfer row's own number to call back -- calls.callback_number, else
+   *  calls.caller_e164, else null (withheld caller ID). Present ONLY on a failed_transfer row. */
+  callbackNumber?: string | null;
+  /** F-077 part 1: a booking-act row's own act, in full, so the UI can call describeAct() with it --
+   *  never re-derived from a partial projection. Present and ALWAYS set on a booking_act row (Task 3). */
+  bookingAct?: AiAct;
 };
 
 async function openTasks(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
@@ -168,23 +176,113 @@ async function staleBookings(db: SupabaseClient, accountId: string, assignee?: A
   }));
 }
 
+/** The TypeScript twin of `failedTransfers`' own "was this caller actually served since" check: an
+ *  outcome that means the caller reached a person, booked, left a lead, or at least got a message. */
+const TRANSFER_SUCCESS_OUTCOMES = ["transferred", "booked", "lead", "message"] as const;
+
+/**
+ * F-077 part 1, round 2 (spec section 10): a failed transfer cannot be derived from what `calls`
+ * held before migration 0114. Every row starts `abandoned` (0019), and the handoff-result route
+ * writes `transferred` only when the human conversation ENDS, so the old predicate ("abandoned and
+ * handoff_requested_at set") also matched every transfer still in progress, and every one whose
+ * `transferred` write was refused or failed. The failure is now recorded when it happens, by the
+ * route that knows (`markTransferFailed`, voice.ts), and this reads only that stamp
+ * (`transfer_failed_at is not null`), not yet followed up (`transfer_followup_at is null`).
+ * Exempt from suppression below, the same treatment as `staleBookings`: a derived row, not a task,
+ * so an open task on the same contact must not hide it.
+ *
+ * A row also clears itself at READ time -- nothing is written -- when a LATER call from the SAME
+ * `caller_e164`, in the SAME account, was actually served (`TRANSFER_SUCCESS_OUTCOMES`): the caller
+ * tried again and reached someone, so the queue should not still ask for a callback. Bounded to ONE
+ * extra query over the candidates' own numbers, never one per row, and account-scoped like every
+ * other read here, so two tenants that happen to share a caller's number can never clear each
+ * other's row.
+ */
+async function failedTransfers(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
+  const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  // R4 (fix round, voice r2): `.neq("outcome", "transferred")` is belt-and-braces beside
+  // `markTransferFailed`'s own exclusion (voice.ts) -- a call the queue would show as a REAL
+  // transfer must never surface here as a failed one, however a race between the two stamps
+  // resolves. `outcome` is `not null default 'abandoned'` (0019), so `.neq` excludes no legitimate
+  // candidate on a NULL technicality.
+  let q = db.from("calls")
+    .select(`id, contact_id, callback_number, caller_e164, started_at${embed}`)
+    .eq("account_id", accountId)
+    .not("transfer_failed_at", "is", null).is("transfer_followup_at", null)
+    .neq("outcome", "transferred");
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
+  const { data, error } = await q.order("started_at", { ascending: true }).limit(200);
+  if (error) throw new Error(`failedTransfers failed: ${error.message}`);
+  const candidates = (data ?? []) as unknown as {
+    id: string; contact_id: string | null; callback_number: string | null; caller_e164: string | null; started_at: string;
+  }[];
+  if (candidates.length === 0) return [];
+
+  // A withheld caller ID (null) can never be matched to a later call, so it is never a candidate for
+  // this one extra, account-scoped query.
+  const numbers = Array.from(new Set(candidates.map((c) => c.caller_e164).filter((n): n is string => n !== null)));
+  const latestServedByCaller = new Map<string, string>();
+  if (numbers.length > 0) {
+    // R6 (fix round): bounded, ordered and explicitly capped, the same instinct `openTasks` already
+    // states at the top of this file -- an unbounded, unordered read over every served call for
+    // these numbers would grow with the account's own call history forever. `.gt("started_at",
+    // oldest candidate's started_at)` loses no match: `candidates` is ordered ascending, so its
+    // first row IS the earliest one, and a served call at or before that instant can never be LATER
+    // than any candidate (every candidate's own `started_at` is >= the earliest one's), which is the
+    // exact comparison the loop below performs. `.order(desc) + .limit(1000)` then keeps the 1000
+    // MOST RECENT matches within that bound rather than an arbitrary (and possibly stale) slice --
+    // fail-safe in the direction that matters: missing a genuine later-served call only means a
+    // resolved row keeps showing a little longer, never the reverse.
+    const { data: served, error: sErr } = await db.from("calls")
+      .select("caller_e164, started_at")
+      .eq("account_id", accountId).in("caller_e164", numbers).in("outcome", TRANSFER_SUCCESS_OUTCOMES)
+      .gt("started_at", candidates[0]!.started_at)
+      .order("started_at", { ascending: false })
+      .limit(1000);
+    if (sErr) throw new Error(`failedTransfers served-call read failed: ${sErr.message}`);
+    for (const s of (served ?? []) as { caller_e164: string | null; started_at: string }[]) {
+      if (!s.caller_e164) continue;
+      const prev = latestServedByCaller.get(s.caller_e164);
+      if (!prev || s.started_at > prev) latestServedByCaller.set(s.caller_e164, s.started_at);
+    }
+  }
+
+  return candidates
+    .filter((c) => {
+      if (!c.caller_e164) return true;
+      const latestServed = latestServedByCaller.get(c.caller_e164);
+      return !latestServed || !(latestServed > c.started_at);
+    })
+    .map((c) => ({
+      id: `failed_transfer:${c.id}`, source: "failed_transfer" as const, accountId,
+      contactId: c.contact_id, title: "",
+      dueAt: null, occurredAt: c.started_at,
+      callbackNumber: c.callback_number ?? c.caller_e164 ?? null,
+    }));
+}
+
 /**
  * SUPPRESSION (spec §3): an open task against a contact hides that contact's
  * derived conversation row, so a "Not now" dismissal does not leave the
- * original showing alongside the task it created. Bookings are exempt —
- * marking one changes `status`, so it stops matching on its own.
+ * original showing alongside the task it created. Bookings, a failed
+ * transfer (F-077 part 1) and a booking act (F-077 part 1, Task 3) are all
+ * exempt the same way — each clears ITSELF, on its own column or its own
+ * later-served-call read, never on a task, so an open task against the same
+ * contact must never hide any of the three.
  */
 export async function listAccountWork(
   db: SupabaseClient, accountId: string, opts: { assignee?: AssigneeFilter } = {},
 ): Promise<WorkRow[]> {
-  const [tasks, convos, bookings] = await Promise.all([
+  const [tasks, convos, bookings, transfers, bookingActs] = await Promise.all([
     openTasks(db, accountId, opts.assignee),
     unansweredConversations(db, accountId, opts.assignee),
     staleBookings(db, accountId, opts.assignee),
+    failedTransfers(db, accountId, opts.assignee),
+    listPendingBookingActs(db, accountId, opts.assignee),
   ]);
   const suppressed = new Set(tasks.map((t) => t.contactId).filter(Boolean) as string[]);
   const keep = (r: WorkRow) => !r.contactId || !suppressed.has(r.contactId);
-  return [...tasks, ...convos.filter(keep), ...bookings];
+  return [...tasks, ...convos.filter(keep), ...bookings, ...transfers, ...bookingActs];
 }
 
 /** `listAgencyWork`'s own row shape: every `WorkRow` field plus the three the
@@ -216,11 +314,18 @@ export type AgencyWorkRow = WorkRow & { brandName: string; timezone: string; sup
  * hold: re-measured against live data at five accounts, 2026-09-15, the
  * concurrent read is only about 1.5x faster than serial, not 5-8x — the
  * bottleneck moved from round-trip latency to server-side contention.
- * `listAccountWork` fans out to two or three queries per account
- * (`unansweredConversations` alone issues two), so a chunk of eight
- * concurrent accounts puts roughly twenty queries in flight against the
- * SAME Supabase project at once, and that is what the wall-clock time now
- * actually reflects. Bounded rather than unbounded for the same reason
+ * `listAccountWork` fanned out to two or three queries per account at the
+ * time of this measurement (`unansweredConversations` alone issued two), so
+ * a chunk of eight concurrent accounts put roughly twenty queries in flight
+ * against the SAME Supabase project at once, and that is what the
+ * wall-clock time then reflected. F-077 part 1 (round 2) added two more
+ * sources to the fan-out (`failedTransfers`, `listPendingBookingActs`), one
+ * of which (`failedTransfers`) also issues up to two queries of its own, so
+ * the account now ranges from five to seven queries rather than two or
+ * three — more queries in flight per chunk than the twenty estimated here.
+ * This exact count was not re-measured; the DIRECTION of the finding
+ * (bottleneck is server-side contention, not round-trip latency) is
+ * unaffected by it either way. Bounded rather than unbounded for the same reason
  * `demo/seed.ts`'s own `inParallel` is: an unbounded fan-out over every
  * account would trade a linear-latency cost for a connection-storm risk
  * instead of removing it — this repo's cost model was wrong about the

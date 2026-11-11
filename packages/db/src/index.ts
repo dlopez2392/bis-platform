@@ -437,6 +437,7 @@ export * from "./ai-act-rules";
 export {
   insertAiActs, getAiAct, listContactAiActs, undoAiBookingAct, aiContactHeldBy, undoAiContactCreated,
   stampAiActUndone, clearAiActUndone, markAiActNotified,
+  listPendingBookingActs, stampAiActAccepted, unstampAiActAccepted, BOOKING_ACT_KINDS,
   type AiBookingUndoOutcome, type AiContactUndoOutcome,
 } from "./ai-acts";
 
@@ -462,3 +463,9 @@ export {
 export {
   RESTORE_DAYS, canPutBack, canRestore, parseChangeId, putBackChange, restoreRemoved,
 } from "./record-restore";
+
+// F-115 PR E fix (review I4/I6): the ONE bounded, account-scoped read for every id a page's own
+// change rows reference but cannot name from their own columns. See ./record-change-names.ts.
+export {
+  changeNameRefs, readChangeNames, type ChangeNameRefs, type ChangeNames,
+} from "./record-change-names";
