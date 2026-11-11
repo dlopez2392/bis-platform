@@ -109,6 +109,11 @@ const readReplyTokenMock = vi.fn(async (..._a: unknown[]): Promise<{ token: stri
 // contact — asserted by its own spy, the same idiom as the 404 test just above reads for every other
 // source this page could start before `getContact` had proven the contact.
 const findConversationForContactMock = vi.fn(async (..._a: unknown[]): Promise<string | null> => null);
+// F-115 PR E fix (review I4): the page's own "change" rows' ONE bounded names read; nothing to
+// resolve unless a case says otherwise.
+const readChangeNamesMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ names: {}, groupKinds: {} }));
+const EMPTY_CHANGE_REFS = { contactIds: new Set(), groupIds: new Set(), tagIds: new Set(), equipmentIds: new Set(), stageIds: new Set(), pipelineIds: new Set() };
+const changeNameRefsMock = vi.fn<(...a: unknown[]) => unknown>(() => EMPTY_CHANGE_REFS);
 vi.mock("@bis/db", () => ({
   getInboundSettings: (...a: unknown[]) => getInboundSettingsMock(...a),
   ensureReplyToken: (...a: unknown[]) => ensureReplyTokenMock(...a),
@@ -144,6 +149,14 @@ vi.mock("@bis/db", () => ({
   // Contact archive (plan Task 11): the header's ArchiveControls imports archive-actions.ts, which imports these.
   // Rendered, never run, here.
   archiveContacts: vi.fn(), restoreContacts: vi.fn(), contactDeleteBlockers: vi.fn(),
+  changeNameRefs: (...a: unknown[]) => changeNameRefsMock(...a),
+  readChangeNames: (...a: unknown[]) => readChangeNamesMock(...a),
+  // ChangeItem (components/record/change-item.tsx, rendered for real by ActivityTimeline below)
+  // imports these two PURE functions directly; their own correctness is record-restore.test.ts's
+  // job (packages/db), never re-proven here — a faithful-enough stub so a "change" row with a Put
+  // back/Restore button can render at all, never a thrown "No export" from this mock.
+  canPutBack: (row: { op: string; field: string | null }) => row.op === "update" && row.field !== null,
+  canRestore: (row: { op: string }) => row.op === "delete",
 }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
 // A desk: the three "have" cards render open, so their props and markers can be read.

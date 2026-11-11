@@ -34,6 +34,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { ContactDetailsBody, ContactTagsBody } from "./contact-fields-panel";
 import { RelationshipsCard } from "../relationships-card";
 import { ActivityTimeline } from "./activity-timeline";
+import { putBackAction, restoreAction } from "../history-actions";
 import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
@@ -188,7 +189,10 @@ export default async function ContactDetailPage({
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  // F-115 PR E fix round 2 (review C1): named so the SAME value reaches both `makeTr` here and the
+  // `pseudo` prop `ActivityTimeline` must pass to `ChangeItem` ("use client") in place of `tr` itself.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
 
   // The Texts and Email rows (consent PR-2/PR-3), on the ledger client. An unreadable ledger is the
   // row's error state, never a thrown page and never a guessed "Allowed".
@@ -235,6 +239,21 @@ export default async function ContactDetailPage({
   const subtitle = mainGroup
     ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
     : null;
+  // F-115 PR E fix (review I4/I6): what a "change" row's verb/fields need beyond `timeline.names`
+  // (already merged with `readChangeNames`'s own bounded read, loaders.ts) — the account's own
+  // custom field labels (fieldDefs, read below), and every group's own kind the page's "change"
+  // rows reference (`timeline.changeGroupKinds`), supplemented by `places.groups` (the groups the
+  // contact is CURRENTLY in, always exactly known) for the common case a removed membership's own
+  // group is still one of them.
+  const changeFields = {
+    customFieldLabels: Object.fromEntries(
+      (fieldDefs.status === "ready" ? fieldDefs.fieldDefs : []).map((d) => [d.field_key, d.name]),
+    ),
+    groupKinds: {
+      ...(timeline.status === "ready" ? timeline.changeGroupKinds : {}),
+      ...Object.fromEntries((places?.groups ?? []).map((g) => [g.id, g.kind])),
+    },
+  };
   // 1b: the rows are built here, in their own guard (C5), so a malformed row costs the timeline card.
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
@@ -244,6 +263,7 @@ export default async function ContactDetailPage({
       suggestionStages: timeline.suggestionStages,
       // item 8c (plan Task 6): the page's acts' facts, so each act's row knows whether its Undo is still safe.
       actFacts: timeline.actFacts,
+      changeFields,
     }))
     : null;
   // Text and Email link to the composer inside the timeline card; when that card failed there is no
@@ -365,6 +385,13 @@ export default async function ContactDetailPage({
             canMerge={seesWholeAccount(access)}
             contactName={name}
             nowMs={now.getTime()}
+            // F-115 part 1 (S-04), plan Task 5: Put back/Restore (Owners, Staff, the agency; never a
+            // Technician — the SAME role `canMerge` already reads). The Owner-only download link
+            // (Q5: Owners only, which is narrower than `canWriteHistory` — never Staff).
+            canWriteHistory={seesWholeAccount(access)}
+            putBackHistory={putBackAction.bind(null, accountId, locale)}
+            restoreHistory={restoreAction.bind(null, accountId, locale)}
+            historyDownloadHref={access.canManage ? `/dashboard/accounts/${accountId}/contacts/${contactId}/history` : null}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}
@@ -374,6 +401,7 @@ export default async function ContactDetailPage({
               older: timeline.page.older, paged: Boolean(before), failed: timeline.page.failed, locale: localeParam,
             })}
             tr={tr}
+            pseudo={pseudo}
           />
         ),
       }

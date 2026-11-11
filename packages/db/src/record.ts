@@ -388,8 +388,15 @@ export type TimelineEntry =
   /** F-115 part 1 (S-04), plan Task 4: one row per folded group of record_changes writes, at the
    *  group's newest write, read only when asked (`opts.changes`). `id` is the group's own key;
    *  `contactId` is the group's own contact when it has one (a group's own record, with no single
-   *  member, carries ""), the SAME rule `document` already uses above. */
-  | { kind: "change"; id: string; at: string; contactId: string; group: ChangeGroup };
+   *  member, carries ""), the SAME rule `document` already uses above.
+   *  F-115 PR E fix round 2 (re-review I1): `cursorAt` is the SAME row `id` was encoded from (the
+   *  group's own OLDEST step's minimum-id row) — a REAL, internally consistent `(createdAt, id)` pair,
+   *  unlike `at` (the group's DISPLAY/sort instant, its NEWEST step). Used ONLY to build `older` when
+   *  this entry is the page's last item; every other kind's `at` already serves both roles, because
+   *  every other kind is one real row. Optional only so a hand-built fixture elsewhere (apps/web's own
+   *  component tests, which never compute `older`) need not supply it; `record.ts`'s OWN construction
+   *  always does. */
+  | { kind: "change"; id: string; at: string; cursorAt?: string; contactId: string; group: ChangeGroup };
 /** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
  *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
  *  reads nothing, so both are empty and that is an empty timeline, not an error. */
@@ -598,9 +605,21 @@ export async function listTimelinePage(
       opts.groupId
         ? listChangeRowsNoPartialWrite(db, accountId, { groupId: opts.groupId }, changeCursor, page.limit, page.limit)
         : Promise.resolve({ rows: [] as ChangeRow[], hasMore: false }),
-    ]).then(([byContact, byGroup]) => ({
-      ok: true as const, rows: [...byContact.rows, ...byGroup.rows], hasMore: byContact.hasMore || byGroup.hasMore,
-    })).catch((error: unknown) => ({ ok: false as const, error }))
+    ]).then(([byContact, byGroup]) => {
+      // F-115 PR E fix (review I3): a `client_group_member` row's own `contact_id` AND
+      // `client_group_id` are both set (0112's capture), so the GROUP page's byContact read (every
+      // member's own contact id) and its byGroup read (the group's own id) both return the SAME row
+      // — deduped here by its own `id` (never by reference: the two reads are two separate
+      // PostgREST responses, never the same object) before `groupChanges` ever sees it, or every
+      // membership edit shows twice (two identical Was/Now lines, Put back bound twice).
+      const seen = new Set<number>();
+      const rows = [...byContact.rows, ...byGroup.rows].filter((r) => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
+      });
+      return { ok: true as const, rows, hasMore: byContact.hasMore || byGroup.hasMore };
+    }).catch((error: unknown) => ({ ok: false as const, error }))
     : null;
   const results = await Promise.all([
     settle("notes", async () => (((await listNotes(db, accountId, who, page)) ?? []) as (TimelineNote & { contact_id: string })[])
@@ -698,18 +717,30 @@ export async function listTimelinePage(
           aiActIds: idsOf("ai_acts", ["aiAct"]),
           proposalIds: idsOf("suggestions", ["suggestion"]),
         };
-        const groups = foldVia(groupChanges(outcome.rows), onPage);
-        // F-115 PR C fix (review I2): the entry's `id` is the group's OWN MINIMUM row id (never the
-        // newest/max) — a group spanning rows 5,4,3 at one instant must exclude ALL THREE from the
-        // next page; a cursor built from the max (5) would use "id < 5", which still ADMITS 4 and 3
-        // (already shown as part of THIS same group) back in as if unread, duplicating them
-        // (record-timeline-changes.test.ts's own page-2 assertion pins this exact case). Encoded in
-        // the one shape `parseTimelineCursor`/`timelineBeforeFilter` accept from every kind (a
-        // UUID-shaped string): see `encodeChangeCursorId`'s own doc comment.
-        changesEntries = groups.map((g): TimelineEntry => ({
-          kind: "change", id: encodeChangeCursorId(Math.min(...g.rows.map((r) => r.id))),
-          at: g.at, contactId: g.rows[0]?.contactId ?? "", group: g,
-        }));
+        // F-115 PR E fix round 2 (re-review I1): every OTHER source's own entries this page already
+        // read, as instants — two writes of the SAME record may only fold when nothing here (nor any
+        // OTHER record's own write, added inside groupChanges itself) falls strictly between them, so
+        // a group always occupies a CONTIGUOUS run of the merged list. Best-effort against what THIS
+        // page actually read, the same bound every source here already accepts.
+        const foreignAtMs = results.flatMap((r) => (r.entries ?? []).map((e) => Date.parse(e.at)));
+        const groups = foldVia(groupChanges(outcome.rows, foreignAtMs), onPage);
+        // F-115 PR E fix round 2 (re-review I1): the entry's `id`/`cursorAt` pair is the group's OWN
+        // OLDEST STEP's minimum-id row — a REAL row's own (createdAt, id), always internally
+        // consistent, never the group's NEWEST step's `at` (kept separately, for display/sort order)
+        // paired with a DIFFERENT step's id. A group spanning rows 5,4,3 (its oldest step) at one
+        // instant must exclude ALL THREE from the next page; a cursor built from the newest step's own
+        // `at` would wrongly re-admit this step on its own (record-timeline-changes.test.ts's own
+        // page-2 assertions pin this). Encoded in the one shape `parseTimelineCursor`/
+        // `timelineBeforeFilter` accept from every kind (a UUID-shaped string): `encodeChangeCursorId`'s
+        // own doc comment.
+        changesEntries = groups.map((g): TimelineEntry => {
+          const oldestStep = g.steps[0]!;
+          const cursorRow = oldestStep.reduce((min, r) => (r.id < min.id ? r : min));
+          return {
+            kind: "change", id: encodeChangeCursorId(cursorRow.id), cursorAt: cursorRow.createdAt,
+            at: g.at, contactId: g.rows[0]?.contactId ?? "", group: g,
+          };
+        });
       } catch (e) {
         opts.onError?.("changes", e);
       }
@@ -724,7 +755,11 @@ export async function listTimelinePage(
   const items = merged.slice(0, limit);
   const last = items.at(-1);
   const hasMore = merged.length > limit || changesHasMore;
-  return { items, older: hasMore && last ? { v: last.at, id: last.id } : null, failed, sources };
+  // F-115 PR E fix round 2 (re-review I1): a "change" entry's cursor is its OWN `cursorAt`/`id` pair
+  // (a real row), never its display `at` (the group's newest step) — see the "change" variant's own
+  // doc comment and `changesEntries`'s construction just above.
+  const cursorOf = (e: TimelineEntry): TimelineCursor => (e.kind === "change" ? { v: e.cursorAt ?? e.at, id: e.id } : { v: e.at, id: e.id });
+  return { items, older: hasMore && last ? cursorOf(last) : null, failed, sources };
 }
 
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */

@@ -70,6 +70,14 @@ const listGroupPlacesMock = vi.fn();
 const listOpenDealsForMock = vi.fn();
 const listContactPlacesMock = vi.fn();
 const getContactMock = vi.fn();
+// F-115 PR E fix (review m6): the account's own custom field defs (loaders.ts's loadFieldDefs);
+// none unless a case says otherwise, same default every pre-existing test here already expected.
+const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+// F-115 PR E fix (review I4): the group loader's own ONE bounded names read; nothing to resolve
+// unless a case says otherwise.
+const readChangeNamesMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ names: {}, groupKinds: {} }));
+const EMPTY_CHANGE_REFS = { contactIds: new Set(), groupIds: new Set(), tagIds: new Set(), equipmentIds: new Set(), stageIds: new Set(), pipelineIds: new Set() };
+const changeNameRefsMock = vi.fn<(...a: unknown[]) => unknown>(() => EMPTY_CHANGE_REFS);
 vi.mock("@bis/db", () => ({
   readGroup: (...a: unknown[]) => readGroupMock(...a),
   listGroupMembers: (...a: unknown[]) => listGroupMembersMock(...a),
@@ -86,6 +94,15 @@ vi.mock("@bis/db", () => ({
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
   TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"],
+  changeNameRefs: (...a: unknown[]) => changeNameRefsMock(...a),
+  readChangeNames: (...a: unknown[]) => readChangeNamesMock(...a),
+  listCustomFields: (...a: unknown[]) => listCustomFieldsMock(...a),
+  // ChangeItem (components/record/change-item.tsx, rendered for real by GroupTimeline below)
+  // imports these two PURE functions directly; their own correctness is record-restore.test.ts's
+  // job (packages/db), never re-proven here — a faithful-enough stub so a "change" row with a Put
+  // back/Restore button can render at all, never a thrown "No export" from this mock.
+  canPutBack: (row: { op: string; field: string | null }) => row.op === "update" && row.field !== null,
+  canRestore: (row: { op: string }) => row.op === "delete",
 }));
 const groupActivityMembersMock = vi.fn();
 const groupFactsMock = vi.fn();
@@ -173,6 +190,9 @@ beforeEach(() => {
   listTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [], sources: SOURCES });
   listPeopleNamesMock.mockReset().mockResolvedValue({});
   getVoiceProfileMock.mockReset().mockResolvedValue(null);
+  listCustomFieldsMock.mockReset().mockResolvedValue([]);
+  readChangeNamesMock.mockReset().mockResolvedValue({ names: {}, groupKinds: {} });
+  changeNameRefsMock.mockReset().mockReturnValue(EMPTY_CHANGE_REFS);
   placesCardProps.length = 0; peopleCardProps.length = 0; detailsCardProps.length = 0;
   noteOpenedMock.mockReset().mockResolvedValue(undefined);
   errors?.mockRestore();
@@ -684,6 +704,34 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
   it("still names no hero with the middle column drawn (rule 11)", async () => {
     groupActivityMembersMock.mockResolvedValue({ people: many(50), total: { ok: true, value: 73 }, more: true });
     expect(await render()).not.toContain("data-hero");
+  });
+
+  // F-115 PR E fix (review m6): a member's custom field change reads the account's OWN label
+  // (loaders.ts's loadFieldDefs), never the raw dotted key — the contact page's own read, now made
+  // here too.
+  it("a member's custom field change on the timeline reads the account's own label, never the raw key (mutation: pass customFieldLabels: {} -> the raw key shows, FAILS)", async () => {
+    listCustomFieldsMock.mockResolvedValue([
+      { id: "f1", model: "contact", field_key: "favorite_color", name: "Favorite color", data_type: "text", options: [], position: 0 },
+    ]);
+    const row = {
+      id: 1, recordType: "contact", recordId: ANA.contactId, contactId: ANA.contactId, clientGroupId: null,
+      op: "update", field: "custom.favorite_color", before: "Blue", after: "Green", xact: "1",
+      authorKind: "person", authorId: "u1", via: null, at: AT, createdAt: AT,
+    };
+    const group = {
+      key: `contact:${ANA.contactId}:1`, recordType: "contact", recordId: ANA.contactId, authorKind: "person",
+      authorId: "u1", via: null, at: AT, firstAt: AT, steps: [[row]], rows: [row],
+    };
+    listTimelinePageMock.mockResolvedValue({
+      items: [{ kind: "change", id: "ch1", at: AT, contactId: ANA.contactId, group }], older: null, failed: [], sources: SOURCES,
+    });
+    const html = cardHtml(await render(), "timeline");
+    expect(html).toContain("Favorite color");
+    // The raw key is still legitimately present as the row's own data-change-field selector
+    // (change-item.tsx, by design — an e2e hook, never user-visible text); only the LABEL text
+    // (the <dt>) must never show it bare.
+    expect(html).toMatch(/<dt[^>]*>Favorite color<\/dt>/);
+    expect(html).not.toMatch(/<dt[^>]*>favorite_color<\/dt>/);
   });
 });
 

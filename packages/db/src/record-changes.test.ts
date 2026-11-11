@@ -87,6 +87,84 @@ describe("groupChanges", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.authorKind).toBeNull();
   });
+
+  // F-115 PR E fix (review I2): a person's own manual edit next to their own merge/restore write,
+  // same author, within the collapse window, must stay TWO groups either way — folding them would
+  // either hide the manual edit under foldVia's drop of the merge's via, or carry the merge's own
+  // fields under a via that does not name it. Both orders.
+  it("never folds two writes whose via differ, even same author within the window, in EITHER order (mutation: drop the via check from sameAuthor -> FAILS, collapses to one group both times)", () => {
+    const manualThenMerge = [
+      row({ id: 1, xact: "1", via: null, createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 2, xact: "2", via: "merge:5", createdAt: "2026-01-01T00:05:00.000Z" }), // 5 min later
+    ];
+    expect(groupChanges(manualThenMerge)).toHaveLength(2);
+
+    const mergeThenManual = [
+      row({ id: 3, xact: "3", via: "merge:5", createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 4, xact: "4", via: null, createdAt: "2026-01-01T00:05:00.000Z" }), // 5 min later
+    ];
+    expect(groupChanges(mergeThenManual)).toHaveLength(2);
+  });
+
+  it("still folds two plain edits (via null on both) within the window, same as before (mutation: compare via with !== so null!==null is wrongly true -> FAILS)", () => {
+    const rows = [
+      row({ id: 1, xact: "1", via: null, createdAt: "2026-01-01T00:00:00.000Z" }),
+      row({ id: 2, xact: "2", via: null, createdAt: "2026-01-01T00:05:00.000Z" }),
+    ];
+    expect(groupChanges(rows)).toHaveLength(1);
+  });
+
+  // F-115 PR E fix round 2 (re-review I1): a group must occupy a CONTIGUOUS run of the merged
+  // timeline — two writes that would otherwise fold (same author, same record, within the window)
+  // must NOT fold when something else (any source, any other record) falls strictly between them.
+  const ms = (iso: string) => Date.parse(iso);
+  describe("groupChanges: contiguity (review round 2, I1) — never folds across a foreign entry", () => {
+    it("a foreign instant strictly between two otherwise-foldable writes splits them into two groups (mutation: drop the hasBetween check -> FAILS, folds to one)", () => {
+      const rows = [
+        row({ id: 1, xact: "1", createdAt: "2026-01-01T00:00:00.000Z" }),
+        row({ id: 2, xact: "2", createdAt: "2026-01-01T00:05:00.000Z" }), // 5 min later; a note sits at 00:02
+      ];
+      const foreign = [ms("2026-01-01T00:02:00.000Z")];
+      expect(groupChanges(rows, foreign)).toHaveLength(2);
+      // Without the foreign instant, the SAME two rows still fold (proves the split is the foreign
+      // entry's doing, not some other change to the window check).
+      expect(groupChanges(rows, [])).toHaveLength(1);
+    });
+
+    it("a foreign instant exactly AT either endpoint (same-instant note+change) does not block the fold — only STRICTLY between does (mutation: use >= / <= instead of >/< -> FAILS, folds to two)", () => {
+      const rows = [
+        row({ id: 1, xact: "1", createdAt: "2026-01-01T00:00:00.000Z" }),
+        row({ id: 2, xact: "2", createdAt: "2026-01-01T00:05:00.000Z" }),
+      ];
+      const foreignAtBothEndpoints = [ms("2026-01-01T00:00:00.000Z"), ms("2026-01-01T00:05:00.000Z")];
+      expect(groupChanges(rows, foreignAtBothEndpoints)).toHaveLength(1);
+    });
+
+    it("another RECORD's own write sitting between two of THIS record's writes also splits them — 'foreign' means a different record, not just a different source (mutation: only check non-change foreignAtMs, ignore other records' own writes -> FAILS, folds to one)", () => {
+      const recordA = [
+        row({ id: 1, xact: "1", recordId: "ca", contactId: "ca", createdAt: "2026-01-01T00:00:00.000Z" }),
+        row({ id: 3, xact: "3", recordId: "ca", contactId: "ca", createdAt: "2026-01-01T00:05:00.000Z" }),
+      ];
+      const recordB = row({ id: 2, xact: "2", recordId: "cb", contactId: "cb", authorId: "user_2", createdAt: "2026-01-01T00:02:00.000Z" });
+      const groups = groupChanges([...recordA, recordB], []);
+      const aGroups = groups.filter((g) => g.recordId === "ca");
+      expect(aGroups).toHaveLength(2); // split, never folded, because recordB's own write sits between them
+    });
+
+    it("three writes in one now(): the middle one sits exactly at a foreign instant too, and the outer two still fold around it (review case d: one now(), three rows, no splitting WITHIN one write)", () => {
+      // One write (one xact) producing three rows, all sharing the identical instant: this is a
+      // single write, never three — nothing here can "split" it, foreign or not.
+      const oneNow = "2026-01-01T00:00:00.500000Z";
+      const rows = [
+        row({ id: 1, xact: "9", field: "first_name", createdAt: oneNow }),
+        row({ id: 2, xact: "9", field: "last_name", createdAt: oneNow }),
+        row({ id: 3, xact: "9", field: "email", createdAt: oneNow }),
+      ];
+      const groups = groupChanges(rows, [ms(oneNow)]); // a foreign entry at the SAME instant: still one write
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.rows).toHaveLength(3);
+    });
+  });
 });
 
 describe("foldVia", () => {
@@ -170,10 +248,11 @@ describe("encodeChangeCursorId / decodeChangeCursorId: a bigint id in UUID-curso
 });
 
 /**
- * F-115 PR C fix (review I2): `listChangeRows` branches on whether its cursor's own `id` is present —
- * the `(created_at, id)` OR idiom when it is (a row this module itself produced earlier), a plain
- * `created_at <` bound when it is not (`record.ts`'s only external seed without one: the outer
- * merged-timeline cursor, when the previous page's cutoff was not itself a "change" entry).
+ * F-115 PR C fix (review I2), amended PR E (review I1), REVERTED in round 2 (re-review I1):
+ * `listChangeRows` branches on whether its cursor's own `id` is present — `.or(changeRowBeforeFilter(...))`
+ * (the `(created_at, id)` idiom) when it is, a plain `created_at <` bound when it is not (`record.ts`'s
+ * only external seed without one: the outer merged-timeline cursor, when the previous page's cutoff
+ * was not itself a "change" entry).
  */
 describe("listChangeRows: the cursor's own branch (with id vs. without)", () => {
   function recordingDb() {
@@ -186,11 +265,12 @@ describe("listChangeRows: the cursor's own branch (with id vs. without)", () => 
     return { db, calls };
   }
 
-  it("with id: calls .or with the (created_at, id) filter, never .lt (mutation: always call .lt -> FAILS)", async () => {
+  it("with id: calls .or(changeRowBeforeFilter(...)), never a bare .lt('id', n) (mutation: call .lt('id', before.id) instead -> FAILS, case (e)'s id/time divergence would silently skip a row)", async () => {
     const { db, calls } = recordingDb();
     await listChangeRows(db, "a1", { contactIds: ["c1"] }, { createdAt: "2026-11-02T00:00:00Z", id: 5 }, 10);
-    expect(calls.some((c) => c.method === "or" && c.args[0] === changeRowBeforeFilter("created_at", { createdAt: "2026-11-02T00:00:00Z", id: 5 }))).toBe(true);
-    expect(calls.some((c) => c.method === "lt")).toBe(false);
+    const want = changeRowBeforeFilter("created_at", { createdAt: "2026-11-02T00:00:00Z", id: 5 });
+    expect(calls.some((c) => c.method === "or" && c.args[0] === want)).toBe(true);
+    expect(calls.some((c) => c.method === "lt" && c.args[0] === "id")).toBe(false);
   });
 
   it("without id: calls .lt on created_at alone, never .or (mutation: always call .or -> FAILS, since changeRowBeforeFilter would throw with no id)", async () => {
