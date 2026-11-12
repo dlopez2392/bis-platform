@@ -24,6 +24,7 @@
 import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { transferFailedLine } from "@/lib/voice/handoff";
+import { sayLine } from "../xml";
 import { recordTransferFailed } from "@/lib/voice/transfer-failed";
 
 export const runtime = "nodejs";
@@ -142,13 +143,12 @@ function escapeXmlText(text: string): string {
  * this sentence answers the `handoffLine` the same caller heard seconds
  * earlier, in ONE language — theirs (F-010) — and the two must match or the
  * caller is told they are being connected in one language and that it
- * failed in another. `language="es-MX"` is what makes the Spanish sound
+ * failed in another. `sayLine`'s Spanish voice is what makes the Spanish sound
  * Spanish rather than Spanish words read by an English voice.
  */
 function failedXml(language: "en" | "es"): string {
-  const attr = language === "es" ? ` language="es-MX"` : "";
   const line = escapeXmlText(transferFailedLine(language));
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say${attr}>${line}</Say><Hangup/></Response>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${sayLine(language, line)}<Hangup/></Response>`;
 }
 
 /**

@@ -49,3 +49,18 @@ export function xmlText(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+/**
+ * The voice for every `<Say>` the carrier speaks before Sofía answers (the owner line's PIN prompts, the refusals,
+ * the failed-transfer apology). Without a `voice` attribute Telnyx uses its basic `man` voice, which the owner heard
+ * on the first owner-line call (2026-11-12) and ruled too robotic; he chose Amazon Polly's neural voices, which Telnyx
+ * offers with no key of our own (https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/say, read
+ * 2026-11-12: `Polly.VoiceId-Neural`). Joanna is a US English voice; Lupe is US Spanish, the Valley's Spanish. A Polly
+ * voice ignores `language`, so the Spanish line carries no `language="es-MX"` any more: the voice IS the language.
+ */
+export const SAY_VOICE = { en: "Polly.Joanna-Neural", es: "Polly.Lupe-Neural" } as const;
+
+/** One spoken line in one language. `text` must already be escaped for XML character data. */
+export function sayLine(language: "en" | "es", text: string): string {
+  return `<Say voice="${SAY_VOICE[language]}">${text}</Say>`;
+}

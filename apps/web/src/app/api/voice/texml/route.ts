@@ -64,7 +64,7 @@ import {
 import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallback-drill";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
-import { xmlText } from "./xml";
+import { sayLine, xmlText } from "./xml";
 import { ownerLimitXml, ownerPinAskXml, ownerPinUrl, ownerVerifyAskXml } from "./owner-line-xml";
 import { OWNER_LINE_ROLES } from "@/lib/owner-line/data-path";
 import { pinPepperConfigured } from "@/lib/owner-line/secrets";
@@ -155,8 +155,8 @@ const COPY = {
 /** The `<Say>` elements for one sentence in the profile's languages — English
  *  first when both, because order matters to a caller hearing it live. */
 function says(languages: Languages, copy: { en: string; es: string }): string {
-  const en = `<Say>${copy.en}</Say>`;
-  const es = `<Say language="es-MX">${copy.es}</Say>`;
+  const en = sayLine("en", copy.en);
+  const es = sayLine("es", copy.es);
   return languages === "es" ? es : languages === "both" ? en + es : en;
 }
 
@@ -654,7 +654,7 @@ function dialXml(
     // Speak the misconfig: a broken deploy should be audible on a test call,
     // never silent dead air (demo lesson).
     return {
-      body: `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Configuration error: the project identifier is not set.</Say><Hangup/></Response>`,
+      body: `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${sayLine("en", "Configuration error: the project identifier is not set.")}<Hangup/></Response>`,
       unsignedBridge: false,
     };
   }

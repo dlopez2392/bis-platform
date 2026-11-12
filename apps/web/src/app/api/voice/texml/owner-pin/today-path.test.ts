@@ -43,7 +43,7 @@ const PROFILE = {
   services: "-", languages: "en" as const, booking_enabled: true, after_hours: "hours_then_message" as const,
   enabled: true, trade_module: null, business_hours: null,
 };
-const CAP_DOC = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>We're sorry — we can't take more calls today. Please call back tomorrow.</Say><Hangup/></Response>`;
+const CAP_DOC = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say voice="Polly.Joanna-Neural">We're sorry — we can't take more calls today. Please call back tomorrow.</Say><Hangup/></Response>`;
 let HASH = "";
 const hit = (over: Record<string, unknown> = {}) => ({ status: "pin", enrollmentId: "e1", userId: USER, role: "staff",
   name: "Dan", language: "en", accountLanguage: null, pinParams: HASH.slice(0, 36), ...over });

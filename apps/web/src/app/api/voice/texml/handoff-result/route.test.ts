@@ -340,7 +340,7 @@ describe("voice texml handoff-result route", () => {
   it("speaks Spanish for an es profile", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "es" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
-    expect(xml).toContain('language="es-MX"');
+    expect(xml).toContain('voice="Polly.Lupe-Neural"');
     expect(xml).toContain("Lo siento, nadie pudo contestar en este momento.");
   });
 
@@ -354,14 +354,14 @@ describe("voice texml handoff-result route", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
     getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "es" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
-    expect(xml).toContain('<Say language="es-MX">Lo siento, nadie pudo contestar en este momento.</Say>');
+    expect(xml).toContain('<Say voice="Polly.Lupe-Neural">Lo siento, nadie pudo contestar en este momento.</Say>');
   });
 
   it("on a `both` line, a caller who asked in English hears English", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
     getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "en" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
-    expect(xml).not.toContain("es-MX");
+    expect(xml).not.toContain("Polly.Lupe-Neural");
     expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
   });
 
@@ -373,7 +373,7 @@ describe("voice texml handoff-result route", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "es" });
     getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "en" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
-    expect(xml).toContain('language="es-MX"');
+    expect(xml).toContain('voice="Polly.Lupe-Neural"');
   });
 
   it("the text-back after a failed transfer follows the same language (F-010)", async () => {
@@ -566,7 +566,7 @@ describe("voice texml handoff-result route", () => {
     getVoiceProfileMock.mockRejectedValue(new Error("boom"));
     getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "es" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
-    expect(xml).toContain('<Say language="es-MX">Lo siento, nadie pudo contestar en este momento.</Say>');
+    expect(xml).toContain('<Say voice="Polly.Lupe-Neural">Lo siento, nadie pudo contestar en este momento.</Say>');
     errSpy.mockRestore();
   });
 
