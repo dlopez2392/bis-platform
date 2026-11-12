@@ -1,20 +1,36 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import path from "node:path";
+
+// `e2e/**` is included for `.test.ts` only, never `.spec.ts`: Playwright
+// owns the specs and they would fail instantly under vitest. What lives
+// here is the pure decision module behind the fixture sweep — which
+// decides what gets DELETED from the shared dev database — and a decision
+// that dangerous belongs in a unit test rather than only in the e2e run
+// that acts on it.
+//
+// `ci/**` holds the tests for the CI preflight scripts under
+// .github/scripts/. Those scripts belong to no workspace package, and a
+// test that `pnpm check` does not collect proves nothing, so they are
+// tested from here.
+const SUITE = ["src/**/*.test.ts", "e2e/**/*.test.ts", "ci/**/*.test.ts"];
+
+// The web tests that need a real Supabase database: each loads .env.local
+// and creates and deletes real rows through serviceDb(). CI's verify-db job
+// runs them on its own stack (`--project live`); verify-app runs every other
+// file with NO Supabase value in scope (`--project unit`), so the two jobs
+// run in parallel (2026-11-12; ci-workflow.test.ts pins that together they
+// are exactly `pnpm check`). Name a new one `*.live.test.ts`. One that is
+// missed here fails red in verify-app, "SUPABASE_SERVICE_ROLE_KEY missing",
+// never silently. Every pattern sits inside SUITE, so the projects partition
+// it: `vitest run` with no `--project` (what `pnpm check` runs) runs both.
+const NEEDS_DATABASE = ["src/**/*.live.test.ts", "src/**/actions.returning-lead.test.ts"];
 
 export default defineConfig({
   test: {
-    // `e2e/**` is included for `.test.ts` only, never `.spec.ts`: Playwright
-    // owns the specs and they would fail instantly under vitest. What lives
-    // here is the pure decision module behind the fixture sweep — which
-    // decides what gets DELETED from the shared dev database — and a decision
-    // that dangerous belongs in a unit test rather than only in the e2e run
-    // that acts on it.
-    //
-    // `ci/**` holds the tests for the CI preflight scripts under
-    // .github/scripts/. Those scripts belong to no workspace package, and a
-    // test that `pnpm check` does not collect proves nothing, so they are
-    // tested from here.
-    include: ["src/**/*.test.ts", "e2e/**/*.test.ts", "ci/**/*.test.ts"],
+    projects: [
+      { extends: true, test: { name: "unit", include: SUITE, exclude: [...configDefaults.exclude, ...NEEDS_DATABASE] } },
+      { extends: true, test: { name: "live", include: NEEDS_DATABASE } },
+    ],
     // Runtime-only configuration is pinned OFF for the unit suite, whatever
     // the ambient environment holds. `originFrom` checks APP_ORIGIN ahead of
     // the Host header by design, so eleven tests that assert host-derived

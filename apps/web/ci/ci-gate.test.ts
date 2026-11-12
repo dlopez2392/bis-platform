@@ -1,0 +1,89 @@
+import { describe, it, expect } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// .github/scripts/ci-gate.sh is the whole of the two REQUIRED checks since
+// 2026-11-12. The ruleset on main requires check runs named exactly `verify`
+// and `e2e`, and it cannot be changed from here, so when each was split into
+// parts that run in parallel (verify-db and verify-app; e2e-migrations and
+// four e2e-shard runners), `verify` and `e2e` became small jobs that `need`
+// their parts, run `if: always()`, and pass only when this script says every
+// part SUCCEEDED. GitHub reports a skipped required check as passing, so the
+// one thing this script must never do is read anything but `success` as
+// green: not `skipped`, not `cancelled`, not an empty string from a misspelt
+// `needs.<id>.result`. The parts never skip a whole job (a docs-only push
+// skips their STEPS and still ends `success`), so no exception is needed.
+//
+// Run for real, through bash, with nothing but the env each case hands it.
+
+const SCRIPT = fileURLToPath(new URL("../../../.github/scripts/ci-gate.sh", import.meta.url)).replace(/\\/g, "/");
+
+/** Git for Windows' bash (never WSL's launcher), or plain bash elsewhere. No bash is a FAILURE. */
+function bashExecutable(): string {
+  if (process.platform !== "win32") return "bash";
+  const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
+  const candidates = [
+    ...[process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean).map((b) => path.join(b!, "Git")),
+    path.resolve(execPath, "..", "..", ".."),
+  ].map((r) => path.join(r, "usr", "bin", "bash.exe"));
+  const found = candidates.find((c) => fs.existsSync(c));
+  if (!found) throw new Error(`No Git for Windows bash found (looked at: ${candidates.join(", ")})`);
+  return found;
+}
+const BASH = bashExecutable();
+
+function gate(args: string[], env: Record<string, string>) {
+  const r = spawnSync(BASH, [SCRIPT, ...args], {
+    encoding: "utf8",
+    // Nothing but PATH and what the case hands it (NODE_ENV only because
+    // Next's ProcessEnv type requires it; the script never reads it).
+    env: { NODE_ENV: "test", PATH: process.env.PATH ?? "", ...env },
+  });
+  return { status: r.status, output: `${r.stdout}${r.stderr}` };
+}
+
+describe("ci-gate.sh: a required check is green only when every part it names succeeded", () => {
+  it("passes when every named part's result is success, naming each", () => {
+    const r = gate(["VERIFY_DB", "VERIFY_APP"], { VERIFY_DB: "success", VERIFY_APP: "success" });
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).toMatch(/VERIFY_DB: success/);
+    expect(r.output).toMatch(/VERIFY_APP: success/);
+    expect(r.output).not.toContain("::error::");
+  });
+
+  it.each(["failure", "cancelled", "skipped"])("refuses a part whose result is %s, naming it (mutation: accept `skipped` → FAILS)", (result) => {
+    const r = gate(["E2E_MIGRATIONS", "E2E_SHARD"], { E2E_MIGRATIONS: "success", E2E_SHARD: result });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(new RegExp(`::error::E2E_SHARD is ${result}`));
+  });
+
+  it("refuses a part whose result is empty or unset: a misspelt needs.<id>.result is an empty string, never a pass", () => {
+    const empty = gate(["VERIFY_DB", "VERIFY_APP"], { VERIFY_DB: "success", VERIFY_APP: "" });
+    expect(empty.status, empty.output).toBe(1);
+    expect(empty.output).toMatch(/::error::VERIFY_APP is empty or unset/);
+    const unset = gate(["VERIFY_DB", "VERIFY_APP"], { VERIFY_DB: "success" });
+    expect(unset.status, unset.output).toBe(1);
+    expect(unset.output).toMatch(/::error::VERIFY_APP is empty or unset/);
+  });
+
+  it("names EVERY part that did not succeed, not only the first", () => {
+    const r = gate(["A_RESULT", "B_RESULT", "C_RESULT"], { A_RESULT: "failure", B_RESULT: "success", C_RESULT: "cancelled" });
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::A_RESULT is failure/);
+    expect(r.output).toMatch(/::error::C_RESULT is cancelled/);
+  });
+
+  it("refuses to pass with nothing to check (mutation: an empty arg list exits 0 → FAILS)", () => {
+    const r = gate([], {});
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::/);
+  });
+
+  it("refuses an argument that is not an environment variable name, rather than reading something else", () => {
+    const r = gate(["needs.verify-db.result"], {});
+    expect(r.status, r.output).toBe(1);
+    expect(r.output).toMatch(/::error::.*not a variable name/);
+  });
+});

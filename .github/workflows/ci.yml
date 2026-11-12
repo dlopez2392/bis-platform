@@ -26,10 +26,10 @@ name: CI
 #           how, and how that is checked).
 #
 # The CI project, `bis-ci` (built by .github/workflows/ci-project-setup.yml),
-# is read by ONE step here: e2e's check that it holds every migration of the
-# branch ("CI project FIRST", CLAUDE.md), read-only, with the DB URL scoped to
-# that step alone. Neither job writes to it, and neither holds its secret key.
-# Vercel Preview and screenshots.yml still run on it.
+# is read by ONE step here: e2e-migrations' check that it holds every
+# migration of the branch ("CI project FIRST", CLAUDE.md), read-only, with
+# the DB URL scoped to that step alone. No job writes to it, and none holds
+# its secret key. Vercel Preview and screenshots.yml still run on it.
 #
 # Of the workflows on main, only seed-demo.yml and ops-health.yml reach
 # production, through the secrets held by the `production` environment (main
@@ -39,46 +39,65 @@ name: CI
 # restoring or re-seeding the CI project: docs/runbooks/ci-supabase-project.md.
 #
 # The targets are enforced, not assumed, by .github/scripts/ci-target-guard.sh,
-# twice in each job: first (--before-local-stack, straight after checkout) it
+# in every part: first (--before-local-stack, straight after checkout) it
 # refuses ANY Supabase value already in scope, and the migration check's
 # BIS_CI_SUPABASE_DB_URL too, so no cloud credential reaches the suites or the
-# app at all; then, once the stack is up (--local-stack), it refuses any API
-# or DB URL that is not on the runner's loopback, and any CI-project value
-# beside them. A Clerk key from the production instance is refused in both.
+# app at all; then, in the two parts that start a stack, once it is up
+# (--local-stack), it refuses any API or DB URL that is not on the runner's
+# loopback, and any CI-project value beside them. A Clerk key from the
+# production instance is refused in both.
 # The secrets that hold production's values — the ones NAMED
 # NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL —
 # are never read here; apps/web/ci/ci-workflow.test.ts fails `pnpm check` if
 # one ever is.
 #
-#   verify  typecheck + lint + unit tests + production build. This is exactly
-#           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
-#           more and no less, so CI and a contributor's terminal cannot
-#           disagree about what "green" means. The guard runs and the stack
-#           in front of them are preflights, not gates; the stack
-#           diagnostics beside them (2026-10-13) are read-only and exit 0.
+# THE TWO REQUIRED CHECKS ARE GATES (2026-11-12). The ruleset on main
+# requires check runs named exactly `verify` and `e2e`. Each used to be one
+# job; a push took ~22 minutes to go green, almost all of it e2e's 999
+# seconds of serial Playwright and verify's serial `pnpm check`. Each is now a
+# small job that `needs` its PARTS, which run in parallel on their own
+# runners, and is green only when .github/scripts/ci-gate.sh reads every
+# part's result as `success` (`if: always()`, so a failed part makes the gate
+# RED rather than skipped: GitHub counts a skipped required check as passing).
 #
-#   e2e     checks that the CI project holds every migration in the branch
-#           (the "CI project FIRST" rule's gate, since no gate runs on that
-#           project any more), starts its own stack, seeds it (`ci:seed:local`:
-#           "Test Client One" and the rows the specs assume), then the
-#           Playwright journey. Starts beside verify, not after it, and joins
-#           no repo-wide queue: until 2026-10-08 every run shared one seeded
-#           account on bis-ci, so runs were serialized repo-wide and specs
-#           timed out under contention there (four in one 15.2-minute run that
-#           day). Each run now seeds its own copy of the DATABASE. What runs
-#           still share is listed in the e2e job's own comment below: above
-#           all the one Clerk development instance, plus the Stripe TEST
-#           account, the CI OpenAI key and a read-only look at bis-ci.
+#   verify  = verify-db + verify-app: exactly `pnpm check` and
+#           `pnpm --filter web build` from CLAUDE.md, no more and no less, so
+#           CI and a contributor's terminal cannot disagree about what
+#           "green" means (ci-workflow.test.ts pins that the parts together
+#           are `pnpm check`, package by package).
+#     verify-db   its own stack, then the packages/db suite and the web tests
+#                 that need a database (vitest project `live`).
+#     verify-app  no stack and no Supabase value at all: typecheck, lint, the
+#                 rest of the web suite (vitest project `unit`), the build.
+#           The guard runs and the stack are preflights, not gates; the stack
+#           diagnostics (2026-10-13) are read-only and exit 0.
 #
-# Both jobs REFUSE to run without their credentials, naming what is missing
+#   e2e     = e2e-migrations + e2e-shard.
+#     e2e-migrations  the CI project holds every migration in the branch (the
+#           "CI project FIRST" rule's gate, since no gate runs on that project
+#           any more). Bash and psql only.
+#     e2e-shard  four runners, each its own stack, seeded (`ci:seed:local`:
+#           "Test Client One" and the rows the specs assume), then its quarter
+#           of the Playwright journey (`--shard=N/4`). Starts beside verify,
+#           not after it, and joins no repo-wide queue: until 2026-10-08 every
+#           run shared one seeded account on bis-ci, so runs were serialized
+#           repo-wide and specs timed out under contention there (four in one
+#           15.2-minute run that day). Each shard seeds its own copy of the
+#           DATABASE. What shards and runs still share is listed in
+#           e2e-shard's own comment below: above all the one Clerk development
+#           instance, plus the Stripe TEST account and the CI OpenAI key.
+#
+# Every part REFUSES to run without its credentials, naming what is missing
 # (the guard's check 1). A gate that quietly skips when it cannot run is how
 # the pre-CI state came about in the first place.
 #
 # The one sanctioned skip (2026-10-07): a push to a branch whose WHOLE diff
-# against main is docs still runs both jobs to a green end, but stops after
-# the guard and .github/scripts/ci-docs-only.sh — no install, no suites, no
-# build, no Playwright, so no Supabase traffic. It is loud (a ::notice:: on
-# the run), never applies to a push to main, and any doubt means the full run.
+# against main is docs still runs every part to a green end, but each stops
+# after the guard and .github/scripts/ci-docs-only.sh — no install, no suites,
+# no build, no Playwright, so no Supabase traffic. It is loud (a ::notice::
+# on the run), never applies to a push to main, and any doubt means the full
+# run. The parts skip STEPS, never the job, so each still ends `success` and
+# the gates need no docs-only exception.
 
 on:
   push:
@@ -100,7 +119,7 @@ on:
 #   Re-running an OLD run of a branch joins that branch's group too, so it
 #   cancels the branch's current run; re-run the newest one instead.
 #
-#   Neither job has a group of its own since 2026-10-08. verify had one,
+#   No job has a group of its own since 2026-10-08. verify had one,
 #   `verify-ci-supabase`, repo-wide, because every verify ran its db suite
 #   against the one shared cloud project and two at once failed on wall clock
 #   (2026-09-17: two branches overlapped 13.5 minutes and both failed inside
@@ -110,7 +129,7 @@ on:
 #   run shared Test Client One on bis-ci. Each job now runs on a stack inside
 #   its own runner, so no two runs contend for a database and branches' runs
 #   go in parallel. What concurrent e2e runs still share (the Clerk development
-#   instance above all) is listed in the e2e job's comment, with why each is
+#   instance above all) is listed in e2e-shard's comment, with why each is
 #   safe to share. The per-branch group above still supersedes a branch's own
 #   stale run, and still never cancels main.
 concurrency:
@@ -126,26 +145,33 @@ env:
   # pointed the e2e run's cancel links at the production domain instead of the
   # local server. A gate must test the code, not the deployment's settings.
   NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
-  # Secrets both jobs need. Sending is FAKE everywhere except
-  # VERCEL_ENV=production (.env.example), so a CI run never emails a real
-  # address. Clerk stays the development instance, which the guard enforces.
+  # Secrets the parts need (every part's guard requires the Clerk pair).
+  # Sending is FAKE everywhere except VERCEL_ENV=production (.env.example), so
+  # a CI run never emails a real address. Clerk stays the development
+  # instance, which the guard enforces.
   #
-  # NO Supabase value lives here (since 2026-10-08). Each job reads its four
-  # from the stack it starts. A value here would reach both jobs:
+  # NO Supabase value lives here (since 2026-10-08). A part that starts a
+  # stack reads its four from it. A value here would reach every job:
   # ci-target-guard.sh --before-local-stack refuses that at run time, and
   # ci-workflow.test.ts in review.
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
   CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
 
 jobs:
-  verify:
+  # ---- verify = verify-db + verify-app (2026-11-12) ---------------------------
+  #
+  # Until 2026-11-12 one job: a stack (169s), then `pnpm check` (520s:
+  # typecheck 69, lint 48, the db suite 181, the web suite 221, all serial),
+  # then the build (80s): 13.3 minutes. Only the db suite and six web test
+  # files need a database, so the job is split there, and the two halves run
+  # side by side in about 7 minutes each.
+  verify-db:
     runs-on: ubuntu-latest
-    # 35, not 20, set when the db suite ran against the shared cloud project:
-    # the first green run spent 15m30s in `pnpm check` alone, because every
-    # db test was a round trip to us-east-1 from a runner. On the local stack
-    # (2026-10-08) those round trips are loopback; lower this once enough
-    # runs have been timed there to know the new headroom.
-    timeout-minutes: 35
+    # About 7 minutes measured (stack 169s, db suite 181s, the live web tests
+    # a few seconds, setup ~30s). 35 was the old one-job verify's cap, set
+    # when its db suite ran against the shared cloud project; 25 keeps more
+    # than three times the headroom.
+    timeout-minutes: 25
     # NO `concurrency:` here, on purpose (2026-10-08). verify used to join one
     # repo-wide group, `verify-ci-supabase`, because every run shared one cloud
     # database; see the header. Its database is now its own, so it runs the
@@ -155,21 +181,21 @@ jobs:
 
       # Before `pnpm install` and before anything touches a database. Needs
       # only bash. Names every problem it finds, prints no value. Here it
-      # refuses any Supabase value at all: verify has none until its own
+      # refuses any Supabase value at all: this part has none until its own
       # stack writes them, three steps below.
-      - name: Check that verify holds no cloud Supabase credential
+      - name: Check that verify-db holds no cloud Supabase credential
         run: bash .github/scripts/ci-target-guard.sh --before-local-stack
 
       # DOCS-ONLY PUSHES END HERE, GREEN. Writes docs_only=true only for a
       # push to a branch other than main whose WHOLE diff against main is
       # docs (*.md, docs/**, .claude/**, LICENSE, .github/ISSUE_TEMPLATE/**,
       # never a code extension, never a workflow); every step below is then
-      # skipped and the job still ends `success` on the head SHA, which is
-      # what the ruleset on main requires. Anything else, any doubt and any
-      # error mean `false`: the full run. Why it exists, and why a step and
-      # not a path filter or a job-level `if:`: the script's header.
-      # Every later step carries the same condition, written `!= 'true'` so a
-      # missing output runs everything (pinned by ci-workflow.test.ts).
+      # skipped and the job still ends `success`, which is what its gate
+      # needs. Anything else, any doubt and any error mean `false`: the full
+      # run. Why it exists, and why a step and not a path filter or a
+      # job-level `if:`: the script's header. Every later step carries the
+      # same condition, written `!= 'true'` so a missing output runs
+      # everything (pinned by ci-workflow.test.ts).
       - name: Decide whether this push changes only docs
         id: scope
         run: bash .github/scripts/ci-docs-only.sh
@@ -200,7 +226,7 @@ jobs:
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-supabase-cli.sh
 
-      # verify's database, inside this runner: `supabase start` with no
+      # This part's database, inside this runner: `supabase start` with no
       # migrations, then the CI project's bootstrap, then the branch's own
       # migrations by `supabase db push`, in that order (grants attach when a
       # table is created). Writes the stack's URL, keys and DB URL to
@@ -212,16 +238,22 @@ jobs:
       # The same guard, now on the values the suites will actually read: the
       # API and DB URL must be this runner's loopback, and the stack's REST
       # API must answer with its service key.
-      - name: Check that verify targets its local Supabase stack
+      - name: Check that verify-db targets its local Supabase stack
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-target-guard.sh --local-stack
 
-      # `pnpm check` = typecheck + lint + every package's vitest suite,
-      # verbatim from CLAUDE.md. The db suite and the live web tests run
-      # against the local stack and clean up after themselves.
-      - name: pnpm check
+      # `pnpm check`'s test half, the part that needs a database: the whole
+      # packages/db suite, then the web tests that need one (vitest project
+      # `live`, apps/web/vitest.config.ts). Both create and delete their own
+      # rows on this runner's stack. verify-app runs the rest of `pnpm check`;
+      # ci-workflow.test.ts pins that the two together are all of it.
+      - name: packages/db tests
         if: steps.scope.outputs.docs_only != 'true'
-        run: pnpm check
+        run: pnpm --filter @bis/db test
+
+      - name: apps/web tests that need a database
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm --filter web test --project live
 
       # NOT a gate (2026-10-13). Kong's 502s came back in bursts with its
       # upstream keep-alive already off; the hypothesis is Kong running out
@@ -231,17 +263,10 @@ jobs:
       # the baseline a red one is read against. Numbers only, no log; exits 0
       # always (ci-stack-diagnostics.test.ts). `!cancelled()`, not
       # `always()`: a cancelled run has nothing to compare.
-      - name: Stack baseline after pnpm check
+      - name: Stack baseline after the database tests
         if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}
         timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --baseline
-
-      # Catches the class `tsc` cannot: Next evaluates route modules during
-      # page-data collection. Vercel builds only on main, so without this a
-      # branch can look green and break the production deploy on merge.
-      - name: Production build
-        if: steps.scope.outputs.docs_only != 'true'
-        run: pnpm --filter web build
 
       # NOT a gate: on a red run only, LAST, while the stack is still up (it
       # goes with the runner). Containers' restarts and OOM flags, Kong's
@@ -253,59 +278,181 @@ jobs:
         timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --failure
 
-  e2e:
+  verify-app:
+    runs-on: ubuntu-latest
+    # About 7 minutes measured (typecheck 69s, lint 48s, the web unit suite
+    # ~215s, the build 80s, setup ~30s).
+    timeout-minutes: 20
+    # No stack and no Supabase value, ever: nothing here reads a database.
+    # The web unit suite is what a developer runs with no env (the live
+    # tests load .env.local themselves and are verify-db's); the build
+    # prerenders only /_not-found (every other route is dynamic, read from
+    # the build's own route table, 2026-11-12), and the database clients
+    # read their env when called, never at import. A test or route that
+    # does need a database fails red here, naming the missing variable.
+    steps:
+      - uses: actions/checkout@v5
+
+      # verify-db's guard, for the same reason; this part never starts a
+      # stack, so its no-Supabase-value check holds for the whole job.
+      - name: Check that verify-app holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
+
+      # verify-db's decision, made again here so each part's skip is visible
+      # in its own log. Same inputs, same answer.
+      - name: Decide whether this push changes only docs
+        id: scope
+        run: bash .github/scripts/ci-docs-only.sh
+
+      - uses: pnpm/action-setup@v6
+        if: steps.scope.outputs.docs_only != 'true'
+
+      - uses: actions/setup-node@v5
+        if: steps.scope.outputs.docs_only != 'true'
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.scope.outputs.docs_only != 'true'
+
+      # `pnpm check`'s first two thirds, verbatim: the root's recursive
+      # scripts, so a new package is covered without an edit here.
+      - name: Typecheck
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm typecheck
+
+      - name: Lint
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm lint
+
+      - name: apps/web tests that need no database
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm --filter web test --project unit
+
+      # Catches the class `tsc` cannot: Next evaluates route modules during
+      # page-data collection. Vercel builds only on main, so without this a
+      # branch can look green and break the production deploy on merge.
+      - name: Production build
+        if: steps.scope.outputs.docs_only != 'true'
+        run: pnpm --filter web build
+
+  # The required check. Green only when both parts succeeded; see the header
+  # and .github/scripts/ci-gate.sh. `always()`, so a failed or cancelled part
+  # turns it red instead of skipping it.
+  verify:
+    needs: [verify-db, verify-app]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Every part of verify succeeded
+        env:
+          VERIFY_DB: ${{ needs.verify-db.result }}
+          VERIFY_APP: ${{ needs.verify-app.result }}
+        run: bash .github/scripts/ci-gate.sh VERIFY_DB VERIFY_APP
+
+  # ---- e2e = e2e-migrations + e2e-shard (2026-11-12) --------------------------
+
+  # "Every new migration goes to the CI project FIRST" (CLAUDE.md). No gate
+  # runs on the CI project any more (every part builds its database from the
+  # branch's files), so THIS is that rule's gate: every migration file in the
+  # branch must be in the CI project's history, or it fails naming each one
+  # and the fix. A migration the CI project has and the branch lacks (another
+  # branch applied first) is not a failure.
+  #
+  # Its own job since 2026-11-12, not a step of each shard: one read of bis-ci
+  # per push rather than four. It was already the first thing e2e did and
+  # failed in about 12 seconds (6 of the last 10 red runs); what the job buys
+  # is the RE-RUN. The shards no longer stop behind it, so once the migration
+  # is pushed to bis-ci, "Re-run failed jobs" re-runs this and the gate, about
+  # a minute, instead of the whole 22-minute e2e.
+  #
+  # The ONLY place ci.yml reads the CI project. Its DB URL is scoped to the
+  # check's step, under a name no app code reads, the script checks it is the
+  # CI project's Session pooler user before psql sees it, and it reads in one
+  # read-only transaction. Needs only bash and psql: no install, no stack.
+  e2e-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      # The before-local-stack guard although this part starts no stack: it
+      # refuses any Supabase value in the JOB's scope, BIS_CI_SUPABASE_DB_URL
+      # included, which must live on the check's step alone.
+      - name: Check that e2e-migrations holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
+
+      - name: Decide whether this push changes only docs
+        id: scope
+        run: bash .github/scripts/ci-docs-only.sh
+
+      - name: Check that the CI project has every migration in this branch
+        if: steps.scope.outputs.docs_only != 'true'
+        env:
+          BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+          BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+        run: bash .github/scripts/ci-migrations-applied.sh
+
+  e2e-shard:
     runs-on: ubuntu-latest
     # 40 since 2026-10-26: the Chromium step's worst case grew to 18 minutes
-    # (two 6-minute attempts and up to 4 minutes' wait for apt's lock).
-    # 30 minutes, set when e2e ran on the shared project. Its last run there on
-    # main (752c070f) took 8.0 minutes, 7.1 of them in Playwright; the stack
-    # adds about two (verify's: `supabase start` 85s, schema 28s).
+    # (two 6-minute attempts and up to 4 minutes' wait for apt's lock). A
+    # shard's own work is about 10 minutes (2026-11-12 estimate, below).
     timeout-minutes: 40
-    # NO `needs: verify` and NO `concurrency:`, on purpose (2026-10-08).
+    # FOUR SHARDS (2026-11-12). Until then one job ran all 387 tests serially
+    # (`workers: 1`, `fullyParallel: false`: the specs share one database and
+    # assert on rows they create), 999 seconds of tests plus ~5 minutes of
+    # stack, seed and build. Each shard is a whole e2e run on its OWN runner
+    # and stack, so the shared-database reason for one worker still holds
+    # inside each, and playwright.config.ts is unchanged. Playwright splits by
+    # test COUNT, whole files at a time, in file order; on run 43267445267's
+    # timings the four shards hold about 342, 271, 155 and 214 seconds of
+    # tests (billing-pause.spec.ts, 125s alone, is in the first). setup and
+    # teardown are dependency projects, so every shard runs them; the phone
+    # project lands in the last shard; a shard with no test of a project
+    # simply runs none (checked with `--list` against Playwright 1.62).
     #
-    # `needs: verify` put e2e AFTER verify because the two raced for one
-    # database. On production's project, on b9f31dc (the merge commit for
-    # #85) — the SAME TREE that had just passed both jobs on its own branch —
-    # three runs failed three different tests, every one a wall-clock timeout
-    # (auth.setup.ts:93, blueprints.spec.ts:29, auth.setup.ts:51): contention,
-    # not a defect. Each job now has its own database inside its own runner, so
-    # verify and e2e no longer race for one, and e2e starts beside verify: a
-    # push's wall clock is the longer of the two jobs, not their sum plus a
-    # queue.
+    # fail-fast OFF: one red shard must not cancel the others, or a run would
+    # name one failing spec and hide the rest. The matrix's length and the
+    # `/4` in the Playwright step are pinned together by ci-workflow.test.ts.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # NO `needs` and NO `concurrency:`, on purpose (2026-10-08, kept
+    # 2026-11-12). `needs: verify` put e2e after verify because the two raced
+    # for one database (the b9f31dc timeouts: contention, not a defect); each
+    # part now has its own, so the shards start beside verify. They do not
+    # wait for e2e-migrations either (above). The group `e2e-ci-supabase`
+    # serialized every e2e run because every run shared one seeded account
+    # on bis-ci; each shard seeds its own copy. ci-workflow.test.ts fails if
+    # any of these lines comes back.
     #
-    # A red verify still blocks the merge without `needs`: the ruleset on main
-    # requires BOTH checks green on the head commit. (`needs` would only add a
-    # way for e2e to report `skipped`.) What it costs: e2e also runs on a
-    # commit whose verify is red, on a free runner of this public repo.
-    #
-    # The group `e2e-ci-supabase` serialized every e2e run in the repo because
-    # every run shared one seeded account on bis-ci ("Test Client One", its
-    # pipeline card, its forms, its unread counts). Each run now seeds its own
-    # copy of that account in its own stack. ci-workflow.test.ts fails if
-    # either line comes back.
-    #
-    # What concurrent e2e runs (2-3 branches at once, plus any run a cancel
-    # killed before teardown) STILL share, and why each is safe:
-    #   - The one Clerk development instance. Every run mints its own users
+    # What concurrent shards and runs (four shards a push, 2-3 branches at
+    # once, plus any run a cancel killed before teardown) STILL share, and
+    # why each is safe:
+    #   - The one Clerk development instance. Every shard mints its own users
     #     and orgs there (an agency user and an org of its own, a client user
-    #     and org, the company blueprints.spec.ts adds), and they count
-    #     against the instance's limits together. Every run's seed names the
-    #     SAME Clerk org for "Test Client One", but nothing joins it any more:
-    #     a Clerk org here holds at most 5 members, and until 2026-10-08 each
-    #     run's agency user took a seat in it (e2e/auth.setup.ts). The sweep
-    #     deletes users and orgs this suite named once they are 30 minutes old
-    #     (e2e/fixtures/stale.ts), so one run never deletes another's, and a
-    #     killed run's leftovers last until the next setup on any branch.
+    #     and org, the company blueprints.spec.ts adds), named with Date.now()
+    #     stamps, and they count against the instance's limits together. Every
+    #     shard's seed names the SAME Clerk org for "Test Client One", but
+    #     nothing joins it any more: a Clerk org here holds at most 5 members,
+    #     and until 2026-10-08 each run's agency user took a seat in it
+    #     (e2e/auth.setup.ts). The sweep deletes users and orgs this suite
+    #     named once they are 30 minutes old (e2e/fixtures/stale.ts), so one
+    #     shard never deletes another's, and a killed run's leftovers last
+    #     until the next setup on any branch.
     #   - The Stripe TEST account (plans.spec.ts, billing.spec.ts): each run's
     #     own products, prices, customers and subscriptions, named or tagged
     #     per run; the target guard refuses a live key.
-    #   - The CI OpenAI key: one short model call per run.
-    #   - bis-ci, read-only, by the migration check alone.
+    #   - The CI OpenAI key: one short model call, in whichever shard holds
+    #     concierge.spec.ts.
     env:
-      # NO Supabase value, as in verify: the stack writes its four to
-      # GITHUB_ENV, and the guard refuses any that is already set. The CI
-      # project's one value this job reads is scoped to the migration check
-      # step below.
+      # NO Supabase value: the stack writes its four to GITHUB_ENV, and the
+      # guard refuses any that is already set.
       #
       # The two e2e tests that call the model, both in concierge.spec.ts,
       # skip themselves when this is unset: "a visitor's message comes back
@@ -313,7 +460,7 @@ jobs:
       # inbox thread as Web chat, every turn marked". Until 2026-09-21 no
       # machine had ever proved a real answer comes back (the first proof was
       # a person, in a browser, on Test Client One).
-      # Scoped to THIS job on purpose: the unit suites under `verify` stub or
+      # Scoped to THIS job on purpose: the unit suites under verify stub or
       # clear the key themselves, and a job that never talks to OpenAI should
       # not carry the credential. The secret is a separate CI key (`bis-ci`),
       # revocable on its own; the cost is one short model call per run. When
@@ -370,40 +517,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The same guard as verify's, for the same reason: no cloud Supabase
-      # value may reach this job's suites or its app. This job also creates
-      # and deletes Clerk users, so the development instance is checked here.
-      - name: Check that e2e holds no cloud Supabase credential
+      # The same guard as verify's parts', for the same reason: no cloud
+      # Supabase value may reach this job's suites or its app. This job also
+      # creates and deletes Clerk users, so the development instance is
+      # checked here.
+      - name: Check that e2e-shard holds no cloud Supabase credential
         run: bash .github/scripts/ci-target-guard.sh --before-local-stack
 
-      # The same decision as verify's, made again here rather than read from
-      # verify's outputs, so each job's skip is visible in its own log. Same
-      # inputs (the event, the ref, the branch's diff against main), same answer.
+      # The same decision as verify's parts, made again here so each part's
+      # skip is visible in its own log. Same inputs, same answer.
       - name: Decide whether this push changes only docs
         id: scope
         run: bash .github/scripts/ci-docs-only.sh
-
-      # "Every new migration goes to the CI project FIRST" (CLAUDE.md). No gate
-      # runs on the CI project any more (both jobs build their database from
-      # the branch's files), so THIS is that rule's gate: every migration file
-      # in the branch must be in the CI project's history, or the job fails
-      # naming each one and the fix. A migration the CI project has and the
-      # branch lacks (another branch applied first) is not a failure. First,
-      # because it takes a second and a red one makes the rest moot. Here, in
-      # a required check, and not in a job of its own, because a new job is not
-      # required until the ruleset says so; not in verify, which holds no
-      # CI-project value at all.
-      #
-      # The ONLY place ci.yml reads the CI project. Its DB URL is scoped to
-      # this step, under a name no app code reads, the script checks it is
-      # the CI project's Session pooler user before psql sees it, and it reads
-      # in one read-only transaction. Needs only bash and psql.
-      - name: Check that the CI project has every migration in this branch
-        if: steps.scope.outputs.docs_only != 'true'
-        env:
-          BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
-          BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
-        run: bash .github/scripts/ci-migrations-applied.sh
 
       - uses: pnpm/action-setup@v6
         if: steps.scope.outputs.docs_only != 'true'
@@ -417,29 +542,29 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.scope.outputs.docs_only != 'true'
 
-      # Verify's CLI, verify's script. See verify's steps.
+      # verify-db's CLI, verify-db's script. See verify-db's steps.
       - name: Install the Supabase CLI
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-supabase-cli.sh
 
-      # verify's stack plus ONE thing: PostgREST trusts the Clerk development
-      # instance whose Frontend API domain NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-      # names, as the CI project does, so the signed-in pages read through
-      # userDb() exactly as they do there. The script refuses a production
-      # instance's key and reads the trust back from the running PostgREST.
-      # BEFORE Playwright, which builds the app: NEXT_PUBLIC_SUPABASE_URL is
-      # baked in at build time.
+      # verify-db's stack plus ONE thing: PostgREST trusts the Clerk
+      # development instance whose Frontend API domain
+      # NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY names, as the CI project does, so
+      # the signed-in pages read through userDb() exactly as they do there.
+      # The script refuses a production instance's key and reads the trust
+      # back from the running PostgREST. BEFORE Playwright, which builds the
+      # app: NEXT_PUBLIC_SUPABASE_URL is baked in at build time.
       - name: Start a local Supabase stack that trusts the Clerk development instance
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-local-supabase.sh --trust-clerk-dev-instance
 
-      - name: Check that e2e targets its local Supabase stack
+      - name: Check that e2e-shard targets its local Supabase stack
         if: steps.scope.outputs.docs_only != 'true'
         run: bash .github/scripts/ci-target-guard.sh --local-stack
 
       # The account the specs read ("Test Client One", its contact, its
       # "Sales" pipeline and card, its custom field, one inert number), in
-      # THIS run's stack, under the Clerk development instance's real "Test
+      # THIS shard's stack, under the Clerk development instance's real "Test
       # Client One" organization id. It then verifies every row the specs
       # assume and fails naming what is missing. `--local-stack` refuses any
       # URL that is not this runner's loopback (packages/db/src/ci/target.ts).
@@ -481,8 +606,10 @@ jobs:
       # playwright.config.ts builds and starts the production server itself
       # (`pnpm build && pnpm start`), creates a per-run agency user and a
       # per-run fixture client and signs each in with a Clerk sign-in ticket,
-      # runs every spec serially, and deletes both in teardown. Stale fixtures
-      # a killed run left behind are swept at the top of the next run.
+      # runs this shard's specs serially, and deletes both in teardown. Stale
+      # fixtures a killed run left behind are swept at the top of the next
+      # run. `pnpm --filter web test:e2e` is CLAUDE.md's gate; pnpm hands the
+      # `--shard` after it to `playwright test`.
       #
       # NO TRACE UPLOAD, on purpose (2026-10-07). This repo is public, so its
       # Actions artifacts are downloadable by any signed-in GitHub user, and a
@@ -494,13 +621,30 @@ jobs:
       # apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one comes back.
       - name: Playwright
         if: steps.scope.outputs.docs_only != 'true'
-        run: pnpm --filter web test:e2e
+        run: pnpm --filter web test:e2e --shard=${{ matrix.shard }}/4
 
-      # verify's failure dump, for the same reason: see verify's last step.
+      # verify-db's failure dump, for the same reason: see its last step.
       - name: Stack diagnostics on failure
         if: failure()
         timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --failure
+
+  # The required check. Green only when the migration check and every shard
+  # succeeded; see the header and .github/scripts/ci-gate.sh. `always()`, so
+  # a failed or cancelled part turns it red instead of skipping it. For the
+  # matrix, GitHub's result is `success` only when every shard succeeded.
+  e2e:
+    needs: [e2e-migrations, e2e-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Every part of e2e succeeded
+        env:
+          E2E_MIGRATIONS: ${{ needs.e2e-migrations.result }}
+          E2E_SHARD: ${{ needs.e2e-shard.result }}
+        run: bash .github/scripts/ci-gate.sh E2E_MIGRATIONS E2E_SHARD
 
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
   # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers
@@ -524,8 +668,8 @@ jobs:
       # auto-detects pnpm from the repo root's "packageManager" field even
       # with no `cache:` input named — which then fails
       # "Unable to locate executable file: pnpm" because this job installs
-      # no pnpm (confirmed on 490eda13's run). verify and e2e DO use pnpm
-      # (pnpm/action-setup runs before their setup-node) and keep their
+      # no pnpm (confirmed on 490eda13's run). verify-db, verify-app and
+      # e2e-shard DO use pnpm (pnpm/action-setup runs before their setup-node) and keep their
       # `cache: pnpm`; this job needs neither pnpm nor its cache.
       - uses: actions/setup-node@v5
         with:

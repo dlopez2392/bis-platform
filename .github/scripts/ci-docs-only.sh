@@ -7,13 +7,15 @@
 # all test-account setup and teardown. A docs-only push cannot change what
 # those suites measure, so it should not pay for them.
 #
-# How ci.yml uses it: both `verify` and `e2e` run this as their third step
-# (after checkout and the target guard, `id: scope`), and every later step
-# carries `if: steps.scope.outputs.docs_only != 'true'`. Both jobs therefore
-# always RUN and end `success` on the head SHA, which is what the ruleset on
-# main requires; a docs-only push just ends early. (A workflow path filter
-# would leave the required checks Pending forever; a job-level `if:` reports
-# `skipped` and takes e2e's `needs: verify` down with it.)
+# How ci.yml uses it: every part of the two required checks (verify-db,
+# verify-app, e2e-migrations and each e2e-shard, since 2026-11-12) runs this
+# as its third step (after checkout and the target guard, `id: scope`), and
+# every later step carries `if: steps.scope.outputs.docs_only != 'true'`.
+# Every part therefore always RUNS and ends `success`, so the `verify` and
+# `e2e` gates, which accept nothing else (ci-gate.sh), go green on the head
+# SHA; a docs-only push just ends early. (A workflow path filter would leave
+# the required checks Pending forever; a job-level `if:` reports `skipped`,
+# which the gates refuse.)
 #
 # Writes `docs_only=true` or `docs_only=false` to $GITHUB_OUTPUT. `true` only
 # when ALL of these hold; anything else, including any error, is `false`, so

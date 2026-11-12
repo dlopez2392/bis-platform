@@ -9,7 +9,7 @@
   before follow-up work).
 - Gates before any merge: `pnpm check` (typecheck + lint + db + web tests),
   `pnpm --filter web build`, `pnpm --filter web test:e2e`. CI runs all three
-  on every push (`.github/workflows/ci.yml`, jobs `verify` and `e2e`).
+  on every push (`.github/workflows/ci.yml`, checks `verify` and `e2e`).
   Push to `main` deploys production.
 - **The server enforces those checks on `main` (since 2026-09-19).** The
   repo is PUBLIC, and a ruleset on `main` (id 23712687, no bypass actors —
@@ -28,16 +28,22 @@
   run.
 - CI runs on neither production's Supabase (`tlbkbmlrfafquucsmsmm`) nor,
   since 2026-10-08, the shared CI project (`odnobiodsftffphuuosz`, `bis-ci`):
-  `verify` and `e2e` each start a throwaway Supabase stack inside their own
-  runner (`.github/scripts/ci-local-supabase.sh`, bootstrap then migrations;
-  e2e's with `--trust-clerk-dev-instance`, so its PostgREST verifies the
-  Clerk development instance's tokens as bis-ci does) and e2e seeds its own
-  (`ci:seed:local`). Neither joins a repo-wide queue and e2e starts beside
-  verify: a push is green in about 8–9 minutes (was ~14 serialized, plus up
-  to an hour of queue). A red verify still blocks a merge, because both are
-  required checks. A guard in both jobs refuses production and any cloud
-  Supabase value for the suites or the app. The ONE read of bis-ci in CI is
-  e2e's migration check: read-only, its DB URL scoped to that step. Since
+  since 2026-11-12 `verify` and `e2e` are GATE jobs (`ci-gate.sh`,
+  `if: always()`) that are green only when every part they need succeeded,
+  and the parts run in parallel: `verify` = `verify-db` (its own stack: the
+  db suite and the web tests that need a database, vitest project `live`) +
+  `verify-app` (no stack: typecheck, lint, the web `unit` project, the
+  build); `e2e` = `e2e-migrations` + four `e2e-shard` runners, each with
+  its own stack started with `--trust-clerk-dev-instance` (so its PostgREST
+  verifies the Clerk development instance's tokens as bis-ci does), seeded
+  by `ci:seed:local`, running `--shard=N/4`. Stacks come from
+  `.github/scripts/ci-local-supabase.sh` (bootstrap then migrations). No job
+  joins a repo-wide queue: a push is green in about 11 minutes (was ~22 with
+  one serial e2e job; the longest shard holds billing-pause.spec.ts). Read a
+  red gate through the PART it names. A guard in every part refuses
+  production and any cloud Supabase value for the suites or the app. The
+  ONE read of bis-ci in CI is e2e-migrations' check: read-only, its DB URL
+  scoped to that step. Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the two live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
@@ -49,8 +55,9 @@
   capture (no longer with CI), so check for an in-progress `screenshots.yml`
   run first. Every new migration goes to the CI project FIRST (the
   `ci-project-setup.yml` workflow), then production, then a parity check
-  (`docs/runbooks/ci-supabase-project.md`). The `e2e` job enforces the
-  first part: it fails, naming each file, when a migration in the branch is
+  (`docs/runbooks/ci-supabase-project.md`). The `e2e` check enforces the
+  first part: its e2e-migrations part fails, naming each file, when a
+  migration in the branch is
   not in the CI project's history (`.github/scripts/ci-migrations-applied.sh`).
   Production and parity are still checked by hand. That check proves only
   that each migration's VERSION is in bis-ci's history, not that bis-ci's

@@ -46,16 +46,18 @@ function setupNodeSteps(file: string): Array<{ file: string; job: string | null;
 describe("CI installs the Node major production runs on", () => {
   const steps = workflowFiles.flatMap(setupNodeSteps);
 
-  // The scanner job (S-07 2a) added a third: verify's, e2e's and scanner's
-  // own, each pinned to production's major in the loop below. A job that
-  // installs Node but forgets to pin it — or pins a different major — must
-  // still show up here, named, or this count silently drops back to 2 and
-  // the loop below never sees it (mutation: drop scanner's setup-node step,
-  // or its node-version, → this count goes back to 2 → FAILS).
-  it("finds the setup-node steps of verify, e2e and scanner (so the check below is not empty)", () => {
+  // The scanner job (S-07 2a) added a third; the split of verify and e2e into
+  // parallel parts (2026-11-12) made it four: verify-db's, verify-app's,
+  // e2e-shard's (one step, every shard) and scanner's, each pinned to
+  // production's major in the loop below. The gates (verify, e2e) and
+  // e2e-migrations install no Node. A job that installs Node but forgets to
+  // pin it — or pins a different major — must still show up here, named, or
+  // this count silently drops and the loop below never sees it (mutation:
+  // drop scanner's setup-node step, or its node-version, → FAILS).
+  it("finds the setup-node steps of verify-db, verify-app, e2e-shard and scanner (so the check below is not empty)", () => {
     const ciSteps = steps.filter((s) => s.file === "ci.yml");
-    expect(ciSteps).toHaveLength(3);
-    expect(ciSteps.map((s) => s.job).sort()).toEqual(["e2e", "scanner", "verify"]);
+    expect(ciSteps).toHaveLength(4);
+    expect(ciSteps.map((s) => s.job).sort()).toEqual(["e2e-shard", "scanner", "verify-app", "verify-db"]);
   });
 
   it.each(steps.map((s, i) => [`${s.file}${s.job ? ` (${s.job})` : ""} #${i}`, s] as const))(
