@@ -257,6 +257,7 @@ export default async function DashboardLayout({
             clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
             clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
             clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
+            clientAccountId={clientState?.status === "ok" ? clientState.id : undefined}
           />
           <div className="flex min-w-0 flex-1 flex-col">
             {/* The palette mounts ONCE for the whole dashboard tree. This
