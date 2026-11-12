@@ -21,6 +21,8 @@ import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
 import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
+import { recordCallUsageSafely, estimateCallCostMicroUsd } from "./call-usage";
+import { REALTIME_MODEL, TRANSCRIBE_MODEL } from "./session-config";
 import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
@@ -998,6 +1000,36 @@ export async function finishCall(
       accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
       occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
     }, `finishCall ${meta.callRowId}`);
+  }
+
+  // BIS'S COST RECORD (0116 call_usage, owner decision 2026-11-10): what the
+  // call spent at OpenAI, summed from the socket's frames (call-state.ts
+  // `usage`), so BIS can measure a minute of Sofía's real cost. Written for
+  // EVERY call with a row id, spam included: unlike the client billing leg
+  // just above, this is what BIS paid, and a robocall or a silent ring still
+  // spent tokens on her greeting.
+  //
+  // The call's OWN account (`ctx.accountId`): nothing in the schema ties
+  // call_usage.account_id to calls.account_id. The models are the ones the
+  // session config actually sent at accept. Gated on `meta.callRowId` alone,
+  // not `stored`, like the usage leg above: the row is keyed on the call, and
+  // the call row exists from pickup. After that leg and so after the durable
+  // row and both carrier sends: nobody is waiting on this. The thunk puts the
+  // estimate inside `recordCallUsageSafely`'s try, which never throws and
+  // gives the write 5 s.
+  if (meta.callRowId) {
+    const callId = meta.callRowId;
+    const u = state.usage;
+    await recordCallUsageSafely(ctx.db, () => ({
+      callId, accountId: ctx.accountId, model: REALTIME_MODEL, responses: u.responses,
+      inputTextTokens: u.inputTextTokens, inputAudioTokens: u.inputAudioTokens,
+      inputCachedTextTokens: u.inputCachedTextTokens, inputCachedAudioTokens: u.inputCachedAudioTokens,
+      outputTextTokens: u.outputTextTokens, outputAudioTokens: u.outputAudioTokens,
+      transcribeModel: TRANSCRIBE_MODEL,
+      transcribeInputTokens: u.transcribeInputTokens, transcribeOutputTokens: u.transcribeOutputTokens,
+      transcribeSeconds: u.transcribeSeconds,
+      estCostMicrousd: estimateCallCostMicroUsd(REALTIME_MODEL, u),
+    }), `finishCall ${callId}`);
   }
 
   // THE CALLBACK TO DO (F-033): when the caller wants a person to call them

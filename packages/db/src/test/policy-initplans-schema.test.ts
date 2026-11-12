@@ -156,8 +156,9 @@ const offenders = (rows: Live[]) =>
   }).sort();
 
 /** Policies later migrations add, left out of the "untouched 72" digest below so it keeps saying what 0109 left alone.
- *  0111 (F-115): record_changes_read and record_changes_technician_none (record-changes-rls.test.ts pins them). */
-const LATER = ["record_changes_read", "record_changes_technician_none"];
+ *  0111 (F-115): record_changes_read and record_changes_technician_none (record-changes-rls.test.ts pins them).
+ *  0116: call_usage_agency_read (call-usage-schema.test.ts pins it). */
+const LATER = ["record_changes_read", "record_changes_technician_none", "call_usage_agency_read"];
 
 describe("0109: the 64 policies are wrapped and otherwise unchanged", () => {
   it("PRE holds 64 distinct policies on 59 tables (the spec's inventory, 2.2)", () => {
@@ -191,12 +192,12 @@ describe("0109: the 64 policies are wrapped and otherwise unchanged", () => {
       expect(rows[0]!.d).toBe("72|c2a5a17e0ef4f6e27247f8df517ddb4f");
     }));
 
-  it("public holds 138 policies on 65 tables: 0109's 136 on 64, plus 0111's two on record_changes; none dropped (red before 0111: 136, 64)", () =>
+  it("public holds 139 policies on 66 tables: 0109's 136 on 64, plus 0111's two on record_changes and 0116's one on call_usage; none dropped (red before 0116: 138, 65)", () =>
     withRollback(async (c) => {
       const rows = await livePolicies(c);
-      expect([rows.length, new Set(rows.map((r) => r.t)).size]).toEqual([138, 65]);
+      expect([rows.length, new Set(rows.map((r) => r.t)).size]).toEqual([139, 66]);
       expect(rows.filter((r) => LATER.includes(r.p)).map((r) => `${r.t}.${r.p}`)).toEqual(
-        ["record_changes.record_changes_read", "record_changes.record_changes_technician_none"]);
+        ["call_usage.call_usage_agency_read", "record_changes.record_changes_read", "record_changes.record_changes_technician_none"]);
     }));
 });
 

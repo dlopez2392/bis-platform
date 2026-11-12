@@ -402,6 +402,8 @@ export {
   aiGateCheck, recordAiLedger, getAiSettings, countAiSkipsSince, firstOverBudgetSince, setAccountAiSettings, setGlobalAiEnabled,
   type AiFeature, type AiOutcome, type AiGate, type AiLedgerEntry, type AiSettingsRead,
 } from "./ai-gateway";
+// 0116: one call's OpenAI token use and estimated cost, recorded once per call. See ./call-usage.ts.
+export { recordCallUsage, type CallUsageInput } from "./call-usage";
 // Item 8a-2: the record page's AI paragraph cache (0087). See ./record-summaries.ts.
 export {
   getRecordSummary, claimRecordSummary, saveRecordSummary, releaseRecordSummaryLease,

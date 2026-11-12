@@ -135,6 +135,111 @@ export interface CallState {
   summary?: string;
   /** S-47e: the per-call identity (spec 5.4.1). Lives here because ToolContext is fixed per call (SD3). */
   identity: IdentityState;
+  /** The call's OpenAI token use, summed as frames arrive; finishCall writes it once (0116 call_usage).
+   *  Never read by classifyOutcome. */
+  usage: CallUsageTotals;
+}
+
+/**
+ * Running totals of what the call spent at OpenAI, for BIS's own cost record (owner decision 2026-11-10).
+ *
+ * The cached counts are stored AS REPORTED, beside the text and audio counts, never subtracted from them: the
+ * Realtime docs do not say outright whether `cached_tokens_details.text_tokens` is part of
+ * `input_token_details.text_tokens` or extra to it. Kept raw, the row can be re-costed either way; the
+ * estimate (./call-usage.ts) is where the one assumption is made, and labelled.
+ */
+export type CallUsageTotals = {
+  /** `response.done` frames seen: every response, cancelled ones included (their tokens were spent too). */
+  responses: number;
+  inputTextTokens: number;
+  inputAudioTokens: number;
+  inputCachedTextTokens: number;
+  inputCachedAudioTokens: number;
+  outputTextTokens: number;
+  outputAudioTokens: number;
+  /** The caller-speech transcriber reports tokens OR seconds per turn. Null until a report of that kind arrives,
+   *  so the row says "not measured" rather than "zero". */
+  transcribeInputTokens: number | null;
+  transcribeOutputTokens: number | null;
+  transcribeSeconds: number | null;
+  /** The transcriber's item ids whose usage is already counted: a re-delivered `.completed` frame counts once.
+   *  Its own list, not `callerItemIds`: a turn the recording guard recorded from its deltas has not had its
+   *  usage counted yet, and its `.completed` frame is the one that carries it. */
+  transcribedItemIds: string[];
+};
+
+export function emptyCallUsage(): CallUsageTotals {
+  return {
+    responses: 0, inputTextTokens: 0, inputAudioTokens: 0, inputCachedTextTokens: 0, inputCachedAudioTokens: 0,
+    outputTextTokens: 0, outputAudioTokens: 0,
+    transcribeInputTokens: null, transcribeOutputTokens: null, transcribeSeconds: null, transcribedItemIds: [],
+  };
+}
+
+/** A field off an untrusted frame: an object, or nothing. */
+function field(o: unknown, key: string): unknown {
+  return o !== null && typeof o === "object" && !Array.isArray(o) ? (o as Record<string, unknown>)[key] : undefined;
+}
+
+/** A token count off an untrusted frame: a finite, non-negative number, floored; anything else is 0. */
+function tokens(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+/**
+ * Adds one `response.done` frame's `response.usage`. ASSUMED shape, from OpenAI's GA Realtime API docs and NOT
+ * yet seen on a live call: `{ total_tokens, input_tokens, output_tokens, input_token_details: { text_tokens,
+ * audio_tokens, image_tokens, cached_tokens, cached_tokens_details: { text_tokens, audio_tokens, image_tokens } },
+ * output_token_details: { text_tokens, audio_tokens } }`. Any missing or non-numeric field counts 0; it never
+ * throws, and the response is counted whatever its usage looks like.
+ */
+export function withResponseUsage(state: CallState, usage: unknown): CallState {
+  const inDetails = field(usage, "input_token_details");
+  const cached = field(inDetails, "cached_tokens_details");
+  const outDetails = field(usage, "output_token_details");
+  const u = state.usage;
+  return {
+    ...state,
+    usage: {
+      ...u,
+      responses: u.responses + 1,
+      inputTextTokens: u.inputTextTokens + tokens(field(inDetails, "text_tokens")),
+      inputAudioTokens: u.inputAudioTokens + tokens(field(inDetails, "audio_tokens")),
+      inputCachedTextTokens: u.inputCachedTextTokens + tokens(field(cached, "text_tokens")),
+      inputCachedAudioTokens: u.inputCachedAudioTokens + tokens(field(cached, "audio_tokens")),
+      outputTextTokens: u.outputTextTokens + tokens(field(outDetails, "text_tokens")),
+      outputAudioTokens: u.outputAudioTokens + tokens(field(outDetails, "audio_tokens")),
+    },
+  };
+}
+
+/**
+ * Adds one caller turn's transcription `usage` (on `conversation.item.input_audio_transcription.completed`).
+ * ASSUMED shape, from the same docs and likewise unverified on a live call: `{ type: "tokens", input_tokens,
+ * output_tokens, total_tokens, input_token_details? }` or `{ type: "duration", seconds }`. Any other type, or no
+ * usage at all, changes nothing; a bad number in a known type counts 0. Once per item id.
+ */
+export function withTranscriptionUsage(state: CallState, rawItemId: string | undefined, usage: unknown): CallState {
+  // A null or empty id is no id: storing it would make a second id-less turn look like a re-delivery and drop it.
+  const itemId = typeof rawItemId === "string" && rawItemId !== "" ? rawItemId : undefined;
+  const kind = field(usage, "type");
+  if (kind !== "tokens" && kind !== "duration") return state;
+  const u = state.usage;
+  if (itemId !== undefined && u.transcribedItemIds.includes(itemId)) return state;
+  const seen = itemId === undefined ? u.transcribedItemIds : [...u.transcribedItemIds, itemId];
+  if (kind === "duration") {
+    const secs = field(usage, "seconds");
+    const add = typeof secs === "number" && Number.isFinite(secs) && secs > 0 ? secs : 0;
+    return { ...state, usage: { ...u, transcribedItemIds: seen, transcribeSeconds: (u.transcribeSeconds ?? 0) + add } };
+  }
+  return {
+    ...state,
+    usage: {
+      ...u, transcribedItemIds: seen,
+      transcribeInputTokens: (u.transcribeInputTokens ?? 0) + tokens(field(usage, "input_tokens")),
+      transcribeOutputTokens: (u.transcribeOutputTokens ?? 0) + tokens(field(usage, "output_tokens")),
+    },
+  };
 }
 
 export function emptyCallState(): CallState {
@@ -142,6 +247,7 @@ export function emptyCallState(): CallState {
     contactId: null, bookings: [], leads: [], messages: [], transcript: [],
     served: [], recordedCaller: false, pendingCallerTurn: null, callerItemIds: [],
     identity: { confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false },
+    usage: emptyCallUsage(),
   };
 }
 

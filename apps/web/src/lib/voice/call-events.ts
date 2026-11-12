@@ -3,7 +3,7 @@
 import { runTool, type ToolContext, type ToolName } from "./tools/registry";
 import {
   withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, callerTurnRecorded, withCallerItem,
-  type CallState,
+  withResponseUsage, withTranscriptionUsage, type CallState,
 } from "./call-state";
 import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
@@ -37,6 +37,11 @@ export interface RealtimeCallEvent {
   /** `conversation.item.input_audio_transcription.delta` only — see that case. */
   item_id?: string;
   delta?: string;
+  /** `conversation.item.input_audio_transcription.completed` only: the transcriber's usage for this turn.
+   *  `unknown` on purpose: it is read defensively (call-state.ts `withTranscriptionUsage`). */
+  usage?: unknown;
+  /** `response.done` only: the finished response, whose `usage` is read defensively (`withResponseUsage`). */
+  response?: unknown;
 }
 
 /** The caller's finished turns so far — what the recording guard counts
@@ -149,6 +154,11 @@ export async function processCallEvent(
       return { state: recorded, actions: [{ kind: "hangup" }] };
     }
     case "conversation.item.input_audio_transcription.completed": {
+      // The transcriber's usage is counted FIRST, on every branch below: the
+      // tokens were spent whether or not this turn is recorded (an empty turn,
+      // a frame draining after a recording was hung up on). Once per item id,
+      // so a re-delivered frame does not count twice. Never throws.
+      state = withTranscriptionUsage(state, event.item_id, event.usage);
       // Already ending — a delta hung this call up and the socket is still
       // draining while the lifecycle awaits endCallLeg. Whatever arrives in
       // that window is not a turn to judge or record: the transcript already
@@ -217,6 +227,13 @@ export async function processCallEvent(
           : { ok: false, error: "tool failed — apologize and offer to take a message" };
         return { state, actions: functionCallActions(event.call_id, payload) };
       }
+    }
+    case "response.done": {
+      // BIS's cost record (0116 call_usage): every response is counted, a
+      // cancelled or failed one included, because its tokens were billed.
+      // Never throws and sends nothing: a frame with no usable usage counts
+      // 0 tokens and the call goes on.
+      return { state: withResponseUsage(state, (event.response as { usage?: unknown } | null)?.usage), actions: [] };
     }
     default:
       return { state, actions: [] };

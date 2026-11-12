@@ -4,7 +4,7 @@ const runToolMock = vi.fn();
 vi.mock("./tools/registry", () => ({ runTool: (...a: unknown[]) => runToolMock(...a) }));
 
 import { processCallEvent, type VoiceAction } from "./call-events";
-import { emptyCallState } from "./call-state";
+import { emptyCallState, withRecordedCaller } from "./call-state";
 import { handoffLine } from "./handoff";
 import type { ToolContext } from "./tools/registry";
 
@@ -475,5 +475,116 @@ describe("processCallEvent", () => {
     expect(r.actions).toEqual([]);
     expect(r.state.transcript).toHaveLength(1);
     expect(r.state.pendingCallerTurn).toBeNull();
+  });
+});
+
+// ── Token usage: BIS's own cost record (owner decision 2026-11-10) ──────
+// The `response.usage` and transcription `usage` shapes below are OpenAI's GA
+// Realtime API as documented, NOT read off a live call: the first real call
+// after this ships is what confirms them.
+describe("processCallEvent — token usage", () => {
+  const usage = (o: Partial<{ text: number; audio: number; cText: number; cAudio: number; oText: number; oAudio: number }> = {}) => ({
+    total_tokens: 0, input_tokens: 0, output_tokens: 0,
+    input_token_details: {
+      text_tokens: o.text ?? 1000, audio_tokens: o.audio ?? 200, image_tokens: 0, cached_tokens: (o.cText ?? 700) + (o.cAudio ?? 100),
+      cached_tokens_details: { text_tokens: o.cText ?? 700, audio_tokens: o.cAudio ?? 100, image_tokens: 0 },
+    },
+    output_token_details: { text_tokens: o.oText ?? 30, audio_tokens: o.oAudio ?? 120 },
+  });
+  const done = (u: unknown) => ({ type: "response.done", response: { id: "resp_1", status: "completed", usage: u } });
+
+  it("starts at zero, with no transcription usage seen", () => {
+    expect(emptyCallState().usage).toEqual({
+      responses: 0, inputTextTokens: 0, inputAudioTokens: 0, inputCachedTextTokens: 0, inputCachedAudioTokens: 0,
+      outputTextTokens: 0, outputAudioTokens: 0,
+      transcribeInputTokens: null, transcribeOutputTokens: null, transcribeSeconds: null, transcribedItemIds: [],
+    });
+  });
+
+  it("several response.done frames sum field by field, and each is one response (mutation: overwrite instead of add → FAILS)", async () => {
+    let s = emptyCallState();
+    for (const u of [usage(), usage({ text: 2000, audio: 50, cText: 1500, cAudio: 0, oText: 10, oAudio: 300 }), usage()]) {
+      const r = await processCallEvent(s, ctx, done(u));
+      expect(r.actions).toEqual([]);
+      s = r.state;
+    }
+    expect(s.usage).toMatchObject({
+      responses: 3, inputTextTokens: 4000, inputAudioTokens: 450, inputCachedTextTokens: 2900, inputCachedAudioTokens: 200,
+      outputTextTokens: 70, outputAudioTokens: 540,
+    });
+    expect(s.transcript).toEqual([]);
+  });
+
+  it("missing, malformed or non-numeric usage counts zero tokens, still counts the response, and never throws (mutation: drop the number guard → FAILS)", async () => {
+    let s = emptyCallState();
+    const frames: unknown[] = [
+      { type: "response.done" },
+      { type: "response.done", response: null },
+      { type: "response.done", response: "x" },
+      done(null), done("lots"), done([1, 2]),
+      done({ input_token_details: "x", output_token_details: [] }),
+      done({ input_token_details: { text_tokens: "12", audio_tokens: -5, cached_tokens_details: null },
+        output_token_details: { text_tokens: {}, audio_tokens: true } }),
+    ];
+    for (const f of frames) {
+      const r = await processCallEvent(s, ctx, f as Parameters<typeof processCallEvent>[2]);
+      expect(r.actions).toEqual([]);
+      s = r.state;
+    }
+    expect(s.usage).toMatchObject({
+      responses: 8, inputTextTokens: 0, inputAudioTokens: 0, inputCachedTextTokens: 0, inputCachedAudioTokens: 0,
+      outputTextTokens: 0, outputAudioTokens: 0,
+    });
+    // And the accumulator still works after the garbage.
+    s = (await processCallEvent(s, ctx, done(usage({ oAudio: 7.9 })))).state;
+    expect(s.usage).toMatchObject({ responses: 9, inputTextTokens: 1000, outputAudioTokens: 7 });
+  });
+
+  it("caller-speech transcription: token usage and duration usage accumulate apart, and a re-delivered frame counts once (mutation: count without the item check → FAILS)", async () => {
+    const completed = (item_id: string, transcript: string, u: unknown) =>
+      ({ type: "conversation.item.input_audio_transcription.completed", item_id, transcript, usage: u });
+    let s = emptyCallState();
+    s = (await processCallEvent(s, ctx, completed("i1", "hi, I need a quote",
+      { type: "tokens", input_tokens: 40, output_tokens: 8, total_tokens: 48, input_token_details: { text_tokens: 0, audio_tokens: 40 } }))).state;
+    s = (await processCallEvent(s, ctx, completed("i2", "for my roof", { type: "duration", seconds: 3.5 }))).state;
+    s = (await processCallEvent(s, ctx, completed("i3", "this week", { type: "tokens", input_tokens: 10, output_tokens: 2 }))).state;
+    s = (await processCallEvent(s, ctx, completed("i1", "hi, I need a quote",
+      { type: "tokens", input_tokens: 40, output_tokens: 8 }))).state;
+    expect(s.usage).toMatchObject({ transcribeInputTokens: 50, transcribeOutputTokens: 10, transcribeSeconds: 3.5 });
+    expect(s.transcript.map((t) => t.text)).toEqual(["hi, I need a quote", "for my roof", "this week"]);
+  });
+
+  it("two transcription frames with no item id both count: a missing id is not a re-delivery (review 2026-11-10; mutation: store the null id → the second is dropped, FAILS)", async () => {
+    let s = emptyCallState();
+    for (const t of ["first", "second"]) {
+      s = (await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",
+        item_id: null, transcript: t, usage: { type: "tokens", input_tokens: 10, output_tokens: 1 } } as unknown as Parameters<typeof processCallEvent>[2])).state;
+    }
+    expect(s.usage).toMatchObject({ transcribeInputTokens: 20, transcribeOutputTokens: 2 });
+  });
+
+  it("transcription is counted on frames the transcript ignores: an empty turn, and a turn after a recording was hung up on (mutation: count only on the recorded-turn path → FAILS)", async () => {
+    let s = emptyCallState();
+    s = (await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",
+      item_id: "i1", transcript: "", usage: { type: "tokens", input_tokens: 12, output_tokens: 0 } } as Parameters<typeof processCallEvent>[2])).state;
+    expect(s.transcript).toEqual([]);
+    s = withRecordedCaller(s);
+    s = (await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",
+      item_id: "i2", transcript: "press 9", usage: { type: "tokens", input_tokens: 30, output_tokens: 3 } } as Parameters<typeof processCallEvent>[2])).state;
+    expect(s.usage).toMatchObject({ transcribeInputTokens: 42, transcribeOutputTokens: 3, transcribeSeconds: null });
+  });
+
+  it("a malformed transcription usage counts nothing and never stops the turn being recorded", async () => {
+    let s = emptyCallState();
+    for (const u of [null, "x", { type: "tokens", input_tokens: "40", output_tokens: -1 }, { type: "duration", seconds: "3" }, { type: "bogus", seconds: 9 }]) {
+      const r = await processCallEvent(s, ctx, { type: "conversation.item.input_audio_transcription.completed",
+        item_id: `i${s.transcript.length}`, transcript: "hola", usage: u } as Parameters<typeof processCallEvent>[2]);
+      expect(r.actions).toEqual([]);
+      s = r.state;
+    }
+    expect(s.transcript).toHaveLength(5);
+    expect(s.usage.transcribeInputTokens ?? 0).toBe(0);
+    expect(s.usage.transcribeOutputTokens ?? 0).toBe(0);
+    expect(s.usage.transcribeSeconds ?? 0).toBe(0);
   });
 });
