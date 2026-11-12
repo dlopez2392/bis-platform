@@ -105,7 +105,7 @@ export async function GET(
   // stay PR E's (`change-rows.ts`), never built here.
   const personIds = [...new Set(
     fetched.rows
-      .filter((r): r is typeof r & { authorId: string } => (r.authorKind ?? "automation") === "person" && !!r.authorId)
+      .filter((r): r is typeof r & { authorId: string } => r.authorKind === "person" && !!r.authorId)
       .map((r) => r.authorId))];
   const [names, voiceProfile] = await Promise.all([
     listPeopleNames(db, personIds),

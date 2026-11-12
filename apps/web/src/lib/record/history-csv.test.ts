@@ -118,11 +118,6 @@ describe("toHistoryCsvRow", () => {
     });
   });
 
-  it("a null authorKind reads as automation, never a sixth kind (mutation: pass row.authorKind through unchanged -> FAILS)", () => {
-    const row = toHistoryCsvRow(changeRow({ authorKind: null, authorId: null }), "UTC", () => "x", (kind, id) => `${kind}:${id ?? "null"}`);
-    expect(row.who).toBe("automation:null");
-  });
-
   it("a null or undefined before/after is blank, never the string 'null'", () => {
     const row = toHistoryCsvRow(changeRow({ before: null, after: null }), "UTC", () => "x", () => "y");
     expect(row.before).toBe("");

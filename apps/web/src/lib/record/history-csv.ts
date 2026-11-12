@@ -98,19 +98,17 @@ function rawValue(v: unknown): string {
  * `via`) — that copy does not exist yet in this PR, and inventing it here would be this module
  * reaching into PR E's own job. `recordNameOf`/`authorLabelOf` are the route's own DB-backed answers
  * for "whose record is this" and "who made this write", handed in as plain functions so this stays
- * pure and untestable-without-a-database claims stay false. A null `authorKind` (observe mode, before
- * 0113) reads as the automation mark, never a sixth kind — the same fallback `author-mark.ts`'s own
- * "change" case already uses for `ChangeGroup.authorKind`.
+ * pure and untestable-without-a-database claims stay false. Every row names its author kind: 0113
+ * (2026-11-11) made `author_kind` NOT NULL.
  */
 export function toHistoryCsvRow(
   row: ChangeRow, zone: string,
   recordNameOf: (row: ChangeRow) => string,
   authorLabelOf: (kind: AuthorKind, authorId: string | null) => string,
 ): HistoryCsvRow {
-  const kind: AuthorKind = row.authorKind ?? "automation";
   return {
     when: isoWithOffset(row.createdAt, zone),
-    who: authorLabelOf(kind, row.authorId),
+    who: authorLabelOf(row.authorKind, row.authorId),
     kind: row.recordType,
     record: recordNameOf(row),
     field: row.field ?? "",

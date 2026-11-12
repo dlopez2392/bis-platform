@@ -81,13 +81,6 @@ describe("groupChanges", () => {
     expect(groupChanges(differentRecord)).toHaveLength(2);
   });
 
-  it("a group with no author (observe mode) is kept, not dropped", () => {
-    const rows = [row({ authorKind: null, authorId: null })];
-    const groups = groupChanges(rows);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.authorKind).toBeNull();
-  });
-
   // F-115 PR E fix (review I2): a person's own manual edit next to their own merge/restore write,
   // same author, within the collapse window, must stay TWO groups either way — folding them would
   // either hide the manual edit under foldVia's drop of the merge's via, or carry the merge's own
@@ -185,12 +178,6 @@ describe("foldVia", () => {
     const onPage = { mergeIds: new Set<string>(), aiActIds: new Set<string>(), proposalIds: new Set<string>() };
     const forgedRestore = group({ key: "r", via: "restore:999" });
     expect(foldVia([forgedRestore], onPage).map((g) => g.key)).toEqual(["r"]);
-  });
-
-  it("keeps a group with no author (observe mode) through the fold", () => {
-    const onPage = { mergeIds: new Set<string>(), aiActIds: new Set<string>(), proposalIds: new Set<string>() };
-    const noAuthor = group({ key: "n", via: null, authorKind: null, authorId: null });
-    expect(foldVia([noAuthor], onPage).map((g) => g.key)).toEqual(["n"]);
   });
 });
 

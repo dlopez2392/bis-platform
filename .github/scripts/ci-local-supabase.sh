@@ -303,9 +303,6 @@ fi
 schema_at=$SECONDS
 psql "$db_url" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$BOOTSTRAP"
 supabase db push --local --workdir packages/db --yes
-# F-115 (0111): CI refuses any server write that does not say who made it, so a test that covers an unconverted
-# path fails here instead of writing an unattributed row in production. Production stays in observe mode until 0113.
-psql "$db_url" -X -q -v ON_ERROR_STOP=1 -c "update app.record_changes_settings set enforce = true"
 # PostgREST read its schema when the stack started, with no tables in it.
 psql "$db_url" -X -q -v ON_ERROR_STOP=1 -c "notify pgrst, 'reload schema'"
 schema_seconds=$((SECONDS - schema_at))

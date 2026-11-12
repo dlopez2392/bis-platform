@@ -100,7 +100,7 @@ describe("0113: every change row names its author", () => {
       expect(p).toEqual({ d: false, cfg: ["search_path=pg_catalog, pg_temp"] });
     }));
 
-  it("the backfill, pair by pair: contact.updated user/ai/system -> person/ai/automation, contact.created by app.contact_author, within 2 s on the same account, the nearest event; the rest automation/'backfill:unknown'; NOT NULL then holds; a set row is never rewritten (mutations: map system to ai -> FAILS; widen the window to 3 s -> FAILS; drop the account match -> FAILS; skip the leftover update -> set not null FAILS; drop `author_kind is null` -> the second run FAILS)", () =>
+  it("the backfill, pair by pair: contact.updated user/ai/system -> person/ai/automation, contact.created by app.contact_author, within 2 s on the same account, the nearest event; the rest automation/'backfill:unknown'; NOT NULL then holds; a set row is never rewritten (mutations: map system to ai -> FAILS; widen the window to 3 s -> FAILS; drop the account match -> FAILS; drop the record_type match -> FAILS; skip the leftover update -> set not null FAILS; drop `author_kind is null` -> the second run FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "backfill");
       const other = await seedAccount(c, "other");
@@ -174,8 +174,11 @@ describe("0113: every change row names its author", () => {
       // Rows the ledger cannot name: a contact delete, the 0112 types, a row with no event at all.
       await add("contact delete", row("contact", "delete", null), LEFT,
         (rec) => ev(a.accountId, "contact.updated", rec, ["user", "user_abc"], 1, ["firstName"]));
-      await add("place update", row("place", "update", "label"), LEFT,
-        (rec) => ev(a.accountId, "contact.updated", rec, ["user", "user_abc"], 1, ["label"]));
+      // A field the mapping DOES match (first_name/firstName), so only the record_type = 'contact' guard keeps
+      // this place row from taking the contact event's author (0113 review minor 1: with "label", a field the
+      // mapping never names, dropping that guard changed nothing and the case could not fail).
+      await add("place update", row("place", "update", "first_name"), LEFT,
+        (rec) => ev(a.accountId, "contact.updated", rec, ["user", "user_abc"], 1, ["firstName"]));
       await add("no event", row("contact", "update", "first_name"), LEFT, async () => undefined);
 
       const { rows: buckets } = await c.query<{ bucket: string; row_count: string }>("select bucket, row_count from app.backfill_record_change_authors()");
