@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
 import { surfaceById } from "@/lib/surfaces/manifest";
-import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
+import { ACCOUNT_ROUTE_RE, sidebarAccountBase } from "@/lib/account-route";
 import { useLocale } from "@/components/locale-provider";
 import { t } from "@/lib/i18n/t";
 // Conversations' unread badge and the footer's setup meter both read from
@@ -147,6 +147,7 @@ export function AppSidebar({
   clientLogoUrl,
   clientAccentColor,
   clientTimezone,
+  clientAccountId,
 }: {
   accounts: AccountOption[];
   defaultCollapsed: boolean;
@@ -187,6 +188,11 @@ export function AppSidebar({
    *  [accountId] URL segment this layout never receives. Second identity-
    *  block line, mirroring AccountSwitcher's own timezone line below. */
   clientTimezone?: string;
+  /** The client's own business, resolved server-side by this layout like
+   *  the client* props above. Keeps the menu and the identity block's link
+   *  pointing at it on pages outside an account's routes. Undefined for
+   *  the agency. */
+  clientAccountId?: string;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
@@ -200,7 +206,9 @@ export function AppSidebar({
 
   const match = pathname.match(ACCOUNT_ROUTE_RE);
   const activeAccountId = match?.[1];
-  const base = activeAccountId ? `/dashboard/accounts/${activeAccountId}` : null;
+  // A client's own business stays the menu's scope off an account's routes
+  // (Preferences), so the sidebar never empties for them (2026-11-12).
+  const base = sidebarAccountBase(pathname, isAgency, clientAccountId);
 
   // The Conversations badge's count and the footer's setup meter both come
   // from the one shared shell fetch (shell-data.tsx) — replacing what used
@@ -359,9 +367,11 @@ export function AppSidebar({
         />
       ) : clientLabel ? (
         // Same slot and spacing as the switcher, so the nav below sits where it
-        // does for the agency — but no border, hover or chevron, because there
-        // is nothing to switch to and it must not look clickable.
-        <div
+        // does for the agency, but no border or chevron: there is nothing to
+        // switch to. It links to the business's dashboard (owner report,
+        // 2026-11-12: from Preferences there was no way back).
+        <ClientIdentity
+          href={base}
           className={cn(
             // F-107 (rider part): mobile-first — the collapsed LOOK
             // (centered, no horizontal padding) is the base below `sm`
@@ -425,7 +435,7 @@ export function AppSidebar({
               {clientTimezone ?? ""}
             </span>
           </span>
-        </div>
+        </ClientIdentity>
       ) : null}
 
       {isAgency && base ? (
@@ -697,6 +707,41 @@ function SetupMeterLink({
       <span className="h-[5px] w-full overflow-hidden rounded-full bg-[var(--meter-bg)]" aria-hidden>
         <span className="block h-full rounded-full bg-[linear-gradient(90deg,var(--sidebar-accent),var(--sidebar-tint-2))]" style={{ width: `${percent}%` }} />
       </span>
+    </Link>
+  );
+}
+
+/** The client's identity block: a link to their business's dashboard when
+ *  there is one to go to, otherwise the same block as plain, unclickable
+ *  text (a client whose business did not resolve). */
+function ClientIdentity({
+  href,
+  className,
+  title,
+  children,
+}: {
+  href: string | null;
+  className: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  if (!href) {
+    return (
+      <div className={className} title={title}>
+        {children}
+      </div>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      title={title}
+      className={cn(
+        className,
+        "rounded-[var(--radius-ctl)] transition-colors hover:bg-[var(--sidebar-line)]",
+      )}
+    >
+      {children}
     </Link>
   );
 }
