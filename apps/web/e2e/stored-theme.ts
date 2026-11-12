@@ -33,12 +33,21 @@ export function fixtureClerkUserId(file: string): string {
   return clerkUserId;
 }
 
-/** The identity's saved theme, or null for "no choice". Throws on a read error or a missing row. */
-export async function storedTheme(clerkUserId: string): Promise<string | null> {
+/**
+ * The identity's saved theme, null for "no choice", or undefined when the identity has no users
+ * row YET. Throws on a read error.
+ *
+ * Undefined, not a throw (2026-11-12): the toggle's save CREATES the row when there is none
+ * (savePersonPreference), in the background, and every caller reads this inside `expect.poll`,
+ * which retries a value that does not match but fails at once on a throw. In the one serial run an
+ * earlier spec had always made the row first; in a shard where theme.spec is the identity's first
+ * write, the first poll raced the insert and the throw failed the test (e2e-shard 4, PR #357).
+ */
+export async function storedTheme(clerkUserId: string): Promise<string | null | undefined> {
   const { data, error } = await serviceDb()
     .from("users").select("theme").eq("clerk_user_id", clerkUserId).maybeSingle();
   if (error) throw new Error(`users.theme read failed: ${error.message}`);
-  if (!data) throw new Error(`no users row for the fixture identity — has it signed in yet?`);
+  if (!data) return undefined;
   return (data as { theme: string | null }).theme;
 }
 

@@ -160,6 +160,19 @@ if [ "$trust_clerk" = 1 ]; then
 fi
 
 started_at=$SECONDS
+# THE STACK'S HOST PORTS (2026-11-12). 54321-54324 sit inside Linux's default
+# range for OUTGOING connections (32768-60999), so while `supabase start` is
+# pulling images one of the runner's own outbound sockets can be holding
+# 54322, and Docker then fails with "failed to bind host port
+# 0.0.0.0:54322/tcp: address already in use" (verify-db, PR #357's first run).
+# Rare with two stacks a push; five stacks a push made it worth closing.
+# Reserving the ports keeps the kernel from handing them out; a listener may
+# still bind them. Runner only, best effort: a machine with no passwordless
+# sudo (a developer's, the tests' fake PATH) skips it.
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && command -v sudo >/dev/null 2>&1; then
+  sudo -n sysctl -w net.ipv4.ip_local_reserved_ports=54320-54329 >/dev/null 2>&1 || true
+fi
+
 supabase start --workdir "$work" --exclude "$EXCLUDE"
 start_seconds=$((SECONDS - started_at))
 
