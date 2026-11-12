@@ -10,7 +10,10 @@
 - Gates before any merge: `pnpm check` (typecheck + lint + db + web tests),
   `pnpm --filter web build`, `pnpm --filter web test:e2e`. CI runs all three
   on every push (`.github/workflows/ci.yml`, checks `verify` and `e2e`).
-  Push to `main` deploys production.
+  Push to `main` deploys production. Before a push,
+  `bash scripts/affected-tests.sh` lists the tests your diff can reach, by
+  import AND by file name (a test that reads a script or config by path),
+  and `--run` runs them; the full suite stays CI's job.
 - **The server enforces those checks on `main` (since 2026-09-19).** The
   repo is PUBLIC, and a ruleset on `main` (id 23712687, no bypass actors —
   the owner is bound too) requires `verify` and `e2e` to be green on a PR's
