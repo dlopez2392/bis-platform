@@ -53,8 +53,8 @@ const PROFILE = {
   trade_module: null,
   business_hours: null,
 };
-const GOODBYE_EN = "<Say>Sorry, we didn't get that. Please call again anytime. Goodbye.</Say>";
-const GOODBYE_ES = "<Say language=\"es-MX\">Lo sentimos, no recibimos su respuesta. Puede llamar de nuevo cuando guste. Adiós.</Say>";
+const GOODBYE_EN = "<Say voice=\"Polly.Joanna-Neural\">Sorry, we didn't get that. Please call again anytime. Goodbye.</Say>";
+const GOODBYE_ES = "<Say voice=\"Polly.Lupe-Neural\">Lo sentimos, no recibimos su respuesta. Puede llamar de nuevo cuando guste. Adiós.</Say>";
 
 let logSpy: ReturnType<typeof vi.spyOn>;
 let errSpy: ReturnType<typeof vi.spyOn>;
@@ -198,7 +198,7 @@ describe("pressed nothing, or another key, on the SECOND ask: goodbye", () => {
   it("the goodbye speaks the profile's languages from the action URL: es", async () => {
     const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=es&a=${ACCOUNT}&n=2`)).text();
     expect(xml).toContain(GOODBYE_ES);
-    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).not.toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry");
   });
 
   it("the goodbye in both languages, English first", async () => {
@@ -305,7 +305,7 @@ describe("GET mirrors the main route: closed with the key set, answered without 
 function gathers(xml: string): URL[] {
   return [...xml.matchAll(/<Gather action="([^"]+)"/g)].map((m) => new URL(m[1]!.replaceAll("&amp;", "&")));
 }
-const PROMPT = "<Say>Thanks for calling. To be connected, please press 1.</Say>";
+const PROMPT = "<Say voice=\"Polly.Joanna-Neural\">Thanks for calling. To be connected, please press 1.</Say>";
 
 describe("pressed nothing, or another key, on the FIRST ask: asked once more", () => {
   it("no key on the first ask → the question again (n=2), then the goodbye as its fall-through, and NO decline yet (mutation: say goodbye on the first ask → FAILS)", async () => {
@@ -331,7 +331,7 @@ describe("pressed nothing, or another key, on the FIRST ask: asked once more", (
 
   it("the second ask speaks the profile's languages from the action URL", async () => {
     const xml = await (await press({ To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=es&a=${ACCOUNT}&n=1`)).text();
-    expect(xml).toContain("<Say language=\"es-MX\">Gracias por llamar. Para comunicarse, oprima 1.</Say></Gather>");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Gracias por llamar. Para comunicarse, oprima 1.</Say></Gather>");
     expect(xml).toContain(GOODBYE_ES);
     expect(gathers(xml)[0]!.searchParams.get("l")).toBe("es");
   });

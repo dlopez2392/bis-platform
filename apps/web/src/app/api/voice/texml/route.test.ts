@@ -136,7 +136,7 @@ describe("texml route", () => {
     lookupMock.mockResolvedValue(null);
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19560000000"));
     const xml = await res.text();
-    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">");
     expect(xml).toContain("<Hangup/>");
     expect(xml).not.toContain("<Dial");
   });
@@ -160,7 +160,7 @@ describe("texml route", () => {
   it("missing project id speaks the misconfig instead of dead air", async () => {
     delete process.env.VOICE_OPENAI_PROJECT_ID;
     const res = await GET(new Request("https://x.example/api/voice/texml"));
-    expect(await res.text()).toContain("<Say>");
+    expect(await res.text()).toContain("<Say voice=\"Polly.Joanna-Neural\">");
   });
 });
 
@@ -169,7 +169,7 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
-    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">");
     expect(xml).toContain("<Hangup/>");
     expect(xml).not.toContain("<Dial");
   });
@@ -179,7 +179,7 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
     expect(xml).toContain("<Dial");
-    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).not.toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry");
   });
 
   it("status live + enabled:false profile → spoken refusal (live keeps requiring the toggle)", async () => {
@@ -188,7 +188,7 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
     expect(xml).not.toContain("<Dial");
-    expect(xml).toContain("<Say>Sorry");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry");
   });
 
   it("profile missing entirely → refusal defaults to English", async () => {
@@ -202,22 +202,22 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "en" });
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
-    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry, this number can't take your call right now. Please try again later.</Say>");
   });
   it("languages: es → language=\"es-MX\" Say with the Spanish copy, English absent", async () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "es" });
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
-    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
-    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).not.toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry");
     expect(xml).not.toContain("<Dial");
   });
   it("languages: both → English then Spanish, both Say elements present", async () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: false, languages: "both" });
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
     const xml = await res.text();
-    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
-    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry, this number can't take your call right now. Please try again later.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
     // English must come first — order matters for a caller hearing it live.
     expect(xml.indexOf("Sorry")).toBeLessThan(xml.indexOf("Lo sentimos"));
   });
@@ -237,7 +237,7 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
     const xml = await res.text();
-    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.</Say>");
     expect(xml).not.toContain("<Dial");
   });
   it("over the per-account cap (default 50) while the per-caller count is 0 → cap copy, no Dial", async () => {
@@ -459,7 +459,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
     const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
     // Byte-identical to the sentence the disabled-profile test above pins.
-    expect(xml).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry, this number can't take your call right now. Please try again later.</Say>");
   });
 
   it("the history read failing fails OPEN — a database blip dials, never refuses", async () => {
@@ -532,8 +532,8 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, languages: "es" });
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
     const xml = await texmlXml({ To: LIVE_TO, From: SILENT_CALLER });
-    expect(xml).toContain("<Say language=\"es-MX\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
-    expect(xml).not.toContain("<Say>Sorry");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Lo sentimos, este número no puede atender su llamada en este momento. Por favor intente más tarde.</Say>");
+    expect(xml).not.toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry");
     expect(xml).not.toContain("<Dial");
   });
 
@@ -801,7 +801,7 @@ describe("screened calls are recorded", () => {
     const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19560000000"));
     expect(res.status).toBe(200);
     const xml = await res.text();
-    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">");
     expect(xml).toContain("<Hangup/>");
     expect(xml).not.toContain("<Dial");
     errSpy.mockRestore();
@@ -1305,11 +1305,11 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
     process.env.VOICE_SCREEN_NUMBERS = LINE;
     const xml = await (await call()).text();
     expect(xml).toMatch(/<Gather action="https:\/\/x\.example\/api\/voice\/texml\/screen\?[^"]*" numDigits="1" timeout="\d+">/);
-    expect(xml).toContain("<Say>Thanks for calling. To be connected, please press 1.</Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Thanks for calling. To be connected, please press 1.</Say>");
     expect(xml).not.toContain("<Dial");
     expect(xml).not.toContain("<Sip>");
     // No input: a goodbye and a hang-up after the question, never dead air.
-    expect(xml).toMatch(/<\/Gather><Say>[^<]+<\/Say><Hangup\/><\/Response>$/);
+    expect(xml).toMatch(/<\/Gather><Say voice=\"Polly.Joanna-Neural\">[^<]+<\/Say><Hangup\/><\/Response>$/);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen asking ${LINE}, caller ${STRANGER} to press 1 (first-time), accountId ${ACCOUNT}`));
   });
 
@@ -1470,8 +1470,8 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
     process.env.VOICE_SCREEN_NUMBERS = LINE;
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "es" });
     const xml = await (await call()).text();
-    expect(xml).toContain("<Say language=\"es-MX\">Gracias por llamar. Para comunicarse, oprima 1.</Say>");
-    expect(xml).not.toContain("<Say>Thanks");
+    expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Gracias por llamar. Para comunicarse, oprima 1.</Say>");
+    expect(xml).not.toContain("<Say voice=\"Polly.Joanna-Neural\">Thanks");
     expect(new URL(/<Gather action="([^"]+)"/.exec(xml)![1]!.replaceAll("&amp;", "&")).searchParams.get("l")).toBe("es");
   });
 
@@ -1479,7 +1479,7 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
     process.env.VOICE_SCREEN_NUMBERS = LINE;
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "both" });
     const xml = await (await call()).text();
-    expect(xml).toMatch(/<Gather [^>]*><Say>Thanks for calling\. To be connected, please press 1\.<\/Say><Say language="es-MX">Gracias por llamar\. Para comunicarse, oprima 1\.<\/Say><\/Gather>/);
+    expect(xml).toMatch(/<Gather [^>]*><Say voice="Polly.Joanna-Neural">Thanks for calling\. To be connected, please press 1\.<\/Say><Say voice="Polly.Lupe-Neural">Gracias por llamar\. Para comunicarse, oprima 1\.<\/Say><\/Gather>/);
   });
 });
 
@@ -1564,8 +1564,8 @@ describe("billing: a paused or receptionist-less account (BILLING_ENFORCE)", () 
   const CALLER = "+19565550111";
   const TRANSFER = "+19565550123";
   const DAY = 24 * 60 * 60 * 1000;
-  const UNAVAILABLE_EN = "<Say>Thanks for calling. No one can take your call right now. Please call back later.</Say>";
-  const UNAVAILABLE_ES = "<Say language=\"es-MX\">Gracias por llamar. En este momento nadie puede atender su llamada. Por favor llame más tarde.</Say>";
+  const UNAVAILABLE_EN = "<Say voice=\"Polly.Joanna-Neural\">Thanks for calling. No one can take your call right now. Please call back later.</Say>";
+  const UNAVAILABLE_ES = "<Say voice=\"Polly.Lupe-Neural\">Gracias por llamar. En este momento nadie puede atender su llamada. Por favor llame más tarde.</Say>";
   const call = () => GET(new Request(`https://x.example/api/voice/texml?To=%2B19565550999&From=${encodeURIComponent(CALLER)}`));
   const standing = (over: Partial<BillingStanding> = {}): BillingStanding => ({
     complimentary: false, pausedAt: null, subscriptionStatus: "active",
@@ -1844,8 +1844,8 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     (await (await import("./route")).answer(TO, from, "https://x.example", true, { skipOwnerLine: true })).text();
   /** `doc` with `ask` as the first verb: what an ask whose fallthrough is exactly `doc` must look like. */
   const withAsk = (doc: string, ask: string) => doc.replace("<Response>", `<Response>${ask}`);
-  const PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
-  const CODE_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Enter the 6-digit code shown on your screen.</Say></Gather>`;
+  const PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Joanna-Neural">Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
+  const CODE_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Joanna-Neural">Enter the 6-digit code shown on your screen.</Say></Gather>`;
   const clearedLine = () => lookupMock.mockResolvedValue({ id: "pn1", account_id: UUID_ACCOUNT, e164: TO, telnyx_id: null, status: "live" });
 
   describe("the fallthrough after an ask is exactly today's path (review C-1: the fallback ticket means EVERY guard cleared)", () => {
@@ -1874,8 +1874,8 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
       ownerLookupMock.mockResolvedValue(HIT);
       const asked = await (await telnyxSigned({ To: TO, From: CELL })).text();
       const t = await today(CELL);
-      expect(t).toContain("<Say>Sorry, this number can't take your call right now. Please try again later.</Say>");
-      expect(t).toContain(`<Say language="es-MX">`);
+      expect(t).toContain("<Say voice=\"Polly.Joanna-Neural\">Sorry, this number can't take your call right now. Please try again later.</Say>");
+      expect(t).toContain(`<Say voice="Polly.Lupe-Neural">`);
       expect(asked).toBe(withAsk(t, PIN_ASK));
       expect(asked).not.toContain("&amp;f=");
     });
@@ -1901,7 +1901,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
   it("a registered, verified cell with a PIN hears the PIN step, and the fallthrough is today's bridge with no owner pass", async () => {
     ownerLookupMock.mockResolvedValue(HIT);
     const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
-    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial`);
+    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Joanna-Neural">Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial`);
     expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
     expect(sipParams(xml).get("X-BIS-Signature")).toBeTruthy();
     expect(ownerLookupMock).toHaveBeenCalledWith({}, "a1", CELL, 10);
@@ -1911,7 +1911,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
   it("a pending call-in code hears the code ask in the person's language (none stored: the account's), falling through to today's bridge", async () => {
     ownerLookupMock.mockResolvedValue({ ...HIT, status: "verify", language: null, accountLanguage: "es", pinParams: null });
     const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
-    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say language="es-MX">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial answerOnBridge="true"`);
+    expect(xml).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Lupe-Neural">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial answerOnBridge="true"`);
     expect(xml).not.toContain("<Hangup");
     expect(logSpy).toHaveBeenCalledWith("texml owner line asking for a call-in code, accountId a1");
   });
@@ -2053,7 +2053,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
   it("over the daily limit: a short line in their language, then today's bridge", async () => {
     ownerLookupMock.mockResolvedValue({ ...HIT, status: "over_limit", language: "es" });
     const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
-    expect(xml).toContain(`<Response><Say language="es-MX">Ya llegó al límite de llamadas de hoy. Le comunico con Sofía.</Say><Dial`);
+    expect(xml).toContain(`<Response><Say voice="Polly.Lupe-Neural">Ya llegó al límite de llamadas de hoy. Le comunico con Sofía.</Say><Dial`);
     expect(sipParams(xml).get("X-BIS-Owner-Pass")).toBeNull();
   });
 
@@ -2168,7 +2168,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
       const xml = await (await telnyxSigned({ To: TO, From: CELL })).text();
       expect(xml).not.toContain("<Gather");
       expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Say>We're sorry — we can't take more calls today. Please call back tomorrow.</Say><Hangup/></Response>`);
+<Response><Say voice="Polly.Joanna-Neural">We're sorry — we can't take more calls today. Please call back tomorrow.</Say><Hangup/></Response>`);
     });
   });
 
@@ -2199,12 +2199,12 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, persona_name: "Ana" });
     const pin = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
       { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: "Dan Lopez" })).text();
-    expect(pin).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>That PIN didn&apos;t match. Try again.</Say><Say>Hi Dan. Enter your PIN, or press pound to talk to Ana.</Say></Gather><Dial answerOnBridge="true"`);
+    expect(pin).toContain(`<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Joanna-Neural">That PIN didn&apos;t match. Try again.</Say><Say voice="Polly.Joanna-Neural">Hi Dan. Enter your PIN, or press pound to talk to Ana.</Say></Gather><Dial answerOnBridge="true"`);
     expect(sipParams(pin).get("X-BIS-Owner-Pass")).toBeNull();
     expect(profileMock).toHaveBeenCalledWith({}, UUID_ACCOUNT);
     const code = await (await ownerLineGatherAgain(TO, CELL, "https://x.example",
       { kind: "verify", locale: "es", accountId: UUID_ACCOUNT, name: null })).text();
-    expect(code).toContain(`<Say language="es-MX">Ese código no coincide. Intente de nuevo.</Say><Say language="es-MX">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial`);
+    expect(code).toContain(`<Say voice="Polly.Lupe-Neural">Ese código no coincide. Intente de nuevo.</Say><Say voice="Polly.Lupe-Neural">Marque el código de 6 dígitos que aparece en su pantalla.</Say></Gather><Dial`);
     expect(code).not.toContain("<Hangup");
   });
 
@@ -2216,7 +2216,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
     const res = await ownerLineGatherAgain(TO, CELL, "https://x.example", { kind: "pin", locale: "en", accountId: UUID_ACCOUNT, name: null });
     expect(res.status).toBe(200);
     const xml = await res.text();
-    expect(xml).toContain("<Say>Hi. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">Hi. Enter your PIN, or press pound to talk to Sofía.</Say></Gather><Dial");
     expect(xml).not.toContain("&amp;f=");
     expect(logged(errSpy)).toContain(`texml lookup failed for ${TO}: Error: db blip`);
   });
@@ -2227,7 +2227,7 @@ describe("the owner line at the answer route (F-032 §4.1; SC-9, SC-14, SC-16, S
       clearedLine();
       pinTokenAndClock();
     });
-    const RETRY_PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say>That PIN didn&apos;t match. Try again.</Say><Say>Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
+    const RETRY_PIN_ASK = `<Gather action="https://x.example/api/voice/texml/owner-pin" numDigits="6" timeout="8" finishOnKey="#"><Say voice="Polly.Joanna-Neural">That PIN didn&apos;t match. Try again.</Say><Say voice="Polly.Joanna-Neural">Hi Dan. Enter your PIN, or press pound to talk to Sofía.</Say></Gather>`;
 
     it("over the customer caps: after the re-ask comes today's cap sentence and hang-up, never a ticketed bridge (mutation: mint the cleared bridge in ownerLineGatherAgain -> FAILS)", async () => {
       const { ownerLineGatherAgain } = await import("./route");

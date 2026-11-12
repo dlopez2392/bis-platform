@@ -27,7 +27,7 @@
 //
 // The words come from ./owner-line-copy, never the 562 KB catalogue: this file is imported statically by the
 // answer route, which runs on Telnyx's answer deadline (review M-2). Nothing here reaches @bis/db (plan SC-18).
-import { xmlText } from "./xml";
+import { sayLine, xmlText } from "./xml";
 import { OWNER_LINE_SAY } from "./owner-line-copy";
 import { firstName } from "@/lib/owner-line/names";
 import { t } from "@/lib/i18n/t";
@@ -41,7 +41,7 @@ export function ownerPinUrl(origin: string): string {
 }
 
 function say(locale: Locale, text: string): string {
-  return locale === "es" ? `<Say language="es-MX">${xmlText(text)}</Say>` : `<Say>${xmlText(text)}</Say>`;
+  return sayLine(locale === "es" ? "es" : "en", xmlText(text));
 }
 
 function gather(action: string, inner: string): string {

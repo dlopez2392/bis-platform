@@ -173,11 +173,11 @@ describe("the well-formedness checker itself", () => {
     ],
     ["a bare '&' in an attribute value", `<Response><Dial action="https://x/y?a=1&b=2"/></Response>`],
     ["an unclosed element", `<Response><Dial>+1</Response>`],
-    ["a mismatched end tag", `<Response><Say>hi</Sip></Response>`],
-    ["a bare '<' in character data", `<Response><Say>a < b</Say></Response>`],
+    ["a mismatched end tag", `<Response><Say voice="Polly.Joanna-Neural">hi</Sip></Response>`],
+    ["a bare '<' in character data", `<Response><Say voice="Polly.Joanna-Neural">a < b</Say></Response>`],
     ["an unquoted attribute value", `<Response><Dial timeout=20>+1</Dial></Response>`],
     ["two root elements", `<Response/><Response/>`],
-    ["an unknown entity", `<Response><Say>Tom &nope; Jerry</Say></Response>`],
+    ["an unknown entity", `<Response><Say voice="Polly.Joanna-Neural">Tom &nope; Jerry</Say></Response>`],
   ];
   for (const [name, doc] of bad) {
     it(`rejects ${name}`, () => {
@@ -187,9 +187,9 @@ describe("the well-formedness checker itself", () => {
 
   const good: [string, string][] = [
     ["an escaped '&'", `<Response><Sip>sip:p@h?a=1&amp;b=2</Sip></Response>`],
-    ["numeric character references", `<Response><Say>Tom &#38; Jerry &#x27;s</Say></Response>`],
+    ["numeric character references", `<Response><Say voice="Polly.Joanna-Neural">Tom &#38; Jerry &#x27;s</Say></Response>`],
     ["an empty element and an attribute", `<Response><Dial timeout="20">+1</Dial><Hangup/></Response>`],
-    ["accented Spanish copy", `<Response><Say language="es-MX">Lo sentimos — más tarde.</Say></Response>`],
+    ["accented Spanish copy", `<Response><Say voice="Polly.Lupe-Neural">Lo sentimos — más tarde.</Say></Response>`],
   ];
   for (const [name, doc] of good) {
     it(`accepts ${name}`, () => {
@@ -340,14 +340,14 @@ describe("every emitted TeXML document parses", () => {
   it("the English refusal", async () => {
     lookupMock.mockResolvedValue(null);
     const xml = await texml({ To: LIVE_TO, From: CALLER });
-    expect(xml).toContain("<Say>");
+    expect(xml).toContain("<Say voice=\"Polly.Joanna-Neural\">");
     parseXmlStrict(xml);
   });
 
   it("the bilingual refusal (accented Spanish copy, language attribute)", async () => {
     profileMock.mockResolvedValue({ ...PROFILE, enabled: false, languages: "both" });
     const xml = await texml({ To: LIVE_TO, From: CALLER });
-    expect(xml).toContain("es-MX");
+    expect(xml).toContain("Polly.Lupe-Neural");
     parseXmlStrict(xml);
   });
 
@@ -549,7 +549,7 @@ describe("every emitted TeXML document parses", () => {
     // goes wrong, and this copy travels as character data.
     profileMock.mockResolvedValue({ ...PROFILE, languages: "es" });
     const xml = await handoffResult("tok_abc", "busy");
-    expect(xml).toContain("es-MX");
+    expect(xml).toContain("Polly.Lupe-Neural");
     parseXmlStrict(xml);
   });
 
@@ -590,7 +590,7 @@ describe("every emitted TeXML document parses", () => {
     it("the question in both languages (accented Spanish, language attribute, inside the Gather)", async () => {
       profileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
       const xml = await texml({ To: LIVE_TO, From: CALLER });
-      expect(xml).toContain("es-MX");
+      expect(xml).toContain("Polly.Lupe-Neural");
       parseXmlStrict(xml);
     });
 
@@ -644,7 +644,7 @@ describe("the owner line's documents parse (F-032)", () => {
     ownerLimitXml({ locale: "en", persona: "Sofía", fallthrough: DIAL }),
     // Review C-1: a fallthrough that is today's REFUSAL, not a bridge.
     ownerPinAskXml({ locale: "es", name: "Dan", persona: "Sofía", action: "https://x/api/voice/texml/owner-pin", retry: false,
-      fallthrough: `<Say>We&apos;re sorry — we can&apos;t take more calls today.</Say><Hangup/>` }),
+      fallthrough: `<Say voice="Polly.Joanna-Neural">We&apos;re sorry — we can&apos;t take more calls today.</Say><Hangup/>` }),
     ownerVerifiedXml("es"),
   ])("parses strictly: %#", (xml) => { expect(() => parseXmlStrict(xml)).not.toThrow(); });
 
