@@ -136,7 +136,7 @@ export function parseChangeId(v: number | string): number | null {
 type RawChangeRow = {
   id: number; record_type: ChangeRecordType; record_id: string; contact_id: string | null; client_group_id: string | null;
   op: "insert" | "update" | "delete"; field: string | null; before: unknown; after: unknown; xact: number | string;
-  author_kind: AuthorKind | null; author_id: string | null; via: string | null; created_at: string;
+  author_kind: AuthorKind; author_id: string | null; via: string | null; created_at: string;
 };
 const CHANGE_ROW_COLUMNS =
   "id, record_type, record_id, contact_id, client_group_id, op, field, before, after, xact, author_kind, author_id, via, created_at";

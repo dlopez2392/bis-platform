@@ -17,7 +17,7 @@ export type ChangeRecordType =
 export type ChangeRow = {
   id: number; recordType: ChangeRecordType; recordId: string; contactId: string | null; clientGroupId: string | null;
   op: "insert" | "update" | "delete"; field: string | null; before: unknown; after: unknown; xact: string;
-  authorKind: AuthorKind | null; authorId: string | null; via: string | null; createdAt: string;
+  authorKind: AuthorKind; authorId: string | null; via: string | null; createdAt: string;
 };
 
 /** One write, or several close writes by the same person, folded for the timeline (plan Task 4). A
@@ -27,7 +27,7 @@ export type ChangeRow = {
  *  same author, so only `via` can differ step to step, and the newest write's reason is the one
  *  that reads truest for a group shown as one timeline row. */
 export type ChangeGroup = {
-  key: string; recordType: ChangeRecordType; recordId: string; authorKind: AuthorKind | null; authorId: string | null;
+  key: string; recordType: ChangeRecordType; recordId: string; authorKind: AuthorKind; authorId: string | null;
   via: string | null; at: string; firstAt: string; steps: ChangeRow[][]; rows: ChangeRow[];
 };
 
@@ -36,7 +36,7 @@ export type ChangeGroup = {
 export const COLLAPSE_MINUTES = 10;
 
 type Write = {
-  recordType: ChangeRecordType; recordId: string; authorKind: AuthorKind | null; authorId: string | null;
+  recordType: ChangeRecordType; recordId: string; authorKind: AuthorKind; authorId: string | null;
   via: string | null; atMs: number; at: string; rows: ChangeRow[];
 };
 
@@ -166,7 +166,7 @@ export function foldVia(groups: readonly ChangeGroup[], onPage: ViaOnPage): Chan
 type RawChangeRow = {
   id: number; record_type: ChangeRecordType; record_id: string; contact_id: string | null; client_group_id: string | null;
   op: "insert" | "update" | "delete"; field: string | null; before: unknown; after: unknown; xact: number | string;
-  author_kind: AuthorKind | null; author_id: string | null; via: string | null; created_at: string;
+  author_kind: AuthorKind; author_id: string | null; via: string | null; created_at: string;
 };
 
 function mapRow(r: RawChangeRow): ChangeRow {
