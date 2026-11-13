@@ -80,7 +80,7 @@ watched clean for a couple of ticks.
 6. After a week, read the project's Usage page and record what the extra
    invocations cost.
 
-**Switched on 2026-11-06.** The bis-ci dry run passed: 22 nested keys, 23 fresh pass rows, and a `platform.ping` job claimed and succeeded. `CRON_FANOUT=1` was then added on Production, and the project redeployed (`dpl_FXWC6YAS…`, ready 08:58Z). The 09:00 and 09:15 ticks were both clean: 23/23 pass heartbeats fresh, no failing keys, no ops alerts, `jobs.dead` and `jobs.backlog` ok, and no runtime errors. Rollback: delete `CRON_FANOUT` on Production and redeploy. Step 6, the cost reading, is due about 2026-11-13.
+**Switched on 2026-11-06.** The bis-ci dry run passed: 22 nested keys, 23 fresh pass rows, and a `platform.ping` job claimed and succeeded. `CRON_FANOUT=1` was then added on Production, and the project redeployed (`dpl_FXWC6YAS…`, ready 08:58Z). The 09:00 and 09:15 ticks were both clean: 23/23 pass heartbeats fresh, no failing keys, no ops alerts, `jobs.dead` and `jobs.backlog` ok, and no runtime errors. Rollback: delete `CRON_FANOUT` on Production and redeploy. Step 6, the cost reading, was done 2026-11-13 from the team's billing charges (one day before the switch against one day after, whole team, so an upper bound): function CPU, memory, invocations and observability events together went from about $0.02 a day (2026-11-03) to about $0.11 a day (2026-11-10). The fan-out costs at most about 8 cents a day, roughly $2.50 a month. It stays on.
 
 ## 4. Reading dead jobs
 
