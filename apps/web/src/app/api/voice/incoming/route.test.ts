@@ -1458,10 +1458,11 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     }
   });
 
-  it("a customer call's incoming-call line is unchanged: it still carries the caller's number", async () => {
+  it("a customer call's incoming-call line carries the caller's number masked, never in full", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     const line = logSpy.mock.calls.find((c: unknown[]) => c[1] === "incoming call");
-    expect(line![2]).toMatchObject({ callerNumber: "+19565550196" });
+    expect(line![2]).toMatchObject({ callerNumber: "+1••••••••96" });
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain("+19565550196");
   });
 });

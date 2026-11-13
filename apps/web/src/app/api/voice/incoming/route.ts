@@ -118,7 +118,7 @@ import { decideDisclosure } from "@/lib/voice/disclosure";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
 import { effectiveStatusOrUnknown, hoursChain, statusCode, dayKey } from "@/lib/business-status/status";
-import { loggableError } from "@/lib/loggable-error";
+import { loggableError, loggablePhone } from "@/lib/loggable-error";
 import { SEND_TIMEOUT_MS, RATE_LIMIT_MAX_WAIT_MS } from "@/lib/http/retry-after";
 import type { Locale } from "@/lib/i18n/locale";
 // F-032 (plan Task 12): the owner line. The decision, the accept body and the spoken lines are small and loaded
@@ -516,7 +516,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         // F-032: an owner-line call finishes as one (its row, its minutes, its access-log entry, nothing else);
         // a customer's call exactly as before.
         if (args.mode === "owner_line") await args.ownerLine.finish(state, { callRowId, startedAt, endedAt: new Date() });
-        else await finishCall(state, args.finishCtx, { callRowId, startedAt, endedAt: new Date() });
+        else await finishCall(state, args.finishCtx, { callRowId, providerCallId: callId, startedAt, endedAt: new Date() });
       } catch (e) {
         log("finishCall threw unexpectedly", { callId, error: String(e) });
       }
@@ -968,13 +968,14 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
             // that is already gone — or an earlier `closeTimer` still counting
             // down, which is the bug the handoff branch below documents.
             //
-            // LOGGED LOUDLY AND WITH THE CALLER'S NUMBER, because this is the
-            // only guard in the voice path that ends a call on a CONTENT
-            // heuristic. If it ever fires on a real customer, this line plus
-            // the transcript — which is deliberately still written — is the
-            // only way anybody finds out.
+            // LOGGED LOUDLY, because this is the only guard in the voice path
+            // that ends a call on a CONTENT heuristic. If it ever fires on a
+            // real customer, this line plus the transcript — which is
+            // deliberately still written — is the only way anybody finds out.
+            // The caller's number is masked to its last two digits (it is
+            // personal data); the call id finds the full record.
             log("recorded message detected — ending the call without a reply",
-              { callId, caller: args.mode === "receptionist" ? args.finishCtx.callerNumber ?? "unknown" : "owner line" });
+              { callId, caller: args.mode === "receptionist" ? loggablePhone(args.finishCtx.callerNumber) : "owner line" });
             clearTimeout(capTimer);
             clearTimeout(warnTimer);
             clearTimeout(closeTimer);
@@ -1132,7 +1133,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // logs never carry that number; every other call's line is unchanged.
     const ownerPassRaw = extractOwnerPass(event.data);
     log("incoming call", {
-      callId, callerNumber: ownerPassRaw ? "withheld (owner pass present)" : callerNumber, calledNumber,
+      callId, callerNumber: ownerPassRaw ? "withheld (owner pass present)" : loggablePhone(callerNumber), calledNumber,
       sipHeaderNames: sipHeaderNames(event.data), attestation: sipAttestation(event.data),
     });
 

@@ -6,6 +6,7 @@ import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
 import { GET as texmlGET } from "../route";
+import { PUBLISHED_TELNYX_PUBLIC_KEY, publishedKeyFormPost } from "@/lib/voice/testing/published-telnyx-key";
 
 const stampMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
@@ -45,6 +46,8 @@ vi.mock("next/server", async (importOriginal) => {
 const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
 const LINE = "+19565550999";
 const STRANGER = "+19565550444";
+/** STRANGER as the logs carry it: a caller's number is masked (security quick win, 2026-11). */
+const STRANGER_LOGGED = "+1••••••••44";
 const PROFILE = {
   id: "vp1", account_id: ACCOUNT, persona_name: "Sofía",
   greeting_en: "Hi", greeting_es: "Hola", facts: "-", services: "-",
@@ -133,7 +136,7 @@ describe("pressed 1: the bridge the main route would have sent", () => {
     expect(action.searchParams.get("t")).toBe(onUri);
     expect(verifyFallbackTicket(action.searchParams.get("f"), onUri!, Date.now()))
       .toEqual({ ok: true, accountId: ACCOUNT, calledE164: LINE, callerE164: STRANGER });
-    expect(logSpy).toHaveBeenCalledWith(`texml screen passed for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen passed for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
     expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
   });
 
@@ -172,7 +175,7 @@ describe("pressed nothing, or another key, on the SECOND ask: goodbye", () => {
     const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER })).text();
     expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${GOODBYE_EN}<Hangup/></Response>`);
     expect(lookupMock).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
   });
 
   it("no Digits field at all → no-keypress goodbye", async () => {
@@ -180,7 +183,7 @@ describe("pressed nothing, or another key, on the SECOND ask: goodbye", () => {
     expect(xml).toContain(GOODBYE_EN);
     expect(xml).toContain("<Hangup/>");
     expect(xml).not.toContain("<Dial");
-    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (no-keypress) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (no-keypress) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
   });
 
   it("an empty Digits field → no-keypress goodbye", async () => {
@@ -209,7 +212,7 @@ describe("pressed nothing, or another key, on the SECOND ask: goodbye", () => {
   it("an unknown language value falls back to English, and a non-uuid account is logged as unknown", async () => {
     const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, "https://x.example/api/voice/texml/screen?l=fr&a=bad%0Aline&n=2")).text();
     expect(xml).toContain(GOODBYE_EN);
-    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId unknown`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER_LOGGED}, accountId unknown`);
   });
 });
 
@@ -251,7 +254,7 @@ describe("the same Telnyx gate as the main route", () => {
     const res = await press({ Digits: "1", To: LINE, From: STRANGER });
     expect(res.status).toBe(403);
     expect(lookupMock).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(`texml screen: rejected request (missing-headers), claimedTo ${LINE}, claimedFrom ${STRANGER}`);
+    expect(errSpy).toHaveBeenCalledWith(`texml screen: rejected request (missing-headers), claimedTo ${LINE}, claimedFrom ${STRANGER_LOGGED}`);
   });
 
   it("a tampered body is refused 403", async () => {
@@ -280,6 +283,24 @@ describe("the same Telnyx gate as the main route", () => {
 });
 
 describe("GET mirrors the main route: closed with the key set, answered without it", () => {
+  it("the Telnyx test key whose private half is in this repo: refused 403 in production (POST validly signed, and GET), accepted on Preview", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("TELNYX_PUBLIC_KEY", PUBLISHED_TELNYX_PUBLIC_KEY);
+    const fields = { Digits: "1", To: LINE, From: STRANGER };
+    try {
+      vi.stubEnv("VERCEL_ENV", "production");
+      expect((await POST(publishedKeyFormPost(URL_BASE, fields))).status).toBe(403);
+      expect((await GET(new Request(`${URL_BASE}&Digits=1&To=${encodeURIComponent(LINE)}`))).status).toBe(403);
+      expect(lookupMock).not.toHaveBeenCalled();
+      vi.stubEnv("VERCEL_ENV", "preview");
+      expect((await POST(publishedKeyFormPost(URL_BASE, fields))).status).toBe(200);
+      expect(lookupMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+    }
+  });
+
   it("GET with TELNYX_PUBLIC_KEY set → 405", async () => {
     process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const res = await GET(new Request(`${URL_BASE}&Digits=1&To=${encodeURIComponent(LINE)}`));
@@ -318,14 +339,14 @@ describe("pressed nothing, or another key, on the FIRST ask: asked once more", (
     expect(asks[0]!.searchParams.get("a")).toBe(ACCOUNT);
     expect(xml).toContain(`>${PROMPT}</Gather>${GOODBYE_EN}<Hangup/></Response>`);
     expect(xml).not.toContain("<Dial");
-    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (no-keypress) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (no-keypress) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
     expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("declined"));
   });
 
   it("a WRONG key on the first ask is asked once more too — a person who pressed the wrong key is still a person (mutation: decline a wrong key on the first ask → FAILS)", async () => {
     const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, FIRST_ASK)).text();
     expect(gathers(xml).map((u) => u.searchParams.get("n"))).toEqual(["2"]);
-    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (wrong-key) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
     expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("declined"));
   });
 
@@ -381,7 +402,7 @@ describe("asked exactly twice under EITHER carrier behaviour on a timeout", () =
     }
     expect(asked).toBe(2);
     expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${GOODBYE_EN}<Hangup/></Response>`);
-    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (no-keypress) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (no-keypress) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
   });
 
   it("B, with a wrong key both times: asked twice, then declined (wrong-key)", async () => {
@@ -390,7 +411,7 @@ describe("asked exactly twice under EITHER carrier behaviour on a timeout", () =
     const last = await (await press({ Digits: "5", To: LINE, From: STRANGER }, second.toString())).text();
     expect(gathers(last)).toHaveLength(0);
     expect(last).toContain(GOODBYE_EN);
-    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER_LOGGED}, accountId ${ACCOUNT}`);
   });
 });
 

@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { readSecret } from "@/lib/fixture-secrets";
 
 /**
  * The app's side of the document vault's scanner (spec 3.1, 3.4; services/scanner). Two calls, each
@@ -42,7 +43,8 @@ const NOT_SPENT: ScanVerdict = { verdict: "error", cause: "transport" };
 
 export function scannerConfig(env: Record<string, string | undefined> = process.env): ScannerConfig | null {
   const raw = env.SCANNER_URL?.trim();
-  const secret = env.SCANNER_SECRET?.trim();
+  // In production, a value published in this repo reads as unset (lib/fixture-secrets.ts).
+  const secret = readSecret("SCANNER_SECRET", env)?.trim();
   if (!raw || !secret) return null;
   let u: URL;
   try { u = new URL(raw); } catch { return null; }

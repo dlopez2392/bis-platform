@@ -1,6 +1,7 @@
 import { recordHeartbeat, serviceDb, type SupabaseClient } from "@bis/db";
 import { configuredOrigin } from "@/lib/email/origin";
 import { cronAuthorized } from "@/lib/automations/cron-auth";
+import { readSecret } from "@/lib/fixture-secrets";
 import { fanoutEnabled, httpInvoke, PLAN, runFanout } from "@/lib/automations/fanout";
 import { buildPassContext, runPasses } from "@/lib/automations/harness";
 import { PASSES } from "@/lib/automations/registry";
@@ -59,7 +60,8 @@ export async function GET(req: Request): Promise<Response> {
     let db: SupabaseClient | null = null;
     results = await runFanout({
       plan: PLAN, now,
-      invoke: httpInvoke(appOrigin, process.env.CRON_SECRET!),
+      // cronAuthorized passed, so this is the same guarded value it compared.
+      invoke: httpInvoke(appOrigin, readSecret("CRON_SECRET") ?? ""),
       beat: (key, outcome) => recordHeartbeat((db ??= serviceDb()), key, outcome),
     });
   } else {

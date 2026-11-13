@@ -24,6 +24,38 @@ const PHONE_LIKE = new RegExp(
 );
 
 /**
+ * A phone number as a log line may carry it: "+1••••••••99". A caller's number
+ * is personal data, and a runtime log is read by more people, for longer, than
+ * the call record it would duplicate. The last two digits are enough to tell
+ * two calls in one log apart and to match a line against a call the dashboard
+ * already shows in full. The country code is kept for +1 only: country codes
+ * run one to three digits and telling them apart needs a table, so any other
+ * number hides everything but its last two digits. No number says "unknown";
+ * a value that is not a plain number is never echoed (it may be a SIP URI, or
+ * a forged log line) and reads "[phone]".
+ */
+export function loggablePhone(n: string | null | undefined): string {
+  if (!n) return "unknown";
+  const m = /^(\+?)(\d{4,15})$/.exec(n);
+  if (!m) return "[phone]";
+  const plus = m[1] ?? "";
+  const digits = m[2] ?? "";
+  const kept = plus && digits.startsWith("1") ? "1" : "";
+  const rest = digits.slice(kept.length);
+  return `${plus}${kept}${"•".repeat(rest.length - 2)}${rest.slice(-2)}`;
+}
+
+/**
+ * `text` with every phone number replaced by "[phone]", in the same narrow
+ * shapes loggableError redacts (E.164 and the common US forms). For prose a
+ * log line must quote, such as a call's AI summary, which can repeat the
+ * number the caller gave.
+ */
+export function redactPhones(text: string): string {
+  return text.replace(PHONE_LIKE, "[phone]");
+}
+
+/**
  * An error as a log line may carry it: its class (the SDK's `.type`, else its
  * name), Stripe's `code` and HTTP status when present, and its message with
  * every email address replaced by "[email]" and every phone number by

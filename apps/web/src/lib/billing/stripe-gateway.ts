@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import Stripe from "stripe";
+import { readSecret } from "@/lib/fixture-secrets";
 import {
   METER_KEYS, type MeterKey, type PlanPriceKey, type StripePriceIds,
   type SubscriptionItemSnapshot, type SubscriptionSnapshot,
@@ -620,7 +621,7 @@ export function stripeKeyVerdict(env: StripeEnv): StripeKeyVerdict {
 }
 
 /** What webhookSecretFromEnv reads. */
-export type WebhookEnv = { STRIPE_WEBHOOK_SECRET?: string };
+export type WebhookEnv = { STRIPE_WEBHOOK_SECRET?: string; VERCEL_ENV?: string };
 
 /**
  * The webhook signing secret, trimmed, or null when unset or blank. The ONE
@@ -633,7 +634,8 @@ export type WebhookEnv = { STRIPE_WEBHOOK_SECRET?: string };
  * subscription, which the webhook already mirrored.
  */
 export function webhookSecretFromEnv(env: WebhookEnv = process.env as WebhookEnv): string | null {
-  const secret = (env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+  // In production, a value published in this repo reads as unset (lib/fixture-secrets.ts).
+  const secret = (readSecret("STRIPE_WEBHOOK_SECRET", env) ?? "").trim();
   return secret || null;
 }
 

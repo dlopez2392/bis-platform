@@ -1581,6 +1581,30 @@ describe("a recording is hung up on, not conversed with", () => {
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("logs the hang-up with the call id and the caller's number masked, never in full", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { ws } = await startLifecycle();
+      ws.send = vi.fn();
+      ws.close = vi.fn();
+      ws.emit("open");
+      await vi.advanceTimersByTimeAsync(900);
+      ws.emit("message", JSON.stringify({
+        type: "conversation.item.input_audio_transcription.completed",
+        transcript: "Hello, please don't hang up the phone. This is an important message "
+        + "regarding your Google business account. Press 0 to speak with an agent "
+        + "immediately and verify your Google listings. Press 9 to opt out.",
+      }));
+      await flushMicrotasks();
+      const line = logSpy.mock.calls.find((c: unknown[]) => String(c[1]).startsWith("recorded message detected"));
+      expect(line![2]).toEqual({ callId: "call_abc123", caller: "+1••••••••96" });
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain("+19565550196");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("ends the SIP LEG too, not just the socket", async () => {
     // The #84 lesson applies to every ending, including this one: ws.close()
     // leaves Telnyx bridged to a leg nobody is on. A guard that saves 40

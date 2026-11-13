@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { readSecret } from "@/lib/fixture-secrets";
 
 /**
  * The customer's link (spec 4.1; plan deviation 1): 32 bytes, base64url, DERIVED from the request id
@@ -12,7 +13,8 @@ import { createHash, createHmac } from "node:crypto";
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 function linkKey(): Buffer {
-  const secret = process.env.DOCUMENT_LINK_SECRET;
+  // In production, a value published in this repo reads as unset (lib/fixture-secrets.ts).
+  const secret = readSecret("DOCUMENT_LINK_SECRET");
   if (!secret || secret.length < 32) throw new Error("DOCUMENT_LINK_SECRET is required (at least 32 characters)");
   return createHash("sha256").update(`bis-document-link:${secret}`).digest();
 }

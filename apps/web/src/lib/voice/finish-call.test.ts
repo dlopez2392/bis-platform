@@ -330,6 +330,24 @@ describe("finishCall", () => {
     expect(errSpy.mock.calls.some((c) => String(c[0]).includes("CALL LOST"))).toBe(true);
     errSpy.mockRestore();
   });
+  it("CALL LOST never carries a phone number the summary quotes, and keeps what recovers the lead: call id, provider call id, start time, masked caller", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    dbMocks.createContact.mockRejectedValue(new Error("db down"));
+    emailRefs.send.mockRejectedValue(new Error("mail down"));
+    summaryMocks.generateSummary.mockResolvedValue("MESSAGE — Ana wants a roof quote; call her back at +19565550196 or (956) 555-0196.");
+    const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
+    await finishCall(s, ctx, { ...meta, providerCallId: "rtc_abc123" });
+    const line = errSpy.mock.calls.map((c: unknown[]) => String(c[0])).find((l) => l.includes("CALL LOST"))!;
+    errSpy.mockRestore();
+    expect(line).not.toContain("+19565550196");
+    expect(line).not.toContain("555-0196");
+    expect(line).toContain("call her back at [phone] or [phone].");
+    expect(line).toContain("call call1");
+    expect(line).toContain("provider call rtc_abc123");
+    expect(line).toContain("started 2027-06-01T17:00:00.000Z");
+    expect(line).toContain("caller +1••••••••96");
+  });
   it("getEmailProvider() throwing (rotated key) returns ok without throwing, row still written", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     emailRefs.providerShouldThrow = true;
