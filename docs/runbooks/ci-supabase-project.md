@@ -7,9 +7,9 @@ for tests. **Since 2026-10-08 neither does:** each starts a throwaway
 Supabase stack inside its own runner (section 11), so neither shares a
 database with any other run or waits in a repo-wide queue, and e2e starts
 beside verify instead of after it. What CI still does with this project is
-READ it, once per push (the `e2e-migrations` part of the `e2e` check): the
-check that it holds every migration of the
-branch (section 6). Vercel Preview and the demo screenshot capture
+WRITE a branch's new migrations to it, and check it holds every migration of
+the branch, in ONE step of the `migrations-bis-ci` part of the `e2e` check,
+only for a ready PR that adds a migration (since 2026-11-13; section 6). Vercel Preview and the demo screenshot capture
 (`screenshots.yml`) still run on it, and so do local runs on danlo's machine
 (section 9). This runbook covers creating the CI project, bringing its schema
 up to date, seeding it, checking it matches production, restoring it after a
@@ -56,11 +56,13 @@ In CI, and in the CI-only tools, a check names the CI project by
   loopback; both refuse the migration check's `BIS_CI_SUPABASE_REF` and
   `BIS_CI_SUPABASE_DB_URL` anywhere in job scope. Tested by
   `apps/web/ci/ci-target-guard.test.ts`.
-- `.github/scripts/ci-migrations-applied.sh` (e2e's read of this project):
-  refuses production's ref anywhere, and any DB URL that is not
-  `postgres.<ref>` on a `*.pooler.supabase.com` host, before psql sees it,
-  then reads in one read-only transaction sent as one command (safe through
-  the 6543 transaction pooler too).
+- `.github/scripts/migrations-apply.sh --target bis-ci` (CI's one write to
+  this project, `migrations-bis-ci`; `ci-db-target.sh`): refuses production's
+  ref anywhere, and any DB URL that is not `postgres.<ref>` on a
+  `*.pooler.supabase.com` host, port 5432, before psql sees it. Its
+  `--require-empty` read guards `ci-project-setup.yml`'s `rebuild-push`.
+  (`ci-migrations-applied.sh`, the read-only check it replaced, retired in
+  PR 4.)
 - `packages/db/src/ci/target.ts` (`assertCiTarget`), inside `db:push:ci`,
   `db:migrations:ci`, `ci:sql` and `ci:seed`: a narrower check of the ref, the
   API URL and the DB URL only (refuses production's ref, a URL or DB user for
@@ -99,9 +101,11 @@ workflow, one step at a time, reading each result before starting the next:
 gh workflow run ci-project-setup.yml --ref main -f step=<step>
 ```
 
-Steps: `bootstrap`, `push-dry-run`, `push`, `migrations`, `fingerprint`,
-`fingerprint-detail`, `migration-history`, `seed`. Only `bootstrap`, `push` and
-`seed` write. The three SQL reads upload their rows as an artifact
+Steps: `bootstrap`, `rebuild-push-dry-run`, `rebuild-push`, `apply-dry-run`,
+`apply`, `migrations`, `fingerprint`, `fingerprint-detail`,
+`migration-history`, `seed`. Only `bootstrap`, `rebuild-push`, `apply` and
+`seed` write. `rebuild-push` is for a rebuilt, EMPTY project only (section 3);
+`apply` is the by-hand fallback for section 6. The three SQL reads upload their rows as an artifact
 (`ci-project-<step>`), so a fingerprint can be diffed as a plain file.
 
 The same commands run from a machine whose `packages/db/.env` holds the CI
@@ -149,12 +153,16 @@ rows with production's (section 5). If Supabase refused the bucket insert,
 create it in the dashboard with the settings above and re-run the bootstrap
 without that statement.
 
-## 3. Push the migrations
+## 3. Push the migrations (a rebuilt, empty project only)
 
-1. `-f step=push-dry-run`. It must list exactly the migration files on the ref
-   you dispatched, and nothing else. Stop if it lists fewer or skips a file.
-2. `-f step=push`. Applies them in one run and records each in
-   `supabase_migrations.schema_migrations`.
+1. `-f step=rebuild-push-dry-run`. It must list exactly the migration files
+   on the ref you dispatched, and nothing else. Stop if it lists fewer or
+   skips a file.
+2. `-f step=rebuild-push`. Applies them in one run and records each in
+   `supabase_migrations.schema_migrations`. Never on a live project: the
+   runner (section 6) is the one applier of new migrations since 2026-11-13,
+   and it applies only timestamped files a branch adds, never the legacy
+   numbered ones, which is why a rebuild still needs the CLI.
 3. `-f step=migrations`. Every file shows as applied on both sides.
 
 The CLI sends each file's bytes as written, so the migrations with backslash
@@ -226,24 +234,28 @@ CI first, then production.
    ahead, and a new file whose slug another file already has (production
    records 61 legacy migrations by slug alone, step 5). Legacy names sort before every timestamped one, so the
    order of every build is unchanged.
-2. On the migration's branch, with main merged in: `-f step=push-dry-run`
-   dispatched with `--ref <branch>` must list exactly the one new file; then
-   `-f step=push` on the same ref. **Until the pipeline's PR 4 (CI applies to
-   bis-ci itself), schema branches still serialise here**, because `db push`
-   compares the CI project's WHOLE history with the branch's files. Two cases:
-   - **Another branch's migration is on the CI project but not yet on main**
-     (the common one). The dry run refuses with "Remote migration versions not
-     found in local migrations directory." Wait for that branch to merge, merge
-     main into yours, and dispatch again. **NEVER run `supabase migration
-     repair` against the CI project** to get past it: it would delete the
-     other branch's history row, and that branch's e2e check would go red
-     while its schema stayed.
-   - **The CI project holds a LATER version than your file** (that branch is
-     merged and you merged main, but your file is older). The CLI asks for
-     `--include-all` (confirmed in CLI 2.109.1, review of #365), which
-     `db:push:ci` refuses on purpose. Give the file a new version:
-     `migration:new` with a new slug, move the SQL into it, delete the old
-     file. It has been applied nowhere, so that is not an edit.
+2. **CI applies it (since 2026-11-13, migration pipeline PR 4).** Push the
+   branch, open its PR and mark it READY (owner decision Q1: a draft never
+   reaches bis-ci). Once `verify-db`, `verify-app` and every `e2e-shard` pass
+   on the head SHA, `migrations-bis-ci` checks the PR is ready, applies ONLY
+   the files the branch adds (`.github/scripts/migrations-apply.sh --target
+   bis-ci`: one transaction per file under the history lock, refusing an edit
+   of an applied file and a version older than bis-ci's newest), then
+   `--check`s that bis-ci holds every file of the branch. A draft or no PR
+   fails that job with "mark it ready, then Re-run failed jobs". A branch that
+   also changes the pipeline is refused by `migrations-plan` (owner decision
+   Q6), and a branch with no migration skips the job and never reaches bis-ci.
+   Two branches no longer serialise: the runner compares only the files it is
+   given, so another branch's row is not a refusal.
+   - **The CI project holds a LATER version than your file**: the runner
+     refuses it ("rename it with `migration:new`, it has been applied
+     nowhere"). Make a new file with `migration:new`, move the SQL into it,
+     delete the old one; that is not an edit.
+   - **NEVER run `supabase migration repair` against the CI project**: it
+     would delete another branch's history row.
+   - By hand, only if CI cannot: `ci-project-setup.yml` `-f step=apply-dry-run`
+     then `-f step=apply`, dispatched with `--ref <branch>` (the same runner,
+     on the files the branch adds).
 3. Post-apply checks of the new objects on the CI project (`ci:sql` with a
    read-only file); for a constraint or function with a backslash escape, the
    md5 of its stored definition against the file's.
@@ -380,29 +392,21 @@ and a migration pushed to the CI project no longer turns other branches'
 
 **What enforces step 2 now.** Until that date, skipping step 2 turned
 `verify` red, because its db suite ran here. Neither job runs here any more,
-so the `e2e` check carries the gate, through its `e2e-migrations` part (a
-job of its own since 2026-11-12: once the migration is pushed here,
-"Re-run failed jobs" re-runs only it and the `e2e` gate, about a minute,
-not the Playwright shards): "Check
-that the CI project has every migration in this branch"
-(`.github/scripts/ci-migrations-applied.sh`), its step after the docs-only
-decision. It compares every
-`packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
-project's `supabase_migrations.schema_migrations` by the pair (version, name)
-the CLI records (since 2026-11-13; a numbered file is also found by a row
-whose name is its whole stem, the form of SOME of production's MCP rows; all
-116 of this project's legacy rows are the CLI's pair, read in the review of
-#365), and fails naming each file that
-is missing, with this section as the fix. A row with the file's version under
-another name is another migration and is named as such: give this file a new
-version with `migration:new`. A row this project holds that the branch lacks
-(another branch pushed first) is reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
-this project: `BIS_CI_SUPABASE_REF` and `BIS_CI_SUPABASE_DB_URL` (from
-`CI_SUPABASE_DB_URL`) are set on that step alone, the script checks the URL
-is this project's Session pooler user before psql sees it, and it reads in
-one read-only transaction sent as one command. It does not check production
-(e2e holds no production credential, and must not): steps 5 and 6 are still
-the orchestrator's.
+so the `e2e` check carries the gate, through its `migrations-bis-ci` part
+(since 2026-11-13; until then a read-only `e2e-migrations` part ran
+`ci-migrations-applied.sh`, retired, on every push). For a branch that
+adds a migration it must SUCCEED: its one step applies the branch's files and
+then runs `migrations-apply.sh --target bis-ci --check`, which fails naming
+each file of the branch this project does not hold, by the pair (version,
+name), and each runner-applied file whose recorded content differs. For any
+other branch it must be SKIPPED (`ci-gate.sh`'s `NAME@DUE`), so such a push
+neither waits for it nor reads this project. On `main` it checks only. It is
+the ONLY place `ci.yml` reaches this project: `BIS_CI_SUPABASE_REF` and
+`BIS_MIGRATIONS_DB_URL` (from `CI_SUPABASE_DB_URL`) are set on that step
+alone, and the runner checks the URL is this project's Session pooler user
+(port 5432) and never production's before psql sees it. It does not touch
+production (e2e holds no production credential, and must not): steps 5 and 6
+are still the orchestrator's.
 
 **What that gate does NOT prove.** It checks that each migration's version and
 name are in this project's history, nothing more. No CI test runs against this
@@ -461,7 +465,7 @@ images, then `types:gen`.
 2026-10-08 it is in the paid one, where projects do not pause. Kept for the
 day it moves back. Free projects pause after about a week without traffic
 [assumption: Supabase's published Free-plan behaviour]. Every CI push is traffic, so this bites only
-after a quiet week. Since 2026-10-08 the symptom in CI is the e2e-migrations job's step
+after a quiet week. Since 2026-10-08 the symptom in CI is the migrations-bis-ci job's apply step (a ready migration PR only)
 "Check that the CI project has every migration in this branch" failing with
 "Could not read the CI project's migration history" (psql's own message
 above it); `screenshots.yml`'s guard says "the project is paused". Nothing
@@ -485,7 +489,7 @@ steps above. A lost project is about half an hour.
 
 1. Section 1, a new project. It gets a new ref.
 2. If the ref changed, one PR changes it everywhere it is a literal:
-   - `.github/workflows/ci.yml`, the e2e migration check step's env:
+   - `.github/workflows/ci.yml`, `migrations-bis-ci`'s apply step env:
      `BIS_CI_SUPABASE_REF`;
    - `.github/workflows/ci-project-setup.yml` env: `BIS_CI_SUPABASE_REF`,
      `NEXT_PUBLIC_SUPABASE_URL`;
@@ -593,7 +597,7 @@ the ruleset requires both checks green on the head commit.
 Since 2026-11-12 `verify` and `e2e` are gate jobs (`.github/scripts/ci-gate.sh`)
 over parts that run in parallel; the parts that start a stack are
 `verify-db` and each of the four `e2e-shard` runners (`verify-app` and
-`e2e-migrations` have none). What runs in verify-db, in order (each script's
+`migrations-bis-ci` have none). What runs in verify-db, in order (each script's
 header has the reasons):
 
 1. `ci-target-guard.sh --before-local-stack`: no Supabase value may be in
@@ -620,9 +624,9 @@ header has the reasons):
 
 Each e2e-shard runs the same steps, with these differences:
 
-- The migration check on this project (section 6), the one read of it in
-  `ci.yml`, is not among them: it is the `e2e-migrations` job's, once per
-  push.
+- The apply-and-check on this project (section 6), the one place
+  `ci.yml` reaches it, is not among them: it is `migrations-bis-ci`'s, for a
+  ready PR that adds a migration only.
 - Its stack is started with `--trust-clerk-dev-instance`. e2e signs in
   through the Clerk development instance, and every in-account page reads
   through `userDb()`, which hands PostgREST the Clerk session token. The

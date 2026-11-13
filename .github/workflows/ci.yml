@@ -26,10 +26,12 @@ name: CI
 #           how, and how that is checked).
 #
 # The CI project, `bis-ci` (built by .github/workflows/ci-project-setup.yml),
-# is read by ONE step here: e2e-migrations' check that it holds every
-# migration of the branch ("CI project FIRST", CLAUDE.md), read-only, with
-# the DB URL scoped to that step alone. No job writes to it, and none holds
-# its secret key. Vercel Preview and screenshots.yml still run on it.
+# is reached by ONE step here (2026-11-13): migrations-bis-ci's, which applies
+# the migrations a branch ADDS ("CI project FIRST", CLAUDE.md) once verify and
+# every e2e shard passed and the branch's PR is ready, then checks bis-ci
+# holds every migration of the branch. The DB URL is scoped to that step
+# alone, and a push that adds no migration never runs it. No job holds the
+# project's secret key. Vercel Preview and screenshots.yml still run on it.
 #
 # Of the workflows on main, only seed-demo.yml and ops-health.yml reach
 # production, through the secrets held by the `production` environment (main
@@ -40,8 +42,8 @@ name: CI
 #
 # The targets are enforced, not assumed, by .github/scripts/ci-target-guard.sh,
 # in every part: first (--before-local-stack, straight after checkout) it
-# refuses ANY Supabase value already in scope, and the migration check's
-# BIS_CI_SUPABASE_DB_URL too, so no cloud credential reaches the suites or the
+# refuses ANY Supabase value already in scope, and the bis-ci DB URL's step
+# names (BIS_MIGRATIONS_DB_URL, BIS_CI_SUPABASE_DB_URL) too, so no cloud credential reaches the suites or the
 # app at all; then, in the two parts that start a stack, once it is up
 # (--local-stack), it refuses any API or DB URL that is not on the runner's
 # loopback, and any CI-project value beside them. A Clerk key from the
@@ -75,10 +77,11 @@ name: CI
 #           The guard runs and the stack are preflights, not gates; the stack
 #           diagnostics (2026-10-13) are read-only and exit 0.
 #
-#   e2e     = e2e-migrations + e2e-shard + migrations-plan.
-#     e2e-migrations  the CI project holds every migration in the branch (the
-#           "CI project FIRST" rule's gate, since no gate runs on that project
-#           any more). Bash and psql only.
+#   e2e     = e2e-shard + migrations-plan + migrations-bis-ci.
+#     migrations-bis-ci (2026-11-13) a branch that ADDS a migration, once
+#           verify and every shard passed and its PR is ready: applies it to
+#           bis-ci, then checks bis-ci holds every migration of the branch
+#           ("CI project FIRST"). Skipped otherwise; on main, checks only.
 #     migrations-plan (2026-11-13) no credential at all: refuses a branch that
 #           changes a migration already on main, adds a numbered one, adds SQL
 #           the runner cannot apply in one transaction, removes or renames
@@ -376,48 +379,7 @@ jobs:
           VERIFY_APP: ${{ needs.verify-app.result }}
         run: bash .github/scripts/ci-gate.sh VERIFY_DB VERIFY_APP
 
-  # ---- e2e = e2e-migrations + e2e-shard (2026-11-12) --------------------------
-
-  # "Every new migration goes to the CI project FIRST" (CLAUDE.md). No gate
-  # runs on the CI project any more (every part builds its database from the
-  # branch's files), so THIS is that rule's gate: every migration file in the
-  # branch must be in the CI project's history, or it fails naming each one
-  # and the fix. A migration the CI project has and the branch lacks (another
-  # branch applied first) is not a failure.
-  #
-  # Its own job since 2026-11-12, not a step of each shard: one read of bis-ci
-  # per push rather than four. It was already the first thing e2e did and
-  # failed in about 12 seconds (6 of the last 10 red runs); what the job buys
-  # is the RE-RUN. The shards no longer stop behind it, so once the migration
-  # is pushed to bis-ci, "Re-run failed jobs" re-runs this and the gate, about
-  # a minute, instead of the whole 22-minute e2e.
-  #
-  # The ONLY place ci.yml reads the CI project. Its DB URL is scoped to the
-  # check's step, under a name no app code reads, the script checks it is the
-  # CI project's Session pooler user before psql sees it, and it reads in one
-  # read-only transaction. Needs only bash and psql: no install, no stack.
-  e2e-migrations:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-
-      # The before-local-stack guard although this part starts no stack: it
-      # refuses any Supabase value in the JOB's scope, BIS_CI_SUPABASE_DB_URL
-      # included, which must live on the check's step alone.
-      - name: Check that e2e-migrations holds no cloud Supabase credential
-        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
-
-      - name: Decide whether this push changes only docs
-        id: scope
-        run: bash .github/scripts/ci-docs-only.sh
-
-      - name: Check that the CI project has every migration in this branch
-        if: steps.scope.outputs.docs_only != 'true'
-        env:
-          BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
-          BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
-        run: bash .github/scripts/ci-migrations-applied.sh
+  # ---- e2e = e2e-shard + migrations-plan + migrations-bis-ci (2026-11-13) -----
 
   # The migration plan check (2026-11-13; docs/superpowers/plans/
   # 2026-11-13-migration-pipeline.md, D2 and PR 2). Everything that would make
@@ -431,13 +393,16 @@ jobs:
   #
   # Holds NO credential: no secret, no env, nothing but git (main's history,
   # fetched as ci-docs-only.sh fetches it) and node's built-ins (no install).
-  # Its own part, not a step of e2e-migrations, because that job holds the
+  # Its own part, not a step of migrations-bis-ci, because that job holds the
   # CI project's DB URL on a later step. It needs nothing and runs beside the
   # shards, about 12 seconds of work against their several minutes, so it
-  # makes no push slower.
+  # makes no push slower. Its `added` output (the files the branch ADDS,
+  # written only when the plan passed) is what makes migrations-bis-ci due.
   migrations-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      added: ${{ steps.plan.outputs.added }}
     steps:
       - uses: actions/checkout@v5
 
@@ -458,8 +423,70 @@ jobs:
           package-manager-cache: false
 
       - name: Refuse what the pipeline cannot apply safely
+        id: plan
         if: steps.scope.outputs.docs_only != 'true'
         run: node .github/scripts/migrations-plan.mjs
+
+  # bis-ci receives a branch's migrations from CI (2026-11-13; docs/
+  # superpowers/plans/2026-11-13-migration-pipeline.md, D2 and PR 4), never
+  # by hand from a laptop. DUE only on a branch that ADDS a migration (or on
+  # main, where it only checks), so every other push skips it without a
+  # runner and never reaches bis-ci's secret. When due, it waits for the
+  # plan, verify's two parts and every shard to pass on this SHA: the
+  # migration has been built twice from the files and run under the whole
+  # app before any shared database sees it. A plan refusal (including a
+  # migration beside a pipeline change, owner answer Q6) is never due.
+  #
+  # Then: the ready-PR check (owner answer Q1: a draft or no PR fails here,
+  # "mark it ready, then Re-run failed jobs"), with the job's read-only token
+  # and no DB URL; then ONE step with the DB URL, which applies ONLY the
+  # files the branch adds (migrations-apply.sh: refuses production's ref, a
+  # non-pooler URL, an edited applied file, a version older than bis-ci's
+  # newest; one transaction per file under the history lock) and checks bis-ci
+  # holds every file of the branch (`--check`). That check is the history
+  # gate the e2e check reads (e2e-migrations' job until 2026-11-13).
+  #
+  # Concurrency: one repo-wide group that queues and never cancels, so two
+  # branches never apply at once. The workflow's own per-branch group can
+  # still cancel this run when the branch is pushed again; a cancelled psql
+  # rolls back its file's transaction, so nothing is left half-applied.
+  migrations-bis-ci:
+    needs: [migrations-plan, verify-db, verify-app, e2e-shard]
+    if: ${{ !cancelled() && github.repository == 'dlopez2392/bis-platform' && needs.migrations-plan.result == 'success' && (github.ref == 'refs/heads/main' || (needs.migrations-plan.outputs.added != '' && needs.verify-db.result == 'success' && needs.verify-app.result == 'success' && needs.e2e-shard.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: bis-ci-migrations
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check that migrations-bis-ci holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Check that a ready pull request has this commit as its head
+        if: github.ref != 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/migrations-ready-pr.mjs
+
+      - name: Apply this branch's migrations to the CI project, then check its history
+        env:
+          BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+          BIS_MIGRATIONS_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+          MIGRATIONS_ADDED: ${{ needs.migrations-plan.outputs.added }}
+        run: read -ra files <<< "$MIGRATIONS_ADDED"; bash .github/scripts/migrations-apply.sh --target bis-ci "${files[@]}" && bash .github/scripts/migrations-apply.sh --target bis-ci --check "${files[@]}"
 
   e2e-shard:
     runs-on: ubuntu-latest
@@ -491,7 +518,7 @@ jobs:
     # 2026-11-12). `needs: verify` put e2e after verify because the two raced
     # for one database (the b9f31dc timeouts: contention, not a defect); each
     # part now has its own, so the shards start beside verify. They do not
-    # wait for e2e-migrations either (above). The group `e2e-ci-supabase`
+    # wait for migrations-bis-ci, which waits for THEM. The group `e2e-ci-supabase`
     # serialized every e2e run because every run shared one seeded account
     # on bis-ci; each shard seeds its own copy. ci-workflow.test.ts fails if
     # any of these lines comes back.
@@ -699,8 +726,13 @@ jobs:
   # succeeded; see the header and .github/scripts/ci-gate.sh. `always()`, so
   # a failed or cancelled part turns it red instead of skipping it. For the
   # matrix, GitHub's result is `success` only when every shard succeeded.
+  #
+  # migrations-bis-ci is read as NAME@DUE: BIS_CI_DUE is its job-level `if`'s
+  # due condition, so it must SUCCEED on main and on a branch that adds a
+  # migration (a skip there means verify or a shard failed), and must be
+  # SKIPPED otherwise (ci-gate.sh).
   e2e:
-    needs: [e2e-migrations, e2e-shard, migrations-plan]
+    needs: [e2e-shard, migrations-plan, migrations-bis-ci]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -708,10 +740,11 @@ jobs:
       - uses: actions/checkout@v5
       - name: Every part of e2e succeeded
         env:
-          E2E_MIGRATIONS: ${{ needs.e2e-migrations.result }}
           E2E_SHARD: ${{ needs.e2e-shard.result }}
           MIGRATIONS_PLAN: ${{ needs.migrations-plan.result }}
-        run: bash .github/scripts/ci-gate.sh E2E_MIGRATIONS E2E_SHARD MIGRATIONS_PLAN
+          MIGRATIONS_BIS_CI: ${{ needs.migrations-bis-ci.result }}
+          BIS_CI_DUE: ${{ (github.ref == 'refs/heads/main' || needs.migrations-plan.outputs.added != '') && 'due' || '' }}
+        run: bash .github/scripts/ci-gate.sh E2E_SHARD MIGRATIONS_PLAN MIGRATIONS_BIS_CI@BIS_CI_DUE
 
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
   # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers

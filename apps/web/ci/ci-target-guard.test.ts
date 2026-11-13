@@ -545,7 +545,7 @@ describe("ci-target-guard.sh --before-local-stack: verify's and e2e's preflight,
   it.each(SUPABASE_VARS)("refuses %s when it is already set, naming it and where a CI-project value may live instead (mutation: skip this mode's emptiness loop → exit 0, FAILS)", (name) => {
     const r = before({ [name]: VALID[name] });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(new RegExp(`::error::${name} is set before this job's local Supabase stack exists.*migration check`));
+    expect(r.output).toMatch(new RegExp(`::error::${name} is set before this job's local Supabase stack exists.*migrations-bis-ci.s BIS_CI_SUPABASE_REF and BIS_MIGRATIONS_DB_URL, in its one apply step`));
     expect(r.curlCalled).toBe(false);
   });
 
@@ -553,6 +553,19 @@ describe("ci-target-guard.sh --before-local-stack: verify's and e2e's preflight,
     const r = runGuard({}, {}, { BIS_CI_SUPABASE_DB_URL: CI_HISTORY_DB_URL }, { args: ["--before-local-stack"], base: CLERK_ONLY });
     expect(r.status).toBe(1);
     expect(r.output).toMatch(/::error::BIS_CI_SUPABASE_DB_URL is set before this job's local Supabase stack exists/);
+    expect(r.output).not.toContain(DB_PASSWORD);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  // PR 4 (2026-11-13): the runner (migrations-apply.sh) reads its target as
+  // BIS_MIGRATIONS_DB_URL (and, for production, bis-ci's as
+  // BIS_MIGRATIONS_BISCI_DB_URL). migrations-bis-ci maps CI_SUPABASE_DB_URL onto
+  // its ONE apply step under that name; in a job's or the workflow's env it
+  // would reach every step, so each guard run refuses it.
+  it.each(["BIS_MIGRATIONS_DB_URL", "BIS_MIGRATIONS_BISCI_DB_URL"])("refuses the runner's %s in the job's scope: it belongs to the apply step alone (mutation: leave it off this mode's list → FAILS)", (name) => {
+    const r = runGuard({}, {}, { [name]: CI_HISTORY_DB_URL }, { args: ["--before-local-stack"], base: CLERK_ONLY });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(new RegExp(`::error::${name} is set before this job's local Supabase stack exists`));
     expect(r.output).not.toContain(DB_PASSWORD);
     expect(r.curlCalled).toBe(false);
   });
@@ -586,6 +599,8 @@ describe("ci-target-guard.sh --local-stack: verify and e2e, once the job's stack
   it.each([
     ["BIS_CI_SUPABASE_REF", REF],
     ["BIS_CI_SUPABASE_DB_URL", CI_HISTORY_DB_URL],
+    ["BIS_MIGRATIONS_DB_URL", CI_HISTORY_DB_URL],
+    ["BIS_MIGRATIONS_BISCI_DB_URL", CI_HISTORY_DB_URL],
   ])("refuses %s beside the stack's values: no CI-project value may be in the scope the app and the suites run in (mutation: no such check in --local-stack → FAILS)", (name, value) => {
     const r = runGuard({}, {}, { [name]: value }, { args: ["--local-stack"], base: LOCAL });
     expect(r.status).toBe(1);
