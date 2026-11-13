@@ -23,7 +23,10 @@ import { AI_TASKS, type AiTask, type ModelRoute } from "./tasks";
  * with at least FALLBACK_MIN_MS left of the caller's time limit, which the two attempts share. Each attempt writes
  * its own ledger row under its own model, so the cost is recorded against the model actually used.
  *
- * A task whose `feature` is null (the web chat, until a migration admits it to ai_ledger) writes no ledger row.
+ * A task whose `feature` is null (the web chat, until a migration admits it to ai_ledger) skips steps 3-4 and
+ * writes no ledger row: it honours the kill switch (step 1) and nothing else here. The AI settings copy promises
+ * operators that the account switch, the global switch and the budget leave the website chat running; those
+ * gates join the chat with the ledger migration and a copy rewrite, the owner's call (review of #362).
  *
  * The month and day keys are the account-zone date of `input.now ?? new Date()`, the real clock: 0086 accepts
  * any well-formed key and relies on the app never sending a far-future one.
@@ -79,6 +82,15 @@ const NO_USAGE: AiUsage = { inputTokens: null, outputTokens: null, costMicroUsd:
 const QUIET: ReadonlySet<AiOutcome> = new Set<AiOutcome>(["global_off", "account_off", "over_budget"]);
 
 /**
+ * How long the gateway may spend on the gate read (steps 3-4) before a task's completion: GATE_TIMEOUT_MS, or 0
+ * for a task with no ledger feature, which skips the gate (see aiComplete). A caller that budgets its own time
+ * around a completion (the web chat's follow-up) subtracts this.
+ */
+export function aiGateMs(task: AiTask): number {
+  return AI_TASKS[task].feature === null ? 0 : GATE_TIMEOUT_MS;
+}
+
+/**
  * What a caller that spends something of its OWN before its completion (the web chat claims a visitor's turn)
  * checks first: the kill switch, and whether the provider is configured at all. Reads no database and writes
  * nothing. null = go ahead; aiComplete still makes every check itself.
@@ -122,21 +134,23 @@ export async function aiComplete(db: SupabaseClient, input: AiInput): Promise<Ai
       await finish("unknown_model", NO_USAGE, primary.model);
       return { ok: false, reason: "unknown_model" };
     }
-    let gate: AiGate;
-    try {
-      gate = await aiGateCheck(db, { accountId: input.accountId, ...keys, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
-    } catch (e) {
-      // A database error message carries no prompt; loggableError keeps it readable.
-      await finish("gate_unreadable", NO_USAGE, primary.model, `: ${loggableError(e)}`);
-      return { ok: false, reason: "gate_unreadable" };
-    }
-    const closed: AiRefusal | null = !gate.globalEnabled ? "global_off"
-      : !gate.accountEnabled ? "account_off"
-      : gate.monthSpendMicroUsd >= gate.budgetMicroUsd ? "over_budget"
-      : null;
-    if (closed) {
-      await finish(closed, NO_USAGE, primary.model);
-      return { ok: false, reason: closed };
+    if (aiGateMs(input.task) > 0) {
+      let gate: AiGate;
+      try {
+        gate = await aiGateCheck(db, { accountId: input.accountId, ...keys, signal: AbortSignal.timeout(GATE_TIMEOUT_MS) });
+      } catch (e) {
+        // A database error message carries no prompt; loggableError keeps it readable.
+        await finish("gate_unreadable", NO_USAGE, primary.model, `: ${loggableError(e)}`);
+        return { ok: false, reason: "gate_unreadable" };
+      }
+      const closed: AiRefusal | null = !gate.globalEnabled ? "global_off"
+        : !gate.accountEnabled ? "account_off"
+        : gate.monthSpendMicroUsd >= gate.budgetMicroUsd ? "over_budget"
+        : null;
+      if (closed) {
+        await finish(closed, NO_USAGE, primary.model);
+        return { ok: false, reason: closed };
+      }
     }
 
     const provider = providerFor(process.env);

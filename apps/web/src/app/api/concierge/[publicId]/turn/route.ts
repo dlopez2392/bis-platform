@@ -84,7 +84,10 @@ const FOLLOWUP_TIMEOUT_MS = 8_000;
  *  certain to time out only delays the fixed fallback line. */
 const FOLLOWUP_MIN_MS = 2_000;
 /** Everything this handler does must finish inside `maxDuration` (30s);
- *  three seconds are left for the reads and writes after the model. */
+ *  three seconds are left for the reads and writes after the model. The
+ *  follow-up's own gate read, when the web_chat task has one (aiGateMs: none
+ *  today, 3 s once its gates apply), comes out of this budget BEFORE the
+ *  follow-up's time limit is set, so the gate and the call fit together. */
 const TURN_BUDGET_MS = 27_000;
 // minors-1b item 6: the phone route's own shape (api/voice/incoming/route.ts) for telling "the read
 // failed" apart from "there is no row" — a failed read must answer effective=null directly, never fold
@@ -195,7 +198,7 @@ export async function POST(
     getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount, readBillingStanding,
   } = await import("@bis/db");
   // Lazy for the same reason: the gateway imports `@bis/db` at its module scope.
-  const { aiComplete, aiReadiness } = await import("@/lib/ai/gateway");
+  const { aiComplete, aiGateMs, aiReadiness } = await import("@/lib/ai/gateway");
 
   const ipHash = hashIp(clientIp(req.headers));
   const origin = req.headers.get("origin");
@@ -282,8 +285,9 @@ export async function POST(
       } as Branding);
       // The provider's key and the AI kill switch (AI_GATEWAY_OFF) are checked
       // BEFORE the claim: a turn claimed against an unconfigured or switched-off
-      // deployment would spend a visitor's budget on nothing. The account's own
-      // switch and its budget are the gateway's read, at the model call.
+      // deployment would spend a visitor's budget on nothing. The account's AI
+      // switch, the global one and the budget do not apply to the chat yet
+      // (lib/ai/tasks.ts: the web_chat task has no ledger feature).
       const notReady = aiReadiness();
       if (notReady) {
         log(notReady === "no_key" ? "refused: no OPENAI_API_KEY" : "refused: AI_GATEWAY_OFF");
@@ -634,10 +638,11 @@ export async function POST(
     // I2 (whole-branch review): with no cap, the model can emit thousands of
     // output tokens, and every reply is replayed into every LATER turn's
     // transcript — `concierge/guards.ts` states the arithmetic. The gateway
-    // also holds the kill switch, the account's AI switch and its budget. The
+    // also holds the kill switch (the only one of its switches the chat obeys
+    // until the web_chat task has a ledger feature; lib/ai/tasks.ts). The
     // time limit bounds the request: a hung connection never rejects and never
     // resolves, and without it the invocation stalls until Vercel kills it.
-    // Throws on every refusal or failure (a switch, the budget, a transport
+    // Throws on every refusal or failure (the kill switch, a transport
     // failure, a non-2xx, the timeout), already logged by the gateway with ids
     // only; the two callers below decide what a throw costs, as they did when
     // this was a direct fetch.
@@ -757,7 +762,7 @@ export async function POST(
     // happened, never to the pre-result words.
     if (toolArgs) {
       reply = "";
-      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
+      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt) - aiGateMs("web_chat");
       const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
       if (followupTimeout >= FOLLOWUP_MIN_MS) {
         const result = withDroppedNote(captureResult(outcome), dropped, "web");

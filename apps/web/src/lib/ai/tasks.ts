@@ -20,7 +20,9 @@ import type { PricedModel } from "./prices";
  *
  * `feature` is the ledger's name for the task (ai_ledger.feature). The web chat has none YET: 0086's check
  * constraint admits only the four below, so its row could not be written. Until a migration adds 'web_chat', the
- * web chat honours the kill switch, the account's switch and its budget, but its own cost is not on the ledger.
+ * web chat honours only the kill switch (AI_GATEWAY_OFF): the gateway skips the account's switch, the global switch
+ * and the budget for a task with no feature, as the AI settings copy promises operators, and its cost is not on the
+ * ledger. Those gates join it with that migration and a copy rewrite (the owner's call).
  *
  * Not here: the realtime voice model and its transcription (voice/session-config.ts), a separate lane, and the
  * corpus script's phone fallback (voice/modules/corpus-lib.ts), which plays the phone, not a text task.

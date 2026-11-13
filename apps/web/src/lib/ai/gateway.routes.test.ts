@@ -16,8 +16,8 @@ vi.mock("./prices", async (importOriginal) => {
   };
 });
 
-import { aiComplete, aiReadiness, type AiInput } from "./gateway";
-import { AI_TASK_NAMES, type AiTask, type TaskRoute } from "./tasks";
+import { aiComplete, aiGateMs, aiReadiness, GATE_TIMEOUT_MS, type AiInput } from "./gateway";
+import { AI_TASK_NAMES, AI_TASKS, type AiTask, type TaskRoute } from "./tasks";
 import { openGateDb, type GateOver } from "./testing/open-gate";
 
 /** The task table (tasks.ts) and the fallback (gateway.ts step 7). The provider is a stubbed fetch: no network. */
@@ -67,7 +67,8 @@ describe("the task table is today's requests, byte for byte (this PR changes rou
     call_proposals: { model: "gpt-4o-mini", messages: MESSAGES, response_format: { type: "json_object" }, max_tokens: 2000 },
     record_summary: { model: "gpt-4o-mini", messages: MESSAGES, max_tokens: 400 },
   };
-  it.each(AI_TASK_NAMES)("%s sends exactly today's body, and no task has a fallback yet (mutations: any row's model, cap or JSON mode changed -> FAILS)", async (task) => {
+  it.each(AI_TASK_NAMES)("%s sends exactly today's body, and no task has a fallback yet (mutations: any row's model, cap or JSON mode changed; a fallback added to any row -> FAILS)", async (task) => {
+    expect(AI_TASKS[task].fallback).toBeUndefined();
     const { fetchImpl, raw } = scripted(ok());
     expect((await aiComplete(openGateDb().db, base({ task, fetchImpl }))).ok).toBe(true);
     expect(raw).toEqual([JSON.stringify(today[task])]);
@@ -194,18 +195,42 @@ describe("the fallback (gateway.ts step 7)", () => {
 describe("the web chat task: tools, and no ledger feature yet", () => {
   const TOOL = { type: "function" as const, function: { name: "capture_lead", description: "d", parameters: { type: "object" } } };
 
-  it("reads the gate but writes no ledger row: 0086 admits no web_chat feature (mutation: write the row anyway -> FAILS)", async () => {
+  it("makes no RPC at all: no gate read, and no ledger row, since 0086 admits no web_chat feature (mutations: write the row anyway; read the gate anyway -> FAILS)", async () => {
     const { db, calls } = openGateDb();
     const { fetchImpl } = scripted(ok());
     expect((await aiComplete(db, base({ task: "web_chat", fetchImpl }))).ok).toBe(true);
-    expect(calls.map((c) => c.fn)).toEqual(["ai_gate_check"]);
+    expect(calls).toEqual([]);
   });
 
-  it("the account's AI switch off refuses it with no request (mutation: skip the gate for a task with no feature -> FAILS)", async () => {
-    const { db } = openGateDb({ gate: { account_enabled: false } });
+  // The AI settings copy promises operators the website chat keeps running whatever these say (review of #362):
+  // they join the chat only with its ledger migration and a copy rewrite.
+  const closedGates: [string, GateOver][] = [
+    ["the account's AI switched off", { gate: { account_enabled: false } }],
+    ["the global switch off", { gate: { global_enabled: false } }],
+    ["over budget", { gate: { month_spend_microusd: 10_000_000 } }],
+    ["an unreadable gate", { gate: "error" }],
+  ];
+  it.each(closedGates)("%s: the web chat still answers (mutation: apply the gate to a task with no feature -> FAILS)", async (_name, over) => {
+    const { fetchImpl } = scripted(ok("still here"));
+    expect(await aiComplete(openGateDb(over).db, base({ task: "web_chat", fetchImpl }))).toMatchObject({ ok: true, text: "still here" });
+  });
+
+  it("the kill switch (AI_GATEWAY_OFF=1) still refuses it", async () => {
+    vi.stubEnv("AI_GATEWAY_OFF", "1");
     const { fetchImpl } = scripted(ok());
-    expect(await aiComplete(db, base({ task: "web_chat", fetchImpl }))).toEqual({ ok: false, reason: "account_off" });
+    expect(await aiComplete(openGateDb().db, base({ task: "web_chat", fetchImpl }))).toEqual({ ok: false, reason: "global_off" });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  const gated = AI_TASK_NAMES.filter((t) => t !== "web_chat").flatMap((t) => closedGates.map(([name, over]) => [t, name, over] as const));
+  it.each(gated)("%s, %s: every task WITH a feature still gets every gate (mutation: skip the gate for every task -> FAILS)", async (task, _name, over) => {
+    const { fetchImpl } = scripted(ok());
+    expect((await aiComplete(openGateDb(over).db, base({ task, fetchImpl }))).ok).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("aiGateMs: no gate time for the web chat today, the gate's bound for every other task", () => {
+    expect(AI_TASK_NAMES.map((t) => [t, aiGateMs(t)])).toEqual(AI_TASK_NAMES.map((t) => [t, t === "web_chat" ? 0 : GATE_TIMEOUT_MS]));
   });
 
   it("sends tools, a tool exchange in the wire shape and tool_choice; a tool call with null content is an answer of \"\"", async () => {

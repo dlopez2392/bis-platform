@@ -14,9 +14,7 @@ import { m } from "../src/lib/messages";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process directly: this file calls serviceDb() itself,
-// not through a Next request, so nothing auto-loads the env for it. It is also
-// what puts OPENAI_API_KEY (when a machine has one) into this process's env,
-// so the skip below reads the same configuration the server will.
+// not through a Next request, so nothing auto-loads the env for it.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
 
@@ -30,13 +28,14 @@ loadEnv({ path: ".env.local" });
  * other live account — there is one Supabase project, so an e2e write to a
  * seeded account IS a production write.
  *
- * WHY THE SECOND TEST IS CONDITIONAL. Answering a turn costs a real model
- * call. Without OPENAI_API_KEY the route refuses with 503 by design, so the
- * assertion would be about the refusal rather than about the product; the
- * skip says so out loud rather than passing quietly. The first test needs no
- * key and therefore runs everywhere: it is the only end-to-end proof that
- * `enableConcierge`'s public id resolves to a page that renders this client's
- * own greeting.
+ * NO REAL MODEL CALL. The turn route answers through the AI gateway
+ * (lib/ai/gateway.ts), and this suite's app runs with AI_PROVIDER=fake
+ * (playwright.config.ts; ci.yml's e2e job), so every turn is answered by the
+ * fake provider with no key and no network. The reply test asserts the fake's
+ * own marker, which pins that the chat goes through the gateway: a route that
+ * called OpenAI itself would answer something else (or 503 with no key). The
+ * first test is the only end-to-end proof that `enableConcierge`'s public id
+ * resolves to a page that renders this client's own greeting.
  */
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 
@@ -317,13 +316,8 @@ test("a first message that arrives before the page could truly have been read ge
   expect(await page.locator(".bis-msg-assistant").count()).toBe(assistantBefore);
 });
 
-test("a visitor's message comes back with a reply", async ({ page }) => {
+test("a visitor's message comes back with the gateway's (fake provider's) reply", async ({ page }) => {
   test.skip(!widget, skipReason);
-  test.skip(
-    !process.env.OPENAI_API_KEY,
-    "OPENAI_API_KEY is not set here, so /api/concierge/[publicId]/turn refuses by design "
-      + "and there is no reply to assert. Set it in apps/web/.env.local to run this.",
-  );
   const strings = conciergeStrings("en");
   await page.goto(`/c/${widget!.publicId}`);
   await expect(page.getByText(GREETING)).toBeVisible();
@@ -341,13 +335,12 @@ test("a visitor's message comes back with a reply", async ({ page }) => {
   const replies = page.locator(".bis-concierge-log li.bis-msg-assistant:not(.bis-msg-skeleton)");
   await expect(replies).toHaveCount(2, { timeout: 60_000 });
 
-  // The model's WORDING is not asserted — it is a model. What is asserted is
-  // that the words are not one of the route's own refusals, which is what a
-  // 503 or a spent cap would have put on screen instead.
+  // The fake provider's marker (lib/ai/providers/fake.ts): "[fake <language>]"
+  // and a short hash of the request. Not one of the route's own refusals,
+  // which is what a 503 or a spent cap would have put on screen instead, and
+  // not a real model's words: the chat went through the gateway.
   const answer = (await replies.last().textContent())?.trim() ?? "";
-  expect(answer.length).toBeGreaterThan(0);
-  expect(answer).not.toBe(strings.unavailable);
-  expect(answer).not.toBe(strings.ended);
+  expect(answer).toMatch(/^\[fake en\] [0-9a-f]{8}$/);
   await expect(page.locator(".bis-concierge-error")).toHaveCount(0);
 });
 
@@ -480,8 +473,6 @@ test("the Voice page's checkbox turns the assistant off and back on, through the
 // deleted in `finally`, each error checked, then every table re-read.
 test("a lead's chat files on the customer's inbox thread as Web chat, every turn marked", async ({ page }) => {
   test.skip(!widget, skipReason);
-  test.skip(!process.env.OPENAI_API_KEY,
-    "OPENAI_API_KEY is not set here, so the turn route refuses by design and nothing files. Set it in apps/web/.env.local to run this.");
   const db = serviceDb();
   const accountId = widget!.accountId;
   const stamp = `wc${Date.now()}`;
