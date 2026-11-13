@@ -25,6 +25,7 @@ import { recordCallUsageSafely, estimateCallCostMicroUsd } from "./call-usage";
 import { REALTIME_MODEL, TRANSCRIBE_MODEL } from "./session-config";
 import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
+import { loggablePhone, redactPhones } from "@/lib/loggable-error";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
 import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
@@ -110,6 +111,9 @@ export interface FinishMeta {
    *  finish, so the row update is skipped entirely rather than attempted
    *  against an id that doesn't exist. */
   callRowId: string | null;
+  /** The SIP call id OpenAI gave this call (`rtc_…`), when the caller knows it. Logged on a lost call
+   *  only, beside the start time, so the lead can be found in the provider's and the carrier's logs. */
+  providerCallId?: string | null;
   startedAt: Date;
   endedAt: Date;
 }
@@ -1088,8 +1092,12 @@ export async function finishCall(
   // must fire even though nothing above threw.
   if (meaningful && !stored && !notified) {
     console.error(
-      `CALL LOST — account ${ctx.accountId} call ${meta.callRowId ?? "(no row)"} outcome "${outcome}": ` +
-      `neither the row nor the staff alert reached anyone. Summary: ${summary}`,
+      `CALL LOST — account ${ctx.accountId} call ${meta.callRowId ?? "(no row)"} ` +
+      `provider call ${meta.providerCallId ?? "(unknown)"} started ${meta.startedAt.toISOString()} ` +
+      `caller ${loggablePhone(ctx.callerNumber)} outcome "${outcome}": ` +
+      // The summary is the model's prose and can quote the caller's number; the
+      // identifiers above find the call in the carrier's own log instead.
+      `neither the row nor the staff alert reached anyone. Summary: ${redactPhones(summary)}`,
     );
   }
 

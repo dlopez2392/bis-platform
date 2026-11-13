@@ -51,6 +51,8 @@
 // failed or late read, or any other caller gets exactly today's document.
 import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
+import { loggablePhone } from "@/lib/loggable-error";
+import { telnyxPublicKey } from "@/lib/fixture-secrets";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { agencyHandsets } from "@/lib/voice/caller-reputation";
 import { decideScreen, readScreenConfig } from "@/lib/voice/call-screen";
@@ -325,10 +327,11 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
       // This decision is now spoken here (TeXML hangs up before dialing), so
       // the webhook's own "declined: unknown-number" log line never fires
       // for these calls — this is the only telemetry the cap/refusal path
-      // gets. Caller E164 in logs is a ratified decision (the webhook's
-      // "incoming call" log already logs callerNumber) — parity, not a new
-      // exposure.
-      console.log(`texml declined refuse-unknown for ${calledE164}, caller ${callerE164 ?? "unknown"}`);
+      // gets. The caller's number is masked (loggablePhone): it is personal
+      // data. The called number stays whole: it is one of our own business
+      // lines, and on this path no account row names it, so it is the only
+      // thing in the log that says which line is unregistered.
+      console.log(`texml declined refuse-unknown for ${calledE164}, caller ${loggablePhone(callerE164)}`);
       // ONE log line, TWO different facts — which is exactly the collapse
       // the `screened_calls` record un-does. No row at all is a wrong number
       // and nobody's outage; a number we own that is not live is turning
@@ -346,7 +349,7 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
     const profile = await getVoiceProfile(db, row.account_id);
     const gate = callAnswerable({ status: row.status, profile });
     if (!gate.answerable) {
-      console.log(`texml declined refuse-disabled for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+      console.log(`texml declined refuse-disabled for ${calledE164}, caller ${loggablePhone(callerE164)}, accountId ${row.account_id}`);
       // `gate.reason` has always distinguished these two and nothing has ever
       // read it until now: "never set up" and "deliberately turned off" need
       // different answers from an operator.
@@ -526,7 +529,7 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
         }
       } else {
         if (reputation.blocked) {
-          console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+          console.log(`texml declined blocked (${reputation.reason}) for ${calledE164}, caller ${loggablePhone(callerE164)}, accountId ${row.account_id}`);
           return {
             kind: "blocked", languages: profile.languages, personaName: profile.persona_name,
             screened: {
@@ -536,7 +539,7 @@ async function classify(calledE164: string, callerE164: string | null, ownerLine
           };
         }
         if (!verdict.allowed) {
-          console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${callerE164 ?? "unknown"}, accountId ${row.account_id}`);
+          console.log(`texml declined cap (${verdict.reason}) for ${calledE164}, caller ${loggablePhone(callerE164)}, accountId ${row.account_id}`);
           return {
             kind: "cap", languages: profile.languages, personaName: profile.persona_name,
             screened: {
@@ -980,7 +983,7 @@ async function route(
     // Sofía entirely, and the failure it invites is leaving it on: a line
     // that quietly rings a personal mobile for a week is worse than one that
     // is briefly unavailable.
-    console.log(`texml FORWARDING to ${forward} — Sofía is bypassed while VOICE_FORWARD_TO is set`);
+    console.log(`texml FORWARDING to ${loggablePhone(forward)} — Sofía is bypassed while VOICE_FORWARD_TO is set`);
     return done(xmlResponse(forwardXml(forward, calledE164)));
   }
   if (calledE164) {
@@ -1058,8 +1061,8 @@ async function route(
         // FORCED is logged on every call it engages, for the drill's reason:
         // the failure it invites is leaving it on.
         console.log(verdict.why === "forced"
-          ? `texml screen FORCED on ${calledE164} from ${callerE164} — VOICE_SCREEN_ALWAYS_FROM is set, accountId ${accountId}`
-          : `texml screen asking ${calledE164}, caller ${callerE164 ?? "unknown"} to press 1 (first-time), accountId ${accountId}`);
+          ? `texml screen FORCED on ${calledE164} from ${loggablePhone(callerE164)} — VOICE_SCREEN_ALWAYS_FROM is set, accountId ${accountId}`
+          : `texml screen asking ${calledE164}, caller ${loggablePhone(callerE164)} to press 1 (first-time), accountId ${accountId}`);
         return done(xmlResponse(screenXml(languages, screenActionUrl(origin, languages, accountId))));
       }
     }
@@ -1126,7 +1129,7 @@ async function route(
     if (fallbackDrillActive(calledE164, callerE164)) {
       drill = cleared !== undefined;
       console.log(drill
-        ? `texml FALLBACK DRILL on ${calledE164} from ${callerE164} — Sofía is deliberately unreachable on this call while VOICE_FALLBACK_DRILL_TO/FROM are set`
+        ? `texml FALLBACK DRILL on ${calledE164} from ${loggablePhone(callerE164)} — Sofía is deliberately unreachable on this call while VOICE_FALLBACK_DRILL_TO/FROM are set`
         : `texml fallback drill NOT engaged on ${calledE164} — the call was not cleared, so Sofía answers`);
     }
     const dial = dialXml(calledE164, callerE164, origin, authenticated, cleared, drill);
@@ -1148,7 +1151,10 @@ export function actionOrigin(req: Request): string {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
-  if (process.env.TELNYX_PUBLIC_KEY?.trim()) {
+  const telnyx = telnyxPublicKey();
+  // A published test key in production (lib/fixture-secrets.ts): refused.
+  if (telnyx.kind === "refused") return new NextResponse(null, { status: 403 });
+  if (telnyx.kind === "set") {
     // Hardened mode: signature enforcement requires the TeXML app's Voice
     // Method flipped to POST first (see voice-setup runbook) — with the key
     // set, GET is closed entirely (405) because a GET has no signed body;
