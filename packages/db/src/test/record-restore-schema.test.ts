@@ -41,7 +41,7 @@ type ContactSeed = {
 const contact = (c: Client, a: Acct, seed: ContactSeed = {}) => one(c,
   `insert into public.contacts
      (account_id, first_name, phone, custom, marketing_email_opted_out_at, language, language_source, language_set_at, author_kind)
-   values ($1, $2, '(956) 292-1696', $3::jsonb, $4, $5, $6, $7, 'person') returning id`,
+   values ($1, $2, '(956) 555-0196', $3::jsonb, $4, $5, $6, $7, 'person') returning id`,
   [a.accountId, seed.first ?? "Dan", JSON.stringify(seed.custom ?? {}), seed.optedOutAt ?? null,
    seed.language ?? null, seed.languageSource ?? null, seed.languageSetAt ?? null]);
 const group = (c: Client, a: Acct, kind: "household" | "business" = "household") => one(c,

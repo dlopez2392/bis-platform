@@ -138,7 +138,7 @@ was dropped rather than wondering.
 Match on **email or phone** through the existing `findDuplicate`
 (`contacts.ts:72`, module-private — the spec previously named `findByEmail` /
 `findByPhone`, which do not exist). It already handles the case that matters:
-`(956) 292-1696` and `+19562921696` are the same person, compared on normalised
+`(956) 555-0196` and `+19565550196` are the same person, compared on normalised
 digits.
 
 **Update semantics, stated precisely:** a non-empty CSV cell overwrites; a blank

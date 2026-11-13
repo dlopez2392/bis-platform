@@ -13,7 +13,7 @@ const num = (
 const acct = (id: string, name: string, archived = false) => ({ id, name, archived });
 
 const ACCOUNTS = [
-  acct("acct_woodworks", "956 Woodworks"),
+  acct("acct_alamo", "Alamo Cabinet"),
   acct("acct_resaca", "Resaca Air"),
   acct("acct_test", "Test Client One"),
 ];
@@ -50,7 +50,7 @@ describe("moveTargetsFor", () => {
   it("offers every unoccupied company except the one already holding it", () => {
     const n = num("n1", "+1111", "released", "acct_test");
     const targets = moveTargetsFor(n, ACCOUNTS, occupiedAccountIds([n]));
-    expect(targets.map((a) => a.name)).toEqual(["956 Woodworks", "Resaca Air"]);
+    expect(targets.map((a) => a.name)).toEqual(["Alamo Cabinet", "Resaca Air"]);
   });
 
   /**
@@ -64,21 +64,21 @@ describe("moveTargetsFor", () => {
       num("n2", "+1222", "live", "acct_resaca"),
     ];
     const targets = moveTargetsFor(numbers[0]!, ACCOUNTS, occupiedAccountIds(numbers));
-    expect(targets.map((a) => a.id)).toEqual(["acct_woodworks"]);
+    expect(targets.map((a) => a.id)).toEqual(["acct_alamo"]);
   });
 
   it("never offers the number's own current holder", () => {
     // Mutation: drop the `a.id !== number.accountId` filter — this fails.
-    const n = num("n1", "+1111", "released", "acct_woodworks");
+    const n = num("n1", "+1111", "released", "acct_alamo");
     const targets = moveTargetsFor(n, ACCOUNTS, occupiedAccountIds([n]));
-    expect(targets.map((a) => a.id)).not.toContain("acct_woodworks");
+    expect(targets.map((a) => a.id)).not.toContain("acct_alamo");
   });
 
   it("returns nothing when every other company is occupied", () => {
     const numbers = [
       num("n1", "+1111", "live", "acct_test"),
       num("n2", "+1222", "live", "acct_resaca"),
-      num("n3", "+1333", "live", "acct_woodworks"),
+      num("n3", "+1333", "live", "acct_alamo"),
     ];
     expect(moveTargetsFor(numbers[0]!, ACCOUNTS, occupiedAccountIds(numbers))).toEqual([]);
   });
@@ -90,9 +90,9 @@ describe("moveTargetsFor", () => {
    */
   it("never offers an archived company as a destination", () => {
     const n = num("n1", "+1111", "released", "acct_test");
-    const accounts = [acct("acct_woodworks", "956 Woodworks"), acct("acct_gone", "Closed Co", true)];
+    const accounts = [acct("acct_alamo", "Alamo Cabinet"), acct("acct_gone", "Closed Co", true)];
     expect(moveTargetsFor(n, accounts, occupiedAccountIds([n])).map((a) => a.id))
-      .toEqual(["acct_woodworks"]);
+      .toEqual(["acct_alamo"]);
   });
 
   it("still lists a number HELD by an archived company", () => {
@@ -107,7 +107,7 @@ describe("moveTargetsFor", () => {
     const n = num("n1", "+1111", "released", "acct_test");
     const shuffled = [ACCOUNTS[1]!, ACCOUNTS[0]!];
     expect(moveTargetsFor(n, shuffled, occupiedAccountIds([n])).map((a) => a.name))
-      .toEqual(["956 Woodworks", "Resaca Air"]);
+      .toEqual(["Alamo Cabinet", "Resaca Air"]);
   });
 });
 
@@ -115,7 +115,7 @@ describe("buildNumberInventory", () => {
   it("orders by service state: live, testing, provisioned, released", () => {
     const numbers = [
       num("n1", "+1444", "released", "acct_test"),
-      num("n2", "+1333", "provisioned", "acct_woodworks"),
+      num("n2", "+1333", "provisioned", "acct_alamo"),
       num("n3", "+1111", "live", "acct_resaca"),
       num("n4", "+1222", "testing", "acct_other"),
     ];
@@ -144,7 +144,7 @@ describe("buildNumberInventory", () => {
   /**
    * The real state of the platform on the day this shipped: one released
    * number on Test Client One, one in testing on BIS, one live on Resaca
-   * Air. The released one is the only movable asset, and 956 Woodworks —
+   * Air. The released one is the only movable asset, and Alamo Cabinet —
    * holding nothing — is the only place it can go.
    */
   it("offers the idle number to the one company that can take it", () => {
@@ -157,16 +157,16 @@ describe("buildNumberInventory", () => {
       acct("acct_test", "Test Client One"),
       acct("acct_bis", "BIS"),
       acct("acct_resaca", "Resaca Air"),
-      acct("acct_woodworks", "956 Woodworks"),
+      acct("acct_alamo", "Alamo Cabinet"),
     ];
     const rows = buildNumberInventory(numbers, accounts);
     const idle = rows.find((r) => r.e164 === "+19567055146")!;
-    expect(idle.moveTargets.map((a) => a.name)).toEqual(["956 Woodworks"]);
-    // The live one may go to 956 Woodworks too — and to Test Client One,
+    expect(idle.moveTargets.map((a) => a.name)).toEqual(["Alamo Cabinet"]);
+    // The live one may go to Alamo Cabinet too — and to Test Client One,
     // whose only number is released, which is precisely the churn case: the
     // slot a departed client left behind is free to fill again.
     const live = rows.find((r) => r.e164 === "+19565550100")!;
-    expect(live.moveTargets.map((a) => a.name)).toEqual(["956 Woodworks", "Test Client One"]);
+    expect(live.moveTargets.map((a) => a.name)).toEqual(["Alamo Cabinet", "Test Client One"]);
   });
 
   it("handles no numbers at all", () => {

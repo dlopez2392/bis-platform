@@ -168,7 +168,7 @@ describe("confirmStep (confirm_identity)", () => {
 });
 
 describe("ownsStep (reschedule_appointment / cancel_appointment)", () => {
-  const CALLER = "+19562921696";
+  const CALLER = "+19565550196";
 
   it("a booking made on THIS call is owned, even with nothing confirmed and no caller id", () => {
     const state = withBooking(emptyCallState(), { id: "bk1", contactName: "X", startsAt: "s", endsAt: "e" });
@@ -184,7 +184,7 @@ describe("ownsStep (reschedule_appointment / cancel_appointment)", () => {
 
   it("confirmed this contact, rung met, phone is the caller id (legacy format included) -> owned", () => {
     const state = withConfirmed(emptyCallState(), { contactId: "c1", rung: 1, by: "caller_id" });
-    const owns = ownsStep(state, 1, { bookingId: "bk3", contactId: "c1", contactPhone: "(956) 292-1696", callerNumber: CALLER }, NEXT);
+    const owns = ownsStep(state, 1, { bookingId: "bk3", contactId: "c1", contactPhone: "(956) 555-0196", callerNumber: CALLER }, NEXT);
     expect(owns).toEqual({ owned: true });
   });
 
@@ -218,25 +218,25 @@ describe("messageNeedsNameCheck (take_message, spec 5.10.5, plan P6)", () => {
   });
   it("already confirmed -> false", () => {
     const state = withConfirmed(emptyCallState(), { contactId: "c1", rung: 1, by: "caller_id" });
-    expect(messageNeedsNameCheck(state, "+19562921696", {})).toBe(false);
+    expect(messageNeedsNameCheck(state, "+19565550196", {})).toBe(false);
   });
   it("a name was given -> false", () => {
-    expect(messageNeedsNameCheck(emptyCallState(), "+19562921696", { name: "Ana Prueba" })).toBe(false);
+    expect(messageNeedsNameCheck(emptyCallState(), "+19565550196", { name: "Ana Prueba" })).toBe(false);
   });
   it("nameDeclined: true -> false", () => {
-    expect(messageNeedsNameCheck(emptyCallState(), "+19562921696", { nameDeclined: true })).toBe(false);
+    expect(messageNeedsNameCheck(emptyCallState(), "+19565550196", { nameDeclined: true })).toBe(false);
   });
   it("already asked once this call -> false", () => {
     const state = withMessageNameAsked(emptyCallState());
-    expect(messageNeedsNameCheck(state, "+19562921696", {})).toBe(false);
+    expect(messageNeedsNameCheck(state, "+19565550196", {})).toBe(false);
   });
   it("otherwise -> true", () => {
-    expect(messageNeedsNameCheck(emptyCallState(), "+19562921696", {})).toBe(true);
+    expect(messageNeedsNameCheck(emptyCallState(), "+19565550196", {})).toBe(true);
   });
   // Owner decision 2026-10-26: a message on a locked call files on no customer, so a name would pick nothing.
   it("a locked call, by misses or by cannot -> false: the name would decide nothing (mutation: drop the lock check -> FAILS)", () => {
-    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "misses"), "+19562921696", {})).toBe(false);
-    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "cannot"), "+19562921696", {})).toBe(false);
+    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "misses"), "+19565550196", {})).toBe(false);
+    expect(messageNeedsNameCheck(withLocked(emptyCallState(), "cannot"), "+19565550196", {})).toBe(false);
   });
 });
 

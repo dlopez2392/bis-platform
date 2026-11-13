@@ -126,7 +126,7 @@ describe("texml route", () => {
     expect(xml).toContain("sip:proj_test123@sip.api.openai.com;transport=tls?X-BIS-Called=%2B19565550999");
   });
   it("POST reads To from the form body", async () => {
-    const body = new URLSearchParams({ To: "+19565550888", From: "+19562921696" });
+    const body = new URLSearchParams({ To: "+19565550888", From: "+19565550196" });
     const res = await POST(new Request("https://x.example/api/voice/texml", {
       method: "POST", body, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
@@ -226,7 +226,7 @@ describe("texml route — disabled profile refusal (spoken, bilingual)", () => {
 describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
   it("over the per-number cap (default 5) → cap copy, no Dial", async () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
-    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     const xml = await res.text();
     expect(xml).toContain("We're sorry");
     expect(xml).toContain("can't take more calls today");
@@ -235,7 +235,7 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
   it("cap refusal honors the profile's language (es)", async () => {
     profileMock.mockResolvedValue({ ...ENABLED_PROFILE, enabled: true, languages: "es" });
     countCallsByCallerSinceMock.mockResolvedValue(5);
-    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     const xml = await res.text();
     expect(xml).toContain("<Say voice=\"Polly.Lupe-Neural\">Lo sentimos — hoy ya no podemos atender más llamadas. Por favor llame mañana.</Say>");
     expect(xml).not.toContain("<Dial");
@@ -243,7 +243,7 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
   it("over the per-account cap (default 50) while the per-caller count is 0 → cap copy, no Dial", async () => {
     countCallsSinceMock.mockResolvedValue(50);
     countCallsByCallerSinceMock.mockResolvedValue(0);
-    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     const xml = await res.text();
     expect(xml).toContain("We're sorry");
     expect(xml).toContain("can't take more calls today");
@@ -252,15 +252,15 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
   it("under cap + enabled → Dial present (existing behavior intact)", async () => {
     countCallsSinceMock.mockResolvedValue(1);
     countCallsByCallerSinceMock.mockResolvedValue(1);
-    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     const xml = await res.text();
     expect(xml).toContain("<Dial answerOnBridge=\"true\"");
   });
   it("counts are queried from midnight UTC of today, not an unpinned Date().toISOString()", async () => {
     const expectedSince = utcDayStart(new Date());
-    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     expect(countCallsSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", expectedSince);
-    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", expectedSince);
+    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19565550196", expectedSince);
   });
   it("getVoiceProfile rejecting fails open — Dial present through the outer catch", async () => {
     profileMock.mockRejectedValue(new Error("db down"));
@@ -270,19 +270,19 @@ describe("texml route — daily call cap refusal (spoken, bilingual)", () => {
   });
   it("cap-count lookup throws → Dial present (fail-open pin)", async () => {
     countCallsByCallerSinceMock.mockRejectedValue(new Error("db down"));
-    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19562921696"));
+    const res = await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550196"));
     const xml = await res.text();
     expect(xml).toContain("<Dial answerOnBridge=\"true\"");
   });
   it("POST also reads From from the form body for cap counting", async () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
-    const body = new URLSearchParams({ To: "+19565550999", From: "+19562921696" });
+    const body = new URLSearchParams({ To: "+19565550999", From: "+19565550196" });
     const res = await POST(new Request("https://x.example/api/voice/texml", {
       method: "POST", body, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
     const xml = await res.text();
     expect(xml).toContain("can't take more calls today");
-    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19562921696", utcDayStart(new Date()));
+    expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "a1", "+19565550196", utcDayStart(new Date()));
   });
 });
 
@@ -306,7 +306,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
     // Any base64 works here — the missing headers short-circuit before the
     // key is ever parsed.
     process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19565550196" }).toString();
     const res = await POST(new Request("https://x.example/api/voice/texml", {
       method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
@@ -334,7 +334,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
 
   it("POST with a tampered/invalid signature → 403, logged as invalid-signature with the claimed To/From", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19565550196" }).toString();
     const ts = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
     process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
@@ -353,7 +353,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
   });
 
   it("POST with a valid signature → normal XML (Dial present)", async () => {
-    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19565550196" }).toString();
     const ts = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(raw, ts);
     process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
@@ -373,7 +373,7 @@ describe("texml route — Telnyx signature validation (TELNYX_PUBLIC_KEY set)", 
   });
 
   it("POST with a stale timestamp (now-400s) → 403 even with an otherwise-valid signature", async () => {
-    const raw = new URLSearchParams({ To: "+19565550999", From: "+19562921696" }).toString();
+    const raw = new URLSearchParams({ To: "+19565550999", From: "+19565550196" }).toString();
     const stale = String(Math.floor(Date.now() / 1000) - 400);
     const { publicKeyB64, signatureB64 } = makeSigned(raw, stale);
     process.env.TELNYX_PUBLIC_KEY = publicKeyB64;
@@ -451,7 +451,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
   it("a caller with ANY good outcome is dialled, however much spam they also have", async () => {
     // The live-data shape: the top spam caller is also the top booker.
     countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 4, otherCalls: 13 });
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toContain("<Dial");
   });
 
@@ -615,14 +615,14 @@ describe("texml route — the handoff continuation on the bridge", () => {
   });
 
   it("the SIP dial carries an action URL and a handoff token", async () => {
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toMatch(/<Dial[^>]*action="[^"]*\/api\/voice\/texml\/handoff\?t=[A-Za-z0-9_-]+"/);
     expect(xml).toContain("X-BIS-Handoff=");
   });
 
   it("the token in the action URL and the token on the SIP URI are the SAME token", async () => {
     // Two different tokens would mean the action route can never find the call.
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     const inAction = /action="[^"]*\?t=([A-Za-z0-9_-]+)"/.exec(xml)![1];
     const inUri = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(xml)![1];
     expect(inAction).toBe(inUri);
@@ -635,12 +635,12 @@ describe("texml route — the handoff continuation on the bridge", () => {
   });
 
   it("the existing X-BIS-Called header is still present and unchanged", async () => {
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toContain("X-BIS-Called=%2B19565550999");
   });
 
   it("the action is fetched by POST, like every other call Telnyx makes here", async () => {
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toMatch(/<Dial[^>]*method="POST"/);
   });
 
@@ -648,13 +648,13 @@ describe("texml route — the handoff continuation on the bridge", () => {
     // Same rule as every other origin in this app (email/origin.ts): the
     // custom domain wins over whatever host the webhook happened to hit.
     process.env.APP_ORIGIN = "https://app.bis-rgv.com";
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toContain('action="https://app.bis-rgv.com/api/voice/texml/handoff?t=');
     expect(xml).not.toContain("x.example/api/voice/texml/handoff");
   });
 
   it("falls back to the request's own origin when APP_ORIGIN is unset", async () => {
-    const xml = await texmlXml({ To: LIVE_TO, From: "+19562921696" });
+    const xml = await texmlXml({ To: LIVE_TO, From: "+19565550196" });
     expect(xml).toContain('action="https://x.example/api/voice/texml/handoff?t=');
   });
 
@@ -734,17 +734,17 @@ describe("screened calls are recorded", () => {
 
   it("records `over-cap` for a caller over the daily cap", async () => {
     countCallsByCallerSinceMock.mockResolvedValue(5);
-    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19565550196`));
     await flushAfter();
     expect(recordScreenedCallMock).toHaveBeenCalledWith(expect.anything(), {
       accountId: "a1", phoneNumberId: "pn1",
-      calledE164: LIVE_TO, callerE164: "+19562921696",
+      calledE164: LIVE_TO, callerE164: "+19565550196",
       reason: "over-cap",
     });
   });
 
   it("records NOTHING for a call that is answered (mutation: record on the dial path too -> FAILS)", async () => {
-    const res = await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19562921696`));
+    const res = await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LIVE_TO)}&From=%2B19565550196`));
     const xml = await res.text();
     expect(xml).toContain("<Dial");
     await flushAfter();
@@ -1489,7 +1489,7 @@ describe("observation: which form fields Telnyx sends (POST)", () => {
   it("logs the NAMES of every field, never their values, plus the value of an attestation-like field", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const body = new URLSearchParams({
-      To: "+19565550999", From: "+19562921696", CallSid: "v3:secret-call-id",
+      To: "+19565550999", From: "+19565550196", CallSid: "v3:secret-call-id",
       StirShakenAttestation: "A", Verstat: "TN-Validation-Passed",
     });
     await POST(new Request("https://x.example/api/voice/texml", {
@@ -1503,7 +1503,7 @@ describe("observation: which form fields Telnyx sends (POST)", () => {
 
   it("says so when no attestation-like field arrived, and a field name that could forge a log line is counted, not printed", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const raw = "To=%2B19565550999&From=%2B19562921696&bad%0Aname=1";
+    const raw = "To=%2B19565550999&From=%2B19565550196&bad%0Aname=1";
     await POST(new Request("https://x.example/api/voice/texml", {
       method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
@@ -1527,7 +1527,7 @@ describe("observation: which form fields Telnyx sends (POST)", () => {
   it("an attestation value that looks like a phone number is redacted", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     await POST(new Request("https://x.example/api/voice/texml", {
-      method: "POST", body: new URLSearchParams({ To: "+19565550999", StirShakenOrig: "19562921696" }),
+      method: "POST", body: new URLSearchParams({ To: "+19565550999", StirShakenOrig: "19565550196" }),
       headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
     expect(logSpy).toHaveBeenCalledWith("texml form fields: To,StirShakenOrig; attestation: StirShakenOrig=(redacted)");

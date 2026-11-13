@@ -166,7 +166,7 @@ const CALENDAR_ROW = {
 
 function callIncomingEvent(opts: { callId?: string; callerNumber?: string | null; calledNumber?: string | null } = {}) {
   const callId = opts.callId ?? "call_abc123";
-  const callerNumber = opts.callerNumber === undefined ? "+19562921696" : opts.callerNumber;
+  const callerNumber = opts.callerNumber === undefined ? "+19565550196" : opts.callerNumber;
   const calledNumber = opts.calledNumber === undefined ? "+19565550999" : opts.calledNumber;
   const sip_headers: { name: string; value: string }[] = [];
   if (callerNumber) sip_headers.push({ name: "From", value: `sip:${callerNumber}@sip.example.com` });
@@ -480,7 +480,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(countCallerHistorySinceMock).toHaveBeenCalledWith(
-      expect.anything(), "acct1", "+19562921696", expect.any(String),
+      expect.anything(), "acct1", "+19565550196", expect.any(String),
     );
     const since = new Date(countCallerHistorySinceMock.mock.calls[0]![3] as string);
     const daysBack = (Date.now() - since.getTime()) / 86_400_000;
@@ -573,7 +573,7 @@ describe("POST /api/voice/incoming — the counting seam exists for real", () =>
     const stubDb = { from: () => makeChain() } as unknown as Parameters<typeof real.countCallerHistorySince>[0];
 
     await expect(
-      real.countCallerHistorySince(stubDb, "acct1", "+19562921696", new Date().toISOString()),
+      real.countCallerHistorySince(stubDb, "acct1", "+19565550196", new Date().toISOString()),
     ).resolves.toEqual({ spamCalls: 2, otherCalls: 0, answeredCalls: 5 });
   });
 });
@@ -620,7 +620,7 @@ describe("POST /api/voice/incoming — happy path", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(
-      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" },
+      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196", knowledgeVersion: 5, businessStatus: "open" },
     );
     expect(getOrCreateCalendarMock).toHaveBeenCalledWith(expect.anything(), "acct1", "voice", "ai");
   });
@@ -749,7 +749,7 @@ describe("POST /api/voice/incoming — the TeXML-route signature", () => {
   const SECRET = "k".repeat(48);
   const TOKEN = "c".repeat(32);
   const SIGNED_CALLED = "+19565550999"; // PHONE_ROW's number
-  const SIGNED_CALLER = "+19562921696";
+  const SIGNED_CALLER = "+19565550196";
 
   async function signature(opts: { called?: string; caller?: string | null; token?: string; at?: number; secret?: string } = {}) {
     const { signSipHandoff } = await import("@/lib/voice/sip-handoff-signature");
@@ -916,7 +916,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
   it("off (no setting on the row): no stamp named and the old identity line — the existing shape assertion still holds", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(OLD);
     expect(randomIntMock).not.toHaveBeenCalled();
   });
@@ -926,7 +926,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" }, knowledgeVersion: 5, businessStatus: "open" });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", disclosure: { disclosed: true, setting: "on" }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(DISCLOSED);
   });
 
@@ -937,7 +937,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     await POST(req());
     expect(randomIntMock).toHaveBeenCalledWith(2);
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" }, knowledgeVersion: 5, businessStatus: "open" });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", disclosure: { disclosed: false, setting: "trial" }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(OLD);
   });
 
@@ -976,7 +976,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     const line = logSpy.mock.calls.find((c) => String(c[1]).startsWith("startCallRow failed"));
     expect(line, "the failure is logged").toBeDefined();
     expect(Object.keys(line![2] as object).sort()).toEqual(["accountId", "callId", "error"]);
-    expect(JSON.stringify(line)).not.toContain("+19562921696");
+    expect(JSON.stringify(line)).not.toContain("+19565550196");
     logSpy.mockRestore();
   });
 });
@@ -993,7 +993,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
   it("no module: the row is written exactly as before and the prompt carries no trade rules (mutation: always pass tradeModule, even null -> FAILS)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -1002,7 +1002,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5, businessStatus: "open" });
+      { phoneNumberId: "pn1", callerE164: "+19565550196", tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(EVT);
     expect(acceptedInstructions()).not.toContain(INS);
   });
@@ -1023,7 +1023,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "law" });
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19565550196", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -1258,7 +1258,7 @@ describe("POST /api/voice/incoming — the SIP leg's caller-ID attestation, obse
    *  stored or decided on; the test exists to prove it reaches exactly one log line and nothing else. */
   function eventWithIdentity(identityValue?: string) {
     const sip_headers: { name: string; value: string }[] = [
-      { name: "From", value: "sip:+19562921696@sip.example.com" },
+      { name: "From", value: "sip:+19565550196@sip.example.com" },
       { name: "X-BIS-Called", value: "+19565550999" },
     ];
     if (identityValue !== undefined) sip_headers.push({ name: "Identity", value: identityValue });
@@ -1413,7 +1413,7 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     decideOwnerMock.mockResolvedValue({ ok: true, session: SESSION });
     unwrapMock.mockResolvedValue(withPass());
     await POST(req());
-    expect(logged()).not.toContain("19562921696");
+    expect(logged()).not.toContain("19565550196");
     expect(logged()).not.toContain(PASS);
     expect(logged()).toContain("owner line accepted");
   });
@@ -1462,6 +1462,6 @@ describe("POST /api/voice/incoming — step 7b: the owner line (F-032 §4.3, §4
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     const line = logSpy.mock.calls.find((c: unknown[]) => c[1] === "incoming call");
-    expect(line![2]).toMatchObject({ callerNumber: "+19562921696" });
+    expect(line![2]).toMatchObject({ callerNumber: "+19565550196" });
   });
 });

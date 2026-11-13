@@ -16,7 +16,7 @@ const NOW = new Date("2026-10-06T20:00:00Z");
 const FRESH = "2026-10-06T19:59:30Z";
 const ctx: TextsContext = {
   db: READER, writer: WRITER, accountId: "a1", contactId: "c1", userId: "user_1", actorName: "Ana",
-  address: "+19562921696", unconfirmed: false, now: NOW, locale: "en",
+  address: "+19565550196", unconfirmed: false, now: NOW, locale: "en",
 };
 let n = 0;
 const row = (action: string, method: string, evidence: Record<string, unknown> = {}, at = `2026-10-0${++n}T10:00:00Z`) =>
@@ -37,7 +37,7 @@ describe("stopTexts", () => {
   it("writes revoked / staff through the SERVICE client, compare-and-set on the row the operator saw, with the actor and their name (plan G6, G14; mutation: guard 'none' → FAILS)", async () => {
     const r = await stopTexts(ctx, null);
     expect(db.appendConsentEventGuarded.mock.calls[0]![0]).toBe(WRITER);
-    expect(eventOf()).toMatchObject({ action: "revoked", method: "staff", actorId: "user_1", address: "+19562921696", contactId: "c1", evidence: { actorName: "Ana" } });
+    expect(eventOf()).toMatchObject({ action: "revoked", method: "staff", actorId: "user_1", address: "+19565550196", contactId: "c1", evidence: { actorName: "Ana" } });
     expect(guardOf()).toEqual({ ifNewest: null });
     expect(r).toMatchObject({ ok: true, undo: { kind: "stop", eventId: "new_1" } });
   });
@@ -66,24 +66,24 @@ describe("stopTexts", () => {
 
 describe("undoStopTexts", () => {
   it("undoes only a STAFF stop, compare-and-set on it (mutation: skip the method check → a keyword stop is undone, FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoStopTexts(ctx, "ev_kw")).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
     // Same probe, isolated from the actor/age checks (a keyword stop's
     // actor_id is never a staff id in practice, so the default `row()`
     // helper's actor_id: null would refuse this via `undoable` even with
     // the method check removed — that mutation must fail on ITS OWN merit).
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoStopTexts(ctx, "ev_kw2")).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "staff"), id: "ev_staff", actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "staff"), id: "ev_staff", actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoStopTexts(ctx, "ev_staff")).ok).toBe(true);
     expect(eventOf()).toMatchObject({ action: "resubscribed", method: "staff_undo" });
     expect(guardOf()).toEqual({ ifNewest: "ev_staff" });
   });
 
   it("an Undo is the SAME person's, inside the window: another user's stop, or one older than UNDO_WINDOW_MS, is refused with the undo-expired line — otherwise Undo is a note-free Resume (review R3-I6; mutation: drop the actor check → FAILS; mutation: drop the age check → FAILS)", async () => {
-    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19565550196", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoStopTexts(ctx, "ev_staff")).toEqual({ ok: false, error: m["contact.texts.undoExpired"] });
     const old = new Date(NOW.getTime() - UNDO_WINDOW_MS).toISOString();
@@ -164,7 +164,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("the Undo of either puts the hold back (held / staff_undo) with what they wrote, and reopens exactly the To-dos it closed (mutation: reopen none → FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("hold_released", "staff", { excerpt: "wrong number" }), id: "ev_rel", actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("hold_released", "staff", { excerpt: "wrong number" }), id: "ev_rel", actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     const r = await undoHoldDecision(ctx, "ev_rel", ["task_1"]);
     expect(eventOf()).toMatchObject({ action: "held", method: "staff_undo", evidence: { undoes: "ev_rel", excerpt: "wrong number" } });
     expect(guardOf()).toEqual({ ifNewest: "ev_rel" });
@@ -177,7 +177,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("the Undo of a hold decision is bound the same way: another user's, or an old one, is refused (review R3-I6; mutation: drop the bound from undoHoldDecision → a confirmed stop is lifted back to a hold with no note, FAILS)", async () => {
-    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden mensajes" }), id: "ev_conf", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden mensajes" }), id: "ev_conf", address: "+19565550196", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoHoldDecision(ctx, "ev_conf", [])).toEqual({ ok: false, error: m["contact.texts.undoExpired"] });
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_1", occurred_at: "2026-10-06T19:00:00Z" });
@@ -186,13 +186,13 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("an Undo pointed at anything but a hold decision is refused (mutation: accept any row → a keyword stop is 'undone' into a hold, FAILS)", async () => {
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoHoldDecision(ctx, "ev_kw", [])).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
     // Isolated from the actor/age checks (same reasoning as the earlier
     // probes): this staff member's own, fresh row — but a plain keyword stop,
     // never a hold decision — must be refused by `isDecision`, not `undoable`.
-    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), actor_id: "user_1", occurred_at: FRESH, address: "+19562921696", channel: "sms", contact_id: "c1" });
+    db.readConsentEvent.mockResolvedValue({ ...row("revoked", "keyword"), actor_id: "user_1", occurred_at: FRESH, address: "+19565550196", channel: "sms", contact_id: "c1" });
     expect((await undoHoldDecision(ctx, "ev_kw2", [])).ok).toBe(false);
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
@@ -216,7 +216,7 @@ describe("the history these controls read comes from the service client (F-085)"
     expect(db.readConsentHistory).toHaveBeenCalled();
     for (const call of db.readConsentHistory.mock.calls) {
       expect(call[0]).toBe(WRITER);
-      expect(call.slice(1)).toEqual(["a1", "sms", "+19562921696"]);
+      expect(call.slice(1)).toEqual(["a1", "sms", "+19565550196"]);
     }
   });
 });
@@ -240,7 +240,7 @@ describe("errors read in ctx's own locale (S-10 leftovers item 7)", () => {
   });
 
   it("the undo-expired line is Spanish on a Spanish ctx (mutation: read m[...] directly -> FAILS)", async () => {
-    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "staff"), id: "ev_staff", address: "+19565550196", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoStopTexts(esCtx, "ev_staff")).toEqual({ ok: false, error: m["contact.texts.undoExpired.es"] });
   });

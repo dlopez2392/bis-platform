@@ -18,7 +18,7 @@ import { m } from "@/lib/messages";
 const DB = {} as never;
 const NOW = new Date("2026-10-06T20:00:00Z");
 const input = (over: Partial<InboundConsentInput> = {}): InboundConsentInput => ({
-  accountId: "acct_1", address: "+19562921696", text: "STOP", autoresponse: null, autoresponseRaw: null,
+  accountId: "acct_1", address: "+19565550196", text: "STOP", autoresponse: null, autoresponseRaw: null,
   providerMessageId: "msg_1", messagingProfileId: "prof_1", contactId: "ct_1", firstFiling: true, now: NOW,
   sharedNumber: null, ...over,
 });
@@ -92,7 +92,7 @@ describe("recordInboundConsent — a stop", () => {
     await run(input({ text: "Stop!" }), classifyInbound("Stop!", null));
     const e = db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "revoked")!;
     expect(e[1]).toEqual({
-      accountId: "acct_1", channel: "sms", address: "+19562921696", contactId: "ct_1", sourceRef: "msg_1",
+      accountId: "acct_1", channel: "sms", address: "+19565550196", contactId: "ct_1", sourceRef: "msg_1",
       action: "revoked", method: "keyword",
       evidence: { keyword: "STOP", language: "en", autoresponse_type: null, autoresponse_type_raw: null, messaging_profile_id: "prof_1", excerpt: "Stop!" },
     });
@@ -106,10 +106,10 @@ describe("recordInboundConsent — a stop", () => {
   });
 
   it("logs the ambiguity — never the customer's own number — when Telnyx's autoresponse_type reads as OTHER on a stop (mutation: skip the log → FAILS; mutation: log i.address → FAILS)", async () => {
-    await run(input({ text: "baja", address: "+19562921696", autoresponse: "OTHER", autoresponseRaw: "OPT_OUT_XYZ" }), classifyInbound("baja", "OTHER"));
+    await run(input({ text: "baja", address: "+19565550196", autoresponse: "OTHER", autoresponseRaw: "OPT_OUT_XYZ" }), classifyInbound("baja", "OTHER"));
     const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => /OTHER/.test(l) && /OPT_OUT_XYZ/.test(l))).toBe(true);
-    expect(lines.some((l) => l.includes("+19562921696"))).toBe(false);
+    expect(lines.some((l) => l.includes("+19565550196"))).toBe(false);
   });
 
   it("Telnyx did NOT answer: BIS sends the one confirmation, answering this row, in the keyword's language (mutation: drop answersEventId → FAILS)", async () => {
@@ -155,7 +155,7 @@ describe("recordInboundConsent — a stop", () => {
       { id: "ev_hold_0", action: "held", method: "free_text", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
     ]);
     await run(input({ text: "STOP" }), classifyInbound("STOP", null));
-    expect(db.readConsentHistory).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");   // this number's holds, not another's (review M8)
+    expect(db.readConsentHistory).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19565550196");   // this number's holds, not another's (review M8)
     expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold", "ev_hold_0"], "sms-inbound", "system");
     db.completeTasksForConsentEvents.mockClear();
     await run(input({ text: "START", providerMessageId: "msg_2" }), classifyInbound("START", null));
@@ -274,7 +274,7 @@ describe("recordInboundConsent — a phrase, the grant, the alert phone", () => 
   it("a nameless contact is named by their number in the To-do (mutation: print '(no name)' → FAILS)", async () => {
     db.getContact.mockResolvedValue({ id: "ct_1", first_name: null, last_name: null });
     await run(input({ text: "remove me" }), classifyInbound("remove me", null));
-    expect(db.ensureConsentTask.mock.calls[0]![2].title).toMatch(/^\+19562921696 may have asked/);
+    expect(db.ensureConsentTask.mock.calls[0]![2].title).toMatch(/^\+19565550196 may have asked/);
   });
 
   it("the first-text grant is written FIRST, if_empty, and its failure is only logged — the stop still lands (decision 8, plan G2; mutation: let the grant's failure throw → FAILS)", async () => {

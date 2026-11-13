@@ -2884,7 +2884,7 @@ git commit -m "S-53 e2e: Add company refuses a held trade; a CRM-only company's 
   5. Merge on green: read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`), squash. Confirm the production deploy.
   6. **The three production companies (spec 5.4), RIGHT AFTER the deploy is confirmed** (plan review M3), with the owner's explicit OK, through the app's Settings → Trade card, signed in as the agency:
      - Bespoke Intelligent Solutions → Other, "Marketing and AI receptionist agency".
-     - 956 Woodworks → Woodworking and cabinets.
+     - The pilot client → Woodworking and cabinets.
      - Resaca Air Conditioning & Heating → Heating and air conditioning.
 
      Verify read-only: `select name, trade, trade_other from accounts order by name`.

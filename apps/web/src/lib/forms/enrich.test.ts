@@ -45,7 +45,7 @@ const ANSWERS = [
   { key: "f", label: "First name", value: "Ana" },
   { key: "l", label: "Last name", value: "Ruiz" },
   { key: "e", label: "Email", value: "  ana@example.com " },
-  { key: "p", label: "Phone", value: "(956) 292-1696" },
+  { key: "p", label: "Phone", value: "(956) 555-0196" },
   { key: "c", label: "Business", value: "Rio Roofing" },
   { key: "m", label: "Message", value: "A quote please" },
 ];
@@ -106,7 +106,7 @@ describe("enrich: the public form is the customer's, the chat is Sofía's (item 
       { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", kind: "contact_field_filled",
         target: { field: "email" }, before: { value: "" }, after: { value: "ana@example.com" } },
       { actor: "webchat", callId: null, chatId: "chat-9", contactId: "ct-old", kind: "contact_field_filled",
-        target: { field: "phone" }, before: { value: null }, after: { value: "+19562921696" } },
+        target: { field: "phone" }, before: { value: null }, after: { value: "+19565550196" } },
     ]]);
     expect(dbMocks.setContactsBusiness).toHaveBeenCalled();
   });

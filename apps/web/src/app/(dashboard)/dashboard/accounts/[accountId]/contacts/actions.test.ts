@@ -117,13 +117,13 @@ describe("updateContactFieldAction", () => {
   it("a phone save answers `undo` with the prior phone+flag (read BEFORE the write) and the value ACTUALLY stored (read AFTER), not the typed text (mutation: undo.editedPhone = norm.value → FAILS)", async () => {
     dbMocks.getContact
       .mockResolvedValueOnce({ id: "c1", phone: "+19565550100", phone_country_unconfirmed: true })
-      .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+      .mockResolvedValueOnce({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
-    const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
-    expect(dbMocks.updateContact).toHaveBeenCalledWith({}, "a1", "c1", { phone: "(956) 292-1696" }, { authorKind: "person", authorId: "user_1" });
+    const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 555-0196");
+    expect(dbMocks.updateContact).toHaveBeenCalledWith({}, "a1", "c1", { phone: "(956) 555-0196" }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({
       ok: true,
-      undo: { priorPhone: "+19565550100", priorUnconfirmed: true, editedPhone: "+19562921696" },
+      undo: { priorPhone: "+19565550100", priorUnconfirmed: true, editedPhone: "+19565550196" },
     });
   });
 
@@ -142,12 +142,12 @@ describe("updateContactFieldAction", () => {
   it("a first fill from empty (no prior real number) still answers an `undo`, restoring to null (mutation: skip the read-back for a null prior → FAILS)", async () => {
     dbMocks.getContact
       .mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false })
-      .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+      .mockResolvedValueOnce({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
-    const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
+    const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 555-0196");
     expect(r).toEqual({
       ok: true,
-      undo: { priorPhone: null, priorUnconfirmed: false, editedPhone: "+19562921696" },
+      undo: { priorPhone: null, priorUnconfirmed: false, editedPhone: "+19565550196" },
     });
   });
 });
@@ -390,9 +390,9 @@ describe("setPhoneCountryAction", () => {
     err.mockRestore();
   });
 
-  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)", async () => {
-    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
-    expect(await setPhoneCountryAction("a1", "c1", "MX", "+19562921696")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
+  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529565550196 written, FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
+    expect(await setPhoneCountryAction("a1", "c1", "MX", "+19565550196")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
   });
 
@@ -430,7 +430,7 @@ describe("undoPhoneCountryAction", () => {
   });
 
   it("refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)", async () => {
-    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false });
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19565550196", unconfirmed: false });
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
   });
@@ -477,10 +477,10 @@ describe("undoInlinePhoneEditAction", () => {
   it("undoes a first fill by restoring null (mutation: refuse a null priorPhone → FAILS)", async () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await undoInlinePhoneEditAction("a1", "c1", {
-      editedPhone: "+19562921696", priorPhone: null, priorUnconfirmed: false,
+      editedPhone: "+19565550196", priorPhone: null, priorUnconfirmed: false,
     });
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
-      {}, "a1", "c1", { expectedPhone: "+19562921696", phone: null, unconfirmed: false }, { authorKind: "person", authorId: "user_1" });
+      {}, "a1", "c1", { expectedPhone: "+19565550196", phone: null, unconfirmed: false }, { authorKind: "person", authorId: "user_1" });
     expect(r).toEqual({ ok: true });
   });
 
@@ -560,15 +560,15 @@ describe("undoInlinePhoneEditAction", () => {
     const { updateContactFieldAction } = await import("./actions");
     dbMocks.getContact
       .mockResolvedValueOnce({ id: "c1", phone: "+19565550100", phone_country_unconfirmed: true })
-      .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+      .mockResolvedValueOnce({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
-    const saved = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
+    const saved = await updateContactFieldAction("a1", "c1", "phone", "(956) 555-0196");
     if (!saved.ok || !saved.undo) throw new Error("expected an undo payload");
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await undoInlinePhoneEditAction("a1", "c1", saved.undo);
     expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
       {}, "a1", "c1",
-      { expectedPhone: "+19562921696", phone: "+19565550100", unconfirmed: true },
+      { expectedPhone: "+19565550196", phone: "+19565550100", unconfirmed: true },
       { authorKind: "person", authorId: "user_1" },
     );
     expect(r).toEqual({ ok: true });
@@ -1284,7 +1284,7 @@ describe("the record and bulk actions, in the reader's language (S-10 T3)", () =
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
   });
   it("undoPhoneCountryAction reads Spanish too", async () => {
-    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false }, "es");
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19565550196", unconfirmed: false }, "es");
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed.es"] });
   });
   it("undoInlinePhoneEditAction reads Spanish too", async () => {

@@ -21,7 +21,7 @@ async function seedCall(db: SupabaseClient, accountId: string): Promise<string> 
   const num = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
   expect(num.error, `phone_numbers insert failed: ${num.error?.message}`).toBeNull();
   const call = await db.from("calls")
-    .insert({ account_id: accountId, phone_number_id: num.data!.id as string, caller_e164: "+19562921696" })
+    .insert({ account_id: accountId, phone_number_id: num.data!.id as string, caller_e164: "+19565550196" })
     .select("id").single();
   expect(call.error, `calls insert failed: ${call.error?.message}`).toBeNull();
   return call.data!.id as string;

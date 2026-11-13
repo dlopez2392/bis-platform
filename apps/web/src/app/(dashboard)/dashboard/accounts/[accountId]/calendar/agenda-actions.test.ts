@@ -288,10 +288,10 @@ describe("addJobAction: a new customer (R8, carry-in 4: never silently folded in
   // same ten digits is somebody else, never the owner of the typed +52 number.
   it("a row the phone_key superset brings back on a DIFFERENT number is nobody: no phoneOwner prompt (mutation: drop isCallerIdNumber → FAILS)", async () => {
     db.listContactsOnNumber.mockImplementation(rec("listContactsOnNumber", async () => ({
-      rows: [{ id: C1, first_name: "Ana", last_name: "García", phone: "(956) 292-1696", email_key: null, holds_shared_number: false }], truncated: false,
+      rows: [{ id: C1, first_name: "Ana", last_name: "García", phone: "(956) 555-0196", email_key: null, holds_shared_number: false }], truncated: false,
     })));
-    const r = await addJobAction(ACCT, quick({ phone: "+52 956 292 1696" }), []);
-    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+529562921696", { live: true });
+    const r = await addJobAction(ACCT, quick({ phone: "+52 956 555 0196" }), []);
+    expect(db.listContactsOnNumber).toHaveBeenCalledWith(h.REQ, ACCT, "+529565550196", { live: true });
     expect(r.ok).toBe(true);
     expect(db.createContact).toHaveBeenCalled();
   });

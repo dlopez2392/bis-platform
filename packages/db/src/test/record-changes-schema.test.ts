@@ -37,7 +37,7 @@ async function contact(c: Client, accountId: string, p: { first?: string; phone?
   const { rows: [r] } = await c.query<{ id: string }>(
     `insert into public.contacts (account_id, first_name, phone, email, custom, author_kind)
      values ($1, $2, $3, $4, $5::jsonb, 'person') returning id`,
-    [accountId, p.first ?? "Dan", p.phone ?? "(956) 292-1696", p.email ?? "  dan@example.com  ", JSON.stringify(p.custom ?? {})]);
+    [accountId, p.first ?? "Dan", p.phone ?? "(956) 555-0196", p.email ?? "  dan@example.com  ", JSON.stringify(p.custom ?? {})]);
   return r!.id;
 }
 async function refusal(c: Client, sql: string, params: unknown[] = []) {
@@ -218,13 +218,13 @@ describe("0111: what the capture writes", () => {
       const a = await seedAccount(c, "edit");
       const id = await contact(c, a.accountId, { custom: { gate: "1234" } });
       const sub = await actAsMember(c, a.accountId, a.orgId, "staff");
-      await c.query("update public.contacts set phone = '+19562921696', email = 'dan@example.com' where id = $1", [id]);
+      await c.query("update public.contacts set phone = '+19565550196', email = 'dan@example.com' where id = $1", [id]);
       expect(await changes(c, id, "update")).toEqual([
         { op: "update", field: "email", before: "  dan@example.com  ", after: "dan@example.com", author_kind: "person", author_id: sub, via: null },
-        { op: "update", field: "phone", before: "(956) 292-1696", after: "+19562921696", author_kind: "person", author_id: sub, via: null },
+        { op: "update", field: "phone", before: "(956) 555-0196", after: "+19565550196", author_kind: "person", author_id: sub, via: null },
       ]);
       await actAs(c, { org_id: a.orgId, sub });
-      await c.query("update public.contacts set phone = '+19562921696' where id = $1", [id]);
+      await c.query("update public.contacts set phone = '+19565550196' where id = $1", [id]);
       expect(await changes(c, id, "update")).toHaveLength(2);
       await actAs(c, { org_id: a.orgId, sub });
       await c.query(`update public.contacts set custom = '{"gate":"9","dog":"Rex"}'::jsonb where id = $1`, [id]);

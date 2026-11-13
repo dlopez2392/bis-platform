@@ -93,7 +93,7 @@ Read before assuming this feature is urgent:
   spoke. So this design cannot be tuned against a real robocall corpus, and must
   not pretend otherwise — every threshold below is a starting value behind an
   env var, not a measured optimum.
-- **`+19562921696` is simultaneously the top spam caller (4) and the top
+- **`+19565550196` is simultaneously the top spam caller (4) and the top
   booker (13) — ACROSS BOTH of danlo's accounts.** That pair is a cross-account
   aggregate, and this document's rule is explicitly per account (below), so the
   two numbers cannot be reconciled with a per-account query. **Corrected here
@@ -437,7 +437,7 @@ for a caller who then calls back and books.
 only on `conversation.item.input_audio_transcription.completed`, and
 `semantic_vad` lands a robot's whole ~470-character script as one turn, so
 the hangup fired at the moment the robot would have hung up anyway. Measured
-on 956 Woodworks: calls on 09-17 (no guard) and 09-18 (guard) both cost
+on the pilot client: calls on 09-17 (no guard) and 09-18 (guard) both cost
 38–56 seconds.
 
 **What changed.** `call-events.ts` now also handles the API's incremental

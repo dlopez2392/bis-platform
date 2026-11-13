@@ -28,7 +28,7 @@ const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
   ({ role, text, at: "2026-09-18T12:00:00.000Z" });
 
 const transcript: TranscriptEvent[] = [
-  t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+  t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
   t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
 ];
 
@@ -43,7 +43,7 @@ const transcript: TranscriptEvent[] = [
 // grounding failure. This transcript actually carries the quote, so the
 // tests below isolate the guard they name.
 const emailTranscript: TranscriptEvent[] = [
-  t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+  t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
   t("caller", "My email is sam at example dot com."),
 ];
 
@@ -458,7 +458,7 @@ describe("generateProposals", () => {
   it("drops a contact_field email proposal whose value does not parse as an email (mutation: skip the isValidEmail check -> FAILS)", async () => {
     const db = fakeDb();
     const badEmailTranscript: TranscriptEvent[] = [
-      t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+      t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
       t("caller", "My email address is not an email at all, sorry."),
     ];
     const n = await generateProposals({
@@ -497,17 +497,17 @@ describe("generateProposals", () => {
   // The positive twin: a real 10-digit number is stored AS SAID once it
   // parses (review R2-C1) — never its E.164, which would read as a country
   // code the caller gave and store an ambiguous number confirmed.
-  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19562921696\", FAILS)", async () => {
+  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19565550196\", FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db, contactId: "c1", blankFields: ["phone"],
       fetchImpl: modelReturning({
-        proposals: [{ kind: "contact_field", field: "phone", value: "9562921696",
+        proposals: [{ kind: "contact_field", field: "phone", value: "9565550196",
                       evidence: "Call me Tuesday morning" }],
       }),
     });
     expect(n).toBe(1);
-    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9562921696" });
+    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9565550196" });
   });
 
   // Fix-wave Minor: `fillContactBlanks` (the accept-time write) lowercases

@@ -1606,7 +1606,7 @@ In `finish-call.test.ts` add `recordLanguageSignal: vi.fn(),` to `dbMocks`, `dbM
 
 ```ts
 describe("finishCall — the caller's words become the contact's language (S-09 C5)", () => {
-  const lead = { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } };
+  const lead = { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 555 0196" } };
   const spoke = (text: string) => withLead(withTranscript(emptyCallState(), { role: "caller", text, at: "t" }), lead);
 
   it("a meaningful call in clear Spanish signals call/es as the AI at the call's end, read strictly even on an English-only line (mutation: use detectSpokenLanguage -> FAILS)", async () => {

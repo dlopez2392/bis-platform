@@ -122,10 +122,10 @@ const rpcArgs = (calls: Array<[string, ...unknown[]]>) => calls.find((c) => c[0]
 describe("readConsentState", () => {
   it("asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+    expect(await readConsentState(f.db, "a1", "sms", "+19565550196")).toEqual({ state: "allowed" });
     expect(f.calls).toEqual(expect.arrayContaining([
       ["from", "consent_events"],
-      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19565550196"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
       ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
       ["limit", 20],
@@ -134,12 +134,12 @@ describe("readConsentState", () => {
 
   it("THROWS on a read error (the gate fails closed on it; mutation: return allowed → FAILS)", async () => {
     const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
-    await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
+    await expect(readConsentState(f.db, "a1", "sms", "+19565550196")).rejects.toThrow("readConsentState failed: permission denied");
   });
 
   it("orders by occurred_at BEFORE id, both descending, in exactly that sequence (review I2a; mutation: swap the two .order() calls → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    await readConsentState(f.db, "a1", "sms", "+19562921696");
+    await readConsentState(f.db, "a1", "sms", "+19565550196");
     expect(f.calls.filter((c) => c[0] === "order")).toEqual([
       ["order", "occurred_at", { ascending: false }],
       ["order", "id", { ascending: false }],
@@ -160,17 +160,17 @@ describe("newestDecidingRow — consentStateOf's own order, exported for the Tex
 describe("readConsentHistory / readConsentEvent / readConsentActions", () => {
   it("history reads the same 20 newest deciding rows WITH evidence, note and actor, filtered by account, channel and address (review I1; mutation: drop evidence from the select → FAILS; mutation: drop the account/channel/address filter → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
-    await readConsentHistory(f.db, "a1", "sms", "+19562921696");
+    await readConsentHistory(f.db, "a1", "sms", "+19565550196");
     expect(f.calls).toEqual(expect.arrayContaining([
       ["select", "id, action, method, occurred_at, evidence, note, actor_id"],
-      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19565550196"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]], ["limit", 20],
     ]));
   });
 
   it("history THROWS on a read error — closeHoldTodo calls this with serviceDb(), so the account filter is the only tenant barrier and a swallowed error would read as an empty history (review I1; mutation: drop the throw → FAILS)", async () => {
     const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
-    await expect(readConsentHistory(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentHistory failed: permission denied");
+    await expect(readConsentHistory(f.db, "a1", "sms", "+19565550196")).rejects.toThrow("readConsentHistory failed: permission denied");
   });
 
   it("one event is read by account AND id, so another account's id reads nothing (mutation: drop the account filter → FAILS)", async () => {
@@ -276,14 +276,14 @@ describe("CUSTOMER_STOP_METHODS", () => {
 describe("recordCarrierBlock", () => {
   it("appends revoked / carrier_block with the kind as evidence, guarded unless_customer_stopped (mutation: guard 'none' → FAILS)", async () => {
     const f = fakeDb();
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
-    expect(rpcArgs(f.calls)).toMatchObject({ p_account_id: "a1", p_channel: "sms", p_address: "+19562921696", p_action: "revoked",
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: "c1", kind: "voice.textback" })).toBe("appended");
+    expect(rpcArgs(f.calls)).toMatchObject({ p_account_id: "a1", p_channel: "sms", p_address: "+19565550196", p_action: "revoked",
       p_method: "carrier_block", p_contact_id: "c1", p_evidence: { kind: "voice.textback" }, p_guard: "unless_customer_stopped" });
   });
 
   it("an address already stopped is 'already_stopped', decided inside the function's lock (spec §4.3 idempotency; mutation: map refused to appended → FAILS)", async () => {
     const f = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: "p", prior_action: "revoked", prior_method: "keyword", prior_evidence: {} }], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19565550196", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
   });
 });
 

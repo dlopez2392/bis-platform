@@ -7,7 +7,7 @@ const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
 
 describe("groundedEvidence", () => {
   const transcript = [
-    t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+    t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
     t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
   ];
 
@@ -34,7 +34,7 @@ describe("groundedEvidence", () => {
   // is what keeps the negation visible to whoever reviews the proposal.
   it("returns the whole turn even when it opens with a negation, so the negation stays visible", () => {
     const negated = [
-      t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+      t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
       t("caller", "I don't need a quote for a dining table right now."),
     ];
     expect(groundedEvidence("need a quote for a dining table", negated)).toBe(
@@ -82,7 +82,7 @@ describe("groundedEvidence", () => {
   // Only the CALLER's words are evidence. Sofía's own sentences are the
   // model quoting itself, which grounds nothing.
   it("does not accept the assistant's own words as evidence (mutation: drop the role filter -> FAILS)", () => {
-    expect(groundedEvidence("Thanks for calling 956 Woodworks", transcript)).toBeNull();
+    expect(groundedEvidence("Thanks for calling Valle Cabinet", transcript)).toBeNull();
   });
 
   // The whitespace collapse guards the MODEL rewrapping its own quote when
@@ -215,7 +215,7 @@ describe("groundedTurn", () => {
   // out, and groundedEvidence answers exactly that text.
   it("groundedEvidence equals groundedTurn(...)?.text for every existing case (mutation: return the needle -> FAILS)", () => {
     const base = [
-      t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+      t("assistant", "Thanks for calling Valle Cabinet. How can I help?"),
       t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
     ];
     const cases: [string, TranscriptEvent[], string | null][] = [
@@ -231,7 +231,7 @@ describe("groundedTurn", () => {
       ["call me Tuesday", base, "I need a quote for a dining table. Call me Tuesday morning."],
       ["call me", base, null],
       ["Call me Tuesday morning", [], null],
-      ["Thanks for calling 956 Woodworks", base, null],
+      ["Thanks for calling Valle Cabinet", base, null],
       ["Call   me\n Tuesday   morning", base, "I need a quote for a dining table. Call me Tuesday morning."],
       ["need a quote for a dining table", [
         t("caller", "I don't need a quote for a dining table."), t("assistant", "No problem, anything else?"),

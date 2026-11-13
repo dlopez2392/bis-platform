@@ -631,7 +631,7 @@ Append to `docs/superpowers/specs/2026-09-15-spam-screening-design.md`:
 only on `conversation.item.input_audio_transcription.completed`, and
 `semantic_vad` lands a robot's whole ~470-character script as one turn, so
 the hangup fired at the moment the robot would have hung up anyway. Measured
-on 956 Woodworks: calls on 09-17 (no guard) and 09-18 (guard) both cost
+on the pilot client: calls on 09-17 (no guard) and 09-18 (guard) both cost
 38–56 seconds.
 
 **What changed.** `call-events.ts` now also handles the API's incremental

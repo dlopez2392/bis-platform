@@ -8,7 +8,7 @@
 --
 --   1. A false positive is undiscoverable. Guard 2 (`decideReputation`)
 --      blocks a caller whose entire recent history on an account is silent
---      calls. 956 Woodworks took eight robocalls in a day on 2026-09-17, so
+--      calls. The pilot client took eight robocalls in a day on 2026-09-17, so
 --      this guard is live against real traffic on a real client. If it ever
 --      misfires on a person, the only evidence is a log line.
 --   2. A misconfigured number turns EVERY caller away, silently. A number

@@ -582,7 +582,7 @@ describe("decideReputation", () => {
   });
 
   it("ALLOWS the shape that actually exists in the database: 4 spam AND 13 good", () => {
-    // This is not a hypothetical. +19562921696 is simultaneously the top spam
+    // This is not a hypothetical. +19565550196 is simultaneously the top spam
     // caller and the top booker in the live `calls` table. A rule that counted
     // spam without also requiring zero good outcomes would have blocked the
     // best customer on file. This test is that clause's reason for existing.
@@ -986,7 +986,7 @@ describe("texml route — repeat-offender refusal (Guard 2)", () => {
   it("a caller with ANY good outcome is dialled, however much spam they also have", async () => {
     // The live-data shape: the top spam caller is also the top booker.
     historyMock.mockResolvedValue({ spamCalls: 4, otherCalls: 13 });
-    const xml = await get({ To: "+19565061545", From: "+19562921696" });
+    const xml = await get({ To: "+19565061545", From: "+19565550196" });
     expect(xml).toContain("<Dial");
   });
 

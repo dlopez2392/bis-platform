@@ -36,7 +36,7 @@ describe("decideReputation", () => {
   });
 
   it("ALLOWS the shape that actually exists in the database: 4 spam AND 13 good", () => {
-    // This is not a hypothetical. +19562921696 is simultaneously the top spam
+    // This is not a hypothetical. +19565550196 is simultaneously the top spam
     // caller and the top booker in the live `calls` table. A rule that counted
     // spam without also requiring zero good outcomes would have blocked the
     // best customer on file. This test is that clause's reason for existing.
@@ -83,27 +83,27 @@ describe("exempt callers", () => {
   const blockedHistory = { spamCalls: 5, otherCalls: 0 };
 
   it("never blocks an exempt caller, however bad the history", () => {
-    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
-    expect(decideReputation(blockedHistory, cfg, "+19562921696")).toEqual({ blocked: false });
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19565550196"] };
+    expect(decideReputation(blockedHistory, cfg, "+19565550196")).toEqual({ blocked: false });
   });
 
   it("still blocks a caller who is not on the list", () => {
     // Mutation: exempt everyone — this fails, and the guard would be off.
-    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19565550196"] };
     expect(decideReputation(blockedHistory, cfg, "+15550001111"))
       .toEqual({ blocked: true, reason: "repeat-spam" });
   });
 
   it("blocks as before when nothing is exempt", () => {
     const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: [] };
-    expect(decideReputation(blockedHistory, cfg, "+19562921696"))
+    expect(decideReputation(blockedHistory, cfg, "+19565550196"))
       .toEqual({ blocked: true, reason: "repeat-spam" });
   });
 
   it("does not exempt a missing caller number", () => {
     // An anonymous/withheld caller must not slip through by having no number
     // to compare — `undefined` and `null` are not a match for anything.
-    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19565550196"] };
     expect(decideReputation(blockedHistory, cfg, null)).toEqual({ blocked: true, reason: "repeat-spam" });
     expect(decideReputation(blockedHistory, cfg)).toEqual({ blocked: true, reason: "repeat-spam" });
   });
@@ -111,22 +111,22 @@ describe("exempt callers", () => {
   it("matches the WHOLE number, never a substring of one", () => {
     // A caller whose number merely contains an exempt one, or is contained by
     // it, is a different person.
-    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19562921696"] };
-    expect(decideReputation(blockedHistory, cfg, "+1956292169")).toMatchObject({ blocked: true });
-    expect(decideReputation(blockedHistory, cfg, "+195629216960")).toMatchObject({ blocked: true });
+    const cfg: ReputationConfig = { threshold: 3, windowDays: 30, exempt: ["+19565550196"] };
+    expect(decideReputation(blockedHistory, cfg, "+1956555019")).toMatchObject({ blocked: true });
+    expect(decideReputation(blockedHistory, cfg, "+195655501960")).toMatchObject({ blocked: true });
   });
 });
 
 describe("readReputationConfig exempt parsing", () => {
   it("reads one number", () => {
-    expect(readReputationConfig(env({ PHONE_SPAM_EXEMPT_CALLERS: "+19562921696" })).exempt)
-      .toEqual(["+19562921696"]);
+    expect(readReputationConfig(env({ PHONE_SPAM_EXEMPT_CALLERS: "+19565550196" })).exempt)
+      .toEqual(["+19565550196"]);
   });
 
   it("reads several, trimming the spaces an operator will type", () => {
     expect(readReputationConfig(env({
-      PHONE_SPAM_EXEMPT_CALLERS: "+19562921696, +19565550123 ,+19565550124",
-    })).exempt).toEqual(["+19562921696", "+19565550123", "+19565550124"]);
+      PHONE_SPAM_EXEMPT_CALLERS: "+19565550196, +19565550123 ,+19565550124",
+    })).exempt).toEqual(["+19565550196", "+19565550123", "+19565550124"]);
   });
 
   /**

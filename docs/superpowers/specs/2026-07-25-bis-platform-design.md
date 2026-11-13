@@ -16,7 +16,7 @@ with a deeply-integrated bilingual AI agent layer as the differentiator.
 3. Custom AI features GHL structurally can't match (BIS voice receptionist lineage).
 
 **Cadence:** No hard deadline. Quality over speed. Modules ship one at a time to danlo's
-existing clients (956 Woodworks, RLC Lumber, …); first paying client onboards at M1.
+existing clients (the pilot client, RLC Lumber, …); first paying client onboards at M1.
 
 **Non-goals (v1):** memberships/courses, social planner, ads manager, e-commerce,
 affiliate manager, WordPress hosting, 3-level agency reselling UI (architecture supports

@@ -74,9 +74,9 @@ describe("readTextsView — the Check number rule PR-1's page tests pinned, now 
   });
 
   it("the flag alone raises it too; a plainly US number with no flag is Allowed, read under its E.164 key (mutation: ignore the flag → FAILS; key the read by the phone as stored → FAILS)", async () => {
-    expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: true })).toEqual({ kind: "check_number" });
-    expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false })).toEqual({ kind: "allowed", newestId: null });
-    expect(db.readConsentHistory).toHaveBeenLastCalledWith({}, "a1", "sms", "+19562921696");
+    expect(await readTextsView({} as never, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: true })).toEqual({ kind: "check_number" });
+    expect(await readTextsView({} as never, "a1", { phone: "(956) 555-0196", phone_country_unconfirmed: false })).toEqual({ kind: "allowed", newestId: null });
+    expect(db.readConsentHistory).toHaveBeenLastCalledWith({}, "a1", "sms", "+19565550196");
   });
 });
 

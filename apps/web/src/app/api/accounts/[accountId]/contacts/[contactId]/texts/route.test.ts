@@ -28,7 +28,7 @@ const params = { params: Promise.resolve({ accountId: "a1", contactId: "c1" }) }
 beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false });
   noteOpenedApi.mockReset().mockResolvedValue(true);
-  getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+  getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
   readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
   ledgerDb.mockClear();
   maybeSingle.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago" }, error: null });
@@ -39,9 +39,9 @@ describe("GET …/texts — the Texts row's own read (spec §6: its own loading 
   it("answers the view, the account's zone and the stored phone; the contact is read under the request's own client and the ledger under the ledger client (mutation: drop the zone → FAILS; mutation: read the contact under a different client → FAILS)", async () => {
     const res = await GET(new Request("https://x.test"), params);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19562921696" });
+    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19565550196" });
     expect(getContact).toHaveBeenCalledWith(client, "a1", "c1");
-    expect(readTextsView).toHaveBeenCalledWith(LEDGER, "a1", { id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+    expect(readTextsView).toHaveBeenCalledWith(LEDGER, "a1", { id: "c1", phone: "+19565550196", phone_country_unconfirmed: false });
   });
 
   it("the Texts view reads the ledger through the ledger client, built only AFTER getContact found the contact (F-085, spec §7.3; mutation: pass db to readTextsView → FAILS)", async () => {
@@ -81,7 +81,7 @@ describe("GET …/texts — the Texts row's own read (spec §6: its own loading 
     errSpy.mockClear();
     const res = await GET(new Request("https://x.test"), params);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "UTC", phone: "+19562921696" });
+    expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "UTC", phone: "+19565550196" });
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("timezone unreadable"));
   });
 });

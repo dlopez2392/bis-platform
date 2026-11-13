@@ -82,7 +82,7 @@ async function seedCall(db: Db, accountId: string): Promise<string> {
     if (n.error) throw new Error(n.error.message);
     numberId = n.data!.id as string;
   }
-  const c = await db.from("calls").insert({ account_id: accountId, phone_number_id: numberId, caller_e164: "+19562921696" }).select("id").single();
+  const c = await db.from("calls").insert({ account_id: accountId, phone_number_id: numberId, caller_e164: "+19565550196" }).select("id").single();
   if (c.error) throw new Error(c.error.message);
   return c.data!.id as string;
 }

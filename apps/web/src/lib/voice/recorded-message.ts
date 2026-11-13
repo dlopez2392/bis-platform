@@ -6,7 +6,7 @@
 // wiring.
 //
 // WHAT THIS EXISTS TO STOP, in one row: on 2026-09-17 the only real client on
-// the platform — 956 Woodworks, live for one day — took nine calls. Eight were
+// the platform — the pilot client, live for one day — took nine calls. Eight were
 // the same scam robocall, from eight different local numbers, roughly hourly.
 // Every one was recorded as `abandoned`, so the owner's dashboard told him he
 // had lost eight customers in a day, the weekly report would have inflated

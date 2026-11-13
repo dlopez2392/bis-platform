@@ -86,7 +86,7 @@ export function SettingsFieldCards() {
             a route that does not exist. */}
         <div onClickCapture={(e) => e.preventDefault()}>
           <AlertPhoneCard
-            isAgency accountId="demo" alertPhone="+19562921696" smsNotReady
+            isAgency accountId="demo" alertPhone="+19565550196" smsNotReady
             clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
           />
         </div>
@@ -114,12 +114,12 @@ export function SettingsFieldCards() {
       </Demo>
       <Demo label="Client — ready">
         <AlertPhoneCard
-          isAgency={false} accountId="demo" alertPhone="+19562921696" smsNotReady={false}
+          isAgency={false} accountId="demo" alertPhone="+19565550196" smsNotReady={false}
         />
       </Demo>
       <Demo label="Client — number saved, not ready yet">
         <AlertPhoneCard
-          isAgency={false} accountId="demo" alertPhone="+19562921696" smsNotReady
+          isAgency={false} accountId="demo" alertPhone="+19565550196" smsNotReady
         />
       </Demo>
     </>

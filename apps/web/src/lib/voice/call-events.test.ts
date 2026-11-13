@@ -43,7 +43,7 @@ describe("processCallEvent", () => {
   });
   // ── A recording is not a caller ──────────────────────────────────────
   it("a recorded broadcast is marked and hung up on, not conversed with", async () => {
-    // Verbatim shape from the eight robocalls that reached 956 Woodworks on
+    // Verbatim shape from the eight robocalls that reached the pilot client on
     // 2026-09-17. Sofía answered every one of them helpfully for another
     // forty seconds, on the client's bill.
     const { state, actions } = await processCallEvent(emptyCallState(), ctx,

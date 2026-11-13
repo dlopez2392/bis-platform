@@ -47,7 +47,7 @@ describe("CallCardPanel", () => {
 
   it("a number whose country is certain is a tap-to-call link to its E.164; one that could be US or Mexican is plain text (mutation: always link → tel:+15512345678, FAILS)", () => {
     expect(render()).toContain('href="tel:+19565061545"');
-    expect(render({ callbackNumber: "+19562921696" })).toContain('href="tel:+19562921696"');
+    expect(render({ callbackNumber: "+19565550196" })).toContain('href="tel:+19565550196"');
     const ambiguous = render({ callbackNumber: "55 1234 5678" });
     expect(ambiguous).toContain("55 1234 5678");
     expect(ambiguous).not.toContain("tel:");
@@ -77,6 +77,6 @@ describe("CallCardPanel", () => {
   it("hasCard: a card of three nulls is no card (older calls, spam), anything set is one", () => {
     expect(hasCard(null)).toBe(false);
     expect(hasCard({ reason: null, callbackNumber: null, callerWords: null })).toBe(false);
-    expect(hasCard({ reason: null, callbackNumber: "+19562921696", callerWords: null })).toBe(true);
+    expect(hasCard({ reason: null, callbackNumber: "+19565550196", callerWords: null })).toBe(true);
   });
 });

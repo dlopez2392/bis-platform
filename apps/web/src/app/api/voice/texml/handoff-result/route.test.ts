@@ -135,7 +135,7 @@ const REQUESTED = {
   // Who to text when the dial rings out. Rides the token lookup for the same
   // reason `outcome` does: this route has no other way to know, and a second
   // read would drag the transcript across the wire for one string.
-  caller_e164: "+19562921696",
+  caller_e164: "+19565550196",
   contact_id: null,
   // What the row says when this callback arrives: `finishCall` has already
   // classified it, and a handed-off call reaches socket close `abandoned`.
@@ -186,7 +186,7 @@ beforeEach(() => {
   getBrandingMock.mockReset().mockResolvedValue({ brandName: "Bespoke", brandColor: null, logoPath: null });
   prepareTextbackMock.mockReset().mockResolvedValue({
     contactId: "ct1", conversationId: "cv1",
-    pending: { messageId: "m1", conversationId: "cv1", to: "+19562921696", from: "+19565550100", body: "b" },
+    pending: { messageId: "m1", conversationId: "cv1", to: "+19565550196", from: "+19565550100", body: "b" },
   });
   deliverTextbackMock.mockReset().mockResolvedValue(undefined);
   recordTransferFailedMock.mockReset();
@@ -423,7 +423,7 @@ describe("voice texml handoff-result route", () => {
     // never anything out of the request body.
     expect(prepareTextbackMock.mock.calls[0]![1]).toBe("acct1");
     expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({
-      callerNumber: "+19562921696",
+      callerNumber: "+19565550196",
       // The call's row: the held row's subject when this lands overnight
       // (review R2-I3; mutation: callId: null → FAILS).
       callId: "c1",

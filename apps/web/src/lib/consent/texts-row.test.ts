@@ -45,7 +45,7 @@ describe("the Texts row's lines (spec §6)", () => {
 
 describe("parseTextsResponse / textsLoadFrom — the drawer's read is parsed, not cast", () => {
   it("a good body is ready; a non-OK response or a malformed body is the error state (mutation: cast the body → the bad one is ready, FAILS)", async () => {
-    const good = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19562921696" };
+    const good = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19565550196" };
     expect(await textsLoadFrom({ ok: true, json: async () => good })).toEqual({ status: "ready", ...good });
     expect(await textsLoadFrom({ ok: false, json: async () => good })).toEqual({ status: "error" });
     expect(parseTextsResponse({ view: { kind: "maybe" }, zone: "UTC", phone: null })).toBeNull();

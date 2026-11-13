@@ -29,12 +29,12 @@ describe("applyImportBatch", () => {
       expect(groups).toEqual([{ name: "Analytical Engines", kind: "business" }]);
     }));
 
-  it("matches on phone across formatting — (956) 292-1696 is +19562921696", () =>
+  it("matches on phone across formatting — (956) 555-0196 is +19565550196", () =>
     withTestAccount(async (db, accountId) => {
-      const existing = await createContact(db, accountId, { phone: "+19562921696" }, "user_test");
+      const existing = await createContact(db, accountId, { phone: "+19565550196" }, "user_test");
       const index = await buildMatchIndex(db, accountId);
       const r = await applyImportBatch(db, accountId,
-        [{ input: { phone: "(956) 292-1696", firstName: "Dan" }, tags: [] }],
+        [{ input: { phone: "(956) 555-0196", firstName: "Dan" }, tags: [] }],
         index, "user_test", { createTags: false });
       expect(r).toEqual({ created: 0, updated: 1, flagged: 0 });
       expect((await getContact(db, accountId, existing.id))!.first_name).toBe("Dan");

@@ -194,9 +194,9 @@ describe("startAlertPhoneVerificationAction — normalization is F-009's (phoneF
   });
 
   it("normalizes a human-typed number before opening a verification (mutation: pass the raw string through → FAILS)", async () => {
-    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "(956) 292-1696", alertPhoneCountry: "US" }));
+    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "(956) 555-0196", alertPhoneCountry: "US" }));
     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith(
-      { tag: "serviceDb" }, "acct_1", "+19562921696",
+      { tag: "serviceDb" }, "acct_1", "+19565550196",
     );
   });
 });
@@ -317,10 +317,10 @@ describe("confirmAlertPhoneVerificationAction — the right code", () => {
 
   it("passes the normalized number and the raw code through to verifyAlertPhoneCode (mutation: pass the raw phone string → FAILS)", async () => {
     await confirmAlertPhoneVerificationAction(
-      "acct_1", fd({ alertPhone: "(956) 292-1696", code: "482913" }),
+      "acct_1", fd({ alertPhone: "(956) 555-0196", code: "482913" }),
     );
     expect(dbMocks.verifyAlertPhoneCode).toHaveBeenCalledWith(
-      { tag: "serviceDb" }, "acct_1", "+19562921696", "482913", "user_1",
+      { tag: "serviceDb" }, "acct_1", "+19565550196", "482913", "user_1",
     );
   });
 
@@ -354,7 +354,7 @@ describe("startAlertPhoneVerificationAction — the country beside the number", 
   it.each([
     ["52 55 1234 5678", "US"],
     ["52 899 922 1234", "US"],
-    ["1 956 292 1696", "MX"],
+    ["1 956 555 0196", "MX"],
   ])("%s under %s is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)", async (typed, country) => {
     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: typed, alertPhoneCountry: country })))
       .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });

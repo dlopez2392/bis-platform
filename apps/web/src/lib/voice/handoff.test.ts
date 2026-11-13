@@ -7,15 +7,15 @@ describe("resolveHandoffTarget", () => {
       .toEqual({ available: false, reason: "not-configured" });
   });
   it("is available when a number is set and is not ours", () => {
-    expect(resolveHandoffTarget("+19562921696", ["+19565061545"]))
-      .toEqual({ available: true, to: "+19562921696" });
+    expect(resolveHandoffTarget("+19565550196", ["+19565061545"]))
+      .toEqual({ available: true, to: "+19565550196" });
   });
   it("REFUSES a number this account owns — transferring there loops the caller back into Sofía", () => {
     expect(resolveHandoffTarget("+19565061545", ["+19565061545"]))
       .toEqual({ available: false, reason: "own-number" });
   });
   it("compares the WHOLE number: a near-miss on either end is somebody else's phone", () => {
-    // The positive fixture above (+19562921696) is six digits away from the
+    // The positive fixture above (+19565550196) is six digits away from the
     // owned number, so on its own it cannot tell exact equality from a loose
     // comparison. Two near-misses are needed, not one, and that is load
     // bearing — each catches a different sloppy comparison, and neither
@@ -43,8 +43,8 @@ describe("resolveHandoffTarget", () => {
       .toEqual({ available: false, reason: "own-number" });
   });
   it("is available when the owned list is empty", () => {
-    expect(resolveHandoffTarget("+19562921696", []))
-      .toEqual({ available: true, to: "+19562921696" });
+    expect(resolveHandoffTarget("+19565550196", []))
+      .toEqual({ available: true, to: "+19565550196" });
   });
 });
 

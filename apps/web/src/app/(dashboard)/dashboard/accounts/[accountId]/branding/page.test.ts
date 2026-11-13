@@ -146,7 +146,7 @@ async function render(search: { from?: string; locale?: string } = {}) {
 }
 
 beforeEach(() => {
-  dbFixture.alertPhone = "+19562921696";
+  dbFixture.alertPhone = "+19565550196";
   dbFixture.mailingAddress = null;
   dbFixture.mailingReads = [];
   gateFixture.ok = true;

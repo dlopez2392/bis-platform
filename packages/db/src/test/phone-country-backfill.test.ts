@@ -24,7 +24,7 @@ async function seed(c: Client) {
   const ids = {
     plusOne: await contact("plus one, could be Mexican", "+15512345678"),
     legacy: await contact("bare ten digits, both", "55 1234 5679"),
-    mcallen: await contact("McAllen", "+19562921696"),
+    mcallen: await contact("McAllen", "+19565550196"),
     caller: await contact("called in", "+15512349999"),
     texter: await contact("texted in", "(551) 234-8888"),
     mexican: await contact("already +52", "+528999221234"),
@@ -86,7 +86,7 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
     withRollback(async (c) => {
       const { account, ids } = await seed(c);
       const flag = rowsToFlag(await candidates(c, account));
-      await c.query("update contacts set phone = '+19562921697' where id = $1", [ids.plusOne]);
+      await c.query("update contacts set phone = '+19565550197' where id = $1", [ids.plusOne]);
       const res = await c.query(flagSql(flag));
       expect(res.rows.map((r: { id: string }) => r.id)).toEqual([ids.legacy]);
     }));

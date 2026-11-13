@@ -407,11 +407,11 @@ describe("sendSmsAction — the contact's phone must survive normalisation (F-00
   });
 
   it("normalizes a free-form phone to E.164 before it reaches the provider", async () => {
-    contactRow.phone = "(956) 292-1696";
+    contactRow.phone = "(956) 555-0196";
 
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
 
-    expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+19562921696" }));
+    expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+19565550196" }));
   });
 });
 
@@ -736,9 +736,9 @@ describe("sendSmsAction — the consent gate's refusals", () => {
   });
 
   it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
-    contactRow.phone = "(956) 292-1696";
+    contactRow.phone = "(956) 555-0196";
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
-    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
+    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19565550196");
   });
 
   it("a paused account's composer text says why, nothing written, nothing sent, the billing row read on the service client (M7a PR-4; mutation: fall through to composerBlockedLine → FAILS)", async () => {

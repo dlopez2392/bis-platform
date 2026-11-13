@@ -190,12 +190,12 @@ in. Do not describe a marketing list you do not have.
 a rejection reason:
 
 ```
-Hi, this is 956 Woodworks. Sorry we missed you just now, reply here
+Hi, this is Valle Cabinet. Sorry we missed you just now, reply here
 and we'll help. Reply STOP to opt out.
 ```
 
 ```
-Thanks for choosing 956 Woodworks! If you have a minute, we'd love a
+Thanks for choosing Valle Cabinet! If you have a minute, we'd love a
 quick review: https://g.page/r/... Reply STOP to opt out.
 ```
 

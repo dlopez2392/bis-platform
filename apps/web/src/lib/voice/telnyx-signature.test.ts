@@ -13,7 +13,7 @@ function makeSigned(body: string, timestamp: string) {
 }
 
 describe("verifyTelnyxSignature", () => {
-  const body = "To=%2B19565061545&From=%2B19562921696";
+  const body = "To=%2B19565061545&From=%2B19565550196";
   it("accepts a valid signature", () => {
     const fresh = String(Math.floor(Date.now() / 1000));
     const { publicKeyB64, signatureB64 } = makeSigned(body, fresh);

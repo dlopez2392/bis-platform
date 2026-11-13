@@ -392,7 +392,7 @@ export async function keepContactLanguageHintAction(
  * defaulted `false` while loading or on a failed fetch, because an inline
  * edit never bumps `retryNonce`) and never `norm.value`, the TYPED text
  * (review I1: the stored column is rarely equal to it — `phoneFields`
- * normalises to E.164, so "(956) 292-1696" is stored as "+19562921696").
+ * normalises to E.164, so "(956) 555-0196" is stored as "+19565550196").
  * `undefined` when there was no PRIOR real number to restore (a first fill
  * from empty): Undo then falls back to the ordinary `save("")`, which has
  * no ambiguity to get wrong.

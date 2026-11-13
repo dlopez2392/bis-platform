@@ -14,7 +14,7 @@ Two consequences, and the second is the one that matters:
 1. **A false positive on a real customer is undiscoverable.** Guard 2
    (`decideReputation`) blocks a caller whose entire recent history on an
    account is silent calls. If it ever misfires on a real person, the only
-   evidence is one server log line. 956 Woodworks took eight robocalls in a day
+   evidence is one server log line. The pilot client took eight robocalls in a day
    on 2026-09-17, so this guard is live against real traffic on a real client.
 2. **A misconfigured number turns every caller away, silently.** A number whose
    status is not `live`/`testing`, or an account whose voice profile is

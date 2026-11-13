@@ -2024,7 +2024,7 @@ describe("hours in Facts (spec 5.3)", () => {
     expect(factsWarnings(facts, "", { hasHours: true, hasPriceList: false }).hours).toBe("notice");
     expect(factsWarnings(facts, "", none).hours).toBe("hint");
   });
-  it.each(["Call (956) 292-1696.", "Visit us at 1200 Main St, McAllen TX 78501.", "Since 2026.", "We answer 24/7.", "Licensed, 3 trucks, 2-3 day turnaround."])(
+  it.each(["Call (956) 555-0196.", "Visit us at 1200 Main St, McAllen TX 78501.", "Since 2026.", "We answer 24/7.", "Licensed, 3 trucks, 2-3 day turnaround."])(
     "does not read %j as hours (mutation: a bare-number pattern -> FAILS)", (facts) => {
       expect(factsWarnings(facts, "", { hasHours: true, hasPriceList: true }).hours).toBeNull();
     });
@@ -2047,7 +2047,7 @@ describe("amounts in Facts or Services (C11)", () => {
   it.each(["$40", "$1,200.50 total", "40 dollars", "40 dolares", "40 dólares", "USD 40", "40 USD"])("finds %j", (s) => {
     expect(factsWarnings(s, "", { hasHours: false, hasPriceList: true }).amounts).toHaveLength(1);
   });
-  it.each(["Call (956) 292-1696.", "McAllen TX 78501", "Since 2026.", "We answer 24/7.", "Up to 150 guests."])("ignores %j", (s) => {
+  it.each(["Call (956) 555-0196.", "McAllen TX 78501", "Since 2026.", "We answer 24/7.", "Up to 150 guests."])("ignores %j", (s) => {
     expect(factsWarnings(s, "", { hasHours: false, hasPriceList: true }).amounts).toEqual([]);
   });
   it("without a price list there is no amounts flag at all (today's behaviour)", () => {

@@ -12,7 +12,7 @@ four weeks, counsel reads the wording before every account gets it. Today Sofía
 a caller the call is transcribed.
 
 No account has real call volume yet (production, 28 days to 2026-10-20: BIS 223 calls, 208 of them spam;
-Resaca 48, the demo seed; 956 Woodworks 20, all spam). A before/after trial would measure nothing, so the
+Resaca 48, the demo seed; the pilot client 20, all spam). A before/after trial would measure nothing, so the
 trial splits calls instead: on a Trial account a fair coin decides, per call, whether Sofía discloses, and
 the two halves are compared as calls arrive.
 

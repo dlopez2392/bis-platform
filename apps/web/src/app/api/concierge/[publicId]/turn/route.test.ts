@@ -63,9 +63,9 @@ async function flushAfter(): Promise<void> {
  * `importOriginal`) must be what resolves what the visitor is told.
  */
 const accountRow = {
-  name: "Rio Woodworks — trial",
+  name: "Rio Cabinets — trial",
   timezone: "America/Chicago",
-  brand_name: "Rio Woodworks",
+  brand_name: "Rio Cabinets",
 };
 
 const dbSpy = vi.hoisted(() => ({
@@ -370,12 +370,12 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     await firstTurn();
     const body = sentToModel();
     const system = body.messages[0]!.content;
-    expect(system).toContain("Rio Woodworks");
+    expect(system).toContain("Rio Cabinets");
     // MUTATION: pass `profile.persona_name` as businessName (the brief's own
     // code) — this FAILS: the prompt would say "the assistant on the website
     // for Sofía". MUTATION: add `name` to the select and pass `acct.name` —
     // the scan below finds "trial".
-    expect(system).toContain("the assistant on the website for Rio Woodworks");
+    expect(system).toContain("the assistant on the website for Rio Cabinets");
     expect(JSON.stringify(body).toLowerCase()).not.toContain("trial");
   });
 

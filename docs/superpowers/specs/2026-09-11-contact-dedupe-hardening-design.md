@@ -79,8 +79,8 @@ notices duplicate contacts months later.
 So this is not optional: a **parity test** runs a table of real inputs through both the
 database and `phoneDigits` and asserts they agree, input by input. `packages/db` tests
 run against the real database, so this compares the actual generated column rather than a
-re-implementation of it. At minimum the table covers `(956) 292-1696`, `+19562921696`,
-`956-292-1696`, `19562921696`, `9562921696`, a number with an extension, and an empty
+re-implementation of it. At minimum the table covers `(956) 555-0196`, `+19565550196`,
+`956-555-0196`, `19565550196`, `9565550196`, a number with an extension, and an empty
 string.
 
 `email_key`'s normalization is expressed once in SQL and once in TypeScript for the same

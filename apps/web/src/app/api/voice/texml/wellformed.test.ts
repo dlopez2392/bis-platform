@@ -267,7 +267,7 @@ const PROFILE = {
   business_hours: null,
 };
 const LIVE_TO = "+19565550999";
-const CALLER = "+19562921696";
+const CALLER = "+19565550196";
 
 beforeEach(() => {
   process.env.VOICE_OPENAI_PROJECT_ID = "proj_test123";
@@ -506,7 +506,7 @@ describe("every emitted TeXML document parses", () => {
     // `resolveHandoffTarget` passes `transferPhone` through untouched
     // (lib/voice/handoff.ts:36-38) — the E164 CHECK is the only thing that
     // bounds it, and it bounds the COLUMN, not this function.
-    getTransferPhoneMock.mockResolvedValue("+1956292&1696");
+    getTransferPhoneMock.mockResolvedValue("+1956555&0196");
     const xml = await handoff("tok_abc");
     expect(xml).toContain("<Dial");
     parseXmlStrict(xml);

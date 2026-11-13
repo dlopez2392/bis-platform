@@ -22,7 +22,7 @@ const FROM = "+19565550000";
 // Tue 2026-10-06 15:00 in Chicago (CDT): inside every window.
 const DAY = new Date("2026-10-06T20:00:00Z");
 const base = (over: Partial<SmsRequest> = {}): SmsRequest => ({
-  accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 292-1696", body: "See you at 3",
+  accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 555-0196", body: "See you at 3",
   contactId: "ct_1", accountZone: "America/Chicago", now: DAY, ...over,
 });
 const send = vi.fn();
@@ -179,7 +179,7 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
     async (kind) => {
       db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e1" });
       expect(await decideSms(DB, base({ kind }))).toEqual({ kind: "blocked", reason: "stopped" });
-      expect(db.readConsentState).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");
+      expect(db.readConsentState).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19565550196");
     });
 
   it("a hold blocks as held, not as stopped (mutation: map held to stopped → FAILS)", async () => {
@@ -213,28 +213,28 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
 
   it("a number from the CARRIER is not held on the contact's stored flag, at decide or at deliver (mutation: check the flag anyway → unconfirmed_number, FAILS)", async () => {
     db.readPhoneCountryFlag.mockResolvedValue(true);
-    const d = await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true }));
+    const d = await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196", numberFromCarrier: true }));
     expect(d.kind).toBe("clear");
     expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
     if (d.kind !== "clear") throw new Error("expected clear");
     expect((await deliverSms(DB, d.send)).kind).toBe("sent");
     expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
-    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
   });
 
   it("a stop or hold still blocks the carrier-number path at decide AND at deliver — the carrier bypass is the STORED FLAG only, never the ledger (mutation M8: numberFromCarrier skips readConsentState entirely → FAILS)", async () => {
     db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e5" });
-    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true })))
+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196", numberFromCarrier: true })))
       .toEqual({ kind: "blocked", reason: "stopped" });
     expect(send).not.toHaveBeenCalled();
 
     db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-01T00:00:00Z", method: "free_text", eventId: "e6" });
-    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true })))
+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196", numberFromCarrier: true })))
       .toEqual({ kind: "blocked", reason: "held" });
     expect(send).not.toHaveBeenCalled();
 
     db.readConsentState.mockResolvedValue({ state: "allowed" });
-    const cleared = await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true }));
+    const cleared = await decideSms(DB, base({ kind: "voice.textback", to: "+19565550196", numberFromCarrier: true }));
     if (cleared.kind !== "clear") throw new Error("expected clear");
     db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-06T20:00:02Z", method: "staff", eventId: "e7" });
     expect(await deliverSms(DB, cleared.send)).toEqual({ kind: "blocked", reason: "held" });
@@ -328,8 +328,8 @@ describe("sendSms: steps 8-9", () => {
     const prepare = vi.fn(async () => { order.push("prepare"); });
     const r = await sendSms(DB, base(), { prepare });
     expect(order).toEqual(["provider", "prepare", "send"]);
-    expect(prepare).toHaveBeenCalledWith({ body: `See you at 3 ${m["sms.optOut.en"]}`, to: "+19562921696", from: FROM });
-    expect(r).toEqual({ kind: "sent", providerMessageId: "p_9", to: "+19562921696", from: FROM,
+    expect(prepare).toHaveBeenCalledWith({ body: `See you at 3 ${m["sms.optOut.en"]}`, to: "+19565550196", from: FROM });
+    expect(r).toEqual({ kind: "sent", providerMessageId: "p_9", to: "+19565550196", from: FROM,
       body: `See you at 3 ${m["sms.optOut.en"]}`, billable: false, segments: 1 });
   });
 
@@ -351,7 +351,7 @@ describe("sendSms: steps 8-9", () => {
     const r = await sendSms(DB, base());
     expect(r).toMatchObject({ kind: "failed", stage: "provider", carrierBlocked: true });
     expect(db.recordCarrierBlock).toHaveBeenCalledWith(DB, {
-      accountId: "acct_1", address: "+19562921696", contactId: "ct_1", kind: "automation.sms_reminder" });
+      accountId: "acct_1", address: "+19565550196", contactId: "ct_1", kind: "automation.sms_reminder" });
   });
 
   it("another code, or a provider redirected to a developer's phone, appends nothing (mutation: drop the redirect guard → FAILS)", async () => {
@@ -421,7 +421,7 @@ describe("deliverSms: the split callers", () => {
 
   it("a forged ClearedSms without the gate's own brand is refused before any read (mutation: drop the CLEARED brand check → FAILS)", async () => {
     const forged = {
-      accountId: "acct_1", kind: "automation.sms_reminder", to: "+19562921696", from: FROM,
+      accountId: "acct_1", kind: "automation.sms_reminder", to: "+19565550196", from: FROM,
       body: "See you at 3", contactId: null, numberFromCarrier: false,
     } as unknown as ClearedSms;
     await expect(deliverSms(DB, forged)).rejects.toThrow(/not a decision the gate cleared/);
@@ -433,12 +433,12 @@ describe("deliverSms: the split callers", () => {
 describe("the stop confirmation: the only send to a stopped address (spec §4.2, plan G5)", () => {
   const STOPPED_AT = new Date(DAY.getTime() - 2 * 60_000).toISOString();
   const stopped = (eventId = "rev_1", since = STOPPED_AT) => ({ state: "stopped" as const, since, method: "keyword" as const, eventId });
-  const confirm = (over: Partial<SmsRequest> = {}) => base({ kind: "consent.stop_confirmation", body: "956 Woodworks: You won't…", answersEventId: "rev_1", numberFromCarrier: true, ...over });
+  const confirm = (over: Partial<SmsRequest> = {}) => base({ kind: "consent.stop_confirmation", body: "Valle Cabinet: You won't…", answersEventId: "rev_1", numberFromCarrier: true, ...over });
 
   it("goes through when it answers the NEWEST revoked row, under five minutes old, and is sent as written, no footer (mutation: drop the exception → blocked stopped, FAILS)", async () => {
     db.readConsentState.mockResolvedValue(stopped());
     const r = await sendSms(DB, confirm());
-    expect(r).toMatchObject({ kind: "sent", body: "956 Woodworks: You won't…" });
+    expect(r).toMatchObject({ kind: "sent", body: "Valle Cabinet: You won't…" });
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -500,8 +500,8 @@ describe("the stop confirmation: the only send to a stopped address (spec §4.2,
     // body that already reads as an opt-out instruction as already carrying
     // the disclosure, making a wrong footer: "stop_line" invisible here.
     const night = new Date("2026-10-07T08:00:00Z"); // 03:00 in Chicago
-    const d = await decideSms(DB, base({ kind: "consent.help", body: "956 Woodworks: Call or text this number for help.", now: night }));
-    expect(d.kind === "clear" && d.send.body).toBe("956 Woodworks: Call or text this number for help.");
+    const d = await decideSms(DB, base({ kind: "consent.help", body: "Valle Cabinet: Call or text this number for help.", now: night }));
+    expect(d.kind === "clear" && d.send.body).toBe("Valle Cabinet: Call or text this number for help.");
   });
 
   it("answersStop, pure: an unparseable 'since' is never within the window (mutation: treat NaN as 0 → true, FAILS)", () => {

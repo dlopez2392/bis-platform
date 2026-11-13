@@ -933,7 +933,7 @@ import { buildSystemPrompt } from "./system-prompt";
 import type { VoicePromptInput } from "./session-config";
 
 const BASE: VoicePromptInput = {
-  personaName: "Sofía", businessName: "956 Woodworks", greeting: "Hi!",
+  personaName: "Sofía", businessName: "Valle Cabinet", greeting: "Hi!",
   facts: "We build custom furniture.", services: "Tables, cabinets",
   languages: "both", bookingEnabled: false, timezone: "America/Chicago",
   slotDurationMinutes: 30, afterHours: "message_only",
@@ -952,7 +952,7 @@ describe("buildSystemPrompt medium", () => {
 
   it("says phone receptionist and phone call by default", () => {
     const p = buildSystemPrompt(BASE, NOW);
-    expect(p).toContain("the phone receptionist for 956 Woodworks");
+    expect(p).toContain("the phone receptionist for Valle Cabinet");
     expect(p).toContain("This is a phone call");
   });
 
@@ -960,7 +960,7 @@ describe("buildSystemPrompt medium", () => {
     const p = buildSystemPrompt({ ...BASE, medium: "web" }, NOW);
     expect(p).not.toContain("phone receptionist");
     expect(p).not.toContain("This is a phone call");
-    expect(p).toContain("the assistant on the website for 956 Woodworks");
+    expect(p).toContain("the assistant on the website for Valle Cabinet");
     expect(p).toContain("This is a text chat");
   });
 

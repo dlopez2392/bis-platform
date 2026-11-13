@@ -86,12 +86,12 @@ describe("0062 email_bounce / email_complaint: what the ledger accepts", () => {
     withRollback(async (c) => {
       const a = await account(c, "shape");
       const shape = { code: "23514", constraint: "consent_events_suppression_shape_check" };
-      expect(await refused(c, INSERT, [a, "sms", "+19562921696", "revoked", "email_bounce"])).toMatchObject(shape);
+      expect(await refused(c, INSERT, [a, "sms", "+19565550196", "revoked", "email_bounce"])).toMatchObject(shape);
       expect(await refused(c, INSERT, [a, "email", ADDR, "granted", "email_complaint"])).toMatchObject(shape);
       expect(await refused(c, INSERT, [a, "email", ADDR, "held", "email_bounce"])).toMatchObject(shape);
       // The shape the webhook writes is accepted, and an unrelated method on sms is untouched:
       await c.query(INSERT, [a, "email", ADDR, "revoked", "email_complaint"]);
-      await c.query(INSERT, [a, "sms", "+19562921696", "revoked", "keyword"]);
+      await c.query(INSERT, [a, "sms", "+19565550196", "revoked", "keyword"]);
     }));
 
   it("consent.ts's CONSENT_METHODS is exactly the method CHECK's list, read from the live constraint (the TypeScript twin; mutation: drop 'email_complaint' from either side → FAILS)", () =>

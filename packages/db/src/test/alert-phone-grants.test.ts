@@ -41,17 +41,17 @@ const ACCOUNTS_UPDATE_COLUMNS = [
  * cannot be dialled fails in front of the operator who typed it, not at 2 AM
  * inside a background send where the only trace is a provider error nobody
  * reads. Verified read-only against the live database before the migration was
- * written (`select '(956) 292-1696' ~ '^\+[0-9]{8,15}$'` and friends), so the
+ * written (`select '(956) 555-0196' ~ '^\+[0-9]{8,15}$'` and friends), so the
  * regex's behaviour on each of these is measured rather than assumed.
  */
 const REFUSED = [
-  "(956) 292-1696",     // the majority operator-entered shape in this database
-  "956-292-1696",
-  "9562921696",         // ten bare digits
-  "19562921696",        // eleven, no plus
-  "+1 956 292 1696",    // spaced, the way a number is read aloud
-  " +19562921696",      // a paste that brought its leading space
-  "+19562921696 ",      // ...and its trailing one
+  "(956) 555-0196",     // the majority operator-entered shape in this database
+  "956-555-0196",
+  "9565550196",         // ten bare digits
+  "19565550196",        // eleven, no plus
+  "+1 956 555 0196",    // spaced, the way a number is read aloud
+  " +19565550196",      // a paste that brought its leading space
+  "+19565550196 ",      // ...and its trailing one
   "+1234567",           // seven digits: under E.164's floor
   "+1234567890123456",  // sixteen: over E.164's ceiling
   "not a phone",

@@ -214,8 +214,8 @@ describe("resolveHandoffTarget", () => {
       .toEqual({ available: false, reason: "not-configured" });
   });
   it("is available when a number is set and is not ours", () => {
-    expect(resolveHandoffTarget("+19562921696", ["+19565061545"]))
-      .toEqual({ available: true, to: "+19562921696" });
+    expect(resolveHandoffTarget("+19565550196", ["+19565061545"]))
+      .toEqual({ available: true, to: "+19565550196" });
   });
   it("REFUSES a number this account owns — transferring there loops the caller back into Sofía", () => {
     expect(resolveHandoffTarget("+19565061545", ["+19565061545"]))
@@ -229,8 +229,8 @@ describe("resolveHandoffTarget", () => {
       .toEqual({ available: false, reason: "own-number" });
   });
   it("is available when the owned list is empty", () => {
-    expect(resolveHandoffTarget("+19562921696", []))
-      .toEqual({ available: true, to: "+19562921696" });
+    expect(resolveHandoffTarget("+19565550196", []))
+      .toEqual({ available: true, to: "+19565550196" });
   });
 });
 
@@ -352,7 +352,7 @@ it("transfer_to_human persists the intent BEFORE returning — finishCall is too
   // finishCall's database writes. If the intent were written by finishCall,
   // the action route would sometimes see no transfer and hang up on a caller
   // who had just been told they were being put through.
-  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } };
+  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19565550196" } };
   const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1");
   expect(result).toEqual({ ok: true });
@@ -371,7 +371,7 @@ it("transfer_to_human refuses when there is no call row to mark", async () => {
   // startCallRow fails open (the route's step 10), so callRowId can be null on
   // a real call. Transferring then would be unrecoverable: the action route
   // has nothing to find.
-  const c = { ...ctx, callRowId: null, handoffTarget: { available: true, to: "+19562921696" } };
+  const c = { ...ctx, callRowId: null, handoffTarget: { available: true, to: "+19565550196" } };
   const { result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(result).toEqual({ ok: false, error: expect.any(String) });
   expect(markHandoffRequestedMock).not.toHaveBeenCalled();
@@ -379,7 +379,7 @@ it("transfer_to_human refuses when there is no call row to mark", async () => {
 
 it("a database failure while marking does NOT report success to the model", async () => {
   markHandoffRequestedMock.mockRejectedValueOnce(new Error("boom"));
-  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19562921696" } };
+  const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: true, to: "+19565550196" } };
   const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
   expect(result).toEqual({ ok: false, error: expect.any(String) });
   expect(state.served).not.toContain("transferred");
@@ -594,13 +594,13 @@ For `route.test.ts` (the existing TeXML suite, which already mocks `@bis/db` who
 
 ```ts
 it("the SIP dial carries an action URL and a handoff token", async () => {
-  const xml = await get({ To: "+19565061545", From: "+19562921696" });
+  const xml = await get({ To: "+19565061545", From: "+19565550196" });
   expect(xml).toMatch(/<Dial[^>]*action="[^"]*\/api\/voice\/texml\/handoff\?t=[A-Za-z0-9_-]+"/);
   expect(xml).toContain("X-BIS-Handoff=");
 });
 it("the token in the action URL and the token on the SIP URI are the SAME token", async () => {
   // Two different tokens would mean the action route can never find the call.
-  const xml = await get({ To: "+19565061545", From: "+19562921696" });
+  const xml = await get({ To: "+19565061545", From: "+19565550196" });
   const inAction = /action="[^"]*\?t=([A-Za-z0-9_-]+)"/.exec(xml)![1];
   const inUri = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(xml)![1];
   expect(inAction).toBe(inUri);
@@ -611,7 +611,7 @@ it("a fresh token per call — two calls never share one", async () => {
   expect(a).not.toBe(b);
 });
 it("the existing X-BIS-Called header is still present and unchanged", async () => {
-  const xml = await get({ To: "+19565061545", From: "+19562921696" });
+  const xml = await get({ To: "+19565061545", From: "+19565550196" });
   expect(xml).toContain("X-BIS-Called=%2B19565061545");
 });
 ```
@@ -621,10 +621,10 @@ For the new `handoff/route.test.ts`:
 ```ts
 it("a call that asked to be transferred gets a Dial to the business number", async () => {
   getCallByHandoffTokenMock.mockResolvedValue({ id: "c1", account_id: "acct1", handoff_requested_at: "2026-09-16T00:00:00Z" });
-  getTransferPhoneMock.mockResolvedValue("+19562921696");
+  getTransferPhoneMock.mockResolvedValue("+19565550196");
   const xml = await post("tok_abc");
   expect(xml).toContain("<Dial");
-  expect(xml).toContain(">+19562921696<");
+  expect(xml).toContain(">+19565550196<");
   expect(xml).toContain('passDiversionHeader="true"');
   expect(xml).toMatch(/timeout="\d+"/);
   expect(xml).toMatch(/action="[^"]*handoff-result\?t=tok_abc"/);
@@ -650,7 +650,7 @@ it("the transfer number is read for the account the TOKEN resolved to, never one
   // The whole tenancy boundary of this feature. A transfer must never reach a
   // number belonging to a different account.
   getCallByHandoffTokenMock.mockResolvedValue({ id: "c1", account_id: "acct1", handoff_requested_at: "2026-09-16T00:00:00Z" });
-  getTransferPhoneMock.mockResolvedValue("+19562921696");
+  getTransferPhoneMock.mockResolvedValue("+19565550196");
   await post("tok_abc", { AccountSid: "acct-ATTACKER" });
   expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), "acct1");
 });

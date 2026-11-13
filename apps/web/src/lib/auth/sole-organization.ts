@@ -10,7 +10,7 @@
  * <OrganizationSwitcher/> would, but the topbar renders that for the agency
  * only (topbar.tsx), so a client had no way to reach it at all: they accepted
  * a valid invitation, signed in, and were told they had no company. That is
- * what happened to 956 Woodworks on 2026-09-16.
+ * what happened to the pilot client on 2026-09-16.
  *
  * The e2e client fixture has always called `setActive` by hand to get past
  * this (e2e/auth.setup.ts), with a comment explaining exactly why. The suite

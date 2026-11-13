@@ -725,7 +725,7 @@ describe("forwardSwitchState — the 'send calls straight to a person' switch", 
   const off = { forward_calls: false };
 
   it("off with a transfer number: unlocked, and shows the number calls will ring", () => {
-    expect(forwardSwitchState(off, "+19562921696")).toEqual({ checked: false, locked: false, reason: null, rings: "+19562921696" });
+    expect(forwardSwitchState(off, "+19565550196")).toEqual({ checked: false, locked: false, reason: null, rings: "+19565550196" });
   });
 
   it("off with no transfer number: locked, saying where to fix it (mutation: unlock it → FAILS)", () => {
@@ -737,7 +737,7 @@ describe("forwardSwitchState — the 'send calls straight to a person' switch", 
   });
 
   it("no profile: locked, naming why", () => {
-    expect(forwardSwitchState(null, "+19562921696")).toEqual({ checked: false, locked: true, reason: m["voice.forward.noProfile"], rings: null });
+    expect(forwardSwitchState(null, "+19565550196")).toEqual({ checked: false, locked: true, reason: m["voice.forward.noProfile"], rings: null });
   });
 });
 

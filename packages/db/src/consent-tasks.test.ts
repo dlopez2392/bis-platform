@@ -114,7 +114,7 @@ describe("nextBookedStart — for the CANCEL To-do", () => {
 });
 
 /** A hold on the contact's number, as readConsentEvent answers it. */
-const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19562921696", contact_id: "c1",
+const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19565550196", contact_id: "c1",
   occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null };
 
 describe("completeTask — a hold's To-do closes by deciding the hold, never by Done (review R3-I1, R3-N3; G21)", () => {
@@ -135,7 +135,7 @@ describe("completeTask — a hold's To-do closes by deciding the hold, never by 
     // The ledger reads the guard makes are scoped to THIS account too
     // (mutation: pass a different/blank accountId into either read → FAILS).
     expect(readConsentEvent).toHaveBeenCalledWith(f.db, "a1", "h1");
-    expect(readConsentHistory).toHaveBeenCalledWith(f.db, "a1", "sms", "+19562921696");
+    expect(readConsentHistory).toHaveBeenCalledWith(f.db, "a1", "sms", "+19565550196");
     // Not a stop, then its Undo: a NEW hold (H2) is newest, and the reopened To-do T1 still links H1.
     vi.mocked(readConsentHistory).mockResolvedValue([
       { ...HOLD, id: "h2", method: "staff_undo", occurred_at: "2026-10-05T12:00:00Z" },

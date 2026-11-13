@@ -39,7 +39,7 @@ async function one(c: Client, sql: string, params: unknown[]): Promise<string> {
 }
 /** Seeds, as the table owner (a direct session: automation/'sql', never refused). */
 const contact = (c: Client, a: Acct, first = "Dan") => one(c,
-  "insert into public.contacts (account_id, first_name, phone, author_kind) values ($1, $2, '(956) 292-1696', 'person') returning id",
+  "insert into public.contacts (account_id, first_name, phone, author_kind) values ($1, $2, '(956) 555-0196', 'person') returning id",
   [a.accountId, first]);
 const group = (c: Client, a: Acct, kind: "household" | "business" = "household") => one(c,
   "insert into public.client_groups (account_id, kind, name) values ($1, $2, $3) returning id", [a.accountId, kind, `Garza ${RUN} ${++seq}`]);

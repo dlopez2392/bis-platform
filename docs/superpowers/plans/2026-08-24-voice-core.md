@@ -95,7 +95,7 @@ describe("0019 voice schema", () => {
       const num = await db.from("phone_numbers")
         .insert({ account_id: accountId, e164: "+19565550112" }).select("id").single();
       const call = await db.from("calls")
-        .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })
+        .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19565550196" })
         .select("id, outcome, transcript").single();
       expect(call.error).toBeNull();
       expect(call.data!.outcome).toBe("abandoned");
@@ -353,7 +353,7 @@ describe("voice accessors", () => {
   it("call rows: start → finish; finish on a wrong id throws", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await assignPhoneNumber(db, accountId, { e164: "+19565550121" }, "user_test");
-      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19562921696" });
+      const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550196" });
       await finishCallRow(db, accountId, id, {
         outcome: "message", endedAt: new Date(), durationSecs: 45, turnCount: 6,
         transcript: [{ role: "caller", text: "hola", at: new Date().toISOString() }],
@@ -629,10 +629,10 @@ import { toE164 } from "./phone-number";
 
 describe("toE164", () => {
   it.each([
-    ["9562921696", "+19562921696"],
-    ["(956) 292-1696", "+19562921696"],
-    ["19562921696", "+19562921696"],
-    ["+19562921696", "+19562921696"],
+    ["9565550196", "+19565550196"],
+    ["(956) 555-0196", "+19565550196"],
+    ["19565550196", "+19565550196"],
+    ["+19565550196", "+19565550196"],
     ["525512345678", "+525512345678"],
   ])("%s → %s", (raw, want) => expect(toE164(raw)).toBe(want));
   it.each([["", null], ["12345", null], [null, null], [undefined, null],
@@ -756,8 +756,8 @@ Run: `cd apps/web && npx vitest run src/lib/voice`
 ```ts
 // apps/web/src/lib/voice/phone-number.ts
 // E.164 or nothing. Live-verified 2026-07-26 in the reception demo: external
-// APIs reject "9562921696", "(956) 292-1696", "956-292-1696", "19562921696";
-// only "+19562921696" passes. Every number leaving this app goes through here.
+// APIs reject "9565550196", "(956) 555-0196", "956-555-0196", "19565550196";
+// only "+19565550196" passes. Every number leaving this app goes through here.
 export function toE164(raw: string | null | undefined): string | null {
   const digits = String(raw ?? "").replace(/[^0-9]/g, "");
   if (digits.length === 10) return `+1${digits}`;
@@ -1021,7 +1021,7 @@ const base = {
   services: "Roof repair, full replacement, inspections",
   languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
-  afterHours: "hours_then_message" as const, callerNumber: "+19562921696",
+  afterHours: "hours_then_message" as const, callerNumber: "+19565550196",
 };
 const now = new Date("2027-06-01T15:00:00Z");
 
@@ -1393,7 +1393,7 @@ const ctx: ToolContext = {
   profile: { booking_enabled: true } as any,
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
-  fromEmail: null, callerNumber: "+19562921696", origin: "https://x.example",
+  fromEmail: null, callerNumber: "+19565550196", origin: "https://x.example",
   now: () => new Date("2027-06-01T12:00:00Z"),
 };
 
@@ -1419,7 +1419,7 @@ describe("find_my_booking", () => {
   it("uses caller ID when no phone arg, E.164-normalizes an explicit one", async () => {
     dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     const r1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
-    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
+    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19565550196", expect.any(String));
     expect(r1.result).toEqual({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 555-0100" });
     expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenLastCalledWith({}, "a1", "+19565550100", expect.any(String));
@@ -1444,7 +1444,7 @@ describe("capture_lead / take_message / log_transcript mutate state only", () =>
   it("take_message defaults callbackNumber to caller ID", async () => {
     const { state, result } = await runTool(emptyCallState(), ctx, "take_message", { body: "call me back" });
     expect(result).toMatchObject({ ok: true });
-    expect(state.messages[0]).toMatchObject({ body: "call me back", callbackNumber: "+19562921696" });
+    expect(state.messages[0]).toMatchObject({ body: "call me back", callbackNumber: "+19565550196" });
   });
   it("log_transcript appends and coerces role", async () => {
     const { state } = await runTool(emptyCallState(), ctx, "log_transcript", { role: "assistant", text: "hi" });
@@ -1607,7 +1607,7 @@ describe("book_appointment", () => {
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz" });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
-      expect.objectContaining({ firstName: "Ana", lastName: "Ruiz", phone: "+19562921696", source: "voice" }),
+      expect.objectContaining({ firstName: "Ana", lastName: "Ruiz", phone: "+19565550196", source: "voice" }),
       "voice", "ai");
     expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ calendarId: "cal1", contactId: "ct1" }), "voice", "ai");
@@ -2147,7 +2147,7 @@ const ctx: FinishContext = {
   db: {} as any, accountId: "a1", accountName: "Rio Roofing",
   branding: { brandName: null, brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
-  notifyEmails: ["staff@example.com"], callerNumber: "+19562921696",
+  notifyEmails: ["staff@example.com"], callerNumber: "+19565550196",
   origin: "https://x.example", profileLanguage: "both",
 };
 const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
@@ -2164,11 +2164,11 @@ beforeEach(() => {
 describe("finishCall", () => {
   it("a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row", async () => {
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
-      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19565550196" } });
     const r = await finishCall(s, ctx, meta);
     expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
     expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
-      expect.objectContaining({ firstName: "Ana", lastName: "Ruiz", phone: "+19562921696", source: "voice" }), "voice", "ai");
+      expect.objectContaining({ firstName: "Ana", lastName: "Ruiz", phone: "+19565550196", source: "voice" }), "voice", "ai");
     expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ channel: "voice", direction: "inbound" }), "voice", "ai");
     expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
@@ -2225,12 +2225,12 @@ describe("voiceCallAlertEmail", () => {
   it("carries outcome, summary and caller in both html and text", () => {
     const { html, text } = voiceCallAlertEmail({
       brand, outcome: "lead", summary: "RECORDED — Intake: captured.",
-      callerDisplay: "+19562921696", contactUrl: "https://x/dashboard/accounts/a1/contacts/ct1",
+      callerDisplay: "+19565550196", contactUrl: "https://x/dashboard/accounts/a1/contacts/ct1",
     });
     for (const out of [html, text]) {
       expect(out).toContain("lead");
       expect(out).toContain("RECORDED");
-      expect(out).toContain("+19562921696");
+      expect(out).toContain("+19565550196");
     }
     expect(html).toContain("https://x/dashboard/accounts/a1/contacts/ct1");
   });
@@ -2295,7 +2295,7 @@ describe("texml route", () => {
     expect(xml).toContain("sip:proj_test123@sip.api.openai.com;transport=tls?X-BIS-Called=%2B19565550999");
   });
   it("POST reads To from the form body", async () => {
-    const body = new URLSearchParams({ To: "+19565550888", From: "+19562921696" });
+    const body = new URLSearchParams({ To: "+19565550888", From: "+19565550196" });
     const res = await POST(new Request("https://x.example/api/voice/texml", {
       method: "POST", body, headers: { "content-type": "application/x-www-form-urlencoded" },
     }) as any);

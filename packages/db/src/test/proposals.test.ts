@@ -38,7 +38,7 @@ async function seedCall(db: SupabaseClient, accountId: string): Promise<string> 
     numberOf.set(accountId, num.data!.id as string);
   }
   const call = await db.from("calls")
-    .insert({ account_id: accountId, phone_number_id: numberOf.get(accountId)!, caller_e164: "+19562921696" })
+    .insert({ account_id: accountId, phone_number_id: numberOf.get(accountId)!, caller_e164: "+19565550196" })
     .select("id").single();
   expect(call.error, `calls insert failed: ${call.error?.message}`).toBeNull();
   return call.data!.id as string;
@@ -252,7 +252,7 @@ describe("proposals accessors", () => {
       const num = await db.from("phone_numbers").insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
       expect(num.error).toBeNull();
       const calls = await db.from("calls")
-        .insert(Array.from({ length: 203 }, () => ({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })))
+        .insert(Array.from({ length: 203 }, () => ({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19565550196" })))
         .select("id");
       expect(calls.error).toBeNull();
       const callIds = (calls.data ?? []).map((c) => c.id as string);

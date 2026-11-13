@@ -117,7 +117,7 @@ alter table public.accounts
 -- is one line: store `toE164(input)`, store NULL when it returns null, never
 -- store the raw string. Behaviour verified read-only against this database
 -- before the constraint was written, on the literal shapes the tree actually
--- holds — "(956) 292-1696" false, "+19562921696" true, " +19562921696" false,
+-- holds — "(956) 555-0196" false, "+19565550196" true, " +19565550196" false,
 -- "+1234567" false, "+1234567890123456" false, a trailing newline false
 -- (Postgres `$` is end-of-string, not end-of-line, without the `n` flag).
 --
