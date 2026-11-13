@@ -149,8 +149,8 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
   production DB URL (names read 2026-11-13: repository = `CI_*`, Clerk, OpenAI; `production` = the Supabase
   URL, the service-role key, `OPS_HEALTH_SECRET`), so this becomes the only one.
 - Who approves: danlo only; administrator bypass OFF. Residual: agents act with danlo's GitHub token and the
-  REST API can approve a pending deployment, so the click is an agent rule plus, if the owner agrees (Q4), a
-  Claude Code deny rule on `pending_deployments`. Second residual: a push-triggered job is defined by the
+  REST API can approve a pending deployment, so the click is an agent rule plus a user-level Claude Code
+  hook that blocks the approval endpoint (Q4, done outside the repo). Second residual: a push-triggered job is defined by the
   branch's own YAML; the "migration XOR pipeline change" rule (D2) stops a slip, not intent.
 - Forks: no fork run ever starts (push trigger), and environment secrets are never given to one anyway.
 - Logs: GitHub masks the secret; the scripts never echo a URL, run `{ set +x; }`, use terse verbosity for
@@ -198,7 +198,7 @@ no `continue-on-error`. A re-run of a production job is a fresh click [A5].
    OFF (agents push as you); administrator bypass OFF; deployment branches: all branches; no wait timer.
 2. In that environment only: secret `PROD_MIGRATIONS_DB_URL` = production's Session pooler URI. Never a
    repository secret, never Vercel.
-3. Decide Q1-Q6 below.
+3. Q1-Q6: answered 2026-11-13 (section 6).
 4. No ruleset change (the gate lives inside `e2e`).
 Until 1 and 2 are done, PR 5 does not merge, and production stays as today: the MCP `apply_migration` by
 hand, parity by hand. Interim rule from PR 1 on: the MCP apply of a timestamped file uses `name=<whole stem>`
@@ -280,3 +280,14 @@ the same day; read each merge's head-SHA check runs, then production's history (
 - Q4 Add a Claude Code deny rule so no agent can approve `production-migrations` through the API?
 - Q5 You are the only approver: a migration PR waits for you. Acceptable, or name a delegate?
 - Q6 "A PR adds a migration or changes the pipeline, never both" (recommended): agreed?
+
+## 6. Owner answers (2026-11-13)
+
+- Q1 bis-ci gets a migration when the PR is marked ready (D2 as written).
+- Q2 the main `postgres` Session pooler URL is `PROD_MIGRATIONS_DB_URL`; no `migrator` role.
+- Q3 a parity failure blocks the merge (D4 as written).
+- Q4 yes, and already done OUTSIDE the repo: a user-level Claude Code PreToolUse hook blocks any shell
+  command that can reach the GitHub API and names the deployment-approval endpoint. Nothing is added in the
+  repo for it.
+- Q5 danlo is the only approver.
+- Q6 agreed: a PR adds a migration OR changes the pipeline, never both (D2's plan-job refusal).
