@@ -264,6 +264,51 @@ CI first, then production.
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
 
+**The migration runner (since 2026-11-13; nothing in CI calls it yet).**
+`.github/scripts/migrations-apply.sh --target <bis-ci|production> [--dry-run|--check] FILE...`
+applies the timestamped files a branch adds. The pipeline's PR 4 will run it
+against this project, and PR 5 against production behind the owner's approval.
+- **It refuses before writing anything** when:
+  - a file on main is missing from the target's history (behind main);
+  - an applied file's content changed;
+  - a pending file's version is taken by another name;
+  - on bis-ci, a pending file is older than a version already there;
+  - on production, a pending file is not on bis-ci with the same content.
+- **How it applies.** Each pending file runs in ONE transaction: the history
+  table locked, `lock_timeout` 5 s, `statement_timeout` 10 min. Holding the
+  lock, it checks again that the version is still unrecorded and, on bis-ci,
+  that nothing newer arrived meanwhile: two runs at once serialise, and the
+  later one writes nothing ("another run applied … first"). The row it records
+  is (version, slug, [the file's exact text, a runner marker]).
+- **Nothing of the data reaches the log.** An error prints only its SQLSTATE
+  (`ERROR:  22P02`; the runner names the file and the code), NOTICE and
+  WARNING are not sent, and the migration's own query output is discarded.
+  To see the message, re-run the failing statement by hand where its data is
+  not public.
+- **Connection.** The password travels in `PGPASSWORD`, never on psql's
+  command line. It must be valid percent-encoding, and `%00` is refused,
+  because psql echoes back a password it cannot decode. TLS is required for
+  the hosted targets.
+- **When a file fails.** It leaves neither its changes nor its row; files
+  before it stay applied. Nothing is retried. A file starting with a UTF-8
+  byte-order mark is refused before anything runs.
+- **A file with its own COMMIT, END or ROLLBACK.** `migrations-plan` refuses
+  one at PR time. If one reaches the runner anyway (a manual dispatch), it
+  says "<file> ran its own transaction control: part of it may be COMMITTED
+  and it is NOT recorded" and exits 1. Whatever the file committed before
+  that point stays; nothing after it is committed (psql runs with AUTOCOMMIT
+  off). Find what it committed and repair it by hand before running again.
+- **Which rows count** (the production rows are the three forms in step 5
+  above):
+  - on production, a numbered file is found by its pair, its whole stem, or
+    its slug alone (only if exactly one such row has it), and a timestamped
+    file by its pair or its whole stem;
+  - on bis-ci, only by the pair.
+- **Content check.** Only the runner's own rows (the marker) have content to
+  compare.
+- **Targets.** `--target production` runs only inside GitHub Actions; by
+  hand, production is still step 5's MCP procedure.
+
 **What every push refuses before anything is applied (since 2026-11-13).**
 The `migrations-plan` part of the `e2e` check
 (`.github/scripts/migrations-plan.mjs`) holds no credential and reads only git.

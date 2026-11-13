@@ -45,7 +45,7 @@ stay as they are, frozen.
   `supabase db push --local` need no change [A1].
 - History: the runner (D3) records new files as `(version=<14 digits>, name=<slug>)` in BOTH projects, as the CLI
   would; a file applied by hand (MCP) before PR 5 is `(apply time, <whole stem>)`. A row COVERS a file when:
-  the pair matches; or, on PRODUCTION, its name is the whole stem (any file; bis-ci only ever has CLI pairs, and its check accepts a stem only for numbered files, so a hand-applied timestamped file on bis-ci counts as missing); or, for a LEGACY file on PRODUCTION only, its name
+  the pair matches (on bis-ci, ONLY the pair: all its rows are CLI or runner pairs); or, on PRODUCTION, its name is the whole stem (any file); or, for a LEGACY file on PRODUCTION only, its name
   is the slug alone and exactly one slug-only row has that name (A3 is false: 61 production rows are slug-only).
   Never by version alone: an MCP row's version is its apply time and could equal a new file's version; a
   version taken by another name is refused ("rename the file").
@@ -70,9 +70,9 @@ pipeline change (`.github/workflows`, `scripts/ci-*`, `scripts/migrations-*`, pa
 - Guards: `push` trigger only (forks never run here; a test pins no `pull_request`/`pull_request_target`);
   `if: github.repository == '<owner>/bis-platform'`; `CI_SUPABASE_DB_URL` on the apply step's env only; the
   runner re-validates the bis-ci pooler form and refuses production's ref (same rule as
-  `ci-migrations-applied.sh:56-68`, moved to a shared `ci-db-target.sh`); job concurrency
-  `bis-ci-migrations`, `queue: max`, never cancelled; and inside each transaction a lock on
-  `supabase_migrations.schema_migrations`, so two branches cannot interleave.
+  `ci-migrations-applied.sh:56-68`; shared `ci-db-target.sh` since PR 3, which both scripts source); job concurrency
+  `bis-ci-migrations`, `queue: max`, never cancelled; and inside each transaction the history lock SERIALISES runs
+  and an in-lock re-check (still unrecorded; nothing newer on bis-ci) KEEPS ORDER, so two branches cannot interleave.
 - Only files ADDED by the branch are applied, and only those not already recorded. A recorded file whose
   content digest differs from the branch's file is REFUSED, naming it: bis-ci is append-only.
 - Order rule, bis-ci only: a pending file's version must exceed every 14-digit version bis-ci already holds;
@@ -228,8 +228,8 @@ bash is fragile). `migrations-plan` is its own credential-free PART of the `e2e`
 
 **PR 3 — The runner** (HIGH, ~750). `.github/scripts/ci-db-target.sh` (shared target rules: `bis-ci`,
 `production`, `loopback`), `migrations-apply.sh` (D2/D3 steps; `--dry-run` lists pending and applies nothing),
-`ci-migrations-applied.sh --target production` support with D1's three row forms. Nothing in CI calls the runner
-yet. Its pending set uses the same cover rule, so no legacy file is ever re-applied on production.
+D1's three row forms (built: in the runner itself, with `--check` as the history gate for PRs 4-5, instead of a
+production mode in `ci-migrations-applied.sh`; runner rows carry a marker, so only they are digest-compared). Not in CI.
 - Tests (production matching, fake psql, rows shaped like A3's evidence): a legacy file covered by a slug-only
   row; by a stem row; a slug-only row whose slug two rows share → refused as ambiguous; a timestamped file
   covered by a hand-applied stem row and by the runner's pair, never by its slug alone. Probe: accept slug-only

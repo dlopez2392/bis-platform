@@ -23,7 +23,10 @@ const SUITE = ["src/**/*.test.ts", "e2e/**/*.test.ts", "ci/**/*.test.ts"];
 // missed here fails red in verify-app, "SUPABASE_SERVICE_ROLE_KEY missing",
 // never silently. Every pattern sits inside SUITE, so the projects partition
 // it: `vitest run` with no `--project` (what `pnpm check` runs) runs both.
-const NEEDS_DATABASE = ["src/**/*.live.test.ts", "src/**/actions.returning-lead.test.ts"];
+// ci/*.live.test.ts (2026-11-13): the migration runner's tests against a real
+// Postgres, which they find through the same SUPABASE_DB_URL (verify-db's
+// stack) and refuse unless it is loopback.
+const NEEDS_DATABASE = ["src/**/*.live.test.ts", "src/**/actions.returning-lead.test.ts", "ci/**/*.live.test.ts"];
 
 export default defineConfig({
   test: {
