@@ -203,9 +203,22 @@ answer Q3); the schema stays applied and recorded, and the fix is forward (a
 new migration, or a reasoned line in that file in a reviewed PR). The
 histories are compared first, NORMALISED (each row becomes the file it covers
 by the runner's D1 rule, so production's slug-only and stem rows equal
-bis-ci's pairs): if they differ, another PR's migration is between bis-ci and
-production, the schema is NOT judged (a notice names each migration), and the
-next apply whose histories match judges it. The by-hand read below stays for
+bis-ci's pairs). Then:
+- **A row on PRODUCTION that bis-ci lacks FAILS** ("production holds <stem>
+  that bis-ci does not: drift"): bis-ci always comes first, so this is a
+  hand change on production. Investigate with `fingerprint-detail.sql` on both;
+  a known, reasoned row goes in `allowed-differences.txt` as
+  `history | <stem> | reason`.
+- **A row on bis-ci alone** (another PR between the two projects) means the
+  schema is NOT judged: a notice names each migration. **This repeats on EVERY
+  apply until the row is resolved**, so a PR closed unmerged after its
+  bis-ci apply silently stops parity for good: list its stem in
+  `allowed-differences.txt` (`history | <stem> | reason`, ideally beside the
+  reverting migration) or let the migration reach production.
+- **A file applied to production by hand** (the MCP fallback, section 6: a
+  whole-stem row with no runner digest) is accepted only when bis-ci's
+  recorded copy equals the file AND parity is judged and passes; a notice
+  says it was applied by hand. If parity cannot be judged, it is refused. The by-hand read below stays for
 an investigation or for when CI cannot run.
 
 By hand: run the same read on both projects and diff. Expected differences in the
@@ -299,7 +312,10 @@ CI first, then production.
    - parity fails: step 6.
    - a later push to the same branch asks for the click again (the runner
      applies nothing new; until the pipeline's PR 6).
-   **Fallback, only when CI cannot run:** the MCP procedure (pre-flight read
+   **Fallback, only when CI cannot run:** the MCP procedure (for an OPEN PR:
+   afterwards Re-run failed jobs; the runner skips the file as applied, and
+   parity accepts the hand-applied row only when bis-ci holds the same bytes
+   and parity is judged and passes) (pre-flight read
    by `name`, `apply_migration`, post-apply verification, md5 compare for
    anything with a backslash escape). For a timestamped file pass `name` =
    the file's WHOLE stem (`20261114093000_work_queue`, never `work_queue`):

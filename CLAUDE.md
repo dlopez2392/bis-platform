@@ -68,9 +68,14 @@
   it, owner answer Q3) and production's full history. No other job,
   workflow or test holds a production database credential; `seed-demo.yml`
   and `ops-health.yml` keep their `production` environment secrets (main
-  only). The required `e2e` check is red until production holds every
-  migration of the branch, so the app never deploys ahead of its schema. A
-  missing environment or secret fails that job closed, naming it. Never
+  only). The required `e2e` check is pending while that job waits for the
+  click, and red on a rejection, a timeout or a failure, so a migration PR
+  cannot merge, and the app never deploys ahead of its schema. A missing
+  environment or secret fails that job closed, naming it. After the MCP
+  FALLBACK (below) an open PR can still merge: its next run accepts the
+  hand-applied row (whole stem, no digest) only when bis-ci holds the file
+  byte for byte AND parity is judged and passes, saying it was applied by
+  hand. Never
   approve that environment through the API (a hook blocks it). Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the six live web tests all throw before connecting

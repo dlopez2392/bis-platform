@@ -306,7 +306,7 @@ done
 PARITY_DIR="packages/db/supabase/parity"
 _trim() { local x="$1"; x="${x#"${x%%[![:space:]]*}"}"; printf '%s' "${x%"${x##*[![:space:]]}"}"; }
 normalised_history() {
-  local p="$1" rules="$2" f nm k
+  local p="$1" rules="$2" f nm k out
   local -n rows_="${p}_PAIR"
   local -A used=()
   for f in "$DIR"/*.sql; do
@@ -318,8 +318,9 @@ normalised_history() {
   for k in "${!rows_[@]}"; do
     [ -n "${used[$k]:-}" ] && continue
     nm="${k#*|}"
-    [ -n "${ALLOW_HIST[$nm]:-}" ] && continue
-    if [[ "$nm" =~ ^[0-9]+_ ]]; then printf '%s\n' "$nm"; else printf '%s\n' "${k%%|*}_$nm"; fi
+    if [[ "$nm" =~ ^[0-9]+_ ]]; then out="$nm"; else out="${k%%|*}_$nm"; fi
+    [ -n "${ALLOW_HIST[$nm]:-}" ] || [ -n "${ALLOW_HIST[$out]:-}" ] && continue
+    printf '%s\n' "$out"
   done
 }
 read_fingerprint() {
@@ -356,10 +357,19 @@ run_parity() {
   FP_QUERY="begin transaction read only; set local lock_timeout = '5s'; set local statement_timeout = '5min'; ${body%"$final"}select kind, key, coalesce(md5(def), '-') from items; commit;"
 
   load_history "$BISCI_CONN" "$BISCI_PASS" B "bis-ci"
+  local -a by_hand=()
   for name in "${sorted[@]}"; do
     [ -n "$name" ] || continue
     s="${name%.sql}"; k="${s%%_*}|${s#*_}"; d="$(md5_of "$DIR/$name")"
-    [ "${T_PAIR[$k]:-}" = "$d" ] || refuse "$DIR/$name is not recorded with the file's content on production."
+    cover T "$name"
+    if [ -n "$COVER" ] && [ "$COVER" != "*" ]; then recorded_digest T "$COVER"; else RECORDED=""; fi
+    if [ "$RECORDED" = "$d" ]; then
+      :
+    elif [ "$RECORDED" = "-" ] && [ "${COVER#*|}" = "$s" ]; then
+      by_hand+=("$DIR/$name")
+    else
+      refuse "$DIR/$name is not recorded with the file's content on production."
+    fi
     [ "${B_PAIR[$k]:-}" = "$d" ] || refuse "$DIR/$name is not recorded with the file's content on bis-ci."
   done
   [ "$problems" -eq 0 ] || return 1
@@ -367,11 +377,30 @@ run_parity() {
   local work_p; work_p="$(mktemp -d)" || { echo "::error::Could not make a temporary directory."; return 1; }
   normalised_history T production | LC_ALL=C sort -u > "$work_p/t.hist"
   normalised_history B bis-ci | LC_ALL=C sort -u > "$work_p/b.hist"
+  # Production holding a migration bis-ci does not is DRIFT (bis-ci always
+  # comes first), never "another PR in flight": it fails.
+  local drift
+  drift="$(LC_ALL=C comm -23 "$work_p/t.hist" "$work_p/b.hist")"
+  if [ -n "$drift" ]; then
+    while IFS= read -r line; do
+      echo "::error::Parity: production holds $line that bis-ci does not: drift. Investigate with fingerprint-detail.sql on both (runbook section 5); a known, reasoned row goes in $allowed as \`history | $line | reason\`."
+    done <<< "$drift"
+    rm -rf "$work_p"; return 1
+  fi
+  # bis-ci alone holding a migration is another PR between the two projects
+  # (or one closed unmerged): the schema is not judged.
   if ! cmp -s "$work_p/t.hist" "$work_p/b.hist"; then
-    echo "::notice::Parity not judged: the histories differ, so another migration is between bis-ci and production. The next apply whose histories match judges the schema. The newly applied files are recorded with the same content on both."
-    LC_ALL=C comm -23 "$work_p/t.hist" "$work_p/b.hist" | sed 's/$/ (production only)/; s/^/  - /'
-    LC_ALL=C comm -13 "$work_p/t.hist" "$work_p/b.hist" | sed 's/$/ (bis-ci only)/; s/^/  - /'
-    rm -rf "$work_p"; return 0
+    rm -rf "$work_p"
+    if [ "${#by_hand[@]}" -gt 0 ]; then
+      for name in "${by_hand[@]}"; do
+        echo "::error::$name was applied to production by hand, and parity could not be judged (bis-ci holds migrations production does not), so nothing vouches for its content there. Resolve the bis-ci-only rows below, then Re-run failed jobs."
+      done
+      LC_ALL=C comm -13 <(LC_ALL=C sort -u <(normalised_history T production)) <(LC_ALL=C sort -u <(normalised_history B bis-ci)) | sed 's/$/ (bis-ci only)/; s/^/  - /'
+      return 1
+    fi
+    LC_ALL=C comm -13 <(LC_ALL=C sort -u <(normalised_history T production)) <(LC_ALL=C sort -u <(normalised_history B bis-ci)) | sed 's/$/ (bis-ci only)/; s/^/  - /'
+    echo "::notice::Parity not judged: bis-ci holds the migrations listed above that production does not (another PR between the two, or one closed unmerged). This repeats on every apply until each row above is listed in $allowed (\`history | <stem> | reason\`) or its migration reaches production. The newly applied files are recorded with the same content on both."
+    return 0
   fi
 
   read_fingerprint "$DB_CONN" "$DB_PASS" production "$work_p/t.fp" || { rm -rf "$work_p"; return 1; }
@@ -396,6 +425,9 @@ run_parity() {
     echo "::error::Parity: production and bis-ci differ in $differ item(s), listed above by kind and key (never a definition). The schema is applied and recorded; the merge is blocked. Fix forward with a new migration, or allow the item in $allowed with its reason in a reviewed PR (runbook section 5)."
     return 1
   fi
+  for name in "${by_hand[@]}"; do
+    echo "::notice::$name was applied to production by hand (the MCP fallback, runbook section 6): its row carries no content digest, so its content is vouched for by bis-ci's recorded copy and this parity, which passed."
+  done
   echo "Parity: production matches bis-ci (${#ALL[@]} item(s) compared; $allowedn allowed difference(s), each listed above)."
 }
 
