@@ -81,7 +81,10 @@ function code(f: string, text?: string): string {
 }
 
 const webSources = () => walk(WEB_SRC).filter((f) => !isTest(f));
-const dbSources = () => walk(DB_SRC).filter((f) => !isTest(f));
+/** packages/db/src/database.types.ts is GENERATED from the migrations (`types:gen`): it declares every
+ *  table and column the schema holds, retired ones included, and contains no code that reaches them. */
+const isGeneratedTypes = (f: string) => rel(f) === "packages/db/src/database.types.ts";
+const dbSources = () => walk(DB_SRC).filter((f) => !isTest(f) && !isGeneratedTypes(f));
 
 /** Every module specifier a file imports, re-exports or loads lazily. */
 const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g;
