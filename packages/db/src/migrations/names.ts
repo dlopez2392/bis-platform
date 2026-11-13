@@ -24,6 +24,13 @@
 /** The last numbered migration. No numbered file after it is accepted. */
 export const LEGACY_LAST = 116;
 
+/**
+ * The first second of timestamped names (the switch, 2026-11-13 UTC). An
+ * earlier version is a typo or a copied name, and would sort among, or ahead
+ * of, migrations that production already has.
+ */
+export const TIMESTAMPED_FROM = "20261113000000";
+
 /** How far ahead of the clock a timestamp may be (a machine whose clock runs fast). */
 const FUTURE_SLACK_MS = 24 * 60 * 60 * 1000;
 
@@ -66,6 +73,9 @@ export function parseMigrationFile(file: string): MigrationFile | { error: strin
     return { error: `${file}: a new migration's version is a 14-digit UTC timestamp (YYYYMMDDHHMMSS): ${NEW_FILE_HINT}` };
   }
   if (!timestampOf(version)) return { error: `${file}: ${version} is not a real UTC date and time` };
+  if (version < TIMESTAMPED_FROM) {
+    return { error: `${file}: ${version} is before ${TIMESTAMPED_FROM}, when timestamped names began: ${NEW_FILE_HINT}` };
+  }
   return { file, stem, version, name, kind: "timestamped" };
 }
 
@@ -77,6 +87,7 @@ export function parseMigrationFile(file: string): MigrationFile | { error: strin
 export function checkMigrationDirectory(files: readonly string[], now: Date): string[] {
   const problems: string[] = [];
   const byVersion = new Map<string, string[]>();
+  const bySlug = new Map<string, MigrationFile[]>();
   for (const file of files.filter((f) => f.endsWith(".sql"))) {
     const parsed = parseMigrationFile(file);
     if ("error" in parsed) {
@@ -84,12 +95,22 @@ export function checkMigrationDirectory(files: readonly string[], now: Date): st
       continue;
     }
     byVersion.set(parsed.version, [...(byVersion.get(parsed.version) ?? []), file]);
+    bySlug.set(parsed.name, [...(bySlug.get(parsed.name) ?? []), parsed]);
     if (parsed.kind === "timestamped" && timestampOf(parsed.version)!.getTime() > now.getTime() + FUTURE_SLACK_MS) {
       problems.push(`${file}: its timestamp is more than a day in the future; ${NEW_FILE_HINT}`);
     }
   }
   for (const [version, named] of byVersion) {
     if (named.length > 1) problems.push(`version ${version} is used more than once: ${named.join(", ")}`);
+  }
+  // A timestamped file's slug is unique across the whole directory. Production
+  // records 61 legacy migrations (0032, 0042-0045, 0060-0115) by slug alone,
+  // so a reused slug would make those rows ambiguous. Two LEGACY files that
+  // already share one (0026 and 0047, automations_b) are grandfathered.
+  for (const [slug, sharing] of bySlug) {
+    if (sharing.length > 1 && sharing.some((m) => m.kind === "timestamped")) {
+      problems.push(`the slug "${slug}" is used more than once (${sharing.map((m) => m.file).join(", ")}): a new migration's slug must be unique`);
+    }
   }
   for (let n = 1; n <= LEGACY_LAST; n++) {
     const version = String(n).padStart(4, "0");

@@ -15,12 +15,16 @@
 # the checked-out tree has a row in bis-ci's
 # supabase_migrations.schema_migrations with the same PAIR (version, name):
 # the numeric prefix and the rest of the stem, which is what `supabase db
-# push` records. A numbered file (0001..0116) is also found by a row whose name
-# is its whole stem: production's MCP rows, whose version is the moment of the
-# apply. Never by version alone (since 2026-11-13, when new files became
-# timestamped, YYYYMMDDHHMMSS_slug.sql): an MCP row's apply timestamp can equal
-# a new file's version, and a row with the file's version under another name is
-# another migration, reported as such. A row bis-ci holds that this tree does
+# push` records (all 116 of bis-ci's legacy rows have this form, read in the
+# review of #365). A numbered file (0001..0116) is also found by a row whose
+# name is its whole stem, the form of SOME of production's MCP rows (whose
+# version is the moment of the apply). The other 61 of production's legacy rows
+# (0032, 0042-0045, 0060-0115) record the slug alone; matching those is the
+# production check's job (plan PR 3), not this bis-ci read. Never by version
+# alone (since 2026-11-13, when new files became timestamped,
+# YYYYMMDDHHMMSS_slug.sql): an MCP row's apply timestamp can equal a new file's
+# version, and a row with the file's version under another name is another
+# migration, reported as such. A row bis-ci holds that this tree does
 # not match (another branch applied its migration first) is reported and is
 # NOT a failure. It does not check production: e2e holds no production
 # credential, and must not.
@@ -93,7 +97,8 @@ fi
 # could land on one and the read on another, read-write. A single query
 # string holding begin…commit is one transaction, kept on one connection by
 # either pooler. (psql 15+ prints every statement's result from one -c; -q
-# drops the BEGIN/COMMIT tags, and only digit lines are read below anyway.)
+# drops the BEGIN/COMMIT tags, and only `<digits>|<name>` rows are read below
+# anyway.)
 if ! applied_raw="$(psql "$db_url" -X -q -tA -v ON_ERROR_STOP=1 \
   -c "begin transaction read only; select version, name from supabase_migrations.schema_migrations order by version; commit;")"; then
   echo "::error::Could not read the CI project's migration history (supabase_migrations.schema_migrations); psql's own message is above. A gate that cannot check is red, not skipped: re-run once, and if it fails again, check the CI project (docs/runbooks/ci-supabase-project.md)."

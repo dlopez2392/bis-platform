@@ -6,6 +6,10 @@ import { createMigrationFile } from "./create";
 
 // `pnpm --filter @bis/db migration:new <slug>` (./new-run.ts) writes the next
 // migration file. Run here against a scratch directory, never the real one.
+//
+// In a zone that is not UTC (see names.test.ts): CI's runners are UTC, where a
+// local-time clock reading would pass unnoticed.
+process.env.TZ = "Asia/Kolkata";
 
 const NOW = new Date(Date.UTC(2026, 10, 13, 18, 30, 5));
 let dir = "";
@@ -39,6 +43,19 @@ describe("createMigrationFile", () => {
   it("refuses a bad slug and writes nothing", () => {
     expect(() => createMigrationFile(dir, "Bad-Slug", NOW)).toThrow(/slug/);
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("refuses a slug a timestamped file already has: running it twice makes one file, not two a second apart (mutation: drop the slug check → FAILS)", () => {
+    createMigrationFile(dir, "work_queue", NOW);
+    const later = new Date(NOW.getTime() + 1000);
+    expect(() => createMigrationFile(dir, "work_queue", later)).toThrow(/20261113183005_work_queue\.sql/);
+    expect(readdirSync(dir)).toEqual(["20261113183005_work_queue.sql"]);
+  });
+
+  it("refuses a slug a NUMBERED file has: production records 61 legacy migrations by slug alone, so a reused slug would be ambiguous there", () => {
+    writeFileSync(join(dir, "0115_owner_line.sql"), "select 1;\n");
+    expect(() => createMigrationFile(dir, "owner_line", NOW)).toThrow(/0115_owner_line\.sql/);
+    expect(readdirSync(dir)).toEqual(["0115_owner_line.sql"]);
   });
 
   it("refuses a second file in the same second with another slug: one version, one file", () => {

@@ -217,26 +217,45 @@ CI first, then production.
    `YYYYMMDDHHMMSS_slug.sql`** (the UTC second it was created), never
    `NNNN_*.sql`: two branches kept taking the same next number. `0001`..`0116`
    keep their names; `packages/db/src/migrations/directory.test.ts` (in
-   `verify`) refuses a new numbered file, a reused version and a missing
-   numbered one. Legacy names sort before every timestamped one, so the
+   `verify`) refuses a new numbered file, a reused version, a missing
+   numbered one, a timestamp before `20261113000000` or more than a day
+   ahead, and a new file whose slug another file already has (production
+   records 61 legacy migrations by slug alone, step 5). Legacy names sort before every timestamped one, so the
    order of every build is unchanged.
 2. On the migration's branch, with main merged in: `-f step=push-dry-run`
    dispatched with `--ref <branch>` must list exactly the one new file; then
-   `-f step=push` on the same ref. If the dry run refuses the file because the
-   CI project already holds a LATER version (another branch's migration got
-   there first; the CLI then wants `--include-all`, which `db:push:ci`
-   refuses on purpose) [assumption about CLI 2.109.1, unconfirmed], give the
-   file a new version: `migration:new` again, move the SQL into it, delete
-   the old file. It has been applied nowhere, so that is not an edit.
+   `-f step=push` on the same ref. **Until the pipeline's PR 4 (CI applies to
+   bis-ci itself), schema branches still serialise here**, because `db push`
+   compares the CI project's WHOLE history with the branch's files. Two cases:
+   - **Another branch's migration is on the CI project but not yet on main**
+     (the common one). The dry run refuses with "Remote migration versions not
+     found in local migrations directory." Wait for that branch to merge, merge
+     main into yours, and dispatch again. **NEVER run `supabase migration
+     repair` against the CI project** to get past it: it would delete the
+     other branch's history row, and that branch's e2e check would go red
+     while its schema stayed.
+   - **The CI project holds a LATER version than your file** (that branch is
+     merged and you merged main, but your file is older). The CLI asks for
+     `--include-all` (confirmed in CLI 2.109.1, review of #365), which
+     `db:push:ci` refuses on purpose. Give the file a new version:
+     `migration:new` with a new slug, move the SQL into it, delete the old
+     file. It has been applied nowhere, so that is not an edit.
 3. Post-apply checks of the new objects on the CI project (`ci:sql` with a
    read-only file); for a constraint or function with a backslash escape, the
    md5 of its stored definition against the file's.
 4. The branch's CI green on its head SHA (both jobs, read from the check runs).
 5. Production: the existing MCP procedure (pre-flight read by `name`,
    `apply_migration`, post-apply verification, md5 compare for anything with a
-   backslash escape). The MCP's `name` is the file's WHOLE stem
-   (`20261114093000_work_queue`), as it always was for numbered files
-   (`0115_owner_line`): that is how the history checks recognise an MCP row.
+   backslash escape). **For a timestamped file, pass `name` = the file's
+   WHOLE stem** (`20261114093000_work_queue`, never `work_queue`). The MCP
+   records its own apply time as the version, so the stem in `name` is the
+   only link from the row to the file. Do NOT copy the habit of 0032,
+   0042–0045 and 0060–0115, which were applied with the slug alone (0115 is
+   `(20261111035059, owner_line)`, read in the review of #365). Those 61 rows
+   are matched to their files by slug, which is unique among them. The other
+   legacy rows are the stem form (0012–0031, 0033–0041, 0046–0059, 0116,
+   plus an extra `0048_accounts_mailing_address_check_escapes`), and
+   0001–0011 are the CLI's form (`0001`, `tenancy`).
 6. Parity (section 5).
 7. Ledger: `<stem> APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 8. Merge.
@@ -265,7 +284,9 @@ decision. It compares every
 `packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
 project's `supabase_migrations.schema_migrations` by the pair (version, name)
 the CLI records (since 2026-11-13; a numbered file is also found by a row
-whose name is its whole stem, the MCP's form), and fails naming each file that
+whose name is its whole stem, the form of SOME of production's MCP rows; all
+116 of this project's legacy rows are the CLI's pair, read in the review of
+#365), and fails naming each file that
 is missing, with this section as the fix. A row with the file's version under
 another name is another migration and is named as such: give this file a new
 version with `migration:new`. A row this project holds that the branch lacks
