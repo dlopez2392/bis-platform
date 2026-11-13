@@ -234,6 +234,9 @@ const RSA_KEY = rsaKey(`"kid":"${CLERK_KID}",`);
 const restEnv = (keys: string[]) =>
   `PGRST_DB_ANON_ROLE=anon\nPGRST_JWT_SECRET={"keys":[${keys.join(",")}]}\nPGRST_ADMIN_SERVER_PORT=3001\n`;
 
+/** The one sysctl the script writes on the runner's OWN namespace. */
+const RESERVE_LINE = "sysctl -w net.ipv4.ip_local_reserved_ports=54320-54329 [netns=host]";
+
 type Run = {
   status: number | null; output: string; log: string[]; githubEnv: string; githubPath: string;
   /** The config.toml the stack was started with, or "" if it never started. */
@@ -268,6 +271,10 @@ function run(script: string, extraEnv: Record<string, string> = {}, args: string
     RUNNER_TEMP: toBashPath(runnerTemp),
     GITHUB_ENV: toBashPath(githubEnv),
     GITHUB_PATH: toBashPath(githubPath),
+    // Pinned, not inherited: the script reserves the stack's ports only on a
+    // runner, so an inherited value made these cases pass on a developer's
+    // machine and fail in CI (PR #357's second run).
+    GITHUB_ACTIONS: "true",
     ...extraEnv,
   });
   const r = spawnSync(bash, [script, ...args], { env, encoding: "utf8", cwd: REPO });
@@ -394,7 +401,7 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     expect(r.log).toContain("sudo -n nsenter -t 4242 -n sysctl -w net.ipv4.tcp_tw_reuse=1");
     expect(r.log).toContain("sudo -n nsenter -t 4242 -n sysctl -w net.ipv4.ip_local_port_range=1024 65000");
     // Nothing written on the runner's own namespace instead.
-    expect(r.log.filter((l) => /^sysctl -w .*\[netns=host\]$/.test(l))).toEqual([]);
+    expect(r.log.filter((l) => /^sysctl -w .*\[netns=host\]$/.test(l))).toEqual([RESERVE_LINE]);
     expect(r.output).toMatch(/::notice::.*tcp_tw_reuse=1.*ip_local_port_range=1024-65000/);
   });
 
@@ -414,7 +421,7 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     const r = run(STACK_SCRIPT, { FAKE_KONG_PID: pid });
     expect(r.status).not.toBe(0);
     expect(r.output).toMatch(/::error::.*supabase_kong_db.*pid/);
-    expect(indexOf(r.log, /^sysctl /)).toBe(-1);
+    expect(r.log.filter((l) => l.startsWith("sysctl ") && l !== RESERVE_LINE)).toEqual([]);
     expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
     expect(r.githubEnv).toBe("");
   });
@@ -447,6 +454,31 @@ describe("ci-local-supabase.sh: every failure is loud, and leaves verify no valu
     expect(r.output).toMatch(/::error::.*Postgres 15.*17/);
     expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
     expect(r.githubEnv).toBe("");
+  });
+
+  // 54321-54324 sit inside the kernel's range for outgoing connections, so a
+  // runner's own socket can hold one while the images pull and Docker then
+  // cannot bind it (PR #357's first run). Reserved on the runner's own
+  // namespace, before the stack starts; nowhere but a runner.
+  it("on a runner, reserves the stack's host ports as root before `supabase start` (mutation: reserve after the start → FAILS)", () => {
+    const r = run(STACK_SCRIPT);
+    expect(r.status, r.output).toBe(0);
+    const reserve = r.log.indexOf(RESERVE_LINE);
+    expect(reserve).toBeGreaterThan(-1);
+    expect(indexOf(r.log, /^supabase start /)).toBeGreaterThan(reserve);
+    expect(r.log).toContain("sudo -n sysctl -w net.ipv4.ip_local_reserved_ports=54320-54329");
+  });
+
+  it("off a runner, writes no sysctl on the machine's own namespace (mutation: drop the GITHUB_ACTIONS test → FAILS)", () => {
+    const r = run(STACK_SCRIPT, { GITHUB_ACTIONS: "" });
+    expect(r.status, r.output).toBe(0);
+    expect(r.log.filter((l) => /\[netns=host\]$/.test(l))).toEqual([]);
+  });
+
+  it("a runner that refuses the reservation still starts the stack (mutation: drop `|| true` → FAILS)", () => {
+    const r = run(STACK_SCRIPT, { FAKE_SYSCTL_W_EXIT: "1" });
+    expect(r.log).toContain(RESERVE_LINE);
+    expect(indexOf(r.log, /^supabase start /)).toBeGreaterThan(-1);
   });
 
   it("stops when `supabase start` fails", () => {

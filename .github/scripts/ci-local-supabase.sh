@@ -168,7 +168,7 @@ started_at=$SECONDS
 # Rare with two stacks a push; five stacks a push made it worth closing.
 # Reserving the ports keeps the kernel from handing them out; a listener may
 # still bind them. Runner only, best effort: a machine with no passwordless
-# sudo (a developer's, the tests' fake PATH) skips it.
+# sudo, and any machine that is not a runner, skips it.
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && command -v sudo >/dev/null 2>&1; then
   sudo -n sysctl -w net.ipv4.ip_local_reserved_ports=54320-54329 >/dev/null 2>&1 || true
 fi
