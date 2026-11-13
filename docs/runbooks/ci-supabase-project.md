@@ -184,7 +184,11 @@ fixture account.
 
 ## 5. Parity with production
 
-Run the same read on both projects and diff:
+Run the same read on both projects and diff. Expected differences in the
+`migration-history` diff (not drift): production's 61 slug-only rows (0032,
+0042-0045, 0060-0115) print as the bare slug (`owner_line`) against CI's
+`0115_owner_line`, and production carries one extra row,
+`0048_accounts_mailing_address_check_escapes`. Anything else is a finding.
 
 - CI: `-f step=fingerprint` (and `migration-history`), from the artifact.
 - Production: the orchestrator pastes `packages/db/supabase/parity/fingerprint.sql`

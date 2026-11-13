@@ -59,7 +59,10 @@
   run first. New migration files are `YYYYMMDDHHMMSS_slug.sql` (UTC),
   created by `pnpm --filter @bis/db migration:new <slug>` (since
   2026-11-13); `0001`..`0116` keep their numbers and verify refuses a new
-  numbered file. Every new migration goes to the CI project FIRST (the
+  numbered file. A production apply through the Supabase MCP passes `name` =
+  the file's WHOLE stem (`20261114093000_work_queue`), never the slug alone
+  (0060..0115 were applied slug-only; do not copy that). Every new migration
+  goes to the CI project FIRST (the
   `ci-project-setup.yml` workflow), then production, then a parity check
   (`docs/runbooks/ci-supabase-project.md`). The `e2e` check enforces the
   first part: its e2e-migrations part fails, naming each file, when a

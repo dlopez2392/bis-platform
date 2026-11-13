@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { checkMigrationDirectory, LEGACY_LAST, newMigrationFileName, parseMigrationFile } from "./names";
 
 // Migration file names (plan docs/superpowers/plans/2026-11-13-migration-pipeline.md, D1).
@@ -11,7 +11,14 @@ import { checkMigrationDirectory, LEGACY_LAST, newMigrationFileName, parseMigrat
 // gives the same digits and these tests could not tell the two apart (review
 // of #365). So this file runs in a zone that is neither UTC nor whole hours
 // from it, on every machine, and the first test proves the pin took.
+const PRIOR_TZ = process.env.TZ;
 process.env.TZ = "Asia/Kolkata";
+// Put the zone back, as document-expiry.test.ts does, so a run with
+// --no-isolate cannot carry it into another file.
+afterAll(() => {
+  if (PRIOR_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = PRIOR_TZ;
+});
 
 describe("the zone these tests run in", () => {
   it("is not UTC, so a local-time clock reading fails below (mutation: drop the TZ pin, run with TZ=UTC → the UTC tests stop failing it)", () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,14 @@ import { createMigrationFile } from "./create";
 //
 // In a zone that is not UTC (see names.test.ts): CI's runners are UTC, where a
 // local-time clock reading would pass unnoticed.
+const PRIOR_TZ = process.env.TZ;
 process.env.TZ = "Asia/Kolkata";
+// Put the zone back, as document-expiry.test.ts does, so a run with
+// --no-isolate cannot carry it into another file.
+afterAll(() => {
+  if (PRIOR_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = PRIOR_TZ;
+});
 
 const NOW = new Date(Date.UTC(2026, 10, 13, 18, 30, 5));
 let dir = "";

@@ -45,7 +45,7 @@ stay as they are, frozen.
   `supabase db push --local` need no change [A1].
 - History: the runner (D3) records new files as `(version=<14 digits>, name=<slug>)` in BOTH projects, as the CLI
   would; a file applied by hand (MCP) before PR 5 is `(apply time, <whole stem>)`. A row COVERS a file when:
-  the pair matches; or its name is the whole stem (any file); or, for a LEGACY file on PRODUCTION only, its name
+  the pair matches; or, on PRODUCTION, its name is the whole stem (any file; bis-ci only ever has CLI pairs, and its check accepts a stem only for numbered files, so a hand-applied timestamped file on bis-ci counts as missing); or, for a LEGACY file on PRODUCTION only, its name
   is the slug alone and exactly one slug-only row has that name (A3 is false: 61 production rows are slug-only).
   Never by version alone: an MCP row's version is its apply time and could equal a new file's version; a
   version taken by another name is refused ("rename the file").
